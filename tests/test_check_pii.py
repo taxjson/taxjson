@@ -657,6 +657,75 @@ class TestPushEveryCommitAndDiffAmounts(_Sandbox):
         self.assertIn("money amount", r.stdout + r.stderr)
         self.assertNotIn(self._AMT, r.stdout + r.stderr)
 
+    # Issue #7: the binary scan read only the TIP's blob of each binary
+    # path, so an earlier revision of a PDF (a compressed content stream
+    # holding a denylist value) went out in history unscanned.
+    @staticmethod
+    def _pdf(text):
+        import zlib
+        body = zlib.compress(b"BT (" + text.encode() + b") Tj ET")
+        return (b"%PDF-1.4\n1 0 obj << /Length " + str(len(body)).encode()
+                + b" /Filter /FlateDecode >>\nstream\n" + body
+                + b"\nendstream endobj\ntrailer << >>\n%%EOF\n")
+
+    def _commit_bytes(self, path, data, msg="c"):
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_bytes(data)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", msg)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def test_earlier_binary_revision_in_the_range_is_refused(self):
+        base = self._remote_with_base()
+        bad = self._pdf(f"Account {_ACCT}")
+        self.assertNotIn(_ACCT.encode(), bad)        # only once inflated
+        self._commit_bytes("docs/slip.pdf", bad, "add slip")
+        self.assertEqual(self.scan().returncode, 1)  # the tree scan sees it
+        tip = self._commit_bytes("docs/slip.pdf", self._pdf("Account (cut)"),
+                                 "clean slip")
+        self.assertEqual(self.scan().returncode, 0)  # the tip is clean
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("BINARY", r.stderr)
+        self.assertIn("private denylist match", r.stdout + r.stderr)
+        self.assertNotIn(_ACCT, r.stdout + r.stderr)
+
+    def test_earlier_binary_revision_on_a_new_branch_is_refused(self):
+        self._remote_with_base()
+        self.git("checkout", "-q", "-b", "topic")
+        self._commit_bytes("slip.pdf", self._pdf(f"Account {_ACCT}"))
+        tip = self._commit_bytes("slip.pdf", self._pdf("Account (cut)"))
+        r = subprocess.run(
+            ["bash", str(self.repo / "scripts" / "hooks" / "pre-push"),
+             "origin", "unused-url"], cwd=self.repo, capture_output=True,
+            text=True, env=self.env,
+            input=f"refs/heads/topic {tip} refs/heads/topic {'0' * 40}\n")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("BINARY", r.stderr)
+        self.assertNotIn(_ACCT, r.stdout + r.stderr)
+
+    def test_binary_blob_already_on_the_remote_is_not_rescanned(self):
+        # A blob the remote already holds is published already: a push
+        # that brings it back (a revert) adds nothing new to scan.
+        self._remote_with_base()
+        self._commit_bytes("slip.pdf", self._pdf(f"Account {_ACCT}"))
+        self.git("push", "-q", "--no-verify", "origin", "main")
+        base = self.git("rev-parse", "HEAD").strip()
+        self._commit_bytes("slip.pdf", self._pdf("Account (cut)"))
+        self.git("revert", "--no-edit", "HEAD")
+        tip = self.git("rev-parse", "HEAD").strip()
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_clean_binary_revisions_pass(self):
+        base = self._remote_with_base()
+        self._commit_bytes("slip.pdf", self._pdf("Account one"))
+        self._commit_bytes("slip.pdf", self._pdf("Account two"))
+        self._commit_bytes("other.pdf", self._pdf("Account three"))
+        tip = self._commit_bytes("other.pdf", self._pdf("Account four"))
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def _diff_of(self, path, text):
         base = self._commit("a.txt", "x\n", "base")
         self._commit(path, text)

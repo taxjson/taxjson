@@ -5,7 +5,7 @@
 # would add (merge resolutions included) AND the added lines of every
 # commit it publishes (a value added in one commit and removed in the
 # next is still in history; money amounts in CHANGELOG / docs / code
-# comments too), the text inside any binary file
+# comments too), the text inside every revision of a binary file
 # it adds, the branch / tag NAMES it publishes, the commit messages,
 # annotated-tag messages, and the author / committer / tagger identities
 # of the NEW commits and tags — identities against your private denylist
@@ -32,14 +32,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
   if [ "$remote_sha" != "$z" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
     diff_cmd=(git diff "$remote_sha" "$local_sha" --)
-    num_cmd=(git diff --numstat --no-renames "$remote_sha" "$local_sha" --)
     log_range=("$remote_sha..$local_sha")
     per_commit=1
   else
     # New branch/tag, or a remote tip we do not have: everything not
     # already on that remote.
     diff_cmd=(git log -p --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
-    num_cmd=(git log --numstat --no-renames --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
     log_range=("$local_sha" --not --remotes="$remote/*")
     per_commit=0      # the log above is already per commit
   fi
@@ -55,17 +53,33 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
   # A diff shows a binary only as 'Binary files ... differ': scan the
   # text inside each binary the push adds (PDF /Author, DOCX creator, a
-  # spreadsheet's cells) as published at $local_sha (S024-04).
-  bins="$("${num_cmd[@]}" | awk -F'\t' '$1 == "-" && $2 == "-" { print $3 }' | sort -u)"
+  # spreadsheet's cells, a compressed PDF stream) — EVERY revision of it
+  # that any pushed commit introduces, not just the one at $local_sha: a
+  # PDF cleaned in a later commit is still published in history (S024-04,
+  # issue #7). Each distinct blob once; a blob the remote already has
+  # (reachable from what it holds) is skipped.
+  newobj="$(git rev-list --objects "${log_range[@]}" -- | cut -d' ' -f1)" \
+    || refuse "$local_ref" "could not list the objects it adds (git rev-list failed) to scan its binary files."
+  bins="$(git log --raw --numstat --no-renames --no-abbrev --format='commit %H' \
+            --diff-merges=first-parent "${log_range[@]}" -- \
+          | awk -F'\t' '/^commit /  { delete m; next }
+                        /^:/        { split($1, a, " "); m[$2] = a[4]; next }
+                        $1 == "-" && $2 == "-" && ($3 in m) { print m[$3] "\t" $3 }' \
+          | awk -F'\t' 'NR == FNR { if ($1 != "") new[$1] = 1; next }
+                        ($1 in new) && !seen[$1]++' <(printf '%s\n' "$newobj") -)" \
+    || refuse "$local_ref" "could not list the binary files it adds (git log failed) to scan them."
   if [ -n "$bins" ]; then
     bt="$(mktemp -d)"
-    while IFS= read -r p; do
-      git cat-file -e "$local_sha:$p" 2>/dev/null || continue   # deleted since
-      mkdir -p "$bt/blobs/$(dirname "$p")"
-      git cat-file blob "$local_sha:$p" > "$bt/blobs/$p"
+    i=0
+    while IFS=$'\t' read -r sha p; do
+      [ -n "$sha" ] || continue
+      i=$((i + 1))            # one folder per revision: the same path twice
+      mkdir -p "$bt/blobs/rev$i/$(dirname "$p")"
+      git cat-file blob "$sha" > "$bt/blobs/rev$i/$p" || {
+        rm -rf "$bt"; refuse "$local_ref" "could not read a binary file ($p) to scan it."; }
     done <<< "$bins"
     if [ -n "$(find "$bt/blobs" -type f 2>/dev/null)" ] && ! "$check" "$bt/blobs"; then
-      rm -rf "$bt"; refuse "$local_ref" "a BINARY file's embedded text hit the scan."
+      rm -rf "$bt"; refuse "$local_ref" "a BINARY file's embedded text hit the scan (blobs/revN/<path> is one revision of <path> among the pushed commits, even if a later one replaces it: rewrite the commit that added it)."
     fi
     rm -rf "$bt"
   fi

@@ -136,6 +136,25 @@
   to add, never a guessed figure; a computed figure is labelled "v2
   (opt-in, under audit)" and the checklist keeps it at attention until you
   mark it reviewed. tax-logic CA-FX-07 / US-FX-03 state the method.
+- The `pre-push` hook scans every revision of a binary file the pushed
+  commits add, not only the one at the pushed tip (GitHub issue #7): a
+  PDF whose compressed text held a private value, replaced by a clean
+  copy in a later commit of the same push, was published in history
+  unscanned. Each distinct file revision is scanned once, and one the
+  remote already holds is skipped.
+- Two writes of one file that overlap (two processes, or a write inside
+  another) no longer share one temp file (GitHub issue #9): each stages
+  its data in a new owner-only temp file of its own beside the target
+  and renames only that, so neither publishes the other's unfinished
+  data and neither fails with "No such file or directory" when the other
+  finishes first.
+- `taxjson run --fast` rebuilds after an update that changes only
+  taxjson's shipped market data (GitHub issue #10): the check that the
+  cached stages were built by the installed taxjson (by content, and by
+  modification time) read only its Python files, so a change to
+  `data/markets.toml` (venues, index-option roots, stablecoins,
+  split-share issuers) kept serving results built from the old lists.
+  Every file shipped in the package that the code reads now counts.
 
 ### Changed
 
