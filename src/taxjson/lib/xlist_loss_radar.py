@@ -228,18 +228,33 @@ def _source_brokers(cache: Path, accounts: Iterable[str]
 # Words that say which VOTING class a share is (symbol_codes._DESIGNATORS
 # as exact_name spells them): a broker may write them or leave them out
 # ("QZCO INC SUBORD VTG SHS" / "QZCO INC COM") for an issuer with one
-# listed class.
-_VOTING_WORDS = frozenset(("VOTING", "SUBORDINATE", "MULTIPLE", "NON",
-                           "RESTRICTED"))
+# listed class — at the END of the name only, after the company's own
+# words ("... SUBORDINATE VOTING", "... MULTIPLE VOTING", "... NON
+# VOTING", "... RESTRICTED VOTING", "... VOTING"): a word of the
+# company's name ("NON STOP CORP", "RESTRICTED BRANDS INC") is never
+# share wording.
+_VOTING_KINDS = frozenset(("SUBORDINATE", "MULTIPLE", "NON", "RESTRICTED"))
+
+
+def _voting_phrase(k: Tuple[str, ...]) -> Tuple[str, ...]:
+    """The voting-share phrase a normalised name ends with (exact_name
+    spells "SUBORD VTG SHS" SUBORDINATE VOTING), else ()."""
+    if not k or k[-1] != "VOTING":
+        return ()
+    if len(k) >= 2 and k[-2] in _VOTING_KINDS:
+        return k[-2:]
+    return k[-1:]
 
 
 def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
                   all_a: Set[Tuple[str, ...]], all_b: Set[Tuple[str, ...]],
                   a: str, b: str) -> Optional[Tuple[Tuple[str, ...],
                                                     Tuple[str, ...]]]:
-    """(name of a, name of b) when the two names differ ONLY in voting
-    share wording one of them states (SUBORDINATE VOTING, MULTIPLE
-    VOTING, NON VOTING, RESTRICTED) — possibly a broker's style for an
+    """(name of a, name of b) when the two names differ ONLY in the
+    voting-share phrase one of them ends with (SUBORDINATE VOTING,
+    MULTIPLE VOTING, NON VOTING, RESTRICTED VOTING: _voting_phrase; the
+    same words inside a company's name are its name) — possibly a
+    broker's style for an
     issuer with one listed class — else None. Never when either
     listing is a depositary receipt (a CDR is its own security:
     cross_listings.shown_apart, receipt_why), when the names state any other share
@@ -259,13 +274,12 @@ def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
     every = all_a | all_b | na | nb
     if any(len(w) == 1 and w.isalpha() for k in every for w in k):
         return None                     # a class letter: two classes
-    classes = {frozenset(w for w in k if w in _VOTING_WORDS)
-               for k in every} - {frozenset()}
+    classes = {_voting_phrase(k) for k in every} - {()}
     if len(classes) > 1:
         return None                     # two voting classes named
 
     def strip(k: Tuple[str, ...]) -> Tuple[str, ...]:
-        return tuple(w for w in k if w not in _VOTING_WORDS)
+        return k[:len(k) - len(_voting_phrase(k))]
     for x in sorted(na):
         for y in sorted(nb):
             if x == y or XL.companies_differ(x, y):

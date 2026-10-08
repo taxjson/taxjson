@@ -402,5 +402,38 @@ class TestOptionMarkPerContract(unittest.TestCase):
                              .states["option-timing"].status, "attention")
 
 
+# ============================================================ L5: radar
+class TestRadarTrailingVotingPhrase(unittest.TestCase):
+    @staticmethod
+    def k(*names):
+        return {exact_name(n) for n in names}
+
+    @rule("CA-XLIST-05")
+    def test_a_word_of_the_name_is_not_share_wording(self):
+        a, b = self.k("NON STOP CORP"), self.k("STOP CORP")
+        self.assertIsNone(XR._wording_only(a, b, a, b, "ZZS.US", "ZZS.TO"))
+        a, b = self.k("RESTRICTED BRANDS INC"), self.k("BRANDS INC")
+        self.assertIsNone(XR._wording_only(a, b, a, b, "ZZS.US", "ZZS.TO"))
+        a, b = (self.k("MULTIPLE HOLDINGS INC COM"),
+                self.k("HOLDINGS INC SUBORD VTG SHS"))
+        self.assertIsNone(XR._wording_only(a, b, a, b, "ZZS.US", "ZZS.TO"))
+
+    @rule("CA-XLIST-05")
+    def test_a_trailing_phrase_is(self):
+        com = self.k("ZZSTOP CORP")
+        for w in ("ZZSTOP CORP SUBORD VTG SHS",
+                  "ZZSTOP CORP MULTIPLE VOTING SHARES",
+                  "ZZSTOP CORP RESTRICTED VOTING",
+                  "ZZSTOP CORP NON-VOTING SHS"):
+            b = self.k(w)
+            self.assertIsNotNone(XR._wording_only(com, b, com, b, "ZZS.US",
+                                                  "ZZS.TO"), w)
+
+    @rule("US-XLIST-04")
+    def test_same_test_in_a_us_project(self):
+        a, b = self.k("NON STOP CORP"), self.k("STOP CORP")
+        self.assertIsNone(XR._wording_only(a, b, a, b, "ZZS.US", "ZZS.TO"))
+
+
 if __name__ == "__main__":
     unittest.main()
