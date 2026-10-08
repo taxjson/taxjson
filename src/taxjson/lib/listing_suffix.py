@@ -27,7 +27,11 @@ the project's other books instead, in this order:
      shares, so the in-leg is the other country's listing, QZCC.TO.
    An out-leg of the very listing the currency names (a custody move),
    or of another ticker on the other listing (an ordinary TSX -> NYSE
-   journal), confirms the row currency's listing.
+   journal), confirms the row currency's listing. The out-leg is the
+   listing the books hold it as: the map's rename lines (GLOBAL /
+   TOBASE / JOURNAL, chains followed) apply to it first, so a correct
+   `TOBASE QZAB.US QZAA.TO` makes QZAB's transfer out the evidence of
+   QZAA.TO.
 2. the other listing known (a USD row only, of shares that arrived by a
    transfer the books do not pair): the project's books hold ROOT.TO
    elsewhere — another account or broker, Questrade's own CAD or .TO
@@ -60,6 +64,10 @@ Never corrected (the symbol keeps the row currency's listing):
 * the account's own books hold the other listing in another currency:
   one native-currency pool cannot hold both — said as a suggestion (a
   TOBASE line, which joins them in the base-currency books) instead.
+  When the map books the transfer's out-leg as that other listing, the
+  transfer journal joins the two there itself (lib/cross_listings.
+  analyze, `map_renames`): the kept record carries "map" and the
+  suggestion is not conditional.
 
 A correction applies to every row of the symbol in that broker's exports
 of the account (the transfer-in, later trades, dividends): written to
@@ -464,6 +472,7 @@ def _names_ok(a: Set[Tuple[str, ...]], b: Iterable[Tuple[str, ...]],
 def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
             mapped: Callable[[str], bool] = lambda _s: False,
             distinct: Iterable[Iterable[str]] = (),
+            renames: Optional[Dict[str, str]] = None,
             days: Optional[int] = None) -> Dict[str, Any]:
     """{"corrected": {listing: {...}}, "kept": {listing: {...}}} for one
     (account, broker) group (module docstring): `scan` its exports read
@@ -473,6 +482,11 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
     from taxjson.lib.cross_listings import PAIR_DAYS
     days = PAIR_DAYS if days is None else days
     cands = scan.cands
+    renames = {str(k).upper(): str(v).upper()
+               for k, v in (renames or {}).items()}
+
+    def _booked(sym: str) -> str:
+        return renames.get(sym, sym)
     apart = {frozenset(str(x).upper() for x in p) for p in distinct}
     shown = dict(ev.shown)
     for c in cands.values():
@@ -512,7 +526,18 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
             if len(legs) != 1:
                 continue        # none, or ambiguous: not evidence
             o = legs[0]
-            if o.symbol == lst:
+            # The out-leg as the books hold it: the map's rename lines
+            # (GLOBAL / TOBASE / JOURNAL) apply to it first — the
+            # listing the map books it as is the one it confirms (a map
+            # that books both listings as one decides on its own).
+            both = _booked(lst) == _booked(alt)
+            if (not both and o.symbol != lst
+                    and _booked(o.symbol) == _booked(lst)):
+                verdicts.setdefault(lst, []).append(("keep", o))
+            elif (not both and o.symbol != alt
+                  and _booked(o.symbol) == _booked(alt)):
+                verdicts.setdefault(lst, []).append(("other", o))
+            elif o.symbol == lst:
                 verdicts.setdefault(lst, []).append(("keep", o))
             elif o.symbol == alt:
                 verdicts.setdefault(lst, []).append(("other", o))
@@ -530,6 +555,7 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
         pair: Dict[str, Any] = {}
         if vs and all(k == "other" for k, _o in vs):
             o = sorted((o for _k, o in vs), key=lambda x: (x.date, x.symbol))[0]
+            osym = _booked(o.symbol)
             if (o.symbol != alt and frozenset((_root(o.symbol), _root(lst)))
                     in ev.renames):
                 kept[lst] = {"symbol": alt, "reason": (
@@ -537,12 +563,23 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
                     f"the books (a ticker change, not two listings)")}
                 continue
             how = "transfer"
+            # The map books the out-leg as this listing's other one
+            # (`TOBASE QZAB.US QZAA.TO`, QZAA on a USD row in) — or both
+            # as one symbol (`TOBASE QZAA.TO QZAB.US`): the in-leg is
+            # that listing too.
+            by_map = (o.symbol != alt and osym == _booked(alt)
+                      and _booked(lst) != osym)
             evidence = (f"its transfer-in is the {_broker_name(o.broker)} "
                         f"transfer out of {o.quantity:g} {o.symbol} on "
                         f"{o.date} (account {o.account}) under the same "
-                        f"name")
+                        f"name" + (
+                            "" if not by_map else
+                            f", which ticker.map books as {osym}"
+                            if osym != o.symbol else
+                            f", the listing ticker.map books {alt} as"))
             pair = {"symbol": o.symbol, "date": o.date,
-                    "account": o.account, "broker": o.broker}
+                    "account": o.account, "broker": o.broker,
+                    **({"map": osym} if by_map else {})}
         elif vs:
             continue            # the transfer confirms the row's listing
         elif c.currency == "USD" and c.arrivals and alt in known:
@@ -581,6 +618,20 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
                 f"it")}
             continue
         mixed = sorted(own.get(alt, set()) - {c.currency})
+        if mixed and pair.get("map"):
+            # The map's line pools the two currencies in the base-
+            # currency books only: the transfer journal joins the in-leg
+            # there, as a TOBASE line (lib/cross_listings.analyze), and
+            # its native rows keep the row currency's listing.
+            kept[lst] = {"symbol": alt, "line": f"TOBASE {lst} {alt}",
+                         "reason": (
+                             f"{evidence}; this account also holds {alt} "
+                             f"in {', '.join(mixed)}, so the run joins "
+                             f"{lst} to {alt} in the base-currency books "
+                             f"(one native-currency pool cannot hold "
+                             f"both)"),
+                         "how": how, "map": str(pair["map"])}
+            continue
         if mixed:
             kept[lst] = {"symbol": alt, "line": f"TOBASE {lst} {alt}",
                          "reason": (
@@ -683,7 +734,13 @@ def suggestions(cache: Path) -> List[Tuple[str, str, bool]]:
                             f"write this one too", False))
         for frm, r in sorted(st["kept"].items()):
             line = str(r.get("line") or "")
-            if line:
+            if line and r.get("map"):
+                # The map books the transfer's out-leg as this listing:
+                # the run already joins it (the transfer journal).
+                out.append((line, f"{acct}: {frm} reads as "
+                            f"{r.get('symbol')} — {r.get('reason')}; the "
+                            f"line only makes it explicit", False))
+            elif line:
                 out.append((line, f"{acct}: {frm} reads as "
                             f"{r.get('symbol')} — {r.get('reason')}; add "
                             f"it only if they are one security", True))

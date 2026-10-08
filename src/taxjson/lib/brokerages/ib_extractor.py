@@ -1962,7 +1962,8 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
     Report totals."""
     hm: Dict[str, Dict[str, int]] = {}
     out: Dict[str, Any] = {
-        'title': '', 'fii': {}, 'root_alias': {}, 'alias_conids': {},
+        'title': '', 'fii': {}, 'fii_all': {}, 'root_alias': {},
+        'alias_conids': {},
         'accounts': set(), 'accounts_included': '', 'cash': {},
         'cash_currencies': set(), 'has_cash_report': False,
         'has_order_level': False, 'order_levels': {},
@@ -2109,6 +2110,16 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             for t in texts:
                 out['fii'].setdefault((cat, t), info)
                 out['fii'].setdefault((cat, re.sub(r'\s+', ' ', t)), info)
+                # Every instrument a symbol names (two companies may
+                # share a bare ticker on two markets: a TSX one and an
+                # NYSE one): _security_name picks the row's own.
+                if cat in ('Stocks', 'Warrants'):
+                    for _k in {(cat, t), (cat, re.sub(r'\s+', ' ', t))}:
+                        _all = out['fii_all'].setdefault(_k, [])
+                        if not any(i['conid'] == info['conid']
+                                   and i['name'] == info['name']
+                                   for i in _all):
+                            _all.append(info)
             if cat == 'Equity and Index Options':
                 for t in texts:
                     m = _IB_FII_OCC_RE.match(t)
@@ -2933,15 +2944,43 @@ class IbBrokerage(BaseBrokerage):
 
     @staticmethod
     def _security_name(asset_cat: str, raw_symbol: str,
-                       fii: Dict[tuple, Any]) -> str:
+                       fii: Dict[tuple, Any], booked: str = '',
+                       fii_all: Optional[Dict[tuple, Any]] = None) -> str:
         """The Financial Instrument Information name of a stock row
         ('SAMPLE PLATFORMS INC-CDR'), or '' — the row's description stays
-        the raw symbol (the security overrides key on it)."""
+        the raw symbol (the security overrides key on it). When the
+        statement lists several instruments under the symbol (QZE on the
+        TSX and a different company's QZE on the NYSE: `fii_all`), the
+        name is the one whose market is the row's `booked` listing (its
+        Listing Exch, else its ISIN country), never the first listed;
+        '' when none or several match."""
         if asset_cat not in ('Stocks', 'Warrants'):
             return ''
         s = (raw_symbol or '').strip()
-        info = (fii.get((asset_cat, s))
-                or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
+        keys = ((asset_cat, s), (asset_cat, re.sub(r'\s+', ' ', s)))
+        infos = next((fii_all[k] for k in keys
+                      if fii_all and fii_all.get(k)), [])
+        if len({(i.get('name') or '').strip() for i in infos}) > 1:
+            from taxjson.lib.markets import (canadian_suffixes,
+                                             ib_venue_suffix, suffix_of)
+            ca = canadian_suffixes()
+
+            def _market(sfx: str) -> str:
+                return 'TO' if sfx in ca else sfx
+            want = _market(suffix_of(booked))
+
+            def _of(i: Dict[str, Any]) -> str:
+                exch = (i.get('exch') or '').upper()
+                v = ib_venue_suffix(exch) if exch else None
+                if v:
+                    return _market(v)
+                return {'CA': 'TO', 'US': 'US'}.get(
+                    (i.get('isin') or '').upper()[:2], '')
+            hits = {(i.get('name') or '').strip() for i in infos
+                    if want and _of(i) == want}
+            name = hits.pop() if len(hits) == 1 else ''
+            return name if name and name != s else ''
+        info = next((fii[k] for k in keys if fii.get(k)), None) or {}
         name = (info.get('name') or '').strip()
         return name if name and name != s else ''
 
@@ -4067,7 +4106,9 @@ class IbBrokerage(BaseBrokerage):
                         if _bv is not None and abs(_bv) > 1e-9:
                             _trade_tx['broker_basis'] = (
                                 f"{abs(_bv):,.2f} {currency}")
-                _name = self._security_name(asset_cat, description, fii)
+                _name = self._security_name(
+                    asset_cat, description, fii, _trade_tx['symbol'],
+                    pre.get('fii_all'))
                 if _name:
                     _trade_tx['security_name'] = _name
                 # `Ca` = IB CANCELLED an earlier fill: this row reverses
@@ -5390,7 +5431,8 @@ class IbBrokerage(BaseBrokerage):
                     'market_value': abs(total_cost),
                 })
                 _name = self._security_name(
-                    asset_cat, self._cell(row, header_map, 'Symbol'), fii)
+                    asset_cat, self._cell(row, header_map, 'Symbol'), fii,
+                    symbol, pre.get('fii_all'))
                 if _name:
                     transactions[-1]['security_name'] = _name
                 self.note_row_consumed()

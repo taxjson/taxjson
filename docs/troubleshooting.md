@@ -673,6 +673,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/xlist_loss_radar.py` — `analyze`, `_scoped_names`, `_source_brokers`, `_wording_only`, `_named`, `differ only in share wording`; `src/taxjson/lib/cross_listings.py` — `shown_apart`
 
+### `tjs scan`: "MAP-GAP QZE.TO/QZE.US: … QZE.US and QZE.TO share their letters but the names are not equal … — verify" where QZE.TO and QZE.US are two companies that IB lists under one bare symbol
+- **Check:** the IB statement's Financial Instrument Information lists two stocks under the symbol QZE (one on the TSX with a CA ISIN, one on the NYSE with a US ISIN); `tjs ticker-map --suggest` or the scan names QZE.US with both companies' names. The books are right: QZE.TO and QZE.US are two securities.
+- **Cause:** the IB parser named a stock row from the first instrument the statement lists under its bare symbol, so a USD row of the NYSE company could carry the TSX company's name (and another statement, listing them the other way round, the right one): QZE.US had two names, and the scan could not tell the pair apart.
+- **Fix:** upgrade and `tjs run`. When a statement lists several instruments under one symbol, a row takes the name of the one on its own listing's market (the Listing Exch, else the ISIN country), never the first listed; the scan then reads the two as different companies and asks for no line. A `DISTINCT QZE.US QZE.TO` written to quiet it can stay (it changes no figure).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_security_name`, `fii_all`; `src/taxjson/lib/cross_listings.py` — `gather`, `shown_apart`
+
 ### `tjs scan`: "MAP-GAP QZX.TO/QZX.US: both listings appear in this project but ticker.map has no GLOBAL/TOBASE entry" (or "US-LISTING … hold QZX.TO instead") for a CDR or another company that uses the same letters
 - **Check:** compare the two listings' names in your broker's exports: a CDR's name says so ("… CDR (CAD HEDGED)"), another company's name shares no company word (a real-estate trust on one venue, a currency ETF on the other). `tjs sum --json` is the same with or without a `DISTINCT` line for the pair.
 - **Cause:** the scan read every US and Canadian listing that share a root as a probable interlisting: MAP-GAP asked for a `TOBASE` or `DISTINCT` line, and US-LISTING advised holding the Canadian line, even when the exports showed the Canadian line is a depositary receipt or the names are two companies'. The books were right (two securities); only the scan nagged.
@@ -728,6 +735,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** upgrade and `tjs run`. If the symbol really is the US listing, add `DISTINCT QZCC.US QZCC.TO` to `ticker.map`. To make a correction explicit, `tjs ticker-map --suggest` lists the equivalent `GLOBAL QZCC.US QZCC.TO` and `TOBASE QZCJ.US QZCC.TO` lines (write both).
 - **Fixed in:** `v0.23.0`
 - **Code:** `src/taxjson/lib/listing_suffix.py` — `resolve`, `scan_questrade`, `scan_rbc`, `why`, `listing on a`; `src/taxjson/bin/taxjson_run.py` — `stage_listing_suffix`, `_listing_suffix_stale`, `_ticker_map_named`, `stage_cross_listings`; `src/taxjson/bin/taxjson_ticker_map.py` — `named_symbols`, `_lookup_named`; `src/taxjson/bin/taxjson_brokerage.py` — `listing_fixes`; `src/taxjson/lib/cross_listings.py` — `joined_note`
+
+### A correct `TOBASE QZB.US QZA.TO` for a move from IB to Questrade left "Info: 1 position(s) go short in acct's data (QZA.US)" (in a registered account "Warning: Short position: QZA.US …"), or a QZA.US position the broker never held
+- **Check:** `tjs transfers` shows QZB.US out of IB and QZA (the company's TSX root) into Questrade on a USD row the same week, under one name; the account also holds QZA.TO in CAD; ticker.map has `TOBASE QZB.US QZA.TO`; `tjs journals` lists the pair as refused by your ticker.map.
+- **Cause:** the map's line booked the out-leg as QZA.TO, but the in-leg kept the row currency's listing QZA.US (the account holds QZA.TO in CAD, and one native-currency pool cannot hold both), and the transfer pairing refused the pair because the map names the out-leg. The units left QZA.TO and arrived in QZA.US, a different security: in a registered account a withdrawal at fair value, in a taxable one a later sale read as a short with no purchase (in no total), with nothing on the console. Without the map line the pair was joined as QZB.US and QZA.US.
+- **Fix:** upgrade and `tjs run`. The map's renames apply to a transfer's out-leg before the listing and the pairing are read; an out-leg the map books as the in-leg's other listing joins the in-leg to that listing in the base-currency books: "Warning: acct: joined as one security by their transfer journal: QZB.US ↔ QZA.US (transfer 2026-09-01; ticker.map books QZB.US as QZA.TO, so QZA.US is booked as QZA.TO)" (tax-logic CA-XLIST-01 / CA-XLIST-02, US-XLIST-01 / US-XLIST-02). On an older install add `TOBASE QZA.US QZA.TO` to ticker.map (`tjs ticker-map --suggest` offers it).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/listing_suffix.py` — `resolve`, `which ticker.map books as`; `src/taxjson/lib/cross_listings.py` — `analyze`, `map_renames`, `joined_note`; `src/taxjson/bin/taxjson_run.py` — `_ticker_map_renames`, `_listing_suffix_text`, `stage_cross_listings`
+
+### "Warning: acct: ticker.map books the two legs of a transfer as two securities: 24 QZB.US out 2026-09-01 (booked as QZZ.TO) / QZA.US in 2026-09-03"
+- **Check:** `tjs journals` lists the pair as refused by your ticker.map; the line naming QZB.US (or QZA.US) books it as a symbol the other leg is not booked as.
+- **Cause:** the two legs pair as one move (the same quantity, within 5 business days), but the map's lines book them as two different symbols, so neither leg pairs: the units leave one security and arrive in another (in a registered account a withdrawal at fair value; the in-leg's position has no cost carried). Earlier releases said nothing.
+- **Fix:** if they are one security, add the line the Warning names (`TOBASE QZA.US QZZ.TO`) or correct the line naming the other leg; if they are two securities, add `DISTINCT QZB.US QZA.US`. `tjs run --strict` stops until one of them is in ticker.map.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cross_listings.py` — `map_split`, `map_split_note`, `books the two legs of a transfer as two`; `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`
 
 ### An account number inside a security name, e.g. `tjs ticker-map --suggest` or a join warning naming 'QZX CORP TFR TO 55500001'
 - **Check:** the name in the line ends with `TO ACCOUNT <number>`, `FROM ACCOUNT <number>`, `TFR TO <number>`, `TFR FROM <number>` or `TO <number>`, with no `TRANSFER` word before it; the row is an RBC (or Questrade) transfer whose export has no separate security-name column for it.
