@@ -112,6 +112,13 @@
   and renames only that, so neither publishes the other's unfinished
   data and neither fails with "No such file or directory" when the other
   finishes first.
+- `taxjson run --fast` rebuilds after an update that changes only
+  taxjson's shipped market data (GitHub issue #10): the check that the
+  cached stages were built by the installed taxjson (by content, and by
+  modification time) read only its Python files, so a change to
+  `data/markets.toml` (venues, index-option roots, stablecoins,
+  split-share issuers) kept serving results built from the old lists.
+  Every file shipped in the package that the code reads now counts.
 
 ### Changed
 
