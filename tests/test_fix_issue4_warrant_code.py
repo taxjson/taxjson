@@ -295,7 +295,10 @@ def _config(country):
     return (f'[settings]\nyear = 2025\ncountry = "{country}"\n'
             f'base_currency = "{base}"\nsource_currencies = ["{other}"]\n'
             + ('option_grant_timing_since = 2025\n' if country == 'canada'
-               else '') + '\n'
+               else '')
+            # The lira's spin-off is asked (by default a sheltered
+            # account's is booked without asking, CA-CORP-11/US-CORP-12).
+            + 'sheltered_elections = "ask"\n\n'
             f'[accounts.margin]\ntype = "taxable"\n\n'
             f'[accounts.lira]\ntype = "sheltered"\n')
 

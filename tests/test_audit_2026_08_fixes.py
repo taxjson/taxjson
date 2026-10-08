@@ -1967,6 +1967,9 @@ class TestDeferredLowTail(unittest.TestCase):
             (root / "taxjson.toml").write_text(
                 '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
+                # asked: by default a sheltered account's merger is
+                # booked without asking (CA-CORP-11)
+                'sheltered_elections = "ask"\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.rrsp]\ntype = "sheltered"\n')
             row = ("2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,"
@@ -2184,6 +2187,9 @@ class TestReAuditRegressions(unittest.TestCase):
             (root / "taxjson.toml").write_text(
                 '[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
+                # asked: by default a sheltered account's merger is
+                # booked without asking (CA-CORP-11)
+                'sheltered_elections = "ask"\n'
                 '[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.rrsp]\ntype = "sheltered"\n')
             row = ("2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,"
