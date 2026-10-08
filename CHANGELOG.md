@@ -18,6 +18,10 @@
   rule's test; CA-SL-01 and US-WASH-01 now say the window is counted on
   settle (Canada) or trade (US) dates whatever `tax_date` says.
 
+## v0.24.1 (2026-10-08)
+
+### Added
+
 - **`taxjson run` asks about written options carried in from last year**:
   a contract written before `option_grant_timing_since` (a new project's
   default is its own year) and bought back or expired this year is taxed at
