@@ -5451,6 +5451,92 @@ def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
              "to ticker.map.")
 
 
+def _checklist_answered(root: Path, year: Any, step: str
+                        ) -> Optional[Tuple[str, str]]:
+    """(mark, note) of a DONE or skipped mark on checklist step `step`
+    for this year in checklist.json, None when there is no such mark (or
+    the file cannot be read): a question the user answered there
+    (option-boundary's transition question, export-coverage) is said as
+    a note, not a Warning."""
+    from taxjson.lib import checklist as _cl
+    try:
+        st = _cl.load_state(root)
+    except _cl.StateFileError:
+        return None
+    if st.get("year") not in (None, year):
+        return None
+    ov = (st.get("overrides") or {}).get(step) or {}
+    if ov.get("status") not in ("done", "skipped"):
+        return None
+    return str(ov["status"]), str(ov.get("note") or "")
+
+
+def _say_option_transition(root: Path, cfg: Dict[str, Any]) -> None:
+    """Contracts written before `option_grant_timing_since` and closed in
+    the project year, with no lock saying how their write year was
+    filed (lib/option_boundary.project_question_rows, CA-OPT-11): their
+    premium is in this year's gain, right only if that return did not
+    report it. One Warning with the premium at stake and the question;
+    a note once checklist.json marks option-boundary done (the answer)."""
+    from taxjson.lib import option_boundary as OB
+    from taxjson.lib.pipeline import option_timing_from_settings
+    settings = cfg.get("settings") or {}
+    try:
+        rows = OB.project_question_rows(root, cfg)
+        since = (option_timing_from_settings(settings) or {}).get(
+            "option_grant_since")
+    except Exception as e:                          # noqa: BLE001
+        _say("warning", f"the option grant-timing check failed: {e}",
+             prog=_PROG)
+        return
+    if not rows:
+        return
+    year = settings.get("year")
+    head, details = OB.question_message(rows, int(year), since)
+    mark = _checklist_answered(root, year, OB.QUESTION_STEP)
+    if mark is not None:
+        _say_once(("option-transition",), "note",
+                  f"{head} — answered in checklist.json (option-boundary "
+                  f"marked {mark[0]}{': ' + mark[1] if mark[1] else ''})",
+                  indent="  ", file=sys.stdout)
+        return
+    _say_once(("option-transition",), "warning", head, *details,
+              indent="  ", file=sys.stdout)
+
+
+def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
+    """A broker whose exports for an account end before the tax year's
+    end (before today in the running year) while it still holds
+    positions there (lib/export_coverage): one Warning per broker and
+    account, a note once checklist.json marks export-coverage done."""
+    from taxjson.lib import export_coverage as EC
+    try:
+        gaps = EC.find_gaps(root, cfg)
+    except Exception as e:                          # noqa: BLE001
+        _say("warning", f"the export-coverage check failed: {e}",
+             prog=_PROG)
+        return
+    if not gaps:
+        return
+    year = (cfg.get("settings") or {}).get("year")
+    mark = _checklist_answered(root, year, EC.STEP)
+    for g in gaps:
+        head, details = EC.message(g, int(year))
+        key = ("export-coverage", g.account, g.broker)
+        # A DONE mark answers an end read from the last row (the broker
+        # was quiet); a statement's own end is accepted only by --skip
+        # (the checklist's rule).
+        if mark is not None and (mark[0] == "skipped"
+                                 or g.how == "last-row"):
+            _say_once(key, "note", f"{head} — marked {mark[0]} in "
+                      f"checklist.json ({EC.STEP}"
+                      f"{': ' + mark[1] if mark[1] else ''})", indent="  ",
+                      file=sys.stdout)
+            continue
+        _say_once(key, "warning", head, *details, indent="  ",
+                  file=sys.stdout)
+
+
 def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
                  strict: bool = False) -> None:
     """ONE warning per run: each in-kind move booked (accounts, symbol,
@@ -6917,6 +7003,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         # other listing bought in the window (QA F3).
         _say_xlist_losses(root, cfg, cache,
                           strict=getattr(args, "strict", False))
+        # Written options carried in from an earlier year and closed in
+        # this one, on transition close timing (CA-OPT-11).
+        _say_option_transition(root, cfg)
+        # A broker whose exports stop while it holds positions.
+        _say_export_coverage(root, cfg)
     if not args.account and not pending_accounts:
         # A sheltered account never gets a wash pass. One re-typed from
         # taxable kept its old <name>_gains_wash.json / _wash.sum, which

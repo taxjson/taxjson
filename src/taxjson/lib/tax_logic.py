@@ -344,6 +344,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                     "option_grant_timing_since once") + ").", keys=tk),
             Rule("CA-OPT-02", "Earlier contracts keep close timing.",
                  keys=tk, cont=True),
+            Rule("CA-OPT-11",
+                 "Such a transition contract closed in the project year "
+                 "(bought back, expired or cash-settled) has its premium "
+                 "taxed in this year, which is right only if its write "
+                 "year's return did not report it: with no filed-year "
+                 "lock recording how that year was filed, `taxjson run` "
+                 "warns with the premium at stake, `taxjson "
+                 "option-boundary` asks, and the checklist's "
+                 "option-boundary step needs attention until "
+                 "option_grant_timing_since is lowered to the write year "
+                 "(the premium then stays there) or the step is marked "
+                 "done (`taxjson checklist --done option-boundary`: the "
+                 "transition is right).", keys=tk),
             Rule("CA-OPT-03",
                  "Buying it back: the cost is a capital loss in the "
                  "buy-back year. Expiry adds nothing.", keys=tk),
@@ -3168,6 +3181,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
         ("Options", [
             Rule("US-OPT-01",
                  "Premiums are taxed when the position closes (§1234)."),
+            Rule("US-OPT-07",
+                 "There is no grant timing and so no transition: a "
+                 "contract written in an earlier year and closed in this "
+                 "one is taxed at the close like any other, and no "
+                 "project asks whether an earlier return reported its "
+                 "premium.", cont=True),
             Rule("US-OPT-02",
                  "Exercise or assignment folds the premium into the "
                  "stock's basis or proceeds.", cont=True),

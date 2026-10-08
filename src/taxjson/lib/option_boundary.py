@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import (TaxTransaction,
                               _make_assign_underlying_resolver,
@@ -347,7 +347,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                            "until "
                            "then the books treat the sale as a write "
                            "whose premium is a gain"),
-                "attention": True})
+                "attention": True, "question": False})
             continue
         grant = grant_mode and (since is None or lot.write_year >= since)
         wy = lot.write_year
@@ -403,6 +403,25 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 return (f"kept on close timing by option_grant_timing_since = {since} (transition): "
                         f"lower it to {wy} only if the {wy} return reported the premium ({prem_text}) as a {wy} gain")
             return f"enable grant timing with option_grant_timing_since = {wy} to correct"
+
+        # A transition contract CLOSED in the project year (bought back,
+        # expired or cash-settled — an assignment folds the premium into
+        # the shares under either timing): this year's gain now holds
+        # its premium, which is right only if the write year's return
+        # did not report it. Nothing in the files says which (no lock
+        # records that year's timing), and a new project's default
+        # `since` is its own year: asked, not assumed (CA-OPT-11).
+        ask = (transition and not double and filed_close is not True
+               and wy not in filed_years)
+
+        def _question(prem_text: str) -> str:
+            return (f"QUESTION: did your {wy} return report the {prem_text} "
+                    f"premium when the contract was written? If yes, set "
+                    f"option_grant_timing_since = {wy} in [settings] (the "
+                    f"premium then stays in {wy} and only the close is "
+                    f"this year's); if not, the transition is right — "
+                    f"confirm with `taxjson checklist --done "
+                    f"option-boundary`")
         for c in later:
             prem = lot.per_unit * c.units
             cy = int(c.date[:4])
@@ -430,6 +449,8 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                     where = f"premium {prem:,.2f} recognised in {cy} (close timing)"
                     action = (_double_text(f"{prem:,.2f}", cy) if double else
                               f"the Act puts it in {wy} (s.49(1)) — " + _switch(f"{prem:,.2f}") + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else ""))
+                    if ask and cy == year:
+                        action += "; " + _question(f"{prem:,.2f}")
             else:
                 # A buy-back, or a cash-settled assignment (S075-09: an
                 # index option — the underlying never trades as stock, so
@@ -446,11 +467,14 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                     action = (_double_text(f"{prem:,.2f}", cy) if double else
                               f"the Act puts +{prem:,.2f} in {wy} and -{c.paid:,.2f} in {cy} — " + _switch(f"{prem:,.2f}")
                               + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else ""))
+                    if ask and cy == year:
+                        action += "; " + _question(f"{prem:,.2f}")
             rows.append({"symbol": lot.symbol, "account": lot.account, "written": lot.write_date, "write_year": wy,
                          "units": c.units, "premium": round(prem, 2), "closed": c.date, "close_kind": c.kind,
                          "close_year": cy, "paid": round(c.paid, 2), "timing": "grant" if grant else "close",
                          "where": where, "action": action,
-                         "attention": action.startswith("ATTENTION")})
+                         "attention": action.startswith("ATTENTION"),
+                         "question": "QUESTION:" in action})
         if still_open:
             prem = lot.per_unit * lot.open_units
             expiry = parse_option_expiry(lot.symbol)
@@ -466,7 +490,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                              "action": (f"ATTENTION: import the expiry, assignment or buy-back row for "
                                         f"{lot.open_units:g} unit(s) (the broker export is missing it); "
                                         f"until then the {prem:,.2f} premium's year is unknown"),
-                             "attention": True})
+                             "attention": True, "question": False})
                 continue
             if grant:
                 where = f"premium {prem:,.2f} recognised in {wy}; open"
@@ -480,7 +504,8 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                          "units": lot.open_units, "premium": round(prem, 2), "closed": "", "close_kind": "open",
                          "close_year": None, "paid": 0.0, "timing": "grant" if grant else "close",
                          "where": where, "action": action,
-                         "attention": action.startswith("ATTENTION")})
+                         "attention": action.startswith("ATTENTION"),
+                         "question": False})
     rows.sort(key=lambda r: (r["write_year"], r["symbol"], r["written"]))
     return rows
 
@@ -538,3 +563,144 @@ def expired_open(transactions: List[TaxTransaction], year: int,
                         "side": "written" if q < 0 else "long",
                         "broker_closing": bool(closing.get((acct, sym)))})
     return out
+
+
+# The checklist step whose mark answers the transition question
+# (lib/checklist; `taxjson checklist --done option-boundary`).
+QUESTION_STEP = "option-boundary"
+
+
+def project_question_rows(root, cfg: Dict[str, Any],
+                          today: Optional[date] = None
+                          ) -> List[Dict[str, Any]]:
+    """The `straddling` rows of a project's taxable books that ask the
+    transition question (CA-OPT-11, row "question"): contracts written
+    before `option_grant_timing_since` and closed — bought back, expired
+    or cash-settled — in the project year, with no filed-year lock that
+    records how their write year was filed. Canada on grant timing only
+    (a US premium is taxed at the close in every year, US-OPT-07); []
+    when the project cannot be read. Reads files only (the run's
+    warning, quick-start)."""
+    import json as _json
+    from pathlib import Path as _Path
+    from taxjson.lib.country import CountryError, is_usa, settings_tax_date
+    from taxjson.lib.pipeline import option_timing_from_settings
+    root = _Path(root)
+    settings = (cfg or {}).get("settings") or {}
+    accounts = (cfg or {}).get("accounts") or {}
+    year = settings.get("year")
+    if not isinstance(year, int) or isinstance(year, bool):
+        return []
+    try:
+        if is_usa(settings.get("country")):
+            return []
+        kw = option_timing_from_settings(settings)
+        tax_date = settings_tax_date(settings)
+    except (CountryError, ValueError):
+        return []
+    if str(kw.get("option_premium_timing") or "close") != "grant":
+        return []
+    since = kw.get("option_grant_since")
+    if since is None:
+        return []
+    try:
+        years, timing = filed_locks(root, settings)
+    except Exception:                                   # noqa: BLE001
+        years, timing = set(), {}
+    mh_pairs = None
+    try:
+        from taxjson.lib.missing_history import (load_missing_history,
+                                                 project_missing_history_file)
+        mh = project_missing_history_file(root, note=False)
+        if mh is not None:
+            mh_pairs = load_missing_history(mh) or None
+    except Exception:                                   # noqa: BLE001
+        mh_pairs = None
+    fields = TaxTransaction.__dataclass_fields__
+    out: List[Dict[str, Any]] = []
+    for name, acfg in sorted(accounts.items()):
+        if not isinstance(acfg, dict) or acfg.get("type") != "taxable" \
+                or acfg.get("crypto"):
+            continue
+        base = root / "work" / f"{name}_base.json"
+        try:
+            doc = _json.loads(base.read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        raw = doc.get("transactions") if isinstance(doc, dict) else doc
+        txs = []
+        for r in raw if isinstance(raw, list) else []:
+            if not isinstance(r, dict):
+                continue
+            try:
+                txs.append(TaxTransaction(**{k: v for k, v in r.items()
+                                             if k in fields}))
+            except TypeError:
+                continue
+        if mh_pairs is not None:
+            from taxjson.lib.missing_history import synthesize_openings
+            try:
+                txs, _log = synthesize_openings(txs, mh_pairs)
+            except Exception:                           # noqa: BLE001
+                pass
+        for r in straddling(txs, year, "grant", since, years,
+                            filed_timing=timing, today=today,
+                            tax_date=tax_date):
+            if r.get("question"):
+                r["account"] = r["account"] or name
+                out.append(r)
+    return out
+
+
+def question_message(rows: List[Dict[str, Any]], year: int,
+                     since: Optional[int]) -> Tuple[str, List[str]]:
+    """(headline, details) of the run's Warning for the transition
+    question rows (project_question_rows)."""
+    total = sum(float(r.get("premium") or 0.0) for r in rows)
+    wys = sorted({int(r["write_year"]) for r in rows})
+    syms = sorted({r["symbol"] for r in rows})
+    shown = ", ".join(syms[:4]) + (f" +{len(syms) - 4} more"
+                                   if len(syms) > 4 else "")
+    n = len(rows)
+    yrs = " and ".join(str(y) for y in wys)
+    head = (f"{n} option contract{'s' if n != 1 else ''} you wrote in "
+            f"{yrs} and closed in {year} {'are' if n != 1 else 'is'} on "
+            f"transition close timing: {total:,.2f} of premium is taxed "
+            f"in {year}")
+    if len(wys) == 1:
+        wy = wys[0]
+        ask = (f"Did your {wy} return report these premiums when the "
+               f"contracts were written? If yes, set "
+               f"option_grant_timing_since = {wy} in [settings]: the "
+               f"premiums then stay in {wy} and only the closes are "
+               f"{year}'s (ITA s.49(1)).")
+    else:
+        ask = (f"Did your {yrs} returns report these premiums when the "
+               f"contracts were written? If yes, set "
+               f"option_grant_timing_since in [settings] to the first of "
+               f"those years whose return did: those premiums then stay "
+               f"in their write year and only the closes are {year}'s "
+               f"(ITA s.49(1)).")
+    return head, [
+        f"{shown} (option_grant_timing_since = {since} keeps contracts "
+        f"written before {since} on close timing).",
+        ask,
+        "If not, the transition is right: confirm it with `taxjson "
+        "checklist --done option-boundary`. `taxjson option-boundary` "
+        "lists each contract."]
+
+
+def question_detail(rows: List[Dict[str, Any]], year: int) -> str:
+    """One line for the checklist / quick-start: the contracts, the
+    premium at stake and the question."""
+    total = sum(float(r.get("premium") or 0.0) for r in rows)
+    wys = sorted({int(r["write_year"]) for r in rows})
+    yrs = " and ".join(str(y) for y in wys)
+    n = len(rows)
+    first = wys[0]
+    return (f"{n} contract{'s' if n != 1 else ''} written in {yrs} and "
+            f"closed in {year} on transition close timing ({total:,.2f} "
+            f"of premium taxed in {year}): did your {yrs} return report "
+            f"these premiums when written? If yes set "
+            f"option_grant_timing_since = {first}; if not, `taxjson "
+            f"checklist --done option-boundary`")

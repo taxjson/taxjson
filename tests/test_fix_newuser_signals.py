@@ -34,6 +34,7 @@ from tax_rules import rule, rule_absent
 
 from taxjson.lib import checklist as cl
 from taxjson.lib import out
+from taxjson.lib import export_coverage as EC
 from taxjson.lib import option_boundary as OB
 from taxjson.lib import quick_start as QS
 from taxjson.lib import xlist_loss_radar as XR
@@ -76,6 +77,161 @@ def cfg_of(root):
 def ctx_of(root, year, today):
     return cl.Ctx(root=root, cfg=cfg_of(root), year=year, today=today,
                   run_sub=cl.default_run_sub(root))
+
+
+# ------------------------------------------------------------ 1. options
+OPT = "ZZQ261218C00050000.TO"
+WRITE_BUYBACK = (f"BUYSELL 2025-12-15 10:00:00 {OPT} -1 CAD 4 400\n"
+                 f"BUYSELL 2026-01-12 10:00:00 {OPT} 1 CAD 1 100\n")
+
+
+def T(action, day, sym, q, net, settle=None):
+    return TaxTransaction(action=action, date=day, date_settle=settle or day,
+                          symbol=sym, quantity=q, price=abs(net / q) / 100
+                          if q else 0.0, net_amount=net, currency="CAD",
+                          account="margin")
+
+
+class TestTransitionQuestionRows(unittest.TestCase):
+    BOOK = [T("BUYSELL", "2025-12-15", OPT, -1, 399.0, "2025-12-16"),
+            T("BUYSELL", "2026-01-12", OPT, 1, 101.0, "2026-01-13")]
+
+    @rule("CA-OPT-11")
+    def test_closed_in_the_project_year_asks(self):
+        row, = OB.straddling(self.BOOK, 2026, "grant", 2026, set())
+        self.assertTrue(row["question"])
+        self.assertFalse(row["attention"])
+        self.assertIn("kept on close timing by option_grant_timing_since "
+                      "= 2026", row["action"])
+        self.assertIn("QUESTION: did your 2025 return report the 399.00 "
+                      "premium", row["action"])
+        self.assertIn("set option_grant_timing_since = 2025", row["action"])
+        self.assertIn("`taxjson checklist --done option-boundary`",
+                      row["action"])
+
+    @rule("CA-OPT-11")
+    def test_settled_or_not_this_years(self):
+        # The setting lowered to the write year: grant timing, no question.
+        row, = OB.straddling(self.BOOK, 2026, "grant", 2025, set())
+        self.assertFalse(row["question"])
+        # A lock that records close timing for 2025: the transition is
+        # known to be right.
+        row, = OB.straddling(self.BOOK, 2026, "grant", 2026, set(),
+                             filed_timing={2025: {
+                                 "option_premium_timing": "close"}})
+        self.assertFalse(row["question"])
+        # A locked 2025 with no timing record: the ATTENTION, not a
+        # question.
+        row, = OB.straddling(self.BOOK, 2026, "grant", 2026, {2025})
+        self.assertTrue(row["attention"])
+        self.assertFalse(row["question"])
+        # Closed in another year than the project's: nothing at stake.
+        rows = OB.straddling(self.BOOK, 2027, "grant", 2027, set())
+        self.assertFalse(any(r["question"] for r in rows))
+        # Close timing chosen for every year: no transition.
+        row, = OB.straddling(self.BOOK, 2026, "close", None, set())
+        self.assertFalse(row["question"])
+
+    @rule("CA-OPT-11")
+    def test_assignment_is_not_asked(self):
+        book = [T("BUYSELL", "2025-12-15", OPT, -1, 399.0),
+                TaxTransaction(action="ASSIGN", date="2026-01-16",
+                               date_settle="2026-01-16", symbol=OPT,
+                               quantity=1, currency="CAD", account="margin"),
+                TaxTransaction(action="ASSIGN", date="2026-01-16",
+                               date_settle="2026-01-19", symbol="ZZQ.TO",
+                               quantity=-100, price=50, net_amount=5000.0,
+                               currency="CAD", account="margin")]
+        rows = OB.straddling(book, 2026, "grant", 2026, set())
+        self.assertEqual([r["close_kind"] for r in rows], ["assignment"])
+        self.assertFalse(rows[0]["question"])
+
+
+class TestTransitionQuestionProject(unittest.TestCase):
+    """A 2026 project (since = 2026, the template's default) with a call
+    written in Dec 2025 and bought back in Jan 2026."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = make(cls.tmp.name, "opt", 2026,
+                        {"margin/book.tt": WRITE_BUYBACK})
+        cls.r = tj(cls.root, "run", "--no-input")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @rule("CA-OPT-11")
+    def test_run_warns_with_the_premium_and_the_question(self):
+        text = flat(console(self.r))
+        self.assertIn("Warning: 1 option contract you wrote in 2025 and "
+                      "closed in 2026 is on transition close timing: "
+                      "400.00 of premium is taxed in 2026", text)
+        self.assertIn("Did your 2025 return report these premiums when the "
+                      "contracts were written? If yes, set "
+                      "option_grant_timing_since = 2025", text)
+        self.assertIn("`taxjson checklist --done option-boundary`", text)
+        self.assertEqual(out.lint(self.r.stdout), [])
+
+    @rule("CA-OPT-11")
+    def test_option_boundary_json_rows(self):
+        doc = json.loads(tj(self.root, "option-boundary", "--json").stdout)
+        q = [r for r in doc["rows"] if r.get("question")]
+        self.assertEqual(len(q), 1)
+        self.assertIn("QUESTION:", q[0]["action"])
+
+    @rule("CA-OPT-11")
+    def test_checklist_and_quick_start_until_marked(self):
+        d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
+        shutil.copytree(self.root, d)
+        res = cl.d_option_boundary(ctx_of(d, 2026, date(2026, 10, 1)))
+        self.assertEqual(res.status, "attention")
+        self.assertTrue(res.question)
+        self.assertIn("did your 2025 return report these premiums", res.detail)
+        self.assertIn("400.00 of premium taxed in 2026", res.detail)
+        g = QS.evaluate(d, today=date(2026, 10, 1))
+        self.assertEqual(g.states["option-timing"].status, "attention")
+        # The answer: a DONE mark settles it everywhere.
+        tj(d, "checklist", "--done", "option-boundary", "--note",
+           "2025 filed on close timing", check=False)
+        res, = cl.evaluate(ctx_of(d, 2026, date(2026, 10, 1)),
+                           only=["option-boundary"])
+        self.assertEqual(res.effective, "done")
+        self.assertIn("did your 2025 return", res.finding)
+        g = QS.evaluate(d, today=date(2026, 10, 1))
+        self.assertEqual(g.states["option-timing"].status, "done")
+        text = flat(console(tj(d, "run", "--no-input")))
+        self.assertNotIn("Warning: 1 option contract", text)
+        self.assertIn("answered in checklist.json (option-boundary marked "
+                      "done: 2025 filed on close timing)", text)
+
+    @rule("CA-OPT-11")
+    def test_the_setting_settles_it(self):
+        d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
+        shutil.copytree(self.root, d)
+        (d / "taxjson.toml").write_text(toml(2026, since=2025))
+        text = flat(console(tj(d, "run", "--no-input")))
+        self.assertNotIn("transition close timing", text)
+        res = cl.d_option_boundary(ctx_of(d, 2026, date(2026, 10, 1)))
+        self.assertEqual(res.status, "done", res.detail)
+
+
+class TestTransitionQuestionUSA(unittest.TestCase):
+    @rule_absent("CA-OPT-11", country="usa")
+    @rule("US-OPT-07")
+    def test_never_asked_in_a_us_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make(tmp, "us", 2026,
+                        {"margin/book.tt": WRITE_BUYBACK.replace(
+                            ".TO", ".US").replace("CAD", "USD")},
+                        country="usa")
+            text = flat(console(tj(root, "run", "--no-input")))
+            self.assertNotIn("transition close timing", text)
+            self.assertEqual(OB.project_question_rows(root, cfg_of(root)),
+                             [])
+            g = QS.evaluate(root, today=date(2026, 10, 1))
+            self.assertEqual(g.states["option-timing"].status, "n/a")
 
 
 # -------------------------------------------------------- 2. xlist radar
@@ -210,6 +366,151 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
         root = radar_project(self.tmp.name, "diff", margin, rrsp)
         self.assertNotIn("across listings",
                          flat(tj(root, "run", "--no-input").stdout))
+
+
+# ------------------------------------------------------- 3. export coverage
+WB_HEAD = ('"Currency","Date","Action Code","Symbol","Security Description",'
+           '"Type Code","Quantity","Price","Proceeds"\n')
+
+
+def webull(end, rows):
+    return ("Webull Securities (Canada) Ltd.\nSynthetic Demo Statement\n"
+            "Account Number: 12345678\n"
+            f"Date Range: January 1 2025 - {end}\n\n" + WB_HEAD + rows)
+
+
+WB_OPEN_CALLS = (
+    'USD,15-01-2025,BUY,@ZZAA,ZZAA HOLDINGS INC,EQ,100,85.00,"(8,500.00)"\n'
+    'USD,20-03-2025,SELL,@ZZAA,ZZAA HOLDINGS INC,EQ,100,90.00,"8,995.05"\n'
+    'USD,22-04-2025,BUY,@ZZBB,CALL ZZBB01/16/26 45,OPC,14,1.55,'
+    '"(2,184.75)"\n')
+WB_ALL_CLOSED = (
+    'USD,15-01-2025,BUY,@ZZAA,ZZAA HOLDINGS INC,EQ,100,85.00,"(8,500.00)"\n'
+    'USD,20-03-2025,SELL,@ZZAA,ZZAA HOLDINGS INC,EQ,100,90.00,"8,995.05"\n')
+
+
+class TestExportCoverage(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = make(cls.tmp.name, "wb", 2025, {
+            "margin/webull_2025.csv": webull("September 30 2025",
+                                             WB_OPEN_CALLS)})
+        cls.r = tj(cls.root, "run", "--no-input")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_run_warns_for_the_short_broker(self):
+        text = flat(console(self.r))
+        self.assertIn("Warning: Webull exports for margin end 2025-09-30 "
+                      "with open positions (ZZBB260116C00045000.US 14); "
+                      "download the rest of 2025", text)
+        self.assertIn("The export's date range ends 2025-09-30.", text)
+        self.assertEqual(out.lint(self.r.stdout), [])
+
+    def test_checklist_and_quick_start(self):
+        res = cl.d_export_coverage(ctx_of(self.root, 2025, date(2026, 3, 1)))
+        self.assertEqual(res.status, "attention")
+        self.assertFalse(res.question)      # the export's own end
+        self.assertIn("Webull exports for margin end 2025-09-30", res.detail)
+        g = QS.evaluate(self.root, today=date(2026, 3, 1))
+        self.assertEqual(g.states["inputs"].status, "attention")
+        self.assertIn("download the rest of the year",
+                      g.states["inputs"].detail)
+
+    def test_no_nag_when_every_position_is_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make(tmp, "closed", 2025, {
+                "margin/webull_2025.csv": webull("September 30 2025",
+                                                 WB_ALL_CLOSED)})
+            text = flat(console(tj(root, "run", "--no-input")))
+            self.assertNotIn("exports for margin end", text)
+            self.assertEqual(EC.find_gaps(root, cfg_of(root),
+                                          today=date(2026, 3, 1)), [])
+
+    def test_full_year_export_is_covered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make(tmp, "full", 2025, {
+                "margin/webull_2025.csv": webull("December 31 2025",
+                                                 WB_OPEN_CALLS)})
+            tj(root, "run", "--no-input")
+            self.assertEqual(EC.find_gaps(root, cfg_of(root),
+                                          today=date(2026, 3, 1)), [])
+
+    def test_last_row_end_is_a_question_a_mark_answers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = (qt_row("2025-02-03", "2025-02-04", "Buy", "ZZD.TO", 100,
+                           20, "CAD", "ZZDELTA CORP")
+                    + qt_row("2025-06-02", "2025-06-03", "Buy", "ZZE.TO", 10,
+                             20, "CAD", "ZZECHO CORP"))
+            root = make(tmp, "qt", 2025, {"margin/questrade_2025.csv":
+                                          QT_HEAD + rows})
+            text = flat(console(tj(root, "run", "--no-input")))
+            self.assertIn("Questrade exports for margin end 2025-06-02 with "
+                          "open positions (ZZD.TO 100, ZZE.TO 10)", text)
+            self.assertIn("The last row is dated 2025-06-02; the export "
+                          "itself names no end date.", text)
+            ctx = ctx_of(root, 2025, date(2026, 3, 1))
+            res = cl.d_export_coverage(ctx)
+            self.assertTrue(res.question)
+            tj(root, "checklist", "--done", "export-coverage", check=False)
+            res, = cl.evaluate(ctx, only=["export-coverage"])
+            self.assertEqual(res.effective, "done")
+            text = flat(console(tj(root, "run", "--no-input")))
+            self.assertNotIn("Warning: Questrade exports", text)
+            self.assertIn("marked done in checklist.json (export-coverage)",
+                          text)
+
+    def test_running_year_compares_with_today(self):
+        """The year still running: an IB statement ending more than
+        GRACE_DAYS before today is short; one ending last week is not."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "work").mkdir()
+            (root / "inputs" / "rrsp").mkdir(parents=True)
+            (root / "inputs" / "rrsp" / "U_2026.csv").write_text(
+                "Statement,Header,Field Name,Field Value\n"
+                'Statement,Data,Period,"January 1, 2026 - September 4, '
+                '2026"\n')
+            (root / "work" / "rrsp_ib.json").write_text(json.dumps({
+                "metadata": {"input_files": ["/x/U_2026.csv"]},
+                "transactions": []}))
+            (root / "work" / "rrsp_base.json").write_text(json.dumps({
+                "transactions": [{"action": "BUYSELL", "date": "2026-03-02",
+                                  "symbol": "ZZF.US", "quantity": 10,
+                                  "source": "U_2026.csv"}]}))
+            cfg = {"settings": {"year": 2026},
+                   "accounts": {"rrsp": {"type": "sheltered"}}}
+            g, = EC.find_gaps(root, cfg, today=date(2026, 10, 7))
+            self.assertEqual((g.broker, g.end, g.how, g.current_year),
+                             ("ib", "2026-09-04", "statement", True))
+            self.assertEqual(g.positions, [("ZZF.US", 10.0)])
+            self.assertEqual(EC.find_gaps(root, cfg,
+                                          today=date(2026, 9, 10)), [])
+
+    def test_open_positions(self):
+        rows = [
+            {"action": "BUYSELL", "date": "2025-01-02", "symbol": "ZZG.TO",
+             "quantity": 10},
+            {"action": "SPLIT", "date": "2025-02-02", "symbol": "ZZG.TO",
+             "quantity": 2},
+            {"action": "BUYSELL", "date": "2025-03-02", "symbol": "ZZH.TO",
+             "quantity": -5},               # a sale with no purchase
+            {"action": "BUYSELL", "date": "2025-03-02",
+             "symbol": "ZZI250321C00010000.US", "quantity": 1},
+            {"action": "BUYSELL", "date": "2025-03-02",
+             "symbol": "ZZI251219P00010000.US", "quantity": -2},
+            {"action": "TRANSFER", "date": "2025-04-02", "symbol": "ZZJ.TO",
+             "quantity": 3},
+            {"action": "TRANSFER", "date": "2025-05-02", "symbol": "ZZJ.TO",
+             "quantity": -3},
+        ]
+        self.assertEqual(EC.open_positions(rows, date(2025, 6, 30)),
+                         [("ZZG.TO", 20.0),
+                          ("ZZI251219P00010000.US", -2.0)])
 
 
 # ------------------------------------------- 4. sheltered-account elections

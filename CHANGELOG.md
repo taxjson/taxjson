@@ -86,6 +86,23 @@
   tax**: still asked (it sets the holdings' cost), the prompt and `taxjson
   elect --pending` now say it affects the holdings only.
 
+- **`taxjson run` asks about written options carried in from last year**:
+  a contract written before `option_grant_timing_since` (a new project's
+  default is its own year) and bought back or expired this year is taxed at
+  the close, right only if last year's return did not report its premium.
+  The run now warns with the premium at stake and the question; `taxjson
+  option-boundary`, the checklist's option-boundary step and quick-start's
+  new option-timing step ask it too, until the setting is lowered to the
+  write year or the step is marked done. Never asked in a US project.
+- **A broker whose exports stop while it holds positions is named**: for
+  each account and broker, exports that end before the tax year's end (or
+  before today in the year still running) — an IB statement's period, an
+  RBC export's as-of date, a Webull export's date range or trading-summary
+  year, else the last row — while the broker still holds positions there
+  are a run Warning ("<broker> exports for <account> end <date> with open
+  positions ...; download the rest of the year"), the checklist's new
+  export-coverage step and quick-start's inputs step. A broker whose
+  positions are all closed is never listed.
 - **`taxjson quick-start` lists every step from install to filing**
   (`tjs quick-start`), each with the exact command(s) and a one-line why:
   install or upgrade, `init`, the accounts, the broker files, `run`, filling

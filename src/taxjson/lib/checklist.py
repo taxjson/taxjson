@@ -57,6 +57,10 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("inputs-frozen", 1, "Full-year activity plus January of the next year",
      "taxjson fetch / broker exports",
      "December trades settle in January and option closes after year end change the year."),
+    ("export-coverage", 1, "Each broker's exports reach the year end wherever it still holds positions",
+     "taxjson run (its export-coverage warnings)",
+     "A broker whose exports stop while it holds positions leaves its later sales, option "
+     "expiries and income out of the books — nothing else says so."),
     ("sheltered-inputs", 1, "Sheltered accounts' activity present",
      "inputs/<sheltered>/",
      "RRSP/LIRA/TFSA/RESP purchases decide the superficial-loss rule for the taxable accounts."),
@@ -267,12 +271,19 @@ class Result:
     override: Optional[str] = None      # "done" | "skipped"
     note: str = ""
     finding: str = ""                   # detector status when an override hides it
+    # The attention is a QUESTION only the user can answer (the files
+    # cannot tell): a DONE mark is the answer and settles it — the
+    # finding stays shown beside the mark (option-boundary's transition
+    # question CA-OPT-11, export-coverage).
+    question: bool = False
 
     @property
     def effective(self) -> str:
         # A DONE mark never outranks a detector finding (README: "a mark
         # never hides a later finding"); --skip is the explicit accept.
-        if self.override == "done" and self.status == "attention":
+        # A question's DONE mark is its answer.
+        if self.override == "done" and self.status == "attention" \
+                and not self.question:
             return "attention"
         # ...nor a detector that could not check anything (crashed, or
         # its prerequisite is gone): a stale mark showed [x] over a
@@ -558,6 +569,32 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
     return Result("inputs-frozen", "attention",
                   f"latest activity {latest[:10] or '?'} — January {ctx.year + 1} "
                   f"is not in the books yet")
+
+
+def d_export_coverage(ctx: Ctx) -> Result:
+    """Each account's exports from each broker reach the tax year's end
+    (today in the running year) wherever that broker still holds
+    positions in the account (lib/export_coverage). A question when the
+    end is read from the last row only: a DONE mark answers it."""
+    from taxjson.lib import export_coverage as EC
+    names = [n for n, a in ctx.accounts.items()
+             if isinstance(a, dict) and not a.get("crypto")]
+    if not names:
+        return Result("export-coverage", "n/a", "no broker account")
+    if not any((ctx.cache / f"{n}_base.json").is_file() for n in names):
+        return Result("export-coverage", "blocked",
+                      "no work/*_base.json — run `taxjson run`")
+    gaps = EC.find_gaps(ctx.root, ctx.cfg, today=ctx.today)
+    if gaps:
+        # Only an end read from the last row is a question (the broker
+        # may simply have been quiet); a statement or as-of date is the
+        # export's own end: `--skip` accepts it.
+        return Result("export-coverage", "attention", EC.detail(gaps),
+                      question=all(g.how == "last-row" for g in gaps))
+    return Result("export-coverage", "done",
+                  "every broker with open positions has exports to "
+                  + ("today" if ctx.today <= date(ctx.year, 12, 31)
+                     else f"{ctx.year}-12-31"))
 
 
 def d_sheltered_inputs(ctx: Ctx) -> Result:
@@ -1548,6 +1585,10 @@ def d_option_boundary(ctx: Ctx) -> Result:
             parts.append(f"{att} need attention (a locked year on transition close "
                          f"timing, a premium no filed return reports, or an "
                          f"expired contract with no expiry row)")
+        _asked = [r for r in rows if r.get("question")]
+        if _asked:
+            from taxjson.lib.option_boundary import question_detail
+            parts.append(question_detail(_asked, ctx.year))
         return Result("option-boundary", "attention",
                       "; ".join(parts) + " — `taxjson option-boundary`")
     if doc.get("missing_books"):
@@ -1557,6 +1598,15 @@ def d_option_boundary(ctx: Ctx) -> Result:
         return Result("option-boundary", "attention",
                       "option_grant_timing_since is not set in [settings] — the default "
                       "follows `year`; set it once and keep it")
+    asked = [r for r in rows if r.get("question")]
+    if asked:
+        # Transition contracts closed this year (CA-OPT-11): the premium
+        # is in this year's gain, right only if the write year's return
+        # did not report it — the user's answer (a DONE mark, or the
+        # setting lowered to the write year) settles it.
+        from taxjson.lib.option_boundary import question_detail
+        return Result("option-boundary", "attention",
+                      question_detail(asked, ctx.year), question=True)
     return Result("option-boundary", "done", "no amendment required")
 
 
@@ -2031,6 +2081,7 @@ def d_noa(ctx: Ctx) -> Result:
 
 DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "inputs-frozen": d_inputs_frozen,
+    "export-coverage": d_export_coverage,
     "sheltered-inputs": d_sheltered_inputs,
     "crypto-inputs": d_crypto_inputs,
     "roc-entered": d_roc_entered,

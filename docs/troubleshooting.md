@@ -516,6 +516,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/brokerages/ib_extractor.py` — `no Cash Report — parsed money is NOT reconciled`, `parsed rows do not reconcile with IB's own`
 
+### "Warning: Webull exports for margin end 2025-10-06 with open positions (QZT270115C00090000.US 14); download the rest of 2026"
+- **Check:** the details say how the end was read: an IB statement's Period, an RBC export's "as of" date, a Webull export's date range or trading-summary year, or — for a broker whose export names no end (Questrade, a generic mapping) — the last row. `tjs checklist` shows `[!] export-coverage`, `tjs quick-start` its inputs step.
+- **Cause:** that broker's exports for the account stop before the tax year's end (before today in the year still running; an explicit end may trail today by 14 days) while it still holds positions there, so its later sales, option expiries and assignments, and income are not in the books — and nothing else says so (a broker whose positions are all closed is never listed). An end read from the last row is flagged only after more than 30 days of the year with no row.
+- **Fix:** download the broker's activity for the rest of the year into `inputs/<account>/` and `tjs run`. If the end is the last row and the broker really had no later activity for the account, `tjs checklist --done export-coverage` answers it (the run then says a note); an IB statement or RBC export's own end is accepted only with `--skip`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/export_coverage.py` — `find_gaps`, `account_gaps`, `open_positions`, `message`; `src/taxjson/bin/taxjson_run.py` — `_say_export_coverage`; `src/taxjson/lib/checklist.py` — `d_export_coverage`
+
 ### IB: "Warning: U1234567.csv: the account's IB statements end 2025-12-15, before the end of 2025" or "Warning: IB statements leave 2025-12-16 .. 2025-12-19 uncovered (between … and …)"
 - **Check:** the `Statement,Data,Period,…` line of each IB file in `inputs/<account>/`.
 - **Cause:** an IB statement holds only its Period. taxjson joins the periods of every statement of one IB account and names the days that none covers. Trades and income on those days are missing from the books.
@@ -839,6 +846,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_convert_currency.py` — `missing_rate_message`, `no exchange rate for`; `src/taxjson/bin/to_base_curr.py` — `resolve_rows`, `refresh_boc`, `using cached rates only`, `download failed —`; `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`
 
 ## Options
+
+### "Warning: 1 option contract you wrote in 2025 and closed in 2026 is on transition close timing: 400.00 of premium is taxed in 2026"
+- **Check:** `tjs option-boundary` lists the contract with "QUESTION: did your 2025 return report the … premium when the contract was written?"; `tjs checklist` shows `[!] option-boundary` with the same question, `tjs quick-start` its option-timing step. The project's `[settings] option_grant_timing_since` is the project year (what `tjs init` writes) and no `filed/2025.json` lock (or `prior_year_record`) records how 2025 was filed.
+- **Cause:** grant timing (ITA s.49(1)) puts a written option's premium in the year written, but a contract written before `option_grant_timing_since` keeps close timing (the transition from books filed the old way): its premium is in this year's gain at the buy-back or expiry. That is right only if the write year's return did not report the premium; if it did (last year's return was on grant timing — a previous taxjson project, or your preparer's), the premium is taxed twice. Only you know which; nothing was said before (the checklist showed "no amendment required").
+- **Fix:** if last year's return reported these premiums when written, set `option_grant_timing_since = 2025` (the first year filed under grant timing) and keep it in every later project: the premium then stays in 2025 and only the buy-back is 2026's. If it did not, the transition is right: `tjs checklist --done option-boundary` (add `--note`) answers it, and the run says a note instead. A `filed/2025.json` lock that records the timing answers it too.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/option_boundary.py` — `straddling`, `QUESTION: did your`, `project_question_rows`, `question_message`; `src/taxjson/bin/taxjson_run.py` — `_say_option_transition`, `_checklist_answered`; `src/taxjson/lib/checklist.py` — `d_option_boundary`
 
 ### "Warning: margin: QZQ250117C00040000.US expired 2025-01-17 but the books still hold 1 (long)"
 - **Check:** `tjs list margin` shows the contract still open after its expiry.

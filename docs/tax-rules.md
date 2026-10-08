@@ -90,10 +90,10 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 ## Options: premium timing (s.49)
 
-- **Rule:** writing an option is a disposition: the premium is a capital gain in the year written (`option_premium_timing = "grant"`, the default, for contracts written from `option_grant_timing_since`; earlier contracts keep close timing). Buying it back is a capital loss in the buy-back year; expiry adds nothing. A bought option's cost is a loss on its expiry date. Under `"close"` nothing is taxed until the position closes, and the premium minus the cost is the gain or loss on that date. When a premium's year was already filed and the option is later exercised or assigned, `taxjson option-boundary` names the grant year to amend.
+- **Rule:** writing an option is a disposition: the premium is a capital gain in the year written (`option_premium_timing = "grant"`, the default, for contracts written from `option_grant_timing_since`; earlier contracts keep close timing). Buying it back is a capital loss in the buy-back year; expiry adds nothing. A bought option's cost is a loss on its expiry date. Under `"close"` nothing is taxed until the position closes, and the premium minus the cost is the gain or loss on that date. When a premium's year was already filed and the option is later exercised or assigned, `taxjson option-boundary` names the grant year to amend. A contract written before `option_grant_timing_since` and bought back, expired or cash-settled in the project year (a transition contract) has its premium taxed in this year — right only if its write year's return did not report it: with no filed-year lock recording how that year was filed, `taxjson run` warns with the premium at stake and asks, and the checklist's option-boundary step (quick-start's option-timing step) needs attention until `option_grant_timing_since` is lowered to the write year or the step is marked done.
 - **Source:** s.49(1)–(4); **IT-479R** *Transactions in Securities*, paras 23–32 (para 29 for calls, para 32 for puts).
-- **Rule ids:** `CA-OPT-01`, `CA-OPT-02`, `CA-OPT-03`, `CA-OPT-04`, `CA-OPT-05` and `CA-OPT-10` *(setting: `option_premium_timing = "close"`)*, `CA-OPT-07`, `CA-SL-11`.
-- **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `_grant_applies`, `_open_short_option`, `_recognised_premium`; `src/taxjson/lib/pipeline.py` — `option_timing_from_settings`; `src/taxjson/lib/option_boundary.py` — `write_lots`, `straddling`, `filed_locks`.
+- **Rule ids:** `CA-OPT-01`, `CA-OPT-02`, `CA-OPT-11`, `CA-OPT-03`, `CA-OPT-04`, `CA-OPT-05` and `CA-OPT-10` *(setting: `option_premium_timing = "close"`)*, `CA-OPT-07`, `CA-SL-11`.
+- **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `_grant_applies`, `_open_short_option`, `_recognised_premium`; `src/taxjson/lib/pipeline.py` — `option_timing_from_settings`; `src/taxjson/lib/option_boundary.py` — `write_lots`, `straddling`, `filed_locks`, `project_question_rows`; `src/taxjson/bin/taxjson_run.py` — `_say_option_transition`.
 - **Edge cases and limits:** set `option_grant_timing_since` once to the first year filed under grant timing and keep it unchanged in later projects; a written option carried out of a closed year under another timing is flagged by `taxjson handoff` (taxed twice, or never) (`CA-RPT-08`). Whether naked option writing is on income account is the user's question (IT-479R para 25(c); `REFERENCES.md` "Capital vs income character").
 
 ## Option exercise and assignment; warrants and rights
@@ -346,9 +346,9 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 ## Options (§1234), exercise, assignment and warrants
 
-- **Rule:** premiums are taxed when the position closes. Exercise or assignment folds the premium into the stock's basis or proceeds; each assignment's premium goes to its own stock leg (same pairing rule as Canada). Cash-settled options realize on the option. Exercising a warrant or right is not a sale: its basis and the exercise price become the shares' basis, and the holding period starts at exercise.
+- **Rule:** premiums are taxed when the position closes; there is no grant timing, so no transition question is asked (a contract written last year and closed this year is taxed at the close like any other). Exercise or assignment folds the premium into the stock's basis or proceeds; each assignment's premium goes to its own stock leg (same pairing rule as Canada). Cash-settled options realize on the option. Exercising a warrant or right is not a sale: its basis and the exercise price become the shares' basis, and the holding period starts at exercise.
 - **Source:** §1234; Pub 550 "Options".
-- **Rule ids:** `US-OPT-01`, `US-OPT-02`, `US-OPT-03`, `US-OPT-05`, `US-OPT-06`.
+- **Rule ids:** `US-OPT-01`, `US-OPT-07`, `US-OPT-02`, `US-OPT-03`, `US-OPT-05`, `US-OPT-06`.
 - **Code:** `src/taxjson/lib/core.py` — `USATaxRules`, `_take_option_adj`, `_pair_assign_legs`, `exercise_target`.
 
 ## §1256 contracts and futures

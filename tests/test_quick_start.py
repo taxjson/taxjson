@@ -367,15 +367,16 @@ class TestCleanProject(unittest.TestCase):
         for sid in ("install", "init", "configure", "inputs", "run",
                     "elections", "missing-history", "transfers",
                     "ticker-map", "journals", "renames", "sanity",
-                    "wash-sales"):
+                    "wash-sales", "option-timing"):
             self.assertEqual(st[sid], "done", sid)
         self.assertEqual(st["crypto-sends"], "n/a")
         self.assertEqual(doc["counts"]["attention"], 0)
         self.assertGreaterEqual(doc["counts"]["done"], 13)
         self.assertEqual(doc["next"]["id"], "checklist")
         assert_styled(self, text, PIPE_WIDTH)
+        n = [x.id for x in QS.steps(2024)].index("checklist") + 1
         self.assertEqual(text.splitlines()[-1],
-                         "Next (step 20): `tjs checklist`")
+                         f"Next (step {n}): `tjs checklist`")
 
     def test_a_checklist_mark_counts(self):
         """A review step the user marked done in checklist.json is done."""

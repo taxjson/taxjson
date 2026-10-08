@@ -261,6 +261,19 @@ def steps(year: int, country: Optional[str] = None) -> List[Step]:
              "window, changes the year or the denial.",
              (Cmd("tjs edge-cases", "each one, with where it lands and "
                   "why"),)),
+        Step("option-timing", "Check",
+             "Written options carried in from an earlier year",
+             "A contract written before option_grant_timing_since and "
+             "closed this year is taxed at the close: right only if the "
+             "year it was written did not report its premium (ITA "
+             "s.49(1)), which only you know.",
+             (Cmd("tjs option-boundary", "each contract, where its premium "
+                  "lands and what to do", "canada"),),
+             how="If last year's return reported the premiums when "
+                 "written, set option_grant_timing_since = <that year> in "
+                 "[settings]; if it did not, confirm with `tjs checklist "
+                 "--done option-boundary`.",
+             do="answer the question (`tjs option-boundary`)"),
         Step("wash-sales", "Check",
              "Review each denied loss (superficial loss / wash sale)",
              "A loss denied by a registered-account (US: IRA) repurchase "
@@ -582,6 +595,16 @@ def evaluate(root: Path, today: Optional[date] = None) -> Guide:
                 res.finding = res.detail
         return _from_checklist(res, ran)
 
+    def option_question(ctx_) -> Any:
+        from taxjson.lib import option_boundary as OB
+        rows = OB.project_question_rows(root, cfg or {}, today=today)
+        if rows:
+            return cl.Result("option-boundary", "attention",
+                             OB.question_detail(rows, year), question=True)
+        return cl.Result("option-boundary", "done",
+                         "no contract written before "
+                         "option_grant_timing_since closed this year")
+
     def marked(sid: str, st: State) -> State:
         """A review step the user marked done/skipped in checklist.json."""
         ov = overrides.get(sid) or {}
@@ -589,6 +612,13 @@ def evaluate(root: Path, today: Optional[date] = None) -> Guide:
             return State("done", f"marked {ov['status']} in checklist.json"
                          + (f": {ov['note']}" if ov.get("note") else ""))
         return st
+
+    # A broker whose exports stop while it holds positions
+    # (lib/export_coverage): only the books can tell.
+    if ran and S["inputs"].status == "done":
+        cov = checked("export-coverage", cl.d_export_coverage)
+        if cov.status == "attention":
+            S["inputs"] = cov
 
     # Build the books
     S["run"] = checked("run-clean", cl.d_run_clean) if ran else State(
@@ -712,6 +742,13 @@ def evaluate(root: Path, today: Optional[date] = None) -> Guide:
     else:
         S["sanity"] = State("done", "no open position to check")
     S["edge-cases"] = State("review")
+    if country == "usa":
+        S["option-timing"] = State("n/a", "US project: a premium is taxed "
+                                   "at the close (§1234)")
+    elif ran:
+        S["option-timing"] = checked("option-boundary", option_question)
+    else:
+        S["option-timing"] = State("todo", "after `tjs run`")
     S["wash-sales"] = checked("wash-reviewed", cl.d_wash_reviewed)
     S["check-dates"] = marked("check-dates", State("review"))
     lock = root / "filed" / f"{year}.json"

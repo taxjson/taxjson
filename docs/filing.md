@@ -23,6 +23,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
       in January and option closes after year end change the year's
       numbers (`option-boundary`, below), so the extra month is not
       optional.
+- [ ] **Every broker's exports reach the year end** wherever it still
+      holds positions: `taxjson run` warns ("<broker> exports for
+      <account> end <date> with open positions") when one stops early —
+      its later sales, option expiries and income would be missing.
 - [ ] **Sheltered accounts too.** RRSP, LIRA, TFSA and RESP owe no tax,
       but their purchases decide the superficial-loss rule for the
       taxable ones; without them a permanently denied loss is invisible.
@@ -80,7 +84,9 @@ the open steps one at a time; `--quick` skips the slow detectors.
       purchase or sale within a few days of day 30 of its superficial-loss
       window. Read the items marked THE DATE BASIS DECIDES THIS ONE.
 - [ ] `taxjson option-boundary` — confirms whether a written option that
-      straddles the year end requires a prior-year amendment.
+      straddles the year end requires a prior-year amendment, and asks
+      about a contract written before `option_grant_timing_since` and
+      closed this year: did the year it was written report its premium?
 - [ ] `taxjson handoff` — last year's closing positions, the trades
       that settled in January, and any prior-year correction are carried
       into this year exactly once (needs last year's `close-year` record).
