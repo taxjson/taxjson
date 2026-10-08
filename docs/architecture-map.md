@@ -399,14 +399,17 @@ straddle a year end.
 `form-export` renders gains into filing shapes (Schedule 3 lines for Canada,
 Form 8949 and TXF for the US). `t1135` helps with the foreign property form.
 `reconcile-slips` compares the broker's T5008 or 1099-B slips with the
-computed dispositions. `carryover` keeps the loss carry-forward ledger.
+computed dispositions; `slip-audit` (Canada) compares the T5 and T3 slips
+with the books' income. `carryover` keeps the loss carry-forward ledger.
 
 - `src/taxjson/bin/taxjson_form_export.py` — `main`, `build_schedule3`, `schedule3_line`, `build_8949`, `build_txf`, `filing_lines`: the form renderers.
 - `src/taxjson/bin/taxjson_t1135.py` — `build_report`, `render_report`, `walk_costs`, `classify_country`, `FILING_THRESHOLD`: T1135 cost amounts by country.
 - `src/taxjson/bin/taxjson_reconcile_slips.py` — `reconcile`, `load_slip`, `load_computed`, `render`, `SlipRefused`: slip reconciliation.
+- `src/taxjson/lib/slip_audit.py` — `audit`, `load_slips_file`, `load_books`, `ib_slips`, `annual_average`, `_audit_group`, `_match_payments`, `_securities`, `_suggest_cgd`, `_suggest_roc`, `question_keys`, `template`, `render`: `taxjson slip-audit` — the slips in inputs/slips/ (slips.toml, IB's dividends reports) against the books' income per account, broker account, currency and box; the suggestions; the checklist's t5-t3 step (`src/taxjson/lib/checklist.py` — `d_t5_t3`) and quick-start's slip-audit step.
+- `src/taxjson/lib/ib_dividends.py` — `read_report`, `is_dividends_report`, `component_category`, `Payment`: IBKR's dividends report (U*.YYYY.dividends.csv), payment by payment with its T5/T3 split; the holder's name is never read.
 - `src/taxjson/bin/taxjson_carryover.py` — `build_canada_ledger`, `build_usa_ledger`, `load_claimed`, `lock_figure`, `render`: the carryover ledger.
 - `src/taxjson/lib/carryforward.py` — `resolve_losses`, `resolve_amt`, `record_block`, `lock_block`, `handoff_issues`: carry-forwards from one year to the next.
-- `src/taxjson/bin/taxjson_run.py` — `cmd_form_export`, `cmd_t1135`, `cmd_reconcile_slips`, `cmd_carryover`, `_taxable_gains_argv`: the commands.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_form_export`, `cmd_t1135`, `cmd_reconcile_slips`, `cmd_slip_audit`, `cmd_carryover`, `_taxable_gains_argv`: the commands.
 
 ## Filed-year lock and year hand-off
 

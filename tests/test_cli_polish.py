@@ -151,7 +151,8 @@ class TestGroupedHelp(unittest.TestCase):
 
 
 class TestCountryAwareHelp(unittest.TestCase):
-    ONE_COUNTRY = ("t1135", "instalments", "option-boundary", "amt")
+    ONE_COUNTRY = ("t1135", "instalments", "option-boundary", "amt",
+                   "slip-audit")
 
     def _project(self, d, country):
         base = "USD" if country == "usa" else "CAD"
@@ -167,7 +168,7 @@ class TestCountryAwareHelp(unittest.TestCase):
             listed = _listed(out)
             for c in self.ONE_COUNTRY:
                 self.assertNotIn(c, listed)
-            self.assertIn("4 commands hidden for USA — `taxjson help "
+            self.assertIn("5 commands hidden for USA — `taxjson help "
                           "--all` lists every command.",
                           " ".join(out.split()))
             self.assertIn("form-export", listed)     # generic, stays

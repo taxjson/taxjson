@@ -435,6 +435,7 @@ COMMAND_COUNTRY: Dict[str, str] = {
     "form-export:txf": USA,
     "crypto-sends:gift": CANADA,
     "amt": CANADA,
+    "slip-audit": CANADA,
 }
 
 COMMAND_WHY: Dict[str, str] = {
@@ -456,6 +457,8 @@ COMMAND_WHY: Dict[str, str] = {
     "amt": "the Canadian minimum tax (ITA s.127.5-127.55, form T691) and "
            "its carryover (s.120.2); the US alternative minimum tax "
            "(Form 6251) is not modelled",
+    "slip-audit": "T5 / T3 slips are CRA's (tax-logic CA-SLIP-01); a US "
+                  "1099-DIV / 1099-INT audit is not built",
 }
 
 

@@ -15,6 +15,8 @@ A project is a folder:
 | `inputs/<crypto account>/sends.json`, `crypto_sends.tt` | your crypto-send decisions and the sales generated from them | [sends.json](#inputscrypto-accountsendsjson-and-crypto_sendstt) |
 | `missing_history.json` | sales whose purchase is not in your files | [missing_history.json](#missing_historyjson) |
 | holdings TOML (anywhere) | a broker's positions, for `taxjson sanity` / `taxjson opening` | [Holdings TOML](#holdings-toml) |
+| `inputs/slips/slips.toml`, `inputs/slips/U*.YYYY.dividends.csv` | your T5 / T3 slips and IB's dividends reports, for `taxjson slip-audit` | [inputs/slips/](#inputsslips-slipstoml-and-ibs-dividends-reports) |
+| `inputs/slips/*.csv` | T5008 / 1099-B slips, for `taxjson reconcile-slips` | — |
 | `filed/<year>.json` | close-year locks | [filed/YEAR.json](#filedyearjson-close-year-locks) |
 | `work/`, `reports/` | rebuilt by every `taxjson run`; never edited | — |
 
@@ -678,6 +680,49 @@ acquired = "2021-03-04"
 
 ---
 
+## inputs/slips/: slips.toml and IB's dividends reports
+
+What `taxjson slip-audit` compares with the books' income (Canada only; tax-logic `CA-SLIP-01` to `CA-SLIP-03`). Never booked by `taxjson run`: a slip changes no figure. Reader: `src/taxjson/lib/slip_audit.py` — `load_slips_file`, `ib_slips`, `find_ib_reports`; `src/taxjson/lib/ib_dividends.py` — `read_report`, `is_dividends_report`.
+
+`slips.toml` holds the slips you type from the PDFs, one `[[slip]]` table per slip (`taxjson slip-audit --template` prints one with a T5 per account and currency that has income). Type each box as the slip prints it (a thousands comma is fine; IB's T3 prints `405 54` for 405.54: type `405.54`), and leave out the boxes it leaves blank. Never type a name, a SIN or an address.
+
+| Key | Meaning |
+| --- | --- |
+| `year` | optional; must be the project's year (last year's file is refused) |
+| `[[slip]] type` | `T5`, `T3` or `T5008` (an NR4 is refused: compare it by hand) |
+| `account` | required: the taxjson account (`[accounts.NAME]`, taxable) the slip's payments are in |
+| `issuer` | a label for the payer or broker (`RBC`, `IB`) |
+| `currency` | the slip's currency (T5 box 27; RBC and Webull send one T5 per currency); default `CAD` |
+| `broker_account` | optional: the account number on the slip, only to tell two broker accounts of one account label apart; it is hashed the way the books keep it and never printed (shown as its first two characters and `***`) |
+| `security` | a T3's fund (`XYZQ.TO`, or its root): its boxes split that fund's distribution |
+| `code` | a T5008's type code (`SHS`, `OPC` ...): an aggregated T5008 is compared per class, as information |
+| `boxes` | `{ BOX = AMOUNT }`. Compared: T5 24, 10, 18, 15, 16, 13, 14; T3 49, 23, 21, 24, 25, 26, 33, 34, 42; T5008 20, 21. Accepted and not compared: the derived boxes (T5 25, 26, 11, 12; T3 50, 51, 32, 39, 30 ...). Refused: the identifier boxes (recipient, account, report code) |
+| `[[slip.line]] symbol`, `date`, `box`, `amount` | optional per-security lines (an RBC summary page, a split-corp page): a box-18 or box-42 line makes the suggestions name the security; `date` is optional |
+| `[[ib_report]] file`, `account` | the account an IB dividends report belongs to, when no account's books carry its IB account |
+| `[annual_average] CUR = RATE` | the year's average rate to use instead of the FX cache's (CRA's published one, say) |
+
+```toml
+year = 2025
+
+[[slip]]
+type = "T5"
+issuer = "RBC"
+account = "margin"
+currency = "USD"
+boxes = { 15 = 60.00, 16 = 9.00 }
+
+[[slip]]
+type = "T3"
+issuer = "RBC"
+account = "margin"
+security = "ZZF.TO"
+boxes = { 49 = 70.00, 50 = 96.60, 21 = 20.00, 42 = 10.00 }
+```
+
+IB's dividends report (Reports › Tax › Dividend report, saved as CSV: `U1234567.2025.dividends.csv`) is read as is, payment by payment: each payment's `RevenueComponent` rows give its slip boxes (`T5: Eligible Dividend Income` box 24, `T5: Capital Gains` box 18, `T3: Eligible Dividend Income` box 49, `T3: Foreign Non-Business Income` box 25, `T3: Return of Capital` box 42, `T3: Capital Gains` box 21, a plain `Ordinary Dividend` box 24 for a Canadian issuer and box 15 for a foreign one; `Withhold` box 16 / 34), at IB's rate (`GrossInBase`). Its `Account` section names the holder: taxjson reads only the account number (hashed, masked when shown) and the base currency. The report is matched to the project account whose books carry that IB account; `reconcile-slips` and the checklist's T5008 step skip it. The report has no interest: type the T5's box 13 as a `[[slip]]` with the IB account as `broker_account` to compare it.
+
+---
+
 ## inputs/ACCOUNT/manifest.json: corporate-action elections
 
 Your tax election for each merger, spin-off or name change, keyed by event id; written by `taxjson run`'s prompt or `taxjson elect ACCOUNT --set EVENT_ID=ELECTION --hint KEY=VALUE`. Commit it. Reader: `src/taxjson/lib/corp_actions.py` — `Manifest`, `HINTS_BY_ELECTION`, `RULES_BY_COUNTRY`.
@@ -788,6 +833,27 @@ Each step:
 | `status` | `done`, `attention`, `todo`, `review` (yours to run and read: taxjson cannot tell whether you did) or `n/a`; `null` outside a project |
 | `detail` | what the project's files say about it (empty when nothing to say) |
 | `next` | `true` for the step `next` names |
+
+---
+
+## `taxjson slip-audit --json`
+
+The slip audit as one document: a stable schema for programs (new keys may be added; none is renamed or removed while `schema_version` is 1). Code: `src/taxjson/lib/slip_audit.py` — `audit`, `SCHEMA_VERSION`, `CATEGORIES`, `question_keys`.
+
+| Key | Meaning |
+| --- | --- |
+| `schema_version`, `year`, `country` | `1`, the tax year, `"canada"` |
+| `tolerance`, `fx_band` | the allowed difference per box (CAD), and the share of a box's converted money also allowed (`0.005`) |
+| `sources` | the slip sources read: `{"kind": "slips.toml", "file", "slips"}` or `{"kind": "ib-dividends", "file", "account", "broker_account" (masked), "payments", "unknown_components", "problems"}` |
+| `annual_average` | `{CUR: {"rate", "observations", "source"} \| null}` for each foreign currency in sight |
+| `accounts` | `[{"account", "status", "groups"}]`; a group is the slips of one broker account (or of the whole account): `{"broker_account", "slips", "buckets", "payments", "securities", "record_year"}` |
+| `buckets[]` | per slip currency: `{"currency", "slips", "split_by_t3", "lines"}`; each line `{"category", "label", "boxes", "slip", "books", "diff", "tolerance", "status" (ok, differs, under-50), "converted", "books_annual_average", "closest" (daily, annual or null)}`, and in a foreign currency `"books_cad_daily"`, `"slip_cad_annual_average"` |
+| `payments` | IB's payments against the books: `matched`, `missing_from_books`, `missing_from_slip`, `amount_differs`, `other_year` |
+| `coverage` | `no_slip` (an account's income with no slip; `small_interest_only` when it is interest under 50) and `slips_without_books` |
+| `t5008` | aggregated T5008 slips against the books' dispositions, per class (information) |
+| `suggestions` | `capital_gains_dividends` (`{"symbol", "date", "year", "amount", "account", "toml"}`), `tt_lines` (`{"account", "file", "lines"}`), `notes` |
+| `problems` | inputs not compared (an IB report no account carries, an unknown component) |
+| `issues`, `status` | the findings `{"account", "kind", "text"}` (kinds: `differs`, `no-slip`, `no-books`, `empty-slip`, `missing-from-books`, `missing-from-slip`, `amount-differs`) and `ok` / `attention` / `no-slips`; the command exits 1 when `issues` is not empty |
 
 ---
 

@@ -1652,6 +1652,34 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "no gross-up or credit) and `taxjson carryover` adds it "
                  "to its year's net capital gain or loss. ACB is "
                  "unchanged."),
+            Rule("CA-SLIP-01",
+                 "`taxjson slip-audit` compares each T5 and T3 slip with "
+                 "the books' income of its account, box by box: T5 24/10 "
+                 "and T3 49/23 with a Canadian issuer's dividends and "
+                 "payments in lieu, T5 18 with [[capital_gains_dividends]] "
+                 "(CA-INC-06), T5 15 and T3 24/25 with a foreign issuer's, "
+                 "T5 16 and T3 33/34 with the tax withheld, T3 42 with the "
+                 "return of capital (roc-sum), T5 13 with the interest "
+                 "received. A T3's split of a trust's distribution (boxes "
+                 "21, 25, 26, 49) is applied to the one dividend the books "
+                 "carry for it. Income counts in its tax year: a Canadian "
+                 "trust's distribution by its record date "
+                 "(CA-INC-DATE-TRUST), so a January payment can be on last "
+                 "year's T3; IB's rows have no record date."),
+            Rule("CA-SLIP-02",
+                 "The books convert each foreign payment at the Bank of "
+                 "Canada rate of its date (CA-FX-01); the audit also shows "
+                 "the payments at the year's average rate (the mean of the "
+                 "Bank's daily rates of the year) and names the one a CAD "
+                 "slip's figure is closer to; a slip in another currency "
+                 "is compared in that currency.", cont=True),
+            Rule("CA-SLIP-03",
+                 "The slip is authoritative (CA-INC-02): the audit changes "
+                 "no figure. It lists the [[capital_gains_dividends]] "
+                 "entries and the .tt `ADJUST ... type=roc` lines (with a "
+                 "negative DIVIDEND line when the dividend row holds the "
+                 "return of capital) that bring the books to the slips.",
+                 cont=True),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",
