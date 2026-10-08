@@ -12,8 +12,9 @@
   whose dividends, withholding and interest it matches (one broker's
   slips shared out among its accounts), a T3 in the fund whose
   distributions it matches. It shows the `[[slip]]` tables it would add;
-  `--write` appends them to `inputs/slips/slips.toml` (a file already
-  imported is skipped). A slip it cannot place is listed (ACCOUNT puts it
+  `--write` writes them to `inputs/slips/slips.toml`: each slip once (a
+  slip read twice, or already there, is not added again; an amended slip
+  replaces its original). A slip it cannot place is listed (ACCOUNT puts it
   in that account). Where IB's dividends report covers the same broker
   account, the CRA copy's boxes are compared and the report keeps only
   its payments. Tax-logic `CA-SLIP-04`.
@@ -42,6 +43,40 @@
   the other writers do since #9: it used the fixed `<file>.part`, so a
   leftover one (an interrupted export) stopped every later export with
   "File exists", and two exports of one file shared the temp file.
+- `taxjson slip-audit` and `--import-cra` (pre-release review):
+  - a PDF holding two slips (pages saved together, a merged file) is
+    read as two slips; it was one slip with the second slip's boxes
+    read into the first (a T3's box 24 taken as the T5's, boxes lost);
+  - each slip counts once: a second download, a file named with its
+    folder, an original and its amended slip no longer add up — the
+    amended slip replaces the original (in the import, or a table
+    already in slips.toml, commented out with a backup) and `status`
+    is written into the table;
+  - a T5 typed for the IB account beside IB's dividends report, and two
+    copies of the report, are no longer counted twice; `--template`
+    prints no table for a broker account the report covers;
+  - an issuer is placed at a broker only when it carries the broker's
+    whole name: TD Direct Investing, Qtrade, National Bank Direct
+    Brokerage, RBC Royal Bank and RBC Global Asset Management slips
+    were placed in the RBC Direct Investing account;
+  - slips.toml's `broker_key` is salted with the project's own salt
+    (in work/), so it cannot be turned back into the IB account number;
+    `taxjson redact` replaces it in its copy;
+  - the issuer is read from the slip line and one more name-like line,
+    never the recipient's details below it;
+  - IB's dividends report of a USD-base account is compared in CAD,
+    each payment at the Bank of Canada rate of its pay date (it was
+    compared in USD);
+  - smaller: box 27 printed as `US$` or `U.S. dollars`, "(Original)",
+    a French page and an unknown slip line said rather than misread; a
+    USD slip with no rate in the FX cache is not placed by a guess; a
+    report of two IB accounts is refused; a slip of a two-account IB
+    statement goes to the account whose dividends report matches it;
+    control characters in an issuer are escaped and the file is checked
+    to read back before `--write`; `--json` works with `--import-cra`;
+    pdftotext's failure and a dividends report left in an account's
+    folder name the file masked; the checklist's t5-t3 step names NR4
+    slips and `--import-cra` again.
 - `taxjson format-map` replaces every header an earlier taxjson version
   wrote into ticker.map with the current one: the earliest projects'
   header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD

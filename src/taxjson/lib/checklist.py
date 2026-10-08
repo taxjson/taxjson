@@ -122,13 +122,15 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("t5008", 3, "T5008 slips reconcile to the computed dispositions",
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
-    ("t5-t3", 3, "T5 / T3 slips agree with the books' income (dividends, box 18, ROC, foreign tax, interest)",
+    ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the books' income (dividends, box 18, ROC, foreign tax, "
+     "interest)",
      "taxjson slip-audit",
      "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
      "corporations report on a T5, where box 18 capital-gains dividends go on line 17400 "
      "(taxjson books them as dividends until [[capital_gains_dividends]] names them). "
      "`taxjson slip-audit` compares each slip box with the books (the slips typed into "
-     "inputs/slips/slips.toml, IB's dividends reports) and lists the lines that bring the "
+     "inputs/slips/slips.toml or read from CRA My Account's PDFs with `taxjson slip-audit "
+     "--import-cra`, IB's dividends reports) and lists the lines that bring the "
      "books to the slips: payments in lieu, trust distributions dated by their record "
      "year, a T3's split (capital gains box 21, return of capital box 42). A difference "
      "you accept is answered per account by `taxjson checklist --done t5-t3`; NR4 slips "
@@ -1885,7 +1887,10 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
     DONE mark (QUESTION_STEPS). US: compared by hand."""
     if ctx is None or is_us(ctx.settings.get("country")):
         return Result("t5-t3", "manual", "compare the slips with the TAXABLE "
-                      "line of `taxjson divs-sum` / `roc-sum`")
+                      "line of `taxjson divs-sum` / `roc-sum`"
+                      + ("" if ctx is not None and is_us(
+                          ctx.settings.get("country")) else
+                         "; NR4 slips by hand"))
     from taxjson.lib import slip_audit as SA
     if not ctx.cache.is_dir():
         return Result("t5-t3", "blocked", "no work/ — run `taxjson run`")
@@ -1905,10 +1910,12 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
             return Result("t5-t3", "done", "no taxable income that a T5 or "
                           "T3 reports")
         return Result("t5-t3", "todo",
-                      "no T5/T3 slips in inputs/slips/ — type them into "
+                      "no T5/T3 slips in inputs/slips/ — read CRA My "
+                      "Account's slip PDFs (`taxjson slip-audit "
+                      "--import-cra <folder> --write`), type them into "
                       "inputs/slips/slips.toml (`taxjson slip-audit "
                       "--template` prints one) or add IB's dividends "
-                      "report (U*.YYYY.dividends.csv)")
+                      "report (U*.YYYY.dividends.csv); NR4 slips by hand")
     if issues:
         by: Dict[str, List[str]] = {}
         for i in issues:
