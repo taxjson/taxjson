@@ -109,6 +109,7 @@ PARTITION_RULES = frozenset({
     "CA-SL-01",        # s.54 window on settle dates
     "CA-SL-02",        # s.54 still held at the end of day 30
     "CA-SL-05",        # a long call replaces the shares (enforced)
+    "CA-SL-18",        # ALLOWLOSS: a filing position on one denial (US: US-WASH-25)
     "CA-ACB-01",       # s.47 average cost across accounts
     "CA-ACB-07",       # s.40(3) deemed gain on ROC beyond ACB
     "CA-ACB-08",       # s.90(1) foreign ROC as a dividend (IB)
@@ -140,6 +141,7 @@ PARTITION_RULES = frozenset({
     "US-WASH-22",      # a replacement sold before the loss still washes
     "US-BASIS-05",     # an own-account move carries the lots (CA: s.47)
     "US-WASH-12",      # a long call is a warning only
+    "US-WASH-25",      # ALLOWLOSS: a filing position on one disallowance (CA: CA-SL-18)
     "US-HOLD-01",      # short-/long-term
     "US-BASIS-01",     # FIFO per account
     "US-OPT-01",       # §1234 close timing
@@ -1296,7 +1298,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",
                  "A loss is denied when identical property is acquired "
-                 "within 30 days before or after the sale (settle dates)"),
+                 "within 30 days before or after the sale (counted on "
+                 "settle dates, whatever tax_date says)"),
             Rule("CA-SL-02", "and is still held at the end of day 30,",
                  cont=True),
             Rule("CA-SL-03", "in your taxable or sheltered accounts.",
@@ -1409,6 +1412,17 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                   "purchase recorded as a BUYSELL is counted "
                   "(transfers_as_acquisitions = false).",
                   keys=("transfers_as_acquisitions",))),
+            Rule("CA-SL-18",
+                 "A filing position against one denial is yours, not the "
+                 "law's test: a .tt line `ALLOWLOSS <sale date> <symbol> "
+                 "[<qty>] reason=\"...\"` in the taxable account that sold "
+                 "keeps that sale's loss allowed, and no ACB is raised for "
+                 "it (no double benefit); the replacement units it would "
+                 "use stay used, so every other sale's denial is "
+                 "unchanged. A line naming no denied sale, or two, stops "
+                 "the run; each position is a Warning on every run and "
+                 "listed with the denial the rule would make (`taxjson "
+                 "sum` FILING POSITIONS, `wash-sales`, the checklist)."),
         ]),
         ("In-kind moves to and from registered plans", [
             Rule("CA-INKIND-01",
@@ -2845,7 +2859,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",
                  "A loss is disallowed when the same security is bought "
-                 "within 30 days before or after the sale (trade dates),"),
+                 "within 30 days before or after the sale (counted on "
+                 "trade dates, whatever tax_date says),"),
             Rule("US-WASH-04",
                  "in any of your accounts, IRAs included;", cont=True),
             Rule("US-WASH-02", "share for share;", cont=True),
@@ -2977,6 +2992,19 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   "purchase recorded as a BUYSELL is counted "
                   "(transfers_as_acquisitions = false).",
                   keys=("transfers_as_acquisitions",))),
+            Rule("US-WASH-25",
+                 "A filing position against one disallowance is yours, not "
+                 "§1091's test: a .tt line `ALLOWLOSS <sale date> "
+                 "<symbol> [<qty>] reason=\"...\"` in the taxable account "
+                 "that sold keeps that sale's loss allowed, with no basis "
+                 "addition and no holding period carried to the "
+                 "replacement (no double benefit); the replacement shares "
+                 "it would take stay matched to it, so every other loss's "
+                 "verdict is unchanged. A line naming no disallowed sale, "
+                 "or two, stops the run; each position is a Warning on "
+                 "every run and listed with the disallowance §1091 would "
+                 "make (`taxjson sum` FILING POSITIONS, `wash-sales`, the "
+                 "checklist)."),
         ]),
         ("In-kind moves to and from retirement accounts", [
             Rule("US-INKIND-01",

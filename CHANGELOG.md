@@ -4,6 +4,20 @@
 
 ### Added
 
+- **A filing position against one superficial-loss denial (US: one wash
+  sale), declared and listed**: a `.tt` line `ALLOWLOSS <sale date>
+  <symbol> [<qty>] reason="..."` in the taxable account that sold keeps
+  that sale's loss allowed, with no ACB (US: basis) added to the
+  replacement; every other sale's verdict is unchanged. A line that names
+  no denied sale, or two, stops the run naming it. Each position is one
+  Warning per run and is listed with the denial the rule would make and
+  why (the replacement, its account, the days from the sale on settle and
+  on trade dates): `taxjson sum` (FILING POSITIONS; `filing_positions` in
+  `--json`), `taxjson wash-sales` and the checklist's new filing-positions
+  step. tax-logic CA-SL-18 / US-WASH-25 state it as your position, not the
+  rule's test; CA-SL-01 and US-WASH-01 now say the window is counted on
+  settle (Canada) or trade (US) dates whatever `tax_date` says.
+
 - **`taxjson run` asks about written options carried in from last year**:
   a contract written before `option_grant_timing_since` (a new project's
   default is its own year) and bought back or expired this year is taxed at

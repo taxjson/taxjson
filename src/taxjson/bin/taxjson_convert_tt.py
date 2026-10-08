@@ -45,7 +45,10 @@ _SUGAR_ACTIONS = ('ACQUIRED', 'INKIND')
 # and books them as events (the journal's transfer legs, the rename's
 # SPLIT row in each account holding the old symbol) — they are checked
 # here and never rows of the converted file.
-_EVENT_ACTIONS = ('JOURNAL', 'RENAME')
+_EVENT_ACTIONS = ('JOURNAL', 'RENAME', 'ALLOWLOSS')
+# ALLOWLOSS (lib/loss_overrides) is a filing position against the loss
+# rule on one sale of the account: read by `taxjson run`, checked here,
+# never a row of the books.
 JOURNAL_FORM = "JOURNAL <date> <FROM> <TO> <qty> [separate]"
 # The trailing word that marks a .tt JOURNAL line as a journal of its
 # own, never a restatement of a broker's journal near it
@@ -1258,6 +1261,11 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
             # (lib/dated_events): checked here, never a row of the file.
             if (parse_journal_line(line, source) is not None
                     or parse_rename_line(line, source) is not None):
+                continue
+            # A filing position against the loss rule (lib/loss_overrides):
+            # read by `taxjson run`, never a row of the books.
+            from taxjson.lib.loss_overrides import parse_line as _allowloss
+            if _allowloss(line, source) is not None:
                 continue
             try:
                 expanded = expand_acquired(line)

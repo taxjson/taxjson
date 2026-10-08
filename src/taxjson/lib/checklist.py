@@ -109,6 +109,10 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson wash-sales",
      "A permanently denied loss (registered-account or affiliated-person repurchase) is gone from "
      "your return; make sure each is real (an affiliated person adds it to their own ACB)."),
+    ("filing-positions", 2, "Every filing position against the superficial-loss rule confirmed",
+     "taxjson sum (FILING POSITIONS)",
+     "An ALLOWLOSS line claims a loss the rule would deny: it is your position, not the rule's "
+     "test. Keep its reason and be ready to support it; delete the line to apply the rule."),
     ("option-boundary", 2, "Year-straddling written options need no prior-year amendment",
      "taxjson option-boundary",
      "Under ITA s.49 an assignment in a later year moves the premium; a filed year may need a T1-ADJ."),
@@ -183,6 +187,11 @@ US_STEPS: Dict[str, Any] = {
                      "Paying with crypto is a sale at fair value; a gift is not a sale for the donor."),
     "wash-reviewed": ("Every wash-sale disallowance reviewed", "taxjson wash-sales",
                       "A wash sale triggered by an IRA purchase is permanently disallowed."),
+    "filing-positions": ("Every filing position against the wash-sale rule confirmed",
+                         "taxjson sum (FILING POSITIONS)",
+                         "An ALLOWLOSS line claims a loss §1091 would disallow: it is your "
+                         "position, not the rule's test. Keep its reason and be ready to "
+                         "support it; delete the line to apply the rule."),
     # No s.49 year boundary in a US project (§1234 nets at the close),
     # but a contract past its expiry with no close row keeps its premium
     # or cost out of the return — the check stays (S066-15).
@@ -234,7 +243,8 @@ US_STEPS: Dict[str, Any] = {
 # project instead of blocked by artifacts that can never exist.
 TAXABLE_ONLY = {"inputs-frozen", "roc-entered", "missing-history", "audit",
                 "crypto-sends",
-                "wash-reviewed", "option-boundary", "handoff", "t5008", "t5-t3",
+                "wash-reviewed", "filing-positions", "option-boundary",
+                "handoff", "t5008", "t5-t3",
                 "foreign-tax", "form-export", "t1135", "carryover",
                 "fx-cash", "fees", "amt", "filed-lock", "lock-committed"}
 
@@ -1516,6 +1526,44 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                   "no wash sales" if _us else "no superficial losses")
 
 
+def d_filing_positions(ctx: Ctx) -> Result:
+    """The .tt ALLOWLOSS lines (lib/loss_overrides): n/a without one; each
+    position taken is listed for the user to confirm (manual); a line the
+    final books did not resolve to one denied sale is attention."""
+    from taxjson.lib import loss_overrides as LO
+    expected = LO.read_state(ctx.cache)
+    if not expected:
+        return Result("filing-positions", "n/a",
+                      f"no {LO.KEYWORD} line in the accounts' .tt files")
+    files: Dict[str, Path] = {}
+    for n in sorted({o["account"] for o in expected}):
+        f = ctx.cache / f"{n}_gains_wash.json"
+        if not f.is_file():
+            f = ctx.cache / f"{n}_gains.json"
+        if f.is_file():
+            files[n] = f
+    items = LO.gather(files)
+    probs = LO.problems(items, expected)
+    if probs:
+        return Result("filing-positions", "attention",
+                      f"{len(probs)} {LO.KEYWORD} line(s) name no single "
+                      f"denied loss — {probs[0]}"
+                      + (" ..." if len(probs) > 1 else "")
+                      + " (`taxjson run` stops on it)")
+    verb = "disallow" if is_us(ctx.settings.get("country")) else "deny"
+    shown = []
+    for it in items:
+        for s in it.get("sales") or []:
+            shown.append(f"{s['account']} {s['date']} {s['symbol']} "
+                         f"({s['would_disallow']:,.2f} the rule would "
+                         f"{verb}; reason \"{it.get('reason')}\")")
+    return Result("filing-positions", "manual",
+                  f"{len(shown)} filing position(s) taken against the "
+                  f"rule: {'; '.join(shown[:3])}"
+                  f"{' ...' if len(shown) > 3 else ''} — confirm each "
+                  f"(`taxjson sum` lists them under FILING POSITIONS)")
+
+
 def _us_expired_options(ctx: Ctx) -> Result:
     """US projects (S066-15): option-boundary is a Canadian (s.49)
     command, but the missing-expiry-row check applies to both long and
@@ -2108,6 +2156,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "crypto-sends": d_crypto_sends,
     "audit": d_audit,
     "wash-reviewed": d_wash_reviewed,
+    "filing-positions": d_filing_positions,
     "option-boundary": d_option_boundary,
     "handoff": d_handoff,
     "t5008": d_t5008,

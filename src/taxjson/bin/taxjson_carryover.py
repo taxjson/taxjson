@@ -58,7 +58,7 @@ from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
-                                  run_gains)
+                                  loss_overrides_from_args, run_gains)
 from taxjson.lib.report_model import fmt_money
 from taxjson.bin.taxjson_convert_currency import norm_currency
 
@@ -779,6 +779,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "dividends in [[capital_gains_dividends]]) "
                              "that year — added to the year's net (the "
                              "wrapper passes them).")
+    from taxjson.lib.pipeline import add_loss_override_args
+    add_loss_override_args(parser)
     parser.add_argument("--corporate-distribution", action="append",
                         default=None, metavar="SYMBOL",
                         help="Canada: a Canadian issuer whose "
@@ -941,7 +943,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 corporate_distributions=tuple(
                     args.corporate_distribution or ()),
                 ric_january_dividends=tuple(
-                    args.ric_january_dividend or ()))
+                    args.ric_january_dividend or ()),
+                loss_overrides=loss_overrides_from_args(args))
     req = GainsRequest(country=country, year=None, taxable=True,
                        tax_date=args.tax_date,
                        incomplete_history=args.incomplete_history,

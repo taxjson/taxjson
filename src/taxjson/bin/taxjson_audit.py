@@ -58,7 +58,8 @@ from taxjson.lib.core import (get_tax_rules, is_option_symbol,
 from taxjson.lib.country import (add_country_argument, canonical_country,
                                  refuse_foreign_flags)
 from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
-                                  engine_options, prepare_books)
+                                  engine_options, loss_overrides_from_args,
+                                  prepare_books)
 from taxjson.lib.trace_format import render_report_trace
 
 # Money agreement threshold for every cross-check in this tool: the
@@ -947,6 +948,8 @@ def parse_args(argv=None):
     # US book (US-BASIS-01), as taxjson-gains does — the standalone
     # audit pooled every account's lots (re-audit A2-0318).
     p.add_argument("--per-account-basis", action="store_true", default=None)
+    from taxjson.lib.pipeline import add_loss_override_args
+    add_loss_override_args(p)
     p.add_argument("--corporate-distribution", action="append",
                    default=None, metavar="SYMBOL",
                    help="Canada: as in taxjson-gains ([settings] "
@@ -1120,7 +1123,8 @@ def main(argv=None) -> int:
         option_grant_since=args.option_grant_since,
         option_buyback_loss_superficial=args.option_buyback_wash,
         corporate_distributions=tuple(args.corporate_distribution or ()),
-        ric_january_dividends=tuple(args.ric_january_dividend or ()))
+        ric_january_dividends=tuple(args.ric_january_dividend or ()),
+        loss_overrides=loss_overrides_from_args(args))
     apply_roc_record_dates(transactions, req)
     rules = get_tax_rules(country)
     kwargs: Dict[str, Any] = dict(

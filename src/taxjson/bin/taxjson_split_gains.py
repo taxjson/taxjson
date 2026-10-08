@@ -250,6 +250,13 @@ def split_for_account(combined: Dict[str, Any], account: str,
            if w.get("loss_id") in _loss_ids]
     if orw:
         out["option_replacement_warnings"] = orw
+    # The account's filing positions against the loss rule (.tt
+    # ALLOWLOSS, lib/loss_overrides): each follows the account its line
+    # is in.
+    lo = [it for it in combined.get("loss_overrides") or []
+          if isinstance(it, dict) and it.get("account") == account]
+    if lo:
+        out["loss_overrides"] = lo
     plog = [e for e in _mh_log(combined)
             if e.get("account") == account]
     if plog:

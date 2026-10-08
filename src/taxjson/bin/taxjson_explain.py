@@ -44,7 +44,7 @@ from taxjson.lib.country import (add_country_argument, default_tax_date,
                                  refuse_foreign_flags)
 from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
                                   engine_options, load_stdin_transactions,
-                                  prepare_books)
+                                  loss_overrides_from_args, prepare_books)
 from taxjson.lib.trace_format import (render_gain_block,
                                       render_report_block)
 
@@ -136,6 +136,8 @@ def parse_args():
                              "acquisitions/disposals for the superficial-loss / wash-sale "
                              "window (strict; [settings] transfers_as_acquisitions = true). "
                              "Default: a custody move, held but never a purchase.")
+    from taxjson.lib.pipeline import add_loss_override_args
+    add_loss_override_args(parser)
     parser.add_argument(
         "--corporate-distribution", action="append", default=None,
         metavar="SYMBOL",
@@ -341,7 +343,8 @@ def main():
             option_buyback_loss_superficial=args.option_buyback_wash,
             corporate_distributions=tuple(
                 args.corporate_distribution or ()),
-            ric_january_dividends=tuple(args.ric_january_dividend or ()))
+            ric_january_dividends=tuple(args.ric_january_dividend or ()),
+            loss_overrides=loss_overrides_from_args(args))
     except ValueError as e:
         sys.exit(exit_text(f"taxjson-explain: error: {e}"))
     apply_roc_record_dates(transactions, req)

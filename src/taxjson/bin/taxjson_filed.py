@@ -472,6 +472,9 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
     cmd += locked_year_flags(cache.parent, settings)
+    # The filing positions the books took (.tt ALLOWLOSS lines).
+    from taxjson.lib.loss_overrides import flags as _lo_flags
+    cmd += _lo_flags(cache)
     # missing_history.json (or its old name phantoms.json) lives at the
     # PROJECT ROOT (cache is <root>/work) — looking in work/ made
     # close-year snapshot WITH the missing-history openings and
@@ -525,6 +528,9 @@ def recompute_year(cache: Path, account: str, year: int,
     cmd += _lock_timing_flags(settings, year, option_timing)
     cmd += income_dating_flags(dict(settings, country=country))
     cmd += locked_year_flags(cache.parent, settings)
+    # The filing positions the books took (.tt ALLOWLOSS lines).
+    from taxjson.lib.loss_overrides import flags as _lo_flags
+    cmd += _lo_flags(cache)
     # missing_history.json (or its old name) lives at the PROJECT ROOT
     # (see _recompute_blended above).
     from taxjson.lib.missing_history import missing_history_path

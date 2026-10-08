@@ -947,6 +947,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_wash_sales`; `src/taxjson/lib/core.py`
 
+### A superficial loss (US: a wash sale) taxjson denies that I want to claim: a replacement inside day 30 counted from the settlement date, outside it from the trade date
+- **Check:** `tjs wash-sales` lists the denial and its replacement; `tjs edge-cases` marks a replacement a few days from day 30 THE DATE BASIS DECIDES THIS ONE. In Canada the window is counted on settle dates whatever `tax_date` says (CA-SL-01); in the US on trade dates (US-WASH-01).
+- **Cause:** the engines apply the rule as the law's mechanical test, black and white. Taking a position against one denial is a filing decision only you (and your adviser) can make; taxjson never infers it.
+- **Fix:** add a line to a `.tt` file of the taxable account that sold: `ALLOWLOSS 2025-12-19 QZA.TO reason="the RRSP call was bought 32 days after the trade date"` (the sale's trade or settlement date, its symbol as `tjs wash-sales` spells it, and its units when two denied sales of the symbol share the day), then `tjs run`. The loss stays allowed and no ACB (US: basis) is raised for it; every run says so in one Warning, `tjs sum` lists it under FILING POSITIONS with the denial the rule would make, and the checklist's filing-positions step stays manual until you mark it done. Delete the line to apply the rule again. If the run stops with "Error: 1 .tt ALLOWLOSS line(s) name no single denied superficial loss", the line's date or symbol matches no denied sale (the message lists that day's trades in the account) or matches two (add the units sold).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/loss_overrides.py` — `parse_line`, `problems`, `warning_message`; `src/taxjson/bin/taxjson_run.py` — `_read_loss_overrides`, `_say_loss_overrides`, `name no single`; `src/taxjson/lib/checklist.py` — `d_filing_positions`
+
 ### `tjs checklist`: "[!] inputs-frozen … latest activity 2025-12-31 — January 2026 is not in the books yet"
 - **Check:** the step's detail names the latest activity date (IB statements are checked per account).
 - **Cause:** a December sale settles in January, and a superficial-loss window runs 30 days past it; both need January of the next year in the exports.

@@ -2241,6 +2241,66 @@ def _read_dated_events(root: Path, accounts: Dict[str, Any],
     return decl
 
 
+def _read_loss_overrides(root: Path, accounts: Dict[str, Any]) -> None:
+    """The project's .tt ALLOWLOSS lines (lib/loss_overrides), written to
+    work/loss_overrides.json before any gains pass reads them; a line that
+    cannot be used stops the run with its message (it names the form)."""
+    from taxjson.lib import loss_overrides as LO
+    try:
+        items = LO.read_project(root, accounts)
+    except LO.LossOverrideError as e:
+        probs = str(e).splitlines()
+        _die(f"{len(probs)} .tt {LO.KEYWORD} line(s) cannot be used",
+             *[f"- {p}" for p in probs],
+             f"The form is `{LO.FORM}`, date first, in the taxable "
+             f"account that sold; the reason is required. Fix the line or "
+             f"delete it.")
+    LO.write_state(root / "work", items)
+
+
+def _loss_override_flags(cache: Path) -> List[str]:
+    """--loss-overrides for an engine run of the project's books ([] when
+    the project has no ALLOWLOSS line)."""
+    from taxjson.lib.loss_overrides import flags
+    return flags(cache)
+
+
+def _say_loss_overrides(root: Path, settings: Dict[str, Any], cache: Path,
+                        *, full: bool) -> None:
+    """ONE warning per run listing every filing position taken against
+    the loss rule (CA-SL-18 / US-WASH-25), read from the final gains
+    files. On a full run, a line that names no denied loss, or several,
+    stops the run (each named)."""
+    from taxjson.lib import loss_overrides as LO
+    from taxjson.lib.report_model import resolve_gains_files
+    expected = LO.read_state(cache)
+    if not expected:
+        return
+    accts = {o["account"] for o in expected}
+    files = {a: p for a, p in resolve_gains_files(cache).items()
+             if a in accts}
+    items = LO.gather(files)
+    country = _normalize_country(settings["country"])
+    rule = ("wash sale" if country in ("us", "usa")
+            else "superficial loss")
+    if full:
+        probs = LO.problems(items, expected)
+        if probs:
+            _die(f"{len(probs)} .tt {LO.KEYWORD} line(s) name no single "
+                 f"denied {rule}",
+                 *[f"- {p}" for p in probs],
+                 f"Each line names ONE sale the rule denies: its date "
+                 f"(trade or settlement), its symbol as `taxjson "
+                 f"wash-sales` spells it and, when two such sales share "
+                 f"the day, the units sold (`{LO.FORM}`).")
+    if not any(it.get("status") == LO.STATUS_APPLIED for it in items):
+        return
+    head, details = LO.warning_message(
+        items, "usa" if country in ("us", "usa") else "canada")
+    _say_once(("lossoverride",), "warning", head, *details, indent="  ",
+              file=sys.stdout)
+
+
 def _dated_effective_lines(cache: Path) -> List[str]:
     """The lines the run's effective map carries for the dated renames
     the project declares (lib/dated_events.effective_lines: the .tt
@@ -4363,6 +4423,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(cache.parent, settings)
+    cmd += _loss_override_flags(cache)
     if is_crypto:
         # Spot coins cannot be short: a sale with nothing held is
         # missing history, said as ATTENTION (re-audit A2-0137).
@@ -4372,6 +4433,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # the whole file to every account's gains run is safe — non-matching pairs
     # are ignored. A rebuild dependency so editing the file re-runs gains.
     gains_deps = [base_json] + _lock_files(cache.parent, settings)
+    from taxjson.lib.loss_overrides import state_path as _lo_state
+    gains_deps.append(_lo_state(cache))     # ALLOWLOSS lines (a dep when present)
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
         gains_deps.append(incomplete_history)
@@ -4656,6 +4719,7 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(cache.parent, settings)
+    cmd += _loss_override_flags(cache)
     # Same missing-history opening balances as the main gains pass — without
     # this the wash-adjusted books (which `taxjson wash-sales` PREFERS when
     # present) were computed on different books than <account>.sum.
@@ -5956,6 +6020,7 @@ def stage_blended_wash_pass(names: List[str],
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(cache.parent, settings)
+    cmd += _loss_override_flags(cache)
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(combined_base))
@@ -6620,6 +6685,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         if _legacy:
             _say("warning", _legacy[0], *_legacy[1], prog=_PROG)
     _read_dated_events(root, accounts, _tmap_parsed)
+    _read_loss_overrides(root, accounts)
     # ticker.map EXTRACT lines — description-keyed ticker corrections
     # for securities the currency->exchange suffix mislabels. The parse
     # stage gets the map as taxjson-brokerage --security-overrides when
@@ -7061,6 +7127,9 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 spot_crypto=not _crypto_blend,
                                 strict=getattr(args, "strict", False))
     _say_transfer_windows(settings)
+    if not pending_accounts:
+        _say_loss_overrides(root, settings, cache,
+                            full=not args.account)
     _say_in_kind(root, cache, settings,
                  strict=getattr(args, "strict", False))
     if not args.account and not pending_accounts:
@@ -13140,6 +13209,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
             if acct_cfg.get(a, {}).get("type") == "sheltered")
     except SystemExit:
         pass
+    from taxjson.lib import loss_overrides as _LO
+    _positions = _LO.positions(
+        _LO.gather(files), year,
+        "trade" if _date_key == "date" else "settle")
     if getattr(args, "json", False):
         doc: Dict[str, Any] = {
             "accounts": acct_rows,
@@ -13174,6 +13247,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
             "run_state_problems": _run_state,
             "subtotals": {g.lower(): _sum_rows(rows)
                           for g, rows in group_defs}}
+        if _positions:
+            # The user's filing positions against the loss rule (.tt
+            # ALLOWLOSS): in the totals above, listed so they are never
+            # silent (CA-SL-18 / US-WASH-25).
+            doc["filing_positions"] = _positions
         if want_estimate:
             doc["estimate"] = _tax_estimate_result(
                 cfg, est,
@@ -13368,6 +13446,31 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   "carry those distributions as dividends).")
             _item("Per-security rows: `taxjson form-export`; per account: "
                   "`taxjson sum --json`.")
+
+    if _positions:
+        _rule = ("wash-sale rule (§1091)" if _is_us
+                 else "superficial-loss rule (s.54)")
+        print()
+        _para(f"FILING POSITIONS — {len(_positions)} loss(es) claimed "
+              f"against the {_rule} (.tt ALLOWLOSS lines); the totals "
+              f"above include them")
+        for _fp in _positions:
+            _item(f"{_fp['account']} {_fp['date']} {_fp['symbol']} "
+                  f"{fmt_qty(_fp['qty'])} units: loss {money(_fp['loss'])} "
+                  f"claimed; the rule would "
+                  f"{'disallow' if _is_us else 'deny'} "
+                  f"{money(_fp['would_disallow'])}"
+                  + (f" ({money(_fp['would_permanent'])} for good)"
+                     if _fp['would_permanent'] > 0.005 else "")
+                  + f" — {_fp['why']}. Your reason: \"{_fp['reason']}\" "
+                  f"({_fp['where']})"
+                  + ("" if _fp["in_year"] else
+                     " [a sale of another year: its effect on the "
+                     + ("basis" if _is_us else "ACB") + " carries]"))
+        _item("A filing position is yours, not the rule's test: be ready "
+              "to support it (" + ("IRS" if _is_us else "CRA")
+              + " guidance, a tax professional). Delete the line to apply "
+              "the rule.")
 
     if want_estimate:
         _print_tax_estimate(
@@ -16768,7 +16871,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
                    "--as-of", as_of] + option_timing_flags(
-                       settings) + income_dating_flags(settings)
+                       settings) + income_dating_flags(settings) \
+                + _loss_override_flags(root / "work")
             # income_dating_flags: [settings] corporate_distributions
             # keeps a listed corporation's ROC on its pay date, as in
             # the run (audit A2-0995, A2-0996).
@@ -17168,7 +17272,28 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
 
     from taxjson.lib.out import Doc
 
+    # The user's filing positions against the rule (.tt ALLOWLOSS): the
+    # loss is allowed, so the table never shows it (CA-SL-18 /
+    # US-WASH-25).
+    from taxjson.lib import loss_overrides as _LO
+    _lo_items = _LO.gather(dict(files))
+    _lo_basis = ("trade" if (_soft_settings(root).get("tax_date")
+                             or ("trade" if _usa else "settle")) == "trade"
+                 else "settle")
+    _positions = [p for p in _LO.positions(_lo_items, year, _lo_basis)
+                  if p["in_year"]]
+
     def _flags_section(doc):
+        if _positions:
+            doc.section(f"FILING POSITIONS — {len(_positions)} loss(es) "
+                        f"claimed against the rule (.tt ALLOWLOSS)")
+            doc.para("Allowed in the books although the rule would "
+                     + ("disallow" if _usa else "deny")
+                     + " them: your position, not the rule's test.")
+            doc.items([ln for it in _lo_items
+                       if it.get("status") == _LO.STATUS_APPLIED
+                       and _LO.in_year(it, year, _lo_basis)
+                       for ln in _LO.describe(it)])
         if not flags:
             return
         doc.section(f"MANUAL CHECK — {len(flags)} warn-only flag(s)")
@@ -17198,7 +17323,9 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
                               "embedded_in_open": round(embedded, 2)},
                    "year": year, "currency": _base_currency(root),
                    "basis": gains_basis_label(resolved),
-                   "manual_check_flags": sorted(flags)})
+                   "manual_check_flags": sorted(flags),
+                   **({"filing_positions": _positions}
+                      if _positions else {})})
         return
 
     # The rule's own name: never "wash sale" in a Canadian project
@@ -17367,6 +17494,9 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     # ...and its income dating: a listed corporation's ROC on its pay
     # date in that pass (audit A2-0339).
     argv += income_dating_flags(settings)
+    # ...and the filing positions the books took (.tt ALLOWLOSS): no ACB
+    # addition for them.
+    argv += _loss_override_flags(cache)
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_t1135.main(argv))
@@ -17460,6 +17590,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     # ...and the same income dating: a listed corporation's ROC on its
     # pay date (audit A2-0123, A2-0339, A2-0341, A2-1141).
     argv += income_dating_flags(settings)
+    argv += _loss_override_flags(cache)     # .tt ALLOWLOSS positions
     if settings.get("year") is not None:
         # Rows before the project year are flagged as possibly partial.
         argv += ["--project-year", str(int(settings["year"]))]
@@ -18110,7 +18241,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     try:
         extra = _handoff.record_fields(
             root, cfg, int(year), files, _filed_run_gains,
-            _handoff_gains_flags(settings), filed_csv)
+            _handoff_gains_flags(settings, root / "work"), filed_csv)
     except _handoff.BooksError as e:
         _die(f"{e}", _nothing)
     except ValueError as e:
@@ -18285,16 +18416,19 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
     return out
 
 
-def _handoff_gains_flags(settings: Dict[str, Any]) -> List[str]:
+def _handoff_gains_flags(settings: Dict[str, Any],
+                         cache: Optional[Path] = None) -> List[str]:
     """The taxjson-gains flags a full-history run of this project uses
-    (no --year: the hand-off needs every year's pools)."""
+    (no --year: the hand-off needs every year's pools); `cache`, the
+    project's work/, adds its .tt ALLOWLOSS positions."""
     from taxjson.lib.pipeline import option_timing_flags
     country = _country(settings)
     flags = ["--country", country, "--tax-date", _tax_date(settings)]
     if country in ("us", "usa"):
         flags.append("--per-account-basis")
     return (flags + option_timing_flags(settings)
-            + income_dating_flags(settings))
+            + income_dating_flags(settings)
+            + (_loss_override_flags(cache) if cache is not None else []))
 
 
 def _prior_record_path(root: Path, settings: Dict[str, Any],
@@ -18375,7 +18509,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
         _die("no work/", "Run `taxjson run` first.")
     from taxjson.lib.income_dating import IncomeRulesError
     try:
-        _hflags = _handoff_gains_flags(settings)
+        _hflags = _handoff_gains_flags(settings, root / "work")
     except IncomeRulesError as e:
         # A bad [settings] corporate_distributions & co.: one line, as
         # divs-sum gives it (re-audit A2-0802).
@@ -18798,6 +18932,7 @@ def _explain_wash_sales(root: Path, cache: Path,
         common += ["--incomplete-history", str(mh_file)]
     common += option_timing_flags(settings)
     common += income_dating_flags(settings)
+    common += _loss_override_flags(cache)
 
     # Trace the computation the table comes from: the pipeline BLENDS
     # the taxable equity books (s.47 ACB / cross-account §1091), and
@@ -20632,6 +20767,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
         # The project's income-dating overrides, as the run applied
         # them (re-audit A2-0033: the trust ROC record date).
         fl += income_dating_flags(settings)
+        # ...and its filing positions against the loss rule (ALLOWLOSS).
+        fl += _loss_override_flags(root / "work")
         for sym in getattr(args, "symbol", None) or []:
             fl += ["--symbol", sym]
         if getattr(args, "gain_id", None):

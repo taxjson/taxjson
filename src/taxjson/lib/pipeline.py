@@ -1247,6 +1247,10 @@ class GainsRequest:
     # US-WASH-23); True ([settings] transfers_as_acquisitions = true)
     # books it as an acquisition/disposal (CA-SL-17 / US-WASH-24).
     transfers_as_acquisitions: bool = False
+    # The user's filing positions against the loss rule (.tt ALLOWLOSS
+    # lines, lib/loss_overrides; CA-SL-18 / US-WASH-25): each names one
+    # sale whose denial is not applied (recorded in `loss_overrides`).
+    loss_overrides: Tuple[Dict[str, Any], ...] = ()
 
     def __post_init__(self):
         from taxjson.lib.country import canonical_country
@@ -1331,6 +1335,32 @@ def apply_trust_roc_record_dates(transactions, income_rules) -> list:
             _t.date = _rec
             _t.date_settle = _rec
     return moved
+
+
+def add_loss_override_args(parser) -> None:
+    """--loss-overrides FILE: the project's .tt ALLOWLOSS lines as `taxjson
+    run` writes them (work/loss_overrides.json, lib/loss_overrides) — the
+    engine CLIs that recompute the books share the spelling (taxjson-gains,
+    -audit, -explain, -carryover, -t1135)."""
+    parser.add_argument(
+        "--loss-overrides", metavar="FILE", default=None,
+        help="Filing positions against the superficial-loss / wash-sale "
+             "rule (.tt ALLOWLOSS lines; `taxjson run` writes "
+             "work/loss_overrides.json): each named sale's denial is not "
+             "applied, and what the rule would have denied is recorded.")
+
+
+def loss_overrides_from_args(args) -> tuple:
+    """The overrides of --loss-overrides (() when not given). A file that
+    cannot be read raises ValueError naming it."""
+    path = getattr(args, "loss_overrides", None)
+    if not path:
+        return ()
+    from taxjson.lib.loss_overrides import load_file
+    try:
+        return tuple(load_file(path))
+    except OSError as e:
+        raise ValueError(f"--loss-overrides {path}: {e}") from None
 
 
 def add_income_dating_args(parser) -> None:
@@ -1510,6 +1540,8 @@ def engine_options(req: GainsRequest) -> Dict[str, Any]:
     builder for run_gains, taxjson-audit and taxjson-explain
     (re-audit A2-0314/A2-0318)."""
     extra: Dict[str, Any] = {}
+    if req.loss_overrides:
+        extra['loss_overrides'] = tuple(req.loss_overrides)
     if req.per_account_basis and req.country == 'usa':
         extra['per_account_basis'] = True
     if req.country == 'canada':

@@ -5,7 +5,7 @@ import re
 import hashlib
 import sys
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Sequence, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -2232,7 +2232,7 @@ class TaxRules:
         raise NotImplementedError()
 
 class CanadaTaxRules(TaxRules):
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False, option_grant_basis: str = 'settle') -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False, option_grant_basis: str = 'settle', loss_overrides: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
         """
         Detects Superficial Losses (Wash Sales) based on CRA rules and calculates gains.
         Handles multi-account pooling and iterative adjustments.
@@ -2285,6 +2285,19 @@ class CanadaTaxRules(TaxRules):
 
         def get_sort_date(tx):
             return tx.date_settle if tx.date_settle else tx.date
+
+        # The user's filing positions against the rule (.tt ALLOWLOSS,
+        # lib/loss_overrides; CA-SL-18): each names one sale whose denial
+        # is not applied. `_ov_would` holds, per named row, what the
+        # solver's last pass would have denied (and to which
+        # replacements) — recorded, never booked.
+        from taxjson.lib import loss_overrides as _LO
+        _ov_plan = _LO.plan(
+            loss_overrides,
+            sorted((t for t in transactions),
+                   key=lambda x: event_sort_key(x, profile='ca_main',
+                                                date_of=get_sort_date)))
+        _ov_would: Dict[str, Dict[str, Any]] = {}
 
         # A SPLIT inside a trade's settle lag — after the execution
         # MOMENT (date, clock time) and before the settle date: the
@@ -3671,6 +3684,7 @@ class CanadaTaxRules(TaxRules):
 
             # --- Detection ---
             found_new_wash_sale = False
+            _ov_would = {}
             # Running balance per (account, alias) BEFORE each tx —
             # used to split a buy into its COVERING portion (closes a
             # short: not replacement property) and its OPENING portion
@@ -4358,6 +4372,26 @@ class CanadaTaxRules(TaxRules):
                         adjust_to_trigger[a_id] = trg.id
                         return v
 
+                    if tx.id in _ov_plan.row_of:
+                        # A filing position against this denial (CA-SL-18):
+                        # the units it would use are used (every other
+                        # sale's formula is unchanged), but no DISALLOW
+                        # and no ACB addition are booked — what it would
+                        # have been is recorded for the reports.
+                        _rec = _ov_would.setdefault(tx.id,
+                                                    _LO.new_record())
+                        _rec['qty'] += loss['qty']
+                        _rec['loss'] += loss['loss_amount']
+                        _rec['disallowed'] += disallowed_amt
+                        _rec['permanent'] += perm_amt
+                        for trg, _q, _amt in allocations:
+                            _LO.add_replacement(
+                                _rec, trg, _q, _amt,
+                                'sheltered' if trg.id in sheltered_ids
+                                else 'affiliated' if trg.id in affiliated_ids
+                                else 'taxable')
+                        continue
+
                     if allocations:
                         loss_to_trigger[tx.id] = allocations[0][0].id
                         loss_to_triggers_multi[tx.id] = [
@@ -4939,7 +4973,11 @@ class CanadaTaxRules(TaxRules):
                            if l.get('rec')), 4)
             return {'recognised_premium': rp} if rp > 1e-9 else {}
 
+        _ov_items = (_LO.summarize(_ov_plan, _ov_would, country='canada')
+                     if _ov_plan else [])
+        _LO.stamp_entries(processed_gains, _ov_items)
         return {
+            **({'loss_overrides': _ov_items} if _ov_plan else {}),
             'transactions': processed_gains,
             'by_ticker': by_ticker,
             'wash_sales': final_wash_sales,
@@ -5054,7 +5092,7 @@ class USATaxRules(TaxRules):
 
     WASH_WINDOW_DAYS = 30
 
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False) -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False, loss_overrides: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
         _check_engine_allowed("usa")  # test-only guard (lib/country)
         _disambiguate_duplicate_ids(transactions, sheltered_transactions,
                                     affiliated_transactions)
@@ -5743,6 +5781,29 @@ class USATaxRules(TaxRules):
             taxable_sorted, lambda _t: True, _assign_underlying)
         taxable_sorted = _place_assign_options(taxable_sorted,
                                                _assign_pairs)
+        # The user's filing positions against §1091 (.tt ALLOWLOSS,
+        # lib/loss_overrides; US-WASH-25): the named sale's loss is
+        # matched as usual — so the replacement shares it would take are
+        # still taken and every other loss's verdict is unchanged — but
+        # nothing is disallowed, no basis is added and no holding period
+        # is tacked; what §1091 would have disallowed is recorded.
+        from taxjson.lib import loss_overrides as _LO
+        _ov_plan = _LO.plan(loss_overrides, taxable_sorted)
+        _ov_would: Dict[str, Dict[str, Any]] = {}
+
+        def _ov_take(tx_, rep_tx, is_sh, is_aff, q, amt):
+            rec = _ov_would.setdefault(tx_.id, _LO.new_record())
+            rec['disallowed'] += amt
+            if is_sh or is_aff:
+                rec['permanent'] += amt
+            _LO.add_replacement(rec, rep_tx, q, amt,
+                                'sheltered' if is_sh
+                                else 'affiliated' if is_aff else 'taxable')
+
+        def _ov_loss(tx_, q, amt):
+            rec = _ov_would.setdefault(tx_.id, _LO.new_record())
+            rec['qty'] += q
+            rec['loss'] += amt
         pending_option_adjustments = _AssignPremiumLedger(
             taxable_sorted,
             lambda _t: (not is_option_symbol(_t.symbol)
@@ -6768,6 +6829,9 @@ class USATaxRules(TaxRules):
                             if candidates:
                                 _flag_futures_loss(tx, raw_gain, candidates)
                             candidates = []
+                        _ov_on = tx.id in _ov_plan.row_of
+                        if _ov_on:
+                            _ov_loss(tx, chunk_qty, chunk_loss)
                         for rep in candidates:
                             if remaining_loss_qty <= epsilon:
                                 break
@@ -6781,6 +6845,11 @@ class USATaxRules(TaxRules):
                             match_disallowed = float(match_disallowed_d)
                             rep['remaining_qty'] -= match_qty / _uf
                             remaining_loss_qty -= match_qty
+                            if _ov_on:
+                                _ov_take(tx, rep['tx'], rep['is_sheltered'],
+                                         rep.get('is_affiliated'),
+                                         match_qty, match_disallowed)
+                                continue
 
                             if rep['is_sheltered'] or rep.get('is_affiliated'):
                                 # IRA (Rev. Rul. 2008-5) or a spouse /
@@ -7169,6 +7238,9 @@ class USATaxRules(TaxRules):
                                         1 if isinstance(c, tuple) else 0)
                             candidates = sorted(list(candidates) + _sold,
                                                 key=_ck)
+                    _ov_on = tx.id in _ov_plan.row_of
+                    if _ov_on:
+                        _ov_loss(tx, chunk_qty, chunk_loss)
                     for rep in candidates:
                         if remaining_loss_qty <= epsilon:
                             break
@@ -7182,6 +7254,10 @@ class USATaxRules(TaxRules):
                                                   * loss_per_share_d)
                             _sch['avail'] -= match_qty / _uf
                             remaining_loss_qty -= match_qty
+                            if _ov_on:
+                                _ov_take(tx, _srep['tx'], False, False,
+                                         match_qty, float(match_disallowed_d))
+                                continue
                             disallowed_amt += float(match_disallowed_d)
                             _se = _apply_sold_replacement(
                                 _srep, _sch, match_qty, _uf,
@@ -7209,6 +7285,11 @@ class USATaxRules(TaxRules):
                         match_disallowed = float(match_disallowed_d)
                         rep['remaining_qty'] -= match_qty / _uf
                         remaining_loss_qty -= match_qty
+                        if _ov_on:
+                            _ov_take(tx, rep['tx'], rep['is_sheltered'],
+                                     rep.get('is_affiliated'), match_qty,
+                                     match_disallowed)
+                            continue
 
                         # §1223(3) tacking: the replacement's holding
                         # period gains the PERIOD the wash-sold shares
@@ -7670,7 +7751,11 @@ class USATaxRules(TaxRules):
                         for l in lots)), 4),
                 })
 
+        _ov_items = (_LO.summarize(_ov_plan, _ov_would, country='usa')
+                     if _ov_plan else [])
+        _LO.stamp_entries(realized_gains, _ov_items)
         return {
+            **({'loss_overrides': _ov_items} if _ov_plan else {}),
             'transactions': realized_gains,
             'by_ticker': by_ticker,
             'wash_sales': wash_sale_records,

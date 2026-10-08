@@ -31,6 +31,8 @@ from taxjson.lib.missing_history import detect_missing_history, format_suggestio
 from taxjson.lib.pipeline import (            # noqa: F401
     GainsRequest,
     add_income_dating_args,
+    add_loss_override_args,
+    loss_overrides_from_args,
     TransferValidationError,
     _handle_transfers,
     load_stdin_transactions,
@@ -108,6 +110,7 @@ def _parse_args():
              "window (strict; [settings] transfers_as_acquisitions = true). "
              "Default: a custody move, held but never a purchase.")
     add_income_dating_args(parser)
+    add_loss_override_args(parser)
     parser.add_argument(
         "--spot-crypto", action="store_true",
         help="The book is a crypto account's spot coins: a position going "
@@ -349,6 +352,7 @@ def _request(args) -> GainsRequest:
         spot_crypto=args.spot_crypto,
         locked_years=tuple(args.locked_year or ()),
         transfers_as_acquisitions=args.transfers_as_acquisitions,
+        loss_overrides=loss_overrides_from_args(args),
     )
 
 

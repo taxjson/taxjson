@@ -1357,6 +1357,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Grant timing: a written option's buy-back "
                              "loss can be superficial")
+    from taxjson.lib.pipeline import (add_loss_override_args,
+                                      loss_overrides_from_args as _lo_args)
+    add_loss_override_args(parser)
     parser.add_argument("--corporate-distribution", action="append",
                         default=None, metavar="SYMBOL",
                         help="A Canadian issuer whose distributions are a "
@@ -1421,7 +1424,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                                    args.transfers_as_acquisitions)),
                            full_history=not args.year_wash_only,
                            income_rules=dict(corporate_distributions=tuple(
-                               args.corporate_distribution or ())))
+                               args.corporate_distribution or ()),
+                               # The ALLOWLOSS positions the books took
+                               # (lib/loss_overrides): no ACB addition.
+                               loss_overrides=_lo_args(args)))
     except (UnreadableGains, CurrencyMismatch) as e:
         print(e.code, file=sys.stderr)
         return 2

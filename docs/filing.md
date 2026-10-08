@@ -82,6 +82,12 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson wash-sales` — read every denial. A **permanently** denied
       loss (repurchase in a registered account) is money gone; make sure
       each one is real and not a custody move (`taxjson transfers`).
+- [ ] `taxjson sum` FILING POSITIONS — each `.tt` `ALLOWLOSS` line is a
+      loss you claim although the superficial-loss rule would deny it: your
+      position, not the rule's test. Keep its reason, be ready to support
+      it, and mark the checklist's filing-positions step done
+      (`taxjson checklist --done filing-positions`); none listed, the step
+      is n/a.
 - [ ] `taxjson edge-cases` — lists every trade that settles in the other
       year, the options and income around Dec 31, and each loss with a
       purchase or sale within a few days of day 30 of its superficial-loss
