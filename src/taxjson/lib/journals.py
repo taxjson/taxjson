@@ -118,7 +118,12 @@ class _Map:
             line = " ".join([kw] + [b.upper() for b in body[1:]])
             a, b = body[1].upper(), body[2].upper()
             if kw == "DISTINCT":
-                self.distinct.setdefault(frozenset((a, b)), (where, line))
+                # Read as the map parser reads it (a bare US ticker
+                # beside a share listing is the US listing).
+                from taxjson.bin.taxjson_ticker_map import \
+                    distinct_spellings
+                for pair in distinct_spellings(a, b):
+                    self.distinct.setdefault(pair, (where, line))
                 continue
             if kw not in _RULE_KEYWORDS:
                 continue

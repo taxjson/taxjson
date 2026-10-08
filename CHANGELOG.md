@@ -15,6 +15,59 @@
   a "booked under Questrade's INTERNAL code" warning for the same code, and
   the chain and the later sale meet in one position.
 
+- **A `DISTINCT` line written with the bare US ticker answers the pair**:
+  `DISTINCT QZX QZX.TO` also keeps `QZX.US` and `QZX.TO` apart (the books
+  spell a broker's bare US ticker `.US`), so the cross-listing loss
+  warning, `taxjson scan` and `ticker-map --suggest` stop asking, with an
+  Info line. A `GLOBAL` / `TOBASE` / `JOURNAL` / undated `RENAME` line so
+  written is not re-read (it would move pools): when the books hold the
+  US listing and not the bare symbol, the run warns that it joins nothing,
+  naming the line to write.
+
+- **A `.tt` JOURNAL line between a CDR and its US share needs evidence**:
+  a listing written on a venue that lists depositary receipts (Cboe Canada,
+  `QZG.NE`; marked in markets.toml) or named as a receipt in the exports
+  ("... CDR") is its own security, so sharing the root QZG with `QZG.US`
+  no longer counts as evidence: the names must agree, else the run stops
+  naming the line.
+
+- **A `.tt` JOURNAL line can say it is a separate journal**: a trailing
+  `separate` (`JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 separate`) books the
+  line as a journal of its own, in full, and silences the "booked in full
+  beside the broker's journal" Warning, which nothing could silence
+  before (docs/settings.md).
+
+- **A broker journal split over several rows is one journal everywhere**:
+  a reference shared by more than two legs (1000 out, 600 + 400 in) was
+  read three ways by the cross-listing join, the transfer-in check and the
+  missing-history walk. One rule now: one journal when its out-legs name
+  one listing, its in-legs one, the units balance and the legs are within
+  5 business days; otherwise no journal for any of them.
+
+- **`taxjson format-map --write` homes a dated RENAME where every
+  account keeps its `late=`**: when the default home would take the map
+  line's `late=` away from an account that relies on it, the line goes to
+  an account whose copy keeps every choice; when none does, the refusal
+  names each such account and the `.tt` line to add. An account that never
+  held the old ticker is no longer counted as changed.
+
+- **A DRIP priced in the other currency no longer warns**: a Questrade or
+  RBC reinvestment whose description quotes the price in the other
+  currency (`REINV@C$` on a USD row, `REINV@U$` on a CAD row) is booked at
+  the cash per unit, so the row check no longer flags it (the cost was
+  already right; RBC's fee worked out from the foreign price is gone). A
+  same-currency mismatch still warns.
+
+- **A Questrade dividend reinvestment books the account's held listing**
+  (GitHub issue #3): an REI row with the bare TSX ticker on a USD row was
+  booked `ROOT.US` while the dividend it reinvests bound to `ROOT.TO`, so
+  one share split into +1 / -1 across two listings (a false short in a
+  registered account). It now books the listing the account trades under
+  the same name and root; and when another account's evidence proved the
+  same broker files that security's TSX listing on USD rows, the account's
+  USD rows of it are read as `ROOT.TO` too.
+
+
 ## v0.24.0 (2026-10-07)
 
 ### Added
@@ -249,7 +302,9 @@
 - **A declared rename that books nothing is said.** A `.tt` (or legacy
   ticker.map) RENAME no account's books carry (a typo of the symbol, a late
   date) gets a Warning naming the line, and `taxjson renames` lists it
-  (`--pending` counts it). A chain declared for one day (A to B, then B to
+  (`--pending` counts it; `--json` lists it under a new `unused` key: its
+  date, old and new symbols, `late`, source, places and `.tt` line, and
+  `pending` counts it). A chain declared for one day (A to B, then B to
   C) books both links.
 - **A journal between two listings stays inside its account.** The
   transfer pairing pooled every account's transfer legs, so a journal's

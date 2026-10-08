@@ -7,7 +7,7 @@ trade or a dividend, written date first in a .tt file of an account
 (`taxjson-convert-tt` checks the line; it is never a row of the
 converted file — `taxjson run` reads it here):
 
-  JOURNAL <date> <FROM> <TO> <qty>
+  JOURNAL <date> <FROM> <TO> <qty> [separate]
       <qty> units moved from listing FROM to listing TO of one security
       inside this account (a Norbert's gambit's journal, a TSX line moved
       to its NYSE line). Booked as the move's two transfer legs (an
@@ -24,7 +24,9 @@ converted file — `taxjson run` reads it here):
       out-leg of FROM and in-leg of TO, the same quantity, within
       cross_listings.PAIR_DAYS business days) is a duplicate: said as
       Info and not booked twice; with one leg there, only the other leg
-      is booked.
+      is booked. A line ending `separate` is a journal of its own: booked
+      in full, never settled against the broker's legs nor read as a
+      restatement of a broker's journal near it.
 
   RENAME <date> <OLD> <NEW> [late=fold|late=separate]
       a ticker change on that date (lib/renames). Declared once, in any
@@ -130,6 +132,10 @@ class Journal:
     note: str = ""
     source_name: str = ""       # the .tt file's shown name (row `source`)
     source_key: str = ""
+    # The line ends with `separate`: a journal of its own, booked in full
+    # — never settled against the broker's legs near it, never read as
+    # a restatement of a broker's journal (v0.24.1 leftovers, 3).
+    separate: bool = False
 
     def record(self) -> Dict[str, Any]:
         out = {"date": self.date, "account": self.account,
@@ -137,6 +143,8 @@ class Journal:
                "quantity": self.quantity, "source": SOURCE_TT,
                "where": self.where, "pair": self.pair,
                "status": self.status, "legs": list(self.legs)}
+        if self.separate:
+            out["separate"] = True
         if self.note:
             out["note"] = self.note
         return out
@@ -237,7 +245,8 @@ def read_declarations(root: Path, accounts: Dict[str, Any]) -> Declarations:
                         j["quantity"], where, j["line"],
                         pair=f"tt:{acct}:{j['date']}#{counter[k]}",
                         source_name=shown_name(tt),
-                        source_key=source_key(tt)))
+                        source_key=source_key(tt),
+                        separate=bool(j.get("separate"))))
                 elif r is not None and r.get("noop"):
                     out.notes.append(r["noop"])  # one listing: nothing
                 elif r is not None:
@@ -550,6 +559,11 @@ def settle_journals(journals: Iterable[Journal], legs: Iterable[Any],
         return best[1] if best else None
 
     for j in sorted(journals, key=lambda x: (x.account, x.date, x.where)):
+        if j.separate:
+            # Declared a journal of its own: both legs booked, no
+            # broker leg claimed.
+            j.status, j.legs, j.note = STATUS_BOOKED, ("out", "in"), ""
+            continue
         o = find(j, j.frm, -1)
         i = find(j, j.to, +1)
         for g in (o, i):
@@ -984,11 +998,16 @@ class MigrationPlan:
 
 
 def _view(events: Sequence[Any], accounts: Dict[str, Any],
-          syms: Dict[str, Optional[set]]) -> set:
+          syms: Dict[str, Optional[set]],
+          held: Optional[Any] = None) -> set:
     """What the books of each account get from the rename events: (account,
     OLD, NEW, date, the account's late=) for each event that applies to
     the account's kind and names a symbol its books hold (every event,
-    for an account without books)."""
+    for an account without books). The late= is the one the run applies
+    (DatedRename.late_for): the event's reaches an account without a
+    line of its own only when it `held` OLD before the date — held(acct,
+    event), its books carrying the change (_carries); an account without
+    books is taken as holding."""
     out = set()
     for acct in accounts:
         kind = account_kind(accounts.get(acct))
@@ -998,7 +1017,8 @@ def _view(events: Sequence[Any], accounts: Dict[str, Any],
                 continue
             if have is not None and e.old not in have and e.new not in have:
                 continue
-            out.add((acct, e.old, e.new, e.date, e.late_for(acct)))
+            h = True if held is None or have is None else held(acct, e)
+            out.add((acct, e.old, e.new, e.date, e.late_for(acct, h)))
     return out
 
 
@@ -1037,6 +1057,35 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
     have = {(d.old, d.new, d.date, d.late, d.kind): d.where
             for d in decl.tt_declared}
     added: List[Any] = []
+    syms = {a: _book_symbols(root, a) for a in accounts}
+    _held: Dict[Tuple[str, str, str, str], bool] = {}
+
+    def held(acct: str, e: Any) -> bool:
+        k = (acct, e.old, e.new, e.date)
+        if k not in _held:
+            _held[k] = _carries(root, acct, e.old, e.new, e.date)
+        return _held[k]
+    before_v = _view(before, accounts, syms, held)
+
+    def moved_rename(mv: Any, acct: str, kind: str) -> Any:
+        rel = f"inputs/{acct}/{RENAMES_TT}"
+        return DatedRename(mv.old, mv.new, mv.date, mv.late,
+                           f"{rel} (moved from ticker.map)",
+                           mv.tt_line.split("  #")[0], source=SOURCE_TT,
+                           account=acct, kind=kind)
+
+    def keeps(mv: Any, nd: Any) -> bool:
+        """Every account's view of this change is the same after the
+        move with the line in `nd`'s account (None: no line added — a
+        home that already has it), the lines moved so far included."""
+        after, _n2, bad2 = resolve_renames(
+            list(decl.tt_declared) + added + ([nd] if nd else []), [])
+        if bad2:
+            return False
+        pair = (mv.old, mv.new)
+        return ({x for x in _view(after, accounts, syms, held)
+                 if x[1:3] == pair}
+                == {x for x in before_v if x[1:3] == pair})
     for mv in moved:
         homes = home_accounts(root, accounts, mv.old, mv.new, mv.date,
                               "" if mv.commented else mv.late,
@@ -1047,6 +1096,23 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
             kind = account_kind(accounts.get(acct))
             key = (mv.old, mv.new, mv.date, mv.late, kind)
             dup = not mv.commented and key in have
+            if not mv.commented and not keeps(
+                    mv, None if dup else moved_rename(mv, acct, kind)):
+                # Prefer a home whose line keeps every account's late=
+                # resolution (an account relying on the map line's
+                # event-level late= keeps it; v0.24.1 leftovers, 5).
+                # (The home itself, when another account already has the
+                # line: its own copy may be what keeps it.)
+                alt = next((a for a in ([acct] if dup else [])
+                            + [b for b in accounts if b != acct]
+                            if account_kind(accounts.get(a)) == kind
+                            and keeps(mv, moved_rename(mv, a, kind))),
+                           None)
+                if alt is not None:
+                    if alt != acct:
+                        why = ("its line keeps every account's late= "
+                               "choice of this change")
+                    acct, dup = alt, False
             rel = f"inputs/{acct}/{RENAMES_TT}"
             block = list(mv.comments) if n == 0 else []
             if dup:
@@ -1061,10 +1127,7 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
                 continue
             plan.homes.append(f"{mv.old} -> {mv.new} ({mv.date}): {rel} "
                               f"({why})")
-            nd = DatedRename(mv.old, mv.new, mv.date, mv.late,
-                             f"{rel} (moved from ticker.map)",
-                             mv.tt_line.split("  #")[0], source=SOURCE_TT,
-                             account=acct, kind=kind)
+            nd = moved_rename(mv, acct, kind)
             added.append(nd)
             for d in decl.tt_declared:
                 if (d.old, d.new) == (nd.old, nd.new) and \
@@ -1083,9 +1146,9 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
     if bad:
         plan.refused = [f"after the move: {m}" for m in bad]
         return plan
-    syms = {a: _book_symbols(root, a) for a in accounts}
-    old_v, new_v = _view(before, accounts, syms), _view(after, accounts,
-                                                        syms)
+    old_v = before_v
+    new_v = _view(after, accounts, syms, held)
+    by_pair = {(mv.old, mv.new): mv for mv in moved if not mv.commented}
     for acct, o, nw, d, late in sorted(old_v - new_v):
         alt = sorted(x for x in new_v if x[:3] == (acct, o, nw))
         if not alt and syms.get(acct) is None:
@@ -1096,6 +1159,21 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
         now = (f"{d}" + (f" late={late}" if late else ""))
         then = ", ".join(f"{x[3]}" + (f" late={x[4]}" if x[4] else "")
                          for x in alt) or "not booked"
+        mv = by_pair.get((o, nw))
+        own = any(x.account == acct and (x.old, x.new) == (o, nw)
+                  for x in decl.tt_declared)
+        if late and mv is not None and mv.late == late and not own:
+            # The account relies on the map line's event-level late=,
+            # and no single home keeps it: its own line does.
+            plan.refused.append(
+                f"account {acct}: the ticker change {o} -> {nw} is "
+                f"booked {now} now (ticker.map's late=, the account "
+                f"having no line of its own) and would be {then} after "
+                f"the move, wherever the line goes — add `"
+                f"{mv.tt_line.split('  #')[0]}` to "
+                f"inputs/{acct}/{RENAMES_TT} (or another .tt file of "
+                f"{acct}), then format the map again")
+            continue
         plan.refused.append(
             f"account {acct}: the ticker change {o} -> {nw} is booked "
             f"{now} now and would be {then} after the move — the map line "

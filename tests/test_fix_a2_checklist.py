@@ -12,11 +12,25 @@ from pathlib import Path
 
 from taxjson.lib import checklist as cl
 from tax_rules import rule
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 REPO = Path(__file__).resolve().parent.parent
 ENV = dict(os.environ, TAXJSON_OFFLINE="1", PYTHONPATH=str(REPO / "src"),
-           NO_COLOR="1")
+           NO_COLOR="1", TAXJSON_WIDTH="0")    # captured output
 
 TOML = ('[settings]\nlocal_timezone = "America/Toronto"\nyear = 2025\ncountry = "canada"\n'
         'base_currency = "CAD"\nsource_currencies = []\n'

@@ -13,6 +13,20 @@ from tax_rules.dual import gains_both
 
 from test_fix_ibparse import (HEAD, TRADES_H, XFER_H, CA_H, _trade, _xfer,
                               _ca, _parse_ib, _brokerage_cli)
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 def _book(txs):

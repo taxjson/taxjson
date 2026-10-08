@@ -1102,8 +1102,33 @@ class QuestradeBrokerage(BaseBrokerage):
             else None
         return (str(r['symbol']), str(r['currency'])) if r else None
 
+    def _rei_listing(self, row: Dict[str, Any], sym: str, cur: str
+                     ) -> Tuple[str, str]:
+        """(symbol, suffix currency) of a reinvestment (REI) row: a DRIP
+        buys units of a position the account already holds, so a bare
+        ticker on the other currency's row (Questrade pays a TSX
+        stock's dividend on the USD side: `QZP` on a USD row) is the
+        listing the account trades under the same name — as the dotted
+        dividend it reinvests binds — not the row currency's (QZP.US: a
+        listing no market may have, or another company's). Only when
+        the account trades exactly ONE listing of that name, on the same
+        root, and not the row currency's (GitHub issue #3)."""
+        from taxjson.lib.cross_listings import listing_root
+        own = self.apply_currency_suffix(sym, cur)
+        cands = self._ctx.key_candidates(
+            _get_desc_key(row.get('Description') or '')) if self._ctx \
+            else set()
+        listings = {self.apply_currency_suffix(s, c): (s, c)
+                    for s, c in cands}
+        if own in listings or len(listings) != 1:
+            return sym, cur
+        (lst, (s, c)), = listings.items()
+        if listing_root(lst) != listing_root(own):
+            return sym, cur
+        return s, c
+
     def _resolve_symbol(self, row: Dict[str, Any], currency: str,
-                        lineno: Optional[int] = None):
+                        lineno: Optional[int] = None, rei: bool = False):
         """(symbol, suffix currency) for a non-trade row. Questrade
         writes some rows under an internal code (S098765, a TF6's
         R123456) or a dotted dividend code (.SAMPLP for an issuer held as
@@ -1124,6 +1149,12 @@ class QuestradeBrokerage(BaseBrokerage):
                           == 'Transfers'))
         if not code_like:
             cur = self._listing_currency(sym, currency)
+            if rei:
+                # A reinvestment buys the account's held listing
+                # (_rei_listing).
+                bound = self._rei_listing(row, sym, cur)
+                if bound != (sym, cur):
+                    return bound
             own = self.apply_currency_suffix(sym, cur)
             others = sorted({self.apply_currency_suffix(s, c)
                              for s, c in cands} - {own})
@@ -2196,7 +2227,8 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"and Net Amount {net_s:,.2f} of the same sign "
                 f"({desc[:50]!r}) — a reinvestment buys shares for cash "
                 f"(or a reversal returns both); refusing to guess.")
-        sym_raw, scur = self._resolve_symbol(row, currency, lineno)
+        sym_raw, scur = self._resolve_symbol(row, currency, lineno,
+                                             rei=True)
         key = ('REI', self.apply_currency_suffix(sym_raw, scur),
                round(qty, 6), round(net, 2))
         if qty_s < 0:
@@ -2213,17 +2245,20 @@ class QuestradeBrokerage(BaseBrokerage):
         # decimal comma falls back to the cash / units.
         price = desc_number(m.group(1), strict=False) if m else None
         from taxjson.lib.brokerages.rbc_direct import (
-            _REINV_CUR, _REINV_CUR_RE, reinvest_identity_error)
+            _REINV_CUR, _REINV_CUR_RE, reinvest_identity_error,
+            reinvest_row_price)
         mc = _REINV_CUR_RE.search(desc)
-        bad = reinvest_identity_error(
-            qty, net, price,
-            _REINV_CUR.get(mc.group(1).upper(), '?') if mc else currency,
-            currency)
+        price_cur = (_REINV_CUR.get(mc.group(1).upper(), '?') if mc
+                     else currency)
+        bad = reinvest_identity_error(qty, net, price, price_cur, currency)
         if bad:
             raise BrokerageParseError(
                 f"{self._where(lineno)}: REI row: {bad} ({desc[:50]!r}) "
                 f"— a wrong or shifted column; refusing to book it as the "
                 f"units' cost (re-audit A2-0268).")
+        # A REINV@C$ price on a USD row (U$ on a CAD row) is another
+        # currency's number: booked at the cash per unit instead.
+        price = reinvest_row_price(qty, net, price, price_cur, currency)
         if not price:
             price = round(net / qty, 8)
         tx = {

@@ -15,6 +15,20 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib import cli_diag
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 def _tool(mod, *args, env=None, cwd=None):

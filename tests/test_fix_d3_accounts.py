@@ -15,6 +15,20 @@ from test_fix_a2_ib import A1, A2, _stmt, _prepare
 from test_fix_ibparse import TRADES_H, _trade, _brokerage_cli
 from test_fix_rbc import HDR, row
 from test_fix_rbcqt import q, qt_parse
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 ACCT = "55500001"   # pii-ok
 ACCT2 = "55500002"  # pii-ok

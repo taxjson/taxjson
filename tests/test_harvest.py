@@ -15,6 +15,12 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_harvest import main as harvest_main
 from tax_rules import rule
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
 
 
 # One "today" for the whole module: the fixtures below are dated from it
@@ -30,11 +36,13 @@ class _FrozenDate(date):
 
 
 def setUpModule():
+    _WIDTH.start()
     import taxjson.bin.taxjson_harvest as _h
     _h.date = _FrozenDate
 
 
 def tearDownModule():
+    _WIDTH.stop()
     import taxjson.bin.taxjson_harvest as _h
     _h.date = date
 

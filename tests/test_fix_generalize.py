@@ -14,6 +14,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from taxjson.lib import markets  # noqa: E402
 from taxjson.lib.ticker_map import read_side_rules  # noqa: E402
 from tax_rules import rule, rule_absent  # noqa: E402
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
 
 
 _SAVED_TZ = None
@@ -22,12 +28,14 @@ _SAVED_TZ = None
 def setUpModule():
     # The crypto parsers outside a project need a named zone (no default
     # since the same generalisation, A2): set one, restore it after.
+    _WIDTH.start()
     global _SAVED_TZ
     _SAVED_TZ = os.environ.get("TAXJSON_LOCAL_TZ")
     os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
 
 
 def tearDownModule():
+    _WIDTH.stop()
     if _SAVED_TZ is None:
         os.environ.pop("TAXJSON_LOCAL_TZ", None)
     else:

@@ -258,6 +258,20 @@ def known_suffixes() -> FrozenSet[str]:
 
 
 @lru_cache(maxsize=None)
+def receipt_suffixes() -> FrozenSet[str]:
+    """The listing suffixes of venues that list depositary receipts
+    under the underlying's ticker (`receipts = true`: NE, Cboe Canada's
+    CDRs)."""
+    return frozenset(s for s, v in _venues().items() if v.get("receipts"))
+
+
+def receipt_words() -> FrozenSet[str]:
+    """The name words of a depositary receipt ([lists] receipt_words, as
+    symbol_codes.exact_name spells them)."""
+    return _list("receipt_words")
+
+
+@lru_cache(maxsize=None)
 def canadian_suffixes() -> FrozenSet[str]:
     """The listing suffixes of Canadian exchanges (TO V CN NE VN)."""
     return frozenset(s for s, v in _venues().items()

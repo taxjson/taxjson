@@ -14,6 +14,20 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.cli_diag import InputReadError
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 _LATIN1 = "# café\n".encode("latin-1")
 

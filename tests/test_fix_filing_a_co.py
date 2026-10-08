@@ -10,6 +10,20 @@ from pathlib import Path
 from taxjson.bin.taxjson_carryover import (build_canada_ledger, load_claimed,
                                            main)
 from tax_rules import rule
+from _style import CapturedWidth
+
+
+# Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
+# the module passes run alone too (_style.CapturedWidth).
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 def tx(date, qty, net, price, symbol="XEI.TO"):

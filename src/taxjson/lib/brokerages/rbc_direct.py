@@ -107,6 +107,19 @@ def reinvest_identity_error(qty: float, cash: float, price: Optional[float],
     return (f"the cash {abs(cash):,.2f} does not fit |Quantity| {abs(qty):g}"
             f" x the reinvestment price {price:g} = {expect:,.2f}")
 
+def reinvest_row_price(qty: float, cash: float, price: Optional[float],
+                       price_cur: str, row_cur: str) -> Optional[float]:
+    """The per-unit price a reinvestment row is booked at, in the ROW's
+    currency: the stated price when it is in that currency, else the
+    cash per unit. A REINV@C$ price on a USD row (U$ on a CAD row) is
+    another currency's number: booked as the row's price it made the
+    row check (|qty| x price vs the cash) warn on every such DRIP, and
+    RBC's fee back-computed from it was nonsense (v0.24.1 leftovers, 8).
+    The cost is the cash either way; the description keeps the quote."""
+    if price and price_cur != row_cur and qty:
+        return round(abs(cash) / abs(qty), 8)
+    return price
+
 # A forward/reverse stock split booked as ONE 'Reorganization' row with the
 # net shares moved in Quantity and "... STK SPLIT ON <base> SHS ..." e.g.
 #   "DIS - VANGUARD ... GROWTH ETF STK SPLIT ON 14 SHS REC 04/17/26 ..."
@@ -2450,6 +2463,7 @@ class RbcBrokerage(BaseBrokerage):
                        f"reinvestment row: {bad} ({r.desc[:60]!r}) — a "
                        f"wrong or shifted column; refusing to book it as "
                        f"the units' cost.")
+        price = reinvest_row_price(qty, net, price, price_cur, r.currency)
         tx = {
             'action': 'BUYSELL',
             'date': r.date, 'time': self._time(r),

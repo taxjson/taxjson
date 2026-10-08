@@ -36,6 +36,18 @@ the project's other books instead, in this order:
    Canadian companies trade under the same ticker on the NYSE, and a
    USD trade of the bare ticker is that US listing.
 
+3. the same broker proved it: in another of the project's accounts the
+   same broker's ROOT.US was read as ROOT.TO on that account's own
+   evidence (1 or 2), and the names are EQUAL: the broker files that
+   security's TSX listing on USD rows, so the shares bought here on a
+   USD row (a trade, a dividend reinvestment) are that listing too
+   (GitHub issue #3).
+
+A Questrade REI row (a dividend reinvestment) is a candidate like a
+trade. In the parse it also binds on its own to the listing the account
+trades under the same name and root (questrade._rei_listing), as the
+dividend it reinvests does.
+
 Never corrected (the symbol keeps the row currency's listing):
 * a ticker.map line naming the listing in any keyword (a rename,
   DELETE, a dated RENAME, a QUOTE, T1135, CRYPTO, STABLE or MULT line, an
@@ -182,7 +194,11 @@ def scan_questrade(paths: Iterable[Path]) -> Scan:
             continue            # the parse itself names a broken export
         for _ln, row in rows:
             act = (row.get('Activity Type') or '').strip()
-            if act not in ('Trades', 'Transfers'):
+            # A dividend reinvestment (REI) buys units too: its bare
+            # ticker is spelled from the row currency like a trade's.
+            rei = (act == 'Dividend reinvestment'
+                   or (row.get('Action') or '').strip().upper() == 'REI')
+            if act not in ('Trades', 'Transfers') and not rei:
                 continue
             raw = (row.get('Symbol') or '').strip().upper()
             desc = row.get('Description') or ''
@@ -289,6 +305,13 @@ class Evidence:
         default_factory=dict)
     renames: Set[frozenset] = field(default_factory=set)
     shown: Dict[Tuple[str, ...], str] = field(default_factory=dict)
+    # listing -> [(account, broker, the listing it was read as, {names})]:
+    # another account's correction of the same spelling at a
+    # currency-suffix broker, on its own evidence (a transfer, the other
+    # listing in the books) — the broker files that security's other
+    # listing on that currency's rows (GitHub issue #3).
+    proved: Dict[str, List[Tuple[str, str, str, frozenset]]] = field(
+        default_factory=dict)
 
 
 def read_state(path: Path) -> Dict[str, Any]:
@@ -331,6 +354,7 @@ def project_evidence(cache: Path, accounts: Iterable[str], *,
     from taxjson.lib.symbol_codes import (_CONTROL_RE, _plain_listing,
                                           _row_name, exact_name, is_code)
     ev = Evidence()
+    _proved: List[Tuple[str, str, str, str]] = []
     accts = sorted(set(accounts))
     by_len = sorted(accts, key=len, reverse=True)
     names_of: Dict[Tuple[str, str, str], Set[Tuple[str, ...]]] = {}
@@ -354,9 +378,13 @@ def project_evidence(cache: Path, accounts: Iterable[str], *,
                             or md.get("account") != acct):
                 continue
             naming = broker not in CURRENCY_SUFFIX_BROKERS
-            written = set() if naming else {
-                str(r["symbol"]).upper() for r in read_state(
-                    state_path(cache, acct, broker))["corrected"].values()}
+            _corr = {} if naming else read_state(
+                state_path(cache, acct, broker))["corrected"]
+            written = {str(r["symbol"]).upper() for r in _corr.values()}
+            for _lst, _r in _corr.items():
+                if _r.get("how") in ("transfer", "listing"):
+                    _proved.append((_lst, acct, broker,
+                                    str(_r["symbol"]).upper()))
             txs = doc.get("transactions")
             for t in (txs if isinstance(txs, list) else []):
                 if not isinstance(t, dict):
@@ -368,10 +396,13 @@ def project_evidence(cache: Path, accounts: Iterable[str], *,
                     ev.renames.add(frozenset((_root(sym), _root(new))))
                 if not _plain_listing(sym) or is_code(sym):
                     continue
-                if sym in written:
-                    continue
                 nm = _row_name(t, broker)
                 toks = exact_name(nm)
+                if sym in written:
+                    if toks:
+                        names_of.setdefault((acct, broker, sym),
+                                            set()).add(toks)
+                    continue
                 if toks:
                     ev.shown.setdefault(toks, _CONTROL_RE.sub(
                         lambda m: "\\x%02x" % ord(m.group(0)),
@@ -395,6 +426,10 @@ def project_evidence(cache: Path, accounts: Iterable[str], *,
                     continue
                 ev.outs.append(OutLeg(acct, broker, sym,
                                       str(t.get("date"))[:10], -q))
+    for lst, acct, broker, alt in _proved:
+        ev.proved.setdefault(lst, []).append(
+            (acct, broker, alt,
+             frozenset(names_of.get((acct, broker, alt), ()))))
     # An out-leg with no name of its own takes the names its account's
     # rows give the same symbol (IB: the trades' instrument names).
     for o in ev.outs:
@@ -520,7 +555,21 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
                         f"({_broker_name(b)}, account {a}) under the "
                         f"same name")
         else:
-            continue
+            # 3. the same broker already proved it in another account:
+            #    its rows of this spelling were read as the other
+            #    listing there, on that account's own evidence, under
+            #    an equal name (GitHub issue #3).
+            prov = sorted(p for p in ev.proved.get(lst, ())
+                          if p[1] == broker and p[2] == alt and p[3]
+                          and _names_ok(c.names, p[3], shown))
+            if not prov:
+                continue
+            a = prov[0][0]
+            how = "broker"
+            evidence = (f"{_broker_name(broker)} files {alt} on "
+                        f"{c.currency} rows: account {a}'s {lst} was read "
+                        f"as {alt} on its own evidence, under the same "
+                        f"name")
         # Guards: the map, a real listing, one native-currency pool.
         if mapped(lst) or frozenset((lst, alt)) in apart:
             kept[lst] = {"symbol": alt, "reason": "a ticker.map rule names "

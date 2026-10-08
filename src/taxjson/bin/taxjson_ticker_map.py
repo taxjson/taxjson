@@ -28,7 +28,7 @@ import sys
 import re
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from taxjson.lib.cli_diag import InputContentError, guard_main
@@ -83,6 +83,112 @@ TickerMap = namedtuple("TickerMap",
                         "distinct", "dated", "undated_rename",
                         "lookup_named"],
                        defaults=((), frozenset(), frozenset()))
+
+
+def _bare_symbol(sym: str) -> bool:
+    """A symbol written without a market suffix (no `.SFX` that
+    taxjson/data/markets.toml knows), not an option contract or a
+    future: in the books such a symbol is a coin (price_chain.
+    is_crypto_symbol) — every share listing carries its suffix (a US
+    one `.US`, whatever the broker wrote: base.apply_currency_suffix)."""
+    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.markets import known_suffixes, suffix_of
+    s = str(sym or "").strip().upper()
+    return (bool(s) and suffix_of(s) not in known_suffixes()
+            and not s.startswith(("F:", "/", "\\"))
+            and not is_option_symbol(s))
+
+
+def _share_listing(sym: str) -> bool:
+    """A share listing as the books spell it (ROOT.SFX, a suffix
+    markets.toml knows), not an option contract or a future."""
+    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.markets import known_suffixes, suffix_of
+    s = str(sym or "").strip().upper()
+    return (suffix_of(s) in known_suffixes()
+            and not s.startswith(("F:", "/", "\\"))
+            and not is_option_symbol(s))
+
+
+def us_listing(bare: str) -> str:
+    """The book spelling of a US listing written bare (QZX -> QZX.US):
+    the suffix markets.toml gives a US-dollar row ([currency_suffix])."""
+    from taxjson.lib.markets import data
+    sfx = str(data()["currency_suffix"].get("USD") or "US").upper()
+    return f"{str(bare).strip().upper()}.{sfx}"
+
+
+def listing_pair_spelling(a: str, b: str) -> Optional[str]:
+    """The bare side of a pair whose OTHER side is a share listing
+    (`QZX` in `QZX QZX.TO`), when its US spelling is not that other
+    side; None otherwise (two bare symbols are two coins; a pair with
+    no share listing is left as written)."""
+    a, b = str(a).upper(), str(b).upper()
+    for x, y in ((a, b), (b, a)):
+        if _bare_symbol(x) and _share_listing(y) and us_listing(x) != y:
+            return x
+    return None
+
+
+def distinct_spellings(a: str, b: str) -> Tuple[frozenset, ...]:
+    """The pairs a DISTINCT line keeps apart: the two symbols as written
+    and, when one is a bare ticker beside a share listing (`DISTINCT QZX
+    QZX.TO`), that ticker's US listing too (QZX.US — the spelling every
+    parser gives a broker's bare US ticker), so the line answers the
+    pair the loss radar, `ticker-map --suggest` and the cross-listing
+    join name. The pair as written stays (a bare symbol may be a coin or
+    a broker's code in the books). A DISTINCT line changes no symbol, so
+    neither reading moves a pool (v0.24.1 leftovers, 1)."""
+    a, b = str(a).upper(), str(b).upper()
+    out = [frozenset((a, b))]
+    bare = listing_pair_spelling(a, b)
+    if bare is not None:
+        out.append(frozenset((us_listing(a), b) if a == bare
+                             else (a, us_listing(b))))
+    return tuple(out)
+
+
+def listing_spelling_notes(text: str, name: str = "ticker.map",
+                           books: Optional[set] = None
+                           ) -> Tuple[List[str], List[str]]:
+    """(Info lines, Warning lines) for the map's lines that pair a bare
+    ticker with a share listing (listing_pair_spelling) where the books
+    (`books`: every symbol they name, ticker_map_suggest.books_symbols)
+    hold the ticker's US listing and not the bare symbol itself (a coin
+    or a broker's code is a symbol of its own). A DISTINCT line also
+    keeps the US listing apart (distinct_spellings) — said as Info. A
+    GLOBAL / TOBASE / JOURNAL / undated RENAME line is NOT re-read (it
+    would move pools and the gain): it joins nothing, said as a Warning
+    naming the line to write. Without `books`, every such line."""
+    infos: List[str] = []
+    warns: List[str] = []
+    for lineno, raw in enumerate(str(text or "").splitlines(), 1):
+        parts = raw.split("#", 1)[0].split()
+        if len(parts) != 3:
+            continue
+        kw = parts[0].upper()
+        a, b = parts[1].upper(), parts[2].upper()
+        bare = listing_pair_spelling(a, b)
+        if bare is None:
+            continue
+        if books is not None and (bare in books
+                                  or us_listing(bare) not in books):
+            continue
+        line = " ".join(parts)
+        where = f"{name}:{lineno}"
+        fa = us_listing(a) if a == bare else a
+        fb = us_listing(b) if b == bare else b
+        if kw == "DISTINCT":
+            infos.append(f"{where}: `{line}` is read as `DISTINCT {fa} "
+                         f"{fb}`: a US listing is {us_listing(bare)} in "
+                         f"the books")
+        elif kw in ("GLOBAL", "TOBASE", "JOURNAL", "RENAME"):
+            warns.append(f"{where}: `{line}` names {bare}, a symbol the "
+                         f"books do not hold (they spell its US listing "
+                         f"{us_listing(bare)}), so the line joins nothing. "
+                         f"If {bare} is the US listing, write `{kw} {fa} "
+                         f"{fb}`")
+    return infos, warns
 
 
 def _parse_map_file(file_path: Path):
@@ -239,9 +345,11 @@ def _parse_map_text(text: str, name: str = "ticker.map",
                         notes.append(f"{where}: DISTINCT pairs a symbol "
                                      f"with itself (no effect): {line!r}")
                         continue
-                    pair = frozenset(syms)
-                    distinct.add(pair)
-                    distinct_where.setdefault(pair, (where, line))
+                    # A bare US ticker beside a share listing: its US
+                    # listing too (distinct_spellings).
+                    for pair in distinct_spellings(*syms):
+                        distinct.add(pair)
+                        distinct_where.setdefault(pair, (where, line))
                 else:
                     problems.append(f"{where}: DISTINCT line needs "
                                     f"`a b`: {line!r}")
