@@ -107,8 +107,11 @@ the open steps one at a time; `--quick` skips the slow detectors.
       together) exits clean. The CRA matches Schedule 3 proceeds against
       these; this is the step that prevents a review letter.
 - [ ] **T5 / T3 slips**: `taxjson slip-audit` agrees with the books.
-      Type each slip into `inputs/slips/slips.toml` (`taxjson slip-audit
-      --template` prints one per account), or drop IB's dividends report
+      Download them from CRA My Account (Tax information slips, one PDF
+      per slip) and import them: `taxjson slip-audit --import-cra
+      <folder> --write`; or type each slip into `inputs/slips/slips.toml`
+      (`taxjson slip-audit --template` prints one per account), or drop
+      IB's dividends report
       (`U*.YYYY.dividends.csv`) in `inputs/slips/`. It compares each box
       with the books' income of the account (a USD slip in USD, with the
       Bank of Canada daily and annual-average conversions side by side),

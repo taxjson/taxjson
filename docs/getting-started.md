@@ -755,8 +755,10 @@ tjs reconcile-slips inputs/slips/*.csv
 ```
 
 In Canada, check the T5 and T3 slips against the books' income too:
-type them into `inputs/slips/slips.toml` (`tjs slip-audit --template`
-prints one to fill in) or drop IBKR's dividends report
+import the PDFs CRA My Account shows under "Tax information slips"
+(`tjs slip-audit --import-cra <folder> --write`), type them into
+`inputs/slips/slips.toml` (`tjs slip-audit --template` prints one to fill
+in) or drop IBKR's dividends report
 (`U*.YYYY.dividends.csv`) in `inputs/slips/`, then
 
 ```bash

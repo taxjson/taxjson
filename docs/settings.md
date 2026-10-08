@@ -694,6 +694,8 @@ What `taxjson slip-audit` compares with the books' income (Canada only; tax-logi
 | `issuer` | a label for the payer or broker (`RBC`, `IB`) |
 | `currency` | the slip's currency (T5 box 27; RBC and Webull send one T5 per currency); default `CAD` |
 | `broker_account` | optional: the account number on the slip, only to tell two broker accounts of one account label apart; it is hashed the way the books keep it and never printed (shown as its first two characters and `***`) |
+| `broker_key` | what `--import-cra` writes instead: the books' own 10-character key of the broker account the slip's payments match (a CRA copy shows no account number); the slip is shown with that account's input files |
+| `source` | where the table came from: `cra:<file>` for an imported CRA slip (`--import-cra` skips a file already imported; IB's dividends report for the same broker account then keeps only its payments) |
 | `security` | a T3's fund (`XYZQ.TO`, or its root): its boxes split that fund's distribution |
 | `code` | a T5008's type code (`SHS`, `OPC` ...): an aggregated T5008 is compared per class, as information |
 | `boxes` | `{ BOX = AMOUNT }`. Compared: T5 24, 10, 18, 15, 16, 13, 14; T3 49, 23, 21, 24, 25, 26, 33, 34, 42; T5008 20, 21. Accepted and not compared: the derived boxes (T5 25, 26, 11, 12; T3 50, 51, 32, 39, 30 ...). Refused: the identifier boxes (recipient, account, report code) |
@@ -718,6 +720,8 @@ account = "margin"
 security = "ZZF.TO"
 boxes = { 49 = 70.00, 50 = 96.60, 21 = 20.00, 42 = 10.00 }
 ```
+
+**The slips CRA holds** (My Account › Tax information slips, one PDF per slip, printed from the browser): `taxjson slip-audit [ACCOUNT] --import-cra <folder or PDFs>` reads them with `pdftotext` (poppler-utils) — the slip line (year, T5 or T3, issuer) and the box rows only; the page's name, address and SIN are never read — and shows the `[[slip]]` tables it would add, each placed by the books: a T5 in the broker account of the issuer whose dividends, withholding and interest it matches (one broker's slips shared out among its accounts), a T3 in the fund (`security`) whose distributions match it. `--write` appends them to `slips.toml`. A slip it cannot place (a bank's T5, a broker whose name the books do not show) is listed: import it again with ACCOUNT to put it in that account. Other PDFs (an RRSP receipt, a T2202) are skipped. Code: `src/taxjson/lib/cra_slips.py` — `parse_text`, `read_pdf`, `place`, `table`.
 
 IB's dividends report (Reports › Tax › Dividend report, saved as CSV: `U1234567.2025.dividends.csv`) is read as is, payment by payment: each payment's `RevenueComponent` rows give its slip boxes (`T5: Eligible Dividend Income` box 24, `T5: Capital Gains` box 18, `T3: Eligible Dividend Income` box 49, `T3: Foreign Non-Business Income` box 25, `T3: Return of Capital` box 42, `T3: Capital Gains` box 21, a plain `Ordinary Dividend` box 24 for a Canadian issuer and box 15 for a foreign one; `Withhold` box 16 / 34), at IB's rate (`GrossInBase`). Its `Account` section names the holder: taxjson reads only the account number (hashed, masked when shown) and the base currency. The report is matched to the project account whose books carry that IB account; `reconcile-slips` and the checklist's T5008 step skip it. The report has no interest: type the T5's box 13 as a `[[slip]]` with the IB account as `broker_account` to compare it.
 

@@ -1038,6 +1038,41 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/slip_audit.py` — `load_slips_file`, `_slip_from_table`, `SlipsError`
 
+### `tjs slip-audit --import-cra`: "Not imported: 2025 T5 Sample Bank.pdf: no broker in the books by the issuer's name"
+- **Check:** the slip's issuer is a bank or a broker none of the project's exports come from, or the broker's name on the CRA slip is not the one taxjson knows it by (a trade name).
+- **Cause:** a CRA copy shows no account number: the importer places a T5 by its issuer's name and the payments in the books. A bank account's interest is outside the books.
+- **Fix:** import that PDF again naming the account it belongs to: `tjs slip-audit margin --import-cra "<file>" --write` (it is then compared with the account's rows no other slip's broker account holds), or leave it out and report it from the slip.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `place`, `broker_of_issuer`
+
+### `tjs slip-audit --import-cra`: "ambiguous: ZZF.TO and ZZF.TO distributions match it equally" or "no fund in the books whose distributions match its amounts or name"
+- **Check:** `tjs divs ZZF.TO` lists the fund's distributions in each broker account; compare with the T3's boxes (21, 23, 25, 26, 49 and 42).
+- **Cause:** a T3 is placed in the fund whose year's distributions add up to the slip (with or without its return of capital), or whose descriptions carry its name. Two holdings of one fund with the same total, or distributions the books lack, leave it unplaced.
+- **Fix:** type that T3 into `inputs/slips/slips.toml` with its `security` and `broker_account` (docs/settings.md), or add the missing export.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `place`
+
+### `tjs slip-audit`: "Not compared: margin: ZZF.TO ADJUST 2025-01-08 (roc.tt) has no record= and is dated by its pay date, but the distribution paid 2025-01-08 has record date 2024-12-31"
+- **Check:** the `.tt` return-of-capital line was typed from last year's T3 (box 42) with the January pay date.
+- **Cause:** without `record=` the line is dated by its pay date and lowers the ACB in this year; the distribution it belongs to is last year's by its record date (CA-INC-DATE-ROC-TRUST). Before, slip-audit netted it against this year's T3 and suggested a wrong line.
+- **Fix:** add `record=2024-12-31` (the record date the message names) to the line and re-run `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_redate_prior_roc`
+
+### `tjs slip-audit`: "ZZT.TO: the books already hold ADJUST 2025-09-30 3.45 CAD (roc.tt), not counted against this slip"
+- **Check:** `tjs roc-sum` lists the line; the fund is held at two brokers in one account (or the line's date puts it in another year).
+- **Cause:** a hand-entered row has no broker account; it goes with the fund's distribution on its record date or pay date, else with the one slip showing its amount. When that cannot decide, the row is counted against no slip — and slip-audit never suggests a line the books already hold (before, it suggested it again: applying it booked the return of capital twice).
+- **Fix:** give the line its record date (`record=`) or type each broker's T3 with its `broker_account`, so the row is placed; do not add the line again.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/slip_audit.py` — `_audit_account`, `_roc_match`, `_suggest_roc`
+
+### `tjs slip-audit --import-cra`: "Error: pdftotext is not installed"
+- **Check:** `pdftotext -v` fails.
+- **Cause:** the CRA PDFs are read with pdftotext (poppler-utils).
+- **Fix:** `sudo apt install poppler-utils` (Debian, Ubuntu), `brew install poppler` (macOS); or type the slips into `inputs/slips/slips.toml`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `pdf_text`
+
 ### `tjs reconcile-slips inputs/slips/*.csv`: "Info: skipped U5***.2025.dividends.csv: IB's dividends report (T5/T3 income, read by `taxjson slip-audit`), not a T5008"
 - **Check:** the skipped file is IBKR's dividends report.
 - **Cause:** IB's dividends report lives in `inputs/slips/` beside the T5008 CSVs; it is T5/T3 income, which `reconcile-slips` does not read (before, it failed the reconciliation as an unreadable T5008).

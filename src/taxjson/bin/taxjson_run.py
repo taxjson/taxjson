@@ -18919,6 +18919,119 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
     raise SystemExit(taxjson_reconcile_slips.main(argv))
 
 
+def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
+                           args: argparse.Namespace) -> None:
+    """`taxjson slip-audit [ACCOUNT] --import-cra PDF|DIR ... [--write]`:
+    CRA-downloaded T5 / T3 slip PDFs as [[slip]] tables, each placed in
+    a project account (and broker account, a T3 its fund) by the books
+    (lib/cra_slips). Shows what it would add; --write appends it to
+    inputs/slips/slips.toml."""
+    from taxjson.lib import cra_slips as CS
+    from taxjson.lib import out
+    from taxjson.lib import slip_audit as SA
+    from taxjson.lib.ib_dividends import IBReportError, read_report
+    from taxjson.lib.safe_write import OutsideLinkError, write_user_file
+    year = int((cfg.get("settings") or {}).get("year"))
+    acct = getattr(args, "account", None)
+    if acct and acct not in SA.slip_accounts(cfg):
+        _die_input(f"account {acct!r} gets no T5 or T3",
+                   "Name a taxable, non-crypto [accounts.*] account.")
+    try:
+        paths = CS.pdf_paths(args.import_cra)
+    except CS.CraSlipError as e:
+        _die_input(str(e))
+    slips, skipped = [], []
+    for p in paths:
+        try:
+            sl = CS.read_pdf(p)
+        except CS.CraSlipError as e:
+            if "pdftotext is not installed" in str(e):
+                _die_input(str(e))
+            skipped.append(str(e))
+            continue
+        if sl.year != year:
+            skipped.append(f"{sl.shown}: a {sl.year} slip; the project's "
+                           f"year is {year}")
+            continue
+        slips.append(sl)
+    sf = SA.slips_dir(root) / SA.SLIPS_FILE
+    have = set()
+    if sf.is_file():
+        try:
+            for s0 in SA.load_slips_file(sf, cfg, year)[0]:
+                if s0.origin:
+                    have.add(s0.origin)
+        except SA.SlipsError as e:
+            _die_input(str(e))
+    reports = []
+    for p in SA.find_ib_reports(root):
+        try:
+            reports.append(read_report(p))
+        except IBReportError:
+            pass
+    rate = {}
+    for c in sorted({s.currency for s in slips} - {"CAD"}):
+        a = SA.annual_average(c, year)
+        rate[c] = a["rate"] if a else None
+    import contextlib
+    import io
+    try:
+        # The market list's notes are the views' to print.
+        with contextlib.redirect_stderr(io.StringIO()):
+            groups = CS.book_groups(root, cfg, year)
+    except ValueError as e:
+        _die_input(str(e))
+    placed = CS.place(slips, groups, year, rate, reports, account=acct)
+    new = [pl for pl in placed if pl.account
+           and f"cra:{pl.slip.shown}" not in have]
+    again = [pl for pl in placed if f"cra:{pl.slip.shown}" in have]
+    d = out.Doc(f"CRA SLIP IMPORT — tax year {year}: {len(slips)} slip(s) "
+                f"read")
+    body = [[pl.slip.shown, pl.slip.type, pl.slip.issuer,
+             pl.slip.currency, pl.account or "-",
+             ", ".join(pl.group.sources) if pl.group else "-",
+             pl.security or ""] for pl in placed]
+    if body:
+        d.blank()
+        d.table(["FILE", "TYPE", "ISSUER", "CUR", "ACCOUNT",
+                 "BROKER ACCOUNT", "FUND"], body, drop=(2, 5), key=0)
+    notes = [f"{pl.slip.shown}: {pl.how}" for pl in placed
+             if not pl.account]
+    notes += [f"{pl.slip.shown}: already in slips.toml (source = "
+              f"\"cra:{pl.slip.shown}\"); delete its table to import it "
+              f"again" for pl in again]
+    notes += [f"skipped {m}" for m in skipped]
+    if notes:
+        d.section("Not imported")
+        d.items(notes)
+    if new:
+        text = "\n\n".join(CS.table(pl) for pl in new) + "\n"
+        d.section(f"{'Added to' if args.write else 'Would add to'} "
+                  f"inputs/slips/{SA.SLIPS_FILE}")
+        for ln in text.splitlines():
+            d.line("  " + ln if ln else "")
+        if args.write:
+            old = sf.read_text(encoding="utf-8") if sf.is_file() else (
+                f"year = {year}\n")
+            sep = "" if old.endswith("\n\n") or not old else (
+                "\n" if old.endswith("\n") else "\n\n")
+            sf.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                write_user_file(sf, old + sep + text, root)
+            except OutsideLinkError as e:
+                _die_input(str(e))
+    d.blank()
+    if not new:
+        d.para("Nothing to add.")
+    elif args.write:
+        d.para(f"Added {len(new)} slip(s); `taxjson slip-audit` compares "
+               f"them with the books.")
+    else:
+        d.para(f"Run again with --write to add {len(new)} slip(s) to "
+               f"inputs/slips/{SA.SLIPS_FILE}.")
+    d.print()
+
+
 def cmd_slip_audit(args: argparse.Namespace) -> None:
     """`taxjson slip-audit [ACCOUNT]`: the T5 / T3 slips in inputs/slips/
     (slips.toml, IB's dividends reports) against the books' income, per
@@ -18940,6 +19053,13 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
         except (SA.SlipsError, ValueError) as e:
             _die_input(str(e))
         return
+    if getattr(args, "import_cra", None):
+        _slip_audit_import_cra(root, cfg, args)
+        return
+    if getattr(args, "write", False):
+        _die_input("--write goes with --import-cra",
+                   "It writes the imported slips into inputs/slips/"
+                   "slips.toml.")
     tol = (SA.DEFAULT_TOLERANCE if args.tolerance is None
            else float(args.tolerance))
     try:
@@ -23641,6 +23761,16 @@ def _build_parser(prog: str = "taxjson"
     p_sa.add_argument("--template", action="store_true",
                       help="Print a slips.toml to fill in (a T5 per "
                            "account and currency with income)")
+    p_sa.add_argument("--import-cra", nargs="+", metavar="PDF|DIR",
+                      default=None,
+                      help="Read the T5 / T3 slip PDFs downloaded from "
+                           "CRA My Account (a folder: its *.pdf) into "
+                           "[[slip]] tables, each placed in an account "
+                           "by the books; shows them (ACCOUNT: where the "
+                           "slips no broker matches go)")
+    p_sa.add_argument("--write", action="store_true",
+                      help="With --import-cra: append the tables to "
+                           "inputs/slips/slips.toml")
     p_sa.add_argument("--json", action="store_true",
                       help="Emit the audit as JSON instead of text (a "
                            "stable schema: docs/settings.md)")

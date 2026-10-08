@@ -885,7 +885,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson form-export` | Filing-shaped output: IRS Form 8949 / CRA Schedule 3 (default follows the country), or a TurboTax-importable TXF via `--form txf [--box A|B|C] --out gains.txf`. |
 | `taxjson t1135` | CRA T1135 foreign-property helper: filing-threshold test + per-property/per-country tables. |
 | `taxjson reconcile-slips SLIP.csv [SLIP.csv ...]` | Diff broker T5008 / 1099-B slips against computed dispositions before filing (exit 1 on mismatch); several slip files (one per broker) are reconciled together. |
-| `taxjson slip-audit [ACCOUNT] [--template] [--tolerance N] [--json]` | Canada: the T5 / T3 slips in `inputs/slips/` (`slips.toml`, IBKR dividends reports) against the books' income per account and box; missing payments, accounts with income and no slip, and the `[[capital_gains_dividends]]` / ROC `.tt` lines to apply (exit 1 on a finding). |
+| `taxjson slip-audit [ACCOUNT] [--template] [--import-cra PDF\|DIR ... [--write]] [--tolerance N] [--json]` | Canada: the T5 / T3 slips in `inputs/slips/` (`slips.toml`, IBKR dividends reports) against the books' income per account and box; missing payments, accounts with income and no slip, and the `[[capital_gains_dividends]]` / ROC `.tt` lines to apply (exit 1 on a finding). |
 | `taxjson carryover` | Multi-year capital-loss carryforward/carryback ledger (Canada balance + T1A carryback candidates; US ST/LT worksheet). A close-year lock's recorded balance (this project's or `prior_year_record`'s) becomes the running balance at its year end. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
 | `taxjson close-year [--filed-dispositions CSV]` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. It also records what the next year needs for `taxjson handoff`: every sale, the positions and cost at Dec 31 (superficial-loss deferrals included), and the trades that settle in January. It also records the year's carry-forwards — the net capital loss (US: the short-/long-term capital loss carryover) and, in Canada, the minimum tax carryover by year of origin — from the year's own estimate (see "Carry-forwards"; a Canadian project with no supported `province` gets a federal-only estimate, said in the output — every figure carried forward is federal anyway). When the return was prepared with another tool, `--filed-dispositions` stores the sales it actually reported (CSV: `symbol,date,qty,proceeds,cost,gain`, optional `account`). `--force` keeps the filed dispositions of the lock it replaces (unless a new CSV is given) and warns when that lock recorded other totals. It refuses books whose last run did not finish (no reports, an unreadable `work/<acct>_base.json`). Without `--force` it refuses a year that has not ended, a year with no disposition and no income in the taxable books (a typo'd `year`), and books built with another option timing than `taxjson.toml` now says (that one even with `--force`). |
@@ -1681,7 +1681,11 @@ books' income, per account and slip box: Canadian dividends (T5 24/10, T3
 foreign income and tax withheld (T5 15/16, T3 24/25/33/34), return of capital
 (T3 42) against the books' ADJUST rows, interest (T5 13). Type the slips into
 `inputs/slips/slips.toml` (`taxjson slip-audit --template` prints one; format
-in [docs/settings.md](./docs/settings.md)), or drop IBKR's dividends report
+in [docs/settings.md](./docs/settings.md)), import the PDFs CRA My Account
+shows under "Tax information slips" (`taxjson slip-audit --import-cra
+<folder>`: one layout for every issuer; each slip placed in the account,
+broker account and fund whose payments it matches; `--write` adds them), or
+drop IBKR's dividends report
 (`U*.YYYY.dividends.csv`, its per-payment T5/T3 split) in `inputs/slips/` —
 it is matched to the account whose books carry that IB account, payment by
 payment. A slip in USD (RBC, Webull) is compared in USD, and its CAD is shown

@@ -60,7 +60,7 @@ import datetime as _dt
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -119,7 +119,7 @@ BOX_CAT: Dict[str, Dict[str, str]] = {
 # from others (the grossed-up taxable dividends, the credits) or ones
 # the books never hold.
 OTHER_BOXES: Dict[str, Tuple[str, ...]] = {
-    "T5": ("11", "12", "17", "19", "20", "25", "26"),
+    "T5": ("11", "12", "17", "19", "20", "25", "26", "30"),
     "T3": ("22", "30", "31", "32", "35", "37", "38", "39", "40", "41",
            "45", "46", "47", "48", "50", "51"),
     "T5008": ("19",),
@@ -142,8 +142,9 @@ _IB_CAT = {"eligible": "ca_div", "non_eligible": "ca_div",
            "foreign": "foreign", "other": "other", "roc": "roc",
            "interest": "interest"}
 
-_SLIP_KEYS = {"type", "issuer", "account", "broker_account", "currency",
-              "security", "code", "boxes", "line", "note"}
+_SLIP_KEYS = {"type", "issuer", "account", "broker_account", "broker_key",
+              "currency", "security", "code", "boxes", "line", "note",
+              "source"}
 _LINE_KEYS = {"symbol", "date", "box", "amount", "note"}
 _TOP_KEYS = {"year", "slip", "ib_report", "annual_average"}
 
@@ -184,10 +185,20 @@ class Slip:
     # The categories the slip's source can show (None: every one): IB's
     # dividends report has no interest.
     covers: Optional[Tuple[str, ...]] = None
+    origin: str = ""                 # slips.toml `source` (cra:<file>)
+    detail_only: bool = False        # an IB report beside its CRA slip
 
     @property
     def scope(self) -> str:
         return self.broker_hashes[0] if self.broker_hashes else "*"
+
+    def short_label(self) -> str:
+        iss = self.issuer or "?"
+        if len(iss) > 28:
+            iss = iss[:27].rstrip() + "…"
+        bits = [self.type, iss] + ([self.security] if self.security else [])
+        return " ".join(bits) + (" (payments only)" if self.detail_only
+                                 else "")
 
     def label(self) -> str:
         bits = [self.type, self.issuer or "?"]
@@ -195,7 +206,8 @@ class Slip:
             bits.append(self.security)
         if self.broker_masked:
             bits.append(self.broker_masked)
-        return " ".join(bits) + f" ({self.currency})"
+        return " ".join(bits) + f" ({self.currency})" + (
+            ", payments only" if self.detail_only else "")
 
 
 @dataclass
@@ -218,6 +230,8 @@ class BookRow:
     # The broker accounts the row may be from: its own, else every one
     # its input file names (an IB statement of two accounts).
     hashes: Tuple[str, ...] = ()
+    description: str = ""
+    record: str = ""         # the record date the row carries, if any
 
 
 # ------------------------------------------------------------ helpers
@@ -438,11 +452,23 @@ def _slip_from_table(t: Any, where: str, accounts: Dict[str, Any]) -> Slip:
             amounts[ln.category] = amounts.get(ln.category, 0.0) + ln.amount
             boxes[ln.box] = boxes.get(ln.box, 0.0) + ln.amount
     number = str(t.get("broker_account") or "").strip()
+    key = str(t.get("broker_key") or "").strip().lower()
+    if key and not re.fullmatch(r"[0-9a-f]{10}", key):
+        raise SlipsError(f"{where}: broker_key {t.get('broker_key')!r} is "
+                         f"not the books' 10-character key (`taxjson "
+                         f"slip-audit --import-cra` writes it; type "
+                         f"broker_account instead)")
+    if key and number:
+        raise SlipsError(f"{where}: give broker_account or broker_key, "
+                         f"not both")
+    src = str(t.get("source") or "").strip()
     return Slip(where=where, type=typ,
                 issuer=str(t.get("issuer") or "").strip(), account=acct,
                 currency=cur,
-                broker_hashes=broker_hashes(number) if number else (),
+                broker_hashes=(broker_hashes(number) if number
+                               else (key,) if key else ()),
                 broker_masked=_mask(number) if number else "",
+                origin=src,
                 security=_root(sec) if sec else "",
                 code=str(t.get("code") or "").strip().upper(),
                 amounts=amounts, boxes=boxes, lines=lines,
@@ -610,7 +636,8 @@ def load_books(root: Path, cfg: Dict[str, Any], year: int,
             if act in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 d = rules.income_date(t)
                 amt = _row_amount(t)
-                cat = "ca_div" if is_canadian_issuer(t) else "foreign"
+                cat = ("ca_div" if is_canadian_issuer(t)
+                       and not _is_receipt(t) else "foreign")
             elif act == "TAX":
                 d = wh.get(id(t)) or str(t.get("date") or "")
                 amt = float(t.get("net_amount") or 0.0) \
@@ -663,8 +690,56 @@ def load_books(root: Path, cfg: Dict[str, Any], year: int,
                 hashes=((str(t["source_account"]),)
                         if t.get("source_account")
                         else file_hashes.get(str(t.get("source") or ""),
-                                             ()))))
+                                             ())),
+                description=str(t.get("description") or ""),
+                record=str(t.get("record_date") or "")[:10]))
+        _redate_prior_roc([r for r in out if r.account == acct], year,
+                          problems)
     return out, problems
+
+
+def _redate_prior_roc(rows: List[BookRow], year: int,
+                      problems: List[str]) -> None:
+    """A hand-entered ROC line (.tt ADJUST) with no record= is dated by
+    its pay date; when the distribution paid that day belongs to another
+    year by its record date (a December record date paid in January),
+    the line is that year's T3 box 42: it is counted there, never netted
+    against this year's slip, and said (CA-INC-DATE-ROC-TRUST)."""
+    ystr = str(year)
+    divs = [r for r in rows if r.action == "DIVIDEND" and r.root]
+    for r in rows:
+        if not (r.action == "ADJUST" and r.category == "roc"
+                and not r.record and r.source.lower().endswith(".tt")
+                and r.root):
+            continue
+        hits = [d for d in divs if d.root == r.root
+                and _days(d.pay_date, r.pay_date) <= 3
+                and d.tax_date[:4] != r.tax_date[:4]]
+        if not hits:
+            continue
+        d = min(hits, key=lambda x: _days(x.pay_date, r.pay_date))
+        problems.append(
+            f"{r.account}: {r.symbol} ADJUST {r.pay_date} ({r.source}) "
+            f"has no record= and is dated by its pay date, but the "
+            f"distribution paid {d.pay_date} has record date "
+            f"{d.tax_date}: it is {d.tax_date[:4]}'s return of capital, "
+            f"not compared with the {ystr} slip — add `record="
+            f"{d.tax_date}` to the line (CA-INC-DATE-ROC-TRUST)")
+        r.tax_date = d.tax_date
+
+
+def _is_receipt(t: dict) -> bool:
+    """A depositary receipt (a CDR): written on a venue that lists
+    receipts (markets.toml `receipts = true`) or named one in the
+    export ([lists] receipt_words). Its dividends are the underlying
+    foreign company's: T5 box 15, not a Canadian dividend."""
+    from taxjson.lib.markets import (receipt_suffixes, receipt_words,
+                                     suffix_of)
+    if suffix_of(str(t.get("symbol") or "")) in receipt_suffixes():
+        return True
+    words = set(re.findall(r"[A-Z]+", str(t.get("description") or "")
+                           .upper()))
+    return bool(words & receipt_words())
 
 
 def _file_hashes(doc: dict) -> Dict[str, Tuple[str, ...]]:
@@ -866,7 +941,8 @@ def audit(root: Path, cfg: Dict[str, Any], *,
         "suggestions": {
             "capital_gains_dividends": sugg_cgd,
             "tt_lines": [{"account": a, "file": f"inputs/{a}/{SUGGEST_TT}",
-                          "lines": ls} for a, ls in sorted(sugg_tt.items())],
+                          "lines": ls} for a, ls in sorted(sugg_tt.items())
+                         if ls],
             "notes": notes},
         "problems": problems,
         "issues": issues,
@@ -886,6 +962,27 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
     in_year = [r for r in a_rows if r.tax_date.startswith(ystr)]
     income = _income_by_source(in_year)
     live = [s for s in a_slips if not s.empty and s.type != "T5008"]
+    # A CRA slip (--import-cra) and IB's report of one broker account
+    # are one slip: the CRA copy's boxes are compared; the report keeps
+    # its payments for the per-payment match.
+    cra = [s for s in live if s.origin.startswith("cra:")]
+    for i, s in enumerate(live):
+        if s.source == "ib" and any(
+                c.type == s.type and set(c.broker_hashes)
+                & set(s.broker_hashes)
+                and (s.type == "T5" or c.security == s.security)
+                for c in cra):
+            live[i] = replace(s, amounts={}, covers=(), detail_only=True)
+    # A slip keyed by the books' broker-account key shows its input files.
+    files: Dict[str, set] = {}
+    for r in a_rows:
+        for h in r.hashes:
+            files.setdefault(h, set()).add(r.source or "?")
+    for i, s in enumerate(live):
+        if s.broker_hashes and not s.broker_masked:
+            live[i] = replace(s, broker_masked=", ".join(sorted(
+                files.get(s.broker_hashes[0], ()) or {
+                    "#" + s.broker_hashes[0][:6]})))
     for s in a_slips:
         if s.empty:
             _issue(issues, acct, "empty-slip",
@@ -968,6 +1065,21 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
             for n in names - {""}:
                 slip_roots.setdefault(n, set()).add(key)
     for r, g in placed:
+        if g is None and not r.hashes and r.root:
+            # The distribution it belongs to: the same security's broker
+            # row on its record date or within a week of its pay date.
+            near = {gx or "-" for x, gx in placed
+                    if x.hashes and x.root == r.root
+                    and x.action in ("DIVIDEND", "ADJUST")
+                    and ((r.record and x.tax_date == r.record)
+                         or _days(x.pay_date, r.pay_date) <= MATCH_DAYS)}
+            if len(near) == 1:
+                g = next(iter(near))
+                if g == "-":
+                    uncovered.append(r)
+                    continue
+                groups[g]["rows"].append(r)
+                continue
         if g is None and not r.hashes:
             where_held = held.get(r.root, set()) if r.root else set()
             if len(where_held) == 1:
@@ -978,6 +1090,10 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
                     continue
             elif len(slip_roots.get(r.root, ())) == 1:
                 g = next(iter(slip_roots[r.root]))
+            elif r.category == "roc" and len(_roc_match(r, groups)) == 1:
+                # A hand-entered return of capital (a T3's box 42) goes
+                # with the one slip of its fund showing that amount.
+                g = _roc_match(r, groups)[0]
             elif not where_held and len(groups) == 1 and not any(
                     x.hashes and gx is None for x, gx in placed):
                 g = next(iter(groups))
@@ -1016,12 +1132,31 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
     out_groups = []
     for key in sorted(groups):
         g = groups[key]
+        g["acct_rows"] = a_rows
         out_groups.append(_audit_group(acct, key, g, year, tol, rate, issues,
                                        sugg_cgd, sugg_tt, notes,
                                        slips_no_books))
     st = ("differences" if any(i["account"] == acct for i in issues)
           else "ok")
     return {"account": acct, "groups": out_groups, "status": st}
+
+
+def _roc_match(r: BookRow, groups: Dict[str, Dict[str, Any]]) -> List[str]:
+    """The groups whose slips give the row's fund this return of capital
+    (a T3's box 42, or an IB report's T3 component)."""
+    out = []
+    for key, g in groups.items():
+        for sl in g["slips"]:
+            amts = []
+            if sl.type == "T3" and sl.security == r.root:
+                amts.append(sl.amounts.get("roc", 0.0))
+            for p in sl.payments:
+                if _root(p.symbol) == r.root:
+                    amts.append(p.amount("roc", base=True))
+            if any(a and abs(a - r.cad) <= 0.01 for a in amts):
+                out.append(key)
+                break
+    return out
 
 
 def _income_by_source(rows: List[BookRow]) -> Dict[str, Dict[str, Any]]:
@@ -1122,13 +1257,47 @@ def _audit_group(acct, key, g, year, tol, rate, issues, sugg_cgd, sugg_tt,
                     base.add(pr[c])
             if tot <= 0 or abs(base.amt) < 0.005:
                 continue
+            # The books carry a trust's distribution as the cash paid:
+            # net of the foreign tax the trust withheld (T3 box 34) when
+            # no TAX row holds it, and with the T3's return of capital
+            # inside it when no ADJUST row books that. The T3's income
+            # boxes are gross: split the cash grossed up by box 34, and
+            # leave the return of capital to the ROC line.
+            s_roc = sum(sl.amounts.get("roc", 0.0) for sl in b_slips
+                        if sl.type == "T3" and sl.security == sec)
+            s_tax = sum(sl.amounts.get("foreign_tax", 0.0) for sl in b_slips
+                        if sl.type == "T3" and sl.security == sec)
+            b_roc = sum(_row_money(r, bucket, rate).amt for r in b_rows
+                        if r.root == sec and r.category == "roc")
+            b_tax = sum(_row_money(r, bucket, rate).amt for r in b_rows
+                        if r.root == sec and r.category == "foreign_tax")
+            missing = max(0.0, s_roc - b_roc)
+            gross_up = max(0.0, s_tax - b_tax)
+            k = 1.0
+            implied_tax = 0.0
+            for gu in ([gross_up, 0.0] if gross_up else [0.0]):
+                if base.amt and any(
+                        abs(base.amt + gu - (tot + m))
+                        <= max(tol, 0.005 * (tot + m))
+                        for m in {0.0, missing, s_roc}):
+                    k = tot / base.amt
+                    implied_tax = gu
+                    break
+            if implied_tax:
+                part = Money(amt=implied_tax, alt=implied_tax)
+                books["foreign_tax"].add(part)
+                notes.append(f"{where}: {sec}'s distributions are booked "
+                             f"net of the {fmt_money(implied_tax)} {bucket} "
+                             f"of foreign tax the trust withheld (T3 box "
+                             f"34): counted here as withheld; claim it "
+                             f"from the T3")
             for c in ("ca_div", "foreign"):
                 if c in pr:
                     books[c].add(pr[c], -1.0)
                     pr[c] = Money()
             for c, v in sp.items():
                 part = Money()
-                part.add(base, v / tot)
+                part.add(base, k * v / tot)
                 books[c].add(part)
                 pr.setdefault(c, Money()).add(part)
             split_notes.append(sec)
@@ -1185,12 +1354,26 @@ def _audit_group(acct, key, g, year, tol, rate, issues, sugg_cgd, sugg_tt,
                        f"({CAT_BOXES[c]}) slip {fmt_money(slip_amt)}, "
                        f"books {fmt_money(bm.amt)} ({diff:+,.2f})")
             lines.append(line)
+            if c == "cg_div" and not ok and slip_amt > bm.amt and not any(
+                    ln.category == "cg_div" for sl in b_slips
+                    for ln in sl.lines) and not any(
+                    sl.source == "ib" for sl in b_slips):
+                notes.append(
+                    f"{where}: box 18 capital-gains dividends on the slip "
+                    f"({fmt_money(slip_amt)} {bucket}) are "
+                    f"{fmt_money(slip_amt - bm.amt)} more than "
+                    f"[[capital_gains_dividends]] names — name the "
+                    f"split-share or fund corporations they came from "
+                    f"(the broker's per-security summary lists them), or "
+                    f"type them as [[slip.line]] box 18 lines for the "
+                    f"exact tables")
         buckets.append({"currency": bucket,
-                        "slips": [s.label() for s in b_slips],
+                        "slips": [s.short_label() for s in b_slips],
                         "lines": lines, "split_by_t3": split_notes})
     payments = _match_payments(acct, where, slips, rows, year, issues)
     securities = _securities(acct, where, slips, rows, year, tol,
-                             sugg_cgd, sugg_tt, notes)
+                             sugg_cgd, sugg_tt, notes,
+                             g.get("acct_rows") or rows)
     record_year = [{"symbol": r.symbol, "paid": r.pay_date,
                     "counted_in": r.tax_date[:4]}
                    for r in rows
@@ -1314,7 +1497,7 @@ def _match_payments(acct, where, slips, rows, year, issues
 
 
 def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
-                notes) -> List[Dict[str, Any]]:
+                notes, acct_rows=()) -> List[Dict[str, Any]]:
     """Per-security figures where the slips have them: box 18 against
     [[capital_gains_dividends]], ROC against the books' ADJUST rows,
     and a T3's split. Suggestions are the lines that bring the books to
@@ -1326,6 +1509,10 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
     sec_cur: Dict[str, str] = {}
     dated_cg: Dict[str, List[Tuple[Any, float]]] = {}
     dated_roc: Dict[str, List[Tuple[Any, float]]] = {}
+    # A fund with its own T3 slip (typed, or --import-cra): its return of
+    # capital is that slip's box 42, not IB's report's again.
+    t3_typed = {s.security for s in slips
+                if s.type == "T3" and s.source != "ib" and s.security}
     for s in slips:
         if s.source == "ib":
             if s.type != "T5":
@@ -1334,6 +1521,8 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
                 rt = _root(p.symbol)
                 for c in p.components:
                     cat = _IB_CAT.get(c.category or "")
+                    if cat == "roc" and rt in t3_typed:
+                        continue
                     if cat in ("cg_div", "roc"):
                         d = sec_slip.setdefault(rt, {})
                         d[cat] = d.get(cat, 0.0) + c.gross
@@ -1382,7 +1571,7 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
         if s_roc - bk_roc > max(0.005, 0.0):
             _suggest_roc(acct, rt, sym, cur, s_roc - bk_roc, rrows,
                          dated_roc.get(rt), year, sugg_tt, notes, where,
-                         slips)
+                         slips, acct_rows)
         elif bk_roc - s_roc > tol and s_roc:
             notes.append(f"{where}: the books return {fmt_money(bk_roc)} "
                          f"{cur} of {sym}'s capital and the slip "
@@ -1403,7 +1592,7 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
                              f"(CA-EST-TRUST)")
     t3_ib = {}
     for s in slips:
-        if s.type == "T3" and s.source == "ib":
+        if s.type == "T3" and s.source == "ib" and not s.detail_only:
             t3_ib[s.security] = s
     for sec, s in sorted(t3_ib.items()):
         parts = [f"{CAT_WORDS[c]} {fmt_money(v)}"
@@ -1473,9 +1662,37 @@ def _cgd_entry(symbol, when, amount, acct, date, year) -> Dict[str, Any]:
 
 
 def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
-                 notes, where, slips) -> None:
+                 notes, where, slips, acct_rows=()) -> None:
     from taxjson.lib.report_model import fmt_money
     lines = sugg_tt.setdefault(acct, [])
+    # Never a line the books already hold (in another broker account's
+    # rows, another year by its record date, or not yet counted here):
+    # applying it would book the return of capital twice.
+    counted = {id(x) for x in rrows}
+
+    def held_already(action: str, amt: float) -> Optional[BookRow]:
+        for r in acct_rows:
+            if r.root != rt or r.currency != cur or id(r) in counted:
+                continue
+            if action == "ADJUST" and r.category == "roc" \
+                    and abs(r.native - amt) <= 0.01:
+                return r
+            if action == "DIVIDEND" and r.action == "DIVIDEND" \
+                    and abs(r.native + amt) <= 0.01:
+                return r
+        return None
+
+    def add(line: str, action: str, amt: float) -> None:
+        r = held_already(action, amt)
+        if r is not None:
+            notes.append(f"{where}: {sym}: the books already hold "
+                         f"{action} {r.pay_date} {fmt_money(abs(amt))} "
+                         f"{cur} ({r.source or 'no input file'}), not "
+                         f"counted against this slip — check its date "
+                         f"(record=) and account rather than adding it "
+                         f"again")
+        elif line not in lines:
+            lines.append(line)
     divs = [r for r in rrows if r.category in ("ca_div", "foreign")
             and r.currency == cur and r.action == "DIVIDEND"]
     if dated:
@@ -1486,16 +1703,16 @@ def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
                   if hit else None)
             s = r0.symbol if r0 else sym
             d = r0.pay_date if r0 else p.pay_date
-            lines.append(f"ADJUST {d} 09:30:00 {s} {cur} -{amt:.2f} "
-                         f"type=roc")
+            add(f"ADJUST {d} 09:30:00 {s} {cur} -{amt:.2f} type=roc",
+                "ADJUST", amt)
             if r0 is not None:
                 booked = sum(r.native for r in hit
                              if r.pay_date == r0.pay_date)
                 if abs(booked - p.gross) <= 0.01 + 0.0005 * abs(p.gross):
                     # The dividend row holds the whole payment, ROC
                     # included: take the ROC back out of income.
-                    lines.append(f"DIVIDEND {d} 09:30:00 {s} 0 {cur} 0 "
-                                 f"-{amt:.2f}")
+                    add(f"DIVIDEND {d} 09:30:00 {s} 0 {cur} 0 -{amt:.2f}",
+                        "DIVIDEND", amt)
         return
     # A typed T3: no date on the slip — the year's last distribution
     # (with its record date when the books date it by that,
@@ -1508,15 +1725,22 @@ def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
     rec = (f" record={lr.tax_date}" if lr and lr.tax_date != lr.pay_date
            else "")
     s = lr.symbol if lr else sym
-    lines.append(f"ADJUST {last} 16:00:00 {s} {cur} -{missing:.2f} "
-                 f"type=roc{rec}")
+    add(f"ADJUST {last} 16:00:00 {s} {cur} -{missing:.2f} type=roc{rec}",
+        "ADJUST", missing)
     div_line = (f"DIVIDEND {last} 16:00:00 {s} 0 {cur} 0 -{missing:.2f}"
                 + (f"{rec} label=distribution" if rec else ""))
     slip_income = sum(sl.amounts.get(c, 0.0) for sl in slips
                       if sl.security == rt for c in SPLIT_CATS)
-    book_income = sum(r.native for r in yrows)
-    if slip_income and abs(book_income - slip_income - missing) <= 0.02:
-        lines.append(div_line)
+    # The cash paid, grossed up by the foreign tax the trust withheld
+    # (T3 box 34) when no TAX row holds it.
+    s_tax = sum(sl.amounts.get("foreign_tax", 0.0) for sl in slips
+                if sl.security == rt and sl.type == "T3")
+    b_tax = sum(r.native for r in rrows if r.category == "foreign_tax"
+                and r.tax_date.startswith(ystr))
+    book_income = sum(r.native for r in yrows) + max(0.0, s_tax - b_tax)
+    if slip_income and abs(book_income - slip_income - missing) <= max(
+            0.02, 0.0005 * slip_income):
+        add(div_line, "DIVIDEND", missing)
     elif not slip_income:
         notes.append(f"{where}: {sym}'s return of capital "
                      f"({fmt_money(missing)} {cur}) — if the books' "
