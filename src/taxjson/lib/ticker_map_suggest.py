@@ -410,6 +410,23 @@ def gather(root: Path) -> List[Suggestion]:
     return out
 
 
+def _export_names(root: Path) -> Dict[str, Set[Tuple[str, ...]]]:
+    """{listing: its security names} from the parsed exports of every
+    taxjson.toml account (cross_listings.gather)."""
+    from taxjson.lib import cross_listings as XL
+    from taxjson.lib.tomlcompat import tomllib
+    try:
+        cfg = tomllib.loads((root / "taxjson.toml").read_text(
+            encoding="utf-8-sig")) if tomllib is not None else {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        cfg = {}
+    accts = cfg.get("accounts") if isinstance(cfg, dict) else None
+    _legs, names, _shown = XL.gather(
+        root / "work", [str(a) for a in accts] if isinstance(accts, dict)
+        else [])
+    return names
+
+
 def _holdings_files(root: Path) -> List[Path]:
     """The holdings files taxjson.toml's accounts list (`holdings`)."""
     from taxjson.lib.tomlcompat import tomllib
@@ -565,13 +582,16 @@ def covered_by_suggestion(why: str) -> bool:
 def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]:
     """(the suggestions to offer, [(a suggestion left out, why)]). A
     conditional suggestion whose symbols the books do not all hold is
-    in neither list (books_symbols)."""
+    in neither list (books_symbols), and neither is a conditional join
+    of two listings the exports show apart (cross_listings.shown_apart:
+    a CDR, another company): holding both is no evidence they are one."""
     st = map_state(Path(root) / "ticker.map")
     offer: List[Suggestion] = []
     skipped: List[Tuple[Suggestion, str]] = []
     froms: Dict[str, str] = {}
     extracts: Dict[Tuple[str, str], str] = {}
     books: Optional[Set[str]] = None
+    names: Optional[Dict[str, Set[Tuple[str, ...]]]] = None
     for s in gather(root):
         why = already(s, st)
         if why:
@@ -582,6 +602,12 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
                 books = books_symbols(Path(root))
             if not all(x in books for x in s.needs):
                 continue
+            if s.keyword in ("GLOBAL", "TOBASE") and len(s.needs) == 2:
+                if names is None:
+                    names = _export_names(Path(root))
+                from taxjson.lib.cross_listings import shown_apart
+                if shown_apart(s.needs[0], s.needs[1], names):
+                    continue
         if s.keyword == "EXTRACT":
             prev = extracts.get(s.extract_key)
             if prev is not None:

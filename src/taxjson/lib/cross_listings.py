@@ -758,6 +758,27 @@ def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
     return ""
 
 
+def shown_apart(a: str, b: str,
+                names: Dict[str, Set[Tuple[str, ...]]]) -> str:
+    """Why the exports show two listings are NOT one security, else "":
+    a Canadian listing of the two is a depositary receipt (receipt_why:
+    a receipt word in its name, or a receipt venue), or the names name
+    different companies (companies_differ for every pair of names).
+    Shared letters are a candidate, never proof either way: this is
+    only the evidence AGAINST (`taxjson scan` MAP-GAP / US-LISTING,
+    `ticker-map --suggest`'s conditional hints)."""
+    from taxjson.lib.markets import is_canadian_listing
+    na, nb = names.get(a, set()), names.get(b, set())
+    for sym, ns in ((a, na), (b, nb)):
+        if is_canadian_listing(sym):
+            why = receipt_why(sym, ns, sym)
+            if why:
+                return why
+    if na and nb and all(companies_differ(x, y) for x in na for y in nb):
+        return DIFFERENT
+    return ""
+
+
 def declared_verdict(frm: str, to: str,
                      names: Dict[str, Set[Tuple[str, ...]]],
                      shown: Dict[Tuple[str, ...], str],
