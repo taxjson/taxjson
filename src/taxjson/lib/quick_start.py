@@ -87,12 +87,16 @@ class Step:
     do: str = ""            # the closing line's action; default: cmds[0]
 
 
+# Steps of Canadian law alone: absent from a US project's guide.
+_CANADA_ONLY_STEPS = ("slip-audit",)
+
+
 def steps(year: int, country: Optional[str] = None) -> List[Step]:
     """The workflow, in order. `year` fills the example commands;
     `country` (None outside a project) picks the init example."""
     ctry = country or "canada"
     nxt = year + 1
-    return [
+    out = [
         # ------------------------------------------------------- set up
         Step("install", "Set up", "Install or upgrade taxjson",
              "The same line upgrades: the fix for a problem you hit "
@@ -395,6 +399,11 @@ def steps(year: int, country: Optional[str] = None) -> List[Step]:
              "a gain vanish or count twice.",
              (Cmd("tjs handoff", "in the new project"),)),
     ]
+    # A step of one country's law only is absent from the other's guide
+    # (not "n/a"): T5 / T3 slips are CRA's (pre-release review — a US
+    # project listed the step).
+    return [st for st in out
+            if not (country == "usa" and st.id in _CANADA_ONLY_STEPS)]
 
 
 _TJS = re.compile(r"(?<![\w-])tjs ([a-z][a-z0-9-]*)")
@@ -773,8 +782,7 @@ def evaluate(root: Path, today: Optional[date] = None) -> Guide:
         "review", f"{len(slips)} slip file(s) in inputs/slips/" if slips
         else "no slip CSV in inputs/slips/ yet"))
     if country == "usa":
-        S["slip-audit"] = State("n/a", "US project: compare the 1099-DIV "
-                                "with `tjs divs-sum` by hand")
+        pass                    # no slip-audit step (_CANADA_ONLY_STEPS)
     elif ran:
         S["slip-audit"] = checked("t5-t3", cl.d_t5_t3)
     else:

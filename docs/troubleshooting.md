@@ -942,10 +942,31 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs fx-cash --ledger v2`: "FX on foreign cash: NOT COMPUTED for 2025, ledger v2 (opt-in, under audit) — 4 problems, first: no opening pool for margin/ib USD … ; no reportable figure"
 - **Check:** the report's NOT COMPUTED table lists each problem with its date, account (book) and amount, and the lines below it say what to add; `--cash-events` lists every conversion, move and balance the ledger read.
-- **Cause:** ledger v2 refuses instead of guessing: an account holds foreign cash at the start of the year with no cost (`opening`), a deposit or withdrawal nothing declares (`undeclared`), a statement balance the ledger does not reach within 1.00 (`reconcile`: a conversion or move it does not see), an account with activity and no balance to check against, an overdraft in an account that does not reconcile, a move between your own accounts that arrives before it leaves (`own`), or a missing FX rate.
-- **Fix:** add the `.tt` lines it names to a `.tt` file of the account's `inputs/` folder (docs/settings.md, `.tt` files: `CASHOPEN` once for the first year, `CASHMOVE … cost=` / `kept` / `proceeds=` / `own` / `spot` per move, `CASHBAL` for an export without balances, `CASHBOOK <book>` in a `.tt` file of a folder holding several broker accounts), then `tjs fx-cash --ledger v2` again; `fx_cash_inflow_cost = "spot"` takes the day's rate for undeclared deposits. Close the year with `fx_cash_ledger = "v2"` and the next year opens from the recorded pool.
+- **Cause:** ledger v2 refuses instead of guessing: an account holds foreign cash at the start of the year with no cost (`opening`), a deposit or withdrawal nothing declares (`undeclared`), a statement balance the ledger does not reach within 1.00 (`reconcile`: a conversion or move it does not see), an account with activity and no balance to check against, an overdraft in an account that does not reconcile, a move between your own accounts that arrives before it leaves (`own`), a missing FX rate, or an account of a broker whose export it reads no conversion, deposit or withdrawal from (`unread`: Webull, the generic importer).
+- **Fix:** add the `.tt` lines it names to a `.tt` file of the account's `inputs/` folder (docs/settings.md, `.tt` files: `CASHOPEN` once for the first year, `CASHMOVE … cost=` / `kept` / `proceeds=` / `own` / `spot` per move, `CASHBAL` for an export without balances, `CASHBOOK <book>` in a `.tt` file of a folder holding several broker accounts, `CASHBOOK <book> complete` once a Webull or generic account's conversions and moves are all lines), then `tjs fx-cash --ledger v2` again; `fx_cash_inflow_cost = "spot"` takes the day's rate for undeclared deposits. Close the year with `fx_cash_ledger = "v2"` and the next year opens from the recorded pool.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/fx_cash_v2.py` — `build`, `headline`, `TOL`; `src/taxjson/lib/cash_events.py` — `parse_line`, `collect`, `Books`
+
+### `tjs fx-cash --ledger v2` computed a Questrade account's figure as a margin loan ("BORROWED"), or: "wb/webull: taxjson does not read webull's conversions, deposits or withdrawals from its export"
+- **Check:** `tjs fx-cash --ledger v2 --cash-events` lists what the ledger read for the account; the report's NOT READ FROM THE EXPORT table names the accounts whose exports give it nothing.
+- **Cause:** ledger v2 read no cash event from a Questrade, Webull or generic export, so an account that converted Canadian dollars before buying a US share read as one that borrowed them, and a figure was computed on it.
+- **Fix:** upgrade: Questrade's FX conversions (FXT), deposits, withdrawals, cash-only transfers and stock-lending income are read. For Webull and the generic importer write each conversion and move as a `.tt` line (`FXCONV`, `CASHMOVE`) in the account's folder, then `CASHBOOK <book> complete` (e.g. `CASHBOOK webull complete`) to say they are all there.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/questrade.py` — `questrade_cash_events`; `src/taxjson/lib/cash_events.py` — `READERS`, `unread`; `src/taxjson/lib/fx_cash_v2.py` — `unread_books`
+
+### "Error: m.tt:4: malformed CASHBAL line — … — a line of the FX-on-cash ledger v2 only"
+- **Check:** the line named is a `FXCONV`, `CASHMOVE`, `CASHOPEN`, `CASHBAL` or `CASHBOOK` line.
+- **Cause:** the cash lines are read only by the opt-in ledger v2, but a malformed one stops `tjs run` under either ledger (a typo must not vanish).
+- **Fix:** correct the line to the form the message shows, or delete it if you do not use ledger v2.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `a line of the FX-on-cash ledger v2 only`
+
+### `tjs elect` says "No elections recorded: lira" although the run booked a spin-off there ("sheltered account lira: spin-off … booked at $0 cost")
+- **Check:** `tjs spinoffs` lists the event with election `sheltered_default`.
+- **Cause:** the sheltered default books the event without saving an election, and the listing read only the saved ones.
+- **Fix:** upgrade: `tjs elect` lists each such event as "sheltered default ($0 cost for the distributed shares)" (a merger: "the old shares' cost carried"); `tjs elect ACCOUNT --set ID=ELECTION` records another treatment.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_defaulted_events`, `_elections_section`
 
 ### `tjs checklist`: "[!] journals … 1 pending journal(s) between two listings (1 suggested, 0 refused) — `taxjson journals --pending`"
 - **Check:** `tjs journals --pending` lists each journal the books did not pool: its date, FROM → TO, quantity, broker, how it was found (a Questrade BRW journal, an RBC journal transfer, an IB InterDepot, a move across brokers), the reason, and the lines that settle it. `tjs journals` shows the joined ones too, each with the `TOBASE` / `JOURNAL` line that pools it.

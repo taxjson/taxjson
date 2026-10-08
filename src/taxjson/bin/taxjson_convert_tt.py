@@ -1271,9 +1271,20 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
             # A line of the FX-on-cash ledger v2 (lib/cash_events: FXCONV,
             # CASHMOVE, CASHOPEN, CASHBAL, CASHBOOK): checked here, read by
             # `taxjson fx-cash --ledger v2`, never a row of the books.
-            from taxjson.lib.cash_events import parse_line as _cashline
-            if _cashline(line, source) is not None:
-                continue
+            from taxjson.lib.cash_events import (CashLineError,
+                                                 parse_line as _cashline)
+            try:
+                if _cashline(line, source) is not None:
+                    continue
+            except CashLineError as e:
+                # Still refused (a typo'd line must not vanish), but said
+                # for what it is: under the default ledger nothing reads
+                # it (pre-release review).
+                raise CashLineError(
+                    f"{e} — a line of the FX-on-cash ledger v2 only "
+                    f"(read with fx_cash_ledger = \"v2\" or `taxjson "
+                    f"fx-cash --ledger v2`; the default ledger ignores "
+                    f"it): fix it to the form shown, or delete it") from e
             try:
                 expanded = expand_acquired(line)
             except ValueError as e:

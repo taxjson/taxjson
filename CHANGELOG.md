@@ -116,6 +116,20 @@
   sale used to override the whole sale); two lines naming one sale in
   different spellings stop the run.
 
+- FX-on-cash ledger v2 (opt-in): Questrade's FX conversions, deposits,
+  withdrawals, cash-only transfers and stock-lending income are read, so
+  a Questrade account that converted to US dollars before buying no
+  longer reads as a US-dollar margin loan. An account of a broker whose
+  export gives the ledger no cash event (Webull, the generic importer)
+  and that moves foreign cash is refused until a `CASHBOOK <book>
+  complete` line says its `.tt` conversions and moves are all there; the
+  report lists those accounts.
+- A malformed FXCONV / CASHMOVE / CASHOPEN / CASHBAL / CASHBOOK line
+  still stops `taxjson run`, and now says it is read only by ledger v2.
+- `taxjson elect` lists a sheltered account's spin-off or merger booked
+  by the sheltered default instead of "No elections recorded".
+- A US project's `taxjson quick-start` has no T5 / T3 slips step.
+
 ### Changed
 
 - **A spin-off or merger in a sheltered account is no longer asked.**

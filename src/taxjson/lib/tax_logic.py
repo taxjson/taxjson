@@ -686,7 +686,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "closed with (or CASHOPEN lines), and computes nothing — "
                  "listing why — on a missing opening pool, an undeclared "
                  "move, a reconciliation gap or an overdraft in an "
-                 "account that does not reconcile.",
+                 "account that does not reconcile. It reads the exports "
+                 "of IB, RBC, Questrade, Kraken and Coinbase; an account "
+                 "of a broker whose export it does not read (Webull, the "
+                 "generic importer) that moves foreign cash is refused "
+                 "until its .tt cash lines are declared complete "
+                 "(`CASHBOOK <book> complete`), and the report lists "
+                 "those accounts.",
                  keys=("fx_cash_gains", "fx_cash_ledger",
                        "fx_cash_inflow_cost")),
         ]),
@@ -2431,7 +2437,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "(fx_cash_ledger = \"v2\", under audit) reads "
                  "conversions, deposits, withdrawals and statement "
                  "balances and computes nothing — listing why — instead "
-                 "of guessing.",
+                 "of guessing; an account of a broker whose export it "
+                 "does not read (Webull, the generic importer) that moves "
+                 "foreign cash is refused until its .tt cash lines are "
+                 "declared complete (`CASHBOOK <book> complete`).",
                  keys=("fx_cash_gains", "fx_cash_ledger",
                        "fx_cash_inflow_cost")),
         ]),

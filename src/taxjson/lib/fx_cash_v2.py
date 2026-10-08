@@ -42,6 +42,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 LABEL = "v2 (opt-in, under audit)"
+_COMPLETE = "complete"          # lib/cash_events.COMPLETE
 # Units of the currency a statement balance may differ from the ledger's
 # by (IB rounds each line to the cent; a few hundred rows of rounding).
 TOL = 1.00
@@ -269,6 +270,30 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 if cur != base:
                     k = (o["book"], cur)
                     active[k] = max(active.get(k, ""), o["td"])
+    # A book of a broker whose export the ledger reads no cash event from
+    # (Webull, the generic importer): its trades move foreign cash, its
+    # conversions, deposits and withdrawals are unseen — a figure built
+    # on them was wrong (pre-release review M8). Refused until a
+    # `CASHBOOK <book> complete` line says its .tt cash lines are all.
+    _books = cash.get("books")
+    unread: List[Dict[str, Any]] = []
+    if _books is not None and hasattr(_books, "unread"):
+        moving = {b for (b, _c) in active}
+        for book, broker in _books.unread():
+            done = book in _books.complete
+            unread.append({"book": book, "broker": broker,
+                           "complete": done, "moves": book in moving})
+            if book in moving and not done:
+                curs = sorted(c for (b, c) in active if b == book)
+                short = book.split("/", 1)[1]
+                problems.append(_p(
+                    "unread", f"{book}: taxjson does not read {broker}'s "
+                    f"conversions, deposits or withdrawals from its export, "
+                    f"and this account moves {', '.join(curs)} in {year} — "
+                    f"write each as a .tt line (FXCONV, CASHMOVE) in "
+                    f"{book.split('/', 1)[0]}, then `CASHBOOK {short} "
+                    f"{_COMPLETE}` to say they are all there",
+                    "", book, curs[0]))
     stmt_open = {(c["book"], c["currency"]): c for c in checks
                  if c["date"] == prev_end}
     need = set(active) | {(c["book"], c["currency"]) for c in checks
@@ -615,6 +640,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                            for c, p in sorted(pool.items())
                            if p[0] > 0.005},
         "notes": notes,
+        # Books whose broker's export gives no cash event (READERS):
+        # each with whether a CASHBOOK line declared its lines complete.
+        "unread_books": unread,
         "stablecoins_as_cash": bool(cash.get("stablecoins_as_cash")),
     }
 
@@ -728,6 +756,18 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
             [[d["date"], d["book"], d["currency"], fmt_money(d["amount"]),
               d["how"]] for d in doc["declared"]],
             aligns=["<", "<", "<", ">", "<"], width_=w, key=0)
+    if doc.get("unread_books"):
+        lines.append("")
+        lines.append("NOT READ FROM THE EXPORT (conversions, deposits, "
+                     "withdrawals)")
+        lines += out.fit_table(
+            ["BOOK", "BROKER", "CASH LINES"],
+            [[u["book"], u["broker"],
+              ("declared complete (CASHBOOK)" if u["complete"] else
+               "not declared complete" + ("" if u["moves"] else
+                                          " (no foreign cash moved)"))]
+             for u in doc["unread_books"]],
+            aligns=["<", "<", "<"], width_=w)
     for n in doc.get("notes") or []:
         lines.append("")
         lines += out.wrap(out.label("note", w) + n, w, "", "")
