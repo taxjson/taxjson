@@ -340,12 +340,14 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
             for pl in pls:
                 if account:
                     pl.account = account
-                    pl.how = (f"--account {account} (no broker account of "
-                              f"the issuer in the books)")
+                    pl.how = (f"account {account}, as asked (no broker "
+                              f"account of the issuer in the books)")
                 else:
                     pl.how = ("no broker in the books by the issuer's "
-                              "name — import it with --account NAME, or "
-                              "it is outside the books (a bank account)")
+                              "name — import it again naming its account "
+                              "(`taxjson slip-audit ACCOUNT --import-cra "
+                              "FILE`), or it is outside the books (a bank "
+                              "account)")
             continue
         books = []
         for g in gs:
