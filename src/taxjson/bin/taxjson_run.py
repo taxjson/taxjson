@@ -2382,7 +2382,8 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
         result["refused"] = _refused
         # A pair the map refused whose legs it books as two symbols:
         # each leg is left unpaired (a Warning per account, below).
-        result["map_split"] = XL.map_split(_refused, named, _renames)
+        result["map_split"] = XL.map_split(_refused, named, _renames,
+                                           apart)
         state = cache / XL.STATE
         text = XL.state_text(result)
         if _read_work_stamp(state) != text:

@@ -1197,7 +1197,14 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                     and not ({frozenset((o.symbol, i.symbol)),
                               frozenset((i.symbol, alt)),
                               frozenset((o.symbol, alt))} & apart)):
-                p = Pair(o, i, i.symbol, alt, journal=journal,
+                # The base currency's listing is kept (tobase_direction),
+                # unless that makes a listing the map already renames the
+                # line's FROM (one rename per symbol): the in-leg then
+                # joins it.
+                jf, jt = tobase_direction(i.symbol, alt, base_currency)
+                if jf == alt and alt in renames:
+                    jf, jt = i.symbol, alt
+                p = Pair(o, i, jf, jt, journal=journal,
                          names=((o.raw_name, i.raw_name) if journal else
                                 (shown.get(min(nx), "") if nx else "",
                                  shown.get(min(ny), "") if ny else "")),
@@ -1206,9 +1213,12 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                 continue
             # The user's map decides (listed by `taxjson journals` when
             # the pair is a journal, not a coincidence of two companies).
+            # `verdict`: whether the legs' names agree (map_split warns
+            # only for those).
             if not ambiguous and (verdict != DIFFERENT or brokered):
                 _refuse(Pair(o, i, frm, to, journal=journal,
-                             names=(o.raw_name, i.raw_name)),
+                             names=(o.raw_name, i.raw_name),
+                             extra={"verdict": verdict}),
                         *_map_reason(o.symbol, i.symbol))
             continue
         if verdict == DIFFERENT:
@@ -1601,14 +1611,19 @@ def joined_note(account: str, joined: Iterable[Pair],
                         f"to ticker.map")
             continue
         if p.extra.get("map"):
+            # The in-leg's other listing (the pair's other symbol), and
+            # what the map's line says: it books the out-leg as that
+            # listing, or that listing as the out-leg.
+            alt = p.to if p.frm == p.into.symbol else p.frm
+            says = (f"{alt} as {p.out.symbol}"
+                    if p.extra["map"] == p.out.symbol
+                    else f"{p.out.symbol} as {p.extra['map']}")
             items.append(f"{p.out.symbol} ↔ {p.into.symbol} (transfer "
-                         f"{p.out.date}; ticker.map books {p.out.symbol} "
-                         f"as {p.extra['map']}, so {p.into.symbol} is "
-                         f"booked as {p.to})")
+                         f"{p.out.date}; ticker.map books {says}, so "
+                         f"{p.into.symbol} joins {alt})")
             undo.append(f"- {p.out.symbol} ↔ {p.into.symbol}: the two legs "
-                        f"of one move, and the map's line says "
-                        f"{p.out.symbol} is {p.extra['map']}: "
-                        f"{p.into.symbol} joins its other listing {p.to} "
+                        f"of one move, and the map's line books {says}: "
+                        f"{p.into.symbol} joins its other listing {alt} "
                         f"in the base-currency books (`TOBASE "
                         f"{p.frm} {p.to}`); if they are not one security, "
                         f"add `DISTINCT {p.out.symbol} {p.into.symbol}` to "
@@ -1649,25 +1664,36 @@ def joined_note(account: str, joined: Iterable[Pair],
 
 
 def map_split(refused: Iterable[Pair], map_named: Iterable[str],
-              map_renames: Optional[Dict[str, str]] = None
+              map_renames: Optional[Dict[str, str]] = None,
+              map_distinct: Iterable[Iterable[str]] = ()
               ) -> List[Tuple[Pair, str, str, str]]:
     """The pairs the user's map refused ("map", analyze) whose legs the
     map books as two different symbols — each leg is then left unpaired:
     the units leave one security and arrive in another. [(pair, the
     out-leg as booked, the in-leg as booked, the ticker.map line that
     books them as one)] — the line maps the leg no line names onto the
-    other leg as booked; "" when the map names both."""
+    other leg as booked; "" when the map names both. Only pairs whose
+    legs' names agree (analyze's verdict "": a quantity and a date in
+    common with an unrelated or unnamed leg are no move), and none a
+    `DISTINCT` line keeps apart (the legs, or the legs as booked)."""
     named = {s.upper() for s in map_named}
     ren = {str(k).upper(): str(v).upper()
            for k, v in (map_renames or {}).items()}
+    apart = {frozenset(str(x).upper() for x in pair)
+             for pair in map_distinct}
     out: List[Tuple[Pair, str, str, str]] = []
     for p in refused:
         if p.extra.get("refused") != "map":
             continue
+        if p.extra.get("verdict"):
+            continue                    # the names do not show one move
         eo = ren.get(p.out.symbol, p.out.symbol)
         ei = ren.get(p.into.symbol, p.into.symbol)
         if eo == ei:
             continue                    # the map books them as one
+        if {frozenset((p.into.symbol, eo)), frozenset((p.out.symbol, ei)),
+                frozenset((eo, ei))} & apart:
+            continue                    # the user keeps them apart
         if p.into.symbol not in named:
             line = f"TOBASE {p.into.symbol} {eo}"
         elif p.out.symbol not in named:

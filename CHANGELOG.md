@@ -37,9 +37,11 @@
   registered account, a later sale left out of every total in a taxable one,
   and nothing on the console. The map's renames now apply to the out-leg
   first, and the in-leg is joined to the listing the map books the out-leg
-  as. A transfer pair the map books as two different symbols is a Warning
-  naming both legs and the line that books them as one; `run --strict`
-  stops on it.
+  as (keeping the base currency's listing, as any join does). A transfer
+  pair the map books as two different symbols is a Warning naming both
+  legs and the line that books them as one; `run --strict` stops on it —
+  only when the legs' names agree, and never for a pair a `DISTINCT` line
+  keeps apart.
 
 - **A Questrade internal code of a spun-off warrant no longer resolves to the
   common stock** (GitHub issue #4). A code whose descriptions state a

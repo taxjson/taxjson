@@ -323,17 +323,22 @@ class _MapBooked(_Run):
     def test_the_pair_is_one_security(self):
         self.assertEqual(self.r.returncode, 0, self.r.stderr[-3000:])
         self.assertIn("QZAB.US ↔ QZAA.US (transfer 2026-09-01; ticker.map "
-                      "books QZAB.US as QZAA.TO, so QZAA.US is booked as "
+                      "books QZAB.US as QZAA.TO, so QZAA.US joins "
                       "QZAA.TO)", self.out)
+        # The base currency's listing is the pool (tobase_direction): the
+        # TSX listing in Canada, the US one in a US project (the map's
+        # own line chained on).
+        keep, other = (("QZAA.TO", "QZAA.US") if self.COUNTRY == "canada"
+                       else ("QZAA.US", "QZAA.TO"))
         eff = (self.root / "work" / "ticker.map.effective").read_text()
-        self.assertIn("TOBASE QZAA.US QZAA.TO", eff)
+        self.assertIn(f"TOBASE {other} {keep}", eff)
         self.assertNotIn("Short position", self.out)
         self.assertNotIn("no purchase", self.out)
         self.assertNotIn("two securities", self.out)
-        # No phantom QZAA.US anywhere in the base-currency books.
-        self.assertEqual(self.book_symbols("acct_gains"), {"QZAA.TO"})
-        self.assertNotIn("QZAA.US", (self.root / "reports" /
-                                     "acct.sum").read_text())
+        # No phantom second listing anywhere in the base-currency books.
+        self.assertEqual(self.book_symbols("acct_gains"), {keep})
+        self.assertNotIn(other, (self.root / "reports" /
+                                 "acct.sum").read_text())
         # The raw holdings (one native pool per listing) are written.
         self.assertTrue((self.root / "reports" /
                          "acct_holdings.toml").is_file())

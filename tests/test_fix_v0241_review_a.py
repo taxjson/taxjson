@@ -369,5 +369,77 @@ class TestSpacingIsNoOtherCompany(unittest.TestCase):
                                             exact_name('QZTELUS CORP')))
 
 
+# ------------------------------------------------------------------ L7
+
+def _l7(renames, distinct=(), base='CAD', in_named=True):
+    from taxjson.lib import cross_listings as XL
+    from taxjson.lib.symbol_codes import exact_name
+    nm = 'QZALPHA MINES CORP'
+    key = exact_name(nm)
+    o = XL.Leg('acct', 'ib', 'QZAB.US', '2026-09-01', -24.0,
+               currency='USD', name=key, raw_name=nm)
+    i = XL.Leg('acct', 'questrade', 'QZAA.US', '2026-09-03', 24.0,
+               currency='USD', name=key if in_named else (),
+               raw_name=nm if in_named else '')
+    names = {'QZAB.US': {key}, 'QZAA.TO': {key}}
+    if in_named:
+        names['QZAA.US'] = {key}
+    refused = []
+    named = set(renames) | set(renames.values())
+    r = XL.analyze([o, i], names, {key: nm}, map_named=named,
+                   map_distinct=distinct, base_currency=base,
+                   refused=refused, map_renames=renames)
+    return r, XL.map_split(refused, named, renames, distinct)
+
+
+class TestTobasePairEdges(unittest.TestCase):
+
+    @rule('CA-XLIST-01')
+    @rule('US-XLIST-01')
+    def test_the_join_follows_the_base_currency(self):
+        r, _s = _l7({'QZAB.US': 'QZAA.TO'}, base='CAD')
+        self.assertEqual([(p.frm, p.to) for p in r['joined']],
+                         [('QZAA.US', 'QZAA.TO')])
+        r, _s = _l7({'QZAB.US': 'QZAA.TO'}, base='USD')
+        self.assertEqual([(p.frm, p.to) for p in r['joined']],
+                         [('QZAA.TO', 'QZAA.US')])
+        # A listing the map already renames is never a second line's
+        # FROM: the in-leg joins it.
+        r, _s = _l7({'QZAA.TO': 'QZAB.US'}, base='USD')
+        self.assertEqual([(p.frm, p.to) for p in r['joined']],
+                         [('QZAA.US', 'QZAA.TO')])
+
+    @rule('CA-XLIST-01')
+    def test_the_note_names_the_line_the_map_has(self):
+        from taxjson.lib import cross_listings as XL
+        r, _s = _l7({'QZAA.TO': 'QZAB.US'})
+        head, details = XL.joined_note('acct', r['joined'])
+        text = _flat(head + ' ' + ' '.join(details))
+        self.assertNotIn('books QZAB.US as QZAB.US', text)
+        self.assertIn('ticker.map books QZAA.TO as QZAB.US', text)
+        self.assertIn('QZAA.US joins QZAA.TO', text)
+        r, _s = _l7({'QZAB.US': 'QZAA.TO'})
+        head, details = XL.joined_note('acct', r['joined'])
+        self.assertIn('ticker.map books QZAB.US as QZAA.TO, so QZAA.US '
+                      'joins QZAA.TO', _flat(head))
+
+    @rule('CA-XLIST-01')
+    def test_no_split_hint_for_a_pair_distinct_keeps_apart(self):
+        _r, split = _l7({'QZAB.US': 'QZZZ.TO'})
+        self.assertEqual([line for *_x, line in split],
+                         ['TOBASE QZAA.US QZZZ.TO'])
+        _r, split = _l7({'QZAB.US': 'QZZZ.TO'},
+                        [frozenset(('QZAA.US', 'QZZZ.TO'))])
+        self.assertEqual(split, [])
+
+    @rule('CA-XLIST-01')
+    @rule('US-XLIST-01')
+    def test_an_unnamed_in_leg_is_no_split(self):
+        # Only a quantity and a date in common: no Warning, no --strict
+        # stop.
+        _r, split = _l7({'QZAB.US': 'QZZZ.TO'}, in_named=False)
+        self.assertEqual(split, [])
+
+
 if __name__ == '__main__':
     unittest.main()
