@@ -203,9 +203,9 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 ## T5 and T3 slips against the books (slip-audit)
 
 - **Rule:** `taxjson slip-audit` compares each T5 and T3 slip with the books' income of its account, box by box: T5 24/10 and T3 49/23 with a Canadian issuer's dividends and payments in lieu, T5 18 with `[[capital_gains_dividends]]`, T5 15 and T3 24/25 with a foreign issuer's, T5 16 and T3 33/34 with the tax withheld, T3 42 with the return of capital, T5 13 with the interest received. A T3's split of a trust's distribution is applied to the one dividend the books carry. A foreign payment is converted at the Bank of Canada rate of its date, as the books do; the audit also shows the year's average rate (the mean of the Bank's daily rates in the FX cache) and says which one a CAD slip is closer to. The slip is authoritative: the audit changes no figure and lists the `[[capital_gains_dividends]]` entries and `.tt` return-of-capital lines that bring the books to the slips.
-- **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-SLIP-01` to `CA-SLIP-03` (they cite `CA-INC-02`, `CA-INC-06`, `CA-INC-DATE-TRUST` and `CA-FX-01`).
-- **Rule ids:** `CA-SLIP-01`, `CA-SLIP-02`, `CA-SLIP-03`.
-- **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `load_books`, `annual_average`, `render`; `src/taxjson/lib/ib_dividends.py` — `read_report`, `component_category`.
+- **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-SLIP-01` to `CA-SLIP-04` (they cite `CA-INC-02`, `CA-INC-06`, `CA-INC-DATE-TRUST` and `CA-FX-01`).
+- **Rule ids:** `CA-SLIP-01`, `CA-SLIP-02`, `CA-SLIP-03`, `CA-SLIP-04`.
+- **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `load_books`, `annual_average`, `render`; `src/taxjson/lib/ib_dividends.py` — `read_report`, `component_category`; `src/taxjson/lib/cra_slips.py` — `parse_text`, `place` (the slips downloaded from CRA My Account, placed by the books' payments).
 - **Edge cases and limits:** Canada only (a US 1099-DIV audit is not built). IB's dividends report has no interest: type T5 box 13 into `slips.toml` to compare it. A payment in lieu's box-18 part cannot be named in `[[capital_gains_dividends]]` (dividends only). A hand-entered row of a security held at several brokers is compared with no slip. NR4 slips are compared by hand.
 
 ## Cryptocurrency

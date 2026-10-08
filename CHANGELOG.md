@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`taxjson slip-audit --import-cra`**: the T5 and T3 slip PDFs
+  downloaded from CRA My Account ("Tax information slips", one layout
+  for every issuer) are read with pdftotext — the slip line and the box
+  rows only; the name, address and SIN on the page are never read — and
+  each is placed by the books: a T5 in the broker account of its issuer
+  whose dividends, withholding and interest it matches (one broker's
+  slips shared out among its accounts), a T3 in the fund whose
+  distributions it matches. It shows the `[[slip]]` tables it would add;
+  `--write` appends them to `inputs/slips/slips.toml` (a file already
+  imported is skipped). A slip it cannot place is listed (ACCOUNT puts it
+  in that account). Where IB's dividends report covers the same broker
+  account, the CRA copy's boxes are compared and the report keeps only
+  its payments. Tax-logic `CA-SLIP-04`.
+
 - **`taxjson slip-audit` (Canada): your T5 and T3 slips against the
   books' income**, per account and slip box: Canadian dividends, box 18
   capital-gains dividends, foreign income and tax withheld, return of

@@ -1657,6 +1657,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "negative DIVIDEND line when the dividend row holds the "
                  "return of capital) that bring the books to the slips.",
                  cont=True),
+            Rule("CA-SLIP-04",
+                 "A slip downloaded from CRA My Account (`slip-audit "
+                 "--import-cra`) is the copy the CRA holds: it is placed "
+                 "in the account, broker account and fund whose payments "
+                 "in the books it matches (never guessed: an unmatched or "
+                 "ambiguous slip is listed), and where IB's dividends "
+                 "report covers the same broker account the CRA slip's "
+                 "boxes are compared and the report keeps only its "
+                 "payments.", cont=True),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",
