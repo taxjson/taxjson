@@ -6,10 +6,18 @@ through here (pre-release security review M1). A plain
 `open(tmp, "w")` follows a symlink planted at that predictable name and
 overwrites whatever it points at — a file outside the project too.
 
-- The temp file is created FRESH: an existing entry at its name (a
-  stale temp from a killed run, or a planted symlink) is unlinked first,
-  then os.open(O_CREAT | O_EXCL | O_NOFOLLOW, 0o600) refuses anything
-  that reappears there. Owner-only from the first byte (tax data).
+- atomic_open / write_atomic stage each write in a temp file of its OWN:
+  a new, uniquely named sibling `<out>.<random><suffix>` (tempfile.mkstemp
+  in the final file's folder: O_CREAT | O_EXCL | O_NOFOLLOW, mode 0600),
+  owner-only from the first byte (tax data) and never shared. One fixed
+  `<out><suffix>` name let two overlapping writers of one file (two
+  processes, or a nested write) share it: the first rename published the
+  other's unfinished data and the second failed (GitHub issue #9). A
+  planted symlink or a stale temp at any name is never opened or reused.
+- open_new (a caller that names its own temp file) creates it FRESH: an
+  existing entry at its name is unlinked first, then
+  os.open(O_CREAT | O_EXCL | O_NOFOLLOW, 0o600) refuses anything that
+  reappears there.
 - The data is flushed and fsync'd before the rename, so a crash never
   publishes a short file under the final name.
 - The rename (os.replace) replaces the final directory ENTRY: when the
@@ -19,12 +27,19 @@ overwrites whatever it points at — a file outside the project too.
   person may symlink on purpose (ticker.map, taxjson.toml) are checked
   by their writer first (`link_outside`) and refused when the link
   leaves the project.
+- Unique temps make each WRITE atomic, not a read-modify-write: the last
+  rename wins. Writers that read a shared file, change it and write it
+  back hold a lock around the whole step — the run lock
+  (taxjson_run._acquire_run_lock, one `taxjson run` per project), the
+  checklist state lock (checklist._StateLock) and the shared price/rate
+  caches' lock (json_cache.save_json_cache).
 """
 from __future__ import annotations
 
 import contextlib
 import os
 import stat
+import tempfile
 from pathlib import Path
 from typing import IO, Iterator, Optional, Union
 
@@ -99,13 +114,24 @@ def atomic_open(final: Union[str, Path], *, binary: bool = False,
                 suffix: str = ".part", encoding: str = "utf-8",
                 newline: Optional[str] = None,
                 keep_mode: bool = False) -> Iterator[IO]:
-    """`with atomic_open(out) as f: f.write(...)` — written to
-    `<out><suffix>` (created fresh, see open_new), fsync'd, then renamed
-    over `out` when the block ends cleanly. On an exception the temp is
-    removed and `out` keeps its previous contents."""
+    """`with atomic_open(out) as f: f.write(...)` — written to a new
+    owner-only temp file of this writer's own beside `out`
+    (`<out>.<random><suffix>`), fsync'd, then renamed over `out` when the
+    block ends cleanly. On an exception the temp is removed and `out`
+    keeps its previous contents. Overlapping writers of one `out` never
+    see each other's temp file: each publishes only its own complete
+    data, and the last rename wins."""
     final = Path(final)
-    tmp = temp_name(final, suffix)
-    f = open_new(tmp, binary=binary, encoding=encoding, newline=newline)
+    fd, name = tempfile.mkstemp(prefix=final.name + ".", suffix=suffix,
+                                dir=str(final.parent))
+    tmp = Path(name)
+    try:
+        f = (os.fdopen(fd, "wb") if binary else
+             os.fdopen(fd, "w", encoding=encoding, newline=newline))
+    except BaseException:
+        os.close(fd)
+        discard(tmp)
+        raise
     done = False
     try:
         with f:

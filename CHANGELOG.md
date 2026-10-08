@@ -106,6 +106,12 @@
   copy in a later commit of the same push, was published in history
   unscanned. Each distinct file revision is scanned once, and one the
   remote already holds is skipped.
+- Two writes of one file that overlap (two processes, or a write inside
+  another) no longer share one temp file (GitHub issue #9): each stages
+  its data in a new owner-only temp file of its own beside the target
+  and renames only that, so neither publishes the other's unfinished
+  data and neither fails with "No such file or directory" when the other
+  finishes first.
 
 ### Changed
 
