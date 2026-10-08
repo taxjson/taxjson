@@ -22,9 +22,17 @@ run's work files (nothing is recomputed):
   read without its class letter, _roots: ZZX.B.TO is ZZX.B and ZZX, as
   a Canadian class share's US line is often written) whose security names in the
   exports are EQUAL once normalised (cross_listings._names_verdict over
-  symbol_codes.exact_name, the test a journal join applies) — names
-  that differ, or a listing with no name in the exports (a .tt-only
-  book), are never flagged;
+  symbol_codes.exact_name, the test a journal join applies) — the names
+  the loss's own rows and the purchase's own rows give (their account
+  and broker, _scoped_names; the project's other names only when those
+  rows carry none): a listing another broker names with other share
+  wording says nothing about this pair. Names of one company that
+  differ ONLY in voting-share wording one of them states ("... COM" /
+  "... SUBORD VTG SHS", _wording_only) are a weaker "possible" pair,
+  said as such — never a depositary receipt, a class letter or a second
+  voting class anywhere in the listings' names, or two companies. Other
+  names that differ, or a listing with no name in the exports (a
+  .tt-only book), are never flagged;
 * a purchase of that listing in ANY of the project's accounts —
   taxable or registered, the rule's own scope — within 30 days before
   or after the loss, counted on the rule's dates (settlement in Canada,
@@ -86,12 +94,23 @@ class Finding:
     distinct: str                   # `DISTINCT A B`
     losses: List[Dict[str, Any]] = field(default_factory=list)
     buys: List[Dict[str, Any]] = field(default_factory=list)
+    # The names differ only in share wording a broker may add or leave
+    # out (_wording_only): the two names as written, loss side first —
+    # a weaker "possible" (empty when the names are equal).
+    names: Tuple[str, str] = ("", "")
+
+    @property
+    def possible(self) -> bool:
+        return bool(self.names[0] or self.names[1])
 
     def record(self) -> Dict[str, Any]:
-        return {"loss_symbol": self.loss_symbol,
-                "other_symbol": self.other_symbol, "name": self.name,
-                "tobase": self.tobase, "distinct": self.distinct,
-                "losses": self.losses, "buys": self.buys}
+        rec = {"loss_symbol": self.loss_symbol,
+               "other_symbol": self.other_symbol, "name": self.name,
+               "tobase": self.tobase, "distinct": self.distinct,
+               "losses": self.losses, "buys": self.buys}
+        if self.possible:
+            rec["names"] = list(self.names)
+        return rec
 
 
 def _d(s: Any) -> Optional[_date]:
@@ -153,6 +172,102 @@ def _final_names(cache: Path, accounts: List[str], renames: Dict[str, str]
     for sym, ns in names.items():
         out.setdefault(renames.get(sym, sym), set()).update(ns)
     return out, shown
+
+
+def _scoped_names(cache: Path, accounts: List[str],
+                  renames: Dict[str, str]
+                  ) -> Tuple[Dict[Tuple[str, str, str], Set[Tuple[str, ...]]],
+                             Dict[Tuple[str, str], Set[Tuple[str, ...]]]]:
+    """The exports' names of each listing per (account, broker, symbol)
+    and per (account, symbol), the symbol as the books carry it (the
+    map's renames applied): a loss and a purchase are judged on the
+    names THEIR broker's rows give (a listing another broker names with
+    other share wording says nothing about them)."""
+    from taxjson.lib import cross_listings as XL
+    rows: List[Any] = []
+    XL.gather(cache, accounts, rows=rows)
+    by_broker: Dict[Tuple[str, str, str], Set[Tuple[str, ...]]] = {}
+    by_acct: Dict[Tuple[str, str], Set[Tuple[str, ...]]] = {}
+    for r in rows:
+        if not r.key:
+            continue
+        sym = renames.get(r.symbol, r.symbol)
+        by_broker.setdefault((r.account, r.broker, sym), set()).add(r.key)
+        by_acct.setdefault((r.account, sym), set()).add(r.key)
+    return by_broker, by_acct
+
+
+def _source_brokers(cache: Path, accounts: Iterable[str]
+                    ) -> Dict[Tuple[str, str], str]:
+    """{(account, export file name): broker} from each parsed export's
+    metadata (the books' rows carry the file they came from)."""
+    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    out: Dict[Tuple[str, str], str] = {}
+    for acct in accounts:
+        files = [(b, cache / f"{acct}_{b}.json") for b in DISPLAY_NAMES]
+        files += [(p.name[len(acct) + 1:-len(".json")], p)
+                  for p in sorted(cache.glob(f"{acct}_generic-*.json"))]
+        for b, p in files:
+            if not p.is_file() or b.endswith(("_transfers", "_corp")):
+                continue
+            try:
+                md = json.loads(p.read_text(encoding="utf-8")).get(
+                    "metadata") or {}
+            except (OSError, ValueError, RecursionError, AttributeError):
+                continue
+            for f in md.get("input_files") or []:
+                if f:
+                    out.setdefault((acct, Path(str(f)).name), b)
+    return out
+
+
+# Words that say which VOTING class a share is (symbol_codes._DESIGNATORS
+# as exact_name spells them): a broker may write them or leave them out
+# ("QZCO INC SUBORD VTG SHS" / "QZCO INC COM") for an issuer with one
+# listed class.
+_VOTING_WORDS = frozenset(("VOTING", "SUBORDINATE", "MULTIPLE", "NON",
+                           "RESTRICTED"))
+
+
+def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
+                  all_a: Set[Tuple[str, ...]], all_b: Set[Tuple[str, ...]],
+                  a: str, b: str) -> Optional[Tuple[Tuple[str, ...],
+                                                    Tuple[str, ...]]]:
+    """(name of a, name of b) when the two names differ ONLY in voting
+    share wording one of them states (SUBORDINATE VOTING, MULTIPLE
+    VOTING, NON VOTING, RESTRICTED) — possibly a broker's style for an
+    issuer with one listed class — else None. Never when either
+    listing is a depositary receipt (a CDR is its own security:
+    cross_listings.receipt_why), when the names state any other share
+    designator or class letter, or when the listings' names anywhere in
+    the exports state two voting classes or a class letter (an issuer
+    with two classes): those stay apart, as do different companies."""
+    from taxjson.lib import cross_listings as XL
+    from taxjson.lib.symbol_codes import _FORM, exact_marks
+    if XL.receipt_why(a, all_a | na, written=a) \
+            or XL.receipt_why(b, all_b | nb, written=b):
+        return None
+    every = all_a | all_b | na | nb
+    if any(len(w) == 1 and w.isalpha() for k in every for w in k):
+        return None                     # a class letter: two classes
+    classes = {frozenset(w for w in k if w in _VOTING_WORDS)
+               for k in every} - {frozenset()}
+    if len(classes) > 1:
+        return None                     # two voting classes named
+
+    def strip(k: Tuple[str, ...]) -> Tuple[str, ...]:
+        return tuple(w for w in k if w not in _VOTING_WORDS)
+    for x in sorted(na):
+        for y in sorted(nb):
+            if x == y or XL.companies_differ(x, y):
+                continue
+            sx = strip(x)
+            if sx != strip(y) or not sx:
+                continue
+            if exact_marks(sx) - _FORM:
+                continue                # another designator stated
+            return x, y
+    return None
 
 
 def _map_rules(root: Path, cache: Path
@@ -270,6 +385,24 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
 
     names: Optional[Dict[str, Set[Tuple[str, ...]]]] = None
     shown: Dict[Tuple[str, ...], str] = {}
+    scoped: Optional[Tuple[Dict[Any, Set[Tuple[str, ...]]],
+                           Dict[Any, Set[Tuple[str, ...]]]]] = None
+    brokers: Dict[Tuple[str, str], str] = {}
+    # The broker of a books row: its export file (`source`); a gains row
+    # through its books row's id.
+    src_of: Dict[Tuple[str, str], str] = {}
+    for rows_ in rows_by_sym.values():
+        for r in rows_:
+            if r.get("id"):
+                src_of[(str(r.get("account") or ""), str(r["id"]))] = \
+                    Path(str(r.get("source") or "")).name
+
+    def _names_for(acct_: str, sym: str, src: str) -> Set[Tuple[str, ...]]:
+        by_b, by_a = scoped
+        b_ = brokers.get((acct_, src)) if src else None
+        return (by_b.get((acct_, b_, sym)) if b_ else None) \
+            or by_a.get((acct_, sym)) or names.get(sym, set())
+
     found: Dict[Tuple[str, str], Finding] = {}
     for acct, loss in losses:
         a = str(loss.get("symbol") or "").upper()
@@ -299,18 +432,45 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
                 continue            # sold out by day 30 (CA-SL-02)
             if names is None:
                 names, shown = _final_names(cache, sorted(equity), renames)
-            if XL._names_verdict(names.get(a, set()), names.get(b, set()),
-                                 shown) != "":
-                continue
+                scoped = _scoped_names(cache, sorted(equity), renames)
+                brokers = _source_brokers(cache, sorted(equity))
+            # The names of THIS loss's and THESE purchases' rows (their
+            # account and broker), not every name the project's exports
+            # give either listing.
+            na = _names_for(acct, a, src_of.get(
+                (acct, str(loss.get("id") or "")), ""))
+            nb: Set[Tuple[str, ...]] = set()
+            for r in buys:
+                ra = str(r.get("account") or "")
+                nb |= _names_for(ra, b, Path(str(r.get("source") or "")
+                                             ).name)
+            verdict = XL._names_verdict(na, nb, shown)
+            pair_names: Tuple[str, str] = ("", "")
+            if verdict:
+                if verdict == XL.DIFFERENT:
+                    continue
+                alike = _wording_only(na, nb, names.get(a, set()),
+                                      names.get(b, set()), a, b)
+                if alike is None:
+                    continue
+                pair_names = (shown.get(alike[0], " ".join(alike[0])),
+                              shown.get(alike[1], " ".join(alike[1])))
             key = (a, b)
             f = found.get(key)
             if f is None:
-                common = sorted(names.get(a, set()) & names.get(b, set()))
+                common = sorted(na & nb)
                 nm = shown.get(common[0], " ".join(common[0])) \
                     if common else ""
                 frm, to = XL.tobase_direction(a, b, base_cur)
                 f = found[key] = Finding(a, b, nm, f"TOBASE {frm} {to}",
-                                         f"DISTINCT {a} {b}")
+                                         f"DISTINCT {a} {b}",
+                                         names=pair_names)
+            elif not verdict and f.possible:
+                # One equal-named loss/purchase makes the pair definite.
+                common = sorted(na & nb)
+                f.name = shown.get(common[0], " ".join(common[0])) \
+                    if common else f.name
+                f.names = ("", "")
             item = {"account": acct, "date": str(loss.get("date") or ""),
                     "date_settle": str(loss.get("date_settle") or ""),
                     "quantity": abs(_qty(loss, "qty"))}
@@ -413,6 +573,17 @@ def _when(items: List[Dict[str, Any]]) -> str:
     return ", ".join(out)
 
 
+def _named(f: Dict[str, Any]) -> str:
+    """How the exports name the pair: the shared name, or the two names
+    that differ only in share wording."""
+    nm = f.get("names") or []
+    if len(nm) == 2 and (nm[0] or nm[1]):
+        return (f"named {nm[0]!r} and {nm[1]!r} — the same company; the "
+                f"names differ only in share wording, which may be a "
+                f"broker's style or two share classes")
+    return f"both named {f.get('name')!r}"
+
+
 def message(f: Dict[str, Any], country: str) -> Tuple[str, List[str]]:
     """(headline, details) of the run's console Warning for a finding."""
     from taxjson.lib.country import is_usa
@@ -426,8 +597,8 @@ def message(f: Dict[str, Any], country: str) -> Tuple[str, List[str]]:
     return (f"possible {_kind(country)} across listings: {a} sold at a "
             f"loss, {b} bought within 30 days",
             [f"Sold at a loss: {a} {_when(f.get('losses') or [])}. "
-             f"Bought: {b} {_when(f.get('buys') or [])}. Both listings "
-             f"are named {f.get('name')!r}.",
+             f"Bought: {b} {_when(f.get('buys') or [])}. The listings "
+             f"are {_named(f)}.",
              f"The books keep {a} and {b} apart, so the loss is allowed. "
              f"If they are one security (two listings of one company's "
              f"shares {rule}",
@@ -450,8 +621,8 @@ def scan_text(f: Dict[str, Any], country: str) -> str:
     """A finding as one `taxjson scan` line (XLIST-LOSS)."""
     return (f"loss on {f['loss_symbol']} ({_when(f.get('losses') or [])}) "
             f"and {f['other_symbol']} bought within 30 days "
-            f"({_when(f.get('buys') or [])}), both named "
-            f"{f.get('name')!r}: a possible {_kind(country)} the books "
+            f"({_when(f.get('buys') or [])}), {_named(f)}: a possible "
+            f"{_kind(country)} the books "
             f"cannot see. Add `{f.get('tobase')}` to ticker.map if they "
             f"are one security, `{f.get('distinct')}` if not.")
 
@@ -459,6 +630,6 @@ def scan_text(f: Dict[str, Any], country: str) -> str:
 def suggestion_reason(f: Dict[str, Any], country: str) -> str:
     """The reason `taxjson ticker-map --suggest` gives the TOBASE line."""
     return (f"a loss on {f['loss_symbol']} and {f['other_symbol']} bought "
-            f"within 30 days, both named {f.get('name')!r}: a possible "
+            f"within 30 days, {_named(f)}: a possible "
             f"{_kind(country)} across listings — add it if they are one "
             f"security (`{f.get('distinct')}` if not)")

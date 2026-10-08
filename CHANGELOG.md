@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **The cross-listing loss warning judges the trades' own names**: a loss on
+  one listing and a purchase of the other within 30 days were dropped in
+  silence when another account's export named one listing with other share
+  wording ("... SUBORD VTG SHS"), although the loss's and the purchase's own
+  broker named both listings alike. The radar now compares the names of the
+  loss's rows and the purchase's rows (their account and broker); names of
+  one company that differ only in voting-share wording are flagged too,
+  said as such — never a depositary receipt, a class letter or two
+  companies.
+
 - **A Questrade internal code of a spun-off warrant no longer resolves to the
   common stock** (GitHub issue #4). A code whose descriptions state a
   warrant, right, unit, preferred share or class letter anywhere is never
