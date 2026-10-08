@@ -700,12 +700,39 @@ _CONFIG_PATH: Optional[Path] = None
 _PACKAGE_MTIME_CACHED: Optional[float] = None
 
 
+# Files in the package that are not code or data the code reads: byte
+# caches, hidden files (.gitignore, .DS_Store, editor swap files),
+# documentation and editor / merge leftovers.
+_PKG_SKIP_SUFFIXES = (".pyc", ".pyo", ".md", ".rst", "~", ".swp", ".swo",
+                      ".orig", ".rej", ".bak")
+
+
+def _package_files(pkg_root: Path) -> List[Path]:
+    """Every file of the installed taxjson package that decides what a
+    run computes: the `.py` sources AND the shipped data they read
+    (data/markets.toml — venues, index-option roots, stablecoins — and
+    any other toml / json / csv / txt shipped beside the code), sorted.
+    A market-data-only update left `run --fast` serving output built
+    from the old data (GitHub issue #10)."""
+    out = []
+    for p in pkg_root.rglob("*"):
+        rel = p.relative_to(pkg_root).parts
+        if any(part.startswith(".") or part == "__pycache__"
+               for part in rel):
+            continue
+        if p.name.endswith(_PKG_SKIP_SUFFIXES) or not p.is_file():
+            continue
+        out.append(p)
+    return sorted(out)
+
+
 def _package_mtime() -> float:
-    """Maximum mtime across every `.py` file in the installed taxjson
-    package. Used as an implicit dependency for every cached stage so
-    that an upgrade / edit to any engine, parser, or wrapper module
-    invalidates the cache (which only `run --fast` consults — the
-    default run rebuilds everything).
+    """Maximum mtime across every file of the installed taxjson package
+    that decides a result (`_package_files`: the `.py` sources and the
+    shipped data). Used as an implicit dependency for every cached stage
+    so that an upgrade / edit to any engine, parser, wrapper module or
+    market-data file invalidates the cache (which only `run --fast`
+    consults — the default run rebuilds everything).
 
     Without this, a code fix (e.g. a parser regression repair) would
     let `--fast` silently reuse pre-fix cached output until the user
@@ -722,7 +749,7 @@ def _package_mtime() -> float:
     import taxjson
     pkg_root = Path(taxjson.__file__).parent
     latest = 0.0
-    for p in pkg_root.rglob('*.py'):
+    for p in _package_files(pkg_root):
         try:
             latest = max(latest, p.stat().st_mtime)
         except OSError:
@@ -733,15 +760,16 @@ def _package_mtime() -> float:
 
 def _package_fingerprint() -> str:
     """A CONTENT fingerprint of the installed taxjson package's .py
-    sources (relative path + bytes). The mtime key above misses a code
-    change whose files keep an older mtime (cp -p, rsync -a, tar x,
-    touch -r) and a deleted module, so `run --fast` served output from
-    the old code (S039-03); `run` compares this with the stamp the last
-    complete run left in work/ and rebuilds everything on a mismatch."""
+    sources and shipped data (`_package_files`; relative path + bytes).
+    The mtime key above misses a code change whose files keep an older
+    mtime (cp -p, rsync -a, tar x, touch -r) and a deleted module, so
+    `run --fast` served output from the old code (S039-03); `run`
+    compares this with the stamp the last complete run left in work/
+    and rebuilds everything on a mismatch."""
     import taxjson
     pkg_root = Path(taxjson.__file__).parent
     h = hashlib.sha256()
-    for p in sorted(pkg_root.rglob("*.py")):
+    for p in _package_files(pkg_root):
         try:
             data = p.read_bytes()
         except OSError:
@@ -804,8 +832,9 @@ def needs_rebuild(out: Path, *inputs: Path) -> bool:
       - it doesn't exist, or
       - any declared input is newer than it, or
       - `taxjson.toml` is newer than it (implicit dep via _CONFIG_PATH), or
-      - any `.py` file in the installed taxjson package is newer than
-        it (implicit dep via `_package_mtime()`).
+      - any `.py` or shipped data file (data/markets.toml) in the
+        installed taxjson package is newer than it (implicit dep via
+        `_package_mtime()`).
 
     The config-file dependency catches edits to year / country /
     tax_date / base_currency. The package-source dependency catches
