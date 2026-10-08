@@ -435,5 +435,40 @@ class TestRadarTrailingVotingPhrase(unittest.TestCase):
         self.assertIsNone(XR._wording_only(a, b, a, b, "ZZS.US", "ZZS.TO"))
 
 
+# ================================================ L6: sheltered election
+class TestShelteredElectionNote(unittest.TestCase):
+    def _event(self):
+        from taxjson.lib.corp_actions import CorporateAction
+        return CorporateAction(
+            date="2025-05-01", time="00:00:00", action_type="spinoff",
+            source_symbol="ZZK.TO", source_isin="", target_symbol="ZZL.TO",
+            target_isin="", ratio_new=1, ratio_old=10, qty_disposed=0,
+            qty_received=10, fmv=0.0, currency="CAD",
+            target_currency="CAD", account="rrsp", event_id="ev1")
+
+    def _prompt(self, country):
+        from taxjson.bin import taxjson_corp_actions as CA
+        err = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["1", "0", "y", ""]), \
+                redirect_stderr(err):
+            CA._prompt_election(self._event(), country, sheltered=True)
+        return flat(err.getvalue())
+
+    def test_canada_names_the_superficial_loss_rule(self):
+        text = self._prompt("canada")
+        self.assertIn("Sheltered account: this election sets the holdings' "
+                      "cost in the books — no tax in this account; its "
+                      "holdings still count for the superficial-loss rule.",
+                      text)
+        self.assertNotIn("wash-sale", text)
+        self.assertNotIn("taxed either way", text)
+
+    def test_usa_names_the_wash_sale_rule(self):
+        text = self._prompt("usa")
+        self.assertIn("its holdings still count for the wash-sale rule.",
+                      text)
+        self.assertNotIn("superficial", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,8 @@
    holds positions is a run Warning, the checklist's export-coverage
    step and quick-start's inputs step.
 4. A sheltered account's corporate-action election is still asked, and
-   says it affects the holdings only.
+   says there is no tax in the account (its holdings still count for the
+   superficial-loss rule).
 """
 import io
 import json
@@ -631,8 +632,10 @@ class TestShelteredElection(unittest.TestCase):
         with mock.patch("builtins.input", side_effect=["1", "0", "y", ""]), \
                 redirect_stderr(err):
             CA._prompt_election(self._event(), "canada", sheltered=True)
-        self.assertIn("Sheltered account: this election affects the "
-                      "holdings (their cost in the books) only",
+        self.assertIn("Sheltered account: this election sets the "
+                      "holdings' cost in the books — no tax in this "
+                      "account; its holdings still count for the "
+                      "superficial-loss rule",
                       flat(err.getvalue()))
         err = io.StringIO()
         with mock.patch("builtins.input", side_effect=["1", "0", "y", ""]), \
@@ -658,8 +661,10 @@ class TestShelteredElection(unittest.TestCase):
                 json.dumps({"schema_version": 1,
                             "accounts": {"rrsp": doc}}))
             r = tj(root, "elect", "--pending", check=False)
-            self.assertIn("Sheltered account: this election affects the "
-                          "holdings (their cost in the books) only",
+            self.assertIn("Sheltered account: this election sets the "
+                          "holdings' cost in the books — no tax in this "
+                          "account; its holdings still count for the "
+                          "superficial-loss rule",
                           flat(r.stdout))
 
 

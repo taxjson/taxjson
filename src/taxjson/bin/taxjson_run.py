@@ -7962,9 +7962,9 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
         if ev.get("summary"):
             doc.para(ev["summary"], indent="  ")
         if ev.get("sheltered"):
-            from taxjson.bin.taxjson_corp_actions import SHELTERED_NOTE
-            doc.para(SHELTERED_NOTE[0].upper() + SHELTERED_NOTE[1:] + ".",
-                     indent="  ")
+            from taxjson.bin.taxjson_corp_actions import sheltered_note
+            _note = sheltered_note(country)
+            doc.para(_note[0].upper() + _note[1:] + ".", indent="  ")
         if rec is not None:
             # The pending file only clears on the next successful run —
             # without this marker, "did my --set take?" looked like NO

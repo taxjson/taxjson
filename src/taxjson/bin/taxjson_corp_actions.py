@@ -122,10 +122,17 @@ def _format_options(options) -> str:
 
 # Said with an event of a sheltered (registered) account: its election
 # is asked all the same — it sets the cost the holdings view and the
-# sheltered books carry — but no tax depends on it.
-SHELTERED_NOTE = ("sheltered account: this election affects the holdings "
-                  "(their cost in the books) only — nothing in the account "
-                  "is taxed either way")
+# sheltered books carry — and no tax in the account depends on it; the
+# holdings still count for the taxable accounts' superficial-loss rule
+# (Canada, CA-SL-*) or wash-sale rule (USA, US-WASH-*), each country's own.
+def sheltered_note(country: str) -> str:
+    """The sentence (no final period) said with a sheltered account's
+    event, in the project's country's terms."""
+    from taxjson.lib.country import is_usa
+    rule = "wash-sale" if is_usa(country) else "superficial-loss"
+    return (f"sheltered account: this election sets the holdings' cost "
+            f"in the books — no tax in this account; its holdings still "
+            f"count for the {rule} rule")
 
 
 def _prompt_election(event: CorporateAction, country: str,
@@ -133,7 +140,7 @@ def _prompt_election(event: CorporateAction, country: str,
     """Walk the user through one event. Always includes an `ignore` option
     at the end, regardless of country/event_type, since IB noise is the
     common case where no country-specific tax rule applies. `sheltered`:
-    the event is a sheltered account's — said (SHELTERED_NOTE), still
+    the event is a sheltered account's — said (sheltered_note), still
     asked."""
     options = options_for(country, event.action_type)
     if not options or options == [IGNORE_ELECTION]:
@@ -148,8 +155,8 @@ def _prompt_election(event: CorporateAction, country: str,
     doc.section(f"EVENT {event.event_id}")
     doc.para(event.summary(), indent="  ")
     if sheltered:
-        doc.para(SHELTERED_NOTE[0].upper() + SHELTERED_NOTE[1:] + ".",
-                 indent="  ")
+        note = sheltered_note(country)
+        doc.para(note[0].upper() + note[1:] + ".", indent="  ")
     doc.kv([("account", event.account),
             ("qty disposed", f"{event.qty_disposed:g}"),
             ("qty received", f"{event.qty_received:g}")], indent="  ")
@@ -338,7 +345,7 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             "source_rows": list(ev.raw_descriptions or []),
             "options": options,
             # A sheltered account's event: asked all the same, but no
-            # tax depends on it (SHELTERED_NOTE).
+            # tax in the account depends on it (sheltered_note).
             "sheltered": bool(sheltered),
         })
     return {"schema_version": 1, "country": country,
@@ -423,8 +430,10 @@ def main():
     parser.add_argument(
         '--sheltered', action='store_true',
         help="The account is sheltered (registered): each election is "
-             "still asked, and the prompt says it affects the holdings' "
-             "cost only, not tax (`taxjson run` passes it).",
+             "still asked, and the prompt says it sets the holdings' cost "
+             "with no tax in the account, the holdings still counting for "
+             "the superficial-loss / wash-sale rule (`taxjson run` passes "
+             "it).",
     )
     parser.add_argument(
         '--list', dest='list_only', action='store_true',
