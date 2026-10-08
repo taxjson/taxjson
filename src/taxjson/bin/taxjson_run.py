@@ -23408,7 +23408,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_sa = sub.add_parser(
         "slip-audit",
-        help="Compare your T5 / T3 slips with the books' income",
+        help="T5 / T3 slips against the books' income",
         description="Compare the broker's T5 and T3 slips with the "
              "books' income, per account and slip box: Canadian and "
              "foreign dividends, box 18 capital-gains dividends, "

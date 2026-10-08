@@ -1003,9 +1003,9 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/slip_audit.py` — `_suggest_roc`
 
-### `tjs slip-audit`: "Not compared: inputs/slips/U5***.2025.dividends.csv: no account's books carry IB account U5***"
+### `tjs slip-audit`: "Not compared: inputs/slips/U5***.2025.dividends.csv: no taxable account's books carry IB account U5***"
 - **Check:** the IB statement for that account is in `inputs/<account>/` and `tjs run` has run since.
-- **Cause:** the report is matched to the account whose books carry the IB account; an IB statement of several accounts, or none in the project, leaves no match.
+- **Cause:** the report is matched to the taxable account whose books carry the IB account; a registered account (it gets no T5/T3), or no IB statement for the account in the project, leaves no match.
 - **Fix:** add the IB statement to the account's folder, or name the account in `inputs/slips/slips.toml`: `[[ib_report]]` with `file = "<the report's name>"` and `account = "margin"`.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/slip_audit.py` — `audit`, `find_ib_reports`; `src/taxjson/lib/ib_dividends.py` — `read_report`

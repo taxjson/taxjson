@@ -336,6 +336,9 @@ def load_slips_file(path: Path, cfg: Dict[str, Any], year: Optional[int]
         if str(t["account"]) not in accounts:
             raise SlipsError(f"{w}: account {t['account']!r} is not an "
                              f"[accounts.*] table of taxjson.toml")
+        if str(t["account"]) not in slip_accounts({"accounts": accounts}):
+            raise SlipsError(f"{w}: account {t['account']!r} gets no T5 "
+                             f"or T3 (registered or crypto)")
         reports.append({"file": str(t["file"]), "account": str(t["account"])})
     avg: Dict[str, float] = {}
     for cur, v in (doc.get("annual_average") or {}).items():
@@ -789,9 +792,10 @@ def audit(root: Path, cfg: Dict[str, Any], *,
                     f"account = \"<account>\"")
             else:
                 problems.append(
-                    f"inputs/slips/{_shown(p)}: no account's books carry "
-                    f"IB account {rep.account_masked} (an IB statement for "
-                    f"it in inputs/<account>/?) — not compared; name the "
+                    f"inputs/slips/{_shown(p)}: no taxable account's books "
+                    f"carry IB account {rep.account_masked} (a registered "
+                    f"account gets no T5/T3; else an IB statement for it "
+                    f"in inputs/<account>/?) — not compared; name the "
                     f"account in slips.toml: [[ib_report]] file = "
                     f"\"<this file's name>\" account = \"<account>\"")
                 continue
