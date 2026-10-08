@@ -889,6 +889,29 @@ def strip_json_comments(content: str) -> str:
     )
 
 
+# Every TaxTransaction field that holds a calendar date (YYYY-MM-DD).
+DATE_FIELDS = ('date', 'date_settle', 'lot_date', 'record_date', 'ex_date')
+
+_LOOSE_DATE_RE = re.compile(r'(\d{4})-(\d{1,2})-(\d{1,2})')
+
+
+def canonical_date(value: Any, ctx: str, field: str = 'date') -> str:
+    """`value` written as a canonical ISO date YYYY-MM-DD. An unpadded
+    month or day ("2025-2-1") is padded; a value that is not a real
+    calendar date in year-month-day order is a ValueError naming `ctx`
+    and `field` (issue #5: the engines compare date strings)."""
+    m = _LOOSE_DATE_RE.fullmatch(str(value).strip())
+    try:
+        if not m:
+            raise ValueError
+        return datetime(int(m.group(1)), int(m.group(2)),
+                        int(m.group(3))).strftime('%Y-%m-%d')
+    except ValueError:
+        raise ValueError(
+            f"{ctx}: impossible {field}={value!r} (not a real calendar "
+            f"date written YYYY-MM-DD) — fix the input data.") from None
+
+
 def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     """One row's coercion + validation — the shared body of
     load_transactions and pipeline.load_stdin_transactions, so the
@@ -1013,15 +1036,15 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     if clean_t.get('action') in ('BUYSELL', 'ASSIGN'):
         _missing = tuple(f for f in ('quantity', 'net_amount')
                          if f not in clean_t)
-    for _fld in ('date', 'date_settle', 'lot_date'):
+    # The engines order rows by comparing date STRINGS, so every date is
+    # written YYYY-MM-DD here: an accepted "2025-2-01" sorted after
+    # "2025-10-01", which moved FIFO/ACB lots and turned a long sale
+    # into a short cover (issue #5). An unpadded month or day is padded;
+    # anything else that is not a real calendar date is refused.
+    for _fld in DATE_FIELDS:
         _d = clean_t.get(_fld)
         if _d:
-            try:
-                datetime.strptime(str(_d), '%Y-%m-%d')
-            except ValueError:
-                raise ValueError(
-                    f"{_ctx}: impossible {_fld}={_d!r} (not a real "
-                    f"calendar date) — fix the input data.")
+            clean_t[_fld] = canonical_date(_d, _ctx, _fld)
     # CA-DATE-03 / US-DATE-04: a settlement never precedes its trade;
     # the parsers refuse one, and the JSON path (taxjson-gains on a
     # hand-written file, taxjson-validate) now does too — the tax year

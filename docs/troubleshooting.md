@@ -1107,3 +1107,12 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** review the change. Either amend that return, or, if the old figure was wrong and the new one is what you filed, refresh the lock with `tjs close-year --force` in that year's project. `tjs run --strict` stops on drift.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_check_filed_years`, `DRIFTED vs `; `src/taxjson/bin/taxjson_filed.py`
+
+## Stand-alone tools and hand-written JSON books
+
+### `taxjson-gains book.json`: "impossible date='2025-02-30' (not a real calendar date written YYYY-MM-DD) — fix the input data", or a hand-written book whose gains change when a date is written `2025-2-01` instead of `2025-02-01`
+- **Check:** the message names the row (its index, id and symbol) and the field: `date`, `date_settle`, `lot_date`, `record_date` or `ex_date`. On an older release, write the date `2025-02-01` and run again: if the gains (or a sale read as a short cover) change, it is this problem.
+- **Cause:** the engines order rows by comparing their dates as text, so a date must be written year-month-day with two-digit month and day. A JSON book (one you wrote, or `taxjson-gains`, `taxjson-validate`, `taxjson-wash-radar` and the other stand-alone tools fed a file) with `2025-2-01` was accepted, and that row sorted after `2025-10-01`: FIFO and ACB took the wrong lot and a sale could open a short that a later purchase covered. The broker parsers and `.tt` files always wrote two digits.
+- **Fix:** upgrade. A month or day written with one digit (`2025-2-1`) is now read as `2025-02-01`; anything else that is not a real date in `YYYY-MM-DD` form (`2025-02-30`, `2025/02/01`, `25-2-1`, a date with a time) stops with the message above. Correct the row and run again.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/core.py` — `coerce_transaction_row`, `canonical_date`, `DATE_FIELDS`

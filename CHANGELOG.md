@@ -20,6 +20,14 @@
 
 ### Fixed
 
+- A JSON transaction book with a date written without leading zeros
+  (`2025-2-01`) is read as `2025-02-01`. It used to be accepted as
+  written, and because the engines order rows by comparing dates as
+  text it sorted after `2025-10-01`: FIFO and ACB matched the wrong lot
+  and a sale could be booked as a short cover. A date that is not a
+  real calendar date in year-month-day form is refused with a message
+  naming the row and field; this covers the trade, settlement, lot,
+  record and ex dates (#5).
 - `taxjson format-map` replaces every header an earlier taxjson version
   wrote into ticker.map with the current one: the earliest projects'
   header ("symbol rules for the taxjson pipeline", "Each line is: KEYWORD
