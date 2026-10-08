@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.24.1 (2026-10-08)
+
 ### Added
 
 - **`taxjson run` asks about written options carried in from last year**:
