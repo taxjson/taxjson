@@ -54,7 +54,9 @@ mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs, which
 scans only what a push would add — the diff lines (the net diff and the
 added lines of every pushed commit: a value added in one commit and removed
 in the next is still published), the text inside binary
-files (PDF/Office metadata, spreadsheet cells), branch and tag names,
+files (PDF/Office metadata and compressed PDF text, spreadsheet cells) —
+every revision of a binary file a pushed commit adds, not only the one at
+the tip — branch and tag names,
 commit and tag messages, and author/committer/tagger identities (against
 the denylist and the e-mail allowlist) — and refuses on any hit (your own
 configured identity only warns). `scripts/release.sh` runs the same hook

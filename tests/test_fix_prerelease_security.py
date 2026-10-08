@@ -151,7 +151,12 @@ class TestSafeWrite(_Victims):
         self.assertUntouched(v)
         self.assertEqual(out.read_text(), "new\n")
         self.assertFalse(out.is_symlink())
-        self.assertFalse(os.path.lexists(out.with_name(out.name + ".part")))
+        # Issue #9: each write has its own uniquely named temp; the
+        # planted link at the old fixed name is never used (left as it
+        # is), and the writer leaves no temp of its own.
+        self.assertTrue(out.with_name(out.name + ".part").is_symlink())
+        self.assertEqual(sorted(p.name for p in out.parent.iterdir()),
+                         ["m_base.json", "m_base.json.part"])
         self.assertEqual(stat.S_IMODE(out.stat().st_mode) & 0o077, 0)
 
     def test_symlink_at_the_final_name_is_replaced_not_written_through(self):
@@ -237,7 +242,11 @@ class TestMigrateWriter(_Victims):
         self.assertUntouched(v)
         self.assertIn("QUOTE ZZS.TO ZZS-A.TO",
                       (root / "ticker.map").read_text())
-        self.assertFalse(os.path.lexists(root / "ticker.map.migrate.part"))
+        # Never used (issue #9: each write has its own temp name).
+        self.assertTrue((root / "ticker.map.migrate.part").is_symlink())
+        self.assertEqual([p.name for p in root.iterdir()
+                          if p.name.endswith(".part")],
+                         ["ticker.map.migrate.part"])
 
     def test_ticker_map_linked_outside_the_project_is_refused(self):
         from taxjson.lib import migrate as M
