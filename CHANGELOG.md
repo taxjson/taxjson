@@ -73,8 +73,9 @@
   no longer counts as evidence: the names must agree, else the run stops
   naming the line. Only one side's receipt evidence counts: two lines both
   on Cboe Canada (an ETF's CAD and USD units, `QZG.NE` / `QZG.U.NE`) or two
-  names that both carry a receipt word are not told apart by it (also in
-  `taxjson scan`).
+  names that both carry a receipt word inside the company's name ("QZX
+  SPONSORED HLDGS INC") are not told apart by it (also in `taxjson
+  scan`); a receipt word after the name ("... INC CDR") still counts.
 
 - **A `.tt` JOURNAL line can say it is a separate journal**: a trailing
   `separate` (`JOURNAL 2025-05-07 QZD.TO QZD.U.TO 1500 separate`) books the

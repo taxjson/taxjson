@@ -314,6 +314,11 @@ class TestReceiptEvidenceIsOneSided(unittest.TestCase):
         plain = exact_name('QZX HLDGS INC')
         self.assertIn('depositary receipt', XL.shown_apart(
             'QZX.US', 'QZX.TO', {'QZX.TO': {cdr}, 'QZX.US': {plain}}))
+        # A receipt designator after the name counts whatever the other
+        # side's names say (a symbol whose rows share one instrument
+        # name).
+        self.assertIn('depositary receipt', XL.shown_apart(
+            'QZX.US', 'QZX.TO', {'QZX.TO': {cdr}, 'QZX.US': {cdr}}))
 
     def _run(self, country):
         with tempfile.TemporaryDirectory() as td:

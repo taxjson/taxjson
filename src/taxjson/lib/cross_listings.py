@@ -773,9 +773,11 @@ def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
     other listing does not carry it too: the venue only when the other
     (`other_written`) is written on another venue that lists no
     receipts (a NEO ETF's CAD and USD units, QZG.NE and QZG.U.NE, are
-    two lines of one fund), a receipt word only when no name of the
-    other (`other_names`) states one (a company named "QZX SPONSORED
-    HLDGS" on both sides; v0.24.1 review, M2 / L2)."""
+    two lines of one fund), a receipt word inside the company's name
+    (_inside_name) only when no name of the other (`other_names`)
+    states one (a company named "QZX SPONSORED HLDGS INC" on both
+    sides; v0.24.1 review, M2 / L2). A receipt word after the name
+    ("... INC CDR") always counts."""
     from taxjson.lib.markets import (receipt_suffixes, receipt_words,
                                      suffix_of)
     w = str(written or "").upper()
@@ -784,14 +786,27 @@ def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
     if w and suffix_of(w) in rs and not (ow and suffix_of(ow) in rs):
         return f"{w} is written on a venue that lists depositary receipts"
     words = receipt_words()
-    if any(set(n) & words for n in other_names):
-        return ""
+    other_has = any(set(n) & words for n in other_names)
     for n in sorted(names):
         hit = sorted(set(n) & words)
-        if hit:
-            return (f"{symbol} is named as a depositary receipt "
-                    f"({hit[0]})")
+        if not hit:
+            continue
+        if other_has and all(_inside_name(n, w) for w in hit):
+            continue        # a word of the company's name, both sides
+        return (f"{symbol} is named as a depositary receipt "
+                f"({hit[0]})")
     return ""
+
+
+def _inside_name(key: Tuple[str, ...], word: str) -> bool:
+    """`word` sits inside the company's name: a corporate-form word
+    (INC, CORP, PLC ...) follows it ("QZX SPONSORED HLDGS INC"), unlike
+    a receipt designator after the name ("QZX PLATFORMS INC CDR", "QZX
+    PLC SPONSORED ADR")."""
+    from taxjson.lib.symbol_codes import _FORM
+    k = list(key)
+    return any(w in _FORM and w != "THE"
+               for i, x in enumerate(k) if x == word for w in k[i + 1:])
 
 
 def _receipt_between(a: str, na: Iterable[Tuple[str, ...]], wa: str,
