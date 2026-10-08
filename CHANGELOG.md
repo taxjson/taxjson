@@ -127,8 +127,10 @@
   year, else the last row — while the broker still holds positions there
   are a run Warning ("<broker> exports for <account> end <date> with open
   positions ...; download the rest of the year"), the checklist's new
-  export-coverage step and quick-start's inputs step. A broker whose
-  positions are all closed is never listed.
+  export-coverage step and quick-start's inputs step. Only positions still
+  open after the account's later rows of any source are named (a `.tt`
+  close, another broker's sale, a transfer-out); when `.tt` lines closed
+  them all, an Info line says no export is needed.
 - **`taxjson quick-start` lists every step from install to filing**
   (`tjs quick-start`), each with the exact command(s) and a one-line why:
   install or upgrade, `init`, the accounts, the broker files, `run`, filling

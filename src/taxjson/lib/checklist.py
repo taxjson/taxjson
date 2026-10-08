@@ -584,7 +584,8 @@ def d_export_coverage(ctx: Ctx) -> Result:
     if not any((ctx.cache / f"{n}_base.json").is_file() for n in names):
         return Result("export-coverage", "blocked",
                       "no work/*_base.json — run `taxjson run`")
-    gaps = EC.find_gaps(ctx.root, ctx.cfg, today=ctx.today)
+    gaps = [g for g in EC.find_gaps(ctx.root, ctx.cfg, today=ctx.today)
+            if not g.info]
     if gaps:
         # Only an end read from the last row is a question (the broker
         # may simply have been quiet); a statement or as-of date is the

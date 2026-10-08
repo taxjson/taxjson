@@ -479,6 +479,68 @@ class TestExportCoverage(unittest.TestCase):
             self.assertIn("marked done in checklist.json (export-coverage)",
                           text)
 
+    def _year_summary_project(self, tmp, tt):
+        """A 2026 project whose Webull file is the 2025 trading summary
+        (no 2026 rows) holding 14 calls and 10 ZZCC shares at its end;
+        the account's own .tt books what happened in 2026."""
+        summary = ("Account Number / Numero de compte:,,,,,,,,12345678,\n"
+                   "Year / Annee:,,,,,,,,2025,\n"
+                   "Report / Rapport:,,,,,,,,TRADING SUMMARY,\n\n"
+                   + WB_HEAD
+                   + 'USD,22-04-2025,BUY,@ZZBB,CALL ZZBB01/15/27 45,OPC,14,'
+                     '1.55,"(2,184.75)"\n'
+                   + 'USD,23-04-2025,BUY,@ZZCC,ZZCC HOLDINGS INC,EQ,10,'
+                     '20.00,"(200.00)"\n')
+        files = {"margin/webull_2025.csv": summary}
+        if tt:
+            files["margin/wb_2026_manual.tt"] = tt
+        return make(tmp, "ys", 2026, files)
+
+    def test_later_tt_closes_make_it_an_info(self):
+        """Positions open at the export's end that the account's own .tt
+        lines close later are not missing: an Info, no Warning, the
+        checklist step done."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._year_summary_project(
+                tmp, "BUYSELL 2026-06-15 10:00:00 ZZBB270115C00045000.US "
+                     "-14 USD 2 2800\n"
+                     "BUYSELL 2026-06-16 10:00:00 ZZCC.US -10 USD 25 250\n")
+            text = flat(console(tj(root, "run", "--no-input")))
+            self.assertNotIn("Warning: Webull exports", text)
+            self.assertIn("Info: Webull exports for margin end 2025-12-31; "
+                          "the positions open at the export end "
+                          "(ZZBB270115C00045000.US, ZZCC.US) were closed by "
+                          ".tt lines — no export needed", text)
+            g, = EC.find_gaps(root, cfg_of(root), today=date(2026, 10, 7))
+            self.assertTrue(g.info)
+            res = cl.d_export_coverage(ctx_of(root, 2026, date(2026, 10, 7)))
+            self.assertEqual(res.status, "done", res.detail)
+
+    def test_only_positions_still_open_are_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._year_summary_project(
+                tmp, "BUYSELL 2026-06-15 10:00:00 ZZBB270115C00045000.US "
+                     "-14 USD 2 2800\n")
+            text = flat(console(tj(root, "run", "--no-input")))
+            self.assertIn("Warning: Webull exports for margin end 2025-12-31 "
+                          "with open positions (ZZCC.US 10); download the "
+                          "rest of 2026", text)
+            self.assertIn("The trading summary covers 2025 only.", text)
+            self.assertIn("Closed by later .tt lines, not listed: "
+                          "ZZBB270115C00045000.US.", text)
+
+    def test_closed_later(self):
+        held = [("ZZG.TO", 20.0), ("ZZH.TO", 5.0), ("ZZI.TO", 3.0)]
+        later = [
+            {"action": "BUYSELL", "date": "2026-02-01", "symbol": "ZZG.TO",
+             "quantity": -20, "source": "fix.tt"},
+            {"action": "TRANSFER", "date": "2026-02-01", "symbol": "ZZH.TO",
+             "quantity": -5, "source": "U_2026.csv"},
+            {"action": "BUYSELL", "date": "2026-02-01", "symbol": "ZZI.TO",
+             "quantity": -1, "source": "fix.tt"}]
+        self.assertEqual(EC.closed_later(held, later),
+                         ([("ZZI.TO", 2.0)], ["ZZG.TO"], ["ZZH.TO"]))
+
     def test_running_year_compares_with_today(self):
         """The year still running: an IB statement ending more than
         GRACE_DAYS before today is short; one ending last week is not."""

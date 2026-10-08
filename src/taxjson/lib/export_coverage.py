@@ -21,8 +21,12 @@ finished tax year, or today in the year still running — and the broker
 still holds positions in the account at the end (its own rows: the
 account's books attributed by their source file, its transfer legs and
 corporate-action rows; a long position, or a written option, whose
-contract has not expired by the end). A broker whose positions are all
-closed is never listed: nothing after its end can be missing. Slack: an
+contract has not expired by the end) that the account's later rows of
+any source — a .tt line closing it, another broker's sale, a
+transfer-out — do not close. A broker whose positions are all closed is
+never listed: nothing after its end can be missing; when .tt lines
+closed them, the run says so as an Info ("... were closed by .tt lines —
+no export needed"), not a Warning. Slack: an
 explicit end (statement, as-of, range) may trail today by GRACE_DAYS in
 the running year, and the last days of a finished year may be days
 without trading (a weekend, Dec 25); an end read from the last row
@@ -78,7 +82,18 @@ class Gap:
     how: str                          # statement | as-of | range | year | last-row
     cutoff: str                       # the date they should reach
     current_year: bool
+    # Still open after every later row of the account (any source).
     positions: List[Tuple[str, float]] = field(default_factory=list)
+    # Open at the export's end but closed by the account's later .tt
+    # lines (a hand-entered close, expiry or transfer-out): nothing is
+    # missing for them.
+    closed_by_tt: List[str] = field(default_factory=list)
+
+    @property
+    def info(self) -> bool:
+        """Every position open at the end was closed by later .tt lines:
+        an Info, not a short export."""
+        return not self.positions
 
     def record(self) -> Dict[str, Any]:
         return {"account": self.account, "broker": self.broker,
@@ -86,7 +101,8 @@ class Gap:
                 "how": self.how, "cutoff": self.cutoff,
                 "current_year": self.current_year,
                 "positions": [{"symbol": s, "quantity": q}
-                              for s, q in self.positions]}
+                              for s, q in self.positions],
+                "closed_by_tt": list(self.closed_by_tt)}
 
 
 def broker_name(broker: str) -> str:
@@ -333,6 +349,10 @@ def account_gaps(root: Path, acct: str, year: int, today: date
         rd = _d(r.get("date"))
         if rd is not None and (b not in last or rd > last[b]):
             last[b] = rd
+    # Every position-moving row of the account, any source (a .tt line,
+    # another broker, a transfer leg): what happened after an export's end.
+    all_rows = [r for r in _rows(base)] + [r for v in sidecars.values()
+                                           for r in v]
     gaps: List[Gap] = []
     for b, _p in files:
         rows = rows_by.get(b, []) + sidecars.get(b, [])
@@ -362,9 +382,56 @@ def account_gaps(root: Path, acct: str, year: int, today: date
         held = open_positions(rows, end)
         if not held:
             continue
+        later = [r for r in all_rows
+                 if (_d(r.get("date")) or end) > end
+                 and str(r.get("action") or "") in _POSITION_ACTIONS]
+        still, by_tt, by_other = closed_later(held, later)
+        if not still and not by_tt:
+            continue                    # closed by another broker's rows
         gaps.append(Gap(acct, b, end.isoformat(), how, cutoff.isoformat(),
-                        current, held))
+                        current, still, by_tt))
     return gaps
+
+
+def _is_tt(r: Dict[str, Any]) -> bool:
+    return Path(str(r.get("source") or "")).suffix.lower() == ".tt"
+
+
+def closed_later(held: List[Tuple[str, float]],
+                 later: List[Dict[str, Any]]
+                 ) -> Tuple[List[Tuple[str, float]], List[str], List[str]]:
+    """(still open, closed by .tt lines, closed by other rows) for the
+    positions a broker held at its export's end, walked through the
+    account's later rows of any source in date order (a .tt BUYSELL or
+    expiry, another broker's sale, a transfer-out). A position counts as
+    closed once the later rows bring it to zero or past it; it is
+    closed by .tt when the row that closed it is a .tt line."""
+    rows = sorted(later, key=lambda r: (str(r.get("date") or ""),
+                                       str(r.get("time") or "")))
+    still: List[Tuple[str, float]] = []
+    by_tt: List[str] = []
+    by_other: List[str] = []
+    for sym, q in held:
+        left = q
+        closer = None
+        for r in rows:
+            if str(r.get("symbol") or "").upper() != sym \
+                    or str(r.get("action")) == "SPLIT":
+                continue
+            try:
+                left += float(r.get("quantity") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if abs(left) <= 1e-6 or (left > 0) != (q > 0):
+                closer = r
+                break
+        if closer is None:
+            still.append((sym, left if abs(left) > 1e-6 else q))
+        elif _is_tt(closer):
+            by_tt.append(sym)
+        else:
+            by_other.append(sym)
+    return still, by_tt, by_other
 
 
 def find_gaps(root: Path, cfg: Dict[str, Any],
@@ -403,6 +470,17 @@ def _how_text(g: Gap) -> str:
                         f"itself names no end date."}.get(g.how, "")
 
 
+def info_message(g: Gap) -> str:
+    """The run's Info line for a gap whose positions later .tt lines
+    closed."""
+    syms = ", ".join(g.closed_by_tt[:SHOWN]) + (
+        f" +{len(g.closed_by_tt) - SHOWN} more"
+        if len(g.closed_by_tt) > SHOWN else "")
+    return (f"{broker_name(g.broker)} exports for {g.account} end {g.end}; "
+            f"the positions open at the export end ({syms}) were closed by "
+            f".tt lines — no export needed")
+
+
 def message(g: Gap, year: int) -> Tuple[str, List[str]]:
     """(headline, details) of the run's Warning for one gap."""
     head = (f"{broker_name(g.broker)} exports for {g.account} end {g.end} "
@@ -413,6 +491,11 @@ def message(g: Gap, year: int) -> Tuple[str, List[str]]:
         f"{g.end} are not in the books"
         + (f" (the year so far runs to {g.cutoff})." if g.current_year
            else ".")]
+    if g.closed_by_tt:
+        details.append(f"Closed by later .tt lines, not listed: "
+                       f"{', '.join(g.closed_by_tt[:SHOWN])}"
+                       + (" ..." if len(g.closed_by_tt) > SHOWN else "")
+                       + ".")
     if g.how == "last-row":
         details.append(
             f"If {broker_name(g.broker)} really had no activity for "
@@ -422,7 +505,9 @@ def message(g: Gap, year: int) -> Tuple[str, List[str]]:
 
 
 def detail(gaps: List[Gap]) -> str:
-    """One line for the checklist / quick-start."""
+    """One line for the checklist / quick-start (the gaps that still
+    hold positions: an Info gap is not listed)."""
+    gaps = [g for g in gaps if not g.info]
     parts = [f"{broker_name(g.broker)} exports for {g.account} end "
              f"{g.end} with open positions ({_held_text(g)})"
              for g in gaps[:3]]

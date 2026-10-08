@@ -5564,8 +5564,13 @@ def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
     year = (cfg.get("settings") or {}).get("year")
     mark = _checklist_answered(root, year, EC.STEP)
     for g in gaps:
-        head, details = EC.message(g, int(year))
         key = ("export-coverage", g.account, g.broker)
+        if g.info:
+            # Every position open at the end was closed by .tt lines.
+            _say_once(key, "note", EC.info_message(g), indent="  ",
+                      file=sys.stdout)
+            continue
+        head, details = EC.message(g, int(year))
         # A DONE mark answers an end read from the last row (the broker
         # was quiet); a statement's own end is accepted only by --skip
         # (the checklist's rule).
