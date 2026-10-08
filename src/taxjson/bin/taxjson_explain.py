@@ -198,7 +198,11 @@ def gain_matches(g, args) -> bool:
         return False
     if args.year and not effective_date.startswith(str(args.year)):
         return False
-    if args.wash_sales and not g.get('is_wash_sale'):
+    # A loss the rule would deny that a .tt ALLOWLOSS line claims is
+    # listed too: its trace says what the rule would deny and why
+    # ("no matching gains found" hid it, pre-release review M7).
+    if (args.wash_sales and not g.get('is_wash_sale')
+            and not g.get('loss_override')):
         return False
     return True
 
@@ -386,7 +390,8 @@ def main():
     if args.layout == "report":
         # One blank line between blocks, none before the first.
         for i, g in enumerate(matches):
-            block = render_report_block(g, manual=bool(g.get('tainted')))
+            block = render_report_block(g, manual=bool(g.get('tainted')),
+                                        country=args.country)
             if not block:
                 emit_line(f"taxjson-explain: note: no trace produced for "
                           f"{g.get('id', '?')}", file=sys.stderr)

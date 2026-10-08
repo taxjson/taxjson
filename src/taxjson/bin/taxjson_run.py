@@ -13506,9 +13506,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _rule = ("wash-sale rule (§1091)" if _is_us
                  else "superficial-loss rule (s.54)")
         print()
+        # "the totals above include them" only of this year's sales: a
+        # position on another year's sale shapes this year's ACB, not
+        # its totals (pre-release review).
+        _n_in = sum(1 for _fp in _positions if _fp["in_year"])
+        _n_out = len(_positions) - _n_in
         _para(f"FILING POSITIONS — {len(_positions)} loss(es) claimed "
-              f"against the {_rule} (.tt ALLOWLOSS lines); the totals "
-              f"above include them")
+              f"against the {_rule} (.tt ALLOWLOSS lines)"
+              + ("; the totals above include them" if not _n_out else
+                 "; sales of another year: not in the totals above, "
+                 "their effect on the " + ("basis" if _is_us else "ACB")
+                 + " carries" if not _n_in else
+                 f"; the totals above include the {_n_in} of this year, "
+                 f"not the {_n_out} of another year"))
         for _fp in _positions:
             _item(f"{_fp['account']} {_fp['date']} {_fp['symbol']} "
                   f"{fmt_qty(_fp['qty'])} units: loss {money(_fp['loss'])} "
@@ -18527,6 +18537,38 @@ def _prior_record_path(root: Path, settings: Dict[str, Any],
     return root / "filed" / f"{year - 1}.json"
 
 
+def _handoff_positions(rep: Dict[str, Any], cache: Path, ry: int,
+                       settings: Dict[str, Any]) -> None:
+    """The .tt ALLOWLOSS filing positions on sales up to the closed
+    year `ry` (CA-SL-18 / US-WASH-25): they shape the opening cost the
+    hand-off compares (no ACB / basis raised for the replacement), so
+    the report names them (`filing_positions` and a note; pre-release
+    review). The closed year's project must take the same position."""
+    from taxjson.lib import loss_overrides as _LO
+    from taxjson.lib.report_model import resolve_gains_files
+    if not _LO.read_state(cache):
+        return
+    key = "date" if _tax_date_basis(settings) == "trade" else "date_settle"
+    fps = [fp for fp in _LO.positions(_LO.gather(resolve_gains_files(cache)))
+           if str(fp.get(key) or fp.get("date"))[:4] <= str(ry)]
+    if not fps:
+        return
+    rep["filing_positions"] = [
+        {k: v for k, v in fp.items() if k != "in_year"} for fp in fps]
+    us = _country(settings) in ("us", "usa")
+    rep.setdefault("notes", []).append(
+        f"{len(fps)} filing position(s) taken against the "
+        + ("wash-sale rule (§1091)" if us else "superficial-loss rule (s.54)")
+        + f" on sales up to {ry} (.tt ALLOWLOSS): "
+        + "; ".join(f"{fp['date']} {fp['symbol']}, the rule would "
+                    f"{'disallow' if us else 'deny'} "
+                    f"{fp['would_disallow']:,.2f} ({fp['where']})"
+                    for fp in fps)
+        + f". The opening " + ("basis" if us else "ACB")
+        + " here carries no denied loss for them; the " + str(ry)
+        + " project must hold the same line, or its closing cost differs.")
+
+
 def cmd_handoff(args: argparse.Namespace) -> None:
     """`taxjson handoff`: check this project against the previous year's
     close-year record — opening positions and cost at Dec 31, trades
@@ -18596,6 +18638,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     except _handoff.BooksError as e:
         # Not a fabricated "a lot or a sale is missing" (A2-1137).
         _die(str(e))
+    _handoff_positions(rep, root / "work", ry, settings)
     if getattr(args, "json", False):
         _json_out(dict(rep, record=str(rp)))
     else:
@@ -19476,6 +19519,12 @@ def _radar_engine_args(bases: List[Path],
                 out.append("--transfers-as-acquisitions")
         except Exception:                                  # noqa: BLE001
             pass
+    # The project's .tt ALLOWLOSS filing positions (US-WASH-25): the US
+    # radar's engine applies them as the gains pass does (pre-release
+    # review; a claimed loss read WASHED).
+    _work = {Path(b).parent for b in bases}
+    if len(_work) == 1:
+        out += _loss_override_flags(next(iter(_work)))
     if missing_history is not None and out[1] == "canada":
         # The project's corporate_distributions list: the radar's own
         # pool moves a Canadian TRUST's return of capital to its record

@@ -101,6 +101,21 @@
   (opt-in, under audit)" and the checklist keeps it at attention until you
   mark it reviewed. tax-logic CA-FX-07 / US-FX-03 state the method.
 
+- An ALLOWLOSS filing position is visible wherever the sale is: `taxjson
+  form-export` notes it on the Schedule 3 row and under the Form 8949 part
+  (text, `--json`, `--csv`; a TXF export warns) — on Form 8949 the row has
+  no code W, and docs/tax-rules.md says how it differs from a 1099-B that
+  reports box 1g; `taxjson audit` has a POSITION line (and `--summary` a
+  flag), `taxjson wash-sales --explain` traces the sale instead of "no
+  matching gains found", the US `taxjson wash-radar` reads the loss as
+  claimed instead of WASHED into the replacement's basis, and `taxjson
+  carryover` and `taxjson handoff` name the positions their figures
+  include. `taxjson sum` says "the totals above include them" only of
+  this year's sales. The line: a `reason=` after a `#` is comment, not
+  the reason; its units are the sale's total (one fill of a several-fill
+  sale used to override the whole sale); two lines naming one sale in
+  different spellings stop the run.
+
 ### Changed
 
 - **A spin-off or merger in a sheltered account is no longer asked.**
