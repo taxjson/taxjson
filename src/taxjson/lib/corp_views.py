@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT
+from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT, SHELTERED_DEFAULT
 from taxjson.lib.country import (CANADA, USA, display_name, home_currency,
                                  settings_country)
 
@@ -217,13 +217,17 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 float(getattr(ev, "fmv", 0) or 0) if ev else 0.0
             broker_cur = ((getattr(ev, "target_currency", "") or
                            getattr(ev, "currency", "")) if ev else "")
+            # A sheltered account's spin-off booked without asking
+            # (CA-CORP-11 / US-CORP-12): no value used, not pending.
+            defaulted = not rec and any(
+                r.get("corp_election") == SHELTERED_DEFAULT for r in booked)
             hints = rec.get("hints") or {}
             fmv_ps = hints.get("fmv_per_share")
             # The value the booking used: a positive hint, else the
             # broker's own value (taxable_deemed_dividend defaults to it).
             from_broker = False
             if not fmv_ps and broker_fmv and ev is not None \
-                    and ev.qty_received:
+                    and ev.qty_received and not defaulted:
                 fmv_ps = broker_fmv / ev.qty_received
                 from_broker = True
             income = sum(float(r.get("net_amount") or 0) for r in booked
@@ -236,12 +240,19 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 ev.date[:10] if ev else eid[:8])
             now = _held(rows, child, "9999-12-31", True) \
                 if child != "?" else 0.0
-            election = rec.get("election") or "(none)"
+            election = (SHELTERED_DEFAULT if defaulted
+                        else rec.get("election") or "(none)")
             flags: List[str] = []
             why: List[str] = []
             if sheltered:
                 why.append(f"{shelter_word}: no tax effect")
-            if election != "(none)" and election not in own_keys:
+            if election == SHELTERED_DEFAULT:
+                why.append("booked without asking: the new shares at $0 "
+                           "cost, the parent keeps its cost (the holdings "
+                           "view only). Set a value with `taxjson elect "
+                           f"{acct} --set {eid}=<"
+                           f"{'|'.join(spin_options)}>`.")
+            elif election != "(none)" and election not in own_keys:
                 # Another country's election (a project switched from
                 # canada to usa keeps its rollover_s_86_1): `taxjson run`
                 # refuses it, so it is described as invalid here — never

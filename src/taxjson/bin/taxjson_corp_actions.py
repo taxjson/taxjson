@@ -54,6 +54,10 @@ from taxjson.lib.corp_actions import (
     parse_rbc_corporate_actions,
     rates_converter,
     resolve_event,
+    SHELTERED_ELECTION_MODES,
+    SHELTERED_ELECTIONS_DEFAULT,
+    sheltered_default_applies,
+    sheltered_default_rows,
 )
 
 
@@ -120,11 +124,13 @@ def _format_options(options) -> str:
     return "\n".join(lines)
 
 
-# Said with an event of a sheltered (registered) account: its election
-# is asked all the same — it sets the cost the holdings view and the
-# sheltered books carry — and no tax in the account depends on it; the
-# holdings still count for the taxable accounts' superficial-loss rule
-# (Canada, CA-SL-*) or wash-sale rule (USA, US-WASH-*), each country's own.
+# Said with an event of a sheltered (registered) account when it is
+# asked (sheltered_elections = "ask", or an event the default does not
+# book — corp_actions.sheltered_default_applies): the election sets the
+# cost the holdings view and the sheltered books carry, and no tax in
+# the account depends on it; the holdings still count for the taxable
+# accounts' superficial-loss rule (Canada, CA-SL-*) or wash-sale rule
+# (USA, US-WASH-*), each country's own.
 def sheltered_note(country: str) -> str:
     """The sentence (no final period) said with a sheltered account's
     event, in the project's country's terms."""
@@ -258,14 +264,19 @@ def _load_manifest_or_die(path: Path) -> Manifest:
 
 
 def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
-                   country: str, fx=None) -> dict:
+                   country: str, fx=None,
+                   sheltered_default: frozenset = frozenset()) -> dict:
     """Emit taxjson rows for every event. Events whose election is
     `ignore` produce no rows (resolve_event returns an empty list).
     Hints stored on the manifest record (FMV, ACB allocation, etc.)
-    flow into the country rule via `resolve_event`."""
+    flow into the country rule via `resolve_event`. An event id in
+    `sheltered_default` with no saved election is a sheltered account's
+    event booked without asking (corp_actions.sheltered_default_rows);
+    a saved election always wins."""
     transactions = []
     emitted_event_count = 0
     ignored = 0
+    defaulted = []
     # Overlapping statement CSVs (partial-year + full-year downloads)
     # surface the same corporate event once per file: emitting each copy
     # scaled the pool by the ratio twice (or disposed the source twice).
@@ -276,6 +287,11 @@ def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
     events = combine_broker_copies(events, stream=io.StringIO())
     for ev in events:
         rec = manifest.get(ev.event_id)
+        if rec is None and ev.event_id in sheltered_default:
+            emitted_event_count += 1
+            transactions.extend(sheltered_default_rows(ev))
+            defaulted.append(ev.event_id)
+            continue
         if rec is None:
             raise RuntimeError(f"event {ev.event_id} unresolved at emit time")
         rows = resolve_event(ev, rec.election, country=country,
@@ -292,6 +308,8 @@ def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
             'country': country,
             'event_count': emitted_event_count,
             'ignored_count': ignored,
+            # A sheltered account's events booked without asking.
+            'sheltered_defaults': sorted(set(defaulted)),
         },
     }
 
@@ -344,8 +362,8 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             "ratio_old": ev.ratio_old,
             "source_rows": list(ev.raw_descriptions or []),
             "options": options,
-            # A sheltered account's event: asked all the same, but no
-            # tax in the account depends on it (sheltered_note).
+            # A sheltered account's event that is asked: no tax in the
+            # account depends on it (sheltered_note).
             "sheltered": bool(sheltered),
         })
     return {"schema_version": 1, "country": country,
@@ -429,11 +447,21 @@ def main():
     )
     parser.add_argument(
         '--sheltered', action='store_true',
-        help="The account is sheltered (registered): each election is "
-             "still asked, and the prompt says it sets the holdings' cost "
-             "with no tax in the account, the holdings still counting for "
-             "the superficial-loss / wash-sale rule (`taxjson run` passes "
-             "it).",
+        help="The account is sheltered (registered): no tax in the "
+             "account depends on an election, which only sets the "
+             "holdings' cost; the holdings still count for the "
+             "superficial-loss / wash-sale rule (`taxjson run` passes "
+             "it). See --sheltered-elections.",
+    )
+    parser.add_argument(
+        '--sheltered-elections', choices=SHELTERED_ELECTION_MODES,
+        default=SHELTERED_ELECTIONS_DEFAULT,
+        help="With --sheltered: \"zero\" (the default) books a spin-off "
+             "or merger that has no saved election without asking — a "
+             "spin-off's new shares at $0 cost, the parent keeping its "
+             "cost; a merger's new shares taking the old shares' cost; "
+             "\"ask\" asks as in a taxable account ([settings] "
+             "sheltered_elections).",
     )
     parser.add_argument(
         '--list', dest='list_only', action='store_true',
@@ -553,6 +581,16 @@ def main():
                       f"override.", file=sys.stderr)
 
     missing = _unresolved(events, manifest)
+    # A sheltered account's spin-off or merger: booked without asking
+    # (corp_actions.SHELTERED_DEFAULT) unless --sheltered-elections ask.
+    # Never written to the manifest, so a later election there wins and
+    # "ask" brings the question back.
+    sheltered_default = frozenset()
+    if args.sheltered and args.sheltered_elections == 'zero':
+        sheltered_default = frozenset(
+            ev.event_id for ev in missing if sheltered_default_applies(ev))
+        missing = [ev for ev in missing
+                   if ev.event_id not in sheltered_default]
 
     if missing:
         if args.no_input or not sys.stdin.isatty():
@@ -611,7 +649,8 @@ def main():
                       f"exchanges are booked in the consideration's "
                       f"currency.", file=sys.stderr)
     try:
-        out = _emit_resolved(events, manifest, args.country, fx=fx)
+        out = _emit_resolved(events, manifest, args.country, fx=fx,
+                             sheltered_default=sheltered_default)
     except (KeyError, ValueError) as e:
         # A saved election the rules cannot apply (an unknown election
         # key, a misspelled or missing hint): refuse by name instead of

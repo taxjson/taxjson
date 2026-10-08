@@ -1823,6 +1823,52 @@ def _country_has_corp_rules(country: str) -> bool:
     return _normalize_country(country) in RULES_BY_COUNTRY
 
 
+def _sheltered_elections(settings: Optional[Dict[str, Any]]) -> str:
+    """[settings] sheltered_elections ("zero" | "ask"), refused by name
+    when it is neither (lib/config_check refuses it first)."""
+    from taxjson.lib.corp_actions import sheltered_elections_mode
+    try:
+        return sheltered_elections_mode(settings)
+    except ValueError as e:
+        _die(str(e))
+
+
+def _note_sheltered_defaults(name: str, corp_files: List[Path]) -> None:
+    """One Info line per run for each spin-off or merger of a sheltered
+    account booked without asking (corp_actions.SHELTERED_DEFAULT): the
+    rows carry the tag, so a cached corp stage says it too. Not a
+    warning, and not pending: no tax in the account depends on its cost
+    (CA-CORP-11 / US-CORP-12)."""
+    import json as _json
+    from taxjson.lib.corp_actions import (SHELTERED_DEFAULT,
+                                          sheltered_default_text)
+    seen: Dict[str, Dict[str, str]] = {}
+    for f in corp_files:
+        try:
+            rows = _json.loads(f.read_text(encoding="utf-8")).get(
+                "transactions", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        for r in rows:
+            if not isinstance(r, dict) \
+                    or r.get("corp_election") != SHELTERED_DEFAULT:
+                continue
+            eid = str(r.get("corp_event_id") or "?")
+            ev = seen.setdefault(eid, {"date": str(r.get("date") or ""),
+                                       "kind": "spinoff", "symbol": ""})
+            if r.get("action") == "SPLIT":
+                ev["kind"], ev["symbol"] = "merger", str(
+                    r.get("symbol_new") or "")
+            elif (r.get("action") == "BUYSELL" and not ev["symbol"]
+                  and float(r.get("quantity") or 0) > 0):
+                ev["symbol"] = str(r.get("symbol") or "")
+    for eid, ev in sorted(seen.items(), key=lambda x: (x[1]["date"], x[0])):
+        _say_once(("sheltered-default", name, eid), "note",
+                  sheltered_default_text(name, ev["kind"], ev["symbol"],
+                                         ev["date"], eid),
+                  indent="  ", file=sys.stdout)
+
+
 def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                               corp_files: List[Path], cache: Path) -> None:
     """A taxable spin-off booked at $0 (the documented `fmv_per_share=0`
@@ -4020,9 +4066,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 ] + (["--ticker-map", str(ticker_map)] if ticker_map
                      else []) + (["--symbol-codes", str(_corp_codes)]
                                  if _corp_codes else []) + (
-                    # Asked all the same; the prompt says no tax
-                    # depends on it.
-                    [] if is_taxable else ["--sheltered"])
+                    # A sheltered account's spin-off / merger is booked
+                    # without asking unless [settings]
+                    # sheltered_elections = "ask" (CA-CORP-11 /
+                    # US-CORP-12); asked, the prompt says no tax depends
+                    # on it.
+                    [] if is_taxable else [
+                        "--sheltered", "--sheltered-elections",
+                        _sheltered_elections(settings)])
                 # Interactive by default: corp-actions prompts for the tax
                 # election (taxable vs rollover) on stderr and reads the
                 # answer from stdin. Without a TTY (or with --no-input) it
@@ -4063,6 +4114,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                      f"work/{out.name}.diag).")
             corp_files.append(out)
         _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
+        if not is_taxable:
+            _note_sheltered_defaults(name, corp_files)
 
     # 3. starting-position .tt files. Their converted JSON lives in its
     # own `<acct>_tt_<stem>` namespace: `<acct>_<stem>` collided with
@@ -8517,9 +8570,11 @@ def cmd_elect(args: argparse.Namespace) -> None:
     if _tmap.exists():
         _redo_corp_flags += ["--ticker-map", str(_tmap)]
     _acfg = ((cfg.get("accounts") or {}).get(name) or {})
+    # --redo asks again even in a sheltered account (the default would
+    # book the event without asking, CA-CORP-11 / US-CORP-12).
     _redo_sheltered = ([] if isinstance(_acfg, dict)
                        and _acfg.get("type", "sheltered") == "taxable"
-                       else ["--sheltered"])
+                       else ["--sheltered", "--sheltered-elections", "ask"])
     ran = False
     try:
         for broker, csvs in grouped.items():

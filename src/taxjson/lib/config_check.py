@@ -228,6 +228,15 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
                                 not in ("grant", "close")):
             out.append(f"[settings] option_premium_timing must be "
                        f"\"grant\" or \"close\" (got {opt!r})")
+        # A sheltered account's corporate-action elections (lib/
+        # corp_actions.sheltered_elections_mode): a typo must not read
+        # as either mode.
+        she = settings.get("sheltered_elections")
+        if she is not None and (not isinstance(she, str)
+                                or she.strip().lower()
+                                not in ("zero", "ask")):
+            out.append(f"[settings] sheltered_elections must be "
+                       f"\"zero\" or \"ask\" (got {she!r})")
         since = settings.get("option_grant_timing_since")
         if since is not None and not (isinstance(since, int)
                                       and not isinstance(since, bool)

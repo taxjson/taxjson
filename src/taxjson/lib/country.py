@@ -289,6 +289,10 @@ SETTING_COUNTRY: Dict[str, str] = {
     # account's transfer is a custody move unless set (CA-SL-16/17,
     # US-WASH-23/24).
     "transfers_as_acquisitions": BOTH,
+    # A sheltered account's spin-off / merger booked without asking
+    # (Canada's registered plans, the US IRA-type accounts alike:
+    # CA-CORP-11 / US-CORP-12).
+    "sheltered_elections": BOTH,
     "province": CANADA,
     "option_premium_timing": CANADA,
     "option_grant_timing_since": CANADA,

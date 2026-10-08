@@ -174,6 +174,15 @@ The keys come in groups, in the order `taxjson init` writes them.
 - **Change it when:** you want each contribution treated as a purchase and will declare custody moves (`.tt` TRANSFER ... DECLARED pairs).
 - **Example:** `transfers_as_acquisitions = false`
 
+#### Corporate actions
+
+#### `sheltered_elections`
+- **Meaning:** what a spin-off or merger in a sheltered account (Canada: RRSP, LIRA, TFSA, RESP, RRIF ...; US: IRA, Roth, 401(k), HSA, 529 ...) does when it has no saved election. `"zero"`: it is booked without asking — a spin-off's new shares at $0 cost with the parent keeping its whole cost, a merger's new shares taking the old shares' cost — with one `Info:` line per run; it is never pending, so `run --strict`, `elect --pending`, the checklist and quick-start do not wait for it. `"ask"`: it is asked like a taxable account's event (the prompt, `elect --pending`, exit 3 without a terminal). Either way an election saved with `taxjson elect` wins, and a taxable account is always asked. No tax depends on it: nothing is taxed inside the account, an in-kind move in or out is valued at fair market value, and the superficial-loss / wash-sale rule counts the account's units, not their cost (tax-logic CA-CORP-11 / US-CORP-12).
+- **Default:** `"zero"`.
+- **Country:** both.
+- **Change it when:** you want the sheltered holdings view to show a real cost for every spin-off, and to be asked for it.
+- **Example:** `sheltered_elections = "ask"`
+
 #### Retired setting
 
 #### `cross_asset`

@@ -356,9 +356,16 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Error: 1 corp-action event(s) need an election but --no-input" (or "… but stdin is not a TTY"), and `tjs run` exits 3
 - **Check:** `tjs elect --pending` lists each event with what each election books and the hints it needs (also in `work/pending_elections.json`).
 - **Cause:** a spin-off or merger has more than one tax treatment and only you can choose. The run defers the account until it is chosen; run from a script or an AI assistant, stdin is not a terminal, so it cannot ask.
-- **Fix:** `tjs elect margin --set EVENT_ID=ELECTION` (add `--hint KEY=VALUE` where required), or run `tjs run` at a terminal to be asked; then run again. An event of a sheltered account is asked too — the election sets the cost its holdings carry — but no tax in the account depends on it: the prompt and `tjs elect --pending` say "sheltered account: this election sets the holdings' cost in the books — no tax in this account; its holdings still count for the superficial-loss rule" (a US project: the wash-sale rule).
+- **Fix:** `tjs elect margin --set EVENT_ID=ELECTION` (add `--hint KEY=VALUE` where required), or run `tjs run` at a terminal to be asked; then run again. A spin-off or merger of a sheltered account is not asked by default (next entry); with `sheltered_elections = "ask"` it is — the election sets the cost its holdings carry, and no tax in the account depends on it: the prompt and `tjs elect --pending` say "sheltered account: this election sets the holdings' cost in the books — no tax in this account; its holdings still count for the superficial-loss rule" (a US project: the wash-sale rule).
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_corp_actions.py` — `corp-action event(s) need an election `, `sheltered_note`; `src/taxjson/bin/taxjson_run.py` — `cmd_elect`, `_print_pending`
+
+### "Info: sheltered account lira: spin-off SPNCO.TO on 2025-03-03 (event …) booked at $0 cost for the distributed shares"
+- **Check:** `tjs spinoffs` shows the event with election `sheltered_default` and the new shares' cost of 0; `tjs elect --pending` does not list it.
+- **Cause:** a spin-off in a sheltered account (RRSP, LIRA, TFSA, RESP, RRIF; US: IRA, Roth, 401(k), HSA, 529) is booked without asking: nothing is taxed inside the account, and nothing taxable reads its cost (an in-kind move uses fair market value; the superficial-loss / wash-sale rule counts units). The new shares start at $0 and the parent keeps its whole cost; a merger's new shares take the old shares' cost ("booked with the old shares' cost carried to the new shares"). It used to be asked like a taxable account's event, stopping `run --no-input`, `run --strict`, the checklist and quick-start until answered.
+- **Fix:** nothing to do. For a real cost in the holdings view, `tjs elect lira --set EVENT_ID=ELECTION` (the saved election wins); `sheltered_elections = "ask"` in `[settings]` asks for every such event again.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_note_sheltered_defaults`, `_sheltered_elections`; `src/taxjson/lib/corp_actions.py` — `sheltered_default_rows`, `sheltered_default_text`; `src/taxjson/bin/taxjson_corp_actions.py` — `--sheltered-elections`
 
 ### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
 - **Check:** `tjs spinoffs` shows the election, the value used and the cost booked.

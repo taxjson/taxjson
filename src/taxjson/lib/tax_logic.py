@@ -227,6 +227,39 @@ def _transfers_as_acquisitions(settings: Dict[str, Any]) -> bool:
         return False
 
 
+def _sheltered_elections(settings: Dict[str, Any]) -> str:
+    """[settings] sheltered_elections, as the corp-actions stage reads
+    it (lib/corp_actions.sheltered_elections_mode); a value it refuses
+    raises ValueError, as `run` does."""
+    from taxjson.lib.corp_actions import sheltered_elections_mode
+    return sheltered_elections_mode(settings)
+
+
+def _sheltered_corp_rule(rid: str, mode: str, plans: str, loss_rule: str,
+                         units: str) -> Rule:
+    """CA-CORP-11 / US-CORP-12: a sheltered account's spin-off or merger
+    — each country's own plans and loss rule, the same booking."""
+    why = ("No tax is computed inside the account and nothing taxable "
+           "reads its cost: an in-kind move in or out is valued at fair "
+           "market value on its date, and the " + loss_rule + " counts "
+           "the account's units, never their cost — the cost only shows "
+           "in the holdings view.")
+    if mode == "ask":
+        return Rule(rid,
+                    "A spin-off or merger in " + plans + " is asked like "
+                    "a taxable account's (sheltered_elections = \"ask\"); "
+                    "the election sets only the cost the holdings carry. "
+                    + why, keys=("sheltered_elections",))
+    return Rule(rid,
+                "A spin-off or merger in " + plans + " is booked without "
+                "asking (sheltered_elections = \"zero\", the default): "
+                "the spun-off shares at $0 cost with the parent keeping its "
+                "whole cost, a merger's new shares taking the old shares' "
+                "cost; one Info line per run names each, and it is never "
+                "pending. " + why + " " + units + " An election saved with "
+                "`taxjson elect` wins.", keys=("sheltered_elections",))
+
+
 def _ownership(country: str) -> List[Rule]:
     """What a project of this country refuses: built from the
     lib/country tables, so the statement cannot drift from them."""
@@ -1575,6 +1608,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CORP-08",
                  "ignore skips broker noise only; on a real event it "
                  "leaves the books wrong."),
+            _sheltered_corp_rule(
+                "CA-CORP-11", _sheltered_elections(s),
+                "a registered account (RRSP, RRIF, TFSA, FHSA, RESP, RDSP, "
+                "LIRA / LIF ...)", "superficial-loss rule (s.54)",
+                "The spun-off shares are acquired on the distribution date, "
+                "as under every spin-off election."),
         ]),
         ("Income", [
             Rule("CA-INC-01",
@@ -3181,6 +3220,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CORP-08",
                  "ignore skips broker noise only; on a real event it "
                  "leaves the books wrong."),
+            _sheltered_corp_rule(
+                "US-CORP-12", _sheltered_elections(s),
+                "a tax-advantaged account (IRA, Roth IRA, 401(k), HSA, "
+                "529 ...)", "wash-sale rule (§1091)",
+                "The spun-off shares are acquired on the distribution date, "
+                "as under taxable_distribution_301; elect tax_free_355 for "
+                "a §355 spin-off, whose shares are not a purchase for the "
+                "wash-sale rule."),
         ]),
         ("Income", [
             Rule("US-INC-01",

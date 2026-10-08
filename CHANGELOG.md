@@ -18,6 +18,22 @@
   account, the CRA copy's boxes are compared and the report keeps only
   its payments. Tax-logic `CA-SLIP-04`.
 
+### Changed
+
+- **A spin-off or merger in a sheltered account is no longer asked.**
+  Nothing is taxed inside an RRSP, LIRA, TFSA, RESP or RRIF (US: IRA,
+  Roth, 401(k), HSA, 529), and nothing taxable reads its cost: an
+  in-kind move in or out is valued at fair market value, and the
+  superficial-loss / wash-sale rule counts the account's units. So an
+  event there with no saved election is booked without asking — a
+  spin-off's new shares at $0 cost with the parent keeping its cost, a
+  merger's new shares taking the old shares' cost — with one `Info:`
+  line per run. It is no longer pending: `run --no-input`,
+  `run --strict`, `elect --pending`, the checklist and quick-start do not
+  wait for it. An election saved with `taxjson elect` still wins; a
+  taxable account is asked as before. `[settings] sheltered_elections =
+  "ask"` restores the question. Tax-logic `CA-CORP-11` / `US-CORP-12`.
+
 ### Fixed
 
 - `taxjson slip-audit` (found auditing a full CRA slip set):

@@ -190,12 +190,15 @@ Mergers, spin-offs, tenders and reorganizations are read from each broker's
 corporate-action rows into `CorporateAction` events. Each event needs an
 election (taxable or a rollover, by country); the choice is saved in a
 manifest and turned into transaction rows. Undecided events stop the run with
-an election list; `taxjson elect` records the choices. Splits and renames use
+an election list (a sheltered account's spin-off or merger is booked without
+asking unless `sheltered_elections = "ask"`); `taxjson elect` records the
+choices. Splits and renames use
 one shared timeline so their arithmetic is the same everywhere.
 
 - `src/taxjson/lib/corp_actions.py` — `CorporateAction`, `parse_ib_corporate_actions`, `parse_questrade_corporate_actions`, `parse_rbc_corporate_actions`, `RULES_BY_COUNTRY`, `RuleSpec`, `resolve_event`, `options_for`, `apply_auto_defaults`, `IGNORE_ELECTION`, `Manifest`, `ElectionRecord`, `combine_broker_copies`: the broker extractors; the election rules per country; the saved elections (the manifest) and dedup of one event seen by two brokers.
-- `src/taxjson/bin/taxjson_corp_actions.py` — `main`, `EXTRACTORS`, `extract_events`, `_prompt_election`, `_pending_doc`, `EXIT_ELECTIONS_REQUIRED`: the `taxjson-corp-actions` stage.
-- `src/taxjson/bin/taxjson_run.py` — `cmd_elect`, `_print_pending`, `_print_elections`, `_warn_zero_value_spinoffs`, `_country_has_corp_rules`: `taxjson elect` and the run's election messages.
+- `src/taxjson/bin/taxjson_corp_actions.py` — `main`, `EXTRACTORS`, `extract_events`, `_prompt_election`, `_pending_doc`, `_emit_resolved`, `EXIT_ELECTIONS_REQUIRED`: the `taxjson-corp-actions` stage (`--sheltered-elections`: a sheltered account's events booked without asking).
+- `src/taxjson/lib/corp_actions.py` — `SHELTERED_DEFAULT`, `sheltered_elections_mode`, `sheltered_default_applies`, `sheltered_default_rows`, `sheltered_default_text`: a sheltered account's spin-off ($0 cost) or merger (cost carried) booked without asking, `[settings] sheltered_elections`.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_elect`, `_print_pending`, `_print_elections`, `_warn_zero_value_spinoffs`, `_note_sheltered_defaults`, `_sheltered_elections`, `_country_has_corp_rules`: `taxjson elect` and the run's election messages.
 - `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `cumulative_factor`, `split_event_key`, `split_seen`, `event_sort_key`, `radar_priority`: split and rename arithmetic and same-day event order.
 - `src/taxjson/lib/corp_views.py` — `spinoffs`, `splits`, `render_spinoffs`, `render_splits`, `wrong_country_elections`: `taxjson spinoffs` and `taxjson splits`.
 

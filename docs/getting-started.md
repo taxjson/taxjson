@@ -672,7 +672,11 @@ cash and may show a cost of `0.00`.
 
 - **Merger or spin-off.** When the run recognises one it asks you once
   how to treat it (headless: it exits `3`, and `tjs elect --pending`
-  lists the choices). Answer it; the cost is then split for you.
+  lists the choices). Answer it; the cost is then split for you. In a
+  sheltered account (RRSP, LIRA, TFSA ...) it is not asked: no tax there
+  depends on it, so the new shares start at $0 and the run says so in one
+  `Info:` line (`sheltered_elections = "ask"` in `[settings]` asks
+  anyway).
 - **Stock dividend (Canada).** The new shares come in at $0. Their cost
   is the dividend's declared amount, from the issuer's notice or your
   T5. Add it as an `ADJUST` line on the dividend date:

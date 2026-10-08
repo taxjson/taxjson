@@ -129,7 +129,9 @@ class TestFilingReminder(unittest.TestCase):
     def test_no_reminder_for_sheltered_account(self):
         # A rollover inside a registered plan has no gain to defer, so
         # there is nothing to file with CRA — the reminder must stay
-        # quiet (2026-08-02: it fired for an rrsp account).
+        # quiet (2026-08-02: it fired for an rrsp account). The event is
+        # asked (sheltered_elections = "ask"): by default a sheltered
+        # account's merger is booked without asking (CA-CORP-11).
         try:
             from tests.test_pending_elections import _SSL_RGLD_CSV
         except ImportError:
@@ -139,6 +141,7 @@ class TestFilingReminder(unittest.TestCase):
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\nsource_currencies = []\n'
+                'sheltered_elections = "ask"\n'
                 '[accounts.margin]\ntype = "sheltered"\n')
             (root / "inputs" / "margin" / "ib.csv").write_text(
                 _SSL_RGLD_CSV)

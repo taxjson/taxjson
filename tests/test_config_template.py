@@ -970,8 +970,8 @@ class TestFormatToCanonicalLayout(unittest.TestCase):
         self.assertRegex(r.text, rf"\n{mine[0]}\nleaps_months +=")
         self.assertRegex(r.text, rf"\n{mine[1]}\nyear +=")
         self.assertRegex(r.text, rf"\n{mine[3]}\n\[accounts\.zeta\]\n")
-        # (the last [settings] group: Transfers)
-        self.assertRegex(r.text, rf"transfers_as_acquisitions += .*\n\n"
+        # (the last [settings] group: Corporate actions)
+        self.assertRegex(r.text, rf"sheltered_elections += .*\n\n"
                                  rf"{mine[2]}\n\n"
                                  r"## One \[accounts\.NAME\]")
         again = CT.format_config(r.text)

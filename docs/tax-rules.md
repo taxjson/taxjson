@@ -144,6 +144,14 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Code:** `src/taxjson/lib/corp_actions.py` — `CANADA_SPINOFF`, `_canada_spinoff_rollover_s_86_1`, `_canada_spinoff_deemed_dividend`, `HINTS_BY_ELECTION`, `FILING_REQUIRED_ELECTIONS`, `zero_basis_rollover_rows`.
 - **Edge cases and limits:** a rollover booked with $0 allocated cost keeps the parent's whole cost and moves the gain to the spin-off's sale; every run warns about it. A company's Form 8937 percentage is a US figure and can differ from the s.86.1(3) split. An older manifest's `allocated_acb` (in the event's currency) is converted at the spin-off date's rate, with a warning to re-elect with `allocated_acb_cad`. A Canadian parent's tax-deferred spin-off (a butterfly) has no election of its own: book it with `rollover_s_86_1` and the allocated ACB (KNOWN_ISSUES "Spin-off default wording").
 
+## Spin-offs and mergers in a registered account
+
+- **Rule:** in a registered account (RRSP, RRIF, TFSA, FHSA, RESP, RDSP, LIRA / LIF ...) a spin-off or merger with no saved election is booked without asking when `[settings] sheltered_elections = "zero"` (the default): the spun-off shares at $0 cost with the parent keeping its whole cost, a merger's new shares taking the old shares' cost; one `Info:` line per run, never pending. Nothing is taxed inside the account and nothing taxable reads its cost: an in-kind withdrawal or contribution is valued at fair market value on its date, and the superficial-loss rule counts the account's units, never their cost. The spun-off shares are acquired on the distribution date, as under every spin-off election. `"ask"` asks as in a taxable account; an election saved with `taxjson elect` wins either way.
+- **Source:** s.146 / s.146.2 (no tax inside the plan); s.40(2)(g)(iv) and s.54 for the plan's holdings; see `taxjson tax-logic` rule `CA-CORP-11`.
+- **Rule ids:** `CA-CORP-11`.
+- **Code:** `src/taxjson/lib/corp_actions.py` — `SHELTERED_DEFAULT`, `sheltered_default_applies`, `sheltered_default_rows`, `sheltered_elections_mode`; `src/taxjson/bin/taxjson_corp_actions.py` — `--sheltered-elections`, `_emit_resolved`; `src/taxjson/bin/taxjson_run.py` — `_note_sheltered_defaults`, `_sheltered_elections`.
+- **Edge cases and limits:** an event that delivered no shares (a cash merger, an UNSUPPORTED shape) is still asked. The holdings view and `taxjson sanity`'s cost comparison show the $0 cost until you elect a value.
+
 ## Cost of property received as income or a dividend in kind
 
 - **Rule:** property received as income takes that income as its cost: the shares of a spin-off elected `taxable_deemed_dividend` cost their FMV; a staking reward's fair value when received is the coins' cost; a stock dividend's declared amount is the new shares' cost (entered by you, see "Stock dividends").
@@ -397,6 +405,14 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-CORP-06`, `US-CORP-07` (citing §355, §358(b), Reg. §1.358-2, §1223(1)).
 - **Rule ids:** `US-CORP-06`, `US-CORP-07`.
 - **Code:** `src/taxjson/lib/corp_actions.py` — `USA_SPINOFF`, `_us_spinoff_tax_free_355`, `_emit_distribution`.
+
+## Spin-offs and mergers in a tax-advantaged account
+
+- **Rule:** in an IRA-type account (IRA, Roth IRA, 401(k), HSA, 529 ...) a spin-off or merger with no saved election is booked without asking when `[settings] sheltered_elections = "zero"` (the default): the spun-off shares at $0 cost with the parent keeping its whole cost, a merger's new shares taking the old shares' cost; one `Info:` line per run, never pending. Nothing is taxed inside the account and nothing taxable reads its cost: a distribution in kind is a purchase at fair market value, and the wash-sale rule counts the account's units, never their cost. The spun-off shares are acquired on the distribution date, as under `taxable_distribution_301`; elect `tax_free_355` for a §355 spin-off, whose shares are not a wash-sale purchase. `"ask"` asks as in a taxable account; an election saved with `taxjson elect` wins either way.
+- **Source:** §408(e) / §408A (no tax inside the account); Rev. Rul. 2008-5 for an IRA's replacement purchase; see `taxjson tax-logic` rule `US-CORP-12`.
+- **Rule ids:** `US-CORP-12`.
+- **Code:** `src/taxjson/lib/corp_actions.py` — `SHELTERED_DEFAULT`, `sheltered_default_rows`; `src/taxjson/bin/taxjson_run.py` — `_note_sheltered_defaults`.
+- **Edge cases and limits:** an event that delivered no shares is still asked. The holdings view shows the $0 cost until you elect a value.
 
 ## Return of capital (§301(c))
 

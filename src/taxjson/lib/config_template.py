@@ -12,8 +12,9 @@ adding one more); then [estimate], [carryover],
 [[distributions]], and for Canada [[capital_gains_dividends]] and
 [instalments]. Arrays of tables keep their entries' order. [settings]
 comes in groups (SETTINGS_GROUPS: Project, Currencies, Options, Income,
-Futures), each under a `## --- Name ---` heading line, a blank line between
-groups, the keys alphabetical within a group; every other table's keys
+Futures, Transfers, Corporate actions), each under a `## --- Name ---`
+heading line, a blank line between groups, the keys alphabetical within
+a group; every other table's keys
 are alphabetical, except that an account table's `type` (the required
 key) comes first. Active and commented-out keys are interleaved in one
 sequence, and every key line of a table (`key` or `# key`) is padded to
@@ -266,6 +267,13 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
                 "every such transfer is a purchase or sale on its date "
                 "(an arrival date in a loss's window then stops the "
                 "run)."}),
+    Key("sheltered_elections", '"zero"',
+        "A spin-off or merger in a sheltered account with no saved "
+        "election: \"zero\" (the default) books it without asking (a "
+        "spin-off's new shares at $0 cost, a merger's new shares at the "
+        "old shares' cost; no tax depends on it); \"ask\": asked like a "
+        "taxable account's. `taxjson elect` wins either way.",
+        inline="zero | ask"),
 )
 
 ACCOUNT_SPEC: Tuple[Key, ...] = (
@@ -314,6 +322,7 @@ SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
                 "ric_january_dividends")),
     ("Futures", ("futures_settle",)),
     ("Transfers", ("transfers_as_acquisitions",)),
+    ("Corporate actions", ("sheltered_elections",)),
 )
 
 

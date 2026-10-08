@@ -3781,7 +3781,8 @@ def _canada_spinoff_deemed_dividend(event: CorporateAction, option: str, hints: 
 def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
                                   *, description_base: str,
                                   allocated_acb: Optional[float] = None,
-                                  alloc_cur: Optional[str] = None
+                                  alloc_cur: Optional[str] = None,
+                                  zero_is_intended: bool = False
                                   ) -> List[dict]:
     """Country-neutral basis-allocated spinoff: part of the parent's cost
     basis moves to the spun-off position; no current-year tax. Canada
@@ -3793,7 +3794,9 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     itself: Canada's s.86.1(3) `allocated_acb_cad` (booked in CAD) is
     read ONLY by the Canada wrapper — the shared emitter never sees a
     Canadian hint, so the US §355 rule cannot book one (partition
-    ENGINE-08)."""
+    ENGINE-08). `zero_is_intended`: the $0 allocation is the booking
+    itself (a sheltered account's default, sheltered_default_rows), not
+    a missing amount — no warning."""
     if allocated_acb is None:
         allocated_acb = float((hints or {}).get('allocated_acb') or 0.0)
     alloc_cur = alloc_cur or event.currency
@@ -3807,7 +3810,8 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     # position only receives `adjusted_acb` would silently vaporize the
     # fractional basis (frac/qty * allocated_acb). Keeping it in the
     # parent defers it rather than losing it.
-    if abs(allocated_acb) < 0.005 and event.qty_received > 0:
+    if (abs(allocated_acb) < 0.005 and event.qty_received > 0
+            and not zero_is_intended):
         # A spin-off with value is never allocated $0 (s.86.1(2) /
         # §358(b) apportion by relative FMV): the parent kept its whole
         # cost and the spun-off shares booked at $0, with no word
@@ -4169,6 +4173,96 @@ def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
         ))
         applied.append(ev)
     return applied
+
+
+# --- Sheltered accounts: the election booked without asking -------------
+#
+# Inside a sheltered (registered) account no gain is taxed and no income
+# is reported, and nothing taxable reads the account's cost: an in-kind
+# move in or out is valued at fair market value on its date (lib/
+# in_kind), and the superficial-loss / wash-sale rules count the
+# account's units, never its cost. A spin-off's or merger's election
+# there only sets the cost its holdings view shows, so by default it is
+# booked without asking ([settings] sheltered_elections = "zero";
+# tax-logic CA-CORP-11 / US-CORP-12): a spin-off's new shares at $0
+# cost with the parent keeping its whole cost, a merger's new shares
+# taking the old shares' cost. Nothing is written to the manifest: an
+# election saved there (`taxjson elect`) wins, and "ask" brings the
+# question back.
+SHELTERED_DEFAULT = 'sheltered_default'      # the rows' corp_election
+SHELTERED_ELECTION_MODES = ('zero', 'ask')
+SHELTERED_ELECTIONS_DEFAULT = 'zero'
+
+
+def sheltered_elections_mode(settings: Optional[Dict[str, Any]]) -> str:
+    """[settings] sheltered_elections: "zero" (the default) or "ask".
+    Anything else raises ValueError with the message to show."""
+    raw = (settings or {}).get('sheltered_elections')
+    if raw is None:
+        return SHELTERED_ELECTIONS_DEFAULT
+    mode = str(raw).strip().lower() if isinstance(raw, str) else raw
+    if mode not in SHELTERED_ELECTION_MODES:
+        raise ValueError(
+            f'[settings] sheltered_elections must be "zero" or "ask" '
+            f'(got {raw!r})')
+    return mode
+
+
+def sheltered_default_applies(event: CorporateAction) -> bool:
+    """Whether a sheltered account's event is booked without asking: a
+    spin-off or merger that delivered shares. Any other event (one the
+    rules cannot book, a merger paid only in cash) is asked as before."""
+    if event.action_type == 'spinoff':
+        return (event.qty_received or 0) > 0
+    if event.action_type == 'merger':
+        return (event.qty_received or 0) > 0 and (event.qty_disposed or 0) > 0
+    return False
+
+
+def sheltered_default_rows(event: CorporateAction) -> List[dict]:
+    """The rows of a sheltered account's event booked without asking
+    (see SHELTERED_DEFAULT): a spin-off books the new shares at $0 cost
+    and leaves the parent's cost alone; a merger carries the old shares'
+    cost to the new ones (the share-for-share booking). The same share
+    quantities and dates as any election, so the superficial-loss /
+    wash-sale tests see the same units."""
+    if event.action_type == 'spinoff':
+        rows = _emit_allocated_basis_spinoff(
+            event, {},
+            description_base=(
+                f"Spinoff {event.source_symbol}→{event.target_symbol} "
+                f"(sheltered account: new shares at $0 cost, the parent "
+                f"keeps its cost; no tax in the account)"),
+            allocated_acb=0.0, zero_is_intended=True)
+    else:
+        rows = _emit_basis_carryover_rename(
+            event, {},
+            statute_note=("sheltered account: the old shares' cost "
+                          "carried to the new shares; no tax in the "
+                          "account"),
+            cil_note="sheltered account")
+    for r in rows:
+        r.setdefault('corp_event_id', event.event_id)
+        r.setdefault('corp_election', SHELTERED_DEFAULT)
+    return rows
+
+
+def sheltered_default_text(account: str, action_type: str, symbol: str,
+                           date: str, event_id: str) -> str:
+    """The run's one Info line for a sheltered account's event booked
+    without asking (`symbol`: the shares received)."""
+    if action_type == 'merger':
+        what = f"merger into {symbol}"
+        booked = ("booked with the old shares' cost carried to the new "
+                  "shares")
+        change = "records another treatment if you want one"
+    else:
+        what = f"spin-off {symbol}"
+        booked = "booked at $0 cost for the distributed shares"
+        change = "sets a fair value if you want it there"
+    return (f"sheltered account {account}: {what} on {date} (event "
+            f"{event_id}) {booked}; cost only affects the holdings view "
+            f"— `taxjson elect` {change}")
 
 
 # Hint keys older manifests carry that the emitters still honour.
