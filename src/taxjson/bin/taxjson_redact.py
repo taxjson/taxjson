@@ -466,6 +466,8 @@ class Pseudonyms:
     def __init__(self) -> None:
         self.wallets: Dict[str, str] = {}
         self.txids: Dict[str, str] = {}
+        # slips.toml broker_key values (a hash of a broker account).
+        self.keys: Dict[str, str] = {}
 
 
 class Report:
@@ -482,6 +484,7 @@ class Report:
         self.wallets: Dict[str, str] = {}       # original -> pseudonym
         self.txids: Dict[str, str] = {}
         self.patterns = 0
+        self.broker_keys = 0
         self.description_columns: List[str] = []
         self.review: List[Tuple[int, str]] = []  # (line number, reason)
         self.encoding = "utf-8"
@@ -502,7 +505,8 @@ class Report:
         return bool(self.accounts or self.identity_rows or self.emails
                     or self.names or self.phones or self.postal_codes
                     or self.addresses or self.sins or self.wallets
-                    or self.txids or self.patterns or self.name_ids)
+                    or self.txids or self.patterns or self.name_ids
+                    or self.broker_keys)
 
     @staticmethod
     def masked(s: str) -> str:
@@ -1004,6 +1008,30 @@ def _known_placeholder(table: Dict[str, str], orig: str) -> str:
     return table[orig]
 
 
+_BROKER_KEY_RE = re.compile(
+    r"""(?im)^(\s*(?:#\s*)?broker_key\s*=\s*)(["'])([0-9a-f]{10})\2""")
+
+
+def _redact_broker_keys(text: str, rep: "Report") -> str:
+    """slips.toml's `broker_key = "<10 hex>"` (a hash of the broker
+    account, lib/slip_audit.broker_key), in a table or commented out:
+    replaced by a stand-in, the same one for the same key across the
+    copy (`0000000001` ...)."""
+    keys = rep.pseudonyms.keys
+    n = 0
+
+    def sub(m: "re.Match") -> str:
+        nonlocal n
+        k = m.group(3).lower()
+        if k not in keys:
+            keys[k] = f"{len(keys) + 1:010x}"
+        n += 1
+        return f"{m.group(1)}{m.group(2)}{keys[k]}{m.group(2)}"
+    out = _BROKER_KEY_RE.sub(sub, text)
+    rep.broker_keys += n
+    return out
+
+
 def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                 known_ids: Optional[Dict[str, str]] = None,
                 pseudonyms: Optional[Pseudonyms] = None
@@ -1024,6 +1052,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     for b in bad:
         rep.notes.append(f"pattern skipped (not a valid regex): {b}")
     text = _redact_html_identity(text, rep)
+    text = _redact_broker_keys(text, rep)
     lines = text.splitlines(keepends=True)
     for orig in _collect_ids(lines):
         rep.accounts[orig] = _known_placeholder(rep.known_ids, orig)
@@ -1773,6 +1802,7 @@ def _file_counts(f: _TreeFile) -> str:
             (len(rep.wallets), "wallet address", "wallet addresses"),
             (len(rep.txids), "transaction id", ""),
             (rep.patterns, "denylist / --also match", "denylist / --also matches"),
+            (rep.broker_keys, "slips.toml broker_key", ""),
             (f.swept, "id found in another file", "ids found in other files")):
         if n:
             parts.append(_plural(n, one, many))

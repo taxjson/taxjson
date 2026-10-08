@@ -144,7 +144,11 @@ _IB_CAT = {"eligible": "ca_div", "non_eligible": "ca_div",
 
 _SLIP_KEYS = {"type", "issuer", "account", "broker_account", "broker_key",
               "currency", "security", "code", "boxes", "line", "note",
-              "source"}
+              "source", "status"}
+SLIP_STATUSES = ("original", "amended")
+# work/: the project's salt of the broker_key --import-cra writes (a
+# random value; never in slips.toml, never in inputs/).
+KEY_SALT_FILE = ".slip_key_salt"
 _LINE_KEYS = {"symbol", "date", "box", "amount", "note"}
 _TOP_KEYS = {"year", "slip", "ib_report", "annual_average"}
 
@@ -187,6 +191,8 @@ class Slip:
     covers: Optional[Tuple[str, ...]] = None
     origin: str = ""                 # slips.toml `source` (cra:<file>)
     detail_only: bool = False        # an IB report beside its CRA slip
+    status: str = ""                 # original | amended ("" not said)
+    broker_key: str = ""             # slips.toml broker_key (salted)
 
     @property
     def scope(self) -> str:
@@ -305,6 +311,74 @@ def _mask(number: str) -> str:
 def _shown(path: Path) -> str:
     from taxjson.lib.brokerages.base import shown_name
     return shown_name(path)
+
+
+# ------------------------------------------------------------ broker_key
+def key_salt(root: Path, create: bool = False) -> Optional[str]:
+    """The project's broker_key salt (work/.slip_key_salt, 32 hex);
+    `create` makes one when there is none. None: no salt."""
+    p = Path(root) / "work" / KEY_SALT_FILE
+    try:
+        v = p.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        v = ""
+    if re.fullmatch(r"[0-9a-f]{32}", v):
+        return v
+    if not create:
+        return None
+    import os
+    import secrets
+    from taxjson.lib.safe_write import write_atomic
+    v = secrets.token_hex(16)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(p, v + "\n")
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+    return v
+
+
+def broker_key(salt: str, book_hash: str) -> str:
+    """The broker_key slips.toml carries for a broker account: the
+    books' hash of it, salted with the project's work/ salt — unlike the
+    books' own (unsalted) hash, it cannot be turned back into an account
+    number by trying every number."""
+    return hashlib.sha256(f"taxjson-slip-key:{salt}:{book_hash}"
+                          .encode()).hexdigest()[:10]
+
+
+def resolve_keys(slips: List["Slip"], hashes: Iterable[str],
+                 salt: Optional[str], problems: List[str]) -> List["Slip"]:
+    """Each slip's broker_key turned back into the books' hash of its
+    broker account (`hashes`: every one the books and IB's reports
+    carry). A key no account matches is said and kept apart (its slip
+    then has no books)."""
+    hashes = set(hashes)
+    by_key = {broker_key(salt, h): h for h in hashes} if salt else {}
+    out = []
+    for s in slips:
+        k = s.broker_key
+        if not k:
+            out.append(s)
+        elif k in by_key:
+            out.append(replace(s, broker_hashes=(by_key[k],)))
+        elif k in hashes:
+            problems.append(
+                f"{s.where}: broker_key is the books' own hash of the "
+                f"broker account (an earlier --import-cra wrote it; it can "
+                f"be turned back into the account number) — delete the "
+                f"table and import the slip again to write a salted key")
+            out.append(s)
+        else:
+            problems.append(
+                f"{s.where}: broker_key {k} is no broker account in the "
+                f"books — written with another salt (work/{KEY_SALT_FILE} "
+                f"deleted?) or for an account no longer in the books: "
+                f"delete the table and import the slip again, or type "
+                f"broker_account")
+            out.append(s)
+    return out
 
 
 # ------------------------------------------------------------ slips.toml
@@ -462,7 +536,12 @@ def _slip_from_table(t: Any, where: str, accounts: Dict[str, Any]) -> Slip:
         raise SlipsError(f"{where}: give broker_account or broker_key, "
                          f"not both")
     src = str(t.get("source") or "").strip()
-    return Slip(where=where, type=typ,
+    status = str(t.get("status") or "").strip().lower()
+    if status and status not in SLIP_STATUSES:
+        raise SlipsError(f"{where}: status = {t.get('status')!r}; give "
+                         f"\"original\" or \"amended\" (a cancelled slip: "
+                         f"delete its table)")
+    return Slip(where=where, type=typ, status=status, broker_key=key,
                 issuer=str(t.get("issuer") or "").strip(), account=acct,
                 currency=cur,
                 broker_hashes=(broker_hashes(number) if number
@@ -475,18 +554,78 @@ def _slip_from_table(t: Any, where: str, accounts: Dict[str, Any]) -> Slip:
                 empty=not boxes and not lines)
 
 
+_TABLE_RE = re.compile(r"^\s*\[")
+_SLIP_HEAD_RE = re.compile(r"^\s*\[\[\s*slip\s*\]\]\s*(?:#.*)?$")
+_SLIP_SUB_RE = re.compile(r"^\s*\[{1,2}\s*slip\s*\.")
+
+
+def slip_table_spans(text: str) -> List[Tuple[int, int]]:
+    """[(first line, end line)) of each [[slip]] table of a slips.toml,
+    in order — its [slip.boxes] / [[slip.line]] parts included, the
+    comments and blank lines after it not."""
+    lines = text.splitlines()
+    spans: List[Tuple[int, int]] = []
+    cur: Optional[int] = None
+
+    def close(end: int) -> None:
+        e = end
+        while e > cur + 1 and (not lines[e - 1].strip()
+                               or lines[e - 1].lstrip().startswith("#")):
+            e -= 1
+        spans.append((cur, e))
+    for i, ln in enumerate(lines):
+        if _SLIP_HEAD_RE.match(ln):
+            if cur is not None:
+                close(i)
+            cur = i
+        elif cur is not None and _TABLE_RE.match(ln) \
+                and not _SLIP_SUB_RE.match(ln):
+            close(i)
+            cur = None
+    if cur is not None:
+        close(len(lines))
+    return spans
+
+
+def comment_out_tables(text: str, which: Dict[int, str]) -> str:
+    """slips.toml with the [[slip]] tables numbered in `which` (1-based)
+    turned into comments under the line `which` gives. Raises SlipsError
+    when the tables cannot be told apart in the text."""
+    from taxjson.lib.tomlcompat import tomllib
+    spans = slip_table_spans(text)
+    try:
+        n = len(tomllib.loads(text).get("slip") or [])
+    except Exception:                                   # noqa: BLE001
+        n = -1
+    if n != len(spans):
+        raise SlipsError(f"inputs/slips/{SLIPS_FILE}: its [[slip]] tables "
+                         f"cannot be told apart in the text — delete the "
+                         f"replaced table by hand")
+    lines = text.splitlines()
+    for idx in sorted(which, reverse=True):
+        a, b = spans[idx - 1]
+        lines[a:b] = (["# " + which[idx]]
+                      + ["# " + ln if ln.strip() else "#"
+                         for ln in lines[a:b]])
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
 # ------------------------------------------------------------ IB reports
-def ib_slips(rep: Any, account: str, year: Optional[int]) -> List[Slip]:
+def ib_slips(rep: Any, account: str, year: Optional[int],
+             fx_cache: Optional[dict] = None) -> List[Slip]:
     """IB's dividends report as slips: the account's T5 (every payment,
-    for the per-payment match) and one T3 per fund, in the report's base
-    currency (IB's own rate, GrossInBase)."""
+    for the per-payment match) and one T3 per fund, in CAD — the
+    report's base amounts (IB's own rate, GrossInBase) when the base is
+    CAD; for a USD-base account each payment at the Bank of Canada rate
+    of its pay date (CA-FX-01; a Canadian slip is in CAD). Raises
+    SlipsError when a rate is not in the FX cache."""
     where = _shown(rep.path)
+    to_cad = _report_to_cad(rep, where, fx_cache)
+    covers = tuple(c for c in CATEGORIES if c != "interest")
     t5 = Slip(where=where, type="T5", issuer="IB", account=account,
-              currency=rep.base_currency,
-              broker_hashes=(rep.account_hash,),
+              currency="CAD", broker_hashes=(rep.account_hash,),
               broker_masked=rep.account_masked, source="ib",
-              payments=list(rep.payments),
-              covers=tuple(c for c in CATEGORIES if c != "interest"))
+              payments=list(rep.payments), covers=covers)
     t3s: Dict[str, Slip] = {}
     for p in rep.payments:
         for c in p.components:
@@ -494,22 +633,62 @@ def ib_slips(rep: Any, account: str, year: Optional[int]) -> List[Slip]:
             if cat is None:
                 continue
             if c.slip == "T3":
-                s = t3s.setdefault(p.symbol, Slip(
+                tgt = t3s.setdefault(p.symbol, Slip(
                     where=where, type="T3", issuer="IB", account=account,
-                    currency=rep.base_currency,
-                    broker_hashes=(rep.account_hash,),
+                    currency="CAD", broker_hashes=(rep.account_hash,),
                     broker_masked=rep.account_masked, source="ib",
-                    security=_root(p.symbol),
-                    covers=tuple(c for c in CATEGORIES
-                                 if c != "interest")))
-                tgt, tax_cat = s, "foreign_tax"
+                    security=_root(p.symbol), covers=covers))
             else:
-                tgt, tax_cat = t5, "foreign_tax"
-            tgt.amounts[cat] = tgt.amounts.get(cat, 0.0) + c.gross_base
-            if c.withheld_base:
-                tgt.amounts[tax_cat] = (tgt.amounts.get(tax_cat, 0.0)
-                                        + c.withheld_base)
+                tgt = t5
+            g, w = to_cad(p, c)
+            tgt.amounts[cat] = tgt.amounts.get(cat, 0.0) + g
+            if w:
+                tgt.amounts["foreign_tax"] = (
+                    tgt.amounts.get("foreign_tax", 0.0) + w)
     return [t5] + [t3s[k] for k in sorted(t3s)]
+
+
+def _report_to_cad(rep: Any, where: str, fx_cache: Optional[dict]):
+    """(gross, withheld) of a report component in CAD: a function."""
+    if rep.base_currency == "CAD":
+        return lambda p, c: (c.gross_base, c.withheld_base)
+    from taxjson.bin import to_base_curr as T
+    cache = fx_cache if fx_cache is not None else T.load_cache()
+    rates: Dict[str, Dict[str, float]] = {}
+    for cur in sorted({p.currency for p in rep.payments} - {"CAD"}):
+        dates = sorted(p.pay_date for p in rep.payments
+                       if p.currency == cur and p.pay_date)
+        if not dates:
+            continue
+        lo = (_dt.date.fromisoformat(dates[0])
+              - _dt.timedelta(days=10)).isoformat()
+        rows = T.resolve_rows(cache, cur, "CAD", lo, dates[-1],
+                              _dt.date.today().isoformat())
+        rates[cur] = {d: float(v) for d, v, _src in rows}
+
+    def conv(p, c):
+        if p.currency == "CAD":
+            return c.gross, c.withheld
+        r = rates.get(p.currency, {}).get(p.pay_date)
+        if r is None:
+            raise SlipsError(
+                f"inputs/slips/{where}: IB's report is in "
+                f"{rep.base_currency} (the account's base currency) and "
+                f"the FX cache has no Bank of Canada {p.currency} rate "
+                f"for {p.symbol}'s payment of {p.pay_date or '?'} — run "
+                f"`taxjson run` (it fills the cache), then slip-audit")
+        return c.gross * r, c.withheld * r
+    return conv
+
+
+def report_identity(rep: Any) -> Tuple:
+    """What two copies of one dividends report share: the account, the
+    years and every payment."""
+    return (rep.account_hash, tuple(rep.years), rep.base_currency,
+            tuple((p.symbol, p.pay_date, p.ex_date, p.pil, p.currency,
+                   tuple((c.label, round(c.gross, 4),
+                          round(c.withheld, 4)) for c in p.components))
+                  for p in rep.payments))
 
 
 def find_ib_reports(root: Path) -> List[Path]:
@@ -813,7 +992,6 @@ def audit(root: Path, cfg: Dict[str, Any], *,
     report and the checklist read it). Raises SlipsError for an input
     that cannot be used."""
     from taxjson.lib.cg_dividends import CgDividendMapError
-    from taxjson.lib.ib_dividends import IBReportError, read_report
     settings = cfg.get("settings") or {}
     year = settings.get("year")
     if year is None:
@@ -843,57 +1021,55 @@ def audit(root: Path, cfg: Dict[str, Any], *,
     except CgDividendMapError as e:
         raise SlipsError(str(e)) from None
     # IB reports: matched to the account whose books carry the IB account.
-    hashes_of: Dict[str, set] = {}
-    for r in books:
-        for h in r.hashes:
-            hashes_of.setdefault(h, set()).add(r.account)
-    named = {m["file"]: m["account"] for m in reports_map}
-    for p in find_ib_reports(root):
-        try:
-            rep = read_report(p)
-        except IBReportError as e:
-            raise SlipsError(str(e)) from None
-        acct = named.get(p.name)
-        if acct is None:
-            owners = sorted(hashes_of.get(rep.account_hash, ()))
-            if len(owners) == 1:
-                acct = owners[0]
-            elif len(owners) > 1:
-                raise SlipsError(
-                    f"inputs/slips/{_shown(p)}: IB account "
-                    f"{rep.account_masked} is in the books of "
-                    f"{', '.join(owners)} — name one in slips.toml: "
-                    f"[[ib_report]] file = \"<this file's name>\" "
-                    f"account = \"<account>\"")
-            else:
+    fx_notes: List[str] = []
+    seen_reports: Dict[Tuple, Tuple[Path, Tuple]] = {}
+    report_hashes: set = set()
+    for p, rep, acct in _reports(root, books, reports_map, problems):
+        report_hashes.add(rep.account_hash)
+        # Two copies of one report (`... (1).csv`): read once; two
+        # different reports of one account and year: which is right
+        # cannot be told.
+        ident = report_identity(rep)
+        k = (rep.account_hash, tuple(rep.years))
+        if k in seen_reports:
+            first, ident0 = seen_reports[k]
+            if ident0 == ident:
                 problems.append(
-                    f"inputs/slips/{_shown(p)}: no taxable account's books "
-                    f"carry IB account {rep.account_masked} (a registered "
-                    f"account gets no T5/T3; else an IB statement for it "
-                    f"in inputs/<account>/?) — not compared; name the "
-                    f"account in slips.toml: [[ib_report]] file = "
-                    f"\"<this file's name>\" account = \"<account>\"")
+                    f"inputs/slips/{_shown(p)}: the same IB dividends report "
+                    f"as {_shown(first)} (IB account {rep.account_masked}) "
+                    f"— read once; delete one of them")
                 continue
+            raise SlipsError(
+                f"inputs/slips/{_shown(p)} and {_shown(first)}: two "
+                f"different IB dividends reports of IB account "
+                f"{rep.account_masked} for {', '.join(rep.years) or year} "
+                f"— keep the newer download only")
+        seen_reports[k] = (p, ident)
         if account and acct != account:
             continue
         yrs = rep.years
         if yrs and str(year) not in yrs:
             raise SlipsError(f"inputs/slips/{_shown(p)}: IB's report for "
                              f"{', '.join(yrs)}, not {year}")
-        new = ib_slips(rep, acct, year)
+        new = ib_slips(rep, acct, year, fx_cache)
         slips += new
-        sources.append({"kind": "ib-dividends", "file": "inputs/slips/"
-                        + _shown(p), "account": acct,
-                        "broker_account": rep.account_masked,
-                        "payments": len(rep.payments),
-                        "unknown_components": [
-                            {"component": k, "amount": round(v, 2)}
-                            for k, v in rep.unknown],
-                        "problems": list(rep.problems)})
+        src = {"kind": "ib-dividends", "file": "inputs/slips/" + _shown(p),
+               "account": acct, "broker_account": rep.account_masked,
+               "payments": len(rep.payments),
+               "unknown_components": [
+                   {"component": k, "amount": round(v, 2)}
+                   for k, v in rep.unknown],
+               "problems": list(rep.problems)}
+        if rep.base_currency != "CAD":
+            src["converted_from"] = rep.base_currency
+            fx_notes.append(_usd_base_note(rep, acct, year, fx_cache, new))
+        sources.append(src)
         for k, v in rep.unknown:
             problems.append(f"inputs/slips/{_shown(p)}: IB component "
                             f"{k!r} ({v:.2f} {rep.base_currency}) is not "
                             f"one taxjson knows — not compared")
+    slips = resolve_keys(slips, {h for r in books for h in r.hashes}
+                         | report_hashes, key_salt(root), problems)
     if account:
         slips = [s for s in slips if s.account == account]
     slips = [s for s in slips if s.account in accts or s.account == account]
@@ -943,11 +1119,78 @@ def audit(root: Path, cfg: Dict[str, Any], *,
             "tt_lines": [{"account": a, "file": f"inputs/{a}/{SUGGEST_TT}",
                           "lines": ls} for a, ls in sorted(sugg_tt.items())
                          if ls],
-            "notes": notes},
+            "notes": fx_notes + notes},
         "problems": problems,
         "issues": issues,
         "status": status,
     }
+
+
+def _reports(root: Path, books: List[BookRow],
+             reports_map: List[Dict[str, str]], problems: List[str]):
+    """(path, report, project account) of every IB dividends report in
+    inputs/slips/: the account named in [[ib_report]], else the one
+    whose books carry the IB account. Raises SlipsError."""
+    from taxjson.lib.ib_dividends import IBReportError, read_report
+    hashes_of: Dict[str, set] = {}
+    for r in books:
+        for h in r.hashes:
+            hashes_of.setdefault(h, set()).add(r.account)
+    named = {m["file"]: m["account"] for m in reports_map}
+    for p in find_ib_reports(root):
+        try:
+            rep = read_report(p)
+        except IBReportError as e:
+            raise SlipsError(str(e)) from None
+        acct = named.get(p.name)
+        if acct is None:
+            owners = sorted(hashes_of.get(rep.account_hash, ()))
+            if len(owners) == 1:
+                acct = owners[0]
+            elif len(owners) > 1:
+                raise SlipsError(
+                    f"inputs/slips/{_shown(p)}: IB account "
+                    f"{rep.account_masked} is in the books of "
+                    f"{', '.join(owners)} — name one in slips.toml: "
+                    f"[[ib_report]] file = \"<this file's name>\" "
+                    f"account = \"<account>\"")
+            else:
+                problems.append(
+                    f"inputs/slips/{_shown(p)}: no taxable account's books "
+                    f"carry IB account {rep.account_masked} (a registered "
+                    f"account gets no T5/T3; else an IB statement for it "
+                    f"in inputs/<account>/?) — not compared; name the "
+                    f"account in slips.toml: [[ib_report]] file = "
+                    f"\"<this file's name>\" account = \"<account>\"")
+                continue
+        yield p, rep, acct
+
+
+def _usd_base_note(rep: Any, acct: str, year: int, fx_cache, slips
+                   ) -> str:
+    from taxjson.lib.report_model import fmt_money
+    daily = sum(sum(v for c, v in s.amounts.items() if c in INCOME_CATS)
+                for s in slips)
+    avg = annual_average(rep.base_currency, year, fx_cache)
+    alt_cad = 0.0
+    ok = avg is not None
+    for p in rep.payments:
+        for c in p.components:
+            if _IB_CAT.get(c.category or "") not in INCOME_CATS:
+                continue
+            if p.currency == "CAD":
+                alt_cad += c.gross
+            elif p.currency == rep.base_currency and avg:
+                alt_cad += c.gross * avg["rate"]
+            else:
+                ok = False
+    alt = (f"; at the {year} average rate ({avg['rate']:.4f}) "
+           f"{fmt_money(alt_cad)} CAD") if ok else ""
+    return (f"{acct} ({rep.account_masked}): IB's dividends report is in "
+            f"{rep.base_currency}, the account's base currency — each "
+            f"payment is converted to CAD at the Bank of Canada rate of "
+            f"its pay date (a Canadian slip is in CAD): income "
+            f"{fmt_money(daily)} CAD{alt}")
 
 
 def _issue(issues: List[Dict[str, Any]], acct: str, kind: str,
@@ -964,14 +1207,20 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
     live = [s for s in a_slips if not s.empty and s.type != "T5008"]
     # A CRA slip (--import-cra) and IB's report of one broker account
     # are one slip: the CRA copy's boxes are compared; the report keeps
-    # its payments for the per-payment match.
-    cra = [s for s in live if s.origin.startswith("cra:")]
+    # its payments for the per-payment match. So is a slip typed for
+    # that broker account (broker_account / broker_key) with a box the
+    # report also covers — one typed for its interest only (box 13, which
+    # the report has none of) is compared beside it.
+    whole = [s for s in live if s.source != "ib" and s.broker_hashes and (
+        s.origin.startswith("cra:") or any(
+            abs(v) >= 0.005 and c != "interest"
+            for c, v in s.amounts.items()))]
     for i, s in enumerate(live):
         if s.source == "ib" and any(
                 c.type == s.type and set(c.broker_hashes)
                 & set(s.broker_hashes)
                 and (s.type == "T5" or c.security == s.security)
-                for c in cra):
+                for c in whole):
             live[i] = replace(s, amounts={}, covers=(), detail_only=True)
     # A slip keyed by the books' broker-account key shows its input files.
     files: Dict[str, set] = {}
@@ -982,7 +1231,7 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
         if s.broker_hashes and not s.broker_masked:
             live[i] = replace(s, broker_masked=", ".join(sorted(
                 files.get(s.broker_hashes[0], ()) or {
-                    "#" + s.broker_hashes[0][:6]})))
+                    "#" + (s.broker_key or "?")[:6]})))
     for s in a_slips:
         if s.empty:
             _issue(issues, acct, "empty-slip",
@@ -1827,6 +2076,15 @@ def template(root: Path, cfg: Dict[str, Any]) -> str:
     accts = slip_accounts(cfg)
     books, _p = load_books(root, cfg, year, accts)
     ystr = str(year)
+    # The broker accounts IB's dividends reports cover: read as their
+    # T5 and T3s, so no table is printed for them.
+    reports_map: List[Dict[str, str]] = []
+    sf = slips_dir(root) / SLIPS_FILE
+    if sf.is_file():
+        reports_map = load_slips_file(sf, cfg, year)[1]
+    covered: Dict[str, Dict[str, str]] = {}
+    for _path, rep, acct in _reports(root, books, reports_map, []):
+        covered.setdefault(acct, {})[rep.account_hash] = rep.account_masked
     out = [f"# T5 / T3 slips for {year}, typed from the PDFs "
            f"(`taxjson slip-audit` compares them with the books).",
            "# One [[slip]] per slip. Type each box as the slip prints it; "
@@ -1847,6 +2105,15 @@ def template(root: Path, cfg: Dict[str, Any]) -> str:
     for acct in accts:
         rows = [r for r in books if r.account == acct
                 and r.tax_date.startswith(ystr)]
+        cov = covered.get(acct) or {}
+        if cov:
+            out += [f"# {acct}: IB's dividends report of "
+                    f"{', '.join(sorted(cov.values()))} is read as that "
+                    f"broker account's T5 and T3 slips — no table for it.",
+                    "# (It has no interest: a T5 box 13 from IB goes in a "
+                    "table of its own with the IB account as "
+                    "broker_account.)", ""]
+            rows = [r for r in rows if not set(r.hashes) & set(cov)]
         if not rows:
             continue
         for cur in sorted({r.currency for r in rows}):
