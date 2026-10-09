@@ -19130,8 +19130,11 @@ def _slip_audit_import_cra(root: Path, cfg: Dict[str, Any],
     for part in ([s for s in slips if s.status != "amended"],
                  [s for s in slips if s.status == "amended"]):
         if part:
-            placed += CS.place(part, groups, year, rate, reports,
-                               account=acct)
+            try:
+                placed += CS.place(part, groups, year, rate, reports,
+                                   account=acct)
+            except CS.CraSlipError as e:      # the shipped issuer file
+                _die(str(e))
     order = {id(s): i for i, s in enumerate(slips)}
     placed.sort(key=lambda pl: order[id(pl.slip)])
     salt = SA.key_salt(root, create=True)

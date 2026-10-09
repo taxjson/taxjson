@@ -1131,10 +1131,24 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs slip-audit --import-cra`: "Not imported: 2025 T5 Sample Bank.pdf: no broker in the books by the issuer's name"
 - **Check:** the slip's issuer is a bank or a broker none of the project's exports come from, or the broker's name on the CRA slip is not the one taxjson knows it by (a trade name).
-- **Cause:** a CRA copy shows no account number: the importer places a T5 by its issuer's name and the payments in the books. The issuer must carry a broker's whole name (every word of it but a legal form like INC.): "TD DIRECT INVESTING", "RBC ROYAL BANK" or "RBC GLOBAL ASSET MANAGEMENT" is not RBC Direct Investing (before, a shared word such as DIRECT or RBC placed it there). A bank account's interest is outside the books.
+- **Cause:** a CRA copy shows no account number: the importer places a T5 by its issuer's name and the payments in the books. The issuer must carry a broker's whole name (every word of it but a legal form like INC.), or be a carrying dealer `src/taxjson/data/slip_issuers.toml` names for a broker the books hold: "TD DIRECT INVESTING", "RBC ROYAL BANK" or "RBC GLOBAL ASSET MANAGEMENT" is not RBC Direct Investing (before, a shared word such as DIRECT or RBC placed it there). A bank account's interest is outside the books.
 - **Fix:** import that PDF again naming the account it belongs to: `tjs slip-audit margin --import-cra "<file>" --write` (it is then compared with the account's rows no other slip's broker account holds), or leave it out and report it from the slip.
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `place`, `broker_of_issuer`
+
+### `tjs slip-audit --import-cra`: a Webull T5 "from CI INVESTMENT SERVICES INC./CI SERVICES D'INVESTISSEMENT INC" is not imported: "no broker in the books by the issuer's name"
+- **Check:** the slip line of the PDF names CI Investment Services, the project has a Webull export in an account, and `tjs --version` is older than the fix.
+- **Cause:** Webull Canada's accounts are carried by CI Investment Services, which issues their T5 slips: the issuer does not carry the name "Webull", and the importer took only an issuer carrying a broker's whole name. And Webull's export books trades only: with no Webull payments in the books, the Webull broker account was no candidate either.
+- **Fix:** upgrade. The carrying dealers ship as data, `src/taxjson/data/slip_issuers.toml` (an `[[alias]]` per broker: "CI INVESTMENT SERVICES" or its French half "CI SERVICES D'INVESTISSEMENT" is Webull's; CI Direct Investing and other CI businesses are not), and a broker account whose export has no income rows is that broker's (when none of its accounts has payments in the books): the slip goes to the account holding the Webull export. `tjs slip-audit` then shows it under the Webull export with "has no income in the books": the export has no dividends, so enter them as `.tt` DIVIDEND lines. Before upgrading, import the PDF naming its account: `tjs slip-audit margin --import-cra "<file>" --write`. A project without a Webull export does not place it (the message names Webull).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `issuer_aliases`, `alias_of_issuer`, `broker_of_issuer`, `_bare_groups`; `src/taxjson/lib/slip_audit.py` — `broker_account_files`
+
+### `tjs slip-audit --import-cra`: "its Webull broker account cannot be told: the books hold 2 and no 2025 payments in them to match"
+- **Check:** the books hold two or more broker accounts of the slip's broker and none has dividends, withholding or interest in the year (an export of trades only, such as Webull's).
+- **Cause:** a CRA copy shows no account number, and the slips of one broker are shared out among its accounts by the books' payments: with none, any choice is a guess, so the slip is listed instead.
+- **Fix:** import it again naming its account (`tjs slip-audit margin --import-cra "<file>" --write`: it goes in that account with no broker account), or type it into slips.toml with `broker_account`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `place`
 
 ### `tjs slip-audit --import-cra`: "ambiguous: ZZF.TO and ZZF.TO distributions match it equally" or "no fund in the books whose distributions match its amounts or name"
 - **Check:** `tjs divs ZZF.TO` lists the fund's distributions in each broker account; compare with the T3's boxes (21, 23, 25, 26, 49 and 42).
