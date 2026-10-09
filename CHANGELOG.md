@@ -37,6 +37,10 @@
   margin account, or a later year's export — no longer grows the opening
   and sends an earlier year's sales to manual reporting.
   `find-missing-history --write-missing-history` records the quantity.
+- In a year folder that reads shared exports, the IB parse finds the year's
+  project (not the folder above the exports): a one-contract-id ticker
+  change is judged with the project's `.tt` RENAME lines and its
+  ticker.map's dated RENAME lines, as in a single-folder project.
 
 ## v0.25.0 (2026-10-09)
 

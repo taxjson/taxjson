@@ -915,6 +915,11 @@ def load_config(root: Path) -> Dict[str, Any]:
     import os as _os
     _os.environ[ENV_TICKER_MAP] = (str(_tm.resolve()) if _tm.is_file()
                                    else "")
+    # The project itself, for the stages whose input files may sit in a
+    # folder shared by every year (`inputs_dir`): the IB parse reads the
+    # project's .tt RENAME lines and ticker.map from it, never from the
+    # folder above the inputs (lib/project_layout.project_of_input).
+    _os.environ[_PL.ENV_PROJECT_ROOT] = str(Path(root).resolve())
     return cfg
 
 

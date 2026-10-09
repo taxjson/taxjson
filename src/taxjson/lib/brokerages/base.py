@@ -254,6 +254,7 @@ _TICKER_NAMED: frozenset = frozenset()
 _TICKER_MENTIONED: frozenset = frozenset()
 # ... and its DISTINCT pairs (frozensets of two symbols).
 _TICKER_DISTINCT: frozenset = frozenset()
+_TICKER_PATH: Optional[Path] = None
 
 
 def set_ticker_map(path) -> None:
@@ -262,6 +263,8 @@ def set_ticker_map(path) -> None:
     the map already pools is not printed. None clears it. A map that
     does not parse is ignored here (`taxjson run` refuses it up front)."""
     global _TICKER_JOINS, _TICKER_NAMED, _TICKER_MENTIONED, _TICKER_DISTINCT
+    global _TICKER_PATH
+    _TICKER_PATH = None if path is None else Path(path)
     if path is None:
         _TICKER_JOINS = None
         _TICKER_NAMED = frozenset()
@@ -285,6 +288,12 @@ def set_ticker_map(path) -> None:
 def ticker_map_distinct_pairs() -> frozenset:
     """The DISTINCT pairs of the loaded ticker.map (empty without one)."""
     return _TICKER_DISTINCT
+
+
+def ticker_map_file() -> Optional[Path]:
+    """The ticker.map set_ticker_map loaded (the parser's --ticker-map,
+    which `taxjson run` passes), or None."""
+    return _TICKER_PATH
 
 
 def ticker_map_loaded() -> bool:
