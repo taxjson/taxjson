@@ -33,16 +33,17 @@ class TestValidatorAcceptsNewActions(unittest.TestCase):
         self.assertFalse(any("Unknown action" in w for w in all_warnings),
                          f"Unexpected warnings: {all_warnings}")
 
-    def test_unknown_action_still_warns(self):
-        """Regression guard: the set isn't accidentally too permissive."""
+    def test_unknown_action_is_an_error(self):
+        """Regression guard: the set isn't accidentally too permissive.
+        An error, not a warning: the engines refuse the book (#16)."""
         txs = [{
             "action": "MYSTERY_ACTION", "date": "2025-01-15",
             "symbol": "AAPL.US",
         }]
         issues, warnings = validate_transactions(txs)
-        all_warnings = [w for ws in warnings.values() for w in ws]
+        all_issues = [w for ws in issues.values() for w in ws]
         self.assertTrue(any("Unknown action" in w and "MYSTERY_ACTION" in w
-                            for w in all_warnings))
+                            for w in all_issues))
 
 
 class TestByTickerYearFilter(unittest.TestCase):

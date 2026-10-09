@@ -200,6 +200,10 @@ def backup_copy(path: Union[str, Path]) -> Path:
     return bak
 
 
+class LockLinkError(OSError):
+    """A symlink at a lock file's name that file_lock cannot replace."""
+
+
 @contextlib.contextmanager
 def file_lock(lock_path: Union[str, Path], *,
               on_wait=None) -> Iterator[None]:
@@ -209,23 +213,45 @@ def file_lock(lock_path: Union[str, Path], *,
     rotating token cannot interleave with another process's or thread's
     (unique temp files make each WRITE atomic, not the whole step). The
     lock file holds no data; it is created owner-only and never through
-    a symlink (O_NOFOLLOW). `on_wait()` is called once when another
-    holder makes this one wait. Where flock is unavailable (Windows, a
-    file system without locks) or the lock file cannot be opened, the
-    block runs unlocked, as before."""
+    a symlink (O_NOFOLLOW). A symlink at the lock's name is replaced by
+    a lock file of its own (the link removed, never its target): it used
+    to make the open fail and the block run unlocked, so a planted or
+    leftover link silently turned the lock off. When the link cannot be
+    replaced, LockLinkError is raised instead of running unlocked.
+    `on_wait()` is called once when another holder makes this one wait.
+    Where flock is unavailable (Windows, a file system without locks) or
+    the lock file cannot be opened for another reason, the block runs
+    unlocked, as before."""
     try:
         import fcntl
     except ImportError:                             # pragma: no cover
         fcntl = None
     fd = None
     if fcntl is not None:
-        try:
-            fd = os.open(str(lock_path),
-                         os.O_RDWR | os.O_CREAT
-                         | getattr(os, "O_NOFOLLOW", 0)
-                         | getattr(os, "O_CLOEXEC", 0), 0o600)
-        except OSError:
-            fd = None
+        flags = (os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_CLOEXEC", 0))
+        for attempt in (1, 2):
+            try:
+                fd = os.open(str(lock_path), flags, 0o600)
+                break
+            except OSError:
+                fd = None
+                if not os.path.islink(str(lock_path)):
+                    break               # not a link: run unlocked
+                if attempt == 2:
+                    raise LockLinkError(
+                        f"{Path(lock_path).name} is a symlink and could "
+                        f"not be replaced by a lock file — remove it "
+                        f"({lock_path}) and try again")
+                try:
+                    os.unlink(str(lock_path))
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    raise LockLinkError(
+                        f"{Path(lock_path).name} is a symlink and could "
+                        f"not be removed ({e.strerror or e}) — remove it "
+                        f"({lock_path}) and try again") from e
     if fd is not None:
         try:
             try:

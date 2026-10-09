@@ -73,7 +73,11 @@ from manual exports, which keep working side by side. Every file is
 written to a new owner-only temp file of its own and renamed into place,
 and one `taxjson fetch` runs per project at a time (a second one waits
 on `work/.fetch.lock`), so two fetches never publish each other's
-unfinished file or lose each other's merged rows.
+unfinished file or lose each other's merged rows. The waiting fetch says
+so and waits as long as the first runs (Ctrl-C stops it, nothing
+written); a symlink at a lock file's name is replaced by a real lock
+file (its target is never touched), and the fetch stops with an error if
+it cannot be — it never runs unlocked because of one.
 
 ## Credentials and network
 

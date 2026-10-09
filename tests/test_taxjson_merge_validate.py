@@ -112,23 +112,28 @@ class TestTaxjsonValidate(unittest.TestCase):
         only_context = next(iter(issues.values()))
         self.assertTrue(any('Malformed date' in msg for msg in only_context))
 
-    def test_unknown_action_warned_not_errored(self):
-        """Unknown action triggers a warning but doesn't block as an issue.
-        (Currency is required and present here, so any non-empty issue list
-        is attributable to the action itself.)"""
+    def test_unknown_action_is_an_error(self):
+        """An action the engines do not book is an error: the engines
+        refuse the book (#16), so validate must not pass it. INCOME, once
+        in validate's list, is one of them; ADJUST and DISALLOW are
+        booked and pass."""
+        for action in ('MYSTERY_ACTION', 'INCOME'):
+            issues, _warnings = self._validate([
+                {'action': action, 'date': '2025-01-15', 'symbol': 'X',
+                 'quantity': 100, 'currency': 'USD', 'net_amount': 5},
+            ])
+            msgs = [m for v in issues.values() for m in v]
+            self.assertTrue(any(f"Unknown action: '{action}'" in m
+                                for m in msgs), (action, msgs))
+        from taxjson.lib.brokerages.schema import KNOWN_ACTIONS
+        self.assertIn('ADJUST', KNOWN_ACTIONS)
         issues, warnings = self._validate([
-            {'action': 'MYSTERY_ACTION', 'date': '2025-01-15', 'symbol': 'X',
-             'quantity': 100, 'currency': 'USD'},
+            {'action': 'ADJUST', 'date': '2025-01-15', 'symbol': 'X',
+             'currency': 'USD', 'net_amount': -5},
         ])
-        # Warning should mention the unknown action.
-        only_w = next(iter(warnings.values()))
-        self.assertTrue(any('Unknown action' in msg for msg in only_w))
-        # And nothing about the action itself should land in issues —
-        # warnings are the right severity for "we don't recognize this."
-        for ctx, msgs in issues.items():
-            for msg in msgs:
-                self.assertNotIn('action', msg.lower(),
-                                 msg=f"Action complaint leaked to issues: {msg}")
+        msgs = [m for v in list(issues.values()) + list(warnings.values())
+                for m in v]
+        self.assertFalse(any('Unknown action' in m for m in msgs), msgs)
 
     def test_buysell_without_symbol_flagged(self):
         issues, _ = self._validate([

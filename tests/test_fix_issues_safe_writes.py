@@ -122,17 +122,51 @@ class TestFileLock(unittest.TestCase):
             self.assertTrue(entered.is_set())
             self.assertEqual(os.stat(lock).st_mode & 0o777, 0o600)
 
-    def test_a_symlink_at_the_lock_name_is_never_followed(self):
+    def test_a_symlink_at_the_lock_name_is_replaced_never_followed(self):
+        """A link at the lock's name (planted, or left over) is replaced
+        by a lock file of its own — its target never created or touched
+        — and the lock holds: it used to make the block run unlocked."""
+        import threading
         from taxjson.lib.safe_write import file_lock
         with tempfile.TemporaryDirectory() as td:
             outside = Path(td) / "outside"
-            lock = Path(td) / "state.lock"
-            lock.symlink_to(outside)
-            ran = []
-            with file_lock(lock):
-                ran.append(1)               # runs, unlocked
-            self.assertEqual(ran, [1])
+            target = Path(td) / "target"
+            target.write_text("keep")
+            for dest in (outside, target):
+                lock = Path(td) / f"state-{dest.name}.lock"
+                lock.symlink_to(dest)
+                waiting, entered = threading.Event(), threading.Event()
+
+                def second():
+                    with file_lock(lock, on_wait=waiting.set):
+                        entered.set()
+
+                with file_lock(lock):
+                    self.assertFalse(lock.is_symlink())
+                    t = threading.Thread(target=second)
+                    t.start()
+                    self.assertTrue(waiting.wait(30))     # locked
+                    self.assertFalse(entered.is_set())
+                t.join(30)
+                self.assertTrue(entered.is_set())
+                self.assertEqual(os.stat(lock).st_mode & 0o777, 0o600)
             self.assertFalse(os.path.lexists(str(outside)))
+            self.assertEqual(target.read_text(), "keep")
+
+    def test_a_link_that_cannot_be_replaced_is_refused(self):
+        from unittest import mock
+        from taxjson.lib import safe_write as SW
+        with tempfile.TemporaryDirectory() as td:
+            lock = Path(td) / "state.lock"
+            lock.symlink_to(Path(td) / "outside")
+            ran = []
+            with mock.patch.object(SW.os, "unlink",
+                                   side_effect=PermissionError(13, "no")):
+                with self.assertRaises(SW.LockLinkError) as cm:
+                    with SW.file_lock(lock):
+                        ran.append(1)
+            self.assertEqual(ran, [])
+            self.assertIn("state.lock is a symlink", str(cm.exception))
 
 
 # Reviewed direct writes: (file under src/taxjson, the stripped source

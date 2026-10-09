@@ -449,7 +449,7 @@ files into ticker.map and taxjson.toml.
 - `src/taxjson/lib/config_check.py` — `settings_problems`, `account_type_problems`, `account_name_problem`, `ACCOUNT_TYPES`, `ACCOUNT_KEYS`, `RETIRED_SETTINGS`: the checks every config reader applies.
 - `src/taxjson/lib/config_template.py` — `SETTINGS_SPEC`, `ACCOUNT_SPEC`, `TABLES`, `render_init`, `format_config`, `scaffold_document`, `Key`: every key taxjson reads, documented per country.
 - `src/taxjson/lib/migrate.py` — `plan`, `apply`, `Plan`, `legacy_files`, `LEGACY_FILES`, `MigrateError`: moving old files into the new places.
-- `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `file_lock`, `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup; `file_lock` serializes a read-modify-write. Generated state in `work/` goes through `write_atomic`; `tests/test_fix_issues_safe_writes.py` lists the reviewed direct writes left in the core.
+- `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `file_lock` (a link at the lock name replaced, `LockLinkError` when it cannot be), `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup; `file_lock` serializes a read-modify-write. Generated state in `work/` goes through `write_atomic`; `tests/test_fix_issues_safe_writes.py` lists the reviewed direct writes left in the core.
 - `src/taxjson/lib/tomlcompat.py` — `tomllib`: the tomllib or tomli import.
 
 ## The Canada and USA partition

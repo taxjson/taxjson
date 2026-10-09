@@ -110,7 +110,10 @@
   engines do not book is refused with a message naming the row. Such a
   book used to compute at exit 0: an undated sale sorted first and a later
   purchase became a short cover. A fee, interest or tax row without a
-  symbol is still fine (#16).
+  symbol is still fine. `taxjson-validate` now takes its action list
+  from the engines: an action they do not book is an error there too
+  (it was a warning, and `INCOME`, an action nothing writes and the
+  engines refuse, passed), and `ADJUST` rows are no longer flagged (#16).
 - `taxjson-form-export` refuses a gains file whose disposition lacks its
   gain, its units or a date, naming the row; the row used to be left out
   of the export in silence when another row was complete. The
@@ -156,7 +159,9 @@
   runs per project at a time (a second one waits), and the Questrade
   token's read, refresh and save happen under a lock beside the token
   file, so a second fetch uses the token the first one saved instead of
-  the one it killed. (#13)
+  the one it killed. A symlink at a lock's name is replaced by a lock
+  file of its own (it used to make the fetch run unlocked); one that
+  cannot be replaced stops the fetch. (#13)
 - `taxjson fetch --trim-overlap` no longer copies the original CSV
   outside the project through a dangling `<export>.bak` symlink: a link
   at a backup name is skipped for the next free `.bakN`, the backup is

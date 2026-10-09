@@ -35,11 +35,12 @@ def validate_transactions(transactions, filename="input",
     issues = defaultdict(list)
     warnings = defaultdict(list)
     
-    valid_actions = {
-        "BUYSELL", "DIVIDEND", "DIVIDEND_IN_LIEU", "FEE", "INTEREST",
-        "SPLIT", "TAX", "ASSIGN", "TRANSFER", "INCOME",
-        "OPENING_BALANCE",
-    }
+    # The engines' own list (lib/brokerages/schema): validate never
+    # passes a book they refuse (core.check_books refuses any other
+    # action), and never flags one they book (ADJUST, DISALLOW). It used
+    # to carry INCOME, an action nothing writes and the engines refuse.
+    from taxjson.lib.brokerages.schema import KNOWN_ACTIONS
+    valid_actions = KNOWN_ACTIONS
     
     import math
 
@@ -113,7 +114,9 @@ def validate_transactions(transactions, filename="input",
         if not action:
             issues[context].append("Missing 'action'")
         elif action not in valid_actions:
-            warnings[context].append(f"Unknown action: '{action}'")
+            issues[context].append(
+                f"Unknown action: '{action}' — the engines book only "
+                f"{', '.join(sorted(valid_actions))}")
 
         # 2. Date validation
         date = _s("date")

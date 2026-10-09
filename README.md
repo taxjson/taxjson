@@ -154,7 +154,8 @@ query_id = "123456"      # an Activity Flex query: format CSV, with
 ```
 
 Then `taxjson fetch` (or `taxjson fetch run` to rebuild in the same
-breath; a run ends with the broker cross-check when `taxjson.toml`
+breath — one fetch runs per project at a time: a second one waits for
+the first, Ctrl-C stops it; a run ends with the broker cross-check when `taxjson.toml`
 names the holdings files — see `taxjson sanity`. `fetch --positions`
 writes `work/<account>_live_holdings.toml` snapshots of Questrade's
 live positions, which can serve as those files). Credentials never go
