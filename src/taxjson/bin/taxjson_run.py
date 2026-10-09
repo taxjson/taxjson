@@ -23728,17 +23728,24 @@ def _build_parser(prog: str = "taxjson"
     p_fmap.set_defaults(func=cmd_format_map)
 
     p_init = sub.add_parser(
-        "init", help="Create a new project folder for a tax year",
-        description="Scaffold a new project, one project for every tax "
-                    "year: the shared taxjson.toml (country, base currency "
-                    "and the usual accounts for that country), a commented "
-                    "ticker.map, a .gitignore, an inputs/<account>/ folder "
-                    "per account for every year's broker exports, a "
-                    "holdings/ folder for the broker's live positions "
-                    "snapshots, and the tax year's folder (YYYY/) with its "
-                    "own small taxjson.toml. --single scaffolds one folder "
-                    "for one tax year instead. An existing taxjson.toml is "
-                    "kept unless --force (then it is backed up first).")
+        "init", help="Create a folder of exports for every year, with "
+                     "the tax year's project",
+        description="Scaffold one folder of exports for every year: "
+                    "inputs/<account>/ (one folder per account for every "
+                    "year's broker exports, each with a README saying what "
+                    "to download), a .gitignore, and the tax year's folder "
+                    "(YYYY/), a complete project of its own — its "
+                    "taxjson.toml (country, base currency, the usual "
+                    "accounts for that country, inputs_dir = \"../inputs\" "
+                    "and exports_dir = \"../exports\"), a commented "
+                    "ticker.map and holdings/ for the broker's positions "
+                    "snapshots. Every other command runs in the year "
+                    "folder (`taxjson -C DIR/YYYY run`); `taxjson new-year` "
+                    "adds the next year's. --single scaffolds one folder "
+                    "for one tax year instead (taxjson.toml, ticker.map "
+                    "and inputs/ in DIR itself: `taxjson -C DIR run`). An "
+                    "existing taxjson.toml is kept unless --force (then it "
+                    "is backed up first).")
     p_init.add_argument("path", nargs="?", help="Directory to initialize (default: cwd)")
     p_init.add_argument("--country", required=True,
                         choices=["canada", "ca", "usa", "us"],
@@ -23751,11 +23758,12 @@ def _build_parser(prog: str = "taxjson"
                              "(default: current year)")
     p_init.add_argument("--single", action="store_true",
                         help="One folder for one tax year (the layout "
-                             "before v0.26), instead of one project for "
-                             "every year: the shared settings, ticker.map, "
-                             "inputs/ and holdings/ here and a folder per "
-                             "year (the --year one created; `taxjson "
-                             "new-year` adds more)")
+                             "before v0.26): taxjson.toml, ticker.map and "
+                             "inputs/<account>/ in DIR itself, and every "
+                             "command runs there. Without it, DIR holds "
+                             "inputs/ shared by every year and the year's "
+                             "project is DIR/YYYY/ (the --year one; "
+                             "`taxjson new-year` adds more)")
     p_init.set_defaults(func=cmd_init)
 
     p_years = sub.add_parser(

@@ -48,6 +48,11 @@
 
 ### Changed
 
+- `taxjson init DIR` makes the folder of exports for every year:
+  `DIR/inputs/<account>/` and the year's project in `DIR/<year>/`. So
+  `tjs init DIR && tjs -C DIR run` now needs `tjs -C DIR/<year> run`, or
+  `tjs init --single DIR` for the one-folder layout of earlier releases.
+  Existing projects are unchanged.
 - A `missing_history.json` opening is sized from the rows dated up to
   December 31 of the project's year (the deepest shortage among them, as
   before); rows after it — a later year's exports — never size it, so a
