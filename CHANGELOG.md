@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.26.0 (2026-10-09)
+
 ### Added
 
 - One folder of exports for every year: `taxjson init` now makes
