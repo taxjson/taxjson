@@ -1055,7 +1055,7 @@ def prepare_books(transactions, sheltered_transactions=(),
     if incomplete_history:
         mh_pairs = load_missing_history(Path(incomplete_history))
         # Sized from the rows through the tax year's end (the request's
-        # year, else the project's: missing_history.sizing_until).
+        # year, else the project's: MissingHistoryPairs.size_until).
         from taxjson.lib.missing_history import sizing_until
         _until = sizing_until(year)
         transactions, missing_history_log = synthesize_openings(

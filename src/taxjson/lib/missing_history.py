@@ -67,6 +67,9 @@ class MissingHistoryPairs(set):
     def __init__(self, *args):
         super().__init__(*args)
         self.quantities: Dict[Tuple[str, str], float] = {}
+        # The last date whose rows size an opening ('YYYY-12-31', the
+        # project's year end: _size_until_for), None for every row.
+        self.size_until: Optional[str] = None
 
 
 # The entry key that records how many shares (units) an opening fills:
@@ -75,23 +78,53 @@ QUANTITY_KEY = "quantity"
 
 # The tax year an opening is sized for: an entry without a `quantity`
 # fills the deepest shortage of its rows dated up to Dec 31 of that year
-# (synthesize_openings). `taxjson` sets it from the project's `year` for
-# every command and stage (taxjson_run._normalize_settings); a gains
-# stage's own --year sets it too. Unset (a standalone tool outside a
-# project), every row counts.
+# (synthesize_openings). `taxjson` names the project's year and folder
+# here for every command and stage (taxjson_run.load_config:
+# sizing_env_value); load_missing_history gives a file IN that folder
+# the window (MissingHistoryPairs.size_until), so a file of another
+# folder — a standalone tool, a test — never picks up a stray year. A
+# gains stage's own --year sets it too (pipeline.prepare_books).
+# Without either, every row counts.
 ENV_SIZING_YEAR = "TAXJSON_MISSING_HISTORY_YEAR"
+
+
+def sizing_env_value(root: Any, year: Any) -> Optional[str]:
+    """ENV_SIZING_YEAR's value for project `root` of tax year `year`
+    ("YEAR<TAB>folder"), None without a year."""
+    if sizing_until(year) is None:
+        return None
+    try:
+        folder = Path(root).resolve()
+    except (OSError, RuntimeError):
+        folder = Path(root).absolute()
+    return f"{int(year)}\t{folder}"
 
 
 def sizing_until(year: Any = None) -> Optional[str]:
     """The last date ('YYYY-12-31') whose rows size a missing-history
-    opening: `year`'s, else the ENV_SIZING_YEAR year's; None (every
-    row) when neither names a year."""
-    y = year if year not in (None, '') else os.environ.get(ENV_SIZING_YEAR)
+    opening for tax year `year`; None (every row) without one."""
+    if year in (None, '') or isinstance(year, bool):
+        return None
     try:
-        y = int(str(y).strip())
+        y = int(str(year).strip())
     except (TypeError, ValueError):
         return None
     return f"{y:04d}-12-31" if 1000 <= y <= 9999 else None
+
+
+def _size_until_for(path: Path) -> Optional[str]:
+    """The window ENV_SIZING_YEAR gives a missing-history file at
+    `path`: its project's year end when the file sits in the folder the
+    variable names, else None."""
+    raw = (os.environ.get(ENV_SIZING_YEAR) or "").strip()
+    if "\t" not in raw:
+        return None
+    year, folder = raw.split("\t", 1)
+    try:
+        here = Path(path).resolve().parent
+    except (OSError, RuntimeError):
+        return None
+    return sizing_until(year) if str(here) == folder else None
 
 
 def _source_name(pairs) -> str:
@@ -2186,8 +2219,9 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
 def load_missing_history(path: Path) -> MissingHistoryPairs:
     """Load a missing-history file (missing_history.json, or the legacy
     phantoms.json). Returns a set of (symbol, account) pairs that knows
-    the file's name (MissingHistoryPairs.source_name).
-    Underscore-prefixed metadata fields are ignored. A leading BOM
+    the file's name (MissingHistoryPairs.source_name), each entry's
+    `quantity` and, for the project's own file, its year end
+    (size_until). Underscore-prefixed metadata fields are ignored. A leading BOM
     (an editor's UTF-8 save) is dropped, as for every other user-edited
     file (re-audit A2-1453)."""
     with open(path, 'r', encoding='utf-8-sig') as f:
@@ -2203,6 +2237,9 @@ def load_missing_history(path: Path) -> MissingHistoryPairs:
                          f"entries")
     out = MissingHistoryPairs()
     out.source_name = Path(path).name or MISSING_HISTORY_FILE
+    # The project's year end when this is the file of the project the
+    # run names (ENV_SIZING_YEAR): its openings are sized through it.
+    out.size_until = _size_until_for(Path(path))
     for i, entry in enumerate(data):
         if not isinstance(entry, dict):
             raise ValueError(f"{path}[{i}]: expected an object")
@@ -2390,8 +2427,8 @@ def synthesize_openings(
 ) -> Tuple[List[TaxTransaction], List[Dict[str, Any]]]:
     """For each (symbol, account) in pairs, compute the minimum running
     position over the rows dated up to `until` (the tax year's end,
-    'YYYY-12-31'; default sizing_until(): the project's year, or every
-    row outside a project) and prepend an OPENING_BALANCE transaction
+    'YYYY-12-31'; default the loaded file's project year end,
+    MissingHistoryPairs.size_until, else every row) and prepend an OPENING_BALANCE transaction
     with quantity = abs(min) — or exactly the entry's recorded
     `quantity` (pairs.quantities), raising or lowering it. Rows after
     the year end never size it: with exports shared by every year, a
@@ -2428,7 +2465,7 @@ def synthesize_openings(
     label = _source_name(pairs)
     pairs_in = pairs
     if until is None:
-        until = sizing_until()
+        until = getattr(pairs, "size_until", None)
 
     # Compute min running position per LISTED pair — same walk as
     # detect_missing_history but restricted to listed pairs (expanded to their

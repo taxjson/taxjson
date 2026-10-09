@@ -506,6 +506,29 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
         # A recorded quantity is never "sized by the year end".
         self.assertEqual(window_sized_entries([[lowered]]), [])
 
+    def test_the_window_follows_the_projects_own_file(self):
+        import os
+        from taxjson.lib.missing_history import (
+            ENV_SIZING_YEAR, load_missing_history, sizing_env_value)
+        a, b = Path(private_dir()), Path(private_dir())
+        for d in (a, b):
+            (d / "missing_history.json").write_text(
+                '[{"symbol": "QZQ.TO", "account": "margin"}]')
+        old = os.environ.get(ENV_SIZING_YEAR)
+        os.environ[ENV_SIZING_YEAR] = sizing_env_value(a, 2024)
+        try:
+            self.assertEqual(load_missing_history(
+                a / "missing_history.json").size_until, "2024-12-31")
+            # Another folder's file (a later test, a standalone tool)
+            # never picks the year up.
+            self.assertIsNone(load_missing_history(
+                b / "missing_history.json").size_until)
+        finally:
+            if old is None:
+                os.environ.pop(ENV_SIZING_YEAR, None)
+            else:
+                os.environ[ENV_SIZING_YEAR] = old
+
     def test_the_alert_is_printed(self):
         import contextlib
         import io

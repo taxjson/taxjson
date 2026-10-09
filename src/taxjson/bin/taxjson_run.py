@@ -920,6 +920,17 @@ def load_config(root: Path) -> Dict[str, Any]:
     # project's .tt RENAME lines and ticker.map from it, never from the
     # folder above the inputs (lib/project_layout.project_of_input).
     _os.environ[_PL.ENV_PROJECT_ROOT] = str(Path(root).resolve())
+    # A missing_history.json opening is sized from the rows through the
+    # project year's end (CA-ACB-11 / US-BASIS-04): every stage that
+    # loads THIS project's file reads the year from here
+    # (missing_history.load_missing_history; a file of another folder
+    # never does).
+    from taxjson.lib.missing_history import sizing_env_value, ENV_SIZING_YEAR
+    _sz = sizing_env_value(root, (cfg.get("settings") or {}).get("year"))
+    if _sz:
+        _os.environ[ENV_SIZING_YEAR] = _sz
+    else:
+        _os.environ.pop(ENV_SIZING_YEAR, None)
     return cfg
 
 
@@ -1027,15 +1038,6 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
         if not 1900 <= year <= _max_year:
             _die(f"[settings] year = {year} is not a plausible tax year "
                  f"(expected 1900..{_max_year})")
-    # A missing_history.json opening is sized from the rows through the
-    # project year's end (CA-ACB-11 / US-BASIS-04): every command and
-    # stage of this project reads the year from here (a stray outer
-    # setting never applies).
-    from taxjson.lib.missing_history import ENV_SIZING_YEAR
-    if year is not None:
-        _os.environ[ENV_SIZING_YEAR] = str(year)
-    else:
-        _os.environ.pop(ENV_SIZING_YEAR, None)
 
 
 # Top-level tables taxjson.toml may carry. Anything else is ignored —
@@ -23569,10 +23571,10 @@ def cmd_align(args: argparse.Namespace) -> None:
         from taxjson.bin.taxjson_ticker_map import map_file_problems
         import tempfile as _tf
 
-        def _problems_of(t: str) -> List[str]:
+        def _problems_of(text: str) -> List[str]:
             with _tf.TemporaryDirectory() as _d:
                 _probe = Path(_d) / "ticker.map"
-                _probe.write_text(t, encoding="utf-8")
+                _probe.write_text(text, encoding="utf-8")
                 return list(map_file_problems(_probe))
         # A line that would make the map contradict itself (with this
         # map's lines, or one brought over before it) is skipped and
@@ -23827,8 +23829,7 @@ def _build_parser(prog: str = "taxjson"
     p_fmap.set_defaults(func=cmd_format_map)
 
     p_init = sub.add_parser(
-        "init", help="Create a folder of exports for every year, with "
-                     "the tax year's project",
+        "init", help="Create the exports folder and the year's project",
         description="Scaffold one folder of exports for every year: "
                     "inputs/<account>/ (one folder per account for every "
                     "year's broker exports, each with a README saying what "
