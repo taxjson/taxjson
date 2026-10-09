@@ -1044,15 +1044,18 @@ def main(argv=None):
     for label, val in (("--start", args.start), ("--end", end)):
         if not _DATE_RE.match(val):
             parser.error(f"{label} must be YYYY-MM-DD, got {val!r}")
-    if to_curr != "CAD" and yf is None:
+    from taxjson.lib.offline import offline_enabled
+    offline = offline_enabled()
+    # Offline the rows come from the cache only, so the missing Yahoo
+    # library is no reason to stop (it used to: a USD-base project
+    # without the [fx] extra failed even with every rate cached).
+    if to_curr != "CAD" and yf is None and not offline:
         emit_line(f"{PROG} needs the [fx] extra for a {to_curr} target "
               f"(Yahoo Finance): {extra_hint('fx')}")
         return 1
     if from_curr == to_curr:
         return 0
 
-    from taxjson.lib.offline import offline_enabled
-    offline = offline_enabled()
     rows, errors, notes = build_rates(from_curr, to_curr, args.start, end,
                                       today=today, offline=offline)
     for d, val, src in rows:
