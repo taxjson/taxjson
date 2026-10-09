@@ -249,6 +249,45 @@ def this_box(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     return out
 
 
+def check_deployed(prod: Path, target: str
+                   ) -> Tuple[Optional[str], str, List[str]]:
+    """After `taxjson deploy`: does the production copy run the release
+    it was asked for? `target` is a vX.Y.Z tag or "latest" (the newest
+    release tag the copy knows). Returns (the release expected, what
+    `<prod>/venv/bin/taxjson --version` printed, problems) — problems
+    empty when the copy is checked out at that tag and its installed
+    taxjson reports the same version."""
+    if target == "latest":
+        known = release_tags((_git_out(prod, "tag", "-l", "v*") or "").split())
+        want: Optional[str] = known[0] if known else None
+    else:
+        want = target
+    exe = prod / "venv" / "bin" / "taxjson"
+    try:
+        r = subprocess.run([str(exe), "--version"], capture_output=True,
+                           text=True, timeout=120, stdin=subprocess.DEVNULL)
+        got = r.stdout.strip() if r.returncode == 0 else ""
+        why = "" if r.returncode == 0 else f"exited {r.returncode}"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        got, why = "", str(e)
+    if want is None:
+        return None, got, [f"{prod} knows no release tag, so there is no "
+                           f"version to check `{exe} --version` against."]
+    problems = []
+    at_head = (_git_out(prod, "tag", "--points-at", "HEAD") or "").split()
+    if want not in at_head:
+        problems.append(f"{prod} is not checked out at {want} (its HEAD "
+                        f"carries {', '.join(at_head) or 'no tag'}).")
+    if got != f"taxjson {want[1:]}":
+        problems.append(f"`{exe} --version` says {got or 'nothing'!r}"
+                        f"{f' ({why})' if why else ''}, not "
+                        f"'taxjson {want[1:]}': the installed package is "
+                        f"not the release's (re-run the deploy, or "
+                        f"reinstall it: {prod}/venv/bin/python -m pip "
+                        f"install -e {prod}).")
+    return want, got, problems
+
+
 # ------------------------------------------------------------- releases
 def _tag_rows(repo: Path) -> List[Tuple[str, str, str]]:
     out = _git_out(repo, "for-each-ref", "--sort=-creatordate",

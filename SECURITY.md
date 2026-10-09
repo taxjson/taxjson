@@ -193,7 +193,14 @@ dated clock times of the raw exports under each project's `inputs/`, as
 salted SHA-256 hashes, mode `0600`, no plain figures). A tree line, a pushed diff line,
 or a commit or tag message holding one of those figures is refused with
 its file and line only. Neither file is ever committed; a contributor
-without them gets the generic checks.
+without them gets the generic checks. Those include secrets: a PEM
+private key, GitHub, Anthropic, Slack and AWS key formats, and a
+high-entropy value after a key / secret / token name. CI also runs
+gitleaks (a pinned release, checked against its sha256) on every commit
+a push or pull request adds. `scripts/check-public.sh` applies the same
+scan to what GitHub serves beside the code (release notes, issues, pull
+requests and comments), read-only; `scripts/promote.sh` runs it before
+moving a channel forward.
 
 `taxjson redact` strips the account numbers, names and contact details
 it recognises from an export so it can be shared as a parser sample —
@@ -207,11 +214,19 @@ installer clones that repository over HTTPS and checks out the tag
 `channels.json` on `main` names for your channel. What protects them:
 
 - **Tags:** a repository rule lets only the repository's admins create
-  a `v*` tag, and nobody may move or delete one once it exists.
+  a `v*` tag, and nobody may move or delete one once it exists. The
+  maintainer's pre-push hook refuses any pushed tag that is not an
+  annotated `vX.Y.Z` on `main`, and every tag delete or move.
 - **Releases:** GitHub releases are immutable — a published release's
-  tag and assets cannot be changed afterwards.
+  tag and assets cannot be changed afterwards. `scripts/release.sh`
+  scans a release's notes with `scripts/check-pii.sh --message` before
+  it creates the release.
 - **`main`:** a repository rule refuses deleting the branch and force
   pushes, so published history is not rewritten.
+- **Channels:** `scripts/promote.sh` moves `stable` / `beta` only to an
+  annotated release tag on `origin/main`, from a `main` equal to
+  `origin/main`, and forward only when the tag's GitHub Actions run
+  passed.
 - **Dependencies:** Dependabot security updates are on (the core's
   only required dependencies are `tomli` before Python 3.11 and `tzdata`
   on Windows; the extras have more).

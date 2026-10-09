@@ -15166,7 +15166,8 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     """`taxjson deploy [TAG]`: put a release on this machine's production
     copy now — the newest tag, or TAG — through the installer's upgrade
     path (the development checkout's install.sh run against the
-    production copy). The remembered channel is left as it is; the
+    production copy), then checks that the copy is at that tag and its
+    `taxjson --version` agrees (exit 1 when not). The remembered channel is left as it is; the
     installer never moves a channel backwards, so the copy stays on TAG
     until its channel passes it. No fetch flag is passed: the installer
     installs taxjson-fetch unless this machine opted out (remembered in
@@ -15189,6 +15190,14 @@ def cmd_deploy(args: argparse.Namespace) -> None:
     env = dict(os.environ, TAXJSON_DIR=str(prod),
                TAXJSON_REMEMBER_CHANNEL="0")
     _run_script(["bash", str(dev / "install.sh"), "--channel", target], env)
+    # The installer said it worked; check what now runs is the release
+    # (a pip install that silently kept an older build, a copy left on
+    # another commit) — loudly, exit 1, never a quiet mismatch.
+    want, got, problems = ch.check_deployed(prod, target)
+    if problems:
+        _die(f"deploy: the production copy does not run "
+             f"{want or 'a release'}", *problems)
+    print(f"deployed {want}: {prod} runs {got}")
 
 
 def cmd_redact(args: argparse.Namespace) -> None:

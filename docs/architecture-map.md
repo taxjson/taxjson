@@ -507,12 +507,12 @@ a channel's release; `release.sh` cuts a tag after the full gate;
 
 - `install.sh` — `main`, `newest`, `named`, `vernewer`, `--channel`: the one-line installer.
 - `channels.json` — `stable`, `beta`: where each channel points.
-- `scripts/release.sh` — `## Unreleased`, `CHANGELOG.md`, `scripts/ci.sh`: cuts a release (CHANGELOG heading, version bump in both packages, full gate, tag).
-- `scripts/promote.sh` — `die`, `channels.json`: points a channel at a release.
+- `scripts/release.sh` — `## Unreleased`, `CHANGELOG.md`, `scripts/ci.sh`, `scan_notes`, `gh release create`: cuts a release (CHANGELOG heading, version bump in both packages, full gate, tag, push, the GitHub release with scanned notes).
+- `scripts/promote.sh` — `die`, `channels.json`, `ci_gate`, `public_gate`, `undo_promote`: points a channel at a release (main = origin/main, the tag on origin/main, green CI forward).
 - `scripts/channels.sh` — `taxjson channels`: the channel page from a checkout.
-- `src/taxjson/lib/channels.py` — `read_channels`, `parse_channels`, `release_tags`, `status`, `render`, `dev_checkout`: `taxjson channels`, and the checkout `promote` and `deploy` use.
+- `src/taxjson/lib/channels.py` — `read_channels`, `parse_channels`, `release_tags`, `status`, `render`, `dev_checkout`, `check_deployed`: `taxjson channels`, the checkout `promote` and `deploy` use, and deploy's version check.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_channels`, `cmd_promote`, `cmd_deploy`, `_run_script`, `_RELEASE_CMDS`: the release commands.
-- `scripts/dev-setup.sh` — `venv/bin/pip install`, `pre-push`: developer setup (venv, editable installs, the hook).
+- `scripts/dev-setup.sh` — `venv/bin/pip install`, `install_hook`, `--hook-only`: developer setup (venv, editable installs, the pre-push hook in the clone's own hooks folder).
 
 ## The CI gate and repository checks
 
@@ -522,8 +522,10 @@ line PASS. The pre-push hook scans what a push would publish.
 
 - `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`: the gate's stages.
 - `scripts/check-consistency.sh` — `CHANGELOG`, `channels.json`: versions, CHANGELOG heading and channels agree.
-- `scripts/check-pii.sh` — `main`, `report`, `amount_filter`, `sin_filter`, `--diff`: the personal-data and secret scan (tree, diff, messages).
-- `scripts/hooks/pre-push` — `refuse`, `check-pii.sh`: the pre-push hook.
+- `scripts/check-pii.sh` — `main`, `report`, `amount_filter`, `sin_filter`, `entropy_filter`, `CRED_RE`, `--diff`: the personal-data and secret scan (tree, diff, messages).
+- `scripts/check-public.sh` — `SPLIT_PY`, `gh api --paginate`, `check-pii.sh`: scans release notes, issues, pull requests and comments on GitHub (read-only).
+- `.gitleaks.toml` — `useDefault`, `allowlists`: the allowlist of CI's gitleaks job (`.github/workflows/tests.yml`, job `secrets`).
+- `scripts/hooks/pre-push` — `refuse`, `tag_refused`, `check-pii.sh`: the pre-push hook (the tag guard, then the PII scan).
 - `scripts/check_tax_rules.py` — `main`, `collect`, `ownership_problems`, `read_ids`: every tax-logic rule has a test that cites it, and the country tables are complete.
 - `tests/tax_rules/__init__.py` — `rule`, `rule_absent`: the test markers that cite rule ids.
 - `tests/tax_rules/baseline-unpinned.txt` — `CA-`: the shrink-only list of rules without a test yet.

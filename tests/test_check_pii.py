@@ -153,16 +153,19 @@ class TestDiffAndPush(_Sandbox):
         self._bare_remote()
         (self.repo / "a.txt").write_text("hello\n")
         self._commit_all()
-        self.git("tag", "-a", "v1", "-m", f"release for {_NAME.lower()}")
-        tag = self.git("rev-parse", "v1").strip()
-        r = self._pre_push(f"refs/tags/v1 {tag} refs/tags/v1 {'0' * 40}\n")
+        # A release tag (vX.Y.Z, annotated, on the main this push sends):
+        # the tag guard lets it through to the scan.
+        main = f"refs/heads/main {self.git('rev-parse', 'HEAD').strip()} refs/heads/main {'0' * 40}\n"
+        self.git("tag", "-a", "v1.0.0", "-m", f"release for {_NAME.lower()}")
+        tag = self.git("rev-parse", "v1.0.0").strip()
+        r = self._pre_push(main + f"refs/tags/v1.0.0 {tag} refs/tags/v1.0.0 {'0' * 40}\n")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("TAG message", r.stderr)
-        self.git("tag", "-d", "v1")
+        self.git("tag", "-d", "v1.0.0")
         env = dict(self.env, GIT_COMMITTER_NAME=_NAME, GIT_COMMITTER_EMAIL="q@example.com")
-        self.git("tag", "-a", "v2", "-m", "clean message", env=env)
-        tag = self.git("rev-parse", "v2").strip()
-        r = self._pre_push(f"refs/tags/v2 {tag} refs/tags/v2 {'0' * 40}\n")
+        self.git("tag", "-a", "v2.0.0", "-m", "clean message", env=env)
+        tag = self.git("rev-parse", "v2.0.0").strip()
+        r = self._pre_push(main + f"refs/tags/v2.0.0 {tag} refs/tags/v2.0.0 {'0' * 40}\n")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("IDENTITY", r.stderr)
 
@@ -624,9 +627,10 @@ class TestCommitMessageAmounts(_Sandbox):
         r = self._pre_push(f"refs/heads/main {sha} refs/heads/main {z}\n")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         # an annotated tag message is a message too
-        self.git("tag", "-a", "v1", "-m", f"release; total {self._AMT}")
-        tag = self.git("rev-parse", "v1").strip()
-        r = self._pre_push(f"refs/tags/v1 {tag} refs/tags/v1 {z}\n")
+        self.git("tag", "-a", "v1.0.0", "-m", f"release; total {self._AMT}")
+        tag = self.git("rev-parse", "v1.0.0").strip()
+        r = self._pre_push(f"refs/heads/main {sha} refs/heads/main {z}\n"
+                           f"refs/tags/v1.0.0 {tag} refs/tags/v1.0.0 {z}\n")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("TAG message", r.stderr)
 

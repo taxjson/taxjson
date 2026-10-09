@@ -1,0 +1,16 @@
+# gitleaks (the CI "secrets" job in .github/workflows/tests.yml): its
+# default rules, minus test fixtures whose values say they are made up.
+# A real secret never contains these markers. A taxjson test assembles a
+# secret-shaped fixture at run time, so no literal reaches the history;
+# scripts/check-pii.sh is the local check (a `# pii-ok` comment marks a
+# fixture line there).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "made-up fixtures"
+regexTarget = "match"
+regexes = [
+  '''(?i)fake|example|synthetic|placeholder|dummy|made-?up|not-a-real|0123456789|1234567890|abcdefghij''',
+  '''aB3dE5''',                     # the repeated synthetic token unit of the tests
+]

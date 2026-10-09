@@ -71,6 +71,17 @@
   used up is an ATTENTION line. `find-missing-history` shows the opening
   the run applies under each listed position, and
   `--write-missing-history` records `quantity` with `_sized_through`.
+- `scripts/dev-setup.sh` installs the pre-push hook into the clone's own
+  hooks folder (shared by its worktrees) even when a global
+  `core.hooksPath` is set, and says whether that global hook chains to
+  it; `--hook-only` installs just the hook.
+- CI: every job in `.github/workflows/tests.yml` has a timeout and every
+  checkout keeps no token (`persist-credentials: false`). The pull-request
+  template asks for `scripts/ci.sh` and synthetic data only, with no
+  personal data in the change, its commits or the description.
+- `taxjson deploy` checks that the production copy is at the tag and that
+  its `taxjson --version` reports that release, and fails (exit 1) naming
+  both when they disagree.
 
 ### Fixed
 
@@ -78,6 +89,34 @@
   project (not the folder above the exports): a one-contract-id ticker
   change is judged with the project's `.tt` RENAME lines and its
   ticker.map's dated RENAME lines, as in a single-folder project.
+
+### Security
+
+- `scripts/release.sh` creates the GitHub release itself, after the tag
+  push, with the CHANGELOG section (or `--notes FILE`) as its notes,
+  scanned by `scripts/check-pii.sh --message` first: releases are
+  immutable, so a hit stops the release before anything is published.
+  Without `gh` it stops with the exact command to run.
+- The pre-push hook refuses a pushed tag that is not an annotated
+  `vX.Y.Z` on `main` (the remote's, or the one the same push sends), and
+  every tag delete or move: never `git push --tags`.
+- `scripts/promote.sh` promotes only what GitHub holds: the local `main`
+  must equal `origin/main`, the tag must be an annotated tag origin has
+  on `origin/main`, and the channel's current value is read from
+  `origin/main`. Moving a channel forward needs the tag's GitHub Actions
+  `tests.yml` run to be green (`TAXJSON_PROMOTE_IGNORE_CI=1` overrides,
+  with a warning). A refused push takes the promote commit back.
+- `scripts/check-pii.sh` also refuses PEM private keys, GitHub
+  (`gh[pousr]_`, `github_pat_`), Anthropic (`sk-ant-`), Slack (`xox?-`)
+  and AWS (`AKIA`) key formats, and a high-entropy value after a key /
+  secret / token name; a `# pii-ok` comment marks a test fixture. CI runs
+  gitleaks 8.28.0 (checksum-verified) on every commit a push or pull
+  request adds, with `.gitleaks.toml` allowing made-up fixtures.
+- New `scripts/check-public.sh`: scans what GitHub serves beside the code
+  (every release's notes, issues, pull requests and their comments; read
+  only, through `gh api`) with `scripts/check-pii.sh`, naming the item of
+  each masked hit. `scripts/promote.sh` runs it before moving a channel
+  forward (skipped with a warning without `gh`).
 
 ## v0.25.0 (2026-10-09)
 

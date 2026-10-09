@@ -32,7 +32,7 @@ GIT_ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
 for _k in ("TAXJSON_DEV_DIR", "TAXJSON_PROD_DIR", "TAXJSON_CHANNEL",
            "TAXJSON_OFFLINE", "TAXJSON_PROMOTE_TRAILERS", "TAXJSON_DIR",
            "TAXJSON_BIN", "TAXJSON_DRY_RUN", "TAXJSON_REMEMBER_CHANNEL",
-           "TAXJSON_WITH_FETCH"):
+           "TAXJSON_WITH_FETCH", "TAXJSON_PROMOTE_IGNORE_CI", "TAXJSON_SLUG"):
     GIT_ENV.pop(_k, None)
 
 
@@ -52,6 +52,14 @@ class _Repos(unittest.TestCase):
         self.origin = self.d / "origin.git"
         self.git(self.d, "init", "-q", "--bare", "-b", "main",
                  str(self.origin))
+        # A gh that answers nothing: promote's GitHub checks never reach
+        # the network from a test (tests/test_fix_release_safeguards.py
+        # drives them with a recording stub).
+        nogh = self.d / "nogh"
+        nogh.mkdir()
+        (nogh / "gh").write_text("#!/bin/sh\necho 'gh: offline test stub' >&2\nexit 1\n")
+        (nogh / "gh").chmod(0o755)
+        self.path = f"{nogh}{os.pathsep}{os.environ['PATH']}"
         self.dev = self.d / "dev"
         self.git(self.d, "clone", "-q", str(self.origin), str(self.dev))
         self.git(self.dev, "symbolic-ref", "HEAD", "refs/heads/main")
@@ -135,7 +143,7 @@ class TestPromote(_Repos):
         return subprocess.run(
             ["bash", str(self.dev / "scripts" / "promote.sh"), *args],
             cwd=self.d, capture_output=True, text=True, input=stdin,
-            env=dict(GIT_ENV, **(env or {})))
+            env=dict(GIT_ENV, PATH=self.path, **(env or {})))
 
     def head(self):
         return self.git(self.dev, "rev-parse", "HEAD")
@@ -146,8 +154,11 @@ class TestPromote(_Repos):
         (self.dev / "f.txt").write_text("staged, not promoted\n")
         self.git(self.dev, "add", "f.txt")
         tags = self.git(self.dev, "tag", "-l")
-        r = self.promote("v0.4.0")
+        # GitHub's CI is not reachable here (the gate itself is tested in
+        # test_fix_release_safeguards); the override says so loudly.
+        r = self.promote("v0.4.0", env={"TAXJSON_PROMOTE_IGNORE_CI": "1"})
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("CI NOT checked", r.stderr)
         self.assertIn("stable → v0.4.0", r.stdout)
         self.assertEqual(self.origin_channels(),
                          {"stable": "v0.4.0", "beta": "v0.3.0"})
@@ -159,6 +170,7 @@ class TestPromote(_Repos):
         self.assertEqual(self.git(self.dev, "tag", "-l"), tags)  # no tag
         # beta, with trailers from the environment only.
         r = self.promote("0.4.0", "beta", env={
+            "TAXJSON_PROMOTE_IGNORE_CI": "1",
             "TAXJSON_PROMOTE_TRAILERS": "Co-Authored-By: Pat <p@example.com>"})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.origin_channels()["beta"], "v0.4.0")
@@ -390,7 +402,7 @@ class TestChannelsCommand(_Repos):
         (self.home / ".config" / "taxjson" / "channel").write_text("stable\n")
 
     def cli(self, *args, **env):
-        e = dict(GIT_ENV, PYTHONPATH=str(SRC), HOME=str(self.home),
+        e = dict(GIT_ENV, PATH=self.path, PYTHONPATH=str(SRC), HOME=str(self.home),
                  TAXJSON_DEV_DIR=str(self.dev),
                  TAXJSON_PROD_DIR=str(self.prod))
         e.update(env)
@@ -478,7 +490,7 @@ class TestChannelsCommand(_Repos):
         r = subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_run", "promote",
              "beta"], capture_output=True, text=True, input="y\n",
-            cwd=self.d, env=dict(GIT_ENV, PYTHONPATH=str(SRC),
+            cwd=self.d, env=dict(GIT_ENV, PATH=self.path, PYTHONPATH=str(SRC),
                                  HOME=str(self.home),
                                  TAXJSON_DEV_DIR=str(self.dev),
                                  TAXJSON_PROD_DIR=str(self.prod)))
@@ -486,18 +498,27 @@ class TestChannelsCommand(_Repos):
         self.assertIn("promoting what this machine runs: v0.2.0", r.stdout)
         self.assertEqual(self.origin_channels()["beta"], "v0.2.0")
 
-    def test_deploy_moves_the_production_copy_and_keeps_its_channel(self):
+    def _deploy_env(self, stub_text):
         stub = self.d / "stub"
-        stub.mkdir()
+        stub.mkdir(exist_ok=True)
         for name in ("python3", "python3.9", "python3.10", "python3.11",
                      "python3.12", "python3.13"):
-            (stub / name).write_text(_PY_STUB)
+            (stub / name).write_text(stub_text)
             (stub / name).chmod(0o755)
-        env = dict(PATH=f"{stub}:{os.environ['PATH']}",
-                   TAXJSON_BIN=str(self.d / "bin"))
+        return dict(PATH=f"{stub}:{self.path}",
+                    TAXJSON_BIN=str(self.d / "bin"))
+
+    def test_deploy_moves_the_production_copy_and_keeps_its_channel(self):
+        # The stub install's `taxjson --version` reports the release its
+        # checkout is at, as a real editable install would.
+        env = self._deploy_env(_PY_STUB.replace(
+            'echo "taxjson 0.0.0"',
+            'echo "taxjson $(git -C "$(dirname "$0")/../.." tag --points-at '
+            'HEAD --sort=-v:refname | head -1 | cut -c2-)"'))
         r = self.cli("deploy", **env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("channel latest → release v0.3.0", r.stdout)
+        self.assertIn("deployed v0.3.0:", r.stdout)
         on = self.git(self.prod, "describe", "--tags", "--exact-match")
         self.assertEqual(on, "v0.3.0")
         self.assertEqual((self.home / ".config" / "taxjson" / "channel")
@@ -510,6 +531,14 @@ class TestChannelsCommand(_Repos):
         r = self.cli("deploy", "v1", **env)
         self.assertEqual(r.returncode, 2)
         self.assertIn("is not a release", r.stderr)
+
+    def test_deploy_fails_loudly_when_the_version_disagrees(self):
+        # The installed package still reports another version.
+        r = self.cli("deploy", **self._deploy_env(_PY_STUB))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("the production copy does not run v0.3.0", r.stderr)
+        self.assertIn("--version` says 'taxjson 0.0.0'", r.stderr)
+        self.assertIn("not 'taxjson 0.3.0'", r.stderr)
 
 
 class TestReleaseGroup(unittest.TestCase):

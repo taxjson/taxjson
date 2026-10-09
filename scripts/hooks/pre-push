@@ -14,6 +14,11 @@
 # equals this repo's configured user.name <user.email>: that one is only
 # WARNED about (history already carries it, and blocking it would block
 # every push; switch to a pseudonym to stop publishing it).
+# First, the TAG GUARD: a pushed tag must be a release — named vX.Y.Z,
+# annotated, and on main (the remote's main, or the main this same push
+# sends) — and a tag is never deleted or moved. `git push --tags` once
+# published tags that were never meant to be public; scripts/release.sh
+# pushes the one tag by name (docs/releasing.md).
 # Bypass knowingly: git push --no-verify
 set -uo pipefail
 root="$(git rev-parse --show-toplevel)"
@@ -22,7 +27,48 @@ check="$root/scripts/check-pii.sh"
 z=0000000000000000000000000000000000000000
 me="$(git config user.name || true) <$(git config user.email || true)>"
 refuse() { echo "pre-push: refusing to publish $1 — $2" >&2; exit 1; }
+input="$(cat)"
+
+# ---- tag guard ----------------------------------------------------------
+pushed_main=""
 while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = refs/heads/main ] && [ -n "$local_sha" ] && [ "$local_sha" != "$z" ] \
+    && pushed_main="$local_sha"
+done <<< "$input"
+remote_main="$(git rev-parse -q --verify "refs/remotes/$remote/main^{commit}" 2>/dev/null || true)"
+tag_refused=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in refs/tags/*) ;; *) continue ;; esac
+  name="${remote_ref#refs/tags/}"
+  why=""
+  if [ "$local_sha" = "$z" ]; then
+    why="deleting a tag — a published release is never deleted (roll a channel back with scripts/promote.sh)"
+  elif [ -n "$remote_sha" ] && [ "$remote_sha" != "$z" ]; then
+    why="moving a tag the remote already has — a published release is never moved"
+  elif ! [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    why="not a release tag (vX.Y.Z)"
+  elif [ "$(git cat-file -t "$local_sha" 2>/dev/null)" != tag ]; then
+    why="a lightweight tag — a release is an annotated tag (scripts/release.sh makes one)"
+  elif ! commit="$(git rev-parse -q --verify "$local_sha^{commit}" 2>/dev/null)"; then
+    why="it does not point at a commit"
+  else
+    why="its commit is not on $remote's main (nor on a main this push sends)"
+    for m in $remote_main $pushed_main; do
+      if git merge-base --is-ancestor "$commit" "$m" 2>/dev/null; then why=""; break; fi
+    done
+  fi
+  [ -z "$why" ] || tag_refused="$tag_refused  $name: $why
+"
+done <<< "$input"
+if [ -n "$tag_refused" ]; then
+  printf 'pre-push: refusing to push these tags:\n%s' "$tag_refused" >&2
+  echo "Releases are cut by scripts/release.sh, which pushes the one tag by name; never \`git push --tags\` (docs/releasing.md)." >&2
+  exit 1
+fi
+
+# ---- the PII scan of what each ref publishes ------------------------------
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "$local_sha" ] || continue                       # an empty line
   [ "$local_sha" = "$z" ] && continue                  # branch delete
   # The ref NAME is published too (a branch named after the holder or an
   # account id): S024-24.
@@ -113,5 +159,5 @@ $(printf '%s\n' "$tagobj" | sed -nE 's/^tagger (.*) <([^>]*)> [0-9]+ [+-][0-9]{4
          "user); set a pseudonym to stop: git config user.name <pseudonym>;" \
          "git config user.email <id>+<login>@users.noreply.github.com" >&2
   fi
-done
+done <<< "$input"
 exit 0
