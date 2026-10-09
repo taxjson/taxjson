@@ -1099,14 +1099,13 @@ def _project_map_names(paths) -> frozenset:
     one, or when it does not parse — the run refuses such a map)."""
     if ticker_map_loaded():
         return ticker_map_mentioned()
-    root = _project_map_root(paths)
-    if root is None:
+    tmf = _project_map_file(paths)
+    if tmf is None:
         return frozenset()
     try:
         from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
                                                     named_symbols)
-        return named_symbols(_parse_map_file(root / 'ticker.map')[0],
-                             lookups=True)
+        return named_symbols(_parse_map_file(tmf)[0], lookups=True)
     except Exception:                   # the run reports a bad map
         return frozenset()
 
@@ -1736,30 +1735,34 @@ def _flush_ca_side_effects(path, late_warnings, cash_takeovers,
             f"(BUYSELL / SPLIT rows).")
 
 
-def _project_map_root(paths) -> Optional[Path]:
-    """The project folder whose ticker.map sits next to inputs/<account>/
-    <statement> for the first of `paths` that has one, else None."""
+def _project_map_file(paths) -> Optional[Path]:
+    """The project's ticker.map: the one the parser loaded (--ticker-map;
+    `taxjson run` passes it), else the map of the project of the first of
+    `paths` that has one (lib/project_layout.project_of_input: the
+    project the run names, whose exports may sit in a folder shared by
+    every year), else None."""
+    from taxjson.lib.brokerages.base import ticker_map_file
+    loaded = ticker_map_file()
+    if loaded is not None:
+        return loaded
+    from taxjson.lib import project_layout as _PL
     for path in paths:
-        try:
-            pp = Path(path).resolve().parents
-            root = pp[2] if pp[1].name == 'inputs' else None
-        except (IndexError, OSError):
-            root = None
-        if root is not None and (root / 'ticker.map').is_file():
-            return root
+        root = _PL.project_of_input(path)
+        if root is not None and _PL.ticker_map_path(root).is_file():
+            return _PL.ticker_map_path(root)
     return None
 
 
 def _project_root(paths) -> Optional[Path]:
     """The project folder of inputs/<account>/<statement> for the first
-    of `paths`, else None."""
+    of `paths` (the project the run names when the inputs folder is
+    shared by every year: lib/project_layout.project_of_input), else
+    None."""
+    from taxjson.lib import project_layout as _PL
     for path in paths:
-        try:
-            pp = Path(path).resolve().parents
-            if pp[1].name == 'inputs' and (pp[2] / 'taxjson.toml').is_file():
-                return pp[2]
-        except (IndexError, OSError):
-            continue
+        root = _PL.project_of_input(path)
+        if root is not None and _PL.has_config(root):
+            return root
     return None
 
 
@@ -1793,7 +1796,8 @@ def _account_tt_links(paths) -> Dict[tuple, str]:
             d = Path(path).resolve().parent
         except OSError:
             continue
-        if d.parent.name == 'inputs' and d not in dirs:
+        from taxjson.lib import project_layout as _PL
+        if _PL.is_account_folder(d) and d not in dirs:
             dirs.append(d)
     for d in dirs:
         for tt in tt_files(d):
@@ -1815,12 +1819,12 @@ def _project_distinct(paths) -> frozenset:
     from taxjson.lib.brokerages.base import ticker_map_distinct_pairs
     if ticker_map_loaded():
         return ticker_map_distinct_pairs()
-    root = _project_map_root(paths)
-    if root is None:
+    tmf = _project_map_file(paths)
+    if tmf is None:
         return frozenset()
     try:
         from taxjson.bin.taxjson_ticker_map import _parse_map_file
-        return frozenset(_parse_map_file(root / 'ticker.map')[0].distinct)
+        return frozenset(_parse_map_file(tmf)[0].distinct)
     except Exception:                   # the run reports a bad map
         return frozenset()
 
@@ -1890,15 +1894,14 @@ def _book_conid_renames(parsed) -> None:
 
 def _project_map_dated(paths) -> List[Any]:
     """The dated RENAME lines (lib/renames.DatedRename: old, new, date,
-    where) of the project ticker.map next to inputs/<account>/
-    <statement>; empty without one (or a map that does not parse: the
-    run reports it)."""
-    root = _project_map_root(paths)
-    if root is None:
+    where) of the project's ticker.map (_project_map_file); empty
+    without one (or a map that does not parse: the run reports it)."""
+    tmf = _project_map_file(paths)
+    if tmf is None:
         return []
     try:
         from taxjson.bin.taxjson_ticker_map import _parse_map_file
-        return list(_parse_map_file(root / 'ticker.map')[0].dated)
+        return list(_parse_map_file(tmf)[0].dated)
     except Exception:                   # the run reports a bad map
         return []
 
@@ -1938,17 +1941,16 @@ def _ib_account_prescans(paths, named=frozenset()):
 
 
 def _project_ticker_map(paths):
-    """(the rename map, the dated RENAME (old, new) pairs) of the project
-    ticker.map next to inputs/<account>/<statement>, or None (a
-    statement outside a project, no map, or a map that does not
-    parse)."""
-    root = _project_map_root(paths)
-    if root is None:
+    """(the rename map, the dated RENAME (old, new) pairs) of the
+    project's ticker.map (_project_map_file), or None (a statement
+    outside a project, no map, or a map that does not parse)."""
+    tmf = _project_map_file(paths)
+    if tmf is None:
         return None
     try:
         from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
                                                     merge_renames)
-        tm = _parse_map_file(root / 'ticker.map')[0]
+        tm = _parse_map_file(tmf)[0]
         return (merge_renames(tm, True),
                 [(dr.old, dr.new) for dr in tm.dated])
     except Exception:                   # the run reports a bad map

@@ -179,6 +179,51 @@ def shared_inputs(root) -> bool:
         return False
 
 
+# The project a command runs for, named by `taxjson run` (every
+# command's load_config) to its stages: with exports shared by every
+# year (`inputs_dir`) an input file's folders say nothing about which
+# project reads it (inputs/../ is the folder holding the year folders).
+ENV_PROJECT_ROOT = "TAXJSON_PROJECT_ROOT"
+
+
+def project_of_input(path) -> Optional[Path]:
+    """The project folder an input file (inputs/<account>/<file>)
+    belongs to: the project TAXJSON_PROJECT_ROOT names when the file is
+    in its inputs folder (its own inputs/ or the shared one); else the
+    folder holding inputs/ (a single-folder project, or a file read
+    outside a run). None when the file is in no inputs/<account>/."""
+    try:
+        p = Path(path).resolve()
+    except (OSError, RuntimeError):
+        return None
+    env = (os.environ.get(ENV_PROJECT_ROOT) or "").strip()
+    if env:
+        root = _resolved(env)
+        if has_config(root):
+            for base in (inputs_dir(root), root / INPUTS):
+                try:
+                    p.relative_to(_resolved(base))
+                    return root
+                except ValueError:
+                    continue
+    pp = p.parents
+    if len(pp) > 2 and pp[1].name == INPUTS:
+        return pp[2]
+    return None
+
+
+def is_account_folder(folder) -> bool:
+    """`folder` is an inputs/<account>/ folder: of a folder named
+    inputs, or of the shared inputs folder of the project
+    TAXJSON_PROJECT_ROOT names."""
+    d = _resolved(folder)
+    if d.parent.name == INPUTS:
+        return True
+    env = (os.environ.get(ENV_PROJECT_ROOT) or "").strip()
+    return bool(env) and has_config(_resolved(env)) \
+        and d.parent == _resolved(inputs_dir(_resolved(env)))
+
+
 def project_path(root, rel: str) -> Path:
     """A project-relative path as written in messages and plans
     ("inputs/<account>/x.tt", "ticker.map"): one under inputs/ in the
