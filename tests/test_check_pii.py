@@ -1124,5 +1124,16 @@ class TestReleaseAndCiGates(unittest.TestCase):
             self.assertIn(part, run)
         self.assertNotIn("${{", run)          # event data only via env
 
+    def test_workflow_actions_pinned_by_sha(self):
+        # Security review LOW (j): a moved tag cannot change what runs.
+        import re
+        wf = (REPO_ROOT / ".github" / "workflows" / "tests.yml").read_text()
+        uses = re.findall(r"uses:\s*(\S+)(.*)", wf)
+        self.assertTrue(uses)
+        for ref, rest in uses:
+            self.assertRegex(ref, r"@[0-9a-f]{40}$", ref)
+            self.assertRegex(rest, r"#\s*v\d+\.\d+\.\d+", ref)
+        self.assertRegex(wf, r"pip install ruff==\d+\.\d+\.\d+")
+
 if __name__ == "__main__":
     unittest.main()

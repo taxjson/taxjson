@@ -197,6 +197,9 @@
 - CI scans every commit a pull request adds — its patch, message and
   author / committer identities — with the generic PII patterns, as the
   pre-push hook scans a push, using the base branch's scanner.
+- The CI workflow pins `actions/checkout` and `actions/setup-python` to
+  full commit SHAs (the version in a comment beside each) and ruff to an
+  exact version.
 
 ## v0.24.2 (2026-10-08)
 
