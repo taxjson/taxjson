@@ -149,6 +149,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_outside_dir_links`, `_WRITTEN_DIRS`, `load_config`; `src/taxjson/lib/safe_write.py` — `link_outside`
 
+### "Warning: the project folder, inputs/ can be read by other users of this computer (made by an older taxjson or another program; new files are owner-only)"
+- **Check:** `ls -ld . inputs reports` in the project: a mode other than `drwx------` (for example `drwxrwxr-x`) on any of them. The warning shows once per `tjs run`.
+- **Cause:** taxjson creates every folder and file owner-only (0700 / 0600), but folders made by an older release, by `mkdir`, `git clone` or a copy keep your shell's permissions, and other accounts on the machine can then list or read your statements and books.
+- **Fix:** run the command the warning names once: `chmod -R go-rwx <project>`. Nothing else changes; the warning stops.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_loose_project_dirs`, `can be read by other users`
+
 ## Reading the broker files
 
 ### "Error: cannot detect broker for inputs/qt/99900001.csv. Check the header first: …"

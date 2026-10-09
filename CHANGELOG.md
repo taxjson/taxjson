@@ -220,6 +220,10 @@
 - A tool run as `python -m taxjson.bin.<tool>` gets the owner-only
   umask (files 0600, folders 0700) the `taxjson-<tool>` console scripts
   already set.
+- `taxjson run` warns once when the project folder, `inputs/` or
+  `reports/` can be read or written by other users (folders made by an
+  older taxjson, `mkdir` or a copy keep the shell's permissions), with
+  the command that tightens it: `chmod -R go-rwx <project>`.
 
 ## v0.24.2 (2026-10-08)
 

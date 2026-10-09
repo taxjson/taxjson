@@ -6732,6 +6732,31 @@ def _warn_year_without_activity(year: Any, bases: List[Path]) -> None:
 _RUN_LOCK_FH = None
 
 
+def _loose_project_dirs(root: Path) -> List[str]:
+    """The project folder, inputs/ and reports/ when another user may
+    read or write them (group / other bits): taxjson creates them 0700,
+    an older release or a copy did not (2026-10 security review LOW f).
+    Empty on Windows."""
+    import os
+    if os.name == "nt":
+        return []
+    out = []
+    for p, shown in ((root, "the project folder"), (root / "inputs",
+                                                    "inputs/"),
+                     (root / "reports", "reports/")):
+        try:
+            if p.is_dir() and p.stat().st_mode & 0o066:
+                out.append(shown)
+        except OSError:
+            continue
+    return out
+
+
+def _shell_quote(p: Path) -> str:
+    import shlex
+    return shlex.quote(str(p))
+
+
 def _acquire_run_lock(cache: Path) -> None:
     """Hold an exclusive lock on work/.run.lock for the life of this
     process (released by the OS when it exits, however it exits). A
@@ -6784,6 +6809,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE)
+    _loose = _loose_project_dirs(root)
+    if _loose:
+        _say_once("loose-permissions", "warning",
+                  f"{', '.join(_loose)} can be read by other users of "
+                  f"this computer (made by an older taxjson or another "
+                  f"program; new files are owner-only)",
+                  f"Tighten it once: chmod -R go-rwx {_shell_quote(root)}",
+                  prog=_PROG)
     _since_warn = _grant_since_warning(settings, root, accounts)
     if _since_warn:
         # (a crypto-only project writes no options — nothing to warn about)

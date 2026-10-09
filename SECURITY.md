@@ -137,8 +137,10 @@ at startup (a tool run as `python -m taxjson.bin.<tool>` too), so everything the
 whatever your shell's umask. `taxjson fetch` (the taxjson-fetch
 plugin) also tightens an existing `inputs/<account>/` to `0700` and writes the fetched
 statements (which carry your account numbers) `0600`. Directories
-created by earlier versions keep their old mode; tighten a project
-once with `chmod -R go-rwx <project>`.
+created by earlier versions keep their old mode; `taxjson run` warns
+once per run when the project folder, `inputs/` or `reports/` is open
+to other users, naming the command that tightens the project once:
+`chmod -R go-rwx <project>`.
 
 Files are replaced through a temporary sibling (`<file>.part`) that is
 created fresh — an existing entry at that name is removed first and the

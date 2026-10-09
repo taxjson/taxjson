@@ -456,5 +456,37 @@ class TestDashMToolUmask(unittest.TestCase):
             self.assertEqual(r.stdout.strip(), "0o22", r.stderr)
 
 
+class TestLoosePermissionWarning(unittest.TestCase):
+    """LOW (f): a project folder, inputs/ or reports/ other users can
+    read is warned about once per run, with the chmod to run."""
+
+    def _cli(self, root, *args):
+        return subprocess.run([sys.executable, "-m",
+                               "taxjson.bin.taxjson_run", "-C", str(root),
+                               *args], capture_output=True, text=True,
+                              env=dict(ENV, TAXJSON_WIDTH="0"),
+                              stdin=subprocess.DEVNULL, cwd=str(REPO))
+
+    def test_warned_once_then_quiet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proj"
+            self.assertEqual(self._cli(root, "init", "--country",
+                                       "canada").returncode, 0)
+            toml = root / "taxjson.toml"
+            text = toml.read_text()
+            if "\nlocal_timezone" not in text:
+                toml.write_text(text.replace(
+                    "[settings]\n",
+                    '[settings]\nlocal_timezone = "America/Toronto"\n', 1))
+            r = self._cli(root, "run", "--no-input")
+            self.assertNotIn("go-rwx", r.stderr)
+            (root / "inputs").chmod(0o755)
+            r = self._cli(root, "run", "--no-input")
+            self.assertEqual(r.stderr.count("chmod -R go-rwx"), 1,
+                             r.stderr)
+            self.assertIn("inputs/ can be read by other users", r.stderr)
+            self.assertIn(f"chmod -R go-rwx {root}", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
