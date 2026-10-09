@@ -1311,6 +1311,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_check_filed_years`, `DRIFTED vs `; `src/taxjson/bin/taxjson_filed.py`
 
+### `tjs checklist`: "[b] inputs-committed — not checked: this repository's own git config sets filter.crypt.clean, a command git would run"
+- **Check:** `git config --show-scope --get-regexp '^(filter|diff)\.|^core\.attributesfile'` in the project lists the key with scope `local`. The same reason shows on `lock-committed`.
+- **Cause:** `git status` runs the clean / process filter (and a diff textconv) that the repository's own `.git/config` names for the files `.gitattributes` assigns it to. A project folder received from someone else could run any command that way, so the checklist runs no git command in a repository whose own config sets one; filters in your global or system config (git-lfs) are fine.
+- **Fix:** if you set that filter yourself and trust it, check `git status` by hand and mark the step: `tjs checklist --done inputs-committed`. Otherwise remove it (`git config --unset filter.crypt.clean`, and the `.gitattributes` line) and run the checklist again.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/checklist.py` — `_git_refusal`, `_GIT_COMMAND_KEYS`, `_git_status`, `d_inputs_committed`, `d_lock_committed`
+
 ## Stand-alone tools and hand-written JSON books
 
 ### `taxjson-gains book.json`: "impossible date='2025-02-30' (not a real calendar date written YYYY-MM-DD) — fix the input data", or a hand-written book whose gains change when a date is written `2025-2-01` instead of `2025-02-01`

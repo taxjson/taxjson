@@ -172,6 +172,13 @@
   `-P` (Python 3.11+) or a bootstrap that drops the current directory
   first (3.9 / 3.10). Run taxjson as `taxjson` / `tjs`, not
   `python -m taxjson...` from inside a project (SECURITY.md).
+- `taxjson checklist` no longer runs a command named by the project
+  repository's own git config: `git status` ran a clean / process filter
+  that `.git/config` and `.gitattributes` assign, so a project folder
+  from someone else could run anything. With such a key (a filter, a
+  diff textconv / command, `core.attributesFile`) in the repository's
+  config, `inputs-committed` and `lock-committed` are `[b]` with the key
+  named; filters in your global config (git-lfs) are unaffected.
 
 ## v0.24.2 (2026-10-08)
 

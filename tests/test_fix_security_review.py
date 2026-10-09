@@ -120,5 +120,77 @@ class TestChildPythonNeverImportsFromCwd(unittest.TestCase):
             if p.name not in allowed:
                 self.assertIsNone(pat.search(p.read_text()), p)
 
+def _git(root, *args):
+    return subprocess.run(["git", "-c", "user.name=T", "-c",
+                           "user.email=t@example.com", "-c",
+                           "core.hooksPath=/dev/null", "-C", str(root),
+                           *args], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL)
+
+
+class TestChecklistGitRunsNoRepoCommand(unittest.TestCase):
+    """M3: a hostile .git/config + .gitattributes filter is never run by
+    the checklist's git checks."""
+
+    def _repo(self, root: Path, key: str = "filter.evil.clean"):
+        marker = root.parent / "FILTER_RAN"
+        (root / "inputs").mkdir(parents=True)
+        (root / "inputs" / "a.csv").write_text("x\n")
+        (root / "taxjson.toml").write_text("")
+        self.assertEqual(_git(root, "init", "-q").returncode, 0)
+        _git(root, "add", "-A")
+        self.assertEqual(_git(root, "commit", "-qm", "c").returncode, 0)
+        (root / ".gitattributes").write_text("* filter=evil diff=evil\n")
+        _git(root, "config", key, f"touch {marker}; cat")
+        (root / "inputs" / "a.csv").write_text("changed\n")
+        return marker
+
+    def _ctx(self, root):
+        from datetime import date
+        from taxjson.lib import checklist as cl
+        return cl.Ctx(root=root, cfg={"settings": {}, "accounts": {}},
+                      year=2025, today=date(2026, 3, 1),
+                      run_sub=lambda *a, **k: (0, "", ""))
+
+    def test_plain_git_status_runs_the_filter(self):
+        # The control: what the old check ran.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "p"
+            marker = self._repo(root)
+            _git(root, "status", "--porcelain")
+            self.assertTrue(marker.exists())
+
+    def test_inputs_and_lock_committed_are_blocked(self):
+        from taxjson.lib import checklist as cl
+        for key in ("filter.evil.clean", "filter.evil.process",
+                    "diff.evil.textconv", "core.attributesFile"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "p"
+                marker = self._repo(root, key)
+                (root / "filed").mkdir()
+                (root / "filed" / "2025.json").write_text("{}")
+                r = cl.d_inputs_committed(self._ctx(root))
+                self.assertEqual(r.status, "blocked")
+                self.assertIn(key.lower(), r.detail)
+                r2 = cl.d_lock_committed(self._ctx(root))
+                self.assertEqual(r2.status, "blocked", r2.detail)
+                self.assertFalse(marker.exists())
+
+    def test_clean_repo_still_checked(self):
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "p"
+            (root / "inputs").mkdir(parents=True)
+            (root / "inputs" / "a.csv").write_text("x\n")
+            _git(root, "init", "-q")
+            _git(root, "add", "-A")
+            _git(root, "commit", "-qm", "c")
+            self.assertEqual(cl.d_inputs_committed(self._ctx(root)).status,
+                             "done")
+            (root / "inputs" / "a.csv").write_text("y\n")
+            self.assertEqual(cl.d_inputs_committed(self._ctx(root)).status,
+                             "todo")
+
+
 if __name__ == "__main__":
     unittest.main()
