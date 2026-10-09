@@ -818,6 +818,22 @@ Each journal:
 
 ---
 
+## `taxjson ticker-map --suggest --json`
+
+The ticker.map lines the last run suggested, as one document (new keys may be added). Under `--write` the JSON is still the only thing on stdout: the plain lines (`Not added …`, `Nothing added to ticker.map.`, `Added N line(s) …`, the questions on a terminal) go to stderr, and `--write` with no terminal and no `--all` stops (exit 2) before any output while there is anything to choose — an evidence line or a pair to verify. Code: `src/taxjson/bin/taxjson_run.py` — `cmd_ticker_map`; `src/taxjson/lib/ticker_map_suggest.py` — `record`.
+
+| Key | Meaning |
+| --- | --- |
+| `suggestions` | the lines the run's evidence names (`certainty` `"evidence"`): what `--write --all` appends; a script may append each one |
+| `verify` | the listing pairs only you can answer (`kind` `"map-gap"`, `certainty` `"verify"`): `line` is the `TOBASE` (one security), `alternative` the `DISTINCT` (two); never written without your answer — keep them out of a script that appends `suggestions` |
+| `skipped` | the lines left out, each with `why` and `by` (`"ticker.map"`: the map already answers it; `"suggestion"`: another suggestion covers it) |
+| `unused` | the rename rules no symbol of the books reaches (`kind` `"unused-rule"`, `rule`, optional `hint`): to delete by hand, never written |
+| `unused_unread`, `map_gap_unread` | the parsed sources the unused-rule and listing-pair checks could not read (their lists are then incomplete) |
+
+Each suggestion: `line`, `reason`, `source`, `kind`, `certainty`, and when they apply `alternative`, `template` (`true`: a placeholder to edit, never written) and `tt` (`true`: a `.tt` line for an account's file, never written to ticker.map).
+
+---
+
 ## `taxjson checklist --json`
 
 The checklist as one document: a stable schema for programs (new keys,

@@ -15058,8 +15058,40 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
     unused, unread = MH.unused_rules(root)
     interactive = (bool(getattr(args, "write", False)) and not args.all
                    and sys.stdin.isatty())
-    if getattr(args, "json", False):
-        _json_out({"suggestions": [s.record() for s in offer + verify],
+    as_json = bool(getattr(args, "json", False))
+    if args.write and not interactive and not args.all and (offer or verify):
+        # Nothing can be asked: a pair to verify is never written without
+        # its answer, as an evidence line is never written unchosen
+        # (exit 2 before any output, so a script reads no partial JSON).
+        _die_input("ticker-map --write: not a terminal, so nothing can be "
+                   "asked",
+                   ("Add --all to append every suggestion the run's "
+                    "evidence names (never a pair to verify), or run it "
+                    "in a terminal to choose one by one."
+                    if offer else
+                    f"{len(verify)} listing pair(s) to verify — one "
+                    f"security (TOBASE) or two (DISTINCT) — are asked only "
+                    f"on a terminal: run it there, or write the line you "
+                    f"choose into ticker.map by hand."))
+    # Under --json every plain line goes to stderr: stdout is the JSON.
+    out = sys.stderr if as_json else sys.stdout
+
+    def say(text: str) -> None:
+        print(text, file=out)
+
+    def ask(prompt: str) -> str:
+        if as_json:
+            print(prompt, end="", file=sys.stderr, flush=True)
+            return input()
+        return input(prompt)
+
+    if as_json:
+        # `suggestions`: the lines the run's evidence names, safe to
+        # append; `verify`: the pairs only you can answer (TOBASE or its
+        # `alternative`) — apart, so a script appending every suggestion
+        # never writes an unproven TOBASE.
+        _json_out({"suggestions": [s.record() for s in offer],
+                   "verify": [s.record() for s in verify],
                    "skipped": [dict(s.record(), why=w, by=(
                        "suggestion" if TS.covered_by_suggestion(w)
                        else "ticker.map")) for s, w in skipped],
@@ -15120,33 +15152,27 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                "Nothing to add.")
         d.print()
         return
-    if not interactive and not args.all:
-        _die_input("ticker-map --write: not a terminal, so nothing can be "
-                   "asked",
-                   "Add --all to append every suggestion the run's "
-                   "evidence names, or run it in a terminal to choose one "
-                   "by one.")
     chosen = []
     stopped = False
     for s in offer:
         if s.template:
             # A placeholder (<LISTING>, <words ...>) would rename rows to
             # a symbol that is not one: never written.
-            print(f"Not added (a template — edit it, then add it by hand): "
+            say(f"Not added (a template — edit it, then add it by hand): "
                   f"{s.line}")
             continue
         if s.tt:
             # A dated event is a .tt line of an account (lib/dated_events),
             # never a ticker.map line.
-            print(f"Not added (a .tt line — add it to a .tt file of the "
+            say(f"Not added (a .tt line — add it to a .tt file of the "
                   f"account): {s.line}")
             continue
         if interactive:
-            print(s.line)
+            say(s.line)
             for ln in _out_wrap(s.reason, indent="  ", hang="  "):
-                print(ln)
+                say(ln)
             try:
-                ans = input("Add this line? [y/n/q] ").strip().lower()
+                ans = ask("Add this line? [y/n/q] ").strip().lower()
             except EOFError:
                 ans = "q"
             if ans.startswith("q"):
@@ -15159,17 +15185,17 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         if not interactive:
             # --all writes only what the evidence proves: a shared root
             # is a candidate, never proof (MAP-GAP).
-            print(f"Not added (to verify — one security or two? `taxjson "
+            say(f"Not added (to verify — one security or two? `taxjson "
                   f"ticker-map --suggest --write` on a terminal asks): "
                   f"{s.line} / {s.alternative}")
             continue
         if stopped:
             break
-        print(f"{s.line}   or   {s.alternative}")
+        say(f"{s.line}   or   {s.alternative}")
         for ln in _out_wrap(s.reason, indent="  ", hang="  "):
-            print(ln)
+            say(ln)
         try:
-            ans = input("One security or two? [t]OBASE / [d]ISTINCT / "
+            ans = ask("One security or two? [t]OBASE / [d]ISTINCT / "
                         "[s]kip / [q]uit ").strip().lower()
         except EOFError:
             ans = "q"
@@ -15186,7 +15212,7 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                 s.alternative, f"two securities (your answer): {why}",
                 s.source))
     if not chosen:
-        print("Nothing added to ticker.map.")
+        say("Nothing added to ticker.map.")
         return
     tm = root / "ticker.map"
     from taxjson.lib.cli_diag import read_text_utf8
@@ -15221,9 +15247,9 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
     except OSError as e:
         _die_input(f"ticker-map --write: cannot write ticker.map: "
                    f"{e.strerror or e}")
-    print(f"Added {len(chosen)} line(s) to ticker.map"
-          + (f" (the old file is {bak.name})" if bak else "")
-          + ". Run `taxjson run` to apply them.")
+    say(f"Added {len(chosen)} line(s) to ticker.map"
+        + (f" (the old file is {bak.name})" if bak else "")
+        + ". Run `taxjson run` to apply them.")
 
 
 def _write_dated_events_state(root: Path, cfg: Dict[str, Any], cache: Path,

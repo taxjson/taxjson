@@ -104,7 +104,7 @@ class TestTips(unittest.TestCase):
         # The pair itself is `ticker-map --suggest`'s, to verify (it was
         # scan's MAP-GAP).
         self.assertNotIn("MAP-GAP", r.stdout)
-        gap, = [s for s in doc["suggestions"] if s["kind"] == "map-gap"]
+        gap, = [s for s in doc["verify"] if s["kind"] == "map-gap"]
         self.assertEqual((gap["line"], gap["alternative"]),
                          ("TOBASE AEM.US AEM.TO", "DISTINCT AEM.US AEM.TO"))
 
@@ -123,7 +123,7 @@ class TestTips(unittest.TestCase):
                 ticker_map="DISTINCT AEM.US AEM.TO\n")
             r = _run(root)
             _r, doc = _suggest_json(root)
-        self.assertEqual([s for s in doc["suggestions"]
+        self.assertEqual([s for s in doc["verify"]
                           if s["kind"] == "map-gap"], [])
         # ...and US-LISTING too: DISTINCT says AEM.TO is another
         # instrument, so "hold AEM.TO instead" would be wrong advice
@@ -191,7 +191,7 @@ class TestTips(unittest.TestCase):
             r = _run(root)
             _r, doc = _suggest_json(root)
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertEqual([s for s in doc["suggestions"]
+        self.assertEqual([s for s in doc["verify"]
                           if s["kind"] == "map-gap"], [])
 
     def test_non_dividend_payer_not_flagged(self):

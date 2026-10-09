@@ -321,7 +321,10 @@ class TestMapGapIsASuggestionToVerify(unittest.TestCase):
             tips = _cmd(root, "tips")
         self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads(r.stdout)
-        gap, = [s for s in doc["suggestions"] if s["kind"] == "map-gap"]
+        gap, = [s for s in doc["verify"] if s["kind"] == "map-gap"]
+        # `suggestions` holds only the evidence lines: a script appending
+        # every one never writes an unproven TOBASE.
+        self.assertEqual(doc["suggestions"], [])
         self.assertEqual(gap["certainty"], "verify")
         self.assertEqual(gap["line"], "TOBASE QZX.US QZX.TO")
         self.assertEqual(gap["alternative"], "DISTINCT QZX.US QZX.TO")
@@ -347,7 +350,7 @@ class TestMapGapIsASuggestionToVerify(unittest.TestCase):
                 "TOBASE QZX.US QZX.TO\n")
             r = _cmd(root, "ticker-map", "--suggest", "--json")
         doc = json.loads(r.stdout)
-        self.assertEqual([s for s in doc["suggestions"]
+        self.assertEqual([s for s in doc["verify"]
                           if s["kind"] == "map-gap"], [])
 
     def test_write_all_never_adds_a_pair_to_verify(self):
@@ -357,6 +360,31 @@ class TestMapGapIsASuggestionToVerify(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertFalse((root / "ticker.map").exists(), r.stdout)
         self.assertIn("never a pair to verify", " ".join(r.stdout.split()))
+
+    def test_write_without_a_terminal_stops(self):
+        """--write with no terminal and no --all: a pair to verify
+        cannot be asked — exit 2, nothing printed on stdout, nothing
+        written (as for an evidence line)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, names=_SAME)
+            for extra in ((), ("--json",)):
+                r = _cmd(root, "ticker-map", "--suggest", "--write", *extra)
+                self.assertEqual(r.returncode, 2, (extra, r.stdout))
+                self.assertEqual(r.stdout, "", extra)
+                self.assertIn("asked only on a terminal",
+                              " ".join(r.stderr.split()))
+            self.assertFalse((root / "ticker.map").exists())
+
+    def test_write_all_json_keeps_stdout_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, names=_SAME)
+            r = _cmd(root, "ticker-map", "--suggest", "--write", "--all",
+                     "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(r.stdout)
+        self.assertEqual(len(doc["verify"]), 1)
+        self.assertIn("Not added (to verify", r.stderr)
+        self.assertIn("Nothing added to ticker.map.", r.stderr)
 
     def _ask(self, root, answer):
         import builtins

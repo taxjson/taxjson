@@ -40,9 +40,14 @@
   names agree, differ in form, or were not compared): `--write` asks on
   a terminal — `TOBASE` (one security), `DISTINCT` (two) or skip — and
   `--write --all` never adds one, since a shared root is a candidate,
-  not proof (`--all` adds only the lines the run's evidence names). In
-  `--json` such a suggestion has `kind` "map-gap", `certainty` "verify"
-  and its `alternative` (the `DISTINCT` line). The checklist's
+  not proof (`--all` adds only the lines the run's evidence names), and
+  `--write` with no terminal and no `--all` stops (exit 2) while one is
+  open, as it does for an evidence line. In `--json` the pairs are under
+  their own key `verify` — `suggestions` keeps only the evidence lines,
+  so a script appending every suggestion never writes an unproven
+  `TOBASE` — each with `kind` "map-gap", `certainty` "verify" and its
+  `alternative` (the `DISTINCT` line); under `--write --json` the plain
+  lines go to stderr, so stdout stays JSON (docs/settings.md). The checklist's
   ticker-map step needs attention while a pair is open; `tips` no longer
   lists it.
 - The checklist's export-coverage line counts a short export's open

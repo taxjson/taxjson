@@ -115,7 +115,8 @@ class TestConditionalHint(unittest.TestCase):
             self.assertNotIn("QZLR", r.stdout)
             js = json.loads(cli(root, "ticker-map", "--suggest",
                                 "--json").stdout)
-            self.assertEqual(js, {"suggestions": [], "skipped": [],
+            self.assertEqual(js, {"suggestions": [], "verify": [],
+                                  "skipped": [],
                               "unused": [], "unused_unread": [],
                               "map_gap_unread": []})
 
