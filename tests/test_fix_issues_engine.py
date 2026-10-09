@@ -68,6 +68,69 @@ class TestSuccessivePartialCancellations(unittest.TestCase):
         self.assertIs(pairs[0][0], order)
 
 
+class TestExecutionThenWholeOrder(unittest.TestCase):
+    """A Ca of one execution, then a Ca of the whole order (order 440:
+    cancel 40, then cancel 440): the order is removed in full — the
+    second matches neither the residual (400) nor a part of it, and used
+    to stay booked as a phantom -440 sale."""
+
+    def test_unit(self):
+        order = _row(440, 10, 4400)
+        ca40 = _row(-40, 10, 400, ca=True)
+        ca440 = _row(-440, 10, 4400, ca=True)
+        partials, overlaps = [], []
+        kept, pairs, unmatched = pair_cancellations(
+            [order, ca40, ca440], partials=partials, overlaps=overlaps)
+        self.assertEqual((kept, unmatched), ([], []))
+        self.assertEqual(len(partials), 1)
+        self.assertEqual(len(pairs), 1)
+        self.assertIs(pairs[0][0], order)
+        self.assertIs(pairs[0][1], ca440)
+        self.assertEqual(len(overlaps), 1)
+        self.assertIs(overlaps[0][0], order)
+        self.assertEqual(overlaps[0][2]["quantity"], 400)
+
+    def test_two_reduced_orders_stay_unmatched(self):
+        # Two reduced originals of the size: no guess, still flagged.
+        def at(t, hhmm):
+            return dict(t, time=hhmm)
+        rows = [at(_row(440, 10, 4400), "10:00:00"),
+                at(_row(440, 10, 4400), "11:00:00"),
+                at(_row(-40, 10, 400, ca=True), "10:00:00"),
+                at(_row(-40, 10, 400, ca=True), "11:00:00"),
+                at(_row(-440, 10, 4400, ca=True), "12:00:00")]
+        _kept, _pairs, unmatched = pair_cancellations(rows)
+        self.assertEqual(len(unmatched), 1)
+
+    def test_merge2_both_countries(self):
+        earlier = [_row(100, 5, 500, date="2025-01-02"),
+                   _row(440, 10, 4400)]
+        later = [_row(-40, 10, 400, ca=True), _row(-440, 10, 4400, ca=True)]
+        for country in ("canada", "usa"):
+            with self.subTest(country=country):
+                r = _merge2({"earlier.json": earlier,
+                             "later.json": later}, country)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn("none of this account's inputs", r.stderr)
+                self.assertIn("the whole SYNTH.US order of 440", r.stderr)
+                rows = json.loads(r.stdout)["transactions"]
+                self.assertEqual(
+                    [(t["date"], t["quantity"], t["net_amount"])
+                     for t in rows], [("2025-01-02", 100.0, 500.0)])
+        book = [TaxTransaction(**{k: v for k, v in t.items()
+                                  if k in ("action", "date", "date_settle",
+                                           "time", "symbol", "currency",
+                                           "account", "quantity", "price",
+                                           "net_amount")})
+                for t in rows]
+        res = gains_both(book + [tx("BUYSELL", "2025-03-03", "SYNTH.US",
+                                    -100, 700, account="demo")], year=2025)
+        for c in ("canada", "usa"):
+            # 100 sold for 700 against a basis of 500: no phantom -440.
+            self.assertAlmostEqual(res[c]["summary"]["total_gain"], 200.0,
+                                   places=6, msg=c)
+
+
 def _merge2(files, country):
     with tempfile.TemporaryDirectory() as td:
         paths = []
@@ -145,6 +208,19 @@ class TestIbParser(unittest.TestCase):
                if t['symbol'] == 'QZK.US']
         self.assertEqual(got, [('2025-01-02', 10.0)], err)
         self.assertIn("the rest (6) of the QZK.US trade", err)
+
+    def test_one_statement_execution_then_whole_order(self):
+        w = '2025-02-03, 10:00:00'
+        rows, err = self._booked({'ib_2025.csv': self._stmt(
+            'January 1, 2025', 'December 31, 2025', self.TRADES_H,
+            self._trade('QZK', '2025-01-02, 10:00:00', 10, 5, -50),
+            self._trade('QZK', w, 440, 10, -4400),
+            self._trade('QZK', w, -40, 10, 400, code='Ca'),
+            self._trade('QZK', w, -440, 10, 4400, code='Ca'))})
+        got = [(t['date'], t['quantity']) for t in rows
+               if t['symbol'] == 'QZK.US']
+        self.assertEqual(got, [('2025-01-02', 10.0)], err)
+        self.assertIn("the whole QZK.US order of 440", err)
 
     def test_two_statements_then_merge2(self):
         from taxjson.bin.taxjson_merge2 import cancel_trade_pairs

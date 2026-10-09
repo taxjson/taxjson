@@ -112,7 +112,8 @@ def _reduced(orig: Any, ca: Any) -> Any:
     return type(orig)(**d)
 
 
-def pair_cancellations(txs: List[Any], partials: Optional[list] = None
+def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
+                       overlaps: Optional[list] = None
                        ) -> Tuple[List[Any], List[Tuple[Any, Any]],
                                   List[Any]]:
     """Drop every cancellation row together with the original it reverses.
@@ -133,7 +134,16 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None
     the same time preferred) reduces that original pro rata instead:
     the reduced row takes its place in `kept`, the cancellation is
     dropped, and (original, cancellation, reduced) is appended to
-    `partials` when a list is given."""
+    `partials` when a list is given.
+
+    A cancellation of the WHOLE order after one of its executions was
+    cancelled (IB lists both: Ca -40, then Ca -440 of a 440-share order)
+    matches neither the residual (400) nor, as a part, anything: when
+    exactly one already-reduced original matches it at its ORIGINAL
+    size, the order is removed in full — the pair is (original,
+    cancellation), and (original, cancellation, reduced) is appended to
+    `overlaps` when a list is given — instead of the excess (440 against
+    400) staying booked as a phantom reversing trade."""
     used = set()
     pairs = []
     unmatched = []
@@ -162,6 +172,15 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None
                 used.add(ci)
                 if partials is not None:
                     partials.append((before, ca, replaced[oi]))
+                continue
+            whole = [i for i in replaced
+                     if i not in used and cancels(txs[i], ca)]
+            if len(whole) == 1:
+                oi = whole[0]
+                used.update((oi, ci))
+                pairs.append((txs[oi], ca))
+                if overlaps is not None:
+                    overlaps.append((txs[oi], ca, replaced[oi]))
                 continue
             unmatched.append(ca)
             continue

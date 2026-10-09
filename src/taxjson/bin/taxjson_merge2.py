@@ -262,13 +262,24 @@ def cancel_trade_pairs(txs):
     reverses; warn about one whose original is in none of the inputs (it
     stays booked as a reversing trade)."""
     partials: list = []
-    kept, pairs, unmatched = pair_cancellations(txs, partials=partials)
+    overlaps: list = []
+    kept, pairs, unmatched = pair_cancellations(txs, partials=partials,
+                                                overlaps=overlaps)
     for orig, ca, red in partials:
         emit_line(f"note: the broker cancelled (Ca) {-ca.quantity:g} of the "
               f"{orig.symbol} order of {orig.quantity:g} @ {orig.price:g} "
               f"on {orig.date} (one execution); the order is booked as "
               f"{red.quantity:g}.")
+    whole = {id(ca) for _o, ca, _r in overlaps}
+    for orig, ca, red in overlaps:
+        emit_line(f"note: the broker then cancelled (Ca) the whole "
+              f"{orig.symbol} order of {orig.quantity:g} @ {orig.price:g} "
+              f"on {orig.date}, which covers the execution cancelled "
+              f"before: the order is removed in full (not "
+              f"{red.quantity:g} left, and not cancelled twice).")
     for orig, _ca in pairs:
+        if id(_ca) in whole:
+            continue
         what = trade_cancel_what(orig.quantity, _ca.quantity)
         emit_line(f"note: dropped {what} {orig.symbol} trade of "
               f"{orig.quantity:g} @ {orig.price:g} on {orig.date} and "

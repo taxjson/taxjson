@@ -75,7 +75,10 @@
   original size nor (as a part) the reduced one, so it stayed booked as
   a phantom sale, with a wrong gain, a wrong cost on the shares and a
   false "original fill is in none of this account's inputs" warning
-  (#12).
+  (#12). An order cancelled first for one execution and then as a whole
+  (IB's `Ca` of 40, then `Ca` of 440 for a 440-share order) is removed
+  in full too, with a note; the second cancellation used to stay booked
+  as a phantom sale of the whole order in both countries.
 - After `taxjson run --account B`, every taxable account blended with B
   in the cross-account pass is reported stale (`sum`, `form-export`,
   the checklist warn; `close-year` stops), not only B. The pass now

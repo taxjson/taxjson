@@ -572,6 +572,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/trade_cancel.py` — `pair_cancellations`, `trade_cancel_what`; `src/taxjson/bin/taxjson_merge2.py` — `cancel_trade_pairs`
 
+### "Warning: QZK.US: the broker cancelled (Ca) a trade of 440 @ 10 on 2025-02-03, but the original fill is in none of this account's inputs" after "Info: the broker cancelled (Ca) 40 of the QZK.US order of 440 @ 10 … The order is booked as 400"
+- **Check:** IB lists two `Ca` rows for one order: one cancelling one execution (40), then one cancelling the whole order (440, the order's full size). `tjs sum` books a sale of 440 that never happened.
+- **Cause:** the first cancellation reduced the order to 400; the second, the whole order's size, then matched neither the 400 left (exactly) nor a part of it, so it stayed booked as a reversing trade: a phantom sale of 440 in both countries' gains.
+- **Fix:** upgrade and `tjs run`. When nothing matches the order as it stands but exactly one order an earlier cancellation reduced matches the cancellation at its original size, the order is removed in full, with a note ("the broker then cancelled (Ca) the whole QZK.US order of 440 … the order is removed in full"). Two such orders of the same size are not told apart by a guess: the warning stays.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/trade_cancel.py` — `pair_cancellations`, `overlaps`; `src/taxjson/bin/taxjson_merge2.py` — `cancel_trade_pairs`; `src/taxjson/lib/brokerages/ib_extractor.py` — `the whole`
+
 ### IB: "Warning: U1234567.csv: the statement has no Cash Report" or "Error: U1***.csv: parsed rows do not reconcile with IB's own Cash Report"
 - **Check:** the file has no `Cash Report,Header,…` lines (a Flex query or a customised statement). For the error, the next line names the currency and the line, e.g. `USD Dividends: parsed 2.50 vs Cash Report 3.50 (diff -1.00)`.
 - **Cause:** taxjson checks the money it parsed against IB's own Cash Report totals, per currency: dividends, payments in lieu, withholding, interest, other fees, commissions and trades. Without the section the check is off, and the run says so. A mismatch means a row was dropped, doubled or mis-signed (often an edited statement), and the parse stops.

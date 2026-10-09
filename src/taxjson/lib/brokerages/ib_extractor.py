@@ -5530,9 +5530,10 @@ class IbBrokerage(BaseBrokerage):
         _held = {id(c) for c in self.held_trade_cas}
         if trade_cancels and len(_held) < len(trade_cancels):
             _partials: list = []
+            _overlaps: list = []
             _kept, _pairs, _unpaired = pair_cancellations(
                 [t for t in transactions if id(t) not in _held],
-                partials=_partials)
+                partials=_partials, overlaps=_overlaps)
             _kept += [t for t in transactions if id(t) in _held]
             self.trade_pairs = [(dict(_o), dict(_c)) for _o, _c in _pairs]
             # A Ca of one execution of a multi-fill order (A2-0298).
@@ -5545,7 +5546,18 @@ class IbBrokerage(BaseBrokerage):
             _gone = {id(t) for pr in _pairs for t in pr}
             transactions[:] = _kept
             expiry_txs[:] = [t for t in expiry_txs if id(t) not in _gone]
+            # A Ca of the whole order after one of its executions'.
+            _whole = {id(_c) for _o, _c, _r in _overlaps}
+            for _o, _c, _r in _overlaps:
+                emit_line(f"note: {shown_name(path)}: IB then cancelled "
+                      f"(Ca) the whole {_o['symbol']} order of "
+                      f"{_o['quantity']:g} @ {_o['price']:g} on "
+                      f"{_o['date']}, which covers the execution cancelled "
+                      f"before — the order is removed in full (not "
+                      f"{_r['quantity']:g} left, and not cancelled twice).")
             for _o, _c in _pairs:
+                if id(_c) in _whole:
+                    continue
                 emit_line(f"note: {shown_name(path)}: IB cancelled (Ca) "
                       f"{trade_cancel_what(_o['quantity'], _c['quantity'])} "
                       f"{_o['symbol']} trade of {_o['quantity']:g} @ "
