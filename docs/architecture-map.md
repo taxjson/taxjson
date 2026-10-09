@@ -496,7 +496,7 @@ a channel's release; `release.sh` cuts a tag after the full gate;
 
 - `install.sh` — `main`, `newest`, `named`, `vernewer`, `--channel`: the one-line installer.
 - `channels.json` — `stable`, `beta`: where each channel points.
-- `scripts/release.sh` — `## Unreleased`, `CHANGELOG.md`, `scripts/ci.sh`: cuts a release (CHANGELOG heading, version bump in both packages, full gate, tag).
+- `scripts/release.sh` — `## Unreleased`, `CHANGELOG.md`, `scripts/ci.sh`, `scan_notes`, `gh release create`: cuts a release (CHANGELOG heading, version bump in both packages, full gate, tag, push, the GitHub release with scanned notes).
 - `scripts/promote.sh` — `die`, `channels.json`: points a channel at a release.
 - `scripts/channels.sh` — `taxjson channels`: the channel page from a checkout.
 - `src/taxjson/lib/channels.py` — `read_channels`, `parse_channels`, `release_tags`, `status`, `render`, `dev_checkout`: `taxjson channels`, and the checkout `promote` and `deploy` use.

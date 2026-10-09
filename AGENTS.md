@@ -60,8 +60,9 @@ IRS guidance and a tax professional.
   line for PASS: a pipe (`| tail`) hides a failing exit status. One module:
   `cd tests && TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing,
   run the gate once in a fresh `git clone` (it catches untracked files).
-- **Releasing:** `scripts/release.sh vX.Y.Z` (CHANGELOG `## Unreleased` →
-  `## vX.Y.Z (date)`, full gate, tag, push), then `scripts/promote.sh vX.Y.Z
+- **Releasing:** `scripts/release.sh vX.Y.Z [--notes FILE]` (CHANGELOG
+  `## Unreleased` → `## vX.Y.Z (date)`, full gate, tag, push, then the
+  GitHub release with PII-scanned notes), then `scripts/promote.sh vX.Y.Z
   beta` and later `scripts/promote.sh vX.Y.Z` for stable. Channels: latest,
   beta, stable (new installs), dev. See `docs/releasing.md`.
 - **Conventions the tests and hooks enforce:**

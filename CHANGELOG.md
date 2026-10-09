@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Security
+
+- `scripts/release.sh` creates the GitHub release itself, after the tag
+  push, with the CHANGELOG section (or `--notes FILE`) as its notes,
+  scanned by `scripts/check-pii.sh --message` first: releases are
+  immutable, so a hit stops the release before anything is published.
+  Without `gh` it stops with the exact command to run.
+
 
 ## v0.25.0 (2026-10-09)
 

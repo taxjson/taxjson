@@ -209,7 +209,9 @@ installer clones that repository over HTTPS and checks out the tag
 - **Tags:** a repository rule lets only the repository's admins create
   a `v*` tag, and nobody may move or delete one once it exists.
 - **Releases:** GitHub releases are immutable — a published release's
-  tag and assets cannot be changed afterwards.
+  tag and assets cannot be changed afterwards. `scripts/release.sh`
+  scans a release's notes with `scripts/check-pii.sh --message` before
+  it creates the release.
 - **`main`:** a repository rule refuses deleting the branch and force
   pushes, so published history is not rewritten.
 - **Dependencies:** Dependabot security updates are on (the core's
