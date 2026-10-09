@@ -168,7 +168,7 @@ class TestCountryAwareHelp(unittest.TestCase):
             listed = _listed(out)
             for c in self.ONE_COUNTRY:
                 self.assertNotIn(c, listed)
-            self.assertIn("5 commands hidden for USA — `taxjson help "
+            self.assertIn("6 commands hidden for USA — `taxjson help "
                           "--all` lists every command.",
                           " ".join(out.split()))
             self.assertIn("form-export", listed)     # generic, stays

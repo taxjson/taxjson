@@ -443,6 +443,7 @@ COMMAND_COUNTRY: Dict[str, str] = {
     "crypto-sends:gift": CANADA,
     "amt": CANADA,
     "slip-audit": CANADA,
+    "update-tobase-map": CANADA,
 }
 
 COMMAND_WHY: Dict[str, str] = {
@@ -466,6 +467,10 @@ COMMAND_WHY: Dict[str, str] = {
            "(Form 6251) is not modelled",
     "slip-audit": "T5 / T3 slips are CRA's (tax-logic CA-SLIP-01); a US "
                   "1099-DIV / 1099-INT audit is not built",
+    "update-tobase-map": "Canada only for now: the interlisted pairs pool "
+                         "identical property across listings (ITA s.47, "
+                         "tax-logic CA-XLIST-06); a US project keeps its "
+                         "own ticker.map lines (US-XLIST-05)",
 }
 
 

@@ -45,9 +45,21 @@ cd ~/taxes/2025
 `init` writes one folder per account under `~/taxes/inputs/`: `margin`,
 `tfsa`, `rrsp` and `crypto` for Canada (`margin`, `roth`, `401k`,
 `crypto` for the US) — every year's exports go there — and the year's
-project, `~/taxes/2025/`: `taxjson.toml`, a `ticker.map` and an empty
-`holdings/`. Each account folder's `README.txt` says which export to
-download from each broker. Every command runs in the year's folder.
+project, `~/taxes/2025/`: `taxjson.toml`, a `ticker.map`, in Canada a
+`tobase.map` (below) and an empty `holdings/`. Each account folder's
+`README.txt` says which export to download from each broker. Every command
+runs in the year's folder.
+
+**Interlisted shares (Canada).** Many Canadian companies trade both on the
+TSX and in the US (NYSE, Nasdaq, or over the counter): the two listings are
+one security for your ACB and the superficial-loss rule. `tobase.map` holds
+those pairs, from the list that ships with taxjson (`TOBASE QZAB.US QZA.TO`,
+one line per US listing); you do not edit it. Your own `ticker.map` lines
+win over it (`DISTINCT QZAB.US QZA.TO` keeps a pair apart). After an
+upgrade, `tjs update-tobase-map` shows what a newer list changes and
+`tjs update-tobase-map --write` applies it (the checklist says when); in a
+project made before tobase.map existed, the same command shows which pairs
+would change your books before it writes anything ([settings.md](settings.md#tobasemap)).
 (`tjs init --single` makes one folder for one year instead, with
 `inputs/` inside it; see "One folder of exports for every year" below.)
 
@@ -820,6 +832,7 @@ and a complete project per tax year beside them.
   2024/                 the 2024 project
     taxjson.toml        year = 2024, inputs_dir = "../inputs"
     ticker.map
+    tobase.map          Canada: the interlisted pairs (`tjs update-tobase-map`)
     holdings/           2024's broker positions snapshots
     inputs/slips/       2024's slips (slips.toml, IB's report, T5008)
     filed/ work/ reports/ checklist.json
@@ -856,8 +869,8 @@ and a complete project per tax year beside them.
   set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's
   `[estimate]` and `[instalments]` commented out for reference, and each
   account's `holdings` list commented out: those are 2025's snapshots),
-  `ticker.map` and `missing_history.json` copied, and an empty
-  `holdings/`. An entry of `missing_history.json` without a `quantity` is
+  `ticker.map`, `tobase.map` and `missing_history.json` copied, and an
+  empty `holdings/`. An entry of `missing_history.json` without a `quantity` is
   sized from the rows through each year's own December 31, so a later
   year's short never changes an earlier year.
 - **Keeping the years aligned:** a map line or setting added in one year

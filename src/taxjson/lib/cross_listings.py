@@ -1573,8 +1573,9 @@ def effective_map_text(ticker_map: Optional[Path],
     renames = list(renames)
     base = ""
     if ticker_map is not None and Path(ticker_map).is_file():
-        from taxjson.lib.cli_diag import read_text_utf8
-        base = read_text_utf8(Path(ticker_map))
+        # With the project's tobase.map pairs (lib/tobase_map).
+        from taxjson.lib.tobase_map import map_text_with_overlay
+        base = map_text_with_overlay(Path(ticker_map))
     if not lines and not base and not renames:
         return None
     if not lines and not renames:

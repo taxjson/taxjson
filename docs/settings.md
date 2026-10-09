@@ -8,6 +8,7 @@ A project is a folder:
 | --- | --- | --- |
 | `taxjson.toml` | the configuration | [taxjson.toml](#taxjsontoml) |
 | `ticker.map` | symbol rules and lookups (optional) | [ticker.map](#tickermap) |
+| `tobase.map` | Canada: the interlisted master's pairs (a TSX share and its US listings: one security), kept by `taxjson update-tobase-map` | [tobase.map](#tobasemap) |
 | `inputs/<account>/*.csv` | broker exports, detected by content | — |
 | `inputs/<account>/*.tt` | hand-entered rows | [.tt files](#tt-files) |
 | `inputs/<account>/generic_*.csv` + mapping | any other broker's CSV | [Generic importer mapping](#generic-importer-mapping) |
@@ -21,7 +22,7 @@ A project is a folder:
 | `filed/<year>.json` | close-year locks | [filed/YEAR.json](#filedyearjson-close-year-locks) |
 | `work/`, `reports/` | rebuilt by every `taxjson run`; never edited | — |
 
-The exports can live in a folder every year's project shares: `taxjson init` makes that layout by default — `inputs/<account>/` beside the year folders (`2025/`), each a complete project whose `taxjson.toml` names the shared folder with `inputs_dir = "../inputs"` (see [Folders](#folders); docs/getting-started.md, "One folder of exports for every year"). Each year still has its own `taxjson.toml`, `ticker.map`, `missing_history.json` and results; only the exports are shared.
+The exports can live in a folder every year's project shares: `taxjson init` makes that layout by default — `inputs/<account>/` beside the year folders (`2025/`), each a complete project whose `taxjson.toml` names the shared folder with `inputs_dir = "../inputs"` (see [Folders](#folders); docs/getting-started.md, "One folder of exports for every year"). Each year still has its own `taxjson.toml`, `ticker.map`, `tobase.map` (Canada), `missing_history.json` and results; only the exports are shared.
 
 Rules every reader applies:
 
@@ -567,6 +568,35 @@ The lists taxjson cannot read from an export ship in `src/taxjson/data/markets.t
 
 ---
 
+## tobase.map
+
+Canada only for now. The pairs of the **interlisted master** that ships with taxjson (`src/taxjson/data/interlisted.toml`): Canadian shares that also trade in the United States under the same share class — a TSX or TSX Venture line and its US exchange listing (NYSE, Nasdaq, NYSE American, NYSE Arca) and its US over-the-counter listings (the `...F` ordinary-share symbols). Each pair is checked against OpenFIGI (the same share-class FIGI on both sides) and an exchange listing against the Nasdaq Trader symbol directory; a depositary receipt (a CDR in Canada, an ADR or ADS in the US) has a share class of its own and is never paired. The master is keyed by share-class FIGI and holds no ISIN or CUSIP; it is rebuilt by the maintainer (`scripts/build_interlisted.py`: the network fetch is a maintainer step into a cache outside the repository, the build itself offline and append-only — an entry is never deleted, an ended one gets `until`).
+
+- **Where:** beside ticker.map (the year folder; a single-folder project's root). `taxjson init --country canada` writes it, `taxjson new-year` copies it, `taxjson update-tobase-map` keeps it in step with the installed master (dry run by default, `--write` applies it, the previous file kept as `tobase.map.bak`). A US project gets none (and does not read one: tax-logic US-XLIST-05).
+- **Form:** a header (the taxjson version, the master's sources and a `# master-generated: YYYY-MM-DD` line), then `TOBASE US CA` lines in sections — `## --- Exchange-listed pairs (one security, one ACB pool) ---`, then `## --- OTC listings of the same shares ---`, then, for a depositary receipt the books hold whose root is a US ticker, `DISTINCT US CA` lines (`## --- Depositary receipts the books hold (two securities) ---`). Each generated line ends `# master:<share-class FIGI>`; an ended interlisting adds `until=YYYY-MM-DD` (or `until=unknown`), and `ended=SYMBOL` when only that listing ended. Example: `TOBASE QZAB.US QZA.TO  # master:BBG000000Q01`.
+- **Meaning:** read with ticker.map as if its lines were written there (tax-logic CA-XLIST-06): the two listings are one ACB pool and one security for the superficial-loss rule. **ticker.map wins:** a pair one of whose listings a ticker.map rule decides — a `TOBASE` or `JOURNAL` naming it, a `GLOBAL`, `DELETE` or dated `RENAME` of it, a `DISTINCT` pair — is not applied; when the two disagree the run says so in one Info line (`tobase.map: ticker.map decides N of its pair(s) otherwise`), naming each pair and the line that wins; a pair ticker.map pools the same way is silent. To keep a pair apart, write `DISTINCT US CA` in ticker.map; to pool it otherwise, your own `TOBASE` line. A line that cannot be used (not `TOBASE` / `DISTINCT`, a contradiction) stops the run like a ticker.map problem, named `tobase.map:N`. Without a ticker.map beside it, tobase.map is not read (a Warning; `update-tobase-map --write` creates an empty ticker.map).
+- **`.V` and `.TO`:** in a Canadian project a TSX Venture listing and its TSX spelling are one listing for every `TOBASE` and `DISTINCT` line of ticker.map and tobase.map: `TOBASE ZZV.US ZZV.V` also books `ZZV.TO` as `ZZV.V`, `DISTINCT ZZW.US ZZW.V` also keeps `ZZW.TO` apart (Questrade, RBC and IB book a Venture line as `ROOT.TO`; a hand-written `.V` is the same shares). The master writes the `.TO` spelling. `GLOBAL` lines are matched as written.
+- **Ended interlistings (`until`):** never deleted (the years they traded still pool them). A row in an ended listing dated after its `until` is a Warning naming the line: the ticker may now be another security's (after an acquisition a US ticker is often given to another company). If it is, write `DISTINCT US CA` in ticker.map. `until=unknown` gives no such Warning.
+- **Not checked as unused:** `taxjson ticker-map --suggest` never lists a tobase.map line as an unused rule (most pairs are there for a security the books may hold one day). `taxjson format-map` leaves tobase.map alone (it lays out ticker.map only; `update-tobase-map --write` lays tobase.map out).
+- **Do not edit the marked lines.** `update-tobase-map` adds new interlistings and listings (the OTC ones too), annotates ended ones, removes a marked line the master no longer gives only when you have not edited it (an edited marked line is left and listed), adds the new line of a US ticker change beside the old and names the dated `.tt` `RENAME <date> OLD NEW` event to write, and keeps your own unmarked lines in a section of their own. Its pairs that your ticker.map decides otherwise are reported, never changed. Without a tobase.map it lists the pairs that would change the books (a pair whose listing the books hold: both listings held — one pool; one — the rows booked under the Canadian listing) and writes nothing without `--write`.
+- **Years:** `taxjson years` counts each year's tobase.map lines that differ from the newest year's, `taxjson years --diff A B` lists them; `taxjson align` never copies them (run `update-tobase-map` in each year).
+- **Checklist:** the `tobase-map` item is attention while tobase.map is older than the installed master (its `# master-generated` date), a step to read when there is none.
+- **Country:** Canada (`taxjson update-tobase-map` is refused in a US project). The US engine will read the same master as the substantially-identical groups of the wash-sale rule; until then a US project's listings are joined only by its own ticker.map lines (US-XLIST-05).
+- **Code:** `src/taxjson/lib/tobase_map.py` — `compute_overlay`, `overlay_for`, `render`, `plan_update`, `until_findings`, `books_changes`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_file`; `src/taxjson/bin/taxjson_run.py` — `cmd_update_tobase_map`, `_say_tobase_map`, `_say_tobase_until`; `scripts/build_interlisted.py` — `build`, `merge_previous`.
+
+## `taxjson update-tobase-map --json`
+
+A stable schema for programs (new keys may be added; none is renamed or removed while `schema_version` is 1). Code: `src/taxjson/bin/taxjson_run.py` — `cmd_update_tobase_map`.
+
+| Key | Meaning |
+| --- | --- |
+| `schema_version`, `exists` | `1`; whether the project has a tobase.map |
+| `master_generated` | the installed master's `generated` date |
+| `written` | whether this call (`--write`) wrote the file |
+| `ticker_map_decides` | `[{"line", "why"}]`: the master's pairs ticker.map decides otherwise (reported only) |
+
+Without a tobase.map: `lines` (how many pair lines one would hold) and `changes_books` (`[{"line", "how"}]`: the pairs that change these books). With one: `file_master_generated` (its `# master-generated` date, or `null`), `added` (`[{"line", "figi", "section"}]`), `added_in_books` (the added lines naming a symbol of the books), `ended` (`[{"line", "until"}]`), `retracted`, `edited` (lines), `ticker_changed` (`[{"old", "new", "until"}]`).
+
 ## .tt files
 
 Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated line per row; `#` starts a comment; numbers take a decimal point (a thousands comma is fine, a decimal comma is refused); symbols are upper-cased and carry their listing suffix (`.TO`, `.US`; options in OCC form). A line has one date, used as both trade and settle date: write the date that matches `tax_date`. Rows at one date and time are taken in file order. Validate a file with `taxjson-convert-tt --account margin inputs/margin/x.tt`. The parser is `src/taxjson/bin/taxjson_convert_tt.py` — `parse_tt_line`, `parse_opening_line`, `parse_inkind_line`, `parse_journal_line`, `parse_rename_line`, `expand_acquired`, `_VALID_ACTIONS`, `_SUGAR_ACTIONS`, `_EVENT_ACTIONS`. The dated events (`JOURNAL`, `RENAME`) are written date first with no time column; `taxjson run` books them (`src/taxjson/lib/dated_events.py` — `read_declarations`, `settle_journals`, `write_sidecars`) and records each in `work/dated_events.state` with its source (`tt`, `map`, `ib-conid`, `broker`) and place.
@@ -838,7 +868,7 @@ The year projects of a folder of exports shared by every year (`taxjson years` t
 | `schema_version`, `root`, `newest` | `1`, the folder holding the year folders, the newest year |
 | `years` | one object per year folder (`YYYY/` with a `taxjson.toml`), oldest first (below) |
 
-Each year: `year`, `folder`; `filed` (its `filed/<year>.json` exists), `closed_at`, `partial_lock` (taken before the year ended), `totals` (`realized`, `disallowed`, `income` of the lock); `last_run` (the last full run, ISO), `stale` (`true` when the inputs or settings changed since; `null` when there is no run), `changed` (what changed); `differs_from_newest` (`{"map_rules", "keys"}`: how many ticker.map rules and settings differ from the newest year's; `null` for the newest); `marks` (`{"done", "skipped"}` checklist marks); `problem` (a file that cannot be read, else `null`).
+Each year: `year`, `folder`; `filed` (its `filed/<year>.json` exists), `closed_at`, `partial_lock` (taken before the year ended), `totals` (`realized`, `disallowed`, `income` of the lock); `last_run` (the last full run, ISO), `stale` (`true` when the inputs or settings changed since; `null` when there is no run), `changed` (what changed); `differs_from_newest` (`{"map_rules", "tobase_rules", "keys"}`: how many ticker.map rules, tobase.map lines and settings differ from the newest year's; `null` for the newest); `marks` (`{"done", "skipped"}` checklist marks); `problem` (a file that cannot be read, else `null`).
 
 ## `taxjson journals --json`
 

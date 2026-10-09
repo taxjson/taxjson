@@ -316,9 +316,15 @@ def unused_rules(root: Path) -> Tuple[List[UnusedRule], List[str]]:
     except Exception:                                   # noqa: BLE001
         return [], []
     rules: Dict[str, Tuple[str, str]] = {}
+    # A line tobase.map gives the map (the interlisted master's pairs and
+    # the .V / .TO spellings, lib/tobase_map) is never "unused": most
+    # pairs are there for a security the books may hold one day.
+    generated = set(getattr(tmap, "generated", ()) or ())
     for kw, table in (("GLOBAL", tmap.glob), ("TOBASE", tmap.tobase),
                       ("JOURNAL", tmap.journal)):
         for frm, to in table.items():
+            if frm in generated:
+                continue
             rules[str(frm)] = (kw, str(to))
     if not rules:
         return [], []

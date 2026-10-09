@@ -4,6 +4,30 @@
 
 ### Added
 
+- Interlisted shares (Canada): taxjson ships a master of Canadian shares
+  that also trade in the United States under the same share class (a TSX
+  or TSX Venture line, its US exchange listing and its US OTC listings),
+  each pair checked against OpenFIGI's share-class FIGI and the Nasdaq
+  Trader symbol directory; depositary receipts are never paired. A
+  Canadian project carries its pairs as `tobase.map` beside ticker.map
+  (`taxjson init --country canada` writes it, `taxjson new-year` copies
+  it): read as if its `TOBASE` lines were in ticker.map, so the two
+  listings are one ACB pool and one security for the superficial-loss
+  rule (tax-logic CA-XLIST-06). ticker.map wins over it, with an Info
+  line when the two disagree. A US project does not read it (US-XLIST-05).
+- `taxjson update-tobase-map [--write] [--json]`: what a newer master
+  adds, ends (`until`, never deleted) or retracts, the ticker changes
+  (with the dated `.tt` RENAME event to write) and the pairs your
+  ticker.map decides otherwise; without a tobase.map, which pairs would
+  change the books. Dry run by default. A new checklist item says when
+  tobase.map is older than the installed master, and `taxjson years`
+  counts the tobase.map lines that differ between years.
+- A row in an ended interlisting after its `until` date is a Warning
+  naming the possible reuse of the ticker.
+- `scripts/build_interlisted.py` rebuilds the master: an offline,
+  append-only build from a cache outside the repository; the network
+  fetch is a maintainer step.
+
 - One folder of exports for every year: `taxjson init` now makes
   `inputs/<account>/` once for every year's broker exports and the year's
   folder (`2025/`), a complete project of its own (`taxjson.toml`,
@@ -55,6 +79,11 @@
   `holdings`.
 
 ### Changed
+
+- In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
+  TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), and
+  the reverse: the two are one listing.
+- IB's `GREY` listing venue is a US listing (`.US`), like `PINK` and `OTC`.
 
 - `taxjson init DIR` makes the folder of exports for every year:
   `DIR/inputs/<account>/` and the year's project in `DIR/<year>/`. So

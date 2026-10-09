@@ -125,6 +125,7 @@ PARTITION_RULES = frozenset({
     "CA-OPEN-01",      # opening balance: pooled, not a purchase (US: lot dates)
     "CA-XLIST-03",     # a broker's CAD/USD currency journal joined (US: transfer legs)
     "CA-XLIST-05",     # cross-listing loss radar: still held at day 30 (US: none)
+    "CA-XLIST-06",     # tobase.map: the interlisted master's pairs (US: not read)
     "CA-OPEN-02",      # opening cost at the snapshot day's BoC rate (US: USD only)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
@@ -1277,6 +1278,25 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "line says so); a GLOBAL or TOBASE line so written is "
                  "not re-read (it would join pools): a Warning names "
                  "the line to write."),
+            Rule("CA-XLIST-06",
+                 "The interlisted master that ships with taxjson (a TSX or "
+                 "TSX Venture share and its US exchange and OTC listings "
+                 "of the SAME share class, checked against OpenFIGI's "
+                 "share-class FIGI; a depositary receipt — a CDR, an ADR "
+                 "— is never paired) gives each Canadian project a "
+                 "tobase.map beside ticker.map: one `TOBASE US CA` line "
+                 "per pair, read as if written in ticker.map — one ACB "
+                 "pool, one security for the superficial-loss rule "
+                 "(identical property). ticker.map wins: a pair one of "
+                 "whose listings a ticker.map rule decides (a TOBASE or "
+                 "JOURNAL naming it, a GLOBAL, DELETE or dated RENAME of "
+                 "it, a DISTINCT pair) is not applied, with an Info line "
+                 "when the two disagree. A TSX Venture listing and its "
+                 "TSX spelling (X.V, X.TO) are one listing for every "
+                 "TOBASE and DISTINCT line of either file. An ended "
+                 "interlisting keeps its line (`until=`), and a row in "
+                 "an ended listing dated after it is a Warning: the "
+                 "ticker may now name another security."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -2916,6 +2936,17 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "line says so); a GLOBAL or TOBASE line so written is "
                  "not re-read (it would join pools): a Warning names "
                  "the line to write."),
+            Rule("US-XLIST-05",
+                 "A US project does not read tobase.map, the interlisted "
+                 "master's pairs (Canada only for now: CA-XLIST-06; "
+                 "`taxjson update-tobase-map` is refused): two listings "
+                 "of one share are joined only by your own ticker.map "
+                 "lines, the transfer journal (US-XLIST-01) or a .tt "
+                 "JOURNAL line, and X.V and X.TO stay two spellings. "
+                 "Planned: the same master's share-class groups become "
+                 "the substantially-identical groups the wash-sale rule "
+                 "(§1091) matches across listings, each lot keeping its "
+                 "own listing and basis."),
             Rule("US-BASIS-07",
                  "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
                  "401(k)...) are tracked but kept out of the filing "

@@ -1164,7 +1164,7 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Set up", ("checklist", "init", "years", "new-year", "align",
                 "format", "format-map", "migrate", "fetch", "elect",
-                "ticker-map")),
+                "ticker-map", "update-tobase-map")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history",
                          "opening")),
     ("Summaries", ("amt", "estimate", "fx-cash", "instalments", "stats",
@@ -3689,7 +3689,7 @@ def _config_has_distributions() -> bool:
 
 # Project-root files the per-account stages read (their content is part
 # of each account's input fingerprint; taxjson.toml is added there too).
-_PROJECT_ROOT_INPUTS = ("ticker.map", "missing_history.json",
+_PROJECT_ROOT_INPUTS = ("ticker.map", "tobase.map", "missing_history.json",
                         "phantoms.json")
 # phantoms.json: the old name of missing_history.json, still read (one
 # NOTE per run asks to rename it; lib/missing_history).
@@ -3740,7 +3740,8 @@ def _refuse_legacy_project_files(root: Path) -> None:
 
 # What `migrate --to-years` moves from a single-folder project into its
 # year's folder: everything but the exports (inputs/ stays, shared).
-_TO_YEARS_MOVED = ("taxjson.toml", "ticker.map", "missing_history.json",
+_TO_YEARS_MOVED = ("taxjson.toml", "ticker.map", "tobase.map",
+                   "missing_history.json",
                    "phantoms.json", "checklist.json", "work", "reports",
                    "filed", "export", "holdings")
 
@@ -5995,6 +5996,66 @@ def _say_listing_spellings(root: Path) -> None:
         _say_once(("spelling", m), "warning", m, prog=_PROG)
 
 
+def _say_tobase_map(root: Path, ticker_map: Path) -> None:
+    """What the run reads from tobase.map (lib/tobase_map, tax-logic
+    CA-XLIST-06 / US-XLIST-05), said once: the pairs ticker.map decides
+    otherwise (Info, each with the line that wins), a tobase.map with no
+    ticker.map beside it (not read: Warning), a US project's tobase.map
+    (not read: Info). Never fatal (a line it cannot use is a ticker.map
+    problem, refused with the others)."""
+    from taxjson.lib import tobase_map as TB
+    tpath = TB.tobase_path(root)
+    if not tpath.is_file():
+        return
+    if not ticker_map.is_file():
+        _say("warning", f"{TB.TOBASE_MAP} is not read: there is no "
+             f"ticker.map beside it",
+             "Create an empty ticker.map (`taxjson update-tobase-map "
+             "--write` makes one) so the interlisted pairs apply.",
+             prog=_PROG)
+        return
+    try:
+        from taxjson.lib.cli_diag import read_text_utf8
+        ov = TB.overlay_for(ticker_map, read_text_utf8(ticker_map))
+    except (OSError, ValueError):
+        return
+    if ov is None:
+        return
+    if ov.ignored_country:
+        _say("note", f"{TB.TOBASE_MAP} is not read in a US project",
+             "The interlisted pairs apply to Canadian projects only for "
+             "now (tax-logic US-XLIST-05); write a pair you need in "
+             "ticker.map.", prog=_PROG)
+        return
+    if ov.overridden:
+        _say("note", f"{TB.TOBASE_MAP}: ticker.map decides "
+             f"{len(ov.overridden)} of its pair(s) otherwise (ticker.map "
+             f"wins)",
+             *[f"- {rule} not applied ({why})"
+               for rule, why in ov.overridden],
+             "Delete the ticker.map line to use the master's pair, or "
+             "keep it: `taxjson update-tobase-map` lists these too.",
+             prog=_PROG)
+
+
+def _say_tobase_until(root: Path) -> None:
+    """One Warning per ended interlisting traded after its tobase.map
+    `until` date (lib/tobase_map.until_findings). Advisory."""
+    from taxjson.lib import tobase_map as TB
+    if not TB.tobase_path(root).is_file():
+        return
+    if TB.project_country(root) != "canada":
+        return
+    try:
+        found = TB.until_findings(root)
+    except Exception:                               # noqa: BLE001
+        return
+    for f in found:
+        head, details = TB.until_message(f)
+        _say_once(("tobase-until", f.symbol, f.until), "warning", head,
+                  *details, prog=_PROG)
+
+
 def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
                       strict: bool = False) -> None:
     """A loss on one listing and a purchase of another listing of the
@@ -7203,6 +7264,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                  "single meaning; either changes ACB pools and gains. Fix "
                  "the line (KEYWORD FROM TO, separated by spaces; notes "
                  "after `#`) or delete it.")
+    _say_tobase_map(root, ticker_map)
     # Dated events: the .tt JOURNAL / RENAME lines of every account
     # (lib/dated_events), checked up front; ticker.map's legacy JOURNAL
     # and dated RENAME lines still work, said once.
@@ -7672,6 +7734,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         # A ticker.map line naming a bare ticker whose US listing the
         # books hold (v0.24.1 leftovers, 1), said before the radar.
         _say_listing_spellings(root)
+        # A trade in an ended interlisting after its tobase.map `until`
+        # date: the ticker may now be another security's (CA-XLIST-06).
+        _say_tobase_until(root)
         # Every account's gains are final: a loss on one listing, the
         # other listing bought in the window (QA F3).
         _say_xlist_losses(root, cfg, cache,
@@ -23266,6 +23331,11 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     from taxjson.lib.ticker_map_format import init_template
     _stub(f"{_yrel}ticker.map", init_template())
+    if country == "canada":
+        # The interlisted master's pairs (lib/tobase_map, CA-XLIST-06):
+        # every US and OTC listing of a Canadian share, one security.
+        from taxjson.lib import tobase_map as _TB
+        _stub(f"{_yrel}{_TB.TOBASE_MAP}", _TB.render(_TB.load_master()))
     _stub(".gitignore", _TEMPLATE_GITIGNORE + (
         "# The newest year's positions and wash radar, for other tools "
         "(`taxjson run`).\nexports/\n" if years else ""))
@@ -23332,7 +23402,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         for _ln in _out_wrap(f"Next year: `taxjson -C "
                              f"{_shlex.quote(str(top))} new-year "
                              f"{first_year + 1}` copies this year's "
-                             f"taxjson.toml and ticker.map into "
+                             f"taxjson.toml, ticker.map and tobase.map into "
                              f"{first_year + 1}/.", indent="  ",
                              hang="  "):
             print(_ln)
@@ -23397,9 +23467,13 @@ def cmd_years(args: argparse.Namespace) -> None:
                         "against the lock")
         diff = r["differs_from_newest"]
         extra = ""
-        if diff and (diff["map_rules"] or diff["keys"]):
+        if diff and (diff["map_rules"] or diff["keys"]
+                     or diff.get("tobase_rules")):
             extra = (f"; differs from {rep['newest']}: {diff['map_rules']} "
-                     f"ticker.map rule(s), {diff['keys']} setting(s) "
+                     f"ticker.map rule(s), "
+                     + (f"{diff['tobase_rules']} tobase.map line(s), "
+                        if diff.get("tobase_rules") else "")
+                     + f"{diff['keys']} setting(s) "
                      f"(`taxjson years --diff {r['year']} "
                      f"{rep['newest']}`)")
         marks = r["marks"]
@@ -23451,7 +23525,9 @@ def cmd_new_year(args: argparse.Namespace) -> None:
         write_atomic(folder / "taxjson.toml", new_text)
         from taxjson.lib.missing_history import MISSING_HISTORY_FILE
         copied = []
-        for _name in ("ticker.map", MISSING_HISTORY_FILE):
+        for _name in ("ticker.map", "tobase.map", MISSING_HISTORY_FILE):
+            # tobase.map: the interlisted pairs (`update-tobase-map`
+            # brings it up to date with the installed master).
             # missing_history.json: the positions bought before the data
             # are the same every year (an entry without `quantity` is
             # sized through the new year's end: CA-ACB-11).
@@ -23499,15 +23575,208 @@ def cmd_new_year(args: argparse.Namespace) -> None:
              f"{prev_year}/holdings/).")
 
 
+def cmd_update_tobase_map(args: argparse.Namespace) -> None:
+    """`taxjson update-tobase-map [--write] [--json]`: bring the
+    project's tobase.map in step with the installed interlisted master
+    (lib/tobase_map, tax-logic CA-XLIST-06). Dry run by default; --write
+    applies it (the previous file kept as tobase.map.bak). Canada only
+    (lib/country COMMAND_COUNTRY)."""
+    from taxjson.lib import tobase_map as TB
+    from taxjson.lib.safe_write import write_user_file
+    from taxjson.lib.ticker_map_suggest import books_symbols
+    root = Path(args.dir).resolve()
+    if not _PL.has_config(root):
+        _die_input(f"no taxjson.toml in {root}: run it in a project's "
+                   f"(year) folder")
+    master = TB.load_master()
+    books = books_symbols(root)
+    tm = _PL.ticker_map_path(root)
+    from taxjson.lib.cli_diag import read_text_utf8
+    ticker_text = read_text_utf8(tm) if tm.is_file() else ""
+    tob = TB.read_tobase(root)
+    nsec = len(master.security)
+    exch = sum(1 for e in master.security.values() if e.get("us"))
+    otc = sum(1 for e in master.security.values()
+              if e.get("us_otc") and not e.get("us"))
+    head = (f"The installed interlisted master (generated "
+            f"{master.generated}): {nsec} Canadian securities, {exch} with "
+            f"a US exchange listing, {otc} with OTC listings only.")
+    no_run = not books
+    if tob is None:
+        text = TB.render(master, books)
+        n_lines = sum(1 for ln in text.splitlines()
+                      if ln.split("#", 1)[0].strip())
+        changes = TB.books_changes(master, books, ticker_text)
+        ov = TB.compute_overlay(ticker_text, TB.parse_tobase(text), True)
+        if args.json:
+            _json_out({"schema_version": 1, "exists": False,
+                       "master_generated": master.generated,
+                       "lines": n_lines,
+                       "changes_books": [{"line": g.rule, "how": how}
+                                         for g, how in changes],
+                       "ticker_map_decides": [{"line": r, "why": w}
+                                              for r, w in ov.overridden],
+                       "written": bool(args.write)})
+        else:
+            for _ln in _out_wrap(head):
+                print(_ln)
+            for _ln in _out_wrap(
+                    f"This project has no tobase.map yet: one would hold "
+                    f"{n_lines} pair line(s)."):
+                print(_ln)
+            if no_run:
+                for _ln in _out_wrap(
+                        "The books are not built yet (`taxjson run`): "
+                        "what the pairs change in them cannot be shown."):
+                    print(_ln)
+            elif changes:
+                print(f"{len(changes)} of them change these books:")
+                for g, how in changes:
+                    for _ln in _out_wrap(f"- {g.rule}: {how}", "  ",
+                                         "    "):
+                        print(_ln)
+            else:
+                for _ln in _out_wrap(
+                        "None of them changes these books (ticker.map "
+                        "already pools every pair they hold, or they hold "
+                        "none): they apply when you trade such a "
+                        "security."):
+                    print(_ln)
+            if ov.overridden:
+                print(f"ticker.map decides {len(ov.overridden)} pair(s) "
+                      f"otherwise (ticker.map wins; reported only):")
+                for r, w in ov.overridden:
+                    for _ln in _out_wrap(f"- {r} ({w})", "  ", "    "):
+                        print(_ln)
+        if not args.write:
+            if not args.json:
+                for _ln in _out_wrap(
+                        "Nothing written: `taxjson update-tobase-map "
+                        "--write` creates tobase.map; then `taxjson run`."):
+                    print(_ln)
+            return
+        if not tm.is_file():
+            from taxjson.lib.ticker_map_format import init_template
+            write_user_file(tm, init_template(), root, backup=False)
+        write_user_file(TB.tobase_path(root), text, root, backup=False)
+        if not args.json:
+            print(f"Wrote {TB.TOBASE_MAP} ({n_lines} lines). Run `taxjson "
+                  f"run` to rebuild the books with it.")
+        return
+    plan = TB.plan_update(master, tob, books, ticker_text)
+    in_books = [g for g in plan.added
+                if g.keyword == "TOBASE" and ({g.a, TB.venue_alias(g.a)}
+                                              & books)]
+    if args.json:
+        _json_out({
+            "schema_version": 1, "exists": True,
+            "master_generated": master.generated,
+            "file_master_generated": plan.old_stamp or None,
+            "added": [{"line": g.rule, "figi": g.figi,
+                       "section": g.section.strip("#- ")} for g in plan.added],
+            "added_in_books": [g.rule for g in in_books],
+            "ended": [{"line": ln.rule, "until": g.until} for ln, g in
+                      plan.ended],
+            "retracted": [ln.rule for ln in plan.retracted],
+            "edited": [ln.rule for ln in plan.edited],
+            "ticker_changed": [{"old": o.rule, "new": n.rule,
+                                "until": o.until} for o, n in plan.renamed],
+            "ticker_map_decides": [{"line": r, "why": w}
+                                   for r, w in plan.conflicts],
+            "written": bool(args.write and (plan.changes or
+                                            plan.old_stamp !=
+                                            plan.new_stamp))})
+    else:
+        for _ln in _out_wrap(head):
+            print(_ln)
+        print(f"tobase.map was made from the master of "
+              f"{plan.old_stamp or 'an unknown date'}.")
+        if plan.added:
+            print(f"Added: {len(plan.added)} line(s) (new interlistings or "
+                  f"listings)" + (f"; {len(in_books)} name a symbol of "
+                                  f"these books:" if in_books else "."))
+            for g in in_books:
+                print(f"  + {g.rule}")
+            if len(plan.added) <= 30:
+                for g in plan.added:
+                    if g not in in_books:
+                        print(f"  + {g.rule}")
+        if plan.ended:
+            print(f"Ended: {len(plan.ended)} interlisting(s) (annotated "
+                  f"with `until`, kept for the years they traded):")
+            for ln, g in plan.ended:
+                print(f"  ~ {ln.rule} until {g.until}")
+        if plan.retracted:
+            print(f"Retracted: {len(plan.retracted)} line(s) the master no "
+                  f"longer gives (removed; never a line you edited):")
+            for ln in plan.retracted:
+                print(f"  - {ln.rule}")
+        if plan.edited:
+            print(f"Left as written: {len(plan.edited)} marked line(s) you "
+                  f"edited:")
+            for ln in plan.edited:
+                print(f"  = {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
+        for o, n in plan.renamed:
+            old_sym, new_sym = o.a, n.a
+            when = o.until if o.until and o.until != "unknown" else \
+                "YYYY-MM-DD"
+            for _ln in _out_wrap(
+                    f"Ticker change: {old_sym} is now {new_sym} (the old "
+                    f"line is kept for the years it traded). Book the "
+                    f"change as a dated event: a .tt line `RENAME {when} "
+                    f"{old_sym} {new_sym}` (the first day it traded as "
+                    f"{new_sym}).", "", "  "):
+                print(_ln)
+        if plan.conflicts:
+            print(f"ticker.map decides {len(plan.conflicts)} pair(s) "
+                  f"otherwise (ticker.map wins; reported only):")
+            for r, w in plan.conflicts:
+                for _ln in _out_wrap(f"- {r} ({w})", "  ", "    "):
+                    print(_ln)
+        if not plan.changes:
+            print(f"tobase.map is up to date with the installed master.")
+    stale = plan.old_stamp != plan.new_stamp
+    if not args.write:
+        if (plan.changes or stale) and not args.json:
+            print("Nothing written: `taxjson update-tobase-map --write` "
+                  "applies it.")
+        return
+    if not plan.changes and not stale:
+        return
+    bak = write_user_file(TB.tobase_path(root), plan.new_text, root,
+                          backup=not args.no_backup)
+    if not args.json:
+        print(f"Wrote {TB.TOBASE_MAP}"
+              + (f" (the previous file kept as {bak.name})" if bak else "")
+              + ". Run `taxjson run` to rebuild the books with it.")
+
+
 def _align_show(c: Dict[str, Any], here: str, there: str,
                 as_json: bool) -> None:
     if as_json:
         _json_out({"schema_version": 1, "here": here, "there": there,
                    "map_only_here": c["map_only_here"],
                    "map_only_there": c["map_only_there"],
+                   "tobase_only_here": c.get("tobase_only_here", []),
+                   "tobase_only_there": c.get("tobase_only_there", []),
                    "keys": c["keys"]})
         return
+    _tob = [(f"tobase.map lines only in {there}",
+             c.get("tobase_only_there") or []),
+            (f"tobase.map lines only in {here}",
+             c.get("tobase_only_here") or [])]
+    if any(rows for _t, rows in _tob):
+        for title, rows in _tob:
+            if rows:
+                print(f"{title}:")
+                for r in rows:
+                    print(f"  {r}")
+        print("(tobase.map: the interlisted pairs; `taxjson "
+              "update-tobase-map` in each year brings it to the installed "
+              "master.)")
     if not (c["map_only_here"] or c["map_only_there"] or c["keys"]):
+        if any(rows for _t, rows in _tob):
+            return
         print(f"{here} and {there}: the same ticker.map rules and "
               f"settings (the year's own keys aside).")
         return
@@ -23847,7 +24116,8 @@ def _build_parser(prog: str = "taxjson"
                     "taxjson.toml (country, base currency, the usual "
                     "accounts for that country, inputs_dir = \"../inputs\" "
                     "and exports_dir = \"../exports\"), a commented "
-                    "ticker.map and holdings/ for the broker's positions "
+                    "ticker.map (in Canada also tobase.map, the "
+                    "interlisted pairs) and holdings/ for the broker's positions "
                     "snapshots. Every other command runs in the year "
                     "folder (`taxjson -C DIR/YYYY run`); `taxjson new-year` "
                     "adds the next year's. --single scaffolds one folder "
@@ -23898,10 +24168,37 @@ def _build_parser(prog: str = "taxjson"
         description="Create the folder YYYY beside the other year folders "
                     "with the previous year's taxjson.toml (year set, "
                     "prior_year_record pointed at its lock, its [estimate] "
-                    "and [instalments] commented out) and ticker.map, and "
-                    "an empty holdings/, and print the next steps.")
+                    "and [instalments] commented out), ticker.map and "
+                    "tobase.map, and an empty holdings/, and print the "
+                    "next steps.")
     p_ny.add_argument("year", type=int, help="The tax year (YYYY)")
     p_ny.set_defaults(func=cmd_new_year)
+
+    p_tb = sub.add_parser(
+        "update-tobase-map",
+        help="Bring tobase.map (the interlisted pairs) up to date",
+        description="Canada: compare the project's tobase.map, the "
+                    "interlisted master's pairs (a TSX line and its US "
+                    "exchange and OTC listings: one security), with the "
+                    "master this taxjson installs, and list what an update "
+                    "does: lines added (new interlistings), ended "
+                    "interlistings (annotated with `until`, never "
+                    "deleted), retracted lines (removed only when you did "
+                    "not edit them), ticker changes (the new line added, "
+                    "the old kept, with the dated RENAME event to write), "
+                    "the pairs your ticker.map decides otherwise "
+                    "(ticker.map wins; reported only) and a DISTINCT line "
+                    "for each depositary receipt the books hold. Without a "
+                    "tobase.map it shows the pairs that would change the "
+                    "books. Dry run by default; --write applies it.")
+    p_tb.add_argument("--write", action="store_true",
+                      help="Write tobase.map (the previous one is kept as "
+                           "tobase.map.bak)")
+    p_tb.add_argument("--no-backup", action="store_true",
+                      help="With --write: no tobase.map.bak")
+    p_tb.add_argument("--json", action="store_true",
+                      help="Emit JSON (docs/settings.md)")
+    p_tb.set_defaults(func=cmd_update_tobase_map)
 
     p_al = sub.add_parser(
         "align", help="Bring another year's map lines and settings over",

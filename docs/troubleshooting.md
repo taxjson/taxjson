@@ -191,6 +191,41 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `ticker.map problem(s)`; `src/taxjson/lib/ticker_map.py` — `read_side_rules`, `parse_side_line`, `line has no ticker.map keyword`; `src/taxjson/bin/taxjson_ticker_map.py` — `map_file_problems`
 
+### "Info: tobase.map: ticker.map decides 2 of its pair(s) otherwise (ticker.map wins)"
+- **Check:** the lines under it, `- TOBASE QZAB.US QZA.TO not applied (ticker.map: TOBASE QZAB.US QZZ.TO)`; `tjs update-tobase-map` lists the same pairs.
+- **Cause:** a Canadian project reads tobase.map (the interlisted master's pairs) with ticker.map, and ticker.map wins: a `TOBASE`/`JOURNAL` naming one of the pair's listings with another listing, a `GLOBAL`, `DELETE` or dated `RENAME` of one, or a `DISTINCT` pair keeps the master's line from applying.
+- **Fix:** nothing, if your line is right (it is what the books use). If the master's pair is right, delete your ticker.map line and re-run. A pair your map pools the same way is never listed.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `compute_overlay`; `src/taxjson/bin/taxjson_run.py` — `_say_tobase_map`
+
+### "Warning: QZG.US has 2 row date(s) after 2025-06-30, when its interlisting ended (tobase.map:41: `TOBASE QZG.US QZG.TO`)"
+- **Check:** the dates listed; the security name on those rows (`tjs trades`, `tjs events`). The tobase.map line ends `until=2025-06-30`.
+- **Cause:** the master records that the pair stopped trading as one security on that date (an acquisition, a delisting). A later row in that ticker may be another company's: US tickers are reused, and the line would pool it with the Canadian listing.
+- **Fix:** if those rows are another security, add `DISTINCT QZG.US QZG.TO` to ticker.map (it keeps the two apart at every date; book the old security's earlier rows under a symbol of their own with a dated `.tt` `RENAME` line if the year holds both). If they are the same security (a late corporate-action row), nothing.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `until_findings`, `until_message`; `src/taxjson/bin/taxjson_run.py` — `_say_tobase_until`
+
+### "Error: 1 ticker.map problem(s)" with "tobase.map:12: tobase.map holds `TOBASE FROM TO` and `DISTINCT A B` lines only"
+- **Check:** the named tobase.map line; `tjs update-tobase-map` lists marked lines you edited.
+- **Cause:** tobase.map is read with ticker.map, and a line it cannot use would drop a pair silently, so the run stops as for a ticker.map problem.
+- **Fix:** move your own rule to ticker.map (any keyword lives there) and delete it from tobase.map, or run `tjs update-tobase-map --write` to lay the file out again (your own unmarked `TOBASE` / `DISTINCT` lines are kept).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `parse_tobase`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_file`
+
+### `tjs checklist`: "[!] tobase-map … tobase.map is from the master of 2026-01-01; this taxjson has the one of 2026-10-01"
+- **Check:** `tjs update-tobase-map` (a dry run) lists what an update adds, ends and retracts, and the pairs that name a symbol of your books.
+- **Cause:** an upgrade installed a newer interlisted master; the project's tobase.map was made from an older one (its `# master-generated` line).
+- **Fix:** `tjs update-tobase-map --write` (the previous file is kept as `tobase.map.bak`), then `tjs run`. In a project with several year folders, run it in each year you still work on (`tjs years` counts the differing lines).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/checklist.py` — `s_tobase_map`; `src/taxjson/bin/taxjson_run.py` — `cmd_update_tobase_map`
+
+### "Error: `taxjson update-tobase-map` is Canada-only (Canada only for now: the interlisted pairs pool identical property …); this project is country = "usa""
+- **Check:** `[settings] country` in taxjson.toml.
+- **Cause:** the interlisted master's pairs apply to Canadian projects only for now (tax-logic US-XLIST-05); a US project does not read a tobase.map either (an Info line says so when one is there).
+- **Fix:** in a US project, write the pairs you need in ticker.map (`TOBASE` / `DISTINCT`).
+- **Fixed in:** —
+- **Code:** `src/taxjson/lib/country.py` — `COMMAND_COUNTRY`, `COMMAND_WHY`; `src/taxjson/bin/taxjson_run.py` — `_say_tobase_map`
+
 ### "Error: 1 ticker.map problem(s)" with "ticker.map:3: GLOBAL joins an option contract (QZK250620C00010000.US) with a share listing (QZK.US)" or "… joins two different option contracts"
 - **Check:** the named line is a `GLOBAL`, `TOBASE`, `JOURNAL` or undated `RENAME` line with an option symbol (or a future, `F:…`) on one side and a share symbol on the other, or two option symbols whose expiry, right (C/P), strike or market (`.US`, `.TO`) differ.
 - **Cause:** such a line makes the two the same security at every date: the contract's cost was pooled with the shares (or with another contract), and the gains changed without a word. Earlier the line was accepted silently (only a dated `RENAME` was refused).
