@@ -47,6 +47,13 @@
   lists it.
 
 
+- The checklist's export-coverage line counts a short export's open
+  positions instead of naming them — "N open position(s) — `taxjson
+  list <account> <end>` lists them" — and, when a `.tt` line or a later
+  export of the account records the next activity on them, adds "next
+  recorded activity: <date> (<file>)". The run's Warning keeps the
+  symbols and says the same.
+
 ### Fixed
 
 - An ALLOWLOSS line that names no denied loss now says how the books

@@ -57,6 +57,12 @@ after <end>?" — `taxjson checklist --done export-coverage` records the
 end was read from (the user may know the account was not used after an
 RBC as-of date). The run then says a note instead; a gap the mark did not
 answer (a later end, another account or broker) asks again.
+
+The checklist's line (detail) counts the positions instead of naming
+them, gives the command that lists them (`taxjson list <account>
+<end>`) and, when a .tt line or a later export of the account records
+the next activity on them (any date after the end, next_activity), its
+date and file; the run's Warning names them and says the same.
 """
 from __future__ import annotations
 
@@ -110,6 +116,10 @@ class Gap:
     # buy-back row in the books: (symbol, quantity, expiry). Not in
     # `positions`: the missing export holds their expiry row.
     expired: List[Tuple[str, float, str]] = field(default_factory=list)
+    # The first later row of the account (any source, any date after
+    # the end: a .tt line, a later export) on one of those positions:
+    # (date, the file's shown name), else None.
+    next_activity: Optional[Tuple[str, str]] = None
 
     @property
     def info(self) -> bool:
@@ -133,7 +143,11 @@ class Gap:
                               for s, q in self.positions],
                 "expired": [{"symbol": s, "quantity": q, "expiry": e}
                             for s, q, e in self.expired],
-                "closed_by_tt": list(self.closed_by_tt), "key": self.key}
+                "closed_by_tt": list(self.closed_by_tt), "key": self.key,
+                "list_command": list_command(self),
+                "next_activity": ({"date": self.next_activity[0],
+                                   "file": self.next_activity[1]}
+                                  if self.next_activity else None)}
 
 
 def key_text(key: str) -> str:
@@ -541,8 +555,39 @@ def account_gaps(root: Path, acct: str, year: int, today: date
             else:
                 expired.append((sym, q, exp))
         gaps.append(Gap(acct, b, end.isoformat(), how, cutoff.isoformat(),
-                        current, open_, by_tt, expired))
+                        current, open_, by_tt, expired,
+                        next_activity(all_rows, end,
+                                      {s for s, _q in open_}
+                                      | {s for s, _q, _e in expired})))
     return gaps
+
+
+def next_activity(rows: Iterable[Dict[str, Any]], end: date,
+                  symbols: Iterable[str]) -> Optional[Tuple[str, str]]:
+    """(date, file) of the first row after `end` — any date, any source:
+    a .tt line, a later export — that moves one of `symbols` (income
+    rows aside), else None. The file is the name the parse shows (an
+    account id in it masked: brokerages.base.shown_name)."""
+    from taxjson.lib.core import POOL_FREE_ACTIONS
+    want = {str(x).upper() for x in symbols}
+    best: Optional[Tuple[str, str, str]] = None
+    for r in rows:
+        rd = _d(r.get("date"))
+        if rd is None or rd <= end \
+                or str(r.get("symbol") or "").upper() not in want \
+                or str(r.get("action") or "") in POOL_FREE_ACTIONS:
+            continue
+        key = (rd.isoformat(), str(r.get("time") or ""),
+               Path(str(r.get("source") or "")).name)
+        if best is None or key < best:
+            best = key
+    return (best[0], best[2] or "a row with no file") if best else None
+
+
+def list_command(g: "Gap") -> str:
+    """The command that lists the account's positions at the export's
+    end (`taxjson list ACCOUNT DATE`)."""
+    return f"taxjson list {g.account} {g.end}"
 
 
 def held_at_broker(own: List[Tuple[str, float]],
@@ -698,6 +743,11 @@ def message(g: Gap, year: int) -> Tuple[str, List[str]]:
             + (" ..." if len(g.expired) > SHOWN else "")
             + " — the missing export holds the expiry, assignment or "
               "buy-back row.")
+    details.append(f"`{list_command(g)}` lists the positions at the "
+                   f"export's end"
+                   + (f"; the next activity the books record on them is "
+                      f"{g.next_activity[0]} ({g.next_activity[1]})."
+                      if g.next_activity else "."))
     if g.closed_by_tt:
         details.append(f"Closed by later .tt lines, not listed: "
                        f"{', '.join(g.closed_by_tt[:SHOWN])}"
@@ -707,12 +757,31 @@ def message(g: Gap, year: int) -> Tuple[str, List[str]]:
     return head, details
 
 
+def _count_text(g: Gap) -> str:
+    """The checklist's short form of what the broker still held: a
+    count, the command that lists them, and the next activity the
+    books record on them (no symbol list: `taxjson list` has it)."""
+    parts = []
+    if g.positions:
+        parts.append(f"{len(g.positions)} open position(s)")
+    if g.expired:
+        parts.append(f"{len(g.expired)} option(s) that expired after it "
+                     f"with no expiry row")
+    out = (" and ".join(parts) + f" — `{list_command(g)}` lists them")
+    if g.next_activity:
+        out += (f"; next recorded activity: {g.next_activity[0]} "
+                f"({g.next_activity[1]})")
+    return out
+
+
 def detail(gaps: List[Gap]) -> str:
     """One line for the checklist (the gaps that still
-    hold positions: an Info gap is not listed)."""
+    hold positions: an Info gap is not listed): per gap the count of
+    positions, the `taxjson list` command that lists them and the next
+    activity a later file records on them."""
     gaps = [g for g in gaps if not g.info]
     parts = [f"{broker_name(g.broker)} exports for {g.account} end "
-             f"{g.end} with {_what_text(g)}"
+             f"{g.end} with {_count_text(g)}"
              for g in gaps[:3]]
     more = len(gaps) - 3
     return ("; ".join(parts) + (f"; +{more} more" if more > 0 else "")
