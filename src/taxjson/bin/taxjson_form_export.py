@@ -91,6 +91,7 @@ from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.bin.taxjson_convert_currency import norm_currency
 from taxjson.lib.core import is_option_symbol
+from taxjson.lib.json_input import gains_row_kind
 from taxjson.lib.futures import is_plain_future, section_1256_kind
 from taxjson.lib.numeric import round_half_up
 from typing import Any, Dict, List, Optional, Tuple
@@ -147,16 +148,18 @@ def load_dispositions(paths: List[Path], year: Optional[int],
     tainted_skipped = 0
     ystr = str(year) if year else None
     for p in paths:
+        # load_json holds every row to the gains-row contract (lib/
+        # json_input.check_gains_rows): a disposition missing its gain
+        # or units is refused there, never skipped here (issue #17).
         data = load_json(p)
         for e in data.get("transactions", []):
-            if e.get("action") in _INCOME_ACTIONS:
-                continue
-            if "gain" not in e or "qty" not in e:
+            kind = gains_row_kind(e)
+            if kind == "income":
                 continue
             date = e.get(date_key) or e.get("date") or ""
             if ystr and not date.startswith(ystr):
                 continue
-            if e.get("tainted"):
+            if kind == "manual":
                 tainted_skipped += 1
                 continue
             entries.append(e)

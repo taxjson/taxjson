@@ -294,7 +294,8 @@ class TestBuildReport(unittest.TestCase):
             gains = self._write(td, "gains.json", {"transactions": [
                 {"action": "DIVIDEND", "symbol": "AAPL.US",
                  "date": "2025-03-01", "dividend": 120.0, "gain": 0.0},
-                {"symbol": "AAPL.US", "date": "2025-05-01", "gain": 15000.0},
+                {"symbol": "AAPL.US", "date": "2025-05-01", "qty": -100,
+                 "gain": 15000.0},
                 # income on a foreign symbol never held in the cost walk
                 {"action": "DIVIDEND", "symbol": "BP.L",
                  "date": "2025-06-01", "dividend": 40.0, "gain": 0.0},

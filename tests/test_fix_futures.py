@@ -187,7 +187,7 @@ class TestT1135Futures(unittest.TestCase):
                     net=80000.0)]}))
             gains = Path(td) / "margin_gains.json"
             gains.write_text(json.dumps({"transactions": [
-                {"symbol": "F:CLZ5.US", "date": "2025-09-18",
+                {"symbol": "F:CLZ5.US", "date": "2025-09-18", "qty": -1,
                  "gain": 5000.0}]}))
             rep = build_report([base], [gains], 2025, {}, "CAD")
         self.assertFalse(rep["filing_required"])

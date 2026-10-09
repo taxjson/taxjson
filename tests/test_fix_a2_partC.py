@@ -556,8 +556,8 @@ class TestStandaloneTimingDefaults(unittest.TestCase):
                 "metadata": {"target_currency": "CAD"},
                 "transactions": [{
                     "date": "2025-01-05", "date_settle": "2025-01-06",
-                    "symbol": "XYZ.TO", "action": "BUY", "quantity": 10,
-                    "price": 10.0, "net_amount": -100.0,
+                    "symbol": "XYZ.TO", "action": "BUYSELL", "quantity": 10,
+                    "price": 10.0, "net_amount": 100.0,
                     "currency": "CAD", "fees": 0.0}]}))
             err = io.StringIO()
             with contextlib.redirect_stdout(io.StringIO()), \

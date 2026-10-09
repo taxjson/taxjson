@@ -147,10 +147,15 @@ def yearly_nets(results: dict, tax_date: str) -> Dict[int, Dict[str, float]]:
     manual_reporting_required by run_gains."""
     date_key = 'date_settle' if tax_date == 'settle' else 'date'
     nets: Dict[int, Dict[str, float]] = {}
+    # The gains-row contract (issue #17): a disposition without its gain
+    # or units is refused, never left out of a year's net.
+    from taxjson.lib.json_input import check_gains_rows, gains_row_kind
+    check_gains_rows(results.get('transactions'), "gains results")
     for t in results.get('transactions', []):
-        if t.get('action') in _INCOME_ACTIONS:
+        kind = gains_row_kind(t)
+        if kind == 'income':
             continue
-        if 'gain' not in t or 'qty' not in t:
+        if kind == 'manual' and 'gain' not in t:
             continue
         date = t.get(date_key) or t.get('date') or ''
         if len(date) < 4 or not date[:4].isdigit():

@@ -23,7 +23,7 @@ from taxjson.lib.country import country_arg
 from datetime import datetime, timedelta
 
 from taxjson.lib.core import (
-    TaxTransaction, convert_currency, load_transactions,
+    TaxTransaction, carry_row_marks, convert_currency, load_transactions,
 )
 
 # No built-in rate: a row whose date has no rate in the rates file (after
@@ -303,6 +303,7 @@ def convert_transaction(
     tx: TaxTransaction, target_curr: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal
 ) -> TaxTransaction:
     converted = TaxTransaction(**tx.to_dict())
+    carry_row_marks(tx, converted)
     target_curr = norm_currency(target_curr)
     src_curr = norm_currency(tx.currency)
 

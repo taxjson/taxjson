@@ -343,8 +343,8 @@ class TestBaseCurrencyFlagTrimmed(unittest.TestCase):
             "transactions": [{
                 "date": f"{TODAY.year}-01-05",
                 "date_settle": f"{TODAY.year}-01-06",
-                "symbol": "XYZ.TO", "action": "BUY", "quantity": 10,
-                "price": 10.0, "net_amount": -100.0, "currency": "CAD",
+                "symbol": "XYZ.TO", "action": "BUYSELL", "quantity": 10,
+                "price": 10.0, "net_amount": 100.0, "currency": "CAD",
                 "fees": 0.0}]})
 
     def test_t1135(self):

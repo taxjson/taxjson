@@ -62,8 +62,10 @@ def _tool(module, *args, stdin=None, seed=None, cwd=None):
         input=stdin, env=_env(seed))
 
 
-def _gain(symbol, gain, cost, proceeds, *, cur="CAD", days=30, **kw):
+def _gain(symbol, gain, cost, proceeds, *, cur="CAD", days=30, qty=-1,
+          **kw):
     return dict(symbol=symbol, gain=gain, cost=cost, proceeds=proceeds,
+                qty=qty,
                 currency=cur, days_held=days, date="2025-03-03",
                 action="BUYSELL", **kw)
 
