@@ -60,13 +60,10 @@ IRS guidance and a tax professional.
   line for PASS: a pipe (`| tail`) hides a failing exit status. One module:
   `cd tests && TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing,
   run the gate once in a fresh `git clone` (it catches untracked files).
-- **Releasing:** `scripts/release.sh vX.Y.Z [--notes FILE]` (CHANGELOG
-  `## Unreleased` → `## vX.Y.Z (date)`, full gate, tag, push, then the
-  GitHub release with PII-scanned notes; never `git push --tags`:
-  release.sh pushes the one tag, and the pre-push hook refuses any tag
-  that is not an annotated `vX.Y.Z` on main, and every tag delete), then `scripts/promote.sh vX.Y.Z
-  beta` and later `scripts/promote.sh vX.Y.Z` for stable. Channels: latest,
-  beta, stable (new installs), dev. See `docs/releasing.md`.
+- **Releasing:** `scripts/release.sh vX.Y.Z [--notes FILE]` (gate, tag, push,
+  GitHub release with scanned notes; never `git push --tags`), then
+  `scripts/promote.sh vX.Y.Z beta` / `vX.Y.Z` (stable; needs green GitHub
+  CI). Channels: latest, beta, stable (new installs), dev. See `docs/releasing.md`.
 - **Conventions the tests and hooks enforce:**
   - Canadian and US law never mix. Read the country only through
     `src/taxjson/lib/country.py`. `tjs tax-logic` is the spec: a tax change

@@ -57,13 +57,33 @@ the same command with an older tag (it asks first).
 `scripts/promote.sh <tag> [stable|beta]` edits `channels.json`, commits
 only that file as `Promote vX.Y.Z to stable` and pushes `main` (after the
 pre-push PII gate, which the script runs itself, as `release.sh` does).
-It never tags and never rebuilds. It refuses when the tag does not exist
-(after fetching), when it is not a `vX.Y.Z` release, off `main`, when
-`channels.json` has uncommitted changes, when the local `main` is behind
-`origin/main`, and for `latest` (always the newest tag). Moving a channel
-BACKWARDS asks `[y/N]` first; anything but `y` changes nothing. Trailers
+It never tags and never rebuilds. It promotes only what GitHub holds, so
+it fetches first and refuses:
+
+- off `main`, with uncommitted changes to `channels.json`, for `latest`
+  (always the newest tag), or for a tag that is not a `vX.Y.Z` release;
+- unless the local `main` is exactly `origin/main` (nothing unpushed
+  rides along with the promote commit, and nothing newer is missed);
+- unless the tag is an annotated tag that origin has (the same object as
+  this clone's) and its commit is on `origin/main`.
+
+The channel's current release is read from `origin/main:channels.json`,
+what installers read. Moving a channel **forward** also needs CI: the
+GitHub Actions `tests.yml` run for the push of the tag's commit to
+`main` must have passed (`gh api`; a run still going is waited for; no
+run, a failed run or no `gh` refuses).
+`TAXJSON_PROMOTE_IGNORE_CI=1` promotes without that check and prints a
+warning. Moving a channel BACKWARDS (a rollback) is not held to CI,
+since an older tag may predate a CI fix, and asks `[y/N]` first;
+anything but `y` changes nothing. When the push is refused (main moved
+on meanwhile) or the PII gate refuses, the promote commit is taken back
+off the local `main`: only that commit (the script checks HEAD is it,
+its parent the `main` it started from, its only file `channels.json`),
+and other staged or uncommitted work is left alone. Trailers
 go on the commit only when you pass them:
 `TAXJSON_PROMOTE_TRAILERS='Co-Authored-By: …' scripts/promote.sh v0.17.0`.
+`TAXJSON_SLUG` names the GitHub repository when `origin` is not a
+github.com URL (default `taxjson/taxjson`).
 
 ### What the installer does with a channel
 

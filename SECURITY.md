@@ -216,6 +216,10 @@ installer clones that repository over HTTPS and checks out the tag
   it creates the release.
 - **`main`:** a repository rule refuses deleting the branch and force
   pushes, so published history is not rewritten.
+- **Channels:** `scripts/promote.sh` moves `stable` / `beta` only to an
+  annotated release tag on `origin/main`, from a `main` equal to
+  `origin/main`, and forward only when the tag's GitHub Actions run
+  passed.
 - **Dependencies:** Dependabot security updates are on (the core's
   only required dependencies are `tomli` before Python 3.11 and `tzdata`
   on Windows; the extras have more).

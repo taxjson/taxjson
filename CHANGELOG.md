@@ -12,6 +12,12 @@
 - The pre-push hook refuses a pushed tag that is not an annotated
   `vX.Y.Z` on `main` (the remote's, or the one the same push sends), and
   every tag delete or move: never `git push --tags`.
+- `scripts/promote.sh` promotes only what GitHub holds: the local `main`
+  must equal `origin/main`, the tag must be an annotated tag origin has
+  on `origin/main`, and the channel's current value is read from
+  `origin/main`. Moving a channel forward needs the tag's GitHub Actions
+  `tests.yml` run to be green (`TAXJSON_PROMOTE_IGNORE_CI=1` overrides,
+  with a warning). A refused push takes the promote commit back.
 
 
 ## v0.25.0 (2026-10-09)
