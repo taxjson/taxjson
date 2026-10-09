@@ -488,5 +488,60 @@ class TestLoosePermissionWarning(unittest.TestCase):
             self.assertIn(f"chmod -R go-rwx {root}", r.stderr)
 
 
+class TestRedactFileSafety(unittest.TestCase):
+    """LOW (g): the copy is never written through a link that appears
+    after the checks; a file link leaving inputs/ is not copied."""
+
+    def test_new_copy_refuses_a_raced_link(self):
+        from taxjson.bin import taxjson_redact as tr
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "a.csv"
+            src.write_text("Date,Description,Amount\r\n2025-01-01,x,1\r\n")
+            target = Path(tmp) / "victim.txt"
+            target.write_text("keep\n")
+            real_exists = Path.exists
+
+            def racing_exists(self_):
+                # The check sees nothing; then a link appears.
+                r = real_exists(self_)
+                if self_.name == "a.redacted.csv" and not r:
+                    os.symlink(target, self_)
+                return r
+            from unittest import mock
+            with mock.patch.object(Path, "exists", racing_exists):
+                with self.assertRaises(SystemExit):
+                    tr.redact_file(src, None, [], False, False)
+            self.assertEqual(target.read_text(), "keep\n")
+
+    def test_force_replaces_the_link_not_its_target(self):
+        from taxjson.bin import taxjson_redact as tr
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "a.csv"
+            src.write_text("Date,Description,Amount\r\n2025-01-01,x,1\r\n")
+            dst = Path(tmp) / "a.redacted.csv"
+            dst.write_text("old\n")
+            out, _ = tr.redact_file(src, None, [], False, True)
+            self.assertEqual(out, dst)
+            self.assertEqual(dst.read_bytes(),
+                             b"Date,Description,Amount\r\n2025-01-01,x,1\r\n")
+            self.assertEqual(dst.stat().st_mode & 0o077, 0)
+
+    def test_tree_skips_a_link_outside_inputs(self):
+        from taxjson.bin import taxjson_redact as tr
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "inputs" / "acct"
+            inputs.mkdir(parents=True)
+            (inputs / "q.csv").write_text("Date,Amount\n2025-01-01,1\n")
+            secret = Path(tmp) / "private.txt"
+            secret.write_text("not an export\n")
+            (inputs / "leak.csv").symlink_to(secret)
+            (inputs / "same.csv").symlink_to(inputs / "q.csv")
+            _, files, _ = tr._walk_inputs(Path(tmp) / "inputs")
+            skip = {f.rel.name: f.skip for f in files}
+            self.assertIn("outside inputs/", skip["leak.csv"])
+            self.assertIsNone(skip["same.csv"])
+            self.assertIsNone(skip["q.csv"])
+
+
 if __name__ == "__main__":
     unittest.main()

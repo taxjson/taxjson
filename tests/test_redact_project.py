@@ -372,23 +372,30 @@ class TestRedactProjectSymlinks(unittest.TestCase):
         outside.mkdir()
         (outside / "secret.csv").write_text(QT_CSV)
         inp = self.root / "inputs"
-        # A linked file is read through (the run reads it too) and
-        # written as a regular, redacted file; a linked folder is not
-        # followed; a dangling link is skipped.
+        # A linked file inside inputs/ is read through (the run reads it
+        # too) and written as a regular, redacted file; one leaving
+        # inputs/ is not copied (security review LOW g: a link to a
+        # private file elsewhere would land in the shared copy); a
+        # linked folder is not followed; a dangling link is skipped.
         (inp / "qt" / "linked.csv").symlink_to(outside / "secret.csv")
+        (inp / "qt" / "real.csv").write_text(QT_CSV)
+        (inp / "qt" / "inner.csv").symlink_to(inp / "qt" / "real.csv")
         (inp / "linkdir").symlink_to(outside)
         (inp / "qt" / "gone.csv").symlink_to(self.tmp / "missing.csv")
         r = tj(self.root, "redact", "--no-denylist")
         self.assertEqual(r.returncode, 0, r.stderr)
         out = self.root / "inputs_redact"
-        linked = out / "qt" / "linked.csv"
-        self.assertTrue(linked.is_file() and not linked.is_symlink())
-        self.assertNotIn(QT_ACCT, linked.read_text())
+        inner = out / "qt" / "inner.csv"
+        self.assertTrue(inner.is_file() and not inner.is_symlink())
+        self.assertNotIn(QT_ACCT, inner.read_text())
+        self.assertFalse(os.path.lexists(out / "qt" / "linked.csv"))
         self.assertFalse(os.path.lexists(out / "linkdir"))
         self.assertFalse(os.path.lexists(out / "qt" / "gone.csv"))
         text = flat(r)
         self.assertIn("inputs/linkdir not copied: a symlinked folder", text)
         self.assertIn("inputs/qt/gone.csv not copied", text)
+        self.assertIn("inputs/qt/linked.csv not copied: a symlink to a "
+                      "file outside inputs/", text)
         self.assertEqual((outside / "secret.csv").read_text(), QT_CSV)
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,

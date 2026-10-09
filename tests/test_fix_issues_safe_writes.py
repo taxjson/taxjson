@@ -178,6 +178,9 @@ _ALLOWED = {
     ("lib/json_cache.py",
      'with os.fdopen(fd, "w", encoding="utf-8") as f:'):
         "its own mkstemp temp file, renamed into place",
+    ("bin/taxjson_redact.py",
+     'with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:'):
+        "redact_file's new copy, os.open O_CREAT|O_EXCL|O_NOFOLLOW",
     ("lib/corp_actions.py",
      "with os.fdopen(fd, 'w', encoding='utf-8') as f:"):
         "Manifest.save's own mkstemp temp file, renamed into place",
@@ -205,10 +208,6 @@ _ALLOWED = {
     ("lib/migrate.py",
      "tp.write_text(_joined(before, pl.map_append),"):
         "scratch copy in a TemporaryDirectory",
-    ("bin/taxjson_redact.py",
-     'with open(dst, "w", encoding="utf-8", newline="") as fh:'):
-        "the redacted copy the user asked for (a symlink there is "
-        "refused before the write)",
     ("bin/taxjson_generate_parser.py",
      "bad_path.write_text(code, encoding='utf-8')"):
         "the generated parser the user names with --output",

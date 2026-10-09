@@ -1620,10 +1620,26 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
         raise SystemExit(exit_text(f"taxjson redact: {dst} is a symlink — refusing to write through it"))
     if dst.exists() and not force:
         raise SystemExit(exit_text(f"taxjson redact: {dst} exists (use --force to overwrite)"))
-    with open(dst, "w", encoding="utf-8", newline="") as fh:
-        if bom:
-            fh.write("﻿")
-        fh.write(new)
+    # The checks above can be raced (a link planted after them): the
+    # write itself never follows a symlink. A new copy is created with
+    # O_CREAT | O_EXCL | O_NOFOLLOW (anything that appeared at the name
+    # refuses); --force replaces the name through a temp file of its own
+    # (lib/safe_write), never opening what is there (2026-10 security
+    # review LOW g).
+    from taxjson.lib import safe_write
+    data = ("﻿" if bom else "") + new
+    if force:
+        safe_write.write_atomic(dst, data, encoding="utf-8", newline="")
+    else:
+        try:
+            fd = os.open(str(dst), os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError:
+            raise SystemExit(exit_text(
+                f"taxjson redact: {dst} appeared while redacting — "
+                f"nothing written (use --force to overwrite)")) from None
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(data)
     if written is not None:
         written.add(dst.resolve())
     return dst, rep
@@ -1754,6 +1770,15 @@ class _TreeFile:
         self.swept = 0
 
 
+def _inside(p: Path, folder: Path) -> bool:
+    """Whether `p` resolves to a place inside `folder`."""
+    try:
+        p.resolve(strict=True).relative_to(folder.resolve())
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
     """(folders, files, hidden-entry count) of `src`, relative to it,
     sorted. Hidden entries and Office lock files are left out (the run
@@ -1795,6 +1820,11 @@ def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
             tf = _TreeFile(rel_here / n)
             if p.is_symlink() and not p.exists():
                 tf.skip = "a symlink to a file that does not exist"
+            elif p.is_symlink() and not _inside(p, src):
+                # Its target is not one of your exports: a link to a
+                # private file elsewhere would land in the shared copy
+                # (2026-10 security review LOW g).
+                tf.skip = "a symlink to a file outside inputs/ (not followed)"
             elif not p.is_file():
                 tf.skip = "not a regular file"
             files.append(tf)

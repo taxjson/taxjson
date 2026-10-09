@@ -224,6 +224,12 @@
   `reports/` can be read or written by other users (folders made by an
   older taxjson, `mkdir` or a copy keep the shell's permissions), with
   the command that tightens it: `chmod -R go-rwx <project>`.
+- `taxjson redact` never writes its copy through a symlink that appears
+  at the copy's name after its checks (a new copy is created exclusively,
+  `--force` replaces the name), and in a project it does not copy a file
+  symlink that points outside `inputs/` into `inputs_redact/` (a warning
+  names it): a link to a private file elsewhere ended up in the copy
+  meant for sharing.
 
 ## v0.24.2 (2026-10-08)
 
