@@ -241,5 +241,52 @@ class TestRedactWallets(unittest.TestCase):
                                  if "wallet-like" in why}), [2, 3])
 
 
+class TestRedactNameReview(unittest.TestCase):
+    """M5: upper-case names and "LAST, FIRST" cells go to REVIEW; an
+    8-digit number after a broker's name is an account id. Synthetic."""
+
+    def _review_lines(self, text):
+        from taxjson.bin.taxjson_redact import redact_text
+        out, rep = redact_text(text)
+        return out, sorted({n for n, _ in rep.review})
+
+    def test_upper_case_names_are_reviewed(self):
+        text = ("Date,Description,Amount\n"
+                "2025-01-01,JANE Q SAMPLE,1\n"
+                '2025-01-02,"SAMPLE, JANE",1\n'
+                '2025-01-03,"Sample, Jane",1\n'
+                "2025-01-04,JOHN EXAMPLE,1\n")
+        self.assertEqual(self._review_lines(text)[1], [2, 3, 4, 5])
+
+    def test_security_descriptions_are_not(self):
+        descs = ("APPLE INC", "ISHARES CORE S&P 500 ETF",
+                 "BERKSHIRE HATHAWAY INC CL B", "CALL AAPL 01/17/25 150",
+                 "ROYAL BANK OF CANADA - Buy", "META PLATFORMS INC",
+                 "TORONTO DOMINION BANK", "NON-RESIDENT TAX WITHHELD",
+                 "USD CAD", "GLOBAL X ENHANCED ALL-EQUITY",
+                 "VANGUARD FTSE CDN HIGH DIV YLD INDEX ETF",
+                 '"Apple, Inc"', "INTEREST ON CREDIT BALANCE")
+        text = "Date,Description,Amount\n" + "".join(
+            f"2025-01-{i + 1:02d},{d},1\n" for i, d in enumerate(descs))
+        self.assertEqual(self._review_lines(text)[1], [])
+
+    def test_demo_csvs_do_not_flood_review(self):
+        from taxjson.bin.taxjson_redact import redact_text
+        for p in sorted((REPO / "examples").glob("*_demo.csv")):
+            with self.subTest(p.name):
+                _, rep = redact_text(p.read_text(encoding="utf-8"))
+                self.assertLessEqual(len(rep.review), 2)
+
+    def test_account_after_another_brokers_name(self):
+        text = ("Date,Description,Amount\n"
+                "2025-01-01,Transfer in from Questrade 55500099,1\n"  # pii-ok
+                "2025-01-02,TD Direct Investing acct 55500098 journal,1\n"  # pii-ok
+                "2025-01-03,Questrade 20250115 statement,1\n")
+        out, _ = self._review_lines(text)
+        self.assertNotIn("55500099", out)  # pii-ok
+        self.assertNotIn("55500098", out)  # pii-ok
+        self.assertIn("20250115", out)     # a date, not an id
+
+
 if __name__ == "__main__":
     unittest.main()

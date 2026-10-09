@@ -434,7 +434,7 @@ from exactly that.
 export while keeping every row's shape, so a file can be shared as a parser
 sample or a bug report. It is a best-effort pattern matcher.
 
-- `src/taxjson/bin/taxjson_redact.py` — `redact_file`, `redact_text`, `redact_tree`, `compile_patterns`, `Pseudonyms`, `load_denylist`: the redactor; wallet addresses `_WALLET` (pseudonymised when `_plausible_wallet`), leftovers `_WALLETISH` / `_wallet_like` (review).
+- `src/taxjson/bin/taxjson_redact.py` — `redact_file`, `redact_text`, `redact_tree`, `compile_patterns`, `Pseudonyms`, `load_denylist`: the redactor; wallet addresses `_WALLET` (pseudonymised when `_plausible_wallet`), leftovers `_WALLETISH` / `_wallet_like` (review); the review pass `_review` (`_caps_name`, `_LAST_FIRST`); ids after a broker name `_BROKER_ACCOUNT`.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_redact`: `taxjson redact`.
 
 ## Configuration: taxjson.toml, init, format and migrate

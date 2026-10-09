@@ -183,6 +183,12 @@
   Tron (`T…`) and Litecoin (`L…`, `M…`, `ltc1…`) addresses with stable
   same-shape pseudonyms, as it did Bitcoin and Ethereum ones; any other
   token of 25+ base58 or bech32 characters is listed for review.
+- `taxjson redact` lists more names for review: 2-4 upper-case words
+  that are no statement or security vocabulary (`JANE Q SAMPLE`) and a
+  `LAST, FIRST` cell; a security's description (`ISHARES CORE S&P 500
+  ETF`, `APPLE INC`) is not listed. An 8-digit number after another
+  broker's name (`Transfer from Questrade 12345678`) is now replaced as
+  an account number.
 
 ## v0.24.2 (2026-10-08)
 

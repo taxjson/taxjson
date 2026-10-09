@@ -10,7 +10,8 @@ What it changes, and nothing else:
     `"Account: 12345678 - Margin"` headers, Fidelity/Schwab-style
     `Z12345678` / `1234-5678` values in an account column, alphanumeric
     ids (`Account Number: 5MV07654`), any `account|acct|a/c … <id>` or
-    `transfer from|to [acct] <id>` phrase, `account = "<id>"` /
+    `transfer from|to [acct] <id>` phrase, an 8-digit number after a
+    broker's name (`Questrade 12345678`), `account = "<id>"` /
     `broker_account = "<id>"` / `"account_id": "<id>"` keys — each distinct id becomes a
     stable placeholder of the SAME shape (`U99900001`, `99900001`,
     `9990-0002`) and every occurrence in the file, descriptions
@@ -64,7 +65,9 @@ The report shows placeholders and id lengths, never the ids, checks
 that no collected id is left in the copy (any left over is counted and
 its lines listed for review), and lists
 (by line number only) the free-text lines that still hold name-like
-words or long digit runs it did not redact. `--check` writes nothing
+words (Title Case, 2-4 upper-case words that are no statement or
+security vocabulary, a `LAST, FIRST` cell) or long digit runs it did
+not redact. `--check` writes nothing
 and exits 1 when it finds anything to redact.
 
 With no FILE (`taxjson redact`, in a project or with -C DIR) the whole
@@ -84,6 +87,7 @@ import io
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -96,6 +100,20 @@ _ACCOUNT_PHRASE = re.compile(
     r"((?:\b(?:account|acct|a/c)\.?(?:\s*(?:#|number|num|no\.?|id))?\s*[:#]?\s*)"
     r"|(?:\btransfer(?:red)?\s+(?:from|to)\s+(?:(?:account|acct|a/c)\.?\s*)?(?:#\s*)?))"
     r"([A-Za-z0-9][A-Za-z0-9-]{4,16}[A-Za-z0-9])(?![A-Za-z0-9]|\.\d)",
+    re.IGNORECASE)
+# An 8-digit number right after a broker's name is that broker's
+# account number ("Transfer from Questrade <8 digits>", "TD <8 digits>"),
+# the shape Questrade, RBC, TD and the other Canadian dealers use
+# (2026-10 security review M5).
+_BROKER_ACCOUNT = re.compile(
+    r"\b(?:questrade|rbc(?:\s+direct(?:\s+investing)?)?|td(?:\s+direct"
+    r"(?:\s+investing)?|\s+waterhouse)?|bmo(?:\s+investorline)?|cibc"
+    r"(?:\s+investor'?s\s+edge)?|scotia(?:\s+itrade)?|itrade|national\s+bank"
+    r"(?:\s+direct(?:\s+brokerage)?)?|nbdb|qtrade|wealthsimple|desjardins"
+    r"|disnat|interactive\s+brokers|ibkr|webull|fidelity|schwab|vanguard"
+    r"|e\*?trade|hsbc(?:\s+investdirect)?|virtual\s+brokers|cibc)"
+    r"(?:\s+(?:inc|ltd|canada))?\.?\s*(?:account|acct|a/c)?\s*"
+    r"(?:#|no\.?|number)?\s*[:#-]?\s*(\d{8})(?!\d|\.\d)",
     re.IGNORECASE)
 # A config / JSON key naming an account: `broker_account = "..."` (the
 # live-holdings TOML fetch/verify write), `account = "..."`,
@@ -651,6 +669,18 @@ def _is_phrase_id(v: str) -> bool:
     return not any(c.islower() for c in v)
 
 
+def _is_broker_account(v: str) -> bool:
+    """8 digits after a broker's name: an account number unless it is a
+    real YYYYMMDD date."""
+    if not re.fullmatch(r"\d{8}", v):
+        return False
+    try:
+        datetime.strptime(v, "%Y%m%d")
+        return not 1900 <= int(v[:4]) <= 2100
+    except ValueError:
+        return True
+
+
 def _collect_ids(lines: List[str]) -> List[str]:
     ids: List[str] = []
     seen = set()
@@ -677,6 +707,8 @@ def _collect_ids(lines: List[str]) -> List[str]:
             add(m.group(2), _is_phrase_id)
         for m in _ACCOUNT_KEY.finditer(line):
             add(m.group(1))
+        for m in _BROKER_ACCOUNT.finditer(line):
+            add(m.group(1), _is_broker_account)
         cells = _split(line.rstrip("\r\n"))
         if not cells:
             continue
@@ -896,6 +928,54 @@ def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     return line
 
 
+# The currency codes an upper-case phrase of a statement is made of
+# ("USD CAD"), never a name.
+_CCY = frozenset("usd cad eur gbp jpy chf aud nzd hkd cny sgd mxn sek nok dkk "
+                 "btc eth".split())
+# Words of a security's name that a person's name does not carry: an
+# upper-case run holding one is a description, not a name.
+_SECURITY_WORDS = frozenset("""
+adr ads ag all-equity balanced bancorp banks bitcoin canada cl class cdn co
+covered digital emerging energy enhanced equity equal etn fin financial
+gambit global gold growth hedged high holdings hldgs intl international
+lp miners mining mgmt nv participation partners plc reit resources sa
+silver sponsored sub svgs technologies technology tr uranium units unit
+voting vtg weight yield ylt""".split())
+_CAPS_WORD = re.compile(rf"[{_UP}][{_UP}'’-]*\.?,?")
+# "Sample, Jane" / "SAMPLE, JANE Q": a whole cell that is a surname, a
+# comma and a given name (and an initial).
+_LAST_FIRST = re.compile(
+    rf"[{_UP}][{_AL}'’-]+,[ \t]*[{_UP}][{_AL}'’-]+(?:[ \t]+[{_UP}]\.?)?")
+
+
+def _caps_name(text: str) -> bool:
+    """2-4 upper-case words standing alone ("JANE Q SAMPLE"): none of
+    them statement vocabulary or a currency, at least two of 2+ letters,
+    and not part of a longer upper-case phrase — a word run joined to a
+    ticker, a number or punctuation ("ISHARES CORE S&P 500") is a
+    security's description, not a name (2026-10 security review M5)."""
+    seg: List[str] = []
+
+    def judge(seg: List[str]) -> bool:
+        if not 2 <= len(seg) <= 4 or not all(_CAPS_WORD.fullmatch(t)
+                                             for t in seg):
+            return False
+        words = [t.strip(".,").lower() for t in seg]
+        if any(w in _VOCAB or w in _CCY or w in _SECURITY_WORDS
+               or w == "redacted" for w in words):
+            return False
+        return sum(len(w) >= 2 for w in words) >= 2
+
+    for tok in text.split():
+        if any(c.islower() for c in tok):
+            if judge(seg):
+                return True
+            seg = []
+        else:
+            seg.append(tok)
+    return judge(seg)
+
+
 def _review(lineno: int, text: str, where: str, rep: Report) -> None:
     for ph in (*rep.accounts.values(), *rep.wallets.values(), *rep.txids.values()):
         if ph in text:
@@ -906,6 +986,12 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
         if not any(w in _VOCAB for w in words):
             reasons.append("name-like words")
             break
+    if not reasons:
+        last_first = _LAST_FIRST.fullmatch(text.strip())
+        if (last_first and not any(
+                w.strip(".,").lower() in _VOCAB | _CCY
+                for w in text.split())) or _caps_name(text):
+            reasons.append("name-like words")
     for m in _REVIEW_DIGITS.finditer(text):
         tok = m.group(0)
         if "9990" not in tok[:5] and not _DATE8.fullmatch(tok):
