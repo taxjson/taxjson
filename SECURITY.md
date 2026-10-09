@@ -207,7 +207,9 @@ installer clones that repository over HTTPS and checks out the tag
 `channels.json` on `main` names for your channel. What protects them:
 
 - **Tags:** a repository rule lets only the repository's admins create
-  a `v*` tag, and nobody may move or delete one once it exists.
+  a `v*` tag, and nobody may move or delete one once it exists. The
+  maintainer's pre-push hook refuses any pushed tag that is not an
+  annotated `vX.Y.Z` on `main`, and every tag delete or move.
 - **Releases:** GitHub releases are immutable — a published release's
   tag and assets cannot be changed afterwards. `scripts/release.sh`
   scans a release's notes with `scripts/check-pii.sh --message` before

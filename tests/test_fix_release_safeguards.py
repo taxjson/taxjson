@@ -265,5 +265,111 @@ class TestReleaseNotes(_ReleaseRepo):
         self.assertFalse([c for c in self.gh_calls() if c[0] == "release"])
 
 
+class TestTagGuard(_Sandbox):
+    """scripts/hooks/pre-push refuses any pushed tag that is not an
+    annotated vX.Y.Z on main, and every tag delete or move."""
+
+    def setUp(self):
+        super().setUp()
+        self.origin = self.d / "origin.git"
+        self.git(self.d, "init", "-q", "--bare", "-b", "main",
+                 str(self.origin))
+        self.repo = self.d / "repo"
+        self.git(self.d, "clone", "-q", str(self.origin), str(self.repo))
+        self.git(self.repo, "symbolic-ref", "HEAD", "refs/heads/main")
+        (self.repo / "scripts" / "hooks").mkdir(parents=True)
+        shutil.copy(REPO / "scripts" / "check-pii.sh",
+                    self.repo / "scripts")
+        shutil.copy(REPO / "scripts" / "hooks" / "pre-push",
+                    self.repo / "scripts" / "hooks")
+        (self.repo / ".gitignore").write_text("scripts/\n")
+        self.commit("a")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.a = self.git(self.repo, "rev-parse", "HEAD")
+
+    def commit(self, name):
+        (self.repo / f"{name}.txt").write_text(f"{name}\n")
+        self.git(self.repo, "add", "-A")
+        self.git(self.repo, "commit", "-q", "-m", name)
+        return self.git(self.repo, "rev-parse", "HEAD")
+
+    def hook(self, lines):
+        return subprocess.run(
+            ["bash", str(self.repo / "scripts" / "hooks" / "pre-push"),
+             "origin", str(self.origin)], cwd=self.repo, capture_output=True,
+            text=True, input=lines, env=self.env)
+
+    def tag_line(self, name, remote_sha=_Z):
+        sha = self.git(self.repo, "rev-parse", f"refs/tags/{name}")
+        return f"refs/tags/{name} {sha} refs/tags/{name} {remote_sha}\n"
+
+    def assertRefused(self, r, why):
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("refusing to push these tags", r.stderr)
+        self.assertIn(why, r.stderr)
+        self.assertIn("never `git push --tags`", r.stderr)
+
+    def test_annotated_release_on_main_passes(self):
+        self.git(self.repo, "tag", "-a", "v1.2.3", "-m", "taxjson v1.2.3")
+        r = self.hook(self.tag_line("v1.2.3"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_bad_names_and_lightweight_tags(self):
+        for name in ("release-1", "v1.2", "v1.2.3-rc1", "v01.2.3x"):
+            self.git(self.repo, "tag", "-a", name, "-m", "t")
+            self.assertRefused(self.hook(self.tag_line(name)),
+                               f"{name}: not a release tag (vX.Y.Z)")
+        self.git(self.repo, "tag", "v1.2.4")
+        self.assertRefused(self.hook(self.tag_line("v1.2.4")),
+                           "v1.2.4: a lightweight tag")
+
+    def test_commit_must_be_on_main(self):
+        self.git(self.repo, "checkout", "-q", "-b", "side")
+        self.commit("side")
+        self.git(self.repo, "tag", "-a", "v1.2.5", "-m", "t")
+        self.git(self.repo, "checkout", "-q", "main")
+        self.assertRefused(self.hook(self.tag_line("v1.2.5")),
+                           "v1.2.5: its commit is not on origin's main")
+        # A new main commit is fine when the same push sends that main.
+        c = self.commit("c")
+        self.git(self.repo, "tag", "-a", "v1.2.6", "-m", "t")
+        self.assertRefused(self.hook(self.tag_line("v1.2.6")),
+                           "not on origin's main")
+        main = f"refs/heads/main {c} refs/heads/main {self.a}\n"
+        r = self.hook(main + self.tag_line("v1.2.6"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # ...but not a main pushed to another branch name.
+        other = f"refs/heads/main {c} refs/heads/wip {_Z}\n"
+        self.assertRefused(self.hook(other + self.tag_line("v1.2.6")),
+                           "not on origin's main")
+
+    def test_delete_and_move_refused(self):
+        self.git(self.repo, "tag", "-a", "v1.2.3", "-m", "t")
+        sha = self.git(self.repo, "rev-parse", "v1.2.3")
+        r = self.hook(f"(delete) {_Z} refs/tags/v1.2.3 {sha}\n")
+        self.assertRefused(r, "v1.2.3: deleting a tag")
+        r = self.hook(self.tag_line("v1.2.3", remote_sha=self.a))
+        self.assertRefused(r, "v1.2.3: moving a tag")
+
+    def test_a_real_push_of_every_tag_is_refused(self):
+        self.git(self.repo, "config", "core.hooksPath",
+                 str(self.repo / "scripts" / "hooks"))
+        self.git(self.repo, "tag", "-a", "v1.2.3", "-m", "taxjson v1.2.3")
+        self.git(self.repo, "tag", "old-private-tag")
+        r = subprocess.run(["git", "push", "-q", "origin", "--tags"],
+                           cwd=self.repo, capture_output=True, text=True,
+                           env=self.env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("old-private-tag: not a release tag", r.stderr)
+        self.assertEqual(self.git(self.repo, "ls-remote", "--tags", "origin"),
+                         "")
+        r = subprocess.run(["git", "push", "-q", "origin", "v1.2.3"],
+                           cwd=self.repo, capture_output=True, text=True,
+                           env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("refs/tags/v1.2.3",
+                      self.git(self.repo, "ls-remote", "--tags", "origin"))
+
+
 if __name__ == "__main__":
     unittest.main()

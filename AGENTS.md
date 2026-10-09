@@ -62,7 +62,9 @@ IRS guidance and a tax professional.
   run the gate once in a fresh `git clone` (it catches untracked files).
 - **Releasing:** `scripts/release.sh vX.Y.Z [--notes FILE]` (CHANGELOG
   `## Unreleased` → `## vX.Y.Z (date)`, full gate, tag, push, then the
-  GitHub release with PII-scanned notes), then `scripts/promote.sh vX.Y.Z
+  GitHub release with PII-scanned notes; never `git push --tags`:
+  release.sh pushes the one tag, and the pre-push hook refuses any tag
+  that is not an annotated `vX.Y.Z` on main, and every tag delete), then `scripts/promote.sh vX.Y.Z
   beta` and later `scripts/promote.sh vX.Y.Z` for stable. Channels: latest,
   beta, stable (new installs), dev. See `docs/releasing.md`.
 - **Conventions the tests and hooks enforce:**

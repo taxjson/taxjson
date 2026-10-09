@@ -9,6 +9,9 @@
   scanned by `scripts/check-pii.sh --message` first: releases are
   immutable, so a hit stops the release before anything is published.
   Without `gh` it stops with the exact command to run.
+- The pre-push hook refuses a pushed tag that is not an annotated
+  `vX.Y.Z` on `main` (the remote's, or the one the same push sends), and
+  every tag delete or move: never `git push --tags`.
 
 
 ## v0.25.0 (2026-10-09)
