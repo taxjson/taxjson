@@ -15,7 +15,7 @@ A project is a folder:
 | `inputs/<crypto account>/sends.json`, `crypto_sends.tt` | your crypto-send decisions and the sales generated from them | [sends.json](#inputscrypto-accountsendsjson-and-crypto_sendstt) |
 | `missing_history.json` | sales whose purchase is not in your files | [missing_history.json](#missing_historyjson) |
 | holdings TOML (anywhere) | a broker's positions, for `taxjson sanity` / `taxjson opening` | [Holdings TOML](#holdings-toml) |
-| `inputs/slips/slips.toml`, `inputs/slips/U*.YYYY.dividends.csv` | your T5 / T3 slips and IB's dividends reports, for `taxjson slip-audit` (`slips/` in the project when `inputs_dir` names a shared folder) | [inputs/slips/](#inputsslips-slipstoml-and-ibs-dividends-reports) |
+| `inputs/slips/slips.toml`, `inputs/slips/U*.YYYY.dividends.csv` | your T5 / T3 slips and IB's dividends reports, for `taxjson slip-audit` (the project's own, also when `inputs_dir` names a shared folder) | [inputs/slips/](#inputsslips-slipstoml-and-ibs-dividends-reports) |
 | `inputs/slips/*.csv` | T5008 / 1099-B slips, for `taxjson reconcile-slips` | — |
 | `holdings/*.toml` | the year's broker positions snapshots, read by `taxjson sanity` with no setting | [holdings/](#holdings-the-years-positions-snapshots) |
 | `filed/<year>.json` | close-year locks | [filed/YEAR.json](#filedyearjson-close-year-locks) |
@@ -87,7 +87,7 @@ The keys come in groups, in the order `taxjson init` writes them.
 Where the project reads its exports and positions and writes files for other tools. A relative path is read from the project folder; every one must stay inside the folder that holds the project (its parent) — a path or symlink leading further out is refused, naming it (`src/taxjson/lib/project_layout.py` — `folder_setting`, `setting_problems`).
 
 #### `inputs_dir`
-- **Meaning:** the folder of the broker exports (`<folder>/<account>/`: CSVs, `.tt` files, `manifest.json`, `sends.json`), when the year projects share one. The run reads it like `inputs/`; a folder of an account this year's `taxjson.toml` does not have (one split later, one closed earlier) is not read, with one `Info:` line. With it, a year folder named `YYYY` must hold that year's project (`year`), and the year's slips are in the project's `slips/` (slips belong to one year).
+- **Meaning:** the folder of the broker exports (`<folder>/<account>/`: CSVs, `.tt` files, `manifest.json`, `sends.json`), when the year projects share one. The run reads it like `inputs/`; a folder of an account this year's `taxjson.toml` does not have (one split later, one closed earlier) is not read, with one `Info:` line. With it, a year folder named `YYYY` must hold that year's project (`year`), and the year's slips stay in the project's own `inputs/slips/` (slips belong to one year; any other folder there is not read, with a warning).
 - **Default:** `inputs/` in the project.
 - **Country:** both.
 - **Change it when:** `taxjson init` sets it (`"../inputs"`); `taxjson migrate --to-years` sets it on an existing project.
@@ -648,11 +648,11 @@ Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated l
 
 ## missing_history.json
 
-At the project root (the old name `phantoms.json` is still read, with a note; both names at once is refused). A JSON array of `{ "symbol", "account" }` objects; keys starting with `_` are ignored. Each entry gives the account a missing-history opening with no cost: sales drawing on it are listed for manual reporting and left out of the totals. `taxjson find-missing-history --write-missing-history` writes candidates (never over an existing file without `--force`). An entry whose position no longer goes short is reported STALE; delete it. Both countries. Read by `src/taxjson/lib/missing_history.py` — `load_missing_history`, `project_missing_history_file`.
+At the project root (the old name `phantoms.json` is still read, with a note; both names at once is refused); each year's project keeps its own. A JSON array of `{ "symbol", "account" }` objects, with an optional `"quantity"` (the shares, or units, the opening fills; `find-missing-history --write-missing-history` writes it); keys starting with `_` are ignored. Each entry gives the account a missing-history opening with no cost: sales drawing on it are listed for manual reporting and left out of the totals. The opening fills the entry's first shortage only — from the first sale that takes the position below zero until it is back at zero — and never more than its `quantity`: a later short (an intraday crossing in a margin account, a later year's export) is a real short or a new gap, not more of it (tax-logic `CA-ACB-11` / `US-BASIS-04`). An entry without `quantity` gets one `Info:` line per run. `taxjson find-missing-history --write-missing-history` writes candidates (never over an existing file without `--force`). An entry whose position no longer goes short is reported STALE; delete it. Both countries. Read by `src/taxjson/lib/missing_history.py` — `load_missing_history`, `project_missing_history_file`.
 
 ```json
 [
-  {"symbol": "ZZQ.US", "account": "margin", "_note": "bought before 2019"}
+  {"symbol": "ZZQ.US", "account": "margin", "quantity": 10, "_note": "bought before 2019"}
 ]
 ```
 

@@ -774,7 +774,7 @@ import the PDFs CRA My Account shows under "Tax information slips"
 `inputs/slips/slips.toml` (`tjs slip-audit --template` prints one to fill
 in) or drop IBKR's dividends report
 (`U*.YYYY.dividends.csv`) in `inputs/slips/`, then (with one folder of
-exports for every year the slips are the year's own: `2025/slips/`)
+exports for every year the slips are the year's own: `2025/inputs/slips/`)
 
 ```bash
 tjs slip-audit
@@ -816,7 +816,7 @@ and a complete project per tax year beside them.
     taxjson.toml        year = 2024, inputs_dir = "../inputs"
     ticker.map
     holdings/           2024's broker positions snapshots
-    slips/              2024's slips (slips.toml, IB's report, T5008)
+    inputs/slips/       2024's slips (slips.toml, IB's report, T5008)
     filed/ work/ reports/ checklist.json
   2025/                 the 2025 project, the same shape
 ```
@@ -835,7 +835,7 @@ and a complete project per tax year beside them.
   decision you make — `tjs elect … --set`, `tjs crypto-sends … --set`,
   or an answer at the run's prompt — is saved there, and it applies to
   every year. The year's own, in its folder: `taxjson.toml`,
-  `ticker.map`, `missing_history.json`, `slips/`, `holdings/`,
+  `ticker.map`, `missing_history.json`, `inputs/slips/`, `holdings/`,
   `checklist.json`, `work/` (where it generates its `crypto_sends.tt`
   from `sends.json` and its own map), `reports/` and `filed/`.
 - **Downloads go into `inputs/<account>/`**, all years together (file
@@ -879,7 +879,7 @@ and a complete project per tax year beside them.
 `--dry-run` first) keeps `inputs/` where it is and moves the project's
 own files (`taxjson.toml`, `ticker.map`, `missing_history.json`,
 `checklist.json`, `work/`, `reports/`, `filed/`, `inputs/slips/` as
-`slips/`) into a folder named for its year, setting `inputs_dir` and
+`inputs/slips/`) into a folder named for its year, setting `inputs_dir` and
 `exports_dir` and moving relative `holdings` and `prior_year_record`
 paths one level down. To fold several year projects (`~/taxes/2024/`,
 `~/taxes/2025/`, each with its own `inputs/`) into one: in a new folder,

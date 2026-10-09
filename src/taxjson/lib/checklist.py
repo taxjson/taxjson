@@ -791,8 +791,8 @@ def d_inputs_committed(ctx: Ctx) -> Result:
                           f"folders and the shared inputs/ in one "
                           f"repository (`git init` in the folder above)")
         paths += [_os.path.relpath(shared, ctx.root)]
-        if _PL.slips_dir(ctx.root).exists():
-            paths.append(_PL.SLIPS)
+        if _PL.slips_dir(ctx.root).exists() and "inputs" not in paths:
+            paths.append("inputs")
     code, out = _git_status(ctx.root, *paths)
     dirty = [ln for ln in out.splitlines() if ln.strip()]
     if code != 0:

@@ -13,7 +13,7 @@ projects of every year:
         taxjson.toml           year = 2024, inputs_dir = "../inputs"
         ticker.map             its own map
         holdings/              2024's broker positions snapshots
-        slips/                 2024's slips
+        inputs/slips/          2024's slips (its own inputs/ holds only them)
         filed/ work/ reports/ checklist.json
       2025/ ...
 
@@ -211,11 +211,24 @@ def data_root(root) -> Path:
 
 
 def slips_dir(root) -> Path:
-    """The year's slips: inputs/slips/, or <project>/slips/ when the
-    exports are shared (slips belong to one tax year)."""
-    if shared_inputs(root):
-        return Path(root) / SLIPS
+    """The year's slips: always the project's own inputs/slips/ — with
+    exports shared by every year (`inputs_dir`) the project keeps an
+    inputs/ folder of its own for them alone (slips belong to one tax
+    year)."""
     return Path(root) / INPUTS / SLIPS
+
+
+def local_input_folders(root) -> List[str]:
+    """With shared exports: the folders of the project's own inputs/
+    besides slips/ (exports put there are not read). [] otherwise."""
+    if not shared_inputs(root):
+        return []
+    d = Path(root) / INPUTS
+    try:
+        return sorted(p.name for p in d.iterdir() if p.is_dir()
+                      and p.name != SLIPS and not p.name.startswith("."))
+    except OSError:
+        return []
 
 
 def holdings_folder(root) -> Path:

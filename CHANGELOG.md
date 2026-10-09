@@ -25,6 +25,15 @@
 - `[settings] exports_dir`: the newest year's run copies its positions
   and wash radar there, with a README, for other tools.
 
+### Fixed
+
+- A `missing_history.json` entry fills only its position's first
+  shortage (until the position is back at zero), and never more than the
+  new `quantity` it can record: a later short — an intraday crossing in a
+  margin account, or a later year's export — no longer grows the opening
+  and sends an earlier year's sales to manual reporting.
+  `find-missing-history --write-missing-history` records the quantity.
+
 ## v0.25.0 (2026-10-09)
 
 ### Changed

@@ -58,8 +58,19 @@ class MissingHistoryFileConflict(ValueError):
 class MissingHistoryPairs(set):
     """The (symbol, account) pairs load_missing_history read, carrying
     the file's name as the user has it on disk (missing_history.json, or
-    the legacy phantoms.json) so every note and warning names it."""
+    the legacy phantoms.json) so every note and warning names it, and
+    each entry's recorded `quantity` (`quantities`; an entry without one
+    is sized from its first shortage episode alone)."""
     source_name = MISSING_HISTORY_FILE
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.quantities: Dict[Tuple[str, str], float] = {}
+
+
+# The entry key that records how many shares (units) an opening fills:
+# written by `find-missing-history --write-missing-history`.
+QUANTITY_KEY = "quantity"
 
 
 def _source_name(pairs) -> str:
@@ -2110,9 +2121,13 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
             *complete[0], file_name, more=complete[1:]), file=sys.stderr)
 
 
-def format_suggestions(candidates: List[MissingHistoryCandidate]) -> str:
+def format_suggestions(candidates: List[MissingHistoryCandidate],
+                       quantities: Optional[Dict[Tuple[str, str], float]]
+                       = None) -> str:
     """Write the candidate JSON to a string. Underscore-prefixed fields are
-    notes for human review; the loader ignores them."""
+    notes for human review; the loader ignores them. `quantities`: the
+    shares each entry's opening fills (its first shortage episode,
+    synthesize_openings), recorded as `quantity`."""
     entries = []
     for c in candidates:
         note = (
@@ -2128,9 +2143,11 @@ def format_suggestions(candidates: List[MissingHistoryCandidate]) -> str:
                     "history, not a short or a written option"
                     + (f" (IB Basis {c.broker_basis})"
                        if c.broker_basis else ""))
+        _q = (quantities or {}).get((c.symbol, c.account))
         entries.append({
             "symbol": c.symbol,
             "account": c.account,
+            **({QUANTITY_KEY: round(_q, 10)} if _q else {}),
             "_note": note,
             "_first_negative": c.first_negative_date,
             # Full precision (audit S074-22: a 3e-05 BTC short read
@@ -2174,8 +2191,23 @@ def load_missing_history(path: Path) -> MissingHistoryPairs:
         # Book symbols are upper-case: a hand-typed 'xyz.to' used to
         # match nothing and read as "data does not go negative" (audit
         # S075-24 / S076-00).
-        out.add((str(symbol).strip().upper(), str(account).strip()))
+        pair = (str(symbol).strip().upper(), str(account).strip())
+        out.add(pair)
+        q = entry.get(QUANTITY_KEY)
+        if q is not None:
+            if isinstance(q, bool) or not isinstance(q, (int, float)) \
+                    or not q > 0 or q != q or q == float("inf"):
+                raise ValueError(f"{path}[{i}]: {QUANTITY_KEY!r} must be "
+                                 f"a positive number (got {q!r})")
+            out.quantities[pair] = float(q)
     return out
+
+
+def unrecorded_quantity_entries(pairs) -> List[Tuple[str, str]]:
+    """The entries of a loaded file that record no `quantity` (each is
+    sized from its first shortage episode)."""
+    q = getattr(pairs, "quantities", None) or {}
+    return sorted(p for p in (pairs or ()) if p not in q)
 
 
 # The replacement rule a manual warning names, and the date its ±30-day
@@ -2306,6 +2338,7 @@ def synthesize_openings(
     if not pairs:
         return list(transactions), []
     label = _source_name(pairs)
+    pairs_in = pairs
 
     # Compute min running position per LISTED pair — same walk as
     # detect_missing_history but restricted to listed pairs (expanded to their
@@ -2380,6 +2413,14 @@ def synthesize_openings(
     # silently dropped from gains.)
     min_running: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
     running: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
+    # The shortage an entry fills is its FIRST episode's: from the first
+    # row that takes the position below zero until it is back at zero or
+    # above. A later short (an intraday crossing in a margin account, a
+    # later year's gap) is a real short or a new gap, never more of this
+    # missing history — with exports shared by every year, an older
+    # year's opening grew from a later year's short (tax-logic
+    # CA-ACB-11 / US-BASIS-04).
+    episode_done: Set[Tuple[str, str]] = set()
     split_factor: Dict[Tuple[str, str], float] = {p: 1.0 for p in pairs}
     # pair -> (anchor_symbol, anchor_date): first activity anywhere in the
     # pair's chain. The opening must carry the chain's EARLIEST symbol.
@@ -2407,8 +2448,12 @@ def synthesize_openings(
                 split_factor[pair] *= ratio
             continue
         running[pair] += tx.quantity / split_factor[pair]
-        if running[pair] < min_running[pair]:
+        if pair in episode_done:
+            pass
+        elif running[pair] < min_running[pair]:
             min_running[pair] = running[pair]
+        elif min_running[pair] < -1e-6 and running[pair] >= -1e-9:
+            episode_done.add(pair)
         if tx.currency and pair not in currency:
             currency[pair] = tx.currency
 
@@ -2451,6 +2496,13 @@ def synthesize_openings(
             continue
 
         opening_qty = abs(min_pos)
+        _rec = (getattr(pairs_in, "quantities", None) or {}).get(
+            (symbol, account))
+        if _rec is not None and _rec < opening_qty:
+            # The quantity the entry records caps the fill: never more
+            # than the shares it was written for.
+            opening_qty = _rec
+            entry['recorded_quantity'] = _rec
         # Anchor on the CHAIN's earliest symbol and ONE DAY BEFORE its first
         # activity. The earliest symbol lets the engine replay the opening
         # through any rename. The opening anchors ON that first-activity

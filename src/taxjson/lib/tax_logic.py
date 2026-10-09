@@ -1280,7 +1280,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(its old name phantoms.json is still read): sales that "
                  "draw on them have an unknown cost — they are listed "
                  "for manual reporting and left out of the totals, with no superficial-loss "
-                 "test, until the position is fully sold.", cont=True),
+                 "test, until the position is fully sold. An entry fills "
+                 "only its first shortage: from the first sale that takes "
+                 "the position below zero until it is back at zero, at "
+                 "most the `quantity` it records; a later short is a real "
+                 "short (or a new gap), never more of it.", cont=True),
             Rule("CA-ACB-12",
                  "A loss within 30 days (settle dates) of such a sale, or "
                  "such a sale at a loss with a purchase in that window, is "
@@ -2993,7 +2997,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "before the data starts) go in missing_history.json "
                  "(its old name phantoms.json is still read): sales that "
                  "draw on them have an unknown cost — they are listed "
-                 "for manual reporting and left out of the totals. A loss within 30 days "
+                 "for manual reporting and left out of the totals. An "
+                 "entry fills only its first shortage: from the first sale "
+                 "that takes the position below zero until it is back at "
+                 "zero, at most the `quantity` it records; a later short "
+                 "is a real short (or a new gap), never more of it. A loss within 30 days "
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
                  "wash-sale check (not for crypto accounts)."),
