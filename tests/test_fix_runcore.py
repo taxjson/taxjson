@@ -251,7 +251,7 @@ class TestInitForceKeepsEveryBackup(unittest.TestCase):
 
         def _init(path, country):
             with redirect_stdout(io.StringIO()) as out:
-                cmd_init(argparse.Namespace(path=str(path), dir=".",
+                cmd_init(argparse.Namespace(single=True, path=str(path), dir=".",
                                             force=True, country=country,
                                             year=None))
             return out.getvalue()

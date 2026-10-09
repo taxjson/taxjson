@@ -103,7 +103,7 @@ class TestGrantSince(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "p"
             with redirect_stdout(io.StringIO()):
-                cmd_init(argparse.Namespace(path=str(root), dir=".",
+                cmd_init(argparse.Namespace(single=True, path=str(root), dir=".",
                                             force=False, country="canada",
                                             year=2025))
             doc = tomllib.loads((root / "taxjson.toml").read_text())
@@ -112,7 +112,7 @@ class TestGrantSince(unittest.TestCase):
             root2 = Path(td) / "u"
             with redirect_stdout(io.StringIO()), \
                     redirect_stderr(io.StringIO()):
-                cmd_init(argparse.Namespace(path=str(root2), dir=".",
+                cmd_init(argparse.Namespace(single=True, path=str(root2), dir=".",
                                             force=False, country="usa",
                                             year=2025))
             doc = tomllib.loads((root2 / "taxjson.toml").read_text())

@@ -1157,7 +1157,10 @@ class TestPhantomWalks(unittest.TestCase):
         self.assertEqual(sizes, {100.0})
 
     def test_rename_chain_both_ends_listed_is_deterministic(self):
-        # S021-04: same numbers under every PYTHONHASHSEED.
+        # S021-04: same numbers under every PYTHONHASHSEED. The opening
+        # fills the first shortage (10 sold before the data, back to 10
+        # held by the February buy); the 15 sold short after the rename
+        # is a later short, not more missing history (CA-ACB-11).
         import os
         import subprocess
         import sys
@@ -1184,7 +1187,7 @@ class TestPhantomWalks(unittest.TestCase):
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             outs.add(r.stdout.strip())
-        self.assertEqual(outs, {'15.0'})
+        self.assertEqual(outs, {'10.0'})
 
     def test_registered_from_configured_type(self):
         # S076-08.

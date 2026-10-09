@@ -663,7 +663,7 @@ class TestRunNoteWording(unittest.TestCase):
     def test_init_force_names_the_numbered_backup(self):
         with tempfile.TemporaryDirectory() as td:
             base = [sys.executable, '-m', 'taxjson.bin.taxjson_run', 'init',
-                    td, '--year', '2025']
+                    '--single', td, '--year', '2025']
             run = dict(capture_output=True, text=True,
                        stdin=subprocess.DEVNULL)
             subprocess.run(base + ['--country', 'ca'], check=True, **run)
