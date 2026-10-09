@@ -142,6 +142,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/loss_overrides.py` — `write_state`; `src/taxjson/lib/safe_write.py` — `write_atomic`; `src/taxjson/bin/taxjson_run.py` — `_record_skipped_accounts`, `stage_own_account_moves`
 
+### "Error: folder(s) that are symlinks to outside the project — taxjson writes there; nothing was run: work/ -> /mnt/scratch/work"
+- **Check:** `ls -ld work reports filed export inputs inputs/*` in the project shows the named folder as a link (`->`) to a path outside the project folder. Every command stops with exit 2.
+- **Cause:** taxjson writes your books (`work/`), reports, the filed lock and, in an account's `inputs/` folder, the elections and crypto-send decisions. A folder that is a link leaving the project sent those files wherever it points, so such a link is refused, as a `ticker.map` link outside the project is. A link to a folder inside the project is fine.
+- **Fix:** replace the link with a real folder: `rm work && mkdir work` (copy the contents in first if you need them; `work/` is rebuilt by `tjs run`), or run taxjson in the folder the link points into.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_outside_dir_links`, `_WRITTEN_DIRS`, `load_config`; `src/taxjson/lib/safe_write.py` — `link_outside`
+
 ## Reading the broker files
 
 ### "Error: cannot detect broker for inputs/qt/99900001.csv. Check the header first: …"

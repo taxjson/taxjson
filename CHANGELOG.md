@@ -208,6 +208,11 @@
 - `taxjson run` takes its `work/.run.lock` like every other lock: created
   owner-only and never through a symlink (a link planted there had its
   target created or opened).
+- Every command stops (exit 2) when `work/`, `reports/`, `filed/`,
+  `export/`, `inputs/` or an account's `inputs/<account>/` folder is a
+  symlink to a place outside the project, naming each: taxjson writes
+  there, and the files went wherever the link pointed. A link inside the
+  project is kept.
 
 ## v0.24.2 (2026-10-08)
 

@@ -344,5 +344,50 @@ class TestRunLockNeverFollowsALink(unittest.TestCase):
                 tr._RUN_LOCK_FH = old
 
 
+class TestOutsideFolderLinksRefused(unittest.TestCase):
+    """LOW (c): work/, reports/ or inputs/<account>/ linked outside the
+    project stops every command (exit 2); a link inside is fine."""
+
+    def _cli(self, root, *args):
+        return subprocess.run([sys.executable, "-m",
+                               "taxjson.bin.taxjson_run", "-C", str(root),
+                               *args], capture_output=True, text=True,
+                              env=dict(ENV, TAXJSON_WIDTH="0"),
+                              stdin=subprocess.DEVNULL, cwd=str(REPO))
+
+    def test_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "proj"
+            r = self._cli(root, "init", "--country", "canada")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            acct = sorted(d.name for d in (root / "inputs").iterdir()
+                          if d.is_dir())[0]
+            outside = Path(tmp) / "elsewhere"
+            outside.mkdir()
+            for name in ("work", "reports", f"inputs/{acct}"):
+                with self.subTest(name=name):
+                    link = root / name
+                    if link.is_dir() and not link.is_symlink():
+                        link.rename(Path(tmp) / "saved")
+                    link.symlink_to(outside, target_is_directory=True)
+                    r = self._cli(root, "run", "--no-input")
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn("symlinks to outside the project",
+                                  r.stderr)
+                    self.assertIn(f"{name}/ ->", r.stderr)
+                    self.assertEqual(list(outside.iterdir()), [])
+                    link.unlink()
+                    if (Path(tmp) / "saved").exists():
+                        (Path(tmp) / "saved").rename(link)
+            # inside the project: kept
+            (root / "scratch").mkdir()
+            if (root / "work").exists():
+                import shutil
+                shutil.rmtree(root / "work")
+            (root / "work").symlink_to(root / "scratch")
+            r = self._cli(root, "run", "--no-input")
+            self.assertNotIn("symlinks to outside", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

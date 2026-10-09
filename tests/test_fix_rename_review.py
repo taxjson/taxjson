@@ -530,8 +530,11 @@ class TestFormatMapLows(unittest.TestCase):
             tmap = (root / "ticker.map").read_text()
             w = cli(root, "format-map", "--write")
             self.assertEqual(w.returncode, 2, _out(w))
-            self.assertIn("outside the project — nothing was written",
-                          _out(w))
+            # Refused before anything runs: every command stops on a
+            # written folder linked outside the project (security
+            # review LOW c).
+            self.assertIn("symlinks to outside the project", _out(w))
+            self.assertIn("inputs/margin/ ->", _out(w))
             self.assertFalse((Path(away) / "margin" / "renames.tt").exists())
             self.assertEqual((root / "ticker.map").read_text(), tmap)
 

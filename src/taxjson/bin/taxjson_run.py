@@ -895,6 +895,7 @@ def load_config(root: Path) -> Dict[str, Any]:
                      f"folder).")
     except Exception as e:
         _die(f"{path} is not valid TOML: {e}")
+    _refuse_outside_dir_links(root, cfg.get("accounts") or {})
     _refuse_bad_account_types(cfg)
     _normalize_settings(cfg)
     # The project's ticker.map extends the shipped market lists
@@ -3672,6 +3673,32 @@ def cmd_migrate(args: argparse.Namespace) -> None:
             "*.migrated files once you are satisfied; run `taxjson run` to "
             "rebuild.", indent="  "):
         print(_ln)
+
+
+# The folders taxjson writes into: generated state, reports, the filed
+# lock, and the account folders (elections manifest, crypto_sends.tt).
+_WRITTEN_DIRS = ("work", "reports", "filed", "export", "inputs")
+
+
+def _refuse_outside_dir_links(root: Path, accounts: Dict[str, Any]) -> None:
+    """Die (exit 2) when a folder taxjson writes into is a symlink that
+    leaves the project: the books, reports and elections would land in
+    whatever it points at (2026-10 security review LOW c). A link inside
+    the project is kept, as for ticker.map (safe_write.link_outside)."""
+    from taxjson.lib.safe_write import link_outside
+    names = list(_WRITTEN_DIRS) + [f"inputs/{a}" for a in accounts]
+    bad = []
+    for n in names:
+        target = link_outside(root / n, root)
+        if target is not None:
+            bad.append(f"{n}/ -> {target}")
+    if bad:
+        _die_input("folder(s) that are symlinks to outside the project — "
+                   "taxjson writes there; nothing was run:\n    "
+                   + "\n    ".join(bad),
+                   "Replace each link with a real folder (move its "
+                   "contents in), or run in the folder the link points "
+                   "into.")
 
 
 def _refuse_unreadable_project_inputs(root: Path) -> None:
