@@ -52,9 +52,10 @@ class BrokerFetcher:
                             "$IBKR_FLEX_TOKEN)")
         p.add_argument("--positions", action="store_true",
                        help="Also snapshot LIVE holdings per "
-                            "Questrade account into "
-                            "work/<account>_live_holdings.toml "
-                            "(cross-check with `taxjson sanity`)")
+                            "Questrade account into the year's "
+                            "holdings folder, holdings/<account>_"
+                            "live_holdings.toml (`taxjson sanity` "
+                            "finds it)")
         p.add_argument("--trim-overlap", action="store_true",
                        help="Trim rows inside the fetched window "
                             "from manually exported Questrade CSVs "

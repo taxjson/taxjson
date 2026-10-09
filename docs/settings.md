@@ -87,14 +87,14 @@ The keys come in groups, in the order `taxjson init` writes them.
 Where the project reads its exports and positions and writes files for other tools. A relative path is read from the project folder; every one must stay inside the folder that holds the project (its parent) — a path or symlink leading further out is refused, naming it (`src/taxjson/lib/project_layout.py` — `folder_setting`, `setting_problems`).
 
 #### `inputs_dir`
-- **Meaning:** the folder of the broker exports (`<folder>/<account>/`: CSVs, `.tt` files, `manifest.json`, `sends.json`), when the year projects share one. The run reads it like `inputs/`; a folder of an account this year's `taxjson.toml` does not have (one split later, one closed earlier) is not read, with one `Info:` line. With it, a year folder named `YYYY` must hold that year's project (`year`), and the year's slips stay in the project's own `inputs/slips/` (slips belong to one year; any other folder there is not read, with a warning).
+- **Meaning:** the folder of the broker exports (`<folder>/<account>/`: CSVs, `.tt` files, `manifest.json`, `sends.json`), when the year projects share one. The run reads it like `inputs/`; a folder of an account this year's `taxjson.toml` does not have (one split later, one closed earlier) is not read, with one `Info:` line. With it, a year folder named `YYYY` must hold that year's project (`year`), and the year's slips stay in the project's own `inputs/slips/` (slips belong to one year; any other folder there is not read, with a warning). `taxjson fetch` downloads into it too, with a note that the download applies to every year.
 - **Default:** `inputs/` in the project.
 - **Country:** both.
 - **Change it when:** `taxjson init` sets it (`"../inputs"`); `taxjson migrate --to-years` sets it on an existing project.
 - **Example:** `inputs_dir = "../inputs"`
 
 #### `holdings_dir`
-- **Meaning:** the folder of the year's broker positions snapshots `taxjson sanity` (and the end of `taxjson run`) compares the books with, with no `holdings = [...]` setting (see [holdings/](#holdings-the-years-positions-snapshots)).
+- **Meaning:** the folder of the year's broker positions snapshots `taxjson sanity` (and the end of `taxjson run`) compares the books with, with no `holdings = [...]` setting (see [holdings/](#holdings-the-years-positions-snapshots)). `taxjson fetch --positions` writes `<account>_live_holdings.toml` there.
 - **Default:** `holdings/` in the project.
 - **Country:** both.
 - **Change it when:** your download tool writes the snapshots elsewhere inside the folder holding the project.

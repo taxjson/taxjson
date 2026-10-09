@@ -39,7 +39,13 @@ and optionally:
 `request` (FetchRequest) carries the project root, work/ directory,
 parsed taxjson.toml, the accounts to fetch (each declares one of the
 fetcher's brokerages), the parsed arguments, a `say` progress printer
-(stderr under --json), and the --dry-run / --json flags.
+(stderr under --json), the --dry-run / --json flags, and where the
+project's files are (lib/project_layout): `inputs` (the folder of
+inputs/<account>/ — with `[settings] inputs_dir`, the exports folder
+every year's project shares; `shared_inputs` says so) and `holdings`
+(the year's positions snapshots folder, lib/holdings_dir). A fetcher
+writes downloads under `inputs`, never root/"inputs" (an older core
+sends no `inputs`: fall back to root/"inputs" then).
 """
 from __future__ import annotations
 
@@ -78,6 +84,12 @@ class FetchRequest:
     say: Callable[[str], None]
     dry_run: bool = False
     json: bool = False
+    # Where the project's files are (lib/project_layout): the inputs
+    # folder (shared by every year's project when `shared_inputs`) and
+    # the year's holdings folder. None: root/"inputs", root/"holdings".
+    inputs: Optional[Path] = None
+    holdings: Optional[Path] = None
+    shared_inputs: bool = False
 
 
 @dataclass

@@ -28,6 +28,15 @@
   that year as a redacted single-folder project inside the year folder
   (the shared exports and the year's slips, holdings/, taxjson.toml and
   ticker.map), ids replaced consistently in every file.
+- `taxjson fetch` (the taxjson-fetch plugin) in a year folder whose
+  exports are shared downloads into the shared `inputs_dir` folder, with
+  a note that the download applies to every year (it wrote to the year
+  folder's own `inputs/`, which the run does not read); replacing
+  `ib_flex.csv` there is refused when it would drop any year's activity.
+  `fetch --positions` writes `<account>_live_holdings.toml` into the
+  year's holdings folder, where `taxjson sanity` finds it (it was
+  `work/`). Fetchers get the folders in `FetchRequest.inputs` /
+  `holdings`.
 
 ### Fixed
 

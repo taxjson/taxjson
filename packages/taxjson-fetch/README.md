@@ -58,7 +58,8 @@ Options this plugin adds to `taxjson fetch`: `--year N` (backfill a past
 tax year's whole window), `--days N` / `--from YYYY-MM-DD` (override the
 Questrade window), `--refresh-token` (Questrade, first run) /
 `--flex-token` (IBKR), `--positions` (snapshot live Questrade holdings
-into `work/<account>_live_holdings.toml` for `taxjson sanity`) and
+into the year's holdings folder, `holdings/<account>_live_holdings.toml`,
+where `taxjson sanity` and the end of `taxjson run` find it) and
 `--trim-overlap` (trim manually exported Questrade rows inside the
 fetched window, keeping a `.bak`; a symlink at that name is skipped,
 never followed, for the next free `.bakN`). The core adds `--list`, `--fetcher`,
@@ -69,7 +70,13 @@ tax-year window, union-merged on every fetch) and
 `inputs/<account>/ib_flex.csv` (replaced, the previous copy kept as
 `.bak`; a download that would drop activity of the tax year is refused
 and saved as `ib_flex.csv.new`) — the formats the core's parsers read
-from manual exports, which keep working side by side. Every file is
+from manual exports, which keep working side by side. In a year folder
+whose exports are shared by every year (`[settings] inputs_dir =
+"../inputs"`), they land in that shared folder (`../inputs/<account>/`,
+said with a note: the download applies to every year), an
+`ib_flex.csv` replacement is refused when it would drop activity of ANY
+year, and a fetch in another year folder waits on the shared folder's
+`.fetch.lock`. Every file is
 written to a new owner-only temp file of its own and renamed into place,
 and one `taxjson fetch` runs per project at a time (a second one waits
 on `work/.fetch.lock`), so two fetches never publish each other's

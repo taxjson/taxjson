@@ -332,6 +332,43 @@ class TestDispatch(_Patched):
         self.assertTrue(any("fake_key" in x for x in validate_config(bare)))
 
 
+class TestRequestFolders(_Patched):
+    """The request names the folders a fetcher writes: the inputs folder
+    the run reads (shared by every year's project with `inputs_dir`) and
+    the year's holdings folder (lib/project_layout)."""
+    EPS = (("fake", "test_fetch_dispatch:FakeFetcher"),)
+    ACCOUNT = '[accounts.a]\ntype = "taxable"\nbrokerage = "fakebroker"\n'
+
+    def _fetch(self, root):
+        with mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "0"}):
+            code, _out, err = self.fetch(root)
+        self.assertEqual(code, 0, err)
+        return CALLS[-1]
+
+    def test_single_folder_project(self):
+        root = self.project(self.ACCOUNT).resolve()
+        req = self._fetch(root)
+        self.assertEqual(req.inputs, root / "inputs")
+        self.assertEqual(req.holdings, root / "holdings")
+        self.assertFalse(req.shared_inputs)
+
+    def test_year_folder_with_shared_inputs(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        top = Path(tmp.name).resolve()
+        (top / "inputs" / "a").mkdir(parents=True)
+        root = top / "2026"
+        root.mkdir()
+        (root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2026\ncountry = "canada"\n'
+            'base_currency = "CAD"\ninputs_dir = "../inputs"\n'
+            + self.ACCOUNT)
+        req = self._fetch(root)
+        self.assertEqual(req.inputs, top / "inputs")
+        self.assertEqual(req.holdings, root / "holdings")
+        self.assertTrue(req.shared_inputs)
+
+
 class TestCoreHoldsNoBrokerClient(unittest.TestCase):
     def test_no_broker_endpoint_or_credential_in_the_core(self):
         needles = ("questrade.com", "interactivebrokers.com",
