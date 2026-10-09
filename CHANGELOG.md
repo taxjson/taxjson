@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.25.0 (2026-10-09)
+
 ### Changed
 
 - The `quick-start` command is removed; `taxjson checklist` replaces it.

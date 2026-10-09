@@ -1,7 +1,7 @@
 [project]
 name = "taxjson-fetch"
 # Released in lockstep with taxjson (scripts/release.sh bumps both).
-version = "0.24.2"
+version = "0.25.0"
 description = "Broker auto-fetch for taxjson: Questrade REST API and IBKR Flex Web Service, as a `taxjson fetch` plugin"
 readme = "README.md"
 license = { text = "MIT" }
@@ -22,7 +22,7 @@ classifiers = [
 # taxjson.fetchers entry points) and the parsers its files feed. No
 # other runtime dependency: the HTTP clients are stdlib urllib.
 dependencies = [
-    "taxjson>=0.24.2",
+    "taxjson>=0.25.0",
 ]
 
 [project.urls]
