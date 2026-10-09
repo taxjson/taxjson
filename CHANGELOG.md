@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- An opening snapshot (`OPENING` line) that would leave out a buy of
+  the tax year closing a short position (a short cover, or a buy that
+  crosses from short to long) now stops the run, as a left-out sale of
+  the year already did, naming the cover. It used to be dropped
+  silently, and the short sale's gain fell out of the year in both
+  countries. Whether a left-out row realizes a gain is read from the
+  position, walked back from the snapshot's quantity (#11).
 
 ## v0.24.2 (2026-10-08)
 

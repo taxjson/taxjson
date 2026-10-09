@@ -438,8 +438,8 @@ def main():
     parser.add_argument(
         '--year', type=int, default=None,
         help="The project's tax year: an opening snapshot (OPENING rows) "
-             "that would leave out a sale of this year or later is "
-             "refused instead of dropping the sale's gain.",
+             "that would leave out a sale or a short cover of this year "
+             "or later is refused instead of dropping its gain.",
     )
     parser.add_argument(
         '--require-inputs', action='store_true',

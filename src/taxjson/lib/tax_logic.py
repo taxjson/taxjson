@@ -1330,8 +1330,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "before the snapshot day are left out of the books "
                  "(income rows stay; other symbols and other accounts keep "
                  "theirs), so no share is counted twice. A sale of the tax "
-                 "year among them stops the run; one symbol has one "
-                 "snapshot date per account.", cont=True),
+                 "year among them, or a buy of the tax year that closes "
+                 "a short position (a cover, read from the position "
+                 "walked back from the snapshot's), stops the run; one "
+                 "symbol has one snapshot date per account.", cont=True),
         ]),
         ("Dispositions (Schedule 3)", [
             Rule("CA-DISP-01", "Gain = proceeds - ACB - outlays."),
@@ -3021,8 +3023,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "or before the snapshot day are left out of the books "
                  "(income rows stay; other symbols and other accounts keep "
                  "theirs), so no share is counted twice. A sale of the tax "
-                 "year among them stops the run; one symbol has one "
-                 "snapshot date per account.", cont=True),
+                 "year among them, or a buy of the tax year that closes "
+                 "a short position (a cover, read from the position "
+                 "walked back from the snapshot's), stops the run; one "
+                 "symbol has one snapshot date per account.", cont=True),
             Rule("US-STKDIV-01",
                  "A stock dividend is not income (§305(a)): the basis of "
                  "the shares held is spread over the old and new shares "

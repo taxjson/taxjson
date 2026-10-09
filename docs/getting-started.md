@@ -456,9 +456,9 @@ OPENING 2023-12-29 SAMPD.TO 10 CAD 504.95
   the books, so a statement that overlaps your download counts nothing
   twice. `tjs run` says so in a `Warning: Opening snapshot:` line.
   Dividends stay.
-- Use a report from **before the tax year's first sale** of each stock:
-  a sale left out that way would drop out of the year's gains, so the
-  run stops instead.
+- Use a report from **before the tax year's first sale** of each stock
+  (or first buy that closes a short position): a sale or cover left out
+  that way would drop out of the year's gains, so the run stops instead.
 - The cost is the report's **book cost**, never its market value. A
   position with no cost in the report, a short position (a written
   option) or a futures contract is listed and skipped: write its line by
