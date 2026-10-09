@@ -134,17 +134,20 @@ def aggregates_from_gains(doc: Dict[str, Any],
     dividend = pil = 0.0
     proceeds = st_gain = lt_gain = 0.0
     dispositions = tainted = 0
+    # Every row held to the gains-row contract first: a disposition
+    # without its gain or units was skipped here in silence and left out
+    # of the lock and the drift check (issue #17).
+    from taxjson.lib.json_input import check_gains_rows, gains_row_kind
+    check_gains_rows(doc.get("transactions"), "gains document")
     for e in doc.get("transactions", []):
         if account is not None and e.get("account") != account:
             continue
-        action = e.get("action") or ""
-        if action in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
+        kind = gains_row_kind(e)
+        if kind == "income":
             dividend += float(e.get("dividend") or 0.0)
             pil += float(e.get("pil") or 0.0)
             continue
-        if "gain" not in e or "qty" not in e:
-            continue
-        if e.get("tainted"):
+        if kind == "manual":
             tainted += 1
             continue
         entries.append(e)

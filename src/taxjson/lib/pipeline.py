@@ -1036,6 +1036,12 @@ def prepare_books(transactions, sheltered_transactions=(),
     transactions = list(transactions)
     sheltered_transactions = list(sheltered_transactions)
     affiliated_transactions = list(affiliated_transactions)
+    # The computation's input contract, checked before the transfer
+    # rewrite and the opening synthesis rebuild any row (issues #14,
+    # #16): the engines check it again on what reaches them.
+    from taxjson.lib.core import require_computable_rows
+    require_computable_rows(transactions, sheltered_transactions,
+                            affiliated_transactions)
 
     transactions, sheltered_transactions = _handle_transfers(
         transactions, sheltered_transactions, taxable=taxable,

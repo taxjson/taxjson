@@ -142,6 +142,65 @@ def check_row_types(rows, path, key: str = "transactions") -> None:
                     f"`taxjson run`")
 
 
+# The income rows a gains document carries beside its dispositions: the
+# engines book them by their own `dividend` / `pil` amounts.
+INCOME_ROW_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU")
+# What every computed disposition carries and every reader keys on: its
+# units and gain (a row without them was skipped) and a date (a row
+# without one fell out of every year filter). An unknown-cost row still
+# flagged `tainted` (a hand-run file — the pipeline moves them to
+# manual_reporting_required) is reported by hand from its date and units.
+DISPOSITION_FIELDS = ("qty", "gain")
+MANUAL_ROW_FIELDS = ("qty",)
+
+
+def gains_row_kind(row: Dict[str, Any]) -> str:
+    """'income', 'manual' (an unknown-cost row flagged `tainted`) or
+    'disposition' — every other row of a gains document's
+    `transactions` is a computed disposition."""
+    if row.get("action") in INCOME_ROW_ACTIONS:
+        return "income"
+    if row.get("tainted"):
+        return "manual"
+    return "disposition"
+
+
+def check_gains_rows(rows, path, key: str = "transactions") -> None:
+    """InputFileError naming the file and row when a computed
+    disposition lacks its units, its gain or a date (DISPOSITION_FIELDS
+    and date / date_settle: absent, null or empty), or a manual row its
+    units or date (issue #17).
+    The readers skipped such a row in silence — a valid neighbour made
+    the document look like a gains file — and the export or total left
+    the disposition out at exit 0. One contract for every filing and
+    summary reader: form-export, reconcile-slips, sum-gains, the option
+    reports, t1135, close-year and check-filed (taxjson_filed) and
+    carryover."""
+    for i, r in enumerate(rows or []):
+        if not isinstance(r, dict):
+            continue
+        kind = gains_row_kind(r)
+        if kind == "income":
+            continue
+        need = DISPOSITION_FIELDS if kind == "disposition" \
+            else MANUAL_ROW_FIELDS
+        missing = [f for f in need
+                   if r.get(f) is None
+                   or (isinstance(r.get(f), str) and not r[f].strip())]
+        if not any(isinstance(r.get(f), str) and r[f].strip()
+                   for f in ("date", "date_settle")):
+            missing.insert(0, "date")
+        if missing:
+            what = ("a disposition" if kind == "disposition"
+                    else "an unknown-cost (tainted) row")
+            raise InputFileError(
+                f'{path}: "{key}" row {i} ({r.get("symbol") or "?"} '
+                f'{r.get("date") or r.get("date_settle") or "?"}): {what} without '
+                f"{', '.join(missing)} — it would be left out of the "
+                f"totals and forms. The file is damaged or hand-edited: "
+                f"fix it or re-run `taxjson run`")
+
+
 def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:
     """``doc`` when it is a gains-stage document: a ``transactions``
     list whose rows carry ``gain`` (any income-only or empty list is
@@ -169,6 +228,9 @@ def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:
     for key in _WORK_ROW_LISTS:
         check_row_types(doc.get(key) if isinstance(doc.get(key), list)
                         else [], path, key)
+    # Every row on its own (issue #17): the stage-file test above is
+    # about the document; a valid neighbour must not carry a broken row.
+    check_gains_rows(rows, path)
     return doc
 
 

@@ -1257,6 +1257,27 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/json_input.py` — `read_json_doc`, `check_row_types`, `filing_json_text`, `dump_filing_json`, `NonFiniteOutputError`; `src/taxjson/lib/report_model.py` — `load_report_json`
 
+### `taxjson-explain book.json`: "required field(s) net_amount missing on a BUYSELL row — the engine would book it at 0", or an explain trace with cost 0 for a purchase that `taxjson-gains` refuses
+- **Check:** the message names the file and the row's index: that BUYSELL (or ASSIGN) row has no `net_amount` (or no `quantity`) key at all. On an older release, `taxjson-gains` refused the book while `taxjson-explain` traced the sale at cost 0, the whole sale as gain, at exit 0.
+- **Cause:** a trade row without its amount gets the default 0. The loader marks such a row, but only `taxjson-gains` (and `taxjson-wash-radar`) checked the mark; `taxjson-explain`, `taxjson-audit`, `taxjson-carryover`, `taxjson-t1135` and any caller of `run_gains` computed with the 0, for the main book and the `--sheltered` / `--affiliated` books alike. A pass-through tool (`taxjson-sort`, `taxjson-merge2`, `taxjson-convert-currency`) also wrote the 0 out as if it were real.
+- **Fix:** upgrade, then add the row's real `net_amount` (or `quantity`). The check now sits where every gains computation starts (the engines and the book preparation in front of them), for every book, from a file or stdin, and the pass-through tools keep the key missing. A real zero amount written as `"net_amount": 0` stays legal.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/core.py` — `require_computable_rows`, `coerce_transaction_row`, `carry_row_marks`, `TaxTransaction.to_dict`; `src/taxjson/lib/pipeline.py` — `prepare_books`
+
+### `taxjson-gains book.json`: "required field date is empty — fix the input data", "required field symbol is empty on a BUYSELL row", or "unsupported action 'BUY'"
+- **Check:** the message names the file and the row's index. Look at that row: `"date": ""`, `"symbol": ""` (or no symbol at all) on a row that moves a position or its cost, or an action other than `BUYSELL`, `ASSIGN`, `SPLIT`, `TRANSFER`, `ADJUST`, `OPENING_BALANCE`, `DISALLOW`, `DIVIDEND`, `DIVIDEND_IN_LIEU`, `INTEREST`, `TAX` or `FEE` (spelled in capitals). On an older release the book computed at exit 0: an undated sale sorted first and turned a later purchase into a short cover, a sale with no symbol opened a short in a security named "", and a row with another action was left out without a word.
+- **Cause:** a missing or null date was refused when the row was read, but an empty one passed, and nothing checked that a trade names its security or that the action is one the engines book.
+- **Fix:** upgrade, then correct the row. Rows that move a position or its cost (`BUYSELL`, `ASSIGN`, `SPLIT`, `TRANSFER`, `ADJUST`, `OPENING_BALANCE`, `DISALLOW`) need a symbol; a `FEE`, `INTEREST` or `TAX` row without one is fine. The check is the same one as for a missing amount above, in every gains computation.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/core.py` — `require_computable_rows`, `SYMBOL_REQUIRED_ACTIONS`; `src/taxjson/lib/brokerages/schema.py` — `KNOWN_ACTIONS`
+
+### `taxjson-form-export gains.json`: ""transactions" row 1 (QZA.TO 2025-02-02): a disposition without gain — it would be left out of the totals and forms"
+- **Check:** open the named file at that row (counted from 0): a disposition (any row that is not a `DIVIDEND` / `DIVIDEND_IN_LIEU` row and not flagged `tainted`) lacks its `qty` or `gain`, or holds `null` there, or has neither a `date` nor a `date_settle`. On an older release, the export (and `taxjson-sum-gains`, `taxjson-reconcile-slips`, close-year, check-filed, `taxjson-carryover`) left that disposition out of every total at exit 0 when another row of the same file was complete.
+- **Cause:** whether a file was a gains file was decided for the whole document (any row with a gain), and the readers then skipped each row without a gain or units in silence (and a row without a date fell out of every year). The engines always write these, so such a row comes from a damaged or hand-edited file.
+- **Fix:** upgrade. Re-run `tjs run` to rebuild a work file; for a file you wrote, complete the row. Dividend rows (`DIVIDEND`, `DIVIDEND_IN_LIEU`) need none of these, and an unknown-cost row flagged `tainted` needs only its date and units.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/json_input.py` — `require_gains_doc`, `check_gains_rows`, `gains_row_kind`; `src/taxjson/bin/taxjson_form_export.py` — `load_dispositions`; `src/taxjson/bin/taxjson_filed.py` — `aggregates_from_gains`; `src/taxjson/bin/taxjson_carryover.py` — `yearly_nets`
+
 ### `taxjson-form-export --csv s3.csv`: "cannot write --csv s3.csv: [Errno 17] File exists: 's3.csv.part'"
 - **Check:** a file `s3.csv.part` sits beside the CSV, left by an earlier export that was killed or interrupted, or written by another export of the same file running at the same time.
 - **Cause:** the CSV was written through the fixed temp name `<file>.part` and created it only if it did not exist, so a leftover one stopped every later export, and the failed write then deleted it (another export's unfinished data).

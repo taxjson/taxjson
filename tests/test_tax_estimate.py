@@ -161,7 +161,8 @@ class TestSumEstimateCli(unittest.TestCase):
             '[accounts.rrsp]\ntype = "sheltered"\n')
         (root / "work" / "margin_gains.json").write_text(json.dumps({
             "summary": {"year": "2026"}, "transactions": [
-                {"symbol": "AAA.TO", "gain": 30000.0, "cost": 1.0,
+                {"symbol": "AAA.TO", "qty": -1, "date": "2026-05-02",
+                 "gain": 30000.0, "cost": 1.0,
                  "proceeds": 2.0, "currency": "CAD", "days_held": 400},
                 {"action": "DIVIDEND", "symbol": "AAA.TO",
                  "dividend": 1000.0, "currency": "CAD"},
@@ -170,7 +171,8 @@ class TestSumEstimateCli(unittest.TestCase):
         # Sheltered gains must NOT leak into the estimate.
         (root / "work" / "rrsp_gains.json").write_text(json.dumps({
             "summary": {"year": "2026"}, "transactions": [
-                {"symbol": "BBB.TO", "gain": 999999.0, "cost": 1.0,
+                {"symbol": "BBB.TO", "qty": -1, "date": "2026-05-02",
+                 "gain": 999999.0, "cost": 1.0,
                  "proceeds": 2.0, "currency": "CAD", "days_held": 10}]}))
         return root
 
@@ -245,7 +247,8 @@ class TestSumEstimateCli(unittest.TestCase):
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "work" / "margin_gains.json").write_text(json.dumps({
                 "summary": {"year": "2026"}, "transactions": [
-                    {"symbol": "BBB.US", "gain": 2000.0, "cost": 1.0,
+                    {"symbol": "BBB.US", "qty": -1, "date": "2026-05-02",
+                 "gain": 2000.0, "cost": 1.0,
                      "proceeds": 2.0, "currency": "USD",
                      "days_held": 400, "term": "LONG_TERM"}]}))
             r = self._sum(root, "--other-income", "100000", "-v")
@@ -299,10 +302,12 @@ class TestSumEstimateCli(unittest.TestCase):
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "work" / "margin_gains.json").write_text(json.dumps({
                 "summary": {"year": "2026"}, "transactions": [
-                    {"symbol": "AAA.US", "gain": 1000.0, "cost": 1.0,
+                    {"symbol": "AAA.US", "qty": -1, "date": "2026-05-02",
+                 "gain": 1000.0, "cost": 1.0,
                      "proceeds": 2.0, "currency": "USD", "days_held": 30,
                      "term": "SHORT_TERM"},
-                    {"symbol": "BBB.US", "gain": 2000.0, "cost": 1.0,
+                    {"symbol": "BBB.US", "qty": -1, "date": "2026-05-02",
+                 "gain": 2000.0, "cost": 1.0,
                      "proceeds": 2.0, "currency": "USD", "days_held": 400,
                      "term": "LONG_TERM"}]}))
             r = self._sum(root, "--other-income", "100000")

@@ -245,6 +245,15 @@ class TaxTransaction:
         for k in INCOME_FACT_FIELDS + EVIDENCE_FIELDS:
             if not d.get(k):
                 d.pop(k, None)
+        # A trade read WITHOUT its quantity or net_amount key stays
+        # without it when a pass-through tool (sort, merge, convert)
+        # writes it out, so the gains computation still refuses it
+        # (issue #14) instead of reading the written default 0.
+        miss = getattr(self, '_missing_trade_fields', None)
+        if miss:
+            for k in miss[1]:
+                if not d.get(k):
+                    d.pop(k, None)
         return d
 
 
@@ -1065,23 +1074,90 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
             f"{clean_t.get('quantity')!r}) — a zero/negative ratio "
             f"is never a real corporate action.")
     tx = TaxTransaction(**clean_t)
+    # Where the row came from, for require_computable_rows' messages.
+    tx._row_ctx = _ctx
     if _missing:
         tx._missing_trade_fields = (_ctx, _missing)
     return tx
 
 
+# The actions that move a position or its cost: each names its security,
+# so an empty symbol is refused where money is computed (issue #16). The
+# cash rows (FEE, INTEREST, TAX) may stand alone, and so may an income row
+# the engines book by its own amount.
+SYMBOL_REQUIRED_ACTIONS = ('BUYSELL', 'ASSIGN', 'SPLIT', 'TRANSFER',
+                           'ADJUST', 'OPENING_BALANCE', 'DISALLOW')
+
+
+def _describe_row(t) -> str:
+    """The row as the user can find it: the loader's file and index when
+    it came through coerce_transaction_row, else its own fields."""
+    ctx = getattr(t, '_row_ctx', None)
+    if ctx:
+        return ctx
+    src = f"{t.source}: " if getattr(t, 'source', '') else ""
+    return (f"{src}{t.action or '?'} row (id={t.id!r}, symbol="
+            f"{t.symbol!r}, date={t.date!r})")
+
+
+def require_computable_rows(*books) -> None:
+    """The one input contract of the gains computation (issues #14, #16).
+    Every engine entry (CanadaTaxRules/USATaxRules.compute_gains) and the
+    preparation in front of it (pipeline.prepare_books) refuse, in the
+    main book and the context books alike:
+
+    * a BUYSELL/ASSIGN row that came in WITHOUT its quantity or
+      net_amount key (coerce_transaction_row marks it; an explicit 0 is
+      a real amount and stays legal) — the engine would book it at 0;
+    * an action the engines do not book (it was skipped in silence);
+    * a row whose date is empty (missing and null are refused when the
+      row is read);
+    * an empty symbol on a row that moves a position or its cost
+      (SYMBOL_REQUIRED_ACTIONS).
+
+    Raises InputContentError (a ValueError) naming the row."""
+    from taxjson.lib.brokerages.schema import KNOWN_ACTIONS
+    from taxjson.lib.cli_diag import InputContentError
+    for book in books:
+        for t in book or ():
+            miss = getattr(t, '_missing_trade_fields', None)
+            if miss:
+                ctx, fields = miss
+                raise InputContentError(
+                    f"{ctx}: required field(s) {', '.join(fields)} missing "
+                    f"on a {t.action} row — the engine would book it at 0. "
+                    f"Fix the input data.")
+            if t.action not in KNOWN_ACTIONS:
+                raise InputContentError(
+                    f"{_describe_row(t)}: unsupported action "
+                    f"{t.action!r} — the engines book only "
+                    f"{', '.join(sorted(KNOWN_ACTIONS))}. Fix the input "
+                    f"data.")
+            if not str(t.date or '').strip():
+                raise InputContentError(
+                    f"{_describe_row(t)}: required field date is empty — "
+                    f"fix the input data.")
+            if t.action in SYMBOL_REQUIRED_ACTIONS \
+                    and not str(t.symbol or '').strip():
+                raise InputContentError(
+                    f"{_describe_row(t)}: required field symbol is empty "
+                    f"on a {t.action} row — fix the input data.")
+
+
+def carry_row_marks(src, dst) -> None:
+    """Copy the loader's marks (the missing-trade-field marker and the
+    row's file/index) from `src` to its rebuilt copy `dst`, so a tool
+    that rebuilds a row cannot launder a missing amount into a 0."""
+    for k in ('_missing_trade_fields', '_row_ctx'):
+        v = getattr(src, k, None)
+        if v:
+            setattr(dst, k, v)
+
+
 def require_trade_fields(transactions) -> None:
-    """Refuse a BUYSELL/ASSIGN row that came in WITHOUT its quantity or
-    net_amount key (see coerce_transaction_row) — the same way a null
-    value is refused. Raises ValueError naming the row."""
-    for t in transactions:
-        miss = getattr(t, '_missing_trade_fields', None)
-        if miss:
-            ctx, fields = miss
-            raise ValueError(
-                f"{ctx}: required field(s) {', '.join(fields)} missing on "
-                f"a {t.action} row — the engine would book it at 0. Fix "
-                f"the input data.")
+    """require_computable_rows on one list of rows (the name the CLIs
+    called before issue #14 moved the check to the engine boundary)."""
+    require_computable_rows(transactions)
 
 
 def load_transactions(path: Path) -> List[TaxTransaction]:
@@ -2297,6 +2373,11 @@ class CanadaTaxRules(TaxRules):
         candidate-replacement trades.
         """
         _check_engine_allowed("canada")  # test-only guard (lib/country)
+        # The computation's input contract, main and context books
+        # (issues #14, #16): a trade without its amount, an empty date or
+        # symbol, an action the engine does not book.
+        require_computable_rows(transactions, sheltered_transactions,
+                                affiliated_transactions)
         # A move between two of your own taxable accounts changes nothing
         # in Canada: the ACB is one pool across them (s.47).
         transactions = [t for t in transactions
@@ -5134,6 +5215,9 @@ class USATaxRules(TaxRules):
 
     def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False, loss_overrides: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
         _check_engine_allowed("usa")  # test-only guard (lib/country)
+        # The computation's input contract (issues #14, #16; as Canada).
+        require_computable_rows(transactions, sheltered_transactions,
+                                affiliated_transactions)
         _disambiguate_duplicate_ids(transactions, sheltered_transactions,
                                     affiliated_transactions)
         # §1091 contemplates a narrower "related party" rule than CRA's
