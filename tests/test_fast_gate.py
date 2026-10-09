@@ -1,24 +1,34 @@
-"""A faster gate: the suite in parallel.
+"""A faster gate: the suite in parallel, and release.sh reusing a PASS.
 
 scripts/run_tests_parallel.py runs each test module in a process of its
 own (its own TMPDIR and synthetic HOME), longest first, and fails unless
 every process passed and the tests run add up to the tests collected.
+scripts/gate-record.sh records a full PASS of a clean tree by its tree
+hash; scripts/release.sh skips the gate when the tree it releases has
+one, after proving its own edits touch only version, tag and date lines.
+Every repository here is a temporary one; nothing is pushed anywhere
+but a local bare repository.
 """
 import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
 import _hermetic  # noqa: F401  (the synthetic HOME first)
+from test_fix_release_safeguards import _ReleaseRepo, _PY_STUB
 
 REPO = Path(__file__).resolve().parent.parent
 RUNNER = REPO / "scripts" / "run_tests_parallel.py"
+_BASH = shutil.which("bash")
+_GIT = shutil.which("git")
 
 
 def _load_runner():
@@ -249,6 +259,8 @@ class TestGateWiring(unittest.TestCase):
         self.assertIn('"$PY" scripts/run_tests_parallel.py', ci)
         self.assertIn("--serial) SERIAL=--serial", ci)
         self.assertIn("SUITE_ARGS=(--serial)", ci)
+        self.assertIn("bash scripts/gate-record.sh write", ci)
+        self.assertIn("--release-edits) MODE=release-edits", ci)
 
     def test_durations_cache_is_gitignored(self):
         r = subprocess.run(["git", "check-ignore", "-q",
@@ -259,6 +271,192 @@ class TestGateWiring(unittest.TestCase):
 
     def test_the_real_suite_preloads_hermetic(self):
         self.assertTrue((REPO / "tests" / R.PRELOAD / "__init__.py").is_file())
+
+
+def _git(cwd, *args, env=None):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                       text=True, env=env)
+    if r.returncode:
+        raise AssertionError(r.stderr)
+    return r.stdout.strip()
+
+
+@unittest.skipUnless(_BASH and _GIT, "bash and git required")
+class TestGateRecord(unittest.TestCase):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.d = Path(self._td.name)
+        self.repo = self.d / "repo"
+        (self.repo / "scripts").mkdir(parents=True)
+        shutil.copy(REPO / "scripts" / "gate-record.sh",
+                    self.repo / "scripts")
+        self.cache = self.d / "records"
+        self.env = dict(os.environ, TAXJSON_GATE_CACHE=str(self.cache),
+                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                        GIT_AUTHOR_NAME="Sam Synthetic",
+                        GIT_AUTHOR_EMAIL="sam@example.com",
+                        GIT_COMMITTER_NAME="Sam Synthetic",
+                        GIT_COMMITTER_EMAIL="sam@example.com")
+        _git(self.d, "init", "-q", str(self.repo), env=self.env)
+        (self.repo / "a.txt").write_text("a\n")
+        _git(self.repo, "add", "-A", env=self.env)
+        _git(self.repo, "commit", "-q", "-m", "start", env=self.env)
+        self.tree = _git(self.repo, "rev-parse", "HEAD^{tree}", env=self.env)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def gr(self, *args):
+        return subprocess.run(["bash", "scripts/gate-record.sh", *args],
+                              cwd=self.repo, capture_output=True, text=True,
+                              env=self.env)
+
+    def test_written_only_for_a_clean_full_gate(self):
+        r = self.gr("write", self.tree, "quick", "3.12.3", "5")
+        self.assertIn("not written (mode quick", r.stdout)
+        (self.repo / "b.txt").write_text("untracked\n")
+        r = self.gr("write", self.tree, "default", "3.12.3", "5")
+        self.assertIn("not written (the working tree is not clean)", r.stdout)
+        (self.repo / "b.txt").unlink()
+        (self.repo / "a.txt").write_text("modified\n")
+        r = self.gr("write", self.tree, "default", "3.12.3", "5")
+        self.assertIn("not written (the working tree is not clean)", r.stdout)
+        _git(self.repo, "checkout", "--", "a.txt", env=self.env)
+        r = self.gr("write", "f" * 40, "default", "3.12.3", "5")
+        self.assertIn("not written (HEAD moved", r.stdout)
+        self.assertFalse(self.cache.exists() and any(self.cache.iterdir()))
+        r = self.gr("write", self.tree, "default", "3.12.3", "5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        f = self.cache / f"{self.tree}.default.py3.12.3.pass"
+        self.assertTrue(f.is_file(), r.stdout)
+        self.assertEqual(stat.S_IMODE(self.cache.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600)
+        text = f.read_text()
+        self.assertIn(f"tree={self.tree}\n", text)
+        self.assertIn("mode=default\n", text)
+
+    def test_find_matches_tree_python_and_age(self):
+        self.assertEqual(self.gr("find", self.tree, "3.12.3", "7").returncode, 1)
+        self.gr("write", self.tree, "default", "3.12.3", "5")
+        r = self.gr("find", self.tree, "3.12.3", "7")
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue(r.stdout.strip().endswith(".default.py3.12.3.pass"))
+        self.assertEqual(self.gr("find", self.tree, "3.11.9", "7").returncode, 1)
+        self.assertEqual(self.gr("find", "e" * 40, "3.12.3", "7").returncode, 1)
+        # Eight days old: too old for 7, fine for 10.
+        f = Path(r.stdout.strip())
+        old = int(time.time()) - 8 * 86400
+        f.write_text("\n".join(
+            f"passed_at={old}" if ln.startswith("passed_at=") else ln
+            for ln in f.read_text().splitlines()) + "\n")
+        self.assertEqual(self.gr("find", self.tree, "3.12.3", "7").returncode, 1)
+        self.assertEqual(self.gr("find", self.tree, "3.12.3", "10").returncode, 0)
+        # A nightly PASS counts as a full gate.
+        self.gr("write", self.tree, "nightly", "3.12.3", "9")
+        r = self.gr("find", self.tree, "3.12.3", "7")
+        self.assertTrue(r.stdout.strip().endswith(".nightly.py3.12.3.pass"))
+
+
+# The python stand-in, plus the version release.sh asks for; with
+# PIP_TOUCH set, `pip install` also changes that file (something besides
+# the release edits changing the tree).
+_PY_STUB_V = _PY_STUB.replace(
+    'if [ "$1 $2" = "-m pip" ]; then exit 0; fi',
+    'if [ "$1 $2" = "-m pip" ]; then [ -z "${PIP_TOUCH:-}" ] || '
+    'echo changed >> "$PIP_TOUCH"; exit 0; fi\n'
+    'if [ "$1" = "-c" ]; then echo 3.12.3; exit 0; fi')
+
+
+class TestReleaseReusesAPass(_ReleaseRepo):
+    def setUp(self):
+        super().setUp()
+        s = self.dev / "scripts"
+        shutil.copy(REPO / "scripts" / "gate-record.sh", s)
+        self.ci_log = self.d / "ci.log"
+        self._stub("ci.sh", "#!/usr/bin/env bash\n"
+                   f"echo \"ci $*\" >> '{self.ci_log}'\necho '== ci: PASS =='\n",
+                   where=s)
+        (self.dev / "docs" / "troubleshooting.md").write_text(
+            "# Troubleshooting\n\n## A problem\n\n- **Fixed in:** unreleased\n"
+            "- **Fixed in:** `v0.1.0`\n")
+        self.git(self.dev, "add", "-A")
+        self.git(self.dev, "commit", "-q", "-m", "gate record helper")
+        self.git(self.dev, "push", "-q", "origin", "main")
+        self.py = self._stub("python-stub", _PY_STUB_V, where=self.d)
+        self.env["PYTHON"] = str(self.py)
+        self.env["TAXJSON_GATE_CACHE"] = str(self.d / "records")
+        self.tree = self.git(self.dev, "rev-parse", "HEAD^{tree}")
+
+    def record(self, py="3.12.3"):
+        r = subprocess.run(["bash", "scripts/gate-record.sh", "write",
+                            self.tree, "default", py, "60"], cwd=self.dev,
+                           capture_output=True, text=True, env=self.env)
+        self.assertIn("gate record:", r.stdout)
+        return Path(r.stdout.split("gate record: ", 1)[1].strip())
+
+    def ci_calls(self):
+        return (self.ci_log.read_text().splitlines()
+                if self.ci_log.exists() else [])
+
+    def test_a_pass_of_the_tree_is_reused(self):
+        rec = self.record()
+        r = self.release("v0.2.0")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.ci_calls(), ["ci --release-edits"])
+        self.assertIn(f"reusing the PASS of tree {self.tree[:12]}", r.stdout)
+        self.assertIn(str(rec), r.stdout)
+        self.assertTrue(self.origin_tags())
+        # The tag's tree is the gated tree plus the release edits only.
+        changed = self.git(self.dev, "diff", "--name-only", self.tree, "v0.2.0")
+        self.assertEqual(sorted(changed.split()), [
+            "CHANGELOG.md", "docs/troubleshooting.md",
+            "packages/taxjson-fetch/pyproject.toml", "pyproject.toml"])
+
+    def test_fresh_gate_and_no_record_run_the_full_gate(self):
+        self.record()
+        r = self.release("v0.2.0", "--fresh-gate")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.ci_calls(), ["ci "])
+        self.assertIn("== full gate ==", r.stdout)
+
+    def test_another_python_or_an_old_record_is_not_reused(self):
+        self.record(py="3.11.9")
+        r = self.release("v0.2.0")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.ci_calls(), ["ci "])
+
+    def test_old_record_needs_a_longer_max_age(self):
+        rec = self.record()
+        old = int(time.time()) - 9 * 86400
+        rec.write_text("\n".join(
+            f"passed_at={old}" if ln.startswith("passed_at=") else ln
+            for ln in rec.read_text().splitlines()) + "\n")
+        r = self.release("v0.2.0", "--gate-max-age", "10")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.ci_calls(), ["ci --release-edits"])
+
+    def test_a_change_beyond_the_release_edits_runs_the_gate(self):
+        self.record()
+        self.env["PIP_TOUCH"] = str(self.dev / "pyproject.toml")
+        r = self.release("v0.2.0")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("pyproject.toml differs from HEAD beyond the release edits",
+                      r.stdout)
+        self.assertIn("not reusing", r.stdout)
+        self.assertEqual(self.ci_calls(), ["ci "])
+
+    def test_an_untracked_file_runs_the_gate(self):
+        self.record()
+        self.env["PIP_TOUCH"] = str(self.dev / "docs" / "new.md")
+        r = self.release("v0.2.0")
+        self.assertIn("docs/new.md is changed besides the release edits",
+                      r.stdout)
+        self.assertEqual(self.ci_calls(), ["ci "])
+
+    def test_bad_max_age_is_refused(self):
+        r = self.release("v0.2.0", "--gate-max-age", "soon")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--gate-max-age must be a whole number", r.stdout)
 
 
 if __name__ == "__main__":

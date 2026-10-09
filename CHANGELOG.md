@@ -12,6 +12,12 @@
   discovery's count; nothing is retried. On a 20-core machine the suite
   went from about 18 minutes to under 2. `scripts/ci.sh --serial` keeps
   the one-process run.
+- Developers: `scripts/release.sh` reuses a full-gate PASS of the exact
+  tree it releases (recorded by `scripts/ci.sh` from a clean tree, same
+  Python, at most 7 days old — `--gate-max-age DAYS`) instead of running
+  the gate again, after proving its own edits changed only the version,
+  tag and date lines, and runs the checks that read those lines
+  (`scripts/ci.sh --release-edits`). `--fresh-gate` always runs the gate.
 
 ## v0.26.1 (2026-10-09)
 

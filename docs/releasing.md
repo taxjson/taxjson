@@ -121,7 +121,51 @@ installer, which installs the newest release and knows no `--channel`.
 scripts/release.sh v0.17.0      # or 0.17.0 — both forms are accepted
 ```
 
-The script refuses on a dirty tree or off `main`, promotes the CHANGELOG's `## Unreleased` section to `## v0.17.0 (date)` and each `Fixed in: unreleased` in `docs/troubleshooting.md` to the tag, bumps `pyproject.toml` — and, in lockstep, `packages/taxjson-fetch/pyproject.toml` (the broker-fetch plugin's version and its `taxjson>=` floor) — runs the **full** local gate, then commits, tags, and pushes `main` and the one tag, by name — never `git push --tags` (a checkout can hold tags that must not be public; the pre-push hook refuses any other tag). It then creates the GitHub release (`gh release create vX.Y.Z --verify-tag -t "taxjson vX.Y.Z"`) with the CHANGELOG's `## vX.Y.Z` section as its notes, or with `--notes FILE` (`scripts/release.sh v0.17.0 --notes notes.md`). The notes are published apart from the code, so no push hook sees them, and GitHub releases are immutable, so they are scanned with `scripts/check-pii.sh --message` (the commit-message scan: denylist, figure list, generic patterns, money amounts) before anything is pushed and again right before the release is created; a hit stops the release. Without `gh`, or with `gh` not logged in, the script stops after the push and prints the exact command to finish with. It does not touch `channels.json`: the new release is `latest`, and `stable` / `beta` stay where they were until you promote. The gate runs the test suite only: a handful of tests drive the real pipeline, but on synthetic two-trade projects written into temporary directories and deleted afterwards. Nothing in the suite or the release script reads a real tax project. The gate also runs `scripts/check-pii.sh` (personal data and secrets, plus the maintainer's private denylist and the maintainer's private figure list), the same scan the `pre-push` hook applies to every push. Refresh the figure list after each year's run, before releasing — `scripts/check-pii.sh --collect-amounts <project dir>...` (salted hashes of the figures in each project's `reports/`, `work/*.sum`, `*.toml` and `*.tt`, and of the distinctive amounts, prices, quantities, reference codes and clock times in its raw `inputs/` exports, merged into `~/.config/taxjson/pii-amounts`; see CONTRIBUTING.md) — so no figure from your own books can reach the tree, a pushed commit or a commit or tag message. GitHub Actions is not part of the gate — the local run is the source of truth (see CONTRIBUTING.md).
+The script refuses on a dirty tree or off `main`, promotes the CHANGELOG's `## Unreleased` section to `## v0.17.0 (date)` and each `Fixed in: unreleased` in `docs/troubleshooting.md` to the tag, bumps `pyproject.toml` — and, in lockstep, `packages/taxjson-fetch/pyproject.toml` (the broker-fetch plugin's version and its `taxjson>=` floor) — runs the **full** local gate (or reuses a recorded PASS of the same tree: see "Reusing a PASS" below), then commits, tags, and pushes `main` and the one tag, by name — never `git push --tags` (a checkout can hold tags that must not be public; the pre-push hook refuses any other tag). It then creates the GitHub release (`gh release create vX.Y.Z --verify-tag -t "taxjson vX.Y.Z"`) with the CHANGELOG's `## vX.Y.Z` section as its notes, or with `--notes FILE` (`scripts/release.sh v0.17.0 --notes notes.md`). The notes are published apart from the code, so no push hook sees them, and GitHub releases are immutable, so they are scanned with `scripts/check-pii.sh --message` (the commit-message scan: denylist, figure list, generic patterns, money amounts) before anything is pushed and again right before the release is created; a hit stops the release. Without `gh`, or with `gh` not logged in, the script stops after the push and prints the exact command to finish with. It does not touch `channels.json`: the new release is `latest`, and `stable` / `beta` stay where they were until you promote. The gate runs the test suite only: a handful of tests drive the real pipeline, but on synthetic two-trade projects written into temporary directories and deleted afterwards. Nothing in the suite or the release script reads a real tax project. The gate also runs `scripts/check-pii.sh` (personal data and secrets, plus the maintainer's private denylist and the maintainer's private figure list), the same scan the `pre-push` hook applies to every push. Refresh the figure list after each year's run, before releasing — `scripts/check-pii.sh --collect-amounts <project dir>...` (salted hashes of the figures in each project's `reports/`, `work/*.sum`, `*.toml` and `*.tt`, and of the distinctive amounts, prices, quantities, reference codes and clock times in its raw `inputs/` exports, merged into `~/.config/taxjson/pii-amounts`; see CONTRIBUTING.md) — so no figure from your own books can reach the tree, a pushed commit or a commit or tag message. GitHub Actions is not part of the gate — the local run is the source of truth (see CONTRIBUTING.md).
+
+### Reusing a PASS
+
+The full gate is the slow part of a release, and it is often run on the
+very commit being released just before (in a fresh clone, as AGENTS.md
+asks). `scripts/ci.sh` records every full PASS (default, `--nightly` or
+`--mutation` mode; never `--quick`) by the exact tree it tested:
+`~/.cache/taxjson-gate/<tree>.<mode>.py<version>.pass` (owner-only;
+`TAXJSON_GATE_CACHE` names another folder; `scripts/gate-record.sh`
+writes and finds them). A record is written only when the working tree
+was clean — nothing modified, nothing untracked — when the gate started
+and still is, at the same tree, when it ends, and only when the gate
+imported this tree's own `src/taxjson` (not one that `PYTHONPATH` or
+another install put first). The tree hash, not the commit, is the key:
+a fresh clone of the same commit, or a rebased commit with the same
+content, finds it.
+
+`scripts/release.sh` looks for a record of the tree it is about to
+release (`git rev-parse HEAD^{tree}`, before its own edits), made on
+the same Python version (`$PYTHON`, else `venv/bin/python3`), no older
+than `--gate-max-age DAYS` (default 7). The tree it tags is not that
+tree: it has the release's own edits (the CHANGELOG heading, the
+playbook's `Fixed in` tags, both `pyproject.toml` versions and the
+plugin's `taxjson>=` floor). So before reusing the record it proves
+those are the only differences (`release_edits_only`): no file but
+those four is changed or untracked, and each of the four equals the
+gated tree's copy once exactly those lines are masked. Then, instead of
+the full gate, it runs `scripts/ci.sh --release-edits` — the
+consistency check and every test module that reads one of those lines
+(a module that names `CHANGELOG`, `troubleshooting.md`, `pyproject`,
+the installed version...; seconds) — and prints the record it reused:
+
+```
+== gate: reusing the PASS of tree 1a2b3c4d5e6f — ~/.cache/taxjson-gate/... (default gate, Python 3.12.3, passed 2026-10-09T12:00:00Z); --fresh-gate runs it again ==
+```
+
+With no record, an older one, another Python, or any other change in
+the tree, it runs the full gate as before. `--fresh-gate` always runs
+it. `scripts/promote.sh` is unchanged. A typical release is then: run the gate
+in a fresh clone of `main` with that clone's own code first on the path
+— `PYTHONPATH=$PWD/src PYTHON=<the dev venv's python> scripts/ci.sh`
+(a few minutes; without `PYTHONPATH` the dev venv's editable install
+would test the dev clone's code, and no record is written) — then
+`scripts/release.sh vX.Y.Z` in the dev clone, which reuses that PASS.
 
 One tag covers both distributions: the core (`taxjson`) and the broker-fetch plugin (`taxjson-fetch`, `packages/taxjson-fetch`), which the installer installs by default from the same checkout (`--without-fetch` leaves it out). To publish wheels as well, build each from the tagged tree — `python -m build` and `python -m build packages/taxjson-fetch` — and upload both.
 
