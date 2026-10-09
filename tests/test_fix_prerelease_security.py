@@ -74,7 +74,7 @@ class TestNoPyPIInstallHints(unittest.TestCase):
         self.assertIn("installs taxjson-fetch by default", INSTALL_HINT)
         self.assertIn("--with-fetch", INSTALL_HINT)
         self.assertIn("https://taxjson.com/install.sh", INSTALL_HINT)
-        self.assertIn("pip install -e packages/taxjson-fetch", INSTALL_HINT)
+        self.assertIn("pip install --no-deps -e packages/taxjson-fetch", INSTALL_HINT)
         self.assertIn("not published on PyPI", INSTALL_HINT)
         self.assertNotIn("\n", INSTALL_HINT)          # still one line
 

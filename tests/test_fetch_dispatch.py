@@ -130,7 +130,7 @@ class TestNoFetcherInstalled(_Patched):
         # review H1: taxjson-fetch is not published there).
         self.assertNotIn("pip install taxjson", lines[0])
         self.assertIn("installs taxjson-fetch by default", lines[0])
-        self.assertIn("pip install -e packages/taxjson-fetch", lines[0])
+        self.assertIn("pip install --no-deps -e packages/taxjson-fetch", lines[0])
 
     def test_list_json_is_empty(self):
         code, out, _err = self.fetch(self.project(""), "--list", "--json")
@@ -203,7 +203,7 @@ class TestNoFetcherCli(unittest.TestCase):
             r = self._cli(tmp, "fetch", "-h")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("Download broker activity", r.stdout)
-            self.assertIn("pip install -e packages/taxjson-fetch",
+            self.assertIn("pip install --no-deps -e packages/taxjson-fetch",
                           " ".join(r.stdout.split()))
 
 

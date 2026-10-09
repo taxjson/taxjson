@@ -112,7 +112,7 @@ jobs:
       # The broker-fetch plugin, installed the way a user installs it.
       - name: Install and test taxjson-fetch
         run: |
-          pip install -e packages/taxjson-fetch
+          pip install --no-deps -e packages/taxjson-fetch
           python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py"
 
 

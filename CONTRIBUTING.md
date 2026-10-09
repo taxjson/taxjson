@@ -141,7 +141,8 @@ Or use the wrapper:
 The broker-fetch plugin (`packages/taxjson-fetch`) has its own tests;
 they run from a checkout without installing the plugin (its
 `tests/_support.py` registers the entry point for the run), or after
-`pip install -e packages/taxjson-fetch`:
+`pip install --no-deps -e packages/taxjson-fetch` (after the core: `--no-deps`
+keeps pip from fetching a `taxjson` from PyPI to meet its dependency):
 
 ```bash
 PYTHONPATH=packages/taxjson-fetch/src python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" </dev/null

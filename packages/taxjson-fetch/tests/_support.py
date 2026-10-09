@@ -1,7 +1,7 @@
 """Test support for the taxjson-fetch plugin's tests.
 
 Imported FIRST by every test module. The tests run either against an
-installed plugin (`pip install -e packages/taxjson-fetch`) or straight
+installed plugin (`pip install --no-deps -e packages/taxjson-fetch`) or straight
 from a checkout (scripts/ci.sh: PYTHONPATH only). In the second case the
 core's `taxjson fetch` cannot see the plugin — it finds fetchers by
 entry point, which only an installed distribution declares — so this

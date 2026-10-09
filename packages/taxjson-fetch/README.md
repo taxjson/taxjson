@@ -21,7 +21,7 @@ Into the same Python environment as taxjson:
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 # or, from a taxjson checkout, into the environment taxjson is installed in
 # (install the core first, `pip install -e .`):
-pip install -e packages/taxjson-fetch
+pip install --no-deps -e packages/taxjson-fetch
 ```
 
 taxjson is not published on PyPI yet, so a `taxjson` or `taxjson-fetch`

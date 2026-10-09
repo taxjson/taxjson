@@ -230,6 +230,11 @@
   symlink that points outside `inputs/` into `inputs_redact/` (a warning
   names it): a link to a private file elsewhere ended up in the copy
   meant for sharing.
+- The README, CONTRIBUTING.md, the plugin's README, CI and `taxjson
+  fetch`'s install hint install the broker-fetch plugin from a checkout
+  with `pip install --no-deps -e packages/taxjson-fetch`, after the
+  core, so pip never looks its `taxjson` dependency up on PyPI (where
+  that name is not ours).
 
 ## v0.24.2 (2026-10-08)
 

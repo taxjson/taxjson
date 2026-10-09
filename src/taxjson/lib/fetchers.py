@@ -60,7 +60,7 @@ from taxjson.lib.install_hint import NOT_ON_PYPI as _NOT_ON_PYPI  # noqa: E402
 INSTALL_HINT = (f"install it by re-running the installer, which installs "
                 f"taxjson-fetch by default (`{_INSTALLER}`; add "
                 f"`_ --with-fetch` if it was installed --without-fetch), "
-                f"or, from a checkout, `pip install -e packages/taxjson-fetch` "
+                f"or, from a checkout, `pip install --no-deps -e packages/taxjson-fetch` "
                 f"into taxjson's own environment — {_NOT_ON_PYPI}")
 # Keys the core always accepts under [accounts.<name>] for a fetcher
 # (the ones taxjson-fetch reads), installed or not: a project that used
