@@ -46,7 +46,8 @@ needs. Never attach an un-redacted statement.
 
 This is a public repository, so a push is publication. `scripts/check-pii.sh`
 scans for broker account-id shapes, home paths, unlisted e-mail addresses,
-credential-looking strings, and — for the maintainer — a **private denylist**
+credential-looking strings (PEM private keys, GitHub / Anthropic / Slack /
+AWS key formats, a high-entropy value after a key / secret / token name), and — for the maintainer — a **private denylist**
 at `~/.config/taxjson/pii-denylist` (one regex per line: your real account
 numbers, name, addresses; it lives outside every repository, so the strings
 it guards are never themselves committed). It runs in every `scripts/ci.sh`

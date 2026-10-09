@@ -193,7 +193,11 @@ dated clock times of the raw exports under each project's `inputs/`, as
 salted SHA-256 hashes, mode `0600`, no plain figures). A tree line, a pushed diff line,
 or a commit or tag message holding one of those figures is refused with
 its file and line only. Neither file is ever committed; a contributor
-without them gets the generic checks.
+without them gets the generic checks. Those include secrets: a PEM
+private key, GitHub, Anthropic, Slack and AWS key formats, and a
+high-entropy value after a key / secret / token name. CI also runs
+gitleaks (a pinned release, checked against its sha256) on every commit
+a push or pull request adds.
 
 `taxjson redact` strips the account numbers, names and contact details
 it recognises from an export so it can be shared as a parser sample —

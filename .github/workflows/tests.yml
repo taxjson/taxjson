@@ -53,6 +53,50 @@ jobs:
       - run: python scripts/check_tax_rules.py
       - run: bash scripts/check-pii.sh
 
+  secrets:
+    # gitleaks (generic secret formats, entropy-checked) on the commits a
+    # push or pull request adds — a pull request never passes the
+    # maintainer's own pre-push hook. The binary is a pinned release,
+    # checked against its sha256 before it runs. On a pull request the
+    # allowlist (.gitleaks.toml) is the BASE branch's copy, so a pull
+    # request cannot widen the allowlist it is judged by.
+    name: secrets (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks on the new commits
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          V=8.28.0
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$V/gitleaks_${V}_linux_x64.tar.gz"
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  gl.tgz" | sha256sum -c -
+          tar -xzf gl.tgz gitleaks
+          cd "$GITHUB_WORKSPACE"
+          if [ -n "${BASE:-}" ] && git cat-file -e "$BASE:.gitleaks.toml" 2>/dev/null; then
+            git show "$BASE:.gitleaks.toml" > "$RUNNER_TEMP/gitleaks.toml"
+          else
+            cp .gitleaks.toml "$RUNNER_TEMP/gitleaks.toml"
+          fi
+          FROM="${BASE:-$BEFORE}"
+          if [ -n "$FROM" ] && ! echo "$FROM" | grep -qE '^0+$' && git cat-file -e "$FROM^{commit}" 2>/dev/null; then
+            RANGE="$FROM..$HEAD_SHA"
+          else
+            RANGE="-1 $HEAD_SHA"
+          fi
+          "$RUNNER_TEMP/gitleaks" git --log-opts="$RANGE" --config "$RUNNER_TEMP/gitleaks.toml" \
+            --redact --no-banner --exit-code 1
+
   pr-commits:
     # Every commit a pull request adds — its patch, message and author /
     # committer identities — as the pre-push hook checks a push: the tree

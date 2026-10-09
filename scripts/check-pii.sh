@@ -661,6 +661,36 @@ ssn_filter() {
   }'
 }
 
+# Keep a line when a value after a key / secret / token name looks random
+# (see the generic credential check below).
+entropy_filter() {
+  LC_ALL=C awk '
+  function random_looking(v,   n, i, c, h, p, seen, nd, nl, nu) {
+    n = length(v)
+    if (n < 24) return 0
+    split("", seen); nd = 0; nl = 0; nu = 0
+    for (i = 1; i <= n; i++) {
+      c = substr(v, i, 1); seen[c]++
+      if (c ~ /[0-9]/) nd++; else if (c ~ /[a-z]/) nl++; else if (c ~ /[A-Z]/) nu++
+    }
+    if (nd == 0 || nl + nu == 0) return 0
+    if (nu == 0 && v ~ /[_.-]/) return 0          # a lower-case identifier
+    h = 0
+    for (c in seen) { p = seen[c] / n; h -= p * log(p) / log(2) }
+    return h >= 3.5
+  }
+  {
+    line = $0; lo = tolower(line); keep = 0; off = 0
+    while (!keep && match(substr(lo, off + 1), /(key|secret|token)s?[a-z0-9_]*["'"'"' ]*[:=]+["'"'"' ]*[a-z0-9+\/=_.-]+/)) {
+      st = off + RSTART; len = RLENGTH
+      seg = substr(line, st, len)
+      if (match(seg, /[A-Za-z0-9+\/=_.-]+$/) && random_looking(substr(seg, RSTART, RLENGTH))) keep = 1
+      off = st + len - 1
+    }
+    if (keep) print
+  }'
+}
+
 # A message line with the bare word pii-ok is a declared synthetic number.
 amount_filter() { grep -avE '(^|[^A-Za-z0-9_-])pii-ok([^A-Za-z0-9_-]|$)' || true; }
 
@@ -748,11 +778,24 @@ report "social security number (labelled SSN / TIN / Tax ID)" \
 # `--flex-token=<tok>` and a QUESTRADE_REFRESH_TOKEN / *_FLEX_TOKEN
 # assignment (exported or not) with a value of 12+ characters. An
 # all-capitals placeholder value (YOUR_REFRESH_TOKEN) is not a token
-# (2026-10 security review M6).
-CRED_RE='ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}|--(refresh|flex)-token[ =]["'"'"']?[A-Za-z0-9_.-]{12,}|(questrade_refresh_token|[a-z0-9_]*flex_token)[ ]*=[ ]*["'"'"']?[A-Za-z0-9_.-]{12,}'
+# (2026-10 security review M6). Known secret formats anywhere on a line:
+# a PEM private key block, GitHub tokens (gh[pousr]_, github_pat_), an
+# Anthropic key (sk-ant-), other sk- API keys, Slack tokens (xox[baprs]-)
+# and an AWS access key id (AKIA). A test fixture that must spell one
+# carries a pii-ok comment marker on its line (or is assembled at run
+# time); CI's gitleaks job has its own allowlist (.gitleaks.toml).
+CRED_RE='-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}|--(refresh|flex)-token[ =]["'"'"']?[A-Za-z0-9_.-]{12,}|(questrade_refresh_token|[a-z0-9_]*flex_token)[ ]*=[ ]*["'"'"']?[A-Za-z0-9_.-]{12,}'
 CRED_PLACEHOLDER='(--[Rr][Ee][Ff][Rr][Ee][Ss][Hh]-[Tt][Oo][Kk][Ee][Nn][ =]|--[Ff][Ll][Ee][Xx]-[Tt][Oo][Kk][Ee][Nn][ =]|[Tt][Oo][Kk][Ee][Nn]["'"'"' ]*[=:])["'"'"' ]*[A-Z_]{12,}([^A-Za-z0-9_.-]|$)'
 CI="-i"
 report "credential-looking string"                      "$CRED_RE" "$CRED_PLACEHOLDER"
+# Generic: a high-entropy value after a name ending in key / secret /
+# token (private_key: "...", SLACK_TOKEN=..., "apiKey": "..."): 24+
+# characters of letters and digits (base64 / hex / url-safe), with both,
+# Shannon entropy of 3.5 bits per character or more, and not a lower-case
+# snake/kebab/dotted name (a cache_key_for_the_year_2025 is an
+# identifier, not a secret). entropy_filter makes the call per value.
+report "high-entropy value after a key / secret / token name" \
+  '(key|secret|token)s?[A-Za-z0-9_]*["'"'"' ]*[:=]+["'"'"' ]*[A-Za-z0-9+/=_.-]{24,}' '' entropy_filter
 CI=""
 # A commit or tag MESSAGE (--message) never quotes a money amount with
 # thousands separators and cents (1,234,567.89): owner-book totals once

@@ -656,5 +656,103 @@ class TestDevSetupHook(_Sandbox):
         self.assertEqual(self.hook.read_text(), "#!/bin/sh\necho mine\n")
 
 
+class TestSecretPatterns(_Sandbox):
+    """scripts/check-pii.sh: known secret formats and a high-entropy value
+    after a key / secret / token name; a pii-ok comment marker lets a
+    test fixture through. Every secret here is assembled at run time."""
+
+    def scan(self, text, mode="--text"):
+        return subprocess.run(
+            ["bash", str(REPO / "scripts" / "check-pii.sh"), mode],
+            capture_output=True, text=True, input=text, env=self.env)
+
+    RANDOM = "Zx9Qm2Lp7Rt4Vw8Ys3Bn6Kd1Hf5Jg0Ca"
+
+    def test_known_formats_fire_and_stay_hidden(self):
+        hits = {
+            "pem rsa": "-----BEGIN " + "RSA PRIVATE KEY-----",
+            "pem pkcs8": "-----BEGIN " + "PRIVATE KEY-----",
+            "pem openssh": "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
+            "anthropic": "key sk-" + "ant-api03-" + "aB3_dE5-" * 4,
+            "slack": "SLACK " + "xoxb-" + "4071" * 3 + "-aB3dE5gH7k",
+            "github oauth": "gho_" + "aB3dE5" * 6,
+            "github server": "x ghs_" + "aB3dE5" * 6,
+            "github user": "ghu_" + "aB3dE5" * 6,
+            "github refresh": "ghr_" + "aB3dE5" * 6,
+            "github pat": "github_" + "pat_" + "11ABCD" * 6,
+            "aws": "id AKIA" + "ABCDEFGHIJ234567",
+        }
+        for label, text in hits.items():
+            r = self.scan(text + "\n")
+            self.assertEqual(r.returncode, 1, label + r.stdout)
+            self.assertIn("credential-looking string", r.stdout, label)
+            self.assertIn("<content hidden>", r.stdout, label)
+            self.assertNotIn(text.split()[-1][6:], r.stdout, label)
+
+    def test_high_entropy_value_after_a_key_name(self):
+        hits = ["private_key: " + self.RANDOM,
+                '{"apiKey": "' + self.RANDOM + '"}',
+                "SLACK_BOT_TOKEN=" + self.RANDOM,
+                "client_secrets = '" + self.RANDOM.lower() + "'"]
+        for text in hits:
+            r = self.scan(text + "\n")
+            self.assertEqual(r.returncode, 1, text + r.stdout)
+            self.assertIn("high-entropy value", r.stdout, text)
+            self.assertNotIn(self.RANDOM[4:], r.stdout)
+        misses = ["cache_key = " + "the_example_summary_for_2025_books",
+                  "sort_key: " + "a" * 30 + "1",
+                  "monkey = " + self.RANDOM[:20],
+                  "keys = " + "ExampleRecord.__dataclass_fields__"]
+        for text in misses:
+            r = self.scan(text + "\n")
+            self.assertEqual(r.returncode, 0, text + r.stdout)
+
+    def test_pii_ok_marker_allows_a_fixture(self):
+        pem = "-----BEGIN " + "PRIVATE KEY-----"
+        self.assertEqual(self.scan(pem + "\n").returncode, 1)
+        self.assertEqual(self.scan(pem + "  # pii-ok (test fixture)\n")
+                         .returncode, 0)
+        line = "private_key = " + self.RANDOM
+        diff = ("diff --git a/t.py b/t.py\n--- a/t.py\n+++ b/t.py\n"
+                "@@ -0,0 +1,2 @@\n+" + line + "\n+ok = 1\n")
+        r = self.scan(diff, "--diff")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("high-entropy value", r.stdout)
+        r = self.scan(diff.replace(line, line + "  # pii-ok"), "--diff")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+
+class TestSecretsWorkflow(unittest.TestCase):
+    """The CI gitleaks job: a pinned, checksum-verified release, read-only,
+    no persisted credentials, the base branch's allowlist on a PR."""
+
+    def test_gitleaks_job(self):
+        wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
+        job = wf[wf.index("\n  secrets:\n"):wf.index("\n  pr-commits:\n")]
+        for part in ("V=8.28.0", "gitleaks_${V}_linux_x64.tar.gz",
+                     "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
+                     "  gl.tgz\" | sha256sum -c -",
+                     "permissions:\n      contents: read",
+                     "persist-credentials: false", "fetch-depth: 0",
+                     "timeout-minutes:", 'git show "$BASE:.gitleaks.toml"',
+                     "--redact", "--exit-code 1"):
+            self.assertIn(part, job)
+        run = job[job.index("run: |"):]
+        self.assertNotIn("${{", run)          # event data only via env
+        # The checksum is verified before the binary is unpacked or run.
+        self.assertLess(run.index("sha256sum -c"), run.index("tar -xzf"))
+        cfg = (REPO / ".gitleaks.toml").read_text()
+        self.assertIn("useDefault = true", cfg)
+        self.assertIn("[[allowlists]]", cfg)
+
+    @unittest.skipUnless(shutil.which("gitleaks"), "gitleaks not installed")
+    def test_gitleaks_passes_the_tree(self):
+        r = subprocess.run(["gitleaks", "dir", str(REPO / "tests"),
+                            "--config", str(REPO / ".gitleaks.toml"),
+                            "--redact", "--no-banner", "--exit-code", "1"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

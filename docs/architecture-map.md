@@ -511,7 +511,8 @@ line PASS. The pre-push hook scans what a push would publish.
 
 - `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`: the gate's stages.
 - `scripts/check-consistency.sh` — `CHANGELOG`, `channels.json`: versions, CHANGELOG heading and channels agree.
-- `scripts/check-pii.sh` — `main`, `report`, `amount_filter`, `sin_filter`, `--diff`: the personal-data and secret scan (tree, diff, messages).
+- `scripts/check-pii.sh` — `main`, `report`, `amount_filter`, `sin_filter`, `entropy_filter`, `CRED_RE`, `--diff`: the personal-data and secret scan (tree, diff, messages).
+- `.gitleaks.toml` — `useDefault`, `allowlists`: the allowlist of CI's gitleaks job (`.github/workflows/tests.yml`, job `secrets`).
 - `scripts/hooks/pre-push` — `refuse`, `tag_refused`, `check-pii.sh`: the pre-push hook (the tag guard, then the PII scan).
 - `scripts/check_tax_rules.py` — `main`, `collect`, `ownership_problems`, `read_ids`: every tax-logic rule has a test that cites it, and the country tables are complete.
 - `tests/tax_rules/__init__.py` — `rule`, `rule_absent`: the test markers that cite rule ids.

@@ -18,6 +18,12 @@
   `origin/main`. Moving a channel forward needs the tag's GitHub Actions
   `tests.yml` run to be green (`TAXJSON_PROMOTE_IGNORE_CI=1` overrides,
   with a warning). A refused push takes the promote commit back.
+- `scripts/check-pii.sh` also refuses PEM private keys, GitHub
+  (`gh[pousr]_`, `github_pat_`), Anthropic (`sk-ant-`), Slack (`xox?-`)
+  and AWS (`AKIA`) key formats, and a high-entropy value after a key /
+  secret / token name; a `# pii-ok` comment marks a test fixture. CI runs
+  gitleaks 8.28.0 (checksum-verified) on every commit a push or pull
+  request adds, with `.gitleaks.toml` allowing made-up fixtures.
 
 ### Changed
 
