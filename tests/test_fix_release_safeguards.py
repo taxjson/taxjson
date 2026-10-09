@@ -754,5 +754,30 @@ class TestSecretsWorkflow(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
+class TestWorkflowHygiene(unittest.TestCase):
+    """Every CI job has a timeout and every checkout persists no token;
+    the pull-request template asks for the gate and synthetic data."""
+
+    def test_timeouts_and_checkouts(self):
+        import re
+        wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
+        jobs = wf[wf.index("\njobs:\n"):]
+        blocks = re.split(r"\n  (?=[a-z][a-z0-9-]*:\n)", jobs)[1:]
+        self.assertGreaterEqual(len(blocks), 6)
+        for b in blocks:
+            name = b.split(":", 1)[0]
+            self.assertRegex(b, r"\n    timeout-minutes: \d+\n", name)
+            steps = b.split("\n      - ")
+            for st in steps:
+                if "uses: actions/checkout@" in st:
+                    self.assertIn("persist-credentials: false", st, name)
+
+    def test_pull_request_template(self):
+        t = (REPO / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text()
+        self.assertIn("`scripts/ci.sh` passes locally", t)
+        self.assertIn("- [ ] Test data is synthetic only", t)
+        self.assertIn("No personal data", t)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,10 @@
   hooks folder (shared by its worktrees) even when a global
   `core.hooksPath` is set, and says whether that global hook chains to
   it; `--hook-only` installs just the hook.
+- CI: every job in `.github/workflows/tests.yml` has a timeout and every
+  checkout keeps no token (`persist-credentials: false`). The pull-request
+  template asks for `scripts/ci.sh` and synthetic data only, with no
+  personal data in the change, its commits or the description.
 
 
 ## v0.25.0 (2026-10-09)
