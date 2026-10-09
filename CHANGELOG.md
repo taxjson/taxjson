@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- `taxjson run` no longer writes through a symlink in `work/`: a link at
+  `work/loss_overrides.json` (written on every run) made the run
+  overwrite the file it pointed at, outside the project. Every generated
+  file the run keeps (the loss-override state, `.diag` diagnostics, the
+  skipped-account and own-account-move state, markers, a new elections
+  manifest, a pending-elections file) is now written to a temp file of
+  its own and renamed over the name, replacing a link there; a test
+  lists every remaining direct write in the core. (#19)
 
 ## v0.24.2 (2026-10-08)
 

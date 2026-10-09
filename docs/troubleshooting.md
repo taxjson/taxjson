@@ -128,6 +128,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.23.0`
 - **Code:** `src/taxjson/lib/out.py` — `settling_streams`; `src/taxjson/lib/cli_diag.py` — `run_top_level`
 
+### A file outside the project was overwritten by `tjs run`: a symlink in `work/` (such as `work/loss_overrides.json`) pointed at it
+- **Check:** `ls -l work/` shows a symlink (`->`) among the generated files, and the file it points at now holds taxjson's state (for `loss_overrides.json`: `{"schema_version": 1, "overrides": []}`).
+- **Cause:** the run wrote `work/loss_overrides.json` (on every run, even with no ALLOWLOSS line) and a few other generated files (the `.diag` diagnostics, the skipped-accounts and own-account-move state, the missing-history marker, the empty `to_base.csv`, the code stamp, a new elections manifest, a pending-elections file) with a plain write, which follows a symlink at the name and overwrites its target.
+- **Fix:** upgrade: every generated file is written to a temp file of its own and renamed over the name, so a link there is replaced by the new file and its target is never opened. On an older release, remove the symlinks from `work/` (it holds only generated files) and restore the overwritten file from a backup.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/loss_overrides.py` — `write_state`; `src/taxjson/lib/safe_write.py` — `write_atomic`; `src/taxjson/bin/taxjson_run.py` — `_record_skipped_accounts`, `stage_own_account_moves`
+
 ## Reading the broker files
 
 ### "Error: cannot detect broker for inputs/qt/99900001.csv. Check the header first: …"

@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from taxjson.lib.cli_diag import note, write_text_atomic
+from taxjson.lib.safe_write import write_atomic as _write_atomic
 from taxjson.lib.cli_diag import tax_year as _tax_year_arg
 from taxjson.lib.numeric import nonneg_float_arg as _nonneg_float_arg
 from taxjson.lib.numeric import positive_float_arg
@@ -1979,8 +1980,8 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"elect {name} --set {eid}={el} --hint "
                     f"{ALLOCATED_BASIS_HINT[el]}=<amount>")
     if lines or notes:
-        diag.write_text("\n".join(lines + [f"note: {n}" for n in notes])
-                        + "\n", encoding="utf-8")
+        _write_atomic(diag, "\n".join(lines + [f"note: {n}" for n in notes])
+                            + "\n", encoding="utf-8")
         for ln in lines:
             _echo_captured(ln, file=sys.stderr)
     else:
@@ -2095,7 +2096,7 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
             + ". Add the missing row (an expiry is a BUYSELL closing "
               "the position at 0 on the expiry date) and re-run.")
     if lines:
-        diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _write_atomic(diag, "\n".join(lines) + "\n", encoding="utf-8")
         for ln in lines:
             _echo_captured(ln, file=sys.stderr)
     else:
@@ -3010,7 +3011,7 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
         # account on every invocation for offline (no-source-currency)
         # configs — the cache never actually cached.
         if not rates_path.exists() or rates_path.stat().st_size:
-            rates_path.write_text("")
+            _write_atomic(rates_path, "")
         return rates_path
     # `needs_rebuild` here picks up the implicit taxjson.toml dependency
     # (via _CONFIG_PATH), so a change to base_currency or
@@ -3091,7 +3092,7 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
         return user_manifest
     if create:
         acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        user_manifest.write_text('{"elections": {}}\n', encoding="utf-8")
+        _write_atomic(user_manifest, '{"elections": {}}\n', encoding="utf-8")
         return user_manifest
     # Read-only callers (taxjson elect) on a project with no manifest yet:
     # report the canonical path; Manifest.load treats missing as empty.
@@ -3164,10 +3165,10 @@ def _record_skipped_accounts(cache: Path, names: List[str], *,
     try:
         if names_all:
             cache.mkdir(parents=True, exist_ok=True, mode=0o700)
-            path.write_text(_json.dumps({"schema_version": 1,
-                                         "accounts": names_all},
-                                        indent=2) + "\n",
-                            encoding="utf-8")
+            _write_atomic(path, _json.dumps({"schema_version": 1,
+                                             "accounts": names_all},
+                                            indent=2) + "\n",
+                          encoding="utf-8")
         else:
             path.unlink(missing_ok=True)
     except OSError:
@@ -3483,11 +3484,11 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
         _echo_captured(f"{ATTENTION_PREFIX} {name}: crypto sends: {w}",
                        indent="", file=sys.stderr)
     if _problems or _id_notes:
-        _diag.write_text("".join(f"{p} {name}: crypto sends: {m}\n"
-                                 for p, m in _problems + [
-                                     (ATTENTION_PREFIX, w)
-                                     for w in _id_notes]),
-                         encoding="utf-8")
+        _write_atomic(_diag, "".join(f"{p} {name}: crypto sends: {m}\n"
+                                     for p, m in _problems + [
+                                         (ATTENTION_PREFIX, w)
+                                         for w in _id_notes]),
+                      encoding="utf-8")
     else:
         _diag.unlink(missing_ok=True)
     if strict and _problems:
@@ -4428,7 +4429,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                         capture_output=True, cwd=str(base_json.parent))
         report = (vres.stdout or "") + (vres.stderr or "")
         if report.strip():
-            validate_diag.write_text(report, encoding="utf-8")
+            _write_atomic(validate_diag, report, encoding="utf-8")
         elif validate_diag.exists():
             validate_diag.unlink()
         # Quiet on success (the report is in the .diag → .sum); only
@@ -6073,7 +6074,7 @@ def stage_own_account_moves(root: Path, cfg: Dict[str, Any],
             same = False
         if not same:
             cache.mkdir(parents=True, exist_ok=True)
-            p.write_text(text, encoding="utf-8")
+            _write_atomic(p, text, encoding="utf-8")
     from taxjson.lib.out import show as _show, width as _ow
     for m in moves:
         _mv = (f"own-account move: {m['symbol']} {m['qty']:g} "
@@ -6223,8 +6224,8 @@ def stage_blended_wash_pass(names: List[str],
     for name in names:
         _mirror = cache / f"{name}_{tag}.diag"
         if _blend_diag.exists() and _blend_diag.stat().st_size:
-            _mirror.write_text(_blend_diag.read_text(errors="replace"),
-                               encoding="utf-8")
+            _write_atomic(_mirror, _blend_diag.read_text(errors="replace"),
+                          encoding="utf-8")
         else:
             _mirror.unlink(missing_ok=True)
     for name in names:
@@ -6896,7 +6897,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         _step(f"Reading {mh_file.name} (openings for sales with no "
               f"purchase in the files)")
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _ph_marker.write_text(str(mh_file))
+        _write_atomic(_ph_marker, str(mh_file))
         _ph_marker_old.unlink(missing_ok=True)
     elif _ph_marker.exists() or _ph_marker_old.exists():
         _step("missing_history.json removed: rebuilding the gains built "
@@ -7567,7 +7568,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         pass                          # reminder must never break a run
 
     if not args.account:
-        _code_stamp.write_text(_code_fp + "\n", encoding="utf-8")
+        _write_atomic(_code_stamp, _code_fp + "\n", encoding="utf-8")
     _step(f"Done. Reports are in {_out_relpath(reports_dir, root)}/")
 
     # Broker-positions cross-check, when taxjson.toml declares any
@@ -8746,7 +8747,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             ran = True
     except (subprocess.CalledProcessError, KeyboardInterrupt):
         if manifest_backup is not None:
-            manifest_path.write_bytes(manifest_backup)
+            _write_atomic(manifest_path, manifest_backup)
         fail("--redo interrupted",
              f"The previous elections for '{name}' were restored "
              f"unchanged.")
