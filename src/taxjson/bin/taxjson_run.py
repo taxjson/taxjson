@@ -20451,9 +20451,15 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         accts = by_fetcher.get(f.name)
         if not accts:
             continue
+        # Where the downloads and the positions go (lib/project_layout):
+        # the shared inputs folder of a multi-year project, the year's
+        # holdings folder.
         req = FP.FetchRequest(root=root, work=root / "work", config=cfg,
                               accounts=accts, args=args, say=say,
-                              dry_run=dry_run, json=json_mode)
+                              dry_run=dry_run, json=json_mode,
+                              inputs=_PL.inputs_dir(root),
+                              holdings=_PL.holdings_folder(root),
+                              shared_inputs=_PL.shared_inputs(root))
         out = f.impl.fetch(req) or {}
         for a, r in out.items():
             results.setdefault(a, {}).update(r or {})
