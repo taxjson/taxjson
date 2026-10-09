@@ -938,6 +938,20 @@ def _file_hashes(doc: dict) -> Dict[str, Tuple[str, ...]]:
     return {k: tuple(sorted(v)) for k, v in out.items()}
 
 
+def broker_account_files(root: Path, accounts: Iterable[str]
+                         ) -> Dict[str, Tuple[str, ...]]:
+    """{broker-account hash: the input files naming it} from the parse
+    metadata of `accounts`' books (work/<account>_base.json): every
+    broker account an export names, also one no income row carries."""
+    out: Dict[str, set] = {}
+    for acct in accounts:
+        base = _load_doc(Path(root) / "work" / f"{acct}_base.json")
+        for f, hs in _file_hashes(base or {}).items():
+            for h in hs:
+                out.setdefault(h, set()).add(Path(f).name)
+    return {h: tuple(sorted(v)) for h, v in out.items()}
+
+
 def _all_accounts(cache: Path) -> List[str]:
     names = set()
     for suf in _NATIVE_SUFFIXES:
@@ -1068,8 +1082,13 @@ def audit(root: Path, cfg: Dict[str, Any], *,
             problems.append(f"inputs/slips/{_shown(p)}: IB component "
                             f"{k!r} ({v:.2f} {rep.base_currency}) is not "
                             f"one taxjson knows — not compared")
+    # Every broker account an export names, also one with no income
+    # rows (a Webull export: trades only) — a slip --import-cra keyed to
+    # it is that account's.
+    known_files = broker_account_files(root, slip_accounts(cfg))
     slips = resolve_keys(slips, {h for r in books for h in r.hashes}
-                         | report_hashes, key_salt(root), problems)
+                         | report_hashes | set(known_files),
+                         key_salt(root), problems)
     if account:
         slips = [s for s in slips if s.account == account]
     slips = [s for s in slips if s.account in accts or s.account == account]
@@ -1096,7 +1115,8 @@ def audit(root: Path, cfg: Dict[str, Any], *,
         a_rows = [r for r in books if r.account == acct]
         acc = _audit_account(acct, a_slips, a_rows, year, tolerance, rate,
                              issues, sugg_cgd, sugg_tt, notes,
-                             coverage_no_slip, slips_no_books)
+                             coverage_no_slip, slips_no_books,
+                             known_files=known_files)
         if acc is not None:
             res_accounts.append(acc)
     t5008 = _t5008(root, slips, year, tolerance, rate)
@@ -1200,7 +1220,8 @@ def _issue(issues: List[Dict[str, Any]], acct: str, kind: str,
 
 def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
                    sugg_cgd, sugg_tt, notes, coverage_no_slip,
-                   slips_no_books) -> Optional[Dict[str, Any]]:
+                   slips_no_books, known_files=None
+                   ) -> Optional[Dict[str, Any]]:
     ystr = str(year)
     in_year = [r for r in a_rows if r.tax_date.startswith(ystr)]
     income = _income_by_source(in_year)
@@ -1230,7 +1251,8 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
     for i, s in enumerate(live):
         if s.broker_hashes and not s.broker_masked:
             live[i] = replace(s, broker_masked=", ".join(sorted(
-                files.get(s.broker_hashes[0], ()) or {
+                files.get(s.broker_hashes[0], ()) or set(
+                    (known_files or {}).get(s.broker_hashes[0], ())) or {
                     "#" + (s.broker_key or "?")[:6]})))
     for s in a_slips:
         if s.empty:

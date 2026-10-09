@@ -1684,7 +1684,9 @@ foreign income and tax withheld (T5 15/16, T3 24/25/33/34), return of capital
 in [docs/settings.md](./docs/settings.md)), import the PDFs CRA My Account
 shows under "Tax information slips" (`taxjson slip-audit --import-cra
 <folder>`: one layout for every issuer; each slip placed in the account,
-broker account and fund whose payments it matches, each slip once — an
+broker account and fund whose payments it matches — a T5 by its issuer, the
+broker's name or its carrying dealer's (Webull Canada's slips come from CI
+Investment Services; `src/taxjson/data/slip_issuers.toml`) — each slip once — an
 amended slip replaces its original; `--write` adds them), or
 drop IBKR's dividends report
 (`U*.YYYY.dividends.csv`, its per-payment T5/T3 split) in `inputs/slips/` —

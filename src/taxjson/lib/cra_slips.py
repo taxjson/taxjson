@@ -29,9 +29,14 @@ slip is read from its own lines.
 
 An imported slip is given to a project account by the books: the
 issuer's name against the brokers' names (lib/brokerages/detect
-DISPLAY_NAMES: the issuer carries the whole name), then the slips of
-one broker are shared out among its broker accounts so that the slips'
-dividends, withholding and interest are closest to each account's; a
+DISPLAY_NAMES: the issuer carries the whole name) and the issuers the
+shipped data file names for a broker (data/slip_issuers.toml: a
+carrying dealer such as Webull Canada's, `issuer_aliases`), then the
+slips of one broker are shared out among its broker accounts so that
+the slips' dividends, withholding and interest are closest to each
+account's (a broker account with no income rows in the books — an
+export of trades only — when none of the broker's has any; several
+such: not told apart); a
 T3 goes to the fund (and broker account) whose distributions match it
 by name and amount. What cannot be placed is listed, not guessed. The
 broker account is written as a key salted with the project's own salt
@@ -45,7 +50,9 @@ import itertools
 import re
 import shutil
 import subprocess
+import unicodedata
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -323,23 +330,125 @@ def _all_words(text: str) -> set:
             if len(w) >= 2}
 
 
+# The shipped issuer aliases (package data; read by issuer_aliases).
+ISSUERS_FILE = (Path(__file__).resolve().parent.parent / "data"
+                / "slip_issuers.toml")
+
+
+@dataclass(frozen=True)
+class IssuerAlias:
+    """An issuer CRA prints on a broker's slips that does not carry the
+    broker's name (its carrying dealer): data/slip_issuers.toml."""
+    broker: str                    # a taxjson broker id
+    names: Tuple[Tuple[str, ...], ...]   # each name's words (_phrase)
+    source: str                    # where the name was seen
+
+
+def _phrase(text: str) -> Tuple[str, ...]:
+    """A name's words in order: upper case, accents and punctuation
+    dropped (D'INVESTISSEMENT -> D, INVESTISSEMENT), legal forms (INC,
+    LTEE, ...) left out."""
+    t = unicodedata.normalize("NFKD", str(text))
+    t = "".join(c for c in t if not unicodedata.combining(c)).upper()
+    return tuple(w for w in re.findall(r"[A-Z0-9]+", t) if w not in _LEGAL)
+
+
+def parse_issuer_aliases(doc: Dict[str, Any], where: str
+                         ) -> List[IssuerAlias]:
+    """The [[alias]] tables of a slip_issuers.toml document. Raises
+    CraSlipError on an unknown key, an unknown broker id, a name with no
+    distinctive word (it would take another institution's slips) or no
+    source."""
+    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
+    if set(doc) - {"alias"}:
+        raise CraSlipError(f"{where}: unknown key(s) "
+                           f"{', '.join(sorted(set(doc) - {'alias'}))} — "
+                           f"the file holds [[alias]] tables")
+    out = []
+    for i, t in enumerate(doc.get("alias") or [], 1):
+        at = f"{where} [[alias]] #{i}"
+        if not isinstance(t, dict) or set(t) - {"broker", "issuer",
+                                                "source"}:
+            raise CraSlipError(f"{at}: keys are broker, issuer, source")
+        broker = str(t.get("broker") or "")
+        ids = [b for b in DISPLAY_NAMES if b != "generic"]
+        if broker not in ids:
+            raise CraSlipError(f"{at}: broker {broker!r} is not a taxjson "
+                               f"broker id ({', '.join(ids)})")
+        names = t.get("issuer")
+        if isinstance(names, str):
+            names = [names]
+        if not isinstance(names, list) or not names:
+            raise CraSlipError(f"{at}: issuer is a name or a list of "
+                               f"names")
+        phrases = []
+        for n in names:
+            ph = _phrase(n)
+            if not ({w for w in ph if len(w) >= 2} - _GENERIC):
+                raise CraSlipError(
+                    f"{at}: issuer {n!r} has no distinctive word (only "
+                    f"words such as INVESTMENT or SERVICES) — it would "
+                    f"take other institutions' slips")
+            phrases.append(ph)
+        source = str(t.get("source") or "").strip()
+        if not source:
+            raise CraSlipError(f"{at}: no source (where the issuer name "
+                               f"was seen)")
+        out.append(IssuerAlias(broker, tuple(phrases), source))
+    return out
+
+
+@lru_cache(maxsize=None)
+def issuer_aliases() -> Tuple[IssuerAlias, ...]:
+    """The shipped issuer aliases (cached). Raises CraSlipError when the
+    file cannot be read (a broken install)."""
+    from taxjson.lib.tomlcompat import tomllib
+    try:
+        doc = tomllib.loads(ISSUERS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise CraSlipError(f"taxjson's slip issuer file {ISSUERS_FILE} "
+                           f"cannot be read ({e}) — reinstall "
+                           f"taxjson") from None
+    return tuple(parse_issuer_aliases(doc, ISSUERS_FILE.name))
+
+
+def _holds(half: Tuple[str, ...], name: Tuple[str, ...]) -> bool:
+    n = len(name)
+    return any(half[i:i + n] == name for i in range(len(half) - n + 1))
+
+
+def alias_of_issuer(issuer: str) -> Optional[IssuerAlias]:
+    """The data file's alias whose name stands, word for word and in
+    order, in one half of the issuer's bilingual name ("ENGLISH
+    INC./FRENCH INC"); None when none or several brokers'."""
+    halves = [_phrase(h) for h in str(issuer).split("/")]
+    hits = [a for a in issuer_aliases()
+            if any(_holds(h, nm) for h in halves for nm in a.names)]
+    return hits[0] if len({a.broker for a in hits}) == 1 else None
+
+
 def broker_of_issuer(issuer: str) -> Optional[str]:
     """The broker id whose display name (lib/brokerages/detect
     DISPLAY_NAMES) the issuer's name carries in full — every word of it
     but a legal form, at least one of them distinctive (INTERACTIVE
     BROKERS CANADA INC. -> ib; RBC DIRECT INVESTING INC. -> rbc_direct;
-    TD DIRECT INVESTING, RBC ROYAL BANK -> None); None when none or
+    TD DIRECT INVESTING, RBC ROYAL BANK -> None) — or whose issuer
+    alias it carries (data/slip_issuers.toml: CI INVESTMENT SERVICES
+    INC. -> webull; CI DIRECT INVESTING -> None); None when none or
     several."""
     from taxjson.lib.brokerages.detect import DISPLAY_NAMES
     iw = _all_words(issuer)
-    hits = []
+    hits = set()
     for b, name in DISPLAY_NAMES.items():
         if b == "generic":
             continue
         need = _all_words(name) - _LEGAL
         if need and need - _GENERIC and need <= iw:
-            hits.append(b)
-    return hits[0] if len(hits) == 1 else None
+            hits.add(b)
+    a = alias_of_issuer(issuer)
+    if a is not None:
+        hits.add(a.broker)
+    return next(iter(hits)) if len(hits) == 1 else None
 
 
 @dataclass
@@ -374,11 +483,15 @@ def book_groups(root: Path, cfg: Dict[str, Any], year: int
                 ) -> List[Group]:
     """The broker accounts in the books of every slip account: rows that
     share a broker-account key (an IB statement of two accounts joins
-    them)."""
+    them); then, with no rows, each broker account an export names that
+    no income row carries (a Webull export books trades only: its
+    slips have no payments to match, but the account is that broker's):
+    a candidate only for a broker none of whose accounts has any."""
     import json
     from taxjson.lib import slip_audit as SA
     books, _p = SA.load_books(root, cfg, year, SA.slip_accounts(cfg))
     groups: List[Group] = []
+    bare: List[Group] = []
     for acct in SA.slip_accounts(cfg):
         try:
             base = json.loads((Path(root) / "work" / f"{acct}_base.json")
@@ -407,7 +520,52 @@ def book_groups(root: Path, cfg: Dict[str, Any], year: int
             if b and g.broker is None:
                 g.broker = b
         groups += [by[k] for k in sorted(by)]
-    return groups
+        bare += _bare_groups(acct, base, brk, by.values())
+    return groups + bare
+
+
+def _bare_groups(acct: str, base: dict, brk: Dict[str, str],
+                 have) -> List[Group]:
+    """The broker accounts the account's exports name (the parse
+    metadata's source_accounts) that no income row carries: one group
+    each, with no rows — the hashes one file names together joined."""
+    from taxjson.lib import slip_audit as SA
+    seen = {h for g in have for h in g.hashes}
+    parent: Dict[str, str] = {}
+
+    def find(h: str) -> str:
+        while parent.setdefault(h, h) != h:
+            h = parent[h]
+        return h
+    files = SA._file_hashes(base)
+    for f, hs in files.items():
+        hs = [h for h in hs if h not in seen]
+        for h in hs:
+            find(h)
+        for h in hs[1:]:
+            parent[find(h)] = find(hs[0])
+    out: Dict[str, Group] = {}
+    for f in sorted(files):
+        b = brk.get(f)
+        for h in files[f]:
+            if h in seen or not b:
+                continue
+            g = out.setdefault(find(h), Group(acct, (), None, ()))
+            g.hashes = tuple(sorted(set(g.hashes) | {h}))
+            g.sources = tuple(sorted(set(g.sources) | {f}))
+            if g.broker is None:
+                g.broker = b
+    return [out[k] for k in sorted(out)]
+
+
+def _via(issuer: str) -> str:
+    """How the issuer's name gave the broker when an alias did (empty
+    when its own name does)."""
+    a = alias_of_issuer(issuer)
+    if a is None:
+        return ""
+    return (f" (issuer {' '.join(a.names[0])}: {a.broker}'s carrying "
+            f"dealer, {ISSUERS_FILE.name})")
 
 
 def _cad(amount: float, cur: str, rate: Dict[str, Optional[float]]
@@ -499,15 +657,45 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                       f"fills the cache), or type the slip into slips.toml")
             continue
         by_broker.setdefault(broker_of_issuer(s.issuer), []).append(pl)
+    from taxjson.lib.brokerages.detect import DISPLAY_NAMES
     for broker, pls in by_broker.items():
         gs = [g for g in groups if broker and g.broker == broker
               and (not account or g.account == account)]
-        if not gs:
+        shown = DISPLAY_NAMES.get(broker or "", broker or "")
+        # A broker account with no income rows in the books (_bare_groups)
+        # is a candidate only when none of the broker's has any: its
+        # slips go by the payments otherwise, as before. Two with none:
+        # nothing tells them apart — the slip is not placed by a guess.
+        paid = [g for g in gs if g.rows]
+        gs = paid or gs
+        blind = len(gs) > 1 and not paid
+        if not gs or blind:
             for pl in pls:
                 if account:
                     pl.account = account
-                    pl.how = (f"account {account}, as asked (no broker "
-                              f"account of the issuer in the books)")
+                    pl.how = (f"account {account}, as asked ("
+                              + (f"{len(gs)} {shown} broker accounts and "
+                                 f"no payments in the books to tell them "
+                                 f"apart: no broker account written"
+                                 if blind else
+                                 "no broker account of the issuer in the "
+                                 "books") + ")")
+                elif blind:
+                    pl.how = (f"its {shown} broker account cannot be told: "
+                              f"the books hold {len(gs)} and no {year} "
+                              f"payments in them to match — import it "
+                              f"again naming its account (`taxjson "
+                              f"slip-audit ACCOUNT --import-cra FILE`), or "
+                              f"type it into slips.toml with "
+                              f"broker_account")
+                elif broker:
+                    pl.how = (f"the issuer is {shown}'s"
+                              + _via(pl.slip.issuer)
+                              + f" and the books hold no {shown} broker "
+                                f"account — import it again naming its "
+                                f"account (`taxjson slip-audit ACCOUNT "
+                                f"--import-cra FILE`), or add the {shown} "
+                                f"export to inputs/<account>/")
                 else:
                     pl.how = ("no broker in the books by the issuer's "
                               "name — import it again naming its account "
@@ -550,7 +738,8 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
             g = gs[gi]
             pl.group, pl.account = g, g.account
             pl.how = (f"{broker} broker account by its payments"
-                      if len(gs) > 1 else f"the {broker} broker account")
+                      if len(gs) > 1 else f"the {broker} broker account"
+                      ) + _via(pl.slip.issuer)
     # The broker account written: the group's one hash; when the group
     # holds several (an IB statement of two accounts), the one IB
     # dividends report whose figures match the slip, else the one hash

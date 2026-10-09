@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+
+- `taxjson slip-audit --import-cra` places a Webull Canada T5. CRA shows
+  such a slip as issued by CI Investment Services, the dealer that
+  carries Webull Canada's accounts, so the issuer never carried the name
+  "Webull" and the slip was listed as "no broker in the books". Issuers
+  that are a broker's carrying dealer now ship as data
+  (`src/taxjson/data/slip_issuers.toml`, English and French names; CI
+  Direct Investing and other CI businesses are not matched), and a
+  broker account whose export has no income rows (Webull's books trades
+  only) is a place for that broker's slips when none of its accounts has
+  payments in the books: the slip goes to the account
+  holding the Webull export, and only when the books hold one. Two such
+  accounts of one broker are not told apart by a guess: the slip is
+  listed.
 
 ## v0.24.2 (2026-10-08)
 
