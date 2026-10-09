@@ -182,22 +182,25 @@ class TestBuySellCheckStyle(unittest.TestCase):
         self.assertTrue(doc["scope_note"].startswith("Scope: "))
 
 
-class TestScanStyle(unittest.TestCase):
+class TestTipsStyle(unittest.TestCase):
     def test_layout_both_countries(self):
         for country in ("canada", "usa"):
             with self.subTest(country=country):
-                r = project(country).run("scan")
-                self.assertIn(r.returncode, (0, 1), r.stderr)
+                r = project(country).run("tips")
+                self.assertEqual(r.returncode, 0, r.stderr)
                 assert_styled(self, r.stdout)
                 lines = r.stdout.splitlines()
-                self.assertTrue(lines[0].startswith("SCAN — "), lines[0])
-                if r.returncode:
-                    self.assertIn("FINDINGS", lines)
-                    self.assertRegex(lines[-1], r"^\d+ finding\(s\)\.$")
+                self.assertTrue(lines[0].startswith("TIPS — "), lines[0])
+                if "TIPS" in lines:
+                    self.assertRegex(lines[-1], r"^\d+ tip\(s\) for next "
+                                                r"year — none changes a "
+                                                r"number of this year\.$")
                     self.assertTrue(any(ln.startswith("1. ")
                                         for ln in lines))
                 else:
-                    self.assertEqual(lines[-1], "No findings — clean scan.")
+                    self.assertEqual(lines[-1], "No tips — nothing to "
+                                                "change in where you hold "
+                                                "what.")
 
 
 class TestWatchStyle(unittest.TestCase):

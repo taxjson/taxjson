@@ -44,13 +44,14 @@ run's work files (nothing is recomputed):
   symbol in the books, so the engine already applies the rule.
 
 Each pair is a `Warning:` on the run's console (the first RADAR_SHOWN;
-then one line counting the rest, which `taxjson scan` lists) naming the two lines of
+then one line counting the rest, which `taxjson ticker-map --suggest`
+lists) naming the two lines of
 ticker.map that answer it (`TOBASE FROM TO` if they are one security,
 `DISTINCT A B` if not), and `run --strict` stops until one is in the map.
 `taxjson ticker-map --suggest` offers the TOBASE line (not a conditional
 hint: the equal names, the shared root and the trades are the evidence
-that the books hold both symbols), and `taxjson scan` lists the pair as
-XLIST-LOSS. Nothing is denied here: the user's line decides.
+that the books hold both symbols), its reason naming the DISTINCT line.
+Nothing is denied here: the user's line decides.
 
 The findings are written to work/xlist_loss_radar.state (JSON) by the
 run; `open_findings` reads them back with the map's current answers
@@ -75,7 +76,7 @@ _EPS = 1e-9
 _POSITION_ACTIONS = ("BUYSELL", "ASSIGN", "TRANSFER", "OPENING_BALANCE",
                      "SPLIT")
 # The pairs the run's console lists one by one; the rest are counted in
-# one line (`taxjson scan` lists every one).
+# one line (`taxjson ticker-map --suggest` lists every one).
 RADAR_SHOWN = 20
 # A share-class designator at the end of a listing's root: one letter
 # after a dot or a hyphen (the market's spelling of a class, ZZX.B /
@@ -636,18 +637,8 @@ def more_message(n: int, country: str) -> Tuple[str, List[str]]:
     past the first RADAR_SHOWN."""
     return (f"{n} more possible {_kind(country, n)} across listings, not "
             f"listed here",
-            ["`taxjson scan` lists every one (XLIST-LOSS) with the "
+            ["`taxjson ticker-map --suggest` lists every one with the "
              "TOBASE and DISTINCT lines that answer it."])
-
-
-def scan_text(f: Dict[str, Any], country: str) -> str:
-    """A finding as one `taxjson scan` line (XLIST-LOSS)."""
-    return (f"loss on {f['loss_symbol']} ({_when(f.get('losses') or [])}) "
-            f"and {f['other_symbol']} bought within 30 days "
-            f"({_when(f.get('buys') or [])}), {_named(f)}: a possible "
-            f"{_kind(country)} the books "
-            f"cannot see. Add `{f.get('tobase')}` to ticker.map if they "
-            f"are one security, `{f.get('distinct')}` if not.")
 
 
 def suggestion_reason(f: Dict[str, Any], country: str) -> str:

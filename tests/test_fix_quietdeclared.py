@@ -4,7 +4,7 @@
    distributed at no value) is the user's declared $0 cost: an Info line
    with the event id and how to change it — never the run's "$0 cost"
    Warning, find-missing-history's "$0-COST SHARES STILL HELD" section,
-   the checklist's elections ATTENTION or quick-start's. A $0 the broker
+   or the checklist's elections ATTENTION. A $0 the broker
    booked with no value saved stays a Warning. Both countries.
 2. RBC's / Questrade's look-alike rename hint is not printed when a .tt
    `RENAME <date> OLD NEW` line (or a dated ticker.map line) already
@@ -133,7 +133,7 @@ class TestDeclaredZeroValueRun(unittest.TestCase):
             diag = (root / "work" / "margin_corp_spinoff_value.diag")
             self.assertNotIn("warning:", diag.read_text())
             self.assertIn("note:", diag.read_text())
-            # quick-start / checklist read these: nothing to attend to.
+            # The checklist reads these: nothing to attend to.
             from taxjson.lib import checklist as cl
             ctx = type("Ctx", (), {"cache": root / "work"})()
             self.assertEqual(cl._zero_value_elections(ctx), 0)

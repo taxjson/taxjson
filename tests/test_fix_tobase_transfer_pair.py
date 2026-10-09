@@ -456,7 +456,8 @@ class TestIbNamesFollowTheListing(unittest.TestCase):
     """Two companies under one bare IB symbol: each row's name is the
     instrument of the listing it is booked as, never the first listed
     (owner report: a TSX and an NYSE company sharing a ticker read as
-    one listing with two names, a MAP-GAP in `taxjson scan`)."""
+    one listing with two names, a MAP-GAP in `taxjson scan`, now
+    `ticker-map --suggest`)."""
 
     def _names(self, first_tsx):
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
@@ -489,8 +490,8 @@ class TestIbNamesFollowTheListing(unittest.TestCase):
             self.assertEqual(names["QZE.US"], {exact_name("QZEQUITY INC")})
             self.assertEqual(XL.shown_apart("QZE.US", "QZE.TO", names),
                              XL.DIFFERENT)
-            r = _run(root, "scan")
-            self.assertNotIn("MAP-GAP", r.stdout, r.stdout)
+            r = _run(root, "ticker-map", "--suggest")
+            self.assertNotIn("To verify", r.stdout, r.stdout)
 
 
 if __name__ == "__main__":

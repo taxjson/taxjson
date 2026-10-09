@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+### Changed
+
+- `taxjson quick-start` is merged into `taxjson checklist`; the
+  quick-start command is removed. `taxjson checklist` is now every step
+  from install to filing in ten sections (set up, the broker files,
+  building the books, the gaps, tidying the config, the checks, the
+  results, trading through the year, sharing a sample, the year end),
+  each with its command(s) and why: the filing checks run as before
+  (same ids, so `checklist.json` marks and their answers still apply,
+  same exit 1 while anything is open), the guide's other steps are
+  marked from the project's files, the next step is named with its
+  command on the last line, and `--all` shows every step's commands.
+  Outside a project it prints the steps as a guide (exit 0). `--json` is
+  a versioned schema (`schema_version` 2) that keeps the checklist's
+  keys (docs/settings.md). `taxjson init` and the run's closing summary
+  now point to `taxjson checklist`.
+- `taxjson scan` is renamed `taxjson tips` and removed (no alias). Tips
+  is advice for next year — where you hold what (a Canadian dividend
+  payer held through its US listing, a US dividend payer in a TFSA,
+  `--online` probes for a `.TO` twin) — and changes no number of this
+  year: it exits 0 with or without tips (scan exited 1 on a finding), 2
+  when the project cannot be read. Its `--json` keeps each finding's
+  keys and adds `schema_version` 2 (the `notes` list is gone). The map's
+  own hygiene moved to `taxjson ticker-map --suggest`: a loss on one
+  listing with the other bought in its window (scan's XLIST-LOSS) is its
+  `TOBASE` suggestion, as it already was, and the rules no symbol of the
+  books reaches (scan's unused-rule note, still root-aware) are listed
+  there as "Unused rules, delete?", never written. Each `--suggest
+  --json` record now carries `kind` and `certainty`. The checklist's
+  step is `tips`, still yours to run and read; a mark saved under
+  `scan` (and `--done scan`) still applies to it.
+- A `.US` and a Canadian listing of one root with no ticker.map line
+  joining or parting them, and not joined by the run itself (scan's
+  MAP-GAP, which also asked about those) is now a pair to verify in
+  `taxjson ticker-map --suggest`, with the same reason (whether the
+  names agree, differ in form, or were not compared): `--write` asks on
+  a terminal — `TOBASE` (one security), `DISTINCT` (two) or skip — and
+  `--write --all` never adds one, since a shared root is a candidate,
+  not proof (`--all` adds only the lines the run's evidence names). In
+  `--json` such a suggestion has `kind` "map-gap", `certainty` "verify"
+  and its `alternative` (the `DISTINCT` line). The checklist's
+  ticker-map step needs attention while a pair is open; `tips` no longer
+  lists it.
+
+
+- The checklist's export-coverage line counts a short export's open
+  positions instead of naming them — "N open position(s) — `taxjson
+  list <account> <end>` lists them" — and, when a `.tt` line or a later
+  export of the account records the next activity on them, adds "next
+  recorded activity: <date> (<file>)". The run's Warning keeps the
+  symbols and says the same.
+
+### Fixed
+
+- An ALLOWLOSS line that names no denied loss now says how the books
+  spell the sale it meant: the day's trades of the line's root, on any
+  listing, are listed first and never cut (a busy day's list was cut at
+  twelve and could leave the sale out), and the message names the
+  spelling to write — the other listing of the root that day ("the
+  books spell this sale … — write `ALLOWLOSS …`, or if the two listings
+  are one security add `TOBASE …` to ticker.map"), the symbol a
+  ticker.map rule books it under, or a sale of the root a few days off
+  (trade and settlement dates apart by the settlement gap). Both
+  countries.
 
 ## v0.24.2 (2026-10-08)
 

@@ -1127,7 +1127,7 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # sits in exactly one group (tests/test_cli_polish.py); the README's
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Set up", ("quick-start", "init", "format", "format-map", "migrate",
+    ("Set up", ("checklist", "init", "format", "format-map", "migrate",
                 "fetch", "elect", "ticker-map")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history",
                          "opening")),
@@ -1139,8 +1139,8 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Totals by type", ("ccd-sum", "dil-sum", "divs-sum", "fees-sum",
                         "leaps-sum", "roc-sum", "trades-sum", "winners")),
     ("Before you trade", ("wash-radar", "buy-check", "sell-check",
-                          "harvest", "scan", "watch")),
-    ("Before you file", ("checklist", "form-export", "t1135",
+                          "harvest", "tips", "watch")),
+    ("Before you file", ("form-export", "t1135",
                          "reconcile-slips", "slip-audit", "carryover",
                          "option-boundary",
                          "close-year", "check-filed", "handoff")),
@@ -2396,7 +2396,9 @@ def _say_loss_overrides(root: Path, settings: Dict[str, Any], cache: Path,
     rule = ("wash sale" if country in ("us", "usa")
             else "superficial loss")
     if full:
-        probs = LO.problems(items, expected)
+        # ticker.map's spellings: a line naming a sale the books spell
+        # another way says how (LO.spelling_hint).
+        probs = LO.problems(items, expected, spellings=LO.map_view(root))
         if probs:
             _die(f"{len(probs)} .tt {LO.KEYWORD} line(s) name no single "
                  f"denied {rule}",
@@ -3673,7 +3675,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:
 
 def _refuse_unreadable_project_inputs(root: Path) -> None:
     """Die when a project-root input exists as a name but cannot be read.
-    Every config reader calls it, so no command (scan, sanity, harvest,
+    Every config reader calls it, so no command (tips, sanity, harvest,
     fees, ...) builds as if ticker.map or missing_history.json were
     absent (re-audit A2-0401 / A2-0144; `run` since A2-0313). Also
     refuses a project holding both missing_history.json and its old
@@ -5691,7 +5693,7 @@ def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
     same root under an equal name within 30 days (lib/xlist_loss_radar,
     tax-logic CA-XLIST-05 / US-XLIST-04): one Warning per pair naming the
     TOBASE and DISTINCT lines that answer it, the findings written to
-    work/xlist_loss_radar.state (`ticker-map --suggest`, `scan`);
+    work/xlist_loss_radar.state (`ticker-map --suggest`);
     `strict`: a pair the map does not answer stops the run. Advisory: a
     failure to read the books is never fatal."""
     from taxjson.lib import xlist_loss_radar as XR
@@ -12042,7 +12044,7 @@ _PLAN_KINDS = tuple(_PLAN_COUNTRY)
 
 def _ptype_conflict(acfg: Dict[str, Any]) -> bool:
     """A registered plan on a taxable account, or plan = "taxable" on a
-    sheltered one (audit A2-1332): the scan read the plan and skipped
+    sheltered one (audit A2-1332): tips read the plan and skipped
     the account's checks."""
     plan = str(acfg.get("plan") or "").strip().lower()
     typ = acfg.get("type")
@@ -12055,14 +12057,14 @@ def _ptype_conflict(acfg: Dict[str, Any]) -> bool:
 
 def _account_plan(name: str, acfg: Dict[str, Any],
                   country: Optional[str] = None) -> str:
-    """Registered-plan kind for scan checks: explicit `plan = "tfsa"` in
+    """Registered-plan kind for the tips checks: explicit `plan = "tfsa"` in
     taxjson.toml wins (an unknown value is ignored — validate_config
     warns); else inferred from a plan word that is a whole TOKEN of the
     account NAME (the init scaffold names folders tfsa/rrsp/...; `rrsp2`
     and `my-tfsa` count, `admiral` and `spiral` no longer read as an IRA
     and silently skipped the US-LISTING check, R1-243); else the type."""
     # Only the project country's plans count, and a taxable account is
-    # taxable whatever its plan says (the scan skipped one with plan =
+    # taxable whatever its plan says (the scan, now tips, skipped one with plan =
     # "401k"; validate_config warns on the contradiction, the other
     # country's plan is refused — audit A2-0739, A2-1332).
     kinds = _plan_kinds(country) if country else list(_PLAN_KINDS)
@@ -12077,17 +12079,6 @@ def _account_plan(name: str, acfg: Dict[str, Any],
                 rf"(?<![a-z]){re.escape(p)}(?![a-z])", low):
             return p
     return "sheltered"
-
-
-def _scan_symbol_root(sym: str) -> Tuple[str, str]:
-    """(root, suffix) of a US or Canadian listing (every Canadian venue:
-    lib/markets), else (symbol, '')."""
-    from taxjson.lib.markets import canadian_suffixes
-    parts = sym.rsplit(".", 1)
-    if len(parts) == 2 and (parts[1].upper() == "US"
-                            or parts[1].upper() in canadian_suffixes()):
-        return parts[0].upper(), parts[1].upper()
-    return sym.upper(), ""
 
 
 # Boilerplate an exchange appends to a listing's name that carries no
@@ -12145,102 +12136,43 @@ def _issuer_names_match(a: str, b: str) -> bool:
             and long_[:len(short)] == short)
 
 
-def _scan_listing_names(cache: Path, accounts: List[str],
-                        glob: Dict[str, str]
-                        ) -> Tuple[Dict[str, set], Dict[tuple, str]]:
-    """({listing: its security names, symbol_codes.exact_name}, each
-    name as written) from the parsed exports in work/
-    (cross_listings.gather, the names the cross-listing join and the
-    loss radar compare). A symbol a GLOBAL line renames gives its names
-    to the target, the spelling the books carry; a TOBASE line moves
-    none — each listing keeps its own."""
-    from taxjson.lib import cross_listings as XL
-    _legs, names, shown = XL.gather(cache, accounts)
-    out: Dict[str, set] = {}
-    for sym, ns in names.items():
-        out.setdefault(glob.get(sym, sym), set()).update(ns)
-    return out, shown
-
-
-# _scan_pair_verdict kinds that show two listings are NOT one security.
-_SCAN_APART = ("receipt", "different")
-
-
-def _scan_pair_verdict(us: str, ca: str, names: Dict[str, set],
-                       shown: Dict[tuple, str]) -> Tuple[str, str]:
-    """What the exports say about a US and a Canadian listing that share
-    a root: (kind, text). A shared root is a candidate (many interlisted
-    shares keep their letters) unless something shows the two apart:
-    "receipt" — the Canadian line is a depositary receipt (a receipt
-    word of markets.toml [lists] receipt_words in its name, or a listing
-    on a receipt venue); "different" — the names name different
-    companies (no leading company word in common): cross_listings.
-    shown_apart. Otherwise "same" (equal names
-    under the cross-listing join's rule, _names_verdict over
-    symbol_codes.exact_name; text: the name as written), "unequal" (the
-    names are not equal word for word; text: why) or "unknown" (no name
-    for a side; text: which)."""
-    from taxjson.lib import cross_listings as XL
-    nu, nc = names.get(us, set()), names.get(ca, set())
-    apart = XL.shown_apart(us, ca, names)
-    if apart:
-        return ("different" if apart == XL.DIFFERENT else "receipt"), apart
-    why = XL._names_verdict(nu, nc, shown)
-    if not nu or not nc:
-        return "unknown", ("no security name for "
-                           + ("either listing" if not nu and not nc
-                              else (us if not nu else ca)))
-    if why:
-        return "unequal", why
-    common = sorted(nu & nc)
-    return "same", shown.get(common[0], " ".join(common[0]))
-
-
-def cmd_scan(args: argparse.Namespace) -> None:
-    """`taxjson scan`: lint the PROJECT for common tax-efficiency
-    mistakes. Canada checks today:
+def cmd_tips(args: argparse.Namespace) -> None:
+    """`taxjson tips`: advice for next year — where you hold what costs
+    tax it need not. It changes no number of this year. Canada checks
+    today:
 
       US-LISTING   a cross-listed CANADIAN issuer (a ticker.map join, or
                    a same-root Canadian listing the exports do not show
                    apart — "verify" unless the names agree) held via its
-                   US line in
-                   a taxable account or TFSA while receiving dividends —
-                   USD dividend conversion drag, and brokers can
-                   misclassify the payment; the .TO line gives clean
+                   US line in a taxable account or TFSA while receiving
+                   dividends — USD dividend conversion drag, and brokers
+                   can misclassify the payment; the .TO line gives clean
                    eligible-dividend treatment.
       TFSA-US-DIV  a US-domiciled dividend payer inside a TFSA — the 15%
                    US withholding is unrecoverable there (an RRSP is
                    treaty-exempt; a taxable account can claim the FTC).
-      MAP-GAP      ticker.map coverage: a .US and a Canadian listing of
-                   one root seen in the project with no GLOBAL/TOBASE/
-                   JOURNAL or DISTINCT line for them — unless the exports
-                   show them apart (the Canadian line a depositary
-                   receipt, or names of different companies). The
-                   message says whether the names agree, differ in form,
-                   or were not compared (verify first). With
-                   --online, additionally probes yfinance for a .TO twin
-                   of every US-listed dividend payer the map doesn't
-                   know, clusters HELD listings by issuer name to catch
-                   DIFFERENT-root dual listings (SAMPLQ.US/SAMPLP.TO), and
-                   verifies every defined map pair names one issuer
-                   (MAP-BAD? on mismatch). Candidates to verify, not
-                   verdicts.
-      XLIST-LOSS   a loss on one listing with another listing of the
-                   same root, under an equal name, bought within 30
-                   days (any account): a superficial loss / wash sale
-                   the books cannot see until ticker.map says TOBASE
-                   (one security) or DISTINCT (two) — both countries
-                   (lib/xlist_loss_radar).
-      CDR-PAIR     a .TO line whose exchange name says CDR (Canadian
-                   Depositary Receipt — SAMPLR.TO over SAMPLR.US): the SAME
-                   issuer but NOT a listing equivalent (fractional,
-                   CAD-hedged, floating ratio) — never map it; declare
-                   `DISTINCT SAMPLR.US SAMPLR.TO` in ticker.map to record
-                   the ruling and silence the pair. A map entry that
-                   pairs a CDR with its underlying is flagged MAP-BAD?.
 
-    Exit 1 when any finding is reported, 0 on a clean scan."""
+    With --online (Yahoo Finance; candidates to verify, not verdicts):
+    MAP-GAP? — a .TO twin of a US-listed dividend payer the map doesn't
+    know, and held listings clustered by issuer name to catch
+    DIFFERENT-root dual listings (SAMPLQ.US/SAMPLP.TO); MAP-BAD? — a
+    defined map pair whose two sides name different issuers; CDR-PAIR —
+    a .TO line whose exchange name says CDR (Canadian Depositary Receipt
+    — SAMPLR.TO over SAMPLR.US): the SAME issuer but NOT a listing
+    equivalent (fractional, CAD-hedged, floating ratio) — never map it;
+    `DISTINCT SAMPLR.US SAMPLR.TO` records the ruling.
+
+    The map's own hygiene is `taxjson ticker-map --suggest`: a loss on
+    one listing with the other bought in its window (lib/
+    xlist_loss_radar), a same-root listing pair the map does not answer
+    (MAP-GAP, lib/map_hygiene.map_gaps) and the rules no symbol reaches
+    (lib/map_hygiene.unused_rules).
+
+    Exit 0 with or without tips (advice never fails a command); 2 when
+    the project cannot be read (no holdings reports, a damaged report or
+    book, an account left unread)."""
     import json
+    from taxjson.lib import map_hygiene as _MH
     root = Path(args.dir).resolve()
     cache = root / "work"
     reports = root / "reports"
@@ -12249,14 +12181,14 @@ def cmd_scan(args: argparse.Namespace) -> None:
     country = _country(settings)
     accounts = cfg.get("accounts", {}) or {}
     if not accounts:
-        _die("no accounts in taxjson.toml.")
+        _die_input("no accounts in taxjson.toml.")
 
     # Per-listing positions (holdings.toml is built PRE-TOBASE, so the
     # US/TO line actually held is visible — the gains inventory is
     # already consolidated and would hide it).
     holdings: Dict[str, list] = {}
-    # Accounts the scan cannot read (no holdings report / raw book): a
-    # 'clean scan' over them was a false all-clear (re-audit A2-0404).
+    # Accounts tips cannot read (no holdings report / raw book): "no
+    # tips" over them was a false all-clear (re-audit A2-0404).
     _skipped_no_inputs = _accounts_skipped_for_no_inputs(root)
     unscanned: Dict[str, str] = {}
     for name in accounts:
@@ -12280,24 +12212,24 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 float(h.get("quantity", 0) or 0)
             holdings[name] = _hl
         except Exception as e:
-            # A warning, then "No findings — clean scan." and exit 0
-            # turned an unreadable report into a false all-clear: the
-            # findings on that account's positions vanished (S049-10).
-            _die(f"could not read reports/{f.name}: {e}",
-                 "Re-run `taxjson run` to rebuild it (the scan would "
-                 "otherwise leave that account's positions out).")
+            # A warning, then a clean report and exit 0 turned an
+            # unreadable report into a false all-clear: the findings on
+            # that account's positions vanished (S049-10).
+            _die_input(f"could not read reports/{f.name}: {e}",
+                       "Re-run `taxjson run` to rebuild it (tips would "
+                       "otherwise leave that account's positions out).")
     _equity_accts = [n for n, c in accounts.items()
                      if not (c or {}).get("crypto")]
     if not holdings and _equity_accts:
-        # Printing "No findings — clean scan." (exit 0) over a scan that
-        # read nothing was a false all-clear (2026-09 CLI audit B22).
+        # A clean report (exit 0) over books it read nothing of was a
+        # false all-clear (2026-09 CLI audit B22).
         if set(_equity_accts) <= _accounts_skipped_for_no_inputs(root):
-            _die("no account has any input yet — nothing to scan.",
-                 "Drop broker CSVs into inputs/<account>/ and `taxjson "
-                 "run`.")
-        _die("no holdings reports in reports/ — nothing was scanned",
-             "Run `taxjson run` first (the scan checks per-listing "
-             "positions).")
+            _die_input("no account has any input yet — nothing to check.",
+                       "Drop broker CSVs into inputs/<account>/ and "
+                       "`taxjson run`.")
+        _die_input("no holdings reports in reports/ — nothing was checked",
+                   "Run `taxjson run` first (tips read the per-listing "
+                   "positions).")
 
     # Dividend payers, per raw (pre-consolidation) symbol.
     div_syms: set = set()
@@ -12309,9 +12241,14 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     and _has_inputs(root, name)):
                 unscanned.setdefault(name, f"work/{f.name}")
             continue
-        # A truncated raw book turned a real finding into 'No findings —
-        # clean scan.' with exit 0 (audit S042-05).
-        data = _load_json_or_die(f)
+        # A truncated raw book turned a real finding into a clean report
+        # with exit 0 (audit S042-05).
+        try:
+            data = _read_work_doc(f)
+        except (OSError, ValueError) as e:
+            _die_input(f"could not read {f}: {e}",
+                       "Re-run `taxjson run` (tips would otherwise leave "
+                       "that file's rows out).")
         for t in data.get("transactions", []):
             if t.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 div_syms.add(str(t.get("symbol") or "").upper())
@@ -12320,53 +12257,32 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # user's declared-distinct pairs (CDRs etc. — see DISTINCT).
     renames: Dict[str, str] = {}
     glob_renames: Dict[str, str] = {}
-    raw_rules: Dict[str, str] = {}
     distinct_pairs: set = set()
     map_file = root / "ticker.map"
     if map_file.exists():
         try:
             from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                        merge_renames,
-                                                        raw_renames)
+                                                        merge_renames)
             _tmap = load_map_file(map_file)
-            raw_rules = raw_renames(_tmap, to_base=True)
             renames = merge_renames(_tmap, to_base=True)
             glob_renames = merge_renames(_tmap, to_base=False)
             distinct_pairs = {frozenset(s.upper() for s in pair)
                               for pair in _tmap.distinct}
         except Exception as e:
             from taxjson.lib.out import warn as _warn
-            _warn(f"could not read ticker.map: {e}", prog="taxjson scan")
+            _warn(f"could not read ticker.map: {e}", prog="taxjson tips")
     renames_u = {k.upper(): v.upper() for k, v in renames.items()}
 
     def _declared_distinct(a: str, b: str) -> bool:
         return frozenset((a.upper(), b.upper())) in distinct_pairs
 
     # Every (root, suffix) sighting across holdings + dividend history +
-    # the map itself — the cross-listing evidence base.
-    seen_suffixes: Dict[str, set] = {}
-
-    from taxjson.lib.core import (is_option_symbol as _is_opt,
-                                  parse_option_underlying as _opt_und)
-
-    def _see(sym: str) -> None:
-        # An option is a sighting of its underlying's listing: a pair
-        # evidenced on one side only by options was a "clean scan"
-        # while the engine kept two identity classes (S042-04).
-        if _is_opt(sym):
-            sym = _opt_und(sym) or sym
-        r, suf = _scan_symbol_root(sym)
-        if suf:
-            seen_suffixes.setdefault(r, set()).add(suf)
-
-    for rows in holdings.values():
-        for h in rows:
-            _see(str(h.get("symbol") or ""))
-    for sym in div_syms:
-        _see(sym)
-    for old, new in renames_u.items():
-        _see(old)
-        _see(new)
+    # the map itself — the cross-listing evidence base (an option is a
+    # sighting of its underlying, S042-04).
+    seen_suffixes = _MH.sightings(
+        [str(h.get("symbol") or "") for rows in holdings.values()
+         for h in rows] + sorted(div_syms) + list(renames_u)
+        + list(renames_u.values()))
 
     from taxjson.lib.markets import canadian_suffixes as _ca_sufs
     _CA_SUFS = tuple(sorted(_ca_sufs()))
@@ -12378,10 +12294,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
     def _verdict(a: str, b: str) -> Tuple[str, str]:
         if "names" not in _xl:
-            _xl["names"], _xl["shown"] = _scan_listing_names(
+            _xl["names"], _xl["shown"] = _MH.listing_names(
                 cache, _equity_accts,
                 {k.upper(): v.upper() for k, v in glob_renames.items()})
-        return _scan_pair_verdict(a.upper(), b.upper(), _xl["names"],
+        return _MH.pair_verdict(a.upper(), b.upper(), _xl["names"],
                                   _xl["shown"])
 
     def _ca_twins(rt: str, sym_u: str) -> List[str]:
@@ -12389,22 +12305,22 @@ def cmd_scan(args: argparse.Namespace) -> None:
         # identity ruling; without one, a sighting of the same root on
         # ANY Canadian venue (.TO, .V, .CN, .NE, .VN — not only the TSX)
         # is a candidate (MAP-GAP asks for the ruling too) — unless the
-        # exports show the two apart (_scan_pair_verdict: the Canadian
+        # exports show the two apart (map_hygiene.pair_verdict: the Canadian
         # line is a receipt, or the names name different companies) or
         # a DISTINCT line rules it: "hold it instead" would then be
         # wrong advice (audit S042-06, S049-09).
         tgt = renames_u.get(sym_u, "")
-        if _scan_symbol_root(tgt)[1] in _CA_SUFS:
+        if _MH.symbol_root(tgt)[1] in _CA_SUFS:
             return [] if _declared_distinct(sym_u, tgt) else [tgt]
         return [f"{rt}.{s}" for s in sorted(seen_suffixes.get(rt) or ())
                 if s in _CA_SUFS
                 and not _declared_distinct(sym_u, f"{rt}.{s}")
-                and _verdict(sym_u, f"{rt}.{s}")[0] not in _SCAN_APART]
+                and _verdict(sym_u, f"{rt}.{s}")[0] not in _MH.APART]
 
     def _twins_proved(rt: str, sym_u: str) -> bool:
         # A map ruling, or equal names for every twin named.
         tgt = renames_u.get(sym_u, "")
-        if _scan_symbol_root(tgt)[1] in _CA_SUFS:
+        if _MH.symbol_root(tgt)[1] in _CA_SUFS:
             return True
         return all(_verdict(sym_u, c)[0] == "same"
                    for c in _ca_twins(rt, sym_u))
@@ -12422,7 +12338,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 sym = str(h.get("symbol") or "")
                 if float(h.get("quantity", 0) or 0) == 0:
                     continue
-                rt, suf = _scan_symbol_root(sym)
+                rt, suf = _MH.symbol_root(sym)
                 if suf != "US":
                     continue
                 sym_u = sym.upper()
@@ -12436,7 +12352,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     _ca = " or ".join(_ca_twins(rt, sym_u))
                     _chk = ("" if _twins_proved(rt, sym_u) else
                             f" (verify {_ca} is the same security first: "
-                            f"only the letters match — see MAP-GAP)")
+                            f"only the letters match — `taxjson "
+                            f"ticker-map --suggest` lists the pair)")
                     findings.append((
                         "US-LISTING", name, sym,
                         f"Canadian issuer held via its US listing in a "
@@ -12451,143 +12368,11 @@ def cmd_scan(args: argparse.Namespace) -> None:
                         "RRSP (treaty-exempt) or a taxable account "
                         "(foreign tax credit claimable)."))
 
-    # MAP-GAP: a US and a Canadian listing of one root, both seen, no
-    # map line joining or parting them: a candidate (interlisted shares
-    # usually keep their letters) — unless the exports show the two
-    # apart (the Canadian line a receipt, names of different
-    # companies): those are two securities and need no DISTINCT line.
-    from taxjson.lib.cross_listings import tobase_direction
-    for rt in sorted(seen_suffixes):
-        sufs = seen_suffixes[rt]
-        if "US" not in sufs:
-            continue
-        for _cs in sorted(s for s in sufs if s in _CA_SUFS):
-            _ca = f"{rt}.{_cs}"
-            _us = f"{rt}.US"
-            if _declared_distinct(_us, _ca):
-                continue        # user's DISTINCT ruling — settled
-            if _us in renames_u or _ca in renames_u:
-                continue
-            _v, _what = _verdict(_us, _ca)
-            if _v in _SCAN_APART:
-                continue
-            _frm, _to = tobase_direction(
-                _us, _ca, str(settings.get("base_currency") or "")
-                .upper() or None)
-            _lines = (f"`TOBASE {_frm} {_to}` (one cost pool, and the "
-                      f"loss rules see both); if not, "
-                      f"`DISTINCT {_us} {_ca}`.")
-            if _v == "same":
-                _msg = (f"{_us} and {_ca} carry the same name "
-                        f"({_what!r}) but ticker.map does not join them "
-                        f"— if they are one security add {_lines}")
-            elif _v == "unequal":
-                _msg = (f"{_us} and {_ca} share their letters but "
-                        f"{_what} — verify, then if they are one "
-                        f"security add {_lines}")
-            else:
-                _msg = (f"{_us} and {_ca} share their letters; "
-                        f"names not compared ({_what}) — verify, then if "
-                        f"they are one security add {_lines}")
-            findings.append(("MAP-GAP", "-", f"{_ca}/{_us}", _msg))
-
-    # XLIST-LOSS: a loss on one listing, another listing of the same
-    # root under an equal name bought within 30 days, the pair neither
-    # joined nor ruled DISTINCT (lib/xlist_loss_radar — the last run's
-    # findings the map does not answer yet).
-    from taxjson.lib import xlist_loss_radar as _XR
-    for _f in _XR.open_findings(root):
-        findings.append(("XLIST-LOSS", ", ".join(sorted(
-            {str(x.get("account")) for x in _f.get("losses") or []})),
-            f"{_f['loss_symbol']}/{_f['other_symbol']}",
-            _XR.scan_text(_f, country)))
-
-    # MAP-UNUSED (note, not a finding): rules whose FROM symbol never
-    # occurs in any parsed source — judged the way the ENGINE applies
-    # the map (taxjson_ticker_map.map_symbol): FROM must equal a symbol
-    # exactly, or an option's underlying (ROOT-aware on purpose — a
-    # rule with no stock rows is still live through OPTION trades:
-    # ABC271217C00050000.US needs `TOBASE ABC.US ABC.TO`; a root-blind
-    # check would prune such live rules).
-    # Chains count: a rule reached through another rule's target is
-    # live (R1-139). A suffix-less FROM (`GLOBAL QQOL QQNW`) matches
-    # only a suffix-less symbol — the engine never applies it to
-    # QQOL.US, so scan must not call it live either (S053-12).
-    map_unused: list = []
-    if raw_rules:
-        from taxjson.lib.core import (is_option_symbol,
-                                      parse_option_underlying)
-        _seen_syms: set = set()
-        _unread: List[str] = []
-        for _acct in accounts:
-            for _p in _audit_source_files(cache, _acct,
-                                          list(accounts)):
-                try:
-                    _doc = json.loads(_p.read_text(encoding="utf-8"))
-                except (OSError, ValueError) as e:
-                    # Skipping it silently listed live rules as unused
-                    # (S042-10) — and pruning on that note once split
-                    # option identity classes.
-                    _unread.append(f"{_p.name} ({e})")
-                    continue
-                _rows = (_doc.get("transactions", _doc)
-                         if isinstance(_doc, dict) else _doc) or []
-                # A wrong-shape stage file ([1] / {"transactions": [1]})
-                # is unreadable too, not an AttributeError traceback
-                # (re-audit A2-1440).
-                if not isinstance(_rows, list) or any(
-                        not isinstance(_t, dict) for _t in _rows):
-                    _unread.append(f"{_p.name} (not a list of "
-                                   f"transaction objects)")
-                    continue
-                for _t in _rows:
-                    _sym = str(_t.get("symbol") or "").upper()
-                    if _sym:
-                        _seen_syms.add(_sym)
-        _reached: set = set()
-        for _sym in _seen_syms:
-            _reached.add(_sym)
-            if is_option_symbol(_sym):
-                try:
-                    _reached.add(str(parse_option_underlying(_sym)).upper())
-                except Exception:
-                    pass
-        _rules_u = {k.upper(): v.upper() for k, v in raw_rules.items()}
-        _frontier = list(_reached)
-        while _frontier:
-            _nxt = _rules_u.get(_frontier.pop())
-            if _nxt and _nxt not in _reached:
-                _reached.add(_nxt)
-                _frontier.append(_nxt)
-        _suffixed = {}
-        for _sym in _reached:
-            if "." in _sym:
-                _suffixed.setdefault(_sym.rsplit(".", 1)[0], set()).add(_sym)
-        for _frm, _to in sorted(raw_rules.items()):
-            _fu = _frm.upper()
-            if _fu in _reached:
-                continue
-            _hint = ""
-            if "." not in _fu and _fu in _suffixed:
-                _alts = ", ".join(sorted(_suffixed[_fu]))
-                _hint = (f" (the books only have {_alts}; a rule's FROM "
-                         f"matches exactly — write the suffixed form, "
-                         f"e.g. {sorted(_suffixed[_fu])[0]})")
-            map_unused.append(f"{_frm} -> {_to}{_hint}")
-        if _unread:
-            from taxjson.lib.out import warn as _warn
-            _warn(f"could not read {'; '.join(_unread)}",
-                  prog="taxjson scan",
-                  details=["The unused-ticker.map-rule check is skipped "
-                           "(its symbols are unknown); re-run `taxjson "
-                           "run`."])
-            map_unused = []
-
     from taxjson.lib.offline import offline_enabled as _offline
     if getattr(args, "online", False) and _offline():
         # The documented kill switch covers this probe too: it sends
         # every held and dividend ticker to Yahoo (S042-12, S048-00).
-        note("taxjson scan", "TAXJSON_OFFLINE is set — the --online "
+        note("taxjson tips", "TAXJSON_OFFLINE is set — the --online "
              "Yahoo Finance probe is skipped",
              details=["MAP-GAP?/MAP-BAD?/CDR-PAIR are not checked; the "
                       "offline checks below still ran."])
@@ -12597,7 +12382,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
         except ImportError:
             from taxjson.lib.out import warn as _warn
             _warn("--online needs yfinance (pip install -e '.[fx]'); "
-                  "skipping the probe.", prog="taxjson scan")
+                  "skipping the probe.", prog="taxjson tips")
         else:
             # The book symbol (ZZQ.US, ZZQ.B.TO) is not Yahoo's spelling:
             # every probe goes through the project's QUOTE lines, else
@@ -12647,14 +12432,14 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
             probed = []
             for sym in sorted(div_syms):
-                rt, suf = _scan_symbol_root(sym)
+                rt, suf = _MH.symbol_root(sym)
                 if (suf != "US" or _has_ca_twin(rt, sym.upper())
                         or _declared_distinct(f"{rt}.US", f"{rt}.TO")):
                     continue
                 # The exports already name the two differently (a CDR,
                 # another issuer): nothing to verify. A pair the books
                 # cannot compare stays a candidate TO VERIFY.
-                if _verdict(f"{rt}.US", f"{rt}.TO")[0] in _SCAN_APART:
+                if _verdict(f"{rt}.US", f"{rt}.TO")[0] in _MH.APART:
                     continue
                 _twin = _yf(f"{rt}.TO")
                 if not _twin:
@@ -12689,14 +12474,14 @@ def cmd_scan(args: argparse.Namespace) -> None:
             held_syms = {str(h.get("symbol") or "").upper()
                          for rows in holdings.values() for h in rows}
             held_syms = {s for s in held_syms
-                         if _scan_symbol_root(s)[1]
+                         if _MH.symbol_root(s)[1]
                          in _CA_SUFS + ("US",)}
             _NAME_CAP = 80
             _probe_list = sorted(held_syms
                                  | set(renames_u)
                                  | set(renames_u.values()))
             if len(_probe_list) > _NAME_CAP:
-                note("taxjson scan",
+                note("taxjson tips",
                      f"probing issuer names for the first {_NAME_CAP} "
                      f"of {len(_probe_list)} listed symbols",
                      details=["Alphabetical; the remainder are NOT "
@@ -12747,9 +12532,9 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 # sorted: `syms` is a set, and its iteration order
                 # numbered the findings differently on every run (S042-13).
                 us = [s for s in sorted(syms)
-                      if _scan_symbol_root(s)[1] == "US"]
+                      if _MH.symbol_root(s)[1] == "US"]
                 ca = [s for s in sorted(syms)
-                      if _scan_symbol_root(s)[1] in _CA_SUFS]
+                      if _MH.symbol_root(s)[1] in _CA_SUFS]
                 for u in us:
                     for c in ca:
                         if (u in renames_u or c in renames_u
@@ -12780,48 +12565,37 @@ def cmd_scan(args: argparse.Namespace) -> None:
                             f"so."))
 
     if getattr(args, "json", False):
-        print(json.dumps({"findings": [
+        # schema 2: `taxjson scan`'s MAP-UNUSED notes and XLIST-LOSS
+        # findings are `taxjson ticker-map --suggest`'s now.
+        print(json.dumps({"schema_version": 2, "findings": [
             {"check": c, "account": a, "symbol": sy, "message": m}
             for c, a, sy, m in findings],
-            "notes": [{"check": "MAP-UNUSED", "rule": r}
-                      for r in map_unused],
             "unscanned": [{"account": n, "missing": w}
                           for n, w in sorted(unscanned.items())]},
             indent=2, sort_keys=True))
-        raise SystemExit(1 if findings or unscanned else 0)
+        raise SystemExit(2 if unscanned else 0)
 
     from taxjson.lib import out
-    doc = out.Doc(f"SCAN — common tax-efficiency mistakes, {country}"
+    doc = out.Doc(f"TIPS — tax-efficiency advice for next year, {country}"
                   f"{', online map probe' if getattr(args, 'online', False) else ''}")
-    if not holdings:
-        doc.blank()
-        doc.para("No holdings reports found — run `taxjson run` first; "
-                 "the scan checks per-listing positions.")
-    if map_unused:
-        doc.section("UNUSED TICKER.MAP RULES")
-        doc.para(f"{len(map_unused)} ticker.map rule(s) match no parsed "
-                 f"symbol in this project (checked stock rows, option "
-                 f"roots and rename chains). Unused rules are harmless; "
-                 f"prune only if you know the symbol will not return.")
-        doc.items(map_unused)
     if unscanned:
-        out.warn("not scanned (no "
+        out.warn("not read (no "
                  + "; ".join(f"{n}: {w}"
                              for n, w in sorted(unscanned.items()))
-                 + ")", prog="taxjson scan",
+                 + ")", prog="taxjson tips",
                  details=["Re-run `taxjson run` to rebuild them."])
     if not findings:
         doc.blank()
         if unscanned:
-            doc.para(f"No findings in the accounts scanned — NOT a clean "
-                     f"scan: {', '.join(sorted(unscanned))} could not be "
-                     f"read (see above).")
+            doc.para(f"No tips for the accounts read — "
+                     f"{', '.join(sorted(unscanned))} could not be read "
+                     f"(see above).")
             doc.print()
-            raise SystemExit(1)
-        doc.line("No findings — clean scan.")
+            raise SystemExit(2)
+        doc.line("No tips — nothing to change in where you hold what.")
         doc.print()
-        raise SystemExit(0)
-    doc.section("FINDINGS")
+        return
+    doc.section("TIPS")
     doc.table(["CHECK", "ACCOUNT", "SYMBOL"],
               [[c, a, sy] for c, a, sy, _m in findings])
     doc.blank()
@@ -12829,9 +12603,11 @@ def cmd_scan(args: argparse.Namespace) -> None:
         where = f" [{a}]" if a != "-" else ""
         doc.item(f"{c}{where} {sy}: {m}", bullet=f"{i}. ")
     doc.blank()
-    doc.line(f"{len(findings)} finding(s).")
+    doc.line(f"{len(findings)} tip(s) for next year — none changes a "
+             f"number of this year.")
     doc.print()
-    raise SystemExit(1)
+    if unscanned:
+        raise SystemExit(2)
 
 
 def _issuer_is_canadian_by_symbol(cache: Path, acct: str
@@ -15222,10 +14998,14 @@ def cmd_renames(args: argparse.Namespace) -> None:
 def cmd_ticker_map(args: argparse.Namespace) -> None:
     """`taxjson ticker-map --suggest [--write [--all]] [--json]`: every
     ticker.map line the last run suggested (lib/ticker_map_suggest),
-    each with its reason; --write appends the chosen ones to ticker.map
-    (one by one on a terminal: y/n/q; --all: every one), a comment line
-    above each, never a line the map already answers, through
-    safe_write with a backup of the old file."""
+    each with its reason; the listing pairs the map does not answer
+    (MAP-GAP, "verify": TOBASE if one security, DISTINCT if two); the
+    rules no symbol of the books reaches (lib/map_hygiene: "Unused
+    rules, delete?", never written). --write appends the chosen lines
+    to ticker.map (one by one on a terminal: y/n/q, and for a pair to
+    verify t/d/s/q; --all: every evidence line, never a pair to
+    verify), a comment line above each, never a line the map already
+    answers, through safe_write with a backup of the old file."""
     from taxjson.lib import ticker_map_suggest as TS
     from taxjson.lib.out import Doc
     root = Path(args.dir).resolve()
@@ -15238,15 +15018,29 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         _die("no work/ — run `taxjson run` first",
              "The suggestions come from the run's messages.")
     offer, skipped = TS.pending(root)
+    # The listing pairs the map does not answer (MAP-GAP): to verify,
+    # asked on a terminal, never added by --all.
+    verify, gap_unread = TS.verify(root, offer)
+    # The rules no symbol of the books reaches (root-aware: an option's
+    # underlying and a rename chain keep a rule live): listed to delete
+    # by hand, never written (lib/map_hygiene).
+    from taxjson.lib import map_hygiene as MH
+    unused, unread = MH.unused_rules(root)
+    interactive = (bool(getattr(args, "write", False)) and not args.all
+                   and sys.stdin.isatty())
     if getattr(args, "json", False):
-        _json_out({"suggestions": [s.record() for s in offer],
+        _json_out({"suggestions": [s.record() for s in offer + verify],
                    "skipped": [dict(s.record(), why=w, by=(
                        "suggestion" if TS.covered_by_suggestion(w)
-                       else "ticker.map")) for s, w in skipped]})
+                       else "ticker.map")) for s, w in skipped],
+                   "unused": [u.record() for u in unused],
+                   "unused_unread": list(unread),
+                   "map_gap_unread": list(gap_unread)})
         if not args.write:
             return
-    elif not args.write or not offer:
-        d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run")
+    elif not args.write or not (offer or (verify and interactive)):
+        d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run"
+                + (f", {len(verify)} to verify" if verify else ""))
         if offer:
             d.blank()
             for s in offer:
@@ -15255,6 +15049,16 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                                  "   (a .tt line: add it to a .tt file of "
                                  "the account)" if s.tt else ""))
                 d.para(s.reason, indent="  ")
+        if verify:
+            d.section(f"To verify: one security or two? ({len(verify)})")
+            for s in verify:
+                d.line(f"{s.line}   or   {s.alternative}")
+                d.para(s.reason, indent="  ")
+        if gap_unread:
+            d.blank()
+            d.para(f"The listing-pair check skipped what it could not "
+                   f"read: {'; '.join(gap_unread)} — re-run `taxjson "
+                   f"run`.")
         # A suggestion another one covers is not answered by the map:
         # its own heading.
         covered = [x for x in skipped if TS.covered_by_suggestion(x[1])]
@@ -15266,20 +15070,34 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                 d.section(f"{head} ({len(items)})")
                 for s, why in items:
                     d.item(f"{s.line}: {why}", "  ")
+        if unused:
+            d.section(f"Unused rules, delete? ({len(unused)})")
+            for u in unused:
+                d.line(u.line)
+                d.para(u.reason, indent="  ")
+        if unread:
+            d.blank()
+            d.para(MH.first_unread(unread))
         d.blank()
         d.para("Add a line only when it is right for your securities: "
                "`taxjson ticker-map --suggest --write` asks for each one "
-               "(--all adds every one), then re-run `taxjson run`."
-               if offer else "Nothing to add.")
+               "(a pair to verify: TOBASE, DISTINCT or skip; --all adds "
+               "only the lines the run's evidence names, never a pair to "
+               "verify), then re-run `taxjson run`."
+               if offer or verify else
+               "Nothing to add; an unused rule is harmless — delete it by "
+               "hand only if its symbol will not return." if unused else
+               "Nothing to add.")
         d.print()
         return
-    interactive = sys.stdin.isatty() and not args.all
     if not interactive and not args.all:
         _die_input("ticker-map --write: not a terminal, so nothing can be "
                    "asked",
-                   "Add --all to append every suggestion, or run it in a "
-                   "terminal to choose one by one.")
+                   "Add --all to append every suggestion the run's "
+                   "evidence names, or run it in a terminal to choose one "
+                   "by one.")
     chosen = []
+    stopped = False
     for s in offer:
         if s.template:
             # A placeholder (<LISTING>, <words ...>) would rename rows to
@@ -15302,10 +15120,41 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             except EOFError:
                 ans = "q"
             if ans.startswith("q"):
+                stopped = True
                 break
             if not ans.startswith("y"):
                 continue
         chosen.append(s)
+    for s in verify:
+        if not interactive:
+            # --all writes only what the evidence proves: a shared root
+            # is a candidate, never proof (MAP-GAP).
+            print(f"Not added (to verify — one security or two? `taxjson "
+                  f"ticker-map --suggest --write` on a terminal asks): "
+                  f"{s.line} / {s.alternative}")
+            continue
+        if stopped:
+            break
+        print(f"{s.line}   or   {s.alternative}")
+        for ln in _out_wrap(s.reason, indent="  ", hang="  "):
+            print(ln)
+        try:
+            ans = input("One security or two? [t]OBASE / [d]ISTINCT / "
+                        "[s]kip / [q]uit ").strip().lower()
+        except EOFError:
+            ans = "q"
+        if ans.startswith("q"):
+            break
+        # The comment above the line records the answer and what the
+        # exports showed (the reason's first clause, without the lines).
+        why = s.reason.split(" — ")[0]
+        if ans.startswith("t"):
+            chosen.append(TS.Suggestion(
+                s.line, f"one security (your answer): {why}", s.source))
+        elif ans.startswith("d"):
+            chosen.append(TS.Suggestion(
+                s.alternative, f"two securities (your answer): {why}",
+                s.source))
     if not chosen:
         print("Nothing added to ticker.map.")
         return
@@ -15688,17 +15537,38 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
 
 
 def cmd_checklist(args: argparse.Namespace) -> None:
-    """`taxjson checklist`: the filing checklist (docs/filing.md) with each
-    step auto-detected — the command that proves a step is run and its
-    verdict shown — plus manual marks for the steps no command can prove
+    """`taxjson checklist`: every step from install to filing, in order
+    (lib/checklist.items), each checked for you — a check runs the
+    command that proves it (or reads the project's files) and shows its
+    verdict — plus manual marks for the items no command can prove
     (`--done ID`, `--skip ID`, `--undo ID`; stored in checklist.json at the
-    project root, which you should commit). `--walk` steps through the open
-    items one at a time. Exit 1 while anything is open."""
+    project root, which you should commit). The last line names the next
+    item and its command. `--walk` steps through the open items one at a
+    time. Exit 1 while anything is open. Outside a project (no
+    taxjson.toml) it prints the same list as a step-by-step guide, exit
+    0."""
     import json as _json
     from datetime import date as _date
     from taxjson.lib import checklist as cl
 
     root = Path(args.dir).resolve()
+    if not (root / "taxjson.toml").exists():
+        used = [f for f, v in (("--done", args.done), ("--skip", args.skip),
+                               ("--undo", args.undo), ("--reset", args.reset),
+                               ("--walk", args.walk), ("--only", args.only),
+                               ("--quick", args.quick), ("--show", args.show),
+                               ("--note", args.note)) if v]
+        if used:
+            _die_input(f"{used[0]} needs a project: no taxjson.toml in "
+                       f"{root}",
+                       "Run `taxjson checklist` in the project folder (or "
+                       "`taxjson -C DIR checklist`); here it prints the "
+                       "steps.")
+        if args.json:
+            _json_out(cl.guide_json())
+            return
+        print(cl.render_guide())
+        return
     cfg = load_config(root)
     settings = cfg.get("settings") or {}
     year = settings.get("year")
@@ -15706,15 +15576,16 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         _die("[settings] year is required in taxjson.toml")
     country = _country(settings)
 
-    ids = [s[0] for s in cl.STEPS]
+    ids = cl.item_ids()
     if args.note and not (args.done or args.skip):
         _die("--note goes with --done or --skip (it is stored with "
              "the mark)")
     # Every repeated --done/--skip/--undo is recorded (only the last one
     # was, silently — A2-1159); an unknown id stops before any is written.
-    marks = ([(st, "done") for st in (args.done or [])]
-             + [(st, "skipped") for st in (args.skip or [])]
-             + [(st, None) for st in (args.undo or [])])
+    # A former id (cl.ID_ALIASES: `scan` is `tips`) names its item.
+    marks = ([(cl.canonical_id(st), "done") for st in (args.done or [])]
+             + [(cl.canonical_id(st), "skipped") for st in (args.skip or [])]
+             + [(cl.canonical_id(st), None) for st in (args.undo or [])])
     for step, _m in marks:
         if step not in ids:
             _die(f"unknown step {step!r}", f"Step ids: {', '.join(ids)}.")
@@ -15771,6 +15642,8 @@ def cmd_checklist(args: argparse.Namespace) -> None:
 
     ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=_date.today(),
                  run_sub=cl.default_run_sub(root))
+    if args.only:
+        args.only = cl.canonical_id(args.only)
     only = [args.only] if args.only else None
     if only and args.only not in ids:
         _die(f"unknown step {args.only!r}", f"Step ids: {', '.join(ids)}.")
@@ -15799,7 +15672,8 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
     else:
-        print(cl.render(results, year, country, quick=args.quick))
+        print(cl.render(results, year, country, quick=args.quick,
+                        show_all=args.all))
     if not all(r.passed for r in results):
         sys.exit(1)
 
@@ -15822,9 +15696,9 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     while anything is still open (also after [q]uit)."""
     from taxjson.lib.out import kv_lines, wrap
     country = _country(ctx.settings)
-    ids = [s[0] for s in cl.STEPS if not only or s[0] in only]
+    ids = [sid for sid in cl.item_ids() if not only or sid in only]
     keys = "[d]one  [s]kip  [r]e-check  [n]ext  [q]uit  (Enter = next)"
-    print("FILING CHECKLIST WALK")
+    print("CHECKLIST WALK")
     print(f"For each open step: {keys}\n")
     seen = 0
     quit_early = False
@@ -15833,18 +15707,18 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
         r = cl.evaluate(ctx, only=[sid], quick=quick,
                         progress=cl.stderr_progress)[0]
         if r.passed:
-            for ln in wrap(f"{cl.SYMBOL[r.effective]} {sid}: {r.detail}"
+            for ln in wrap(f"{cl.SYMBOL[r.effective]} {sid}"
+                           + (f": {r.detail}" if r.detail else "")
                            + (f" (marked {r.override})" if r.override
                               else ""), None, "  ", "      "):
                 print(ln)
             continue
         seen += 1
-        _, stage, title, cmd, why = cl.step_meta(sid, country)
-        stage_name = dict(cl.STAGES)[stage]
+        _, section, title, cmd, why = cl.item_meta(sid, country)
         show = True
         while True:
             if show:
-                print(f"\n{stage}. {stage_name.upper()} — {sid}")
+                print(f"\n{section.upper()} — {sid}")
                 for ln in wrap(title, None, "  ", "  "):
                     print(ln)
                 for ln in kv_lines([
@@ -22760,33 +22634,10 @@ def cmd_init(args: argparse.Namespace) -> None:
     print("  3. Run:")
     # A command to copy: its own line, never wrapped.
     print(f"       taxjson -C {_shlex.quote(str(root))} run")
-    print("  4. Every step after that, and which one is next:")
-    print(f"       taxjson -C {_shlex.quote(str(root))} quick-start")
+    print("  4. Every step after that, checked, and which one is next:")
+    print(f"       taxjson -C {_shlex.quote(str(root))} checklist")
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
-
-
-def cmd_quick_start(args: argparse.Namespace) -> None:
-    """`taxjson quick-start [--all] [--json]`: the workflow, step by
-    step (lib/quick_start). Outside a project every step with its
-    commands; inside one (taxjson.toml in -C DIR) each step marked from
-    the project's files and the next one named. Read-only: no command
-    run, no file written, no network."""
-    from taxjson.lib import quick_start as QS
-    root = Path(args.dir).resolve()
-    if (root / "taxjson.toml").is_file():
-        # The checks it reads may print their own notes (a built-in
-        # market list entry, say); a guide that runs nothing shows none.
-        import contextlib
-        import io
-        with contextlib.redirect_stderr(io.StringIO()):
-            guide = QS.evaluate(root)
-    else:
-        guide = QS.outside()
-    if args.json:
-        _json_out(QS.to_json(guide))
-        return
-    print(QS.render(guide, show_all=args.all))
 
 
 # The carryover flag means what each country's return does with it
@@ -23010,25 +22861,6 @@ def _build_parser(prog: str = "taxjson"
                              "(default: current year)")
     p_init.set_defaults(func=cmd_init)
 
-    p_qs = sub.add_parser(
-        "quick-start",
-        help="Every step from install to filing; which is next",
-        description="The whole workflow as numbered steps, each with the "
-                    "exact command(s) and why. Inside a project (a "
-                    "taxjson.toml here, or -C DIR) each step is marked "
-                    "done, needs attention, to do, yours to review or "
-                    "n/a from the project's files, and the next one is "
-                    "named with its command. Reads files only: it runs "
-                    "nothing, writes nothing and opens no connection "
-                    "(`taxjson checklist` runs the slow checks).")
-    p_qs.add_argument("--all", action="store_true",
-                      help="Show every step's commands and why, also "
-                           "the done ones")
-    p_qs.add_argument("--json", action="store_true",
-                      help="Emit the guide as JSON (a stable schema, "
-                           "schema_version 1: docs/settings.md)")
-    p_qs.set_defaults(func=cmd_quick_start)
-
     p_tx = sub.add_parser(
         "events",
         help="Every transaction over a window, oldest first",
@@ -23188,22 +23020,24 @@ def _build_parser(prog: str = "taxjson"
                     help="Emit JSON instead of text")
     p_g.set_defaults(func=cmd_gains)
 
-    p_scan = sub.add_parser(
-        "scan",
-        help="Check holdings for tax-efficiency mistakes",
-        description="Lint the project for common tax-efficiency "
-                    "mistakes: Canadian dividend payers held through "
-                    "their US listing in a taxable account or a TFSA, US "
-                    "dividend payers in a TFSA (unrecoverable "
-                    "withholding), and ticker.map cross-listing gaps. "
-                    "Exit 1 on findings.")
-    p_scan.add_argument("--online", action="store_true",
-                        help="Also probe yfinance for .TO twins of "
-                             "unmapped US-listed dividend payers "
-                             "(ticker.map coverage candidates)")
-    p_scan.add_argument("--json", action="store_true",
+    p_tips = sub.add_parser(
+        "tips",
+        help="Tax-efficiency tips for next year",
+        description="Advice for next year on where you hold what: "
+                    "Canadian dividend payers held through their US "
+                    "listing in a taxable account or a TFSA, US dividend "
+                    "payers in a TFSA (unrecoverable withholding). It "
+                    "changes no number of this year (listing pairs "
+                    "ticker.map does not join: `taxjson ticker-map "
+                    "--suggest`). Exit 0 with or without tips; 2 when "
+                    "the project cannot be read.")
+    p_tips.add_argument("--online", action="store_true",
+                        help="Also probe Yahoo Finance for .TO twins of "
+                             "unmapped US-listed dividend payers and "
+                             "check the map's pairs by issuer name")
+    p_tips.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
-    p_scan.set_defaults(func=cmd_scan)
+    p_tips.set_defaults(func=cmd_tips)
 
     p_sum = sub.add_parser(
         "sum",
@@ -23654,17 +23488,21 @@ def _build_parser(prog: str = "taxjson"
              "suggested — two listings a transfer journal pairs but the "
              "run did not join, a Questrade code with a likely ticker, "
              "a ticker change IB, Questrade or RBC shows, a coin's "
-             "Yahoo id — each with its reason. --write appends the "
-             "chosen ones (asked one by one on a terminal; --all: every "
-             "one), with a comment, never one the map already answers, "
-             "keeping a backup of the old file.")
+             "Yahoo id — each with its reason; the listing pairs that "
+             "share their letters with no TOBASE or DISTINCT line (to "
+             "verify); the rules no symbol of the books reaches (unused, "
+             "never written). --write appends the chosen ones (asked one "
+             "by one on a terminal; --all: every line the run's evidence "
+             "names, never a pair to verify), with a comment, never one "
+             "the map already answers, keeping a backup of the old file.")
     p_tm.add_argument("--suggest", action="store_true",
                       help="List the suggested lines (required)")
     p_tm.add_argument("--write", action="store_true",
                       help="Append the chosen lines to ticker.map")
     p_tm.add_argument("--all", action="store_true",
-                      help="With --write: append every suggestion without "
-                           "asking")
+                      help="With --write: append every line the run's "
+                           "evidence names without asking (never a "
+                           "listing pair to verify)")
     p_tm.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_tm.set_defaults(func=cmd_ticker_map)
@@ -23742,11 +23580,17 @@ def _build_parser(prog: str = "taxjson"
 
     p_ck = sub.add_parser(
         "checklist",
-        help="The filing checklist, each step checked for you",
-        description="The filing checklist (docs/filing.md) with each "
-             "step auto-detected by running the command that proves it; "
-             "--done/--skip/--undo record the steps no command can "
-             "prove; --walk steps through the open ones.")
+        help="Every step from install to filing, checked",
+        description="Every step from install to filing, in order, each "
+             "with its command(s) and why. Inside a project (a "
+             "taxjson.toml here, or -C DIR) each step is checked — by "
+             "running the command that proves it, or from the project's "
+             "files — and marked done, needs attention, to do, blocked, "
+             "to confirm, yours to run and read or n/a; the last line "
+             "names the next step and its command. --done/--skip/--undo "
+             "record the steps no command can prove; --walk steps "
+             "through the open ones. Exit 1 while anything is open. "
+             "Outside a project it prints the steps as a guide (exit 0).")
     p_ck.add_argument("--walk", action="store_true",
                       help="Interactive: visit each open step in turn")
     p_ck.add_argument("--done", metavar="ID", action="append",
@@ -23764,8 +23608,12 @@ def _build_parser(prog: str = "taxjson"
                            "(audit, sanity, ...)")
     p_ck.add_argument("--show", action="store_true",
                       help="With --done/--skip/--undo: also print the checklist")
+    p_ck.add_argument("--all", action="store_true",
+                      help="Show every step's commands and why, also "
+                           "the done ones")
     p_ck.add_argument("--json", action="store_true",
-                      help="Emit JSON instead of text")
+                      help="Emit JSON instead of text (a stable schema, "
+                           "schema_version 2: docs/settings.md)")
     p_ck.set_defaults(func=cmd_checklist)
 
     p_san = sub.add_parser(
@@ -24440,11 +24288,10 @@ def _main() -> None:
             # `taxjson run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
-        if args.cmd not in ("init", "help", "migrate",
-                            "quick-start") + _RELEASE_CMDS:
+        if args.cmd not in ("init", "help", "migrate") + _RELEASE_CMDS:
             # An old per-purpose file (yf_ticker.map, distributions.map
-            # ...) stops every command, whatever it reads (lib/migrate);
-            # quick-start names it as the step to do.
+            # ...) stops every command, whatever it reads (lib/migrate),
+            # naming `taxjson migrate`.
             _refuse_legacy_project_files(Path(args.dir).resolve())
         _enforce_command_country(args)
         _refuse_artifact_account(args)

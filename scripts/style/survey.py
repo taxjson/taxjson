@@ -45,7 +45,7 @@ COMMON = [
     ("sell-check", ["sell-check", "SAMPA{sfx}"]),
     ("harvest", ["harvest", "--no-ibkr", "--options"]),
     ("harvest_crypto", ["harvest", "--no-ibkr", "--crypto"]),
-    ("scan", ["scan"]), ("checklist", ["checklist"]),
+    ("tips", ["tips"]), ("checklist", ["checklist"]),
     ("form-export", ["form-export"]),
     ("reconcile-slips", ["reconcile-slips", "{slip}"]),
     ("carryover", ["carryover"]), ("handoff", ["handoff"]),

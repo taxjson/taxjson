@@ -135,10 +135,11 @@ class TestScanMapUnused(unittest.TestCase):
     """R1-139: scan called a rule reached through a chain unused.
     S053-12: scan called a bare `GLOBAL QQOL QQNW` live (it matched
     QQOL.US by root) while the engine, which matches FROM exactly,
-    applied nothing."""
+    applied nothing. The check is `ticker-map --suggest`'s now."""
 
     def _scan(self, ticker_map, symbols):
-        from test_scan import _project, _raw_json, _holdings_toml, _run
+        from test_tips import _project, _raw_json, _holdings_toml
+        from test_tips import _suggest_json
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, accounts=[("margin", "taxable")],
                             holdings={"margin": _holdings_toml("XIU.TO")},
@@ -149,8 +150,9 @@ class TestScanMapUnused(unittest.TestCase):
                     {"action": "BUYSELL", "date": "2026-03-01",
                      "symbol": s, "quantity": 1, "currency": "USD",
                      "net_amount": 10.0} for s in symbols]}))
-            r = _run(root, "--json")
-        return [n["rule"] for n in json.loads(r.stdout)["notes"]]
+            _r, doc = _suggest_json(root)
+        return [u["rule"] + (f" ({u['hint']})" if u.get("hint") else "")
+                for u in doc["unused"]]
 
     def test_rule_reached_through_a_chain_is_live(self):
         rules = self._scan("GLOBAL OLD.US NEW.US\nTOBASE NEW.US NEW.TO\n",

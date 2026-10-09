@@ -1263,7 +1263,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "makes them one security (`TOBASE FROM TO`, the loss "
                  "then denied) and the one that keeps them two "
                  "(`DISTINCT A B`); `taxjson ticker-map --suggest` offers "
-                 "the TOBASE line, `taxjson scan` lists it (XLIST-LOSS) "
+                 "the TOBASE line "
                  "and `run --strict` stops until the map has one of the "
                  "two. Nothing is denied until then; a listing with no "
                  "name in the exports (a .tt-only book) is not flagged. A "
@@ -2163,7 +2163,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "nothing been paid.", cont=True),
             *_ca_instalment_tables(),
             Rule("CA-SCAN-01",
-                 "`taxjson scan`: a US-listed dividend payer held in a "
+                 "`taxjson tips`: a US-listed dividend payer held in a "
                  "TFSA is flagged — the 15% US withholding is "
                  "unrecoverable there, while an RRSP is exempt under the "
                  "Canada-US treaty (not checked) and a taxable account "
@@ -2886,8 +2886,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ticker.map line that makes them one security (`TOBASE "
                  "FROM TO`, the loss then disallowed) and the one that "
                  "keeps them two (`DISTINCT A B`); `taxjson ticker-map "
-                 "--suggest` offers the TOBASE line, `taxjson scan` lists "
-                 "it (XLIST-LOSS) and `run --strict` stops until the map "
+                 "--suggest` offers the TOBASE line "
+                 "and `run --strict` stops until the map "
                  "has one of the two. Nothing is disallowed until then; "
                  "a listing with no name in the exports is not flagged. A "
                  "DISTINCT line naming the US listing bare (`DISTINCT "

@@ -318,11 +318,11 @@ class TestUnreadableInputsAreErrors(unittest.TestCase):
             (root / "reports").mkdir()
             (root / "reports" / "margin_holdings.toml").write_text(
                 '[[holding]]\nsymbol = "AAA.TO"\nquantity = 10\n')
-            for cmd in (["leaps"], ["scan"], ["divs-sum"], ["events"]):
+            for cmd in (["leaps"], ["tips"], ["divs-sum"], ["events"]):
                 r = _runsub(root, *cmd)
                 self.assertNotEqual(r.returncode, 0, (cmd, r.stdout))
                 self.assertIn("margin_raw.json", r.stderr, cmd)
-                self.assertNotIn("clean scan", r.stdout, cmd)
+                self.assertNotIn("No tips", r.stdout, cmd)
 
     def test_unreadable_config_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
@@ -362,7 +362,7 @@ class TestScanUsListing(unittest.TestCase):
             root = self._proj(d, "DISTINCT EFX.US EFX.TO\n"
                                  "DISTINCT ZZZ.US ZZZ.TO\n"
                                  "TOBASE CNQ.US CNQ.TO\n")
-            r = _runsub(root, "scan")
+            r = _runsub(root, "tips")
         flagged = [ln for ln in r.stdout.splitlines() if "US-LISTING" in ln]
         self.assertFalse(any("EFX" in ln or "ZZZ" in ln for ln in flagged),
                          r.stdout)

@@ -372,12 +372,14 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
         (root / "work").mkdir()
         return root
 
-    def test_scan_without_holdings_exits_1(self):
+    def test_tips_without_holdings_exits_2(self):
+        # `tips` (scan before) stops: it cannot read the project (exit
+        # 2, an input error; a tip itself never fails the command).
         with tempfile.TemporaryDirectory() as td:
-            r = _tj(self._root(td), "scan")
-        self.assertEqual(r.returncode, 1)
+            r = _tj(self._root(td), "tips")
+        self.assertEqual(r.returncode, 2)
         self.assertIn("Run `taxjson run`", r.stderr)
-        self.assertNotIn("clean scan", r.stdout)
+        self.assertNotIn("No tips", r.stdout)
 
     def test_leaps_without_books_exits_1(self):
         with tempfile.TemporaryDirectory() as td:

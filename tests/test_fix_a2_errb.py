@@ -248,7 +248,7 @@ class TestRunInputs(_Built):
                 self.assertOneLine(self.cli(root, "run", "--no-input"), 0)
                 if body is not None:
                     f.write_text(body)
-                    r = self.cli(root, "scan")
+                    r = self.cli(root, "tips")
                     self.assertNotIn("Traceback", r.stderr)
                     self.assertIn("m_holdings.toml", r.stderr)
 
@@ -411,15 +411,16 @@ class TestViews(_Built):
         r = self.cli(root, "harvest")
         self.assertNotIn("Traceback", r.stderr)
 
-    def test_scan_wrong_shape_stage_file(self):
-        """A2-1440."""
+    def test_unused_rules_wrong_shape_stage_file(self):
+        """A2-1440 (scan's unused-rule check: `ticker-map --suggest`)."""
         root = self.copy()
         (root / "ticker.map").write_text("GLOBAL XYZ.US XYZ.TO\n")
         for f in sorted((root / "work").glob("m_*tt*.json"))[:1] or [
                 root / "work" / "m_raw.json"]:
             f.write_text('{"transactions": [1]}')
-        r = self.cli(root, "scan")
+        r = self.cli(root, "ticker-map", "--suggest")
         self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("not a list of transaction objects", r.stdout)
 
     def test_list_date_fails_when_an_account_recompute_fails(self):
         """A2-1450."""
@@ -636,12 +637,11 @@ class TestChecklistWalkPrompts(unittest.TestCase):
     def test_eof_at_note_prompt(self):
         from taxjson.bin import taxjson_run as R
         cl = mock.Mock()
-        cl.STEPS = [("s1",), ("s2",)]
+        cl.item_ids.return_value = ["s1", "s2"]
         res = mock.Mock(passed=False, effective="open", detail="x",
                         override=None, note=None)
         cl.evaluate.return_value = [res]
-        cl.step_meta.return_value = (None, 1, "T", "cmd", "why")
-        cl.STAGES = [(1, "stage")]
+        cl.item_meta.return_value = (None, "Section", "T", "cmd", "why")
         cl.SYMBOL = {"open": "-"}
         ctx = mock.Mock(root=Path("/tmp/x"), year=2025,
                         settings={"country": "canada"})

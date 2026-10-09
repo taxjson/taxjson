@@ -11,7 +11,7 @@ cash is refused until `CASHBOOK <book> complete` says its .tt cash lines
 are all of them.
 
 Lows: `taxjson elect` lists an event the sheltered default booked; a US
-project's quick-start has no T5 / T3 step; a malformed v2 cash line
+project's checklist has no T5 / T3 step; a malformed v2 cash line
 says it is read only by ledger v2.
 
 Every fixture is SYNTHETIC: invented tickers, amounts and account ids.
@@ -306,20 +306,27 @@ class TestMalformedCashLine(unittest.TestCase):
         self.assertIn("the default ledger ignores it", msg)
 
 
-class TestQuickStartSlipStep(unittest.TestCase):
+class TestChecklistSlipStep(unittest.TestCase):
 
     @rule("CA-SLIP-01")
     def test_absent_in_a_us_project(self):
-        from taxjson.lib.quick_start import steps
-        self.assertIn("slip-audit", [s.id for s in steps(2025, "canada")])
-        self.assertIn("slip-audit", [s.id for s in steps(2025)])
-        self.assertNotIn("slip-audit", [s.id for s in steps(2025, "usa")])
+        """A US project's checklist has no T5 / T3 step: its t5-t3 item
+        is the 1099-DIV / 1099-INT comparison, with no slip-audit."""
+        from taxjson.lib.checklist import items
+
+        def t5(country):
+            return next(i for i in items(2025, country) if i.id == "t5-t3")
+        self.assertIn("T5 / T3", t5("canada").title)
+        self.assertIn("T5 / T3", t5(None).title)
+        self.assertNotIn("T5", t5("usa").title)
+        self.assertNotIn("tjs slip-audit",
+                         [c.command for c in t5("usa").cmds])
         for c in ("canada", "usa"):
             with self.subTest(country=c), \
                     tempfile.TemporaryDirectory() as td:
                 from tax_rules.dual import cli, projects_both
                 root = projects_both(td)[c]
-                out = cli(root, "quick-start").stdout
+                out = cli(root, "checklist", "--quick").stdout
                 self.assertEqual("T5 / T3" in out, c == "canada", out)
 
 

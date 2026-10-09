@@ -351,7 +351,7 @@ CONFIG_WHY: Dict[str, str] = {
 
 # [accounts.X] plan kinds: each registered plan belongs to one country
 # (audit A2-0739, A2-1272, A2-1332); "taxable" and "sheltered" to both.
-# The one table `taxjson`'s config check and its scan read.
+# The one table `taxjson`'s config check and `taxjson tips` read.
 PLAN_COUNTRY: Dict[str, str] = {
     "tfsa": CANADA, "rrsp": CANADA, "rrif": CANADA, "lira": CANADA,
     "lif": CANADA, "lrif": CANADA, "fhsa": CANADA, "resp": CANADA,

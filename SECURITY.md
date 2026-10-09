@@ -53,7 +53,7 @@ validation error at the conversion stage. The same switch covers the
 current-price chain behind `harvest` and `watch --harvest` (IBKR
 gateway / Yahoo Finance): they serve
 `work/.price_cache.json` only and refuse the lookup on a miss, and
-`scan --online` skips its Yahoo Finance name probe with a note (the
+`tips --online` skips its Yahoo Finance name probe with a note (the
 offline checks still run). `taxjson fetch` refuses outright (one line,
 before any fetcher plugin runs; `--list` still works). The release commands (`taxjson channels`,
 and on a development machine `promote` / `deploy`) run `git fetch` in a
@@ -98,7 +98,7 @@ before `pip install --no-deps -e packages/taxjson-fetch`, so the plugin's
 (the installer and `scripts/dev-setup.sh` pass `--no-deps` too).
 
 **What Yahoo Finance learns.** Every Yahoo lookup (FX fallback, crypto
-prices, `harvest` / `watch --harvest` current prices, `scan --online`)
+prices, `harvest` / `watch --harvest` current prices, `tips --online`)
 is a plain request from your IP address naming a symbol and a date
 range — so Yahoo can see which tickers you hold or trade and roughly
 when, though never quantities, prices paid or account numbers. Use

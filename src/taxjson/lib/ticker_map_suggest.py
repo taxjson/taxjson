@@ -26,6 +26,12 @@ in work/ (nothing is recomputed but the cheap reads):
   crypto price checks' `CRYPTO SYMBOL ID` lines, the gains stage's
   unmapped cross-listing journal (`TOBASE FROM TO`).
 
+* the books' listings (lib/map_hygiene.map_gaps) — a .US and a Canadian
+  listing of one root with no ticker.map line for them (MAP-GAP): a pair
+  to VERIFY, `TOBASE FROM TO` if one security, `DISTINCT A B` if two
+  (`verify`; certainty "verify": `--write` asks which on a terminal,
+  `--all` never adds one).
+
 A line the map already has, or one whose symbol the map already renames
 (the user's rule wins; an EXTRACT for the same currency and symbol), is
 left out; of two EXTRACT lines for one listing the first is offered (the
@@ -103,6 +109,13 @@ class Suggestion:
     # The hint says "if …": offered only when the books hold every
     # symbol the line joins (`needs`; pending).
     conditional: bool = False
+    # "evidence": the run's evidence names the line (`--write --all` may
+    # add it); "verify": a listing pair the map does not answer
+    # (MAP-GAP, lib/map_hygiene) — the user picks `line` (TOBASE) or
+    # `alternative` (DISTINCT), never added without asking.
+    certainty: str = "evidence"
+    kind: str = "line"
+    alternative: str = ""
 
     @property
     def keyword(self) -> str:
@@ -140,8 +153,15 @@ class Suggestion:
         return parts[1].upper(), parts[2].upper()
 
     def record(self) -> Dict[str, Any]:
+        # kind/certainty: a line the run's evidence names ("line",
+        # "evidence": `--write --all` may add it), as against a listing
+        # pair to verify ("map-gap", "verify": asked, never added by
+        # --all) or a rule no symbol reaches (lib/map_hygiene).
         out = {"line": self.line, "reason": self.reason,
-               "source": self.source}
+               "source": self.source, "kind": self.kind,
+               "certainty": self.certainty}
+        if self.alternative:
+            out["alternative"] = self.alternative
         if self.template:
             out["template"] = True
         if self.tt:
@@ -624,6 +644,34 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
             froms[s.symbols[0]] = s.line
         offer.append(s)
     return offer, skipped
+
+
+def verify(root: Path, offer: Iterable[Suggestion] = ()
+           ) -> Tuple[List[Suggestion], List[str]]:
+    """(the listing pairs to verify — MAP-GAP, lib/map_hygiene.map_gaps
+    — as "verify" suggestions, the files that could not be read). A pair
+    an offered suggestion already joins or parts (`offer`: the cross-
+    listing loss radar's TOBASE line, a transfer journal's) is left to
+    that one; a pair the map answers is left out (already)."""
+    from taxjson.lib import map_hygiene as MH
+    gaps, unread = MH.map_gaps(Path(root))
+    named = {frozenset(x.upper() for x in s.symbols[:2]) for s in offer
+             if s.keyword in ("TOBASE", "GLOBAL", "JOURNAL", "DISTINCT")}
+    st: Optional[MapState] = None
+    out: List[Suggestion] = []
+    for g in gaps:
+        if frozenset((g.us, g.ca)) in named:
+            continue
+        s = Suggestion(g.tobase, g.reason,
+                       "reports/*_holdings.toml, work/*_raw.json",
+                       certainty="verify", kind="map-gap",
+                       alternative=g.distinct)
+        if st is None:
+            st = map_state(Path(root) / "ticker.map")
+        if already(s, st):
+            continue
+        out.append(s)
+    return out, unread
 
 
 def comment(s: Suggestion, today: Optional[str] = None) -> str:

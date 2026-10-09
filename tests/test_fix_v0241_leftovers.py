@@ -83,8 +83,6 @@ class TestDistinctBareUsTicker(unittest.TestCase):
                           "`DISTINCT ZZX.US ZZX.TO`", text)
             loss, = zzx_loss(root)
             self.assertLess(loss["gain"], -100.0)     # still allowed
-            self.assertEqual(tj(root, "scan", check=False).stdout.count(
-                "XLIST-LOSS"), 0)
             doc = json.loads(tj(root, "ticker-map", "--suggest",
                                 "--json").stdout)
             lines = [s["line"] for s in doc.get("suggestions")

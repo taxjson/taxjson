@@ -223,7 +223,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `src/taxjson/lib/xlist_loss_radar.py` (tax-logic CA-XLIST-05 / US-XLIST-04).
 - **Current behavior:** two listings (a TSX line and its NYSE line) are one security only when ticker.map, a `.tt` JOURNAL line or a transfer journal joins them. A loss on one with the other listing of the same root bought within 30 days under an equal name is a run Warning, a `ticker-map --suggest` line, a `scan` XLIST-LOSS finding and a `run --strict` stop — but the loss stays allowed until ticker.map says `TOBASE` (one security) or `DISTINCT` (two). Listings of different roots (a different-root dual listing) or names that differ are not flagged, nor is a `.tt`-only book (no names).
 - **Why deferred:** a name match is evidence, not proof (two share classes, a CDR, another company reusing a root); joining on it would change the books silently.
-- **Workaround:** answer each Warning with the `TOBASE` or `DISTINCT` line it names; `taxjson scan --online` clusters different-root listings by issuer name.
+- **Workaround:** answer each Warning with the `TOBASE` or `DISTINCT` line it names; `taxjson tips --online` clusters different-root listings by issuer name.
 
 ### Second-order superficial losses from the ACB bump's date
 - **Where:** `src/taxjson/lib/core.py` (the deferral ADJUST is dated the trigger).
@@ -231,7 +231,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Estimate classifies dividends by listing suffix when the books carry no ISIN
 - **Where:** `taxjson estimate` / `lib/tax_estimate.py`; the issuer test in `taxjson_run.py` (`_issuer_is_canadian_by_symbol`).
-- **Current behavior:** the estimate takes the issuer's country from its ISIN when the books carry one (IB rows); otherwise a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign. The foreign tax credit uses the books' TAX rows (15% is assumed only when there are none). Without an ISIN (Questrade, RBC) a Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson scan` flags the cross-listing case (US-LISTING) only when the project also shows the `.TO` line (a holding, a dividend row or a ticker.map rule) or, with `--online`, when Yahoo knows a `.TO` twin — a Canadian issuer held only on its US line with no such sighting is not flagged. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
+- **Current behavior:** the estimate takes the issuer's country from its ISIN when the books carry one (IB rows); otherwise a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign. The foreign tax credit uses the books' TAX rows (15% is assumed only when there are none). Without an ISIN (Questrade, RBC) a Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson tips` flags the cross-listing case (US-LISTING) only when the project also shows the `.TO` line (a holding, a dividend row or a ticker.map rule) or, with `--online`, when Yahoo knows a `.TO` twin — a Canadian issuer held only on its US line with no such sighting is not flagged. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
 
 ### Estimate: credits, OAS recovery tax and AMT adjustments outside the books
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`, `_amt_canada`.

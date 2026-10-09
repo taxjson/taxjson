@@ -474,7 +474,7 @@ class TestUnreadableInputsAreRefused(unittest.TestCase):
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-1500:])
             (root / "ticker.map").symlink_to(root / "gone.map")
-            for cmd in (["sanity"], ["scan"], ["harvest"], ["fees"]):
+            for cmd in (["sanity"], ["tips"], ["harvest"], ["fees"]):
                 with self.subTest(cmd=cmd):
                     r = _cli(root, home, *cmd)
                     self.assertNotEqual(r.returncode, 0, r.stdout[-800:])
@@ -606,17 +606,16 @@ class TestScanIsNotCleanOverMissingBooks(unittest.TestCase):
                     "BUYSELL 2026-01-05 10:00:00 ABC.TO 10 CAD 10 -100 0"])})
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-1500:])
-            r = _cli(root, home, "scan")
+            r = _cli(root, home, "tips")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             for f in (root / "reports" / "tfsa_holdings.toml",
                       root / "work" / "tfsa_raw.json"):
                 with self.subTest(f=f.name):
                     data = f.read_bytes()
                     f.unlink()
-                    r = _cli(root, home, "scan")
-                    self.assertNotEqual(r.returncode, 0, r.stdout)
-                    self.assertNotIn("clean scan.", r.stdout.replace(
-                        "NOT a clean scan", ""))
+                    r = _cli(root, home, "tips")
+                    self.assertEqual(r.returncode, 2, r.stdout)
+                    self.assertNotIn("No tips —", r.stdout)
                     self.assertIn("tfsa", r.stderr)
                     f.write_bytes(data)
 

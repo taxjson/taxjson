@@ -182,9 +182,9 @@ class TestSteps(_Runs):
         lines = tail.splitlines()
         self.assertTrue(lines[1].startswith(
             "Warning: 2 positions sold in 2024 with no purchase"), tail)
-        self.assertEqual(lines[-1], "Info: Then run `taxjson checklist`. "
-                                    "`taxjson quick-start` lists every "
-                                    "step and names the next one.")
+        self.assertEqual(lines[-1], "Info: Then run `taxjson checklist`: "
+                                    "it checks every step and names the "
+                                    "next one.")
 
 
 class TestCaptured(_Runs):
