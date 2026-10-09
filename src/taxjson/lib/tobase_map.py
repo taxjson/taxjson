@@ -15,9 +15,10 @@ depositary receipt (CDR) the books hold whose root is a US ticker.
 
 How a run reads it (tax-logic CA-XLIST-06): with ticker.map, as if its
 lines were written there, except that ticker.map wins — a tobase.map
-pair one of whose listings a ticker.map rule already decides (a
-TOBASE / JOURNAL naming it, a GLOBAL / DELETE / dated RENAME of it, a
-DISTINCT pair) is not applied (an Info line when the two disagree;
+pair is not applied when a ticker.map rule already decides one of its
+listings (a TOBASE / JOURNAL / GLOBAL / DELETE / dated RENAME of
+either, a TOBASE booking another listing under the one the pair would
+move, a DISTINCT pair) (an Info line when the two disagree;
 nothing when ticker.map pools the same pair). In a Canadian project a
 TSX Venture listing and its TSX spelling (X.V, X.TO) are one listing
 for the TOBASE and DISTINCT lines of both files (every parser books a
@@ -138,6 +139,19 @@ class GenLine:
         return self.rule + tail
 
 
+def home_listing(e: Dict[str, Any]) -> str:
+    """The listing a security's pairs are booked under: its first
+    Canadian listing, or for an issuer the master knows is domiciled
+    outside Canada (`domicile`) its first US exchange listing — so the
+    books keep a US company's dividends and its T1135 status foreign."""
+    ca = [str(x).upper() for x in e.get("ca") or []]
+    us = [str(x).upper() for x in e.get("us") or []]
+    dom = str(e.get("domicile") or "").upper()
+    if dom and dom != "CA" and us:
+        return us[0]
+    return ca[0]
+
+
 def master_lines(master: Master, books: Optional[Set[str]] = None
                  ) -> List[GenLine]:
     """Every line the master gives a project: the TOBASE pairs of each
@@ -149,7 +163,7 @@ def master_lines(master: Master, books: Optional[Set[str]] = None
         ca = [str(x).upper() for x in e.get("ca") or []]
         if not ca:
             continue
-        base = ca[0]
+        base = home_listing(e)
         until = str(e.get("until") or "")
         seen: Set[str] = set()
 
@@ -162,7 +176,7 @@ def master_lines(master: Master, books: Optional[Set[str]] = None
             out.append(GenLine("TOBASE", sym, base, sc, section, u, ended))
         for u in e.get("us") or []:
             add(str(u), SECTION_EXCHANGE)
-        for c in ca[1:]:
+        for c in ca:
             add(c, SECTION_EXCHANGE)
         for u in e.get("us_otc") or []:
             add(str(u), SECTION_OTC)
@@ -394,14 +408,17 @@ def compute_overlay(ticker_text: str, tob: Optional[TobaseFile],
     raw.update(tm.tobase)
     raw.update(tm.journal)
     ren = _Renames(raw, tm.distinct)
-    # What a ticker.map rule decides: either side of a TOBASE / JOURNAL,
-    # the FROM of a GLOBAL / undated RENAME, a DELETE, a dated RENAME's
-    # old symbol, a DISTINCT pair.
+    # What a ticker.map rule decides: the FROM of every rename (TOBASE,
+    # JOURNAL, GLOBAL, undated RENAME), a DELETE, a dated RENAME's old
+    # symbol, a DISTINCT pair — and, for a tobase.map line's FROM only,
+    # a TOBASE / JOURNAL target (that symbol is the base of another
+    # pairing). Another listing joining the same base is no conflict.
     decided: Dict[str, str] = {}
+    targets: Dict[str, str] = {}
     for d in (tm.tobase, tm.journal):
         for f, t in d.items():
             decided.setdefault(f, f"TOBASE {f} {t}")
-            decided.setdefault(t, f"TOBASE {f} {t}")
+            targets.setdefault(t, f"TOBASE {f} {t}")
     for f, t in tm.glob.items():
         decided.setdefault(f, f"GLOBAL {f} {t}")
     for s in tm.delete:
@@ -431,6 +448,9 @@ def compute_overlay(ticker_text: str, tob: Optional[TobaseFile],
             hit = next((decided[s] for s in sorted(_spellings(a)
                                                    | _spellings(b))
                         if s in decided), None)
+            if hit is None:
+                hit = next((targets[s] for s in sorted(_spellings(a))
+                            if s in targets), None)
             if hit is not None:
                 fa, fb = ren.final(a), ren.final(b)
                 if fa == fb or venue_alias(fa) == fb or \

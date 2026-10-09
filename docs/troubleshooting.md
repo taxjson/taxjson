@@ -193,7 +193,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### "Info: tobase.map: ticker.map decides 2 of its pair(s) otherwise (ticker.map wins)"
 - **Check:** the lines under it, `- TOBASE QZAB.US QZA.TO not applied (ticker.map: TOBASE QZAB.US QZZ.TO)`; `tjs update-tobase-map` lists the same pairs.
-- **Cause:** a Canadian project reads tobase.map (the interlisted master's pairs) with ticker.map, and ticker.map wins: a `TOBASE`/`JOURNAL` naming one of the pair's listings with another listing, a `GLOBAL`, `DELETE` or dated `RENAME` of one, or a `DISTINCT` pair keeps the master's line from applying.
+- **Cause:** a Canadian project reads tobase.map (the interlisted master's pairs) with ticker.map, and ticker.map wins: a `TOBASE`, `JOURNAL`, `GLOBAL`, `DELETE` or dated `RENAME` of either listing, a `TOBASE` that books another listing under the one the pair would move, or a `DISTINCT` pair keeps the master's line from applying.
 - **Fix:** nothing, if your line is right (it is what the books use). If the master's pair is right, delete your ticker.map line and re-run. A pair your map pools the same way is never listed.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/tobase_map.py` — `compute_overlay`; `src/taxjson/bin/taxjson_run.py` — `_say_tobase_map`

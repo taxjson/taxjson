@@ -10,7 +10,9 @@ the US line carry the same share-class FIGI, and an exchange listing is
 in the Nasdaq Trader symbol directory. A depositary receipt (a CDR in
 Canada, an ADR / ADS in the US) has a share-class FIGI of its own, so it
 is never paired; a CDR whose root is a US ticker is listed apart, as a
-DISTINCT pair. The master holds no ISIN or CUSIP.
+DISTINCT pair. The master holds no ISIN or CUSIP; an entry's `domicile`
+is the country code of its share class's ISINs (OpenFIGI ISIN lookups in
+the cache), when known.
 
 The TMX lists (interlisted companies, the TSX / TSXV issuer workbook) are
 HINTS only: they say which roots to ask OpenFIGI about. Nothing from them
@@ -497,7 +499,14 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
     report["cdr_hints"] = len(cdr_roots)
     report["cdr_verified"] = len(distinct)
 
-    # 5. Entries.
+    # 5. The issuer's country: the country code of the share class's
+    #    ISINs, from the OpenFIGI ISIN lookups in the cache (one country
+    #    only; the ISIN itself is never shipped). It decides which
+    #    listing a pair is booked under (lib/tobase_map: the home
+    #    listing, so a US company's dividends stay foreign).
+    dom = issuer_countries(figi)
+    report["domicile_known"] = 0
+    # 6. Entries.
     entries: Dict[str, Dict[str, Any]] = {}
     for sc, e in sorted(by_sc.items()):
         rows = e["rows"]
@@ -515,6 +524,9 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             "us_exchange": sorted({usdir[x]["exchange"] for x in e["us"]}),
             "us_otc": sorted(book_us(x) for x in e["us_otc"]),
         }
+        if sc in dom:
+            rec["domicile"] = dom[sc]
+            report["domicile_known"] += 1
         entries[sc] = rec
     # Maintainer-entered ended pairs.
     hist_skipped = []
@@ -537,7 +549,7 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             rec["_until"] = str(h.get("until") or "unknown")
     report["history_skipped_no_figi"] = hist_skipped
 
-    # 6. Merge with the previous master: append-only.
+    # 7. Merge with the previous master: append-only.
     doc = merge_previous(entries, distinct, previous, today)
     counts = collections.Counter()
     for e in doc["security"].values():
@@ -576,6 +588,25 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
     return doc, report
 
 
+def issuer_countries(figi: Figi) -> Dict[str, str]:
+    """{share-class FIGI: the two-letter country code of its ISINs} from
+    the cache's ISIN lookups, when every ISIN of the class names one
+    country."""
+    out: Dict[str, set] = collections.defaultdict(set)
+    for k, rows in figi.cache.items():
+        try:
+            job = json.loads(k)
+        except ValueError:
+            continue
+        if job.get("idType") != "ID_ISIN":
+            continue
+        scs = share_classes(rows)
+        if len(scs) == 1:
+            out[scs.pop()].add(str(job.get("idValue") or "")[:2].upper())
+    return {sc: next(iter(c)) for sc, c in out.items()
+            if len(c) == 1 and re.fullmatch(r"[A-Z]{2}", next(iter(c)))}
+
+
 def merge_previous(entries: Dict[str, Dict[str, Any]],
                    distinct: Dict[str, Dict[str, Any]],
                    previous: Optional[Dict[str, Any]], today: str
@@ -597,6 +628,8 @@ def merge_previous(entries: Dict[str, Dict[str, Any]],
             out[sc] = _clean(rec)
             continue
         rec = {k: v for k, v in new.items() if not k.startswith("_")}
+        if not rec.get("domicile") and old.get("domicile"):
+            rec["domicile"] = old["domicile"]
         rec["first_seen"] = str(old.get("first_seen") or today)
         cur = set(rec["us"]) | set(rec["us_otc"]) | set(rec["ca"])
         for field in ("us", "us_otc", "ca"):
@@ -628,8 +661,8 @@ def merge_previous(entries: Dict[str, Dict[str, Any]],
 
 
 def _clean(rec: Dict[str, Any]) -> Dict[str, Any]:
-    order = ("name", "kind", "share_class_figi", "ca", "us", "us_exchange",
-             "us_otc", "first_seen", "until", "history")
+    order = ("name", "kind", "share_class_figi", "domicile", "ca", "us",
+             "us_exchange", "us_otc", "first_seen", "until", "history")
     out = {k: rec[k] for k in order if k in rec and rec[k] not in (None,)}
     if not out.get("us_otc"):
         out.pop("us_otc", None)
@@ -758,7 +791,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.report:
         a.report.write_text(json.dumps(report, indent=1, default=list)
                             + "\n", encoding="utf-8")
-    summary = {k: report[k] for k in ("counts", "figi_requests",
+    summary = {k: report[k] for k in ("counts", "domicile_known",
+                                      "figi_requests",
                                       "figi_not_in_cache", "roots_asked",
                                       "roots_resolved", "cdr_hints",
                                       "cdr_verified")}

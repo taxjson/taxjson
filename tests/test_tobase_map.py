@@ -118,6 +118,18 @@ class TestRender(unittest.TestCase):
         self.assertIn(TB.SECTION_DISTINCT, text)
         self.assertIn(f"DISTINCT QZD.US QZD.TO  # master:{F4}", text)
 
+    def test_a_foreign_issuer_is_booked_under_its_us_listing(self):
+        # A US company's TSX line joins its NYSE line (its dividends and
+        # T1135 status stay foreign); a Canadian one the reverse.
+        sec = {F1: dict(SEC[F1], domicile="US"),
+               F2: dict(SEC[F2], domicile="US")}
+        text = TB.render(_master(sec))
+        self.assertIn(f"TOBASE QZA.TO QZAB.US  # master:{F1}", text)
+        # No US exchange listing: the Canadian line stays the base.
+        self.assertIn(f"TOBASE QZBBF.US QZB.TO  # master:{F2}", text)
+        text = TB.render(_master({F1: dict(SEC[F1], domicile="CA")}))
+        self.assertIn(f"TOBASE QZAB.US QZA.TO  # master:{F1}", text)
+
     def test_listing_level_end(self):
         sec = {F1: dict(SEC[F1], history=[{"listing": "QZAX.US",
                                           "kind": "us",
@@ -166,6 +178,15 @@ class TestOverlay(unittest.TestCase):
             ov = TB.compute_overlay(line, self._tob("TOBASE QZAB.US QZA.TO"),
                                     True)
             self.assertTrue(ov.overridden, line)
+        # Another listing joining the same base is no conflict.
+        ov = TB.compute_overlay("TOBASE QZAX.US QZA.TO\n",
+                                self._tob("TOBASE QZAB.US QZA.TO"), True)
+        self.assertEqual(ov.overridden, [])
+        self.assertIn("TOBASE QZAB.US QZA.TO", ov.lines)
+        # A FROM that is the base of another pairing is.
+        ov = TB.compute_overlay("TOBASE QZQ.US QZAB.US\n",
+                                self._tob("TOBASE QZAB.US QZA.TO"), True)
+        self.assertTrue(ov.overridden)
         # A rename INTO a symbol does not: the chain joins the pair.
         ov = TB.compute_overlay("GLOBAL QZOLD.US QZAB.US\n",
                                 self._tob("TOBASE QZAB.US QZA.TO"), True)
@@ -424,6 +445,8 @@ class TestBuild(unittest.TestCase):
             K(B.ticker_job("QZD", "CN")): [_eq("QZD", "CN", "BBG000000D01",
                                                typ="Canadian DR")],
             K(B.ticker_job("QZD", "US")): [_eq("QZD", "US", "BBG000000D02")],
+            K({"idType": "ID_ISIN", "idValue": "US0000000001"}): [
+                _eq("QZA", "US", "BBG000000A01")],
         }
         (cache / B.FIGI_CACHE).write_text(json.dumps(figi))
         return B, cache
@@ -441,6 +464,9 @@ class TestBuild(unittest.TestCase):
             self.assertEqual(a["us_otc"], ["QZAAF.US"])     # the ADR: never
             self.assertEqual(rep["receipts_skipped_under_share_class"], 1)
             self.assertEqual(sec["BBG000000V01"]["us_otc"], ["QZVVF.US"])
+            # The ISIN's country, never the ISIN.
+            self.assertEqual(a["domicile"], "US")
+            self.assertNotIn("domicile", sec["BBG000000V01"])
             self.assertNotIn("BBG000000M01", sec)           # two classes
             self.assertEqual(rep["figi_requests"], 0)
             self.assertEqual(doc["distinct"]["BBG000000D01"]["us"], "QZD.US")
@@ -448,6 +474,7 @@ class TestBuild(unittest.TestCase):
                                              "generated": "2026-01-02",
                                              "sources": []}))
             self.assertNotIn("isin", text.lower())
+            self.assertNotIn("US0000000001", text)
             self.assertNotIn("QZ Alpha", text)      # no TMX text shipped
             from taxjson.lib.tomlcompat import tomllib
             self.assertIn("BBG000000A01", tomllib.loads(text)["security"])
