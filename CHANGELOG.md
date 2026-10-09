@@ -217,6 +217,9 @@
   path after `--` (a file named `-…` is never read as an option) and
   refuses a PDF whose text runs past 8 MB instead of reading it all into
   memory.
+- A tool run as `python -m taxjson.bin.<tool>` gets the owner-only
+  umask (files 0600, folders 0700) the `taxjson-<tool>` console scripts
+  already set.
 
 ## v0.24.2 (2026-10-08)
 

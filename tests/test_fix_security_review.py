@@ -431,5 +431,30 @@ class TestPdftotextCall(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
+class TestDashMToolUmask(unittest.TestCase):
+    """LOW (e): `python -m taxjson.bin.<tool>` gets the private umask."""
+
+    def test_tool_output_is_owner_only(self):
+        # Python sets sys.argv[0] to "-m" while it imports the packages
+        # of the module `-m` names (taxjson, taxjson.bin), before the
+        # tool's own code runs.
+        with tempfile.TemporaryDirectory() as tmp:
+            code = ("import os, runpy, sys; os.umask(0o022); "
+                    "sys.argv = ['-m'] + sys.argv[1:]; "
+                    "import taxjson.bin; "
+                    "print(oct(os.umask(0o077)))")
+            r = subprocess.run([sys.executable, "-c", code], env=ENV,
+                               capture_output=True, text=True, cwd=tmp)
+            self.assertEqual(r.stdout.strip(), "0o77", r.stderr)
+            # An ordinary import changes nothing.
+            r = subprocess.run([sys.executable, "-c",
+                                "import os; os.umask(0o022); "
+                                "import taxjson.bin; "
+                                "print(oct(os.umask(0)))"],
+                               env=ENV, capture_output=True, text=True,
+                               cwd=tmp)
+            self.assertEqual(r.stdout.strip(), "0o22", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

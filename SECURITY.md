@@ -131,7 +131,7 @@ console script, or `python -P -m` on 3.11+.
 ## Files on disk
 
 `taxjson` and every `taxjson-*` tool set an owner-only umask (`077`)
-at startup, so everything they create — `work/`, `reports/`,
+at startup (a tool run as `python -m taxjson.bin.<tool>` too), so everything they create — `work/`, `reports/`,
 `filed/`, `export/`, `checklist.json`, a new project's
 `inputs/<account>/` — is `0600` (files) / `0700` (directories)
 whatever your shell's umask. `taxjson fetch` (the taxjson-fetch
