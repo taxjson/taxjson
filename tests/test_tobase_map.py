@@ -520,6 +520,17 @@ class TestBuild(unittest.TestCase):
             self.assertEqual(rep["history_skipped_no_figi"],
                              ["QZF.TO / QZF.US"])
 
+    def test_an_unchanged_rebuild_keeps_its_date(self):
+        with tempfile.TemporaryDirectory() as td:
+            B, cache = self._cache(td)
+            out = Path(td) / "m.toml"
+            self.assertEqual(B.main(["--cache", str(cache), "--out", str(out),
+                                     "--date", "2026-01-02"]), 0)
+            first = out.read_text()
+            self.assertEqual(B.main(["--cache", str(cache), "--out", str(out),
+                                     "--date", "2026-03-01"]), 0)
+            self.assertEqual(out.read_text(), first)
+
     def test_cache_inside_the_repo_is_refused(self):
         B = _build_module()
         self.assertEqual(B.main(["--cache", str(REPO / "tmp-cache"),

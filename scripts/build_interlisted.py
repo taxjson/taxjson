@@ -783,6 +783,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     figi = Figi(a.cache / FIGI_CACHE, online=a.fetch)
     doc, report = build(a.cache, previous, today, figi,
                         load_history(a.history or a.cache / HISTORY))
+    if previous and previous.get("security") == doc["security"] and \
+            (previous.get("distinct") or {}) == doc["distinct"]:
+        # Nothing changed: the master keeps its date and sources (a
+        # project's tobase.map made from it stays current).
+        doc["meta"] = dict(previous.get("meta") or doc["meta"])
     text = render(doc)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     tmp = a.out.with_name(a.out.name + ".tmp")
