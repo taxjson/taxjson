@@ -2341,6 +2341,12 @@ def load_state(root: Path) -> Dict[str, Any]:
         raise StateFileError(f"{STATE_FILE} is not a checklist state "
                              f"file (no overrides table) — fix it or "
                              f"`taxjson checklist --reset`.")
+    for old, new in ID_ALIASES.items():
+        # A mark saved under an item's former id is the item's mark (a
+        # mark under the new id wins).
+        if old in doc["overrides"]:
+            ov = doc["overrides"].pop(old)
+            doc["overrides"].setdefault(new, ov)
     for sid, ov in doc["overrides"].items():
         # A wrong-shape entry ("elections": "x") died later on ov.get
         # in evaluate() with an AttributeError (A2-1393 / A2-1430).
@@ -2431,6 +2437,7 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
     removing a mark that was not there (nothing changed). `answers`: the
     question keys a DONE mark answers (QUESTION_STEPS, question_answers),
     stored with it."""
+    step = canonical_id(step)
     if step not in item_ids():
         raise KeyError(step)
     with _StateLock(root):
@@ -2788,12 +2795,11 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                cmds=(Cmd("git status", "what is not committed yet"),),
                do="commit inputs/, taxjson.toml and ticker.map"),
         # ---------------------------------------------------------- check
-        Item("scan", "Check", "Look for tax-efficiency mistakes",
+        Item("tips", "Check", "Tax-efficiency tips for next year",
              "Advice on where you hold what; it changes no number of "
              "this year.",
-             (Cmd("tjs scan", "e.g. a dividend payer held where its "
-                  "withholding is lost, a listing pair ticker.map does "
-                  "not join"),)),
+             (Cmd("tjs tips", "e.g. a dividend payer held where its "
+                  "withholding is lost"),)),
         _check("sanity",
                "Missing history in a position you still hold shows only "
                "here: the books cannot see a purchase that is not in the "
@@ -3009,6 +3015,16 @@ def item_ids() -> List[str]:
     return [it.id for it in _spec(2025, None)]
 
 
+# An item's former id: still accepted in checklist.json marks and on the
+# command line (--done/--skip/--undo/--only), read as the new id.
+ID_ALIASES: Dict[str, str] = {"scan": "tips"}
+
+
+def canonical_id(sid: Optional[str]) -> Optional[str]:
+    """`sid` with a former id (ID_ALIASES) read as its item's id now."""
+    return ID_ALIASES.get(sid, sid) if isinstance(sid, str) else sid
+
+
 def item_meta(sid: str, country: Optional[str]) -> Tuple[str, str, str,
                                                          str, str]:
     """(id, section, title, command, why) of any item: a check's
@@ -3204,7 +3220,7 @@ STEP_RULES: Dict[str, Callable[[Ctx, _Facts], Result]] = {
     "ticker-map": s_ticker_map,
     "tt-lines": s_tt_lines,
     "format": s_format,
-    "scan": _review("scan"),
+    "tips": _review("tips"),
     "edge-cases": _review("edge-cases"),
     "sum": _review("sum"),
     "explore": _review("explore"),

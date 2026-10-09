@@ -71,7 +71,7 @@ _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
 # securities despite looking like one (CDRs vs their US underlying:
 # SAMPLR.TO is a fractional CAD-hedged receipt over SAMPLR.US, not a listing
 # equivalent — pooling their ACB would be wrong). DISTINCT changes no
-# symbol; it silences the scan's MAP-GAP finding for that pair and
+# symbol; it silences the MAP-GAP finding for that pair and
 # records the judgment in the map file where it belongs.
 # dated: the dated RENAME lines (lib/renames.DatedRename), each a ticker
 # change booked as an event on its date; undated_rename: the FROM symbols
@@ -214,9 +214,9 @@ def _parse_map_text(text: str, name: str = "ticker.map",
     no-op lines (a DISTINCT that pairs a symbol with itself).
 
     Symbols are upper-cased (the keyword always was): a lower-case
-    rule used to match nothing in the pipeline while `taxjson scan`,
-    which upper-cases, called it live (S009-05). A BOM and inline
-    `# notes` are stripped (R1-139)."""
+    rule used to match nothing in the pipeline while the unused-rule
+    check (now `ticker-map --suggest`), which upper-cases, called it
+    live (S009-05). A BOM and inline `# notes` are stripped (R1-139)."""
     glob: Dict[str, str] = {}
     tobase: Dict[str, str] = {}
     journal: Dict[str, str] = {}

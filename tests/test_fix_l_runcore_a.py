@@ -944,7 +944,7 @@ class TestScanSanityFetch(unittest.TestCase):
                 '[[holding]]\nsymbol = "AAQ.TO"\nquantity = 100\n'
                 '[[holding]]\nsymbol = "AAQ261218C00040000.US"\n'
                 'quantity = 2\n')
-            r = _run_cli(root, "scan")
+            r = _run_cli(root, "tips")
             self.assertIn("MAP-GAP", r.stdout)
             self.assertIn("AAQ.TO/AAQ.US", r.stdout)
 

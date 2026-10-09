@@ -318,7 +318,7 @@ class TestRadarCap(unittest.TestCase):
                                     "listings: QZ"), XR.RADAR_SHOWN)
         self.assertIn("3 more possible superficial losses across listings",
                       text)
-        self.assertIn("taxjson scan", text)
+        self.assertIn("taxjson ticker-map --suggest", text)
 
 
 _ACQ = ("ACQUIRED 2024-01-10 09:30:00 QZA.TO 40 CAD 12.00 530.00 "

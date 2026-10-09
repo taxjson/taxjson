@@ -140,8 +140,13 @@ class Suggestion:
         return parts[1].upper(), parts[2].upper()
 
     def record(self) -> Dict[str, Any]:
+        # kind/certainty: a line the run's evidence names ("line",
+        # "evidence": `--write --all` may add it), as against a listing
+        # pair to verify or a rule no symbol reaches (lib/map_hygiene:
+        # "verify", never written without asking).
         out = {"line": self.line, "reason": self.reason,
-               "source": self.source}
+               "source": self.source, "kind": "line",
+               "certainty": "evidence"}
         if self.template:
             out["template"] = True
         if self.tt:

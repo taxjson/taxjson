@@ -826,7 +826,7 @@ def shown_apart(a: str, b: str,
     a receipt word in its name, or a receipt venue), or the names name
     different companies (companies_differ for every pair of names).
     Shared letters are a candidate, never proof either way: this is
-    only the evidence AGAINST (`taxjson scan` MAP-GAP / US-LISTING,
+    only the evidence AGAINST (`taxjson tips` MAP-GAP / US-LISTING,
     `ticker-map --suggest`'s conditional hints)."""
     from taxjson.lib.markets import is_canadian_listing
     na, nb = names.get(a, set()), names.get(b, set())

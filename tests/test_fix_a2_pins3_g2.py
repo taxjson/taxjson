@@ -631,7 +631,8 @@ class TestRunNoteWording(unittest.TestCase):
     result is not included), 4dffc4b_1026 (init --force names the
     backup it actually wrote)."""
 
-    def test_scan_unused_rule_note_names_rename_chains(self):
+    def test_unused_rule_names_rename_chains(self):
+        # `scan`'s unused-rule note is `ticker-map --suggest`'s list now.
         from test_fix_l_runcore_b import _scan_project, _run_cli
         with tempfile.TemporaryDirectory() as tmp:
             root = _scan_project(tmp, [('XEI.TO', 10)],
@@ -639,11 +640,12 @@ class TestRunNoteWording(unittest.TestCase):
             (root / 'work' / 'margin_questrade.json').write_text(json.dumps(
                 {'transactions': [{'symbol': 'XEI.TO',
                                    'action': 'BUYSELL'}]}))
-            r = _run_cli(root, 'scan')
-        # The rules are listed under the note, one item each.
-        self.assertIn('(checked stock rows, option roots and rename '
-                      'chains)', r.stdout)
-        self.assertIn('\n- AAQ.US -> AAQ.TO\n', r.stdout)
+            r = _run_cli(root, 'ticker-map', '--suggest')
+        # Each rule is listed as written, its reason under it.
+        self.assertIn('Unused rules, delete? (1)', r.stdout)
+        self.assertIn('\nTOBASE AAQ.US AAQ.TO\n', r.stdout)
+        self.assertIn('(stock rows, option roots and rename chains '
+                      'checked)', ' '.join(r.stdout.split()))
 
     def test_us_estimate_assumptions_exclude_section_988(self):
         from taxjson.bin.taxjson_run import _print_tax_estimate

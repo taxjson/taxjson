@@ -18,6 +18,21 @@
   a versioned schema (`schema_version` 2) that keeps the checklist's
   keys (docs/settings.md). `taxjson init` and the run's closing summary
   now point to `taxjson checklist`.
+- `taxjson scan` is renamed `taxjson tips` and removed (no alias). Tips
+  is advice for next year — where you hold what (a Canadian dividend
+  payer held through its US listing, a US dividend payer in a TFSA,
+  `--online` probes for a `.TO` twin) — and changes no number of this
+  year: it exits 0 with or without tips (scan exited 1 on a finding), 2
+  when the project cannot be read. Its `--json` keeps each finding's
+  keys and adds `schema_version` 2 (the `notes` list is gone). The map's
+  own hygiene moved to `taxjson ticker-map --suggest`: a loss on one
+  listing with the other bought in its window (scan's XLIST-LOSS) is its
+  `TOBASE` suggestion, as it already was, and the rules no symbol of the
+  books reaches (scan's unused-rule note, still root-aware) are listed
+  there as "Unused rules, delete?", never written. Each `--suggest
+  --json` record now carries `kind` and `certainty`. The checklist's
+  step is `tips`, still yours to run and read; a mark saved under
+  `scan` (and `--done scan`) still applies to it.
 
 
 ## v0.24.2 (2026-10-08)

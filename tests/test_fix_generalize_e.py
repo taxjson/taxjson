@@ -180,7 +180,7 @@ def _scan(root, *args, fake_yf_dir=None, log=None):
         env["FAKE_YF_LOG"] = str(log)
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-         "scan", *args], cwd=REPO_ROOT, capture_output=True, text=True,
+         "tips", *args], cwd=REPO_ROOT, capture_output=True, text=True,
         env=env)
 
 
@@ -203,7 +203,7 @@ class TestYahooSpelling(unittest.TestCase):
         src = inspect.getsource(price_chain.yf_symbol_for)
         self.assertNotIn("BRK", src)
 
-    def test_scan_online_asks_yahoo_for_its_spelling(self):
+    def test_tips_online_asks_yahoo_for_its_spelling(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp) / "fakeyf"
             fake.mkdir()
@@ -237,7 +237,7 @@ class TestCanadianTwinOnEveryVenue(unittest.TestCase):
                           "rrsp": _holdings_toml("ZZQ.V")},
                 raws={"margin": _raw_json("ZZQ.US")})
             r = _scan(root)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("US-LISTING", r.stdout)
         self.assertIn("hold ZZQ.V instead", r.stdout)
         self.assertIn("ZZQ.V/ZZQ.US", r.stdout)       # MAP-GAP

@@ -232,7 +232,7 @@ class TestSpinoffLegIgnoresTheParentsClass(unittest.TestCase):
 class TestReinvestmentKeepsTheNativeBooksSingleCurrency(unittest.TestCase):
     """GitHub issue #3's CSV: the USD REI row bound to the CAD listing is
     restated in CAD in the native-currency books, so the raw holdings
-    report is written and `taxjson scan` runs."""
+    report is written and `taxjson tips` runs."""
 
     def _check(self, country):
         from test_fix_v0241_leftovers import _ISSUE3
@@ -262,7 +262,7 @@ class TestReinvestmentKeepsTheNativeBooksSingleCurrency(unittest.TestCase):
             # 29.50 USD restated at the day's rate.
             want = 29.5 * 1.25 if country == 'canada' else 29.5 / 0.8
             self.assertAlmostEqual(rei[0]['net_amount'], want, places=2)
-            sc = cli(root, 'scan')
+            sc = cli(root, 'tips')
             self.assertNotIn('no holdings reports',
                              _flat(sc.stdout + sc.stderr))
             self.assertEqual(sc.returncode, 0,
@@ -350,7 +350,7 @@ class TestSpacingIsNoOtherCompany(unittest.TestCase):
     @rule('US-XLIST-01')
     @rule('CA-SCAN-02')
     def test_spelled_together_is_not_apart(self):
-        from taxjson.bin.taxjson_run import _scan_pair_verdict
+        from taxjson.lib.map_hygiene import pair_verdict
         from taxjson.lib import cross_listings as XL
         from taxjson.lib.symbol_codes import exact_name
         for us_name, ca_name in (('OPEN QZX CORP', 'OPENQZX CORP'),
@@ -362,7 +362,7 @@ class TestSpacingIsNoOtherCompany(unittest.TestCase):
                 names = {'QZX.US': {u}, 'QZX.TO': {c}}
                 self.assertEqual(XL.shown_apart('QZX.US', 'QZX.TO', names),
                                  '')
-                kind, why = _scan_pair_verdict(
+                kind, why = pair_verdict(
                     'QZX.US', 'QZX.TO', names,
                     {u: us_name, c: ca_name})
                 self.assertEqual(kind, 'unequal', why)

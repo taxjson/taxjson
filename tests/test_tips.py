@@ -1,9 +1,11 @@
-"""`taxjson scan` — tax-efficiency lint (all offline).
+"""`taxjson tips` — tax-efficiency advice for next year (all offline).
 
 Checks pinned: US-LISTING (cross-listed Canadian dividend payer held via
 its US line in taxable/TFSA), TFSA-US-DIV (US-domiciled payer in a
 TFSA), MAP-GAP (both listings seen, no ticker.map consolidation), plan
-inference, exit codes (1 findings / 0 clean).
+inference, exit codes (0 with or without tips: advice for next year
+never fails; 2 when the project cannot be read). `taxjson scan` is gone
+(no alias); its unused-rule note is `ticker-map --suggest`'s.
 """
 
 import json
@@ -20,8 +22,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def _run(root, *args):
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-         "scan", *args],
+         "tips", *args],
         cwd=REPO_ROOT, capture_output=True, text=True)
+
+
+def _suggest_json(root):
+    """`taxjson ticker-map --suggest --json` of the project."""
+    r = subprocess.run(
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+         "ticker-map", "--suggest", "--json"],
+        cwd=REPO_ROOT, capture_output=True, text=True)
+    return r, json.loads(r.stdout)
 
 
 def _holdings_toml(*symbols):
@@ -58,7 +69,7 @@ def _project(tmp, *, accounts, holdings, raws, ticker_map=None):
     return root
 
 
-class TestScan(unittest.TestCase):
+class TestTips(unittest.TestCase):
     @rule("CA-SCAN-02")
     def test_us_listing_of_canadian_issuer_in_taxable(self):
         # ENB.US held in margin; the map knows ENB.US == ENB.TO; pays divs.
@@ -70,7 +81,7 @@ class TestScan(unittest.TestCase):
                 raws={"margin": _raw_json("ENB.US")},
                 ticker_map="TOBASE ENB.US ENB.TO\n")
             r = _run(root)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("US-LISTING", r.stdout)
         self.assertIn("ENB.US", r.stdout)
         self.assertIn("ENB.TO", r.stdout)           # the recommendation
@@ -87,7 +98,7 @@ class TestScan(unittest.TestCase):
                           "rrsp": _holdings_toml("AEM.TO")},
                 raws={"margin": _raw_json("AEM.US")})
             r = _run(root)
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 0)
         self.assertIn("US-LISTING", r.stdout)
         self.assertIn("MAP-GAP", r.stdout)
         self.assertIn("AEM.TO/AEM.US", r.stdout)
@@ -121,7 +132,7 @@ class TestScan(unittest.TestCase):
                 holdings={"tfsa": _holdings_toml("KO.US")},
                 raws={"tfsa": _raw_json("KO.US")})
             r = _run(root)
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 0)
         self.assertIn("TFSA-US-DIV", r.stdout)
         self.assertIn("unrecoverable", r.stdout)
 
@@ -150,7 +161,7 @@ class TestScan(unittest.TestCase):
 
     @rule("CA-SCAN-01")
     def test_rrsp_is_exempt_no_finding(self):
-        # Same US payer inside an RRSP: treaty-exempt — clean scan.
+        # Same US payer inside an RRSP: treaty-exempt — no tip.
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(
                 tmp,
@@ -159,7 +170,7 @@ class TestScan(unittest.TestCase):
                 raws={"rrsp": _raw_json("KO.US")})
             r = _run(root)
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("No findings", r.stdout)
+        self.assertIn("No tips", r.stdout)
 
     def test_mapped_pair_is_not_a_map_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,7 +216,7 @@ class TestScan(unittest.TestCase):
             (root / "work" / "usd_account_raw.json").write_text(
                 _raw_json("KO.US"))
             r = _run(root)
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 0)
         self.assertIn("TFSA-US-DIV", r.stdout)
 
     def test_json_output(self):
@@ -217,7 +228,7 @@ class TestScan(unittest.TestCase):
                 raws={"margin": _raw_json("ENB.US")},
                 ticker_map="TOBASE ENB.US ENB.TO\n")
             r = _run(root, "--json")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 0)
         doc = json.loads(r.stdout)
         self.assertEqual(doc["findings"][0]["check"], "US-LISTING")
         self.assertEqual(doc["findings"][0]["account"], "margin")
@@ -225,7 +236,7 @@ class TestScan(unittest.TestCase):
 
 class TestIssuerNameMatching(unittest.TestCase):
     """The pure helpers behind --online MAP-BAD?/different-root
-    MAP-GAP? findings (network calls stay in cmd_scan; these are the
+    MAP-GAP? findings (network calls stay in cmd_tips; these are the
     decision rules)."""
 
     def test_norm_strips_exchange_boilerplate(self):
@@ -263,7 +274,7 @@ class TestIssuerNameMatching(unittest.TestCase):
 
     def test_cdr_names_recognized(self):
         # A CDR is the SAME issuer but NOT a listing equivalent — the
-        # scan must never suggest mapping one (the receipt ratio
+        # tips must never suggest mapping one (the receipt ratio
         # floats, so no TOBASE ratio can ever be right).
         from taxjson.bin.taxjson_run import _is_cdr_name
         self.assertTrue(_is_cdr_name(
@@ -296,10 +307,11 @@ if __name__ == "__main__":
 
 
 class TestMapUnusedIsRootAware(unittest.TestCase):
-    """A rule with no STOCK rows is still live when OPTION trades carry
-    its root (a root-blind dead-rule check would prune live TOBASE
-    rules). MAP-UNUSED is a note, never a
-    finding, and never changes the exit code."""
+    """`ticker-map --suggest` lists the rules no symbol reaches ("Unused
+    rules, delete?"). A rule with no STOCK rows is still live when OPTION
+    trades carry its root (a root-blind dead-rule check would prune live
+    TOBASE rules); an unused rule is listed, never written, and never
+    changes the exit code."""
 
     def test_option_root_keeps_rule_live_and_note_is_not_a_finding(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -321,17 +333,62 @@ class TestMapUnusedIsRootAware(unittest.TestCase):
                     {"action": "BUYSELL", "date": "2026-03-02",
                      "symbol": "X000007.US", "quantity": 100,
                      "currency": "USD", "net_amount": 0.0}]}))
-            r = _run(root, "--json")
-        doc = json.loads(r.stdout)
-        rules = [n["rule"] for n in doc["notes"]]
+            r, doc = _suggest_json(root)
+            tips = _run(root, "--json")
+        rules = [u["rule"] for u in doc["unused"]]
+        self.assertTrue(all(u["kind"] == "unused-rule"
+                            and u["certainty"] == "verify"
+                            for u in doc["unused"]), doc["unused"])
         # The suffix-less `GLOBAL X000007 DFDVW.US` is NOT live against
-        # X000007.US: the engine matches a rule's FROM exactly, so scan
-        # reports it with a hint to write the suffixed form (S053-12 —
-        # this test used to pin the scan calling it live).
+        # X000007.US: the engine matches a rule's FROM exactly, so it is
+        # listed with a hint to write the suffixed form (S053-12 — this
+        # test used to pin scan calling it live).
         self.assertEqual(len(rules), 2, rules)
-        self.assertTrue(rules[0].startswith("X000007 -> DFDVW.US (the "
-                                            "books only have X000007.US"),
-                        rules)
+        self.assertTrue(rules[0].startswith("X000007 -> DFDVW.US"), rules)
+        self.assertIn("X000007.US", doc["unused"][0]["hint"])
         self.assertEqual(rules[1], "ZZZ.US -> ZZZ.TO")
-        self.assertEqual(r.returncode, 0, "notes never fail the scan")
+        self.assertEqual(doc["unused"][1]["line"], "TOBASE ZZZ.US ZZZ.TO")
+        self.assertEqual(r.returncode, 0, "an unused rule never fails")
+        # Tips no longer carries the map's notes.
+        self.assertNotIn("notes", json.loads(tips.stdout))
+        self.assertEqual(json.loads(tips.stdout)["schema_version"], 2)
 
+
+class TestScanIsGone(unittest.TestCase):
+    """`taxjson scan` was renamed `tips` and removed with no alias; tips
+    exits 0 with tips, 2 when it cannot read the project."""
+
+    def test_scan_is_an_invalid_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, accounts=[("margin", "taxable")],
+                            holdings={"margin": _holdings_toml("XIU.TO")},
+                            raws={"margin": _raw_json("XIU.TO")})
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                 str(root), "scan"],
+                cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("invalid choice: 'scan'", r.stderr)
+
+    def test_no_holdings_reports_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, accounts=[("margin", "taxable")],
+                            holdings={}, raws={})
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (root / "inputs" / "margin" / "x.csv").write_text("a,b\n")
+            r = _run(root)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("holdings", r.stderr)
+
+    def test_tips_listing_ends_with_what_it_is(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(
+                tmp, accounts=[("tfsa", "sheltered")],
+                holdings={"tfsa": _holdings_toml("KO.US")},
+                raws={"tfsa": _raw_json("KO.US")})
+            r = _run(root)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertTrue(lines[0].startswith("TIPS — "), lines[0])
+        self.assertEqual(lines[-1], "1 tip(s) for next year — none "
+                                    "changes a number of this year.")

@@ -1,4 +1,4 @@
-"""`taxjson scan` stops asking about pairs that are evidently not one
+"""`taxjson tips` (scan before) stops asking about pairs that are evidently not one
 security (owner, 2026-10-07).
 
 Interlisted shares usually keep their letters (QZX.TO / QZX.US), so a
@@ -40,7 +40,7 @@ def tearDownModule():
 def _run(root, *args):
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-         "scan", *args],
+         "tips", *args],
         cwd=REPO_ROOT, capture_output=True, text=True,
         env=dict(os.environ, TAXJSON_OFFLINE="1"))
 
@@ -142,7 +142,7 @@ class TestMapGapEvidence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, names=_SAME)
             r = _run(root)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("MAP-GAP", r.stdout)
         self.assertIn("QZX.US and QZX.TO carry the same name "
                       "('QZX ENERGY CORP')", r.stdout)
@@ -159,7 +159,7 @@ class TestMapGapEvidence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             r = _run(root)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("MAP-GAP", r.stdout)
         self.assertIn("names not compared (no security name for either "
                       "listing) — verify", r.stdout)

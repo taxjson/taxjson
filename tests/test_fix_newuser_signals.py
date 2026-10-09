@@ -310,7 +310,7 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
         st = XR.read_state(root / "work")
         self.assertEqual(st[0]["names"], ["ZZCELL INC COM",
                                           "ZZCELL INC SUBORD VTG SHS"])
-        r = tj(root, "scan", check=False)
+        r = tj(root, "ticker-map", "--suggest", check=False)
         self.assertIn("differ only in share wording", flat(r.stdout))
 
     @rule("US-XLIST-04")
@@ -358,7 +358,7 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
 
     @rule("CA-XLIST-05")
     def test_what_the_scan_shows_apart_is_never_possible(self):
-        """The "possible" rule reuses the scan's test of two listings the
+        """The "possible" rule reuses tips' test of two listings the
         exports show apart (cross_listings.shown_apart)."""
         from taxjson.lib import cross_listings as XL
         com = {exact_name("ZZCELL INC COM")}

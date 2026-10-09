@@ -45,7 +45,7 @@ QUICK_START_IDS = {
     "transfers": "transfers", "ticker-map": "ticker-map",
     "journals": "journals", "renames": "renames",
     "crypto-sends": "crypto-sends", "tt-lines": "tt-lines",
-    "format": "format", "scan": "scan", "sanity": "sanity",
+    "format": "format", "scan": "tips", "sanity": "sanity",
     "edge-cases": "edge-cases", "option-timing": "option-boundary",
     "wash-sales": "wash-reviewed", "check-dates": "check-dates",
     "sum": "sum", "explore": "explore", "slips": "t5008",
@@ -191,7 +191,7 @@ class TestCoverage(unittest.TestCase):
                          "confirm it, then `tjs checklist --done fees`")
 
     def test_review_never_keeps_the_list_open(self):
-        rs = [cl.Result("scan", "review"), cl.Result("init", "done"),
+        rs = [cl.Result("tips", "review"), cl.Result("init", "done"),
               cl.Result("t1135", "n/a"), cl.Result("fees", "manual")]
         self.assertFalse(cl.to_json(rs, 2025, "canada")["all_passed"])
         cl.apply_override(rs[3], {"status": "done"})
@@ -214,7 +214,7 @@ class TestOutsideAProject(unittest.TestCase):
                                    "step by step")
         for i in range(1, len(cl.item_ids()) + 1):
             self.assertRegex(out, rf"(?m)^ *{i}\. \S")
-        for cmd in ("tjs init --country", "tjs run", "tjs scan",
+        for cmd in ("tjs init --country", "tjs run", "tjs tips",
                     "tjs find-missing-history --write-missing-history "
                     "--outside-year", "tjs reconcile-slips", "tjs redact",
                     "tjs close-year", "tjs handoff", "--without-fetch",
@@ -426,6 +426,42 @@ class TestAfterARun(unittest.TestCase):
         self.assertEqual(_snapshot(p.root), before)
 
 
+class TestFormerIds(unittest.TestCase):
+    """`scan` became `tips` (the command was renamed): a checklist.json
+    saved under the old id still marks the item, and the CLI accepts
+    the old id."""
+
+    def test_saved_scan_mark_applies_to_tips(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "p"
+            shutil.copytree(project("canada").root, root)
+            year = cl.load_state(root).get("year")
+            (root / cl.STATE_FILE).write_text(json.dumps({
+                "overrides": {"scan": {"status": "skipped", "note": "n",
+                                       "date": "2026-01-02"}},
+                **({"year": year} if year else {})}))
+            st = cl.load_state(root)
+            self.assertEqual(st["overrides"]["tips"]["status"], "skipped")
+            self.assertNotIn("scan", st["overrides"])
+            r = _cli("-C", str(root), "checklist", "--only", "scan",
+                     "--json")
+            doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
+            self.assertEqual(list(doc), ["tips"])
+            self.assertEqual(doc["tips"]["effective"], "skipped")
+            r = _cli("-C", str(root), "checklist", "--undo", "scan")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("tips", json.loads(
+                (root / cl.STATE_FILE).read_text())["overrides"])
+
+    def test_tips_is_a_review_item_that_never_keeps_the_list_open(self):
+        item = {it.id: it for it in cl.items(2025, "canada")}["tips"]
+        self.assertEqual(item.cmds[0].command, "tjs tips")
+        self.assertNotIn("scan", cl.item_ids())
+        self.assertEqual(cl.STEP_RULES["tips"](None, None).status,
+                         "review")
+        self.assertIn("review", cl.PASSED)
+
+
 class TestMarks(unittest.TestCase):
     """checklist.json marks on any item: the only file a mark writes."""
 
@@ -434,6 +470,7 @@ class TestMarks(unittest.TestCase):
             root = Path(d) / "p"
             shutil.copytree(project("canada").root, root)
             before = _snapshot(root)
+            # `scan` is the tips item's former id: still accepted.
             r = _cli("-C", str(root), "checklist", "--done", "scan",
                      "--skip", "transfers", "--done", "fees",
                      "--note", "read it")
@@ -444,12 +481,13 @@ class TestMarks(unittest.TestCase):
             self.assertEqual({k: v for k, v in after.items()
                               if k != cl.STATE_FILE}, before)
             st = json.loads((root / cl.STATE_FILE).read_text())
-            self.assertEqual(st["overrides"]["scan"]["status"], "done")
+            self.assertEqual(st["overrides"]["tips"]["status"], "done")
+            self.assertNotIn("scan", st["overrides"])
             self.assertEqual(st["overrides"]["transfers"]["status"],
                              "skipped")
             r = _cli("-C", str(root), "checklist", "--quick", "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
-            self.assertEqual(doc["scan"]["effective"], "done")
+            self.assertEqual(doc["tips"]["effective"], "done")
             # A skip accepts the finding; it stays beside the mark.
             self.assertEqual(doc["transfers"]["effective"], "skipped")
             self.assertIn("transfer-in", doc["transfers"]["finding"])

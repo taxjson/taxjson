@@ -1,7 +1,7 @@
 """QA F3 (external QA suite, synthetic data): a loss on one listing, the
 other listing of the same root (an equal name) bought within 30 days: a
-Warning naming TOBASE / DISTINCT, `ticker-map --suggest`, `scan`
-XLIST-LOSS, the checklist's wash-reviewed step, `run --strict`
+Warning naming TOBASE / DISTINCT, `ticker-map --suggest` (scan's
+XLIST-LOSS before), the checklist's wash-reviewed step, `run --strict`
 (lib/xlist_loss_radar; CA-XLIST-05 / US-XLIST-04)."""
 import json
 import shutil
@@ -81,11 +81,17 @@ class TestF3CanadaRadar(unittest.TestCase):
         self.assertIn("TOBASE ZZX.US ZZX.TO", lines, doc)
 
     @rule("CA-XLIST-05")
-    def test_scan_finding(self):
-        r = tj(self.root, "scan", check=False)
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("XLIST-LOSS", r.stdout)
-        self.assertIn("`TOBASE ZZX.US ZZX.TO`", r.stdout)
+    def test_suggest_lists_it_and_tips_does_not(self):
+        # scan's XLIST-LOSS finding is `ticker-map --suggest`'s TOBASE
+        # line (its reason naming DISTINCT); `tips` is advice for next
+        # year and leaves it out.
+        r = tj(self.root, "ticker-map", "--suggest", check=False)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("TOBASE ZZX.US ZZX.TO", r.stdout)
+        self.assertIn("`DISTINCT ZZX.TO ZZX.US`",
+                      " ".join(r.stdout.split()))
+        r = tj(self.root, "tips", check=False)
+        self.assertNotIn("XLIST-LOSS", r.stdout)
 
     @rule("CA-XLIST-05")
     def test_checklist_wash_reviewed_step(self):
@@ -119,8 +125,9 @@ class TestF3CanadaRadar(unittest.TestCase):
         self.assertNotIn("across listings", console(r))
         loss, = zzx_loss(d)
         self.assertAlmostEqual(loss["gain"], 0.0, places=2)
-        self.assertEqual(tj(d, "scan", check=False).stdout.count(
-            "XLIST-LOSS"), 0)
+        self.assertNotIn("TOBASE ZZX.US ZZX.TO", tj(
+            d, "ticker-map", "--suggest", check=False).stdout.split(
+            "Already answered")[0])
 
     @rule("CA-XLIST-05")
     def test_distinct_answers_it(self):
