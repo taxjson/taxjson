@@ -1,11 +1,10 @@
 """`taxjson checklist`: every step from install to filing, checked
-(lib/checklist.items). `taxjson quick-start` was merged into it.
+(lib/checklist.items).
 
 - Coverage: every command an item names exists, every user-facing
   command is named by an item or listed in checklist.EXCLUDED with its
   reason, every `tjs ...` command line parses with the real parser, no
-  two items share an id and no check is defined twice; every id the
-  quick-start guide had maps into the checklist's id space.
+  two items share an id and no check is defined twice.
 - Outside a project: every step, numbered, with its commands; house
   style; exit 0; a mark needs a project.
 - Inside a project (synthetic projects only): a fresh `init` (next: the
@@ -33,28 +32,6 @@ from _style import PIPE_WIDTH, assert_styled, env, project  # noqa: E402
 from taxjson.lib import checklist as cl  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-
-# Every step id `taxjson quick-start` had, and the checklist item it is
-# now (one item where a quick-start step and a check were the same
-# thing). The guide's own "walk the filing checklist" step is the
-# command itself: its lines are the list's closing lines.
-QUICK_START_IDS = {
-    "install": "install", "init": "init", "configure": "configure",
-    "inputs": "inputs-frozen", "run": "run-clean",
-    "elections": "elections", "missing-history": "missing-history",
-    "transfers": "transfers", "ticker-map": "ticker-map",
-    "journals": "journals", "renames": "renames",
-    "crypto-sends": "crypto-sends", "tt-lines": "tt-lines",
-    "format": "format", "scan": "tips", "sanity": "sanity",
-    "edge-cases": "edge-cases", "option-timing": "option-boundary",
-    "wash-sales": "wash-reviewed", "check-dates": "check-dates",
-    "sum": "sum", "explore": "explore", "slips": "t5008",
-    "slip-audit": "t5-t3", "filing": "form-export",
-    "estimate": "estimate", "trading": "trading", "redact": "redact",
-    "close-year": "filed-lock", "next-year": "next-year",
-    "handoff": "handoff",
-}
-
 
 def _cli(*args, cwd=None, **extra):
     return subprocess.run(
@@ -123,13 +100,6 @@ class TestCoverage(unittest.TestCase):
         # The sections in order: each one's items together.
         secs = [it.section for it in cl.items(2025)]
         self.assertEqual(sorted(secs, key=cl.SECTIONS.index), secs)
-
-    def test_every_quick_start_step_is_one_item(self):
-        ids = set(cl.item_ids())
-        for old, new in QUICK_START_IDS.items():
-            self.assertIn(new, ids, old)
-        merged = list(QUICK_START_IDS.values())
-        self.assertEqual(len(merged), len(set(merged)))
 
     def test_every_command_line_parses(self):
         """Each `tjs CMD ...` line is a real command with real flags
@@ -471,11 +441,11 @@ class TestAfterARun(unittest.TestCase):
 
 
 class TestFormerIds(unittest.TestCase):
-    """`scan` became `tips` (the command was renamed): a checklist.json
-    saved under the old id still marks the item, and the CLI accepts
-    the old id."""
+    """A checklist.json mark saved under the tips item's former id still
+    marks the item (a migration of saved marks); the command line takes
+    the current ids only."""
 
-    def test_saved_scan_mark_applies_to_tips(self):
+    def test_saved_former_mark_applies_to_tips(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "p"
             shutil.copytree(project("canada").root, root)
@@ -487,48 +457,37 @@ class TestFormerIds(unittest.TestCase):
             st = cl.load_state(root)
             self.assertEqual(st["overrides"]["tips"]["status"], "skipped")
             self.assertNotIn("scan", st["overrides"])
-            r = _cli("-C", str(root), "checklist", "--only", "scan",
+            r = _cli("-C", str(root), "checklist", "--only", "tips",
                      "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(list(doc), ["tips"])
             self.assertEqual(doc["tips"]["effective"], "skipped")
-            r = _cli("-C", str(root), "checklist", "--undo", "scan")
+            r = _cli("-C", str(root), "checklist", "--undo", "tips")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("tips", json.loads(
                 (root / cl.STATE_FILE).read_text())["overrides"])
 
-    def test_every_former_quick_start_id_is_an_alias(self):
-        """Each quick-start step id that is a check's id now names that
-        check: --done/--skip/--only/--undo take it."""
+    def test_former_ids_are_unknown_steps_on_the_command_line(self):
+        """Removed ids are not item ids and the command line refuses
+        them like any unknown step; nothing is written."""
+        former = ("scan", "inputs", "run", "option-timing", "wash-sales",
+                  "slips", "slip-audit", "filing", "close-year")
         ids = set(cl.item_ids())
-        renamed = {o: n for o, n in QUICK_START_IDS.items() if o != n}
-        renamed.pop("scan")         # tips: the item was renamed itself
-        for old, new in renamed.items():
-            self.assertEqual(cl.ID_ALIASES.get(old), new, old)
-        for old in cl.ID_ALIASES:
-            self.assertNotIn(old, ids, old)
+        self.assertFalse(hasattr(cl, "ID_ALIASES"))
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "p"
             shutil.copytree(project("canada").root, root)
-            r = _cli("-C", str(root), "checklist", "--done", "slips",
-                     "--skip", "close-year", "--skip", "option-timing",
-                     "--done", "filing", "--note", "n")
-            self.assertEqual(r.returncode, 0, r.stderr)
-            ov = json.loads((root / cl.STATE_FILE).read_text())["overrides"]
-            self.assertEqual({k: v["status"] for k, v in ov.items()},
-                             {"t5008": "done", "filed-lock": "skipped",
-                              "option-boundary": "skipped",
-                              "form-export": "done"})
-            r = _cli("-C", str(root), "checklist", "--only", "slips",
-                     "--json")
-            doc = json.loads(r.stdout)
-            self.assertEqual([s["id"] for s in doc["steps"]], ["t5008"])
-            self.assertEqual(doc["steps"][0]["override"], "done")
-            r = _cli("-C", str(root), "checklist", "--undo", "slips",
-                     "--undo", "close-year")
-            self.assertEqual(r.returncode, 0, r.stderr)
-            ov = json.loads((root / cl.STATE_FILE).read_text())["overrides"]
-            self.assertEqual(sorted(ov), ["form-export", "option-boundary"])
+            flags = ("--done", "--skip", "--undo", "--only")
+            cases = [(old, flags[i % 4]) for i, old in enumerate(former)]
+            cases += [("scan", f) for f in flags[1:]]
+            for old, flag in cases:
+                self.assertNotIn(old, ids, old)
+                with self.subTest(id=old, flag=flag):
+                    r = _cli("-C", str(root), "checklist", flag, old)
+                    self.assertNotEqual(r.returncode, 0, r.stdout)
+                    self.assertIn(f"unknown step {old!r}", r.stderr)
+                    self.assertIn("Step ids:", r.stderr)
+            self.assertFalse((root / cl.STATE_FILE).exists())
 
     def test_tips_is_a_review_item_that_never_keeps_the_list_open(self):
         item = {it.id: it for it in cl.items(2025, "canada")}["tips"]
@@ -547,8 +506,7 @@ class TestMarks(unittest.TestCase):
             root = Path(d) / "p"
             shutil.copytree(project("canada").root, root)
             before = _snapshot(root)
-            # `scan` is the tips item's former id: still accepted.
-            r = _cli("-C", str(root), "checklist", "--done", "scan",
+            r = _cli("-C", str(root), "checklist", "--done", "tips",
                      "--skip", "transfers", "--done", "fees",
                      "--note", "read it")
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -559,7 +517,6 @@ class TestMarks(unittest.TestCase):
                               if k != cl.STATE_FILE}, before)
             st = json.loads((root / cl.STATE_FILE).read_text())
             self.assertEqual(st["overrides"]["tips"]["status"], "done")
-            self.assertNotIn("scan", st["overrides"])
             self.assertEqual(st["overrides"]["transfers"]["status"],
                              "skipped")
             r = _cli("-C", str(root), "checklist", "--quick", "--json")

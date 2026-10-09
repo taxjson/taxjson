@@ -876,7 +876,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson buy-check SYMBOL ...` | Buy-side wash check: is buying this ticker today safe? **UNSAFE** when a loss was sold within the past 30 days (the rebuy cancels it — permanently if bought sheltered), with the safe-from date when one is determinable (violations defer to `wash-radar` rather than print a date that would invite an early rebuy); **SAFE\*** when buying merely extends an open wash window. Root-matched (`buy-check SAMPLU` covers `SAMPLU.US` and cross-listings, folding in `ticker.map` pairs); `--json` for machines; exit 1 on unsafe. |
 | `taxjson sell-check SYMBOL ...` | Sell-side wash check: is selling this ticker **at a loss** today safe? **UNSAFE** when a registered account's recent buy it still holds would deny the loss on the whole position (LOCKED), or an open violation is backed by a registered account's in-window buy; **PARTIAL** when only some units are at risk (the line says how many; the rest of the loss stands); **ACTION** when a violation can be rescued by selling the taxable replacement before the deadline (Canada only — a US wash sale cannot be rescued, and a WASHED row is SAFE\* with the reason); **SAFE\*/SAFE** with the applicable caveats. Whether it *is* a loss at today's price is `harvest`'s job. `--json` for machines; exit 1 on UNSAFE or PARTIAL. |
 | `taxjson harvest [SYMBOL ...]` | Unrealized gain/(loss) per open position at current prices — "if I sold this today, is it a loss?" Losses first, wash-radar advisory on each loss, `LT_IN` days-to-long-term for US projects. |
-| `taxjson tips` | Tax-efficiency advice for next year (it changes no number of this year): cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding). `--online` probes Yahoo Finance for unmapped .TO twins and checks the map's pairs by issuer name. Exit 0 with or without tips; 2 when the project cannot be read. (Replaces the removed scan command; its MAP-GAP pairs, unused-rule note and XLIST-LOSS are `ticker-map --suggest`'s.) |
+| `taxjson tips` | Tax-efficiency advice for next year (it changes no number of this year): cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding). `--online` probes Yahoo Finance for unmapped .TO twins and checks the map's pairs by issuer name. Exit 0 with or without tips; 2 when the project cannot be read. (The map's hygiene — listing pairs to verify, unused rules, cross-listing losses — is `ticker-map --suggest`'s.) |
 | `taxjson watch` | Cron-able change detector: reports only what CHANGED since the last watch run — new/changed/cleared radar advisories, moved clear dates, and (with `--harvest`) the harvestable-now loss total moving more than `--threshold` (default 100). A report ends with the scope line (verdicts cover this project's accounts only — CA-PLAN-04 / US-PLAN-04). Silent with exit 0 when nothing changed, so a cron line mails only on news; `--exit-code` exits 1 on changes for scripting, `--json` for machines. State: `work/.watch_state.json`; `--state PATH` gives a cron cadence its own baseline (daily and weekly lines can coexist). |
 
 #### Before you file
@@ -1901,13 +1901,12 @@ project cannot be read (no holdings reports: run `taxjson run`). `--json`
 (schema_version 2): `findings` (`check`, `account`, `symbol`, `message`)
 and `unscanned`.
 
-`taxjson tips` replaces the scan command (removed). The map's own hygiene
-moved to `taxjson ticker-map --suggest`: a loss on one listing with the
-other listing bought within 30 days (scan's XLIST-LOSS) is its `TOBASE`
-suggestion; a `.US` and a Canadian listing of one root, both in the
+The map's own hygiene is `taxjson ticker-map --suggest`'s job: a loss
+on one listing with the other listing bought within 30 days is its
+`TOBASE` suggestion; a `.US` and a Canadian listing of one root, both in the
 project (holdings, dividend history, the map itself; an option counts
 for its underlying), with no `ticker.map` line joining or parting them
-and not joined by the run itself (scan's MAP-GAP) is a pair **to
+and not joined by the run itself is a pair **to
 verify**: its reason says whether the
 exports name them alike or the names were not compared, and `--write`
 asks on a terminal — `TOBASE` if they are one security, `DISTINCT` if
@@ -1915,8 +1914,7 @@ not, or skip; `--write --all` never adds one, since a shared root is a
 candidate, not proof. A pair the exports show apart is not listed and
 needs no `DISTINCT` line: the Canadian line named as a depositary
 receipt (a CDR) or listed on a receipt venue, or names of two different
-companies. The rules no symbol of the books reaches (scan's
-MAP-UNUSED note) are listed there as "unused rule, delete?" — root-aware:
+companies. The rules no symbol of the books reaches are listed there as "unused rule, delete?" — root-aware:
 a rule with no stock rows is still live when option trades carry its
 root (`ABC271217C00050000.US` needs `TOBASE ABC.US ABC.TO`), and a rule
 reached through another rule's target (a rename chain) is live; FROM must
@@ -2443,7 +2441,7 @@ it and prints one NOTE per run asking you to rename it
 for you. A project with **both** files is refused (exit 2) until you keep one.
 The old flags still work and print a note.
 
-## Quickstart (manual pipeline)
+## Manual pipeline (stage by stage)
 
 The commands below drive the pipeline stage by stage — handy for one-off files or scripting. For a configured project, prefer `taxjson run` above.
 

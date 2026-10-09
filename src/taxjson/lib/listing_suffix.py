@@ -486,8 +486,8 @@ def resolve(scan: Scan, ev: Evidence, *, account: str, broker: str,
             renames: Optional[Dict[str, str]] = None,
             days: Optional[int] = None) -> Dict[str, Any]:
     """{"corrected": {listing: {...}}, "kept": {listing: {...}}} for one
-    (account, broker) group (module docstring): `scan` its exports read
-    before the parse, `ev` the rest of the project's books.
+    (account, broker) group (module docstring): scan, the Scan of its
+    exports read before the parse; `ev` the rest of the project's books.
     `mapped(symbol)`: a ticker.map line names it (any keyword);
     `distinct`: the map's DISTINCT pairs."""
     from taxjson.lib.cross_listings import PAIR_DAYS

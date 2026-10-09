@@ -11256,7 +11256,7 @@ def _warn_dist_double_entry(root: Path, accounts, rules, keep,
 def _load_json_or_die(path: Path) -> Any:
     """Read a work/ artifact a query view needs, or stop naming it. The
     views used to warn and skip the file, then print a partial report —
-    a smaller total, a missing account, 'No findings — clean scan.' —
+    a smaller total, a missing account, a clean report —
     with exit 0 (audit S045-01, S042-05)."""
     try:
         return _read_work_doc(path)
@@ -12094,7 +12094,7 @@ def _account_plan(name: str, acfg: Dict[str, Any],
     and `my-tfsa` count, `admiral` and `spiral` no longer read as an IRA
     and silently skipped the US-LISTING check, R1-243); else the type."""
     # Only the project country's plans count, and a taxable account is
-    # taxable whatever its plan says (the scan, now tips, skipped one with plan =
+    # taxable whatever its plan says (tips skipped one with plan =
     # "401k"; validate_config warns on the contradiction, the other
     # country's plan is refused — audit A2-0739, A2-1332).
     kinds = _plan_kinds(country) if country else list(_PLAN_KINDS)
@@ -12595,7 +12595,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
                             f"so."))
 
     if getattr(args, "json", False):
-        # schema 2: `taxjson scan`'s MAP-UNUSED notes and XLIST-LOSS
+        # schema 2: the unused-rule notes and cross-listing loss
         # findings are `taxjson ticker-map --suggest`'s now.
         print(json.dumps({"schema_version": 2, "findings": [
             {"check": c, "account": a, "symbol": sy, "message": m}
@@ -15638,10 +15638,9 @@ def cmd_checklist(args: argparse.Namespace) -> None:
              "the mark)")
     # Every repeated --done/--skip/--undo is recorded (only the last one
     # was, silently — A2-1159); an unknown id stops before any is written.
-    # A former id (cl.ID_ALIASES: `scan` is `tips`) names its item.
-    marks = ([(cl.canonical_id(st), "done") for st in (args.done or [])]
-             + [(cl.canonical_id(st), "skipped") for st in (args.skip or [])]
-             + [(cl.canonical_id(st), None) for st in (args.undo or [])])
+    marks = ([(st, "done") for st in (args.done or [])]
+             + [(st, "skipped") for st in (args.skip or [])]
+             + [(st, None) for st in (args.undo or [])])
     for step, _m in marks:
         if step not in ids:
             _die(f"unknown step {step!r}", f"Step ids: {', '.join(ids)}.")
@@ -15698,8 +15697,6 @@ def cmd_checklist(args: argparse.Namespace) -> None:
 
     ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=_date.today(),
                  run_sub=cl.default_run_sub(root), config_error=cfg_error)
-    if args.only:
-        args.only = cl.canonical_id(args.only)
     only = [args.only] if args.only else None
     if only and args.only not in ids:
         _die(f"unknown step {args.only!r}", f"Step ids: {', '.join(ids)}.")
@@ -15739,7 +15736,7 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
     checklist. A config the strict loader refuses — a crypto account and
     no local_timezone (what `init` writes on a UTC machine), an old map
     file `taxjson migrate` moves — is the configure item's finding, not
-    an error instead of the list (quick-start showed it): the TOML is
+    an error instead of the list: the TOML is
     read leniently and the checks that need the strict config are
     blocked. Only a file with no readable (or plausible) year, country
     or account names still stops here, with the loader's own message."""

@@ -838,12 +838,8 @@ Each suggestion: `line`, `reason`, `source`, `kind`, `certainty`, and when they 
 
 The checklist as one document: a stable schema for programs (new keys,
 statuses and items may be added; none is renamed or removed while
-`schema_version` is 2). Version 2 is the checklist and the former
-quick-start guide's JSON (version 1) in one: the checklist's keys
-(`year`, `country`, `all_passed`, and per step `id`, `title`, `command`,
-`status`, `effective`, `detail`, `override`, `note`, `finding`) are kept;
-its `stage` number is now `section`. Inside a project the checks run the
-commands that prove them; outside one nothing is evaluated.
+`schema_version` is 2). Inside a project the checks run the commands
+that prove them; outside one nothing is evaluated.
 Code: `src/taxjson/lib/checklist.py` — `to_json`, `guide_json`,
 `SCHEMA_VERSION`, `STATUSES`.
 

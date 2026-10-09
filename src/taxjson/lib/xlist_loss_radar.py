@@ -264,7 +264,7 @@ def _wording_only(na: Set[Tuple[str, ...]], nb: Set[Tuple[str, ...]],
     with two classes): those stay apart, as do different companies."""
     from taxjson.lib import cross_listings as XL
     from taxjson.lib.symbol_codes import _FORM, exact_marks
-    # What the exports show apart is never a pair (the scan's own test,
+    # What the exports show apart is never a pair (the tips check's test,
     # cross_listings.shown_apart: a Canadian line that is a receipt,
     # names of two companies); a receipt word on either side too (an
     # ADR's US line).

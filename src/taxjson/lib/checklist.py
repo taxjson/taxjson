@@ -2345,7 +2345,7 @@ def load_state(root: Path) -> Dict[str, Any]:
         raise StateFileError(f"{STATE_FILE} is not a checklist state "
                              f"file (no overrides table) — fix it or "
                              f"`taxjson checklist --reset`.")
-    for old, new in ID_ALIASES.items():
+    for old, new in _SAVED_ID_MIGRATION.items():
         # A mark saved under an item's former id is the item's mark (a
         # mark under the new id wins).
         if old in doc["overrides"]:
@@ -2441,7 +2441,6 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
     removing a mark that was not there (nothing changed). `answers`: the
     question keys a DONE mark answers (QUESTION_STEPS, question_answers),
     stored with it."""
-    step = canonical_id(step)
     if step not in item_ids():
         raise KeyError(step)
     with _StateLock(root):
@@ -3021,22 +3020,10 @@ def item_ids() -> List[str]:
     return [it.id for it in _spec(2025, None)]
 
 
-# An item's former id: still accepted in checklist.json marks and on the
-# command line (--done/--skip/--undo/--only), read as the new id — the
-# renamed `scan` item, and each quick-start step id that is a check's id
-# now (quick-start was merged into the checklist).
-ID_ALIASES: Dict[str, str] = {
-    "scan": "tips",
-    "inputs": "inputs-frozen", "run": "run-clean",
-    "option-timing": "option-boundary", "wash-sales": "wash-reviewed",
-    "slips": "t5008", "slip-audit": "t5-t3", "filing": "form-export",
-    "close-year": "filed-lock",
-}
-
-
-def canonical_id(sid: Optional[str]) -> Optional[str]:
-    """`sid` with a former id (ID_ALIASES) read as its item's id now."""
-    return ID_ALIASES.get(sid, sid) if isinstance(sid, str) else sid
+# A mark saved in checklist.json under an item's former id, read as the
+# item's id (a data migration of saved marks only: the command line takes
+# the current ids alone).
+_SAVED_ID_MIGRATION: Dict[str, str] = {"scan": "tips"}
 
 
 def item_meta(sid: str, country: Optional[str]) -> Tuple[str, str, str,
