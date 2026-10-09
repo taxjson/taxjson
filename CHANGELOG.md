@@ -189,6 +189,11 @@
   ETF`, `APPLE INC`) is not listed. An 8-digit number after another
   broker's name (`Transfer from Questrade 12345678`) is now replaced as
   an account number.
+- `scripts/check-pii.sh` (the pre-push scan) finds a credential in any
+  letter case (`TOKEN=…`, `Api_Key: …`) and the broker tokens
+  taxjson-fetch takes: `--refresh-token <token>`, `--flex-token=<token>`
+  and a `QUESTRADE_REFRESH_TOKEN=` / `*_FLEX_TOKEN=` assignment, exported
+  or not. An all-capitals placeholder (`YOUR_REFRESH_TOKEN`) passes.
 
 ## v0.24.2 (2026-10-08)
 
