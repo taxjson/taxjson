@@ -1022,6 +1022,15 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
         if not 1900 <= year <= _max_year:
             _die(f"[settings] year = {year} is not a plausible tax year "
                  f"(expected 1900..{_max_year})")
+    # A missing_history.json opening is sized from the rows through the
+    # project year's end (CA-ACB-11 / US-BASIS-04): every command and
+    # stage of this project reads the year from here (a stray outer
+    # setting never applies).
+    from taxjson.lib.missing_history import ENV_SIZING_YEAR
+    if year is not None:
+        _os.environ[ENV_SIZING_YEAR] = str(year)
+    else:
+        _os.environ.pop(ENV_SIZING_YEAR, None)
 
 
 # Top-level tables taxjson.toml may carry. Anything else is ignored —
@@ -7157,23 +7166,6 @@ def cmd_run(args: argparse.Namespace) -> None:
     if mh_arg:
         _step(f"Reading {mh_file.name} (openings for sales with no "
               f"purchase in the files)")
-        try:
-            from taxjson.lib.missing_history import (
-                load_missing_history, unrecorded_quantity_entries)
-            _unrec = unrecorded_quantity_entries(load_missing_history(mh_arg))
-        except (OSError, ValueError):
-            _unrec = []
-        if _unrec:
-            # Sized from the first shortage episode (CA-ACB-11 /
-            # US-BASIS-04): say once that the quantity is not recorded.
-            _say("note", f"{mh_file.name}: {len(_unrec)} entr"
-                 f"{'y records' if len(_unrec) == 1 else 'ies record'} no "
-                 f"quantity ({', '.join(f'{s}/{a}' for s, a in _unrec[:3])}"
-                 f"{' ...' if len(_unrec) > 3 else ''}): each fills only "
-                 f"its first shortage",
-                 "`taxjson find-missing-history --write-missing-history "
-                 "new.json` writes each entry with its `quantity`; copy "
-                 "the quantities into your file.", indent="  ")
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         _write_atomic(_ph_marker, str(mh_file))
         _ph_marker_old.unlink(missing_ok=True)
@@ -7555,7 +7547,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         if getattr(args, "strict", False):
             raise SystemExit(1)
         return
+    _mh_gains = [g for _n, _b, g, _t in _SHORT_SOURCES]
     _report_short_positions(root, settings, cache, ticker_map_arg, mh_arg)
+    if mh_arg:
+        _note_window_sized_openings(mh_arg, _mh_gains)
     _rename_records = _write_dated_events_state(root, cfg, cache,
                                                 _tmap_parsed)
     if not pending_accounts:
@@ -8106,6 +8101,41 @@ def _short_blocks(gains_json: Path) -> List[List[str]]:
             cur = [line]
             out.append(cur)
     return out
+
+
+def _note_window_sized_openings(mh_file: Path,
+                                gains_files: List[Path]) -> None:
+    """One note when the tax year's end decided the size of a
+    missing_history.json opening (the entry records no `quantity`, and
+    later rows go shorter than the rows through the year end:
+    lib/missing_history.window_sized_entries); silent otherwise. Read
+    from this run's gains books' missing_history_log."""
+    import json as _json
+    from taxjson.lib.missing_history import window_sized_entries
+    logs = []
+    for g in gains_files:
+        try:
+            doc = _json.loads(Path(g).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            logs.append(doc.get("missing_history_log") or [])
+    found = window_sized_entries(logs)
+    if not found:
+        return
+    until = found[0].get("sized_through") or ""
+    shown = ", ".join(f"{e['symbol']}/{e['account']} "
+                      f"{float(e.get('opening_qty') or 0):g}"
+                      for e in found[:3]) + (" ..." if len(found) > 3
+                                             else "")
+    _say("note", f"{mh_file.name}: {len(found)} entr"
+         f"{'y records' if len(found) == 1 else 'ies record'} no "
+         f"quantity and later rows go shorter ({shown}): each opening is "
+         f"sized from the rows through {until}",
+         "Rows after the tax year's end never size it (a later year's "
+         "project sizes its own). To state the units held before the "
+         "data, give the entry a `quantity` (`taxjson find-missing-history "
+         "--write-missing-history new.json` writes it).", indent="  ")
 
 
 def _report_short_positions(root: Path, settings: Dict[str, Any],

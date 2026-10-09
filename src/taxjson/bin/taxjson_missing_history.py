@@ -147,7 +147,9 @@ def _money(v) -> str:
     return fmt_money(v)
 
 
-def _print_section(title, rows, *, show_year_cols, year=None):
+def _print_section(title, rows, *, show_year_cols, year=None, sizes=None):
+    """`sizes`: (symbol, account) -> the run's applied-log entry
+    (_opening_sizes), said under each covered pair."""
     if not rows:
         return
     _P.heading(title)
@@ -193,12 +195,50 @@ def _print_section(title, rows, *, show_year_cols, year=None):
             d.append(f"short at the start of {year} and covered by a "
                      f"{year} purchase: the cover's gain or loss is in "
                      f"{year}.")
+        _sz = (sizes or {}).get((c.symbol, c.account))
+        if _sz is not None:
+            d.append(_opening_size_line(_sz))
         if year and r.short_at_year_start and not r.in_year_activity:
             d.append(f"still short at the start of {year}, with no {year} "
                      f"activity: no {year} gain depends on it; the "
                      f"purchase matters when the position next trades.")
         details.append(d)
     _table(hdr, body, details)
+
+
+def _opening_sizes(txs, mh_path, year):
+    """What `taxjson run` opens for each missing_history.json entry —
+    the same synthesize_openings call, sized from the rows through
+    `year`'s end (or the project's): (symbol, account) -> its applied-
+    log entry. {} when the file cannot be read."""
+    from taxjson.lib.missing_history import (load_missing_history,
+                                             sizing_until,
+                                             synthesize_openings)
+    try:
+        pairs = load_missing_history(Path(mh_path))
+        _o, log = synthesize_openings(txs, pairs, flag_stale=False,
+                                      until=sizing_until(year))
+    except (OSError, ValueError):
+        return {}
+    return {(e['symbol'], e['account']): e for e in log}
+
+
+def _opening_size_line(e) -> str:
+    q = float(e.get('opening_qty') or 0.0)
+    until = e.get('sized_through')
+    if e.get('recorded_quantity') is not None:
+        how = f"the `quantity` it records ({q:g} units)"
+    elif until:
+        how = f"{q:g} units, the deepest shortage of the rows through {until}"
+    else:
+        how = f"{q:g} units, the deepest shortage of every row"
+    out = (f"the run opens {how}" if e.get('inserted')
+           else f"the run opens nothing ({e.get('note') or 'not short'})")
+    sa = e.get('short_again')
+    if sa:
+        out += (f"; it goes short again on {sa['date']} ({sa['qty']:g} "
+                f"units) once that is used up")
+    return out + "."
 
 
 def _print_zero_section(title, rows):
@@ -916,6 +956,11 @@ def main(argv=None):
                     f"{l.new_symbol}'s sale gain is overstated by that "
                     f"amount.", "  ", "  ")
     # === Section 1: truncated history ===
+    # The opening the run applies for each pair the file lists, said
+    # under its row in whichever section it is (CA-ACB-11 / US-BASIS-04).
+    _sizes = (_opening_sizes(txs, args.missing_history, yr)
+              if args.missing_history and short_rows
+              and any(_covered(r) for r in short_rows) else {})
     if short_rows:
         _P.heading(f"TRUNCATED HISTORY — positions go short (missing a "
                    f"buy): {len(short_rows)} pair(s)")
@@ -948,34 +993,35 @@ def main(argv=None):
                     + f"{len(ignorable)} do not.")
             _print_section(f"AFFECTS {yr} - missing basis distorts this year's "
                            "gain; fix before filing:", affects, show_year_cols=True,
-                           year=yr)
+                           year=yr, sizes=_sizes)
             # Pairs the missing-history file already covers (the run
             # applies them) are not work still to do (R1-339).
             _print_section(f"COVERED by {mh_name} - the run applies these "
                            f"openings; nothing more to do unless `taxjson "
                            f"sum` lists the sale under manual reporting:",
-                           covered, show_year_cols=True)
+                           covered, show_year_cols=True, sizes=_sizes)
             # A registered account has no reportable gain: listing its
             # rows under "distorts this year's gain" (and counting them
             # in the checklist) told the user to fabricate basis there
             # (audit S035-08). Their history still matters to the
             # cross-account loss rule, so they are listed apart.
             _print_section(_sheltered_title(yr, country), sheltered,
-                           show_year_cols=True)
+                           show_year_cols=True, sizes=_sizes)
             _print_section(f"ACTIVE IN {yr} - no {yr} sale draws on the "
                            f"missing basis, but the position trades, moves "
                            f"or pays income in {yr} (`taxjson run` lists "
                            f"these):", active, show_year_cols=True,
-                           year=yr)
+                           year=yr, sizes=_sizes)
             _print_section(f"NOT relevant to {yr} - short only from other-year "
                            f"sales (or since drained), no {yr} activity; "
                            f"safe to ignore (`taxjson find-missing-history "
                            f"--write-missing-history --outside-year` records "
                            f"them so the run stops listing them):",
-                           ignorable, show_year_cols=True, year=yr)
+                           ignorable, show_year_cols=True, year=yr,
+                           sizes=_sizes)
         else:
             _print_section("Short positions (all history):", short_rows,
-                           show_year_cols=False)
+                           show_year_cols=False, sizes=_sizes)
 
     # === Section 2: $0-cost corp-action acquisitions ===
     if zero_rows:

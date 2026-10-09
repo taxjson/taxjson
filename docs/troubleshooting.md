@@ -65,12 +65,19 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_account_tt_files`; `src/taxjson/lib/crypto_sends.py` — `tt_path`, `GENERATED_DIR`
 
-### "Info: missing_history.json: 1 entry records no quantity (AMZQ.US/margin): each fills only its first shortage"
-- **Check:** the entry has no `"quantity"`; `tjs find-missing-history` shows the position's first shortage.
-- **Cause:** an entry's opening is sized from its data; it used to be the deepest short over all the rows, so a later short — an intraday crossing in a margin account, or a later year's export read through shared inputs — grew it, and earlier sales were matched to the phantom shares (sent to manual reporting, out of the totals). Now it fills the first shortage only, and a recorded quantity caps it.
-- **Fix:** `tjs find-missing-history --all-history --write-missing-history new.json` writes each entry with its `quantity`; copy the quantities into your `missing_history.json`. The figures for the year the entry was written for do not move.
+### "Info: missing_history.json: 1 entry records no quantity and later rows go shorter (QZQ.US/margin 10): each opening is sized from the rows through 2024-12-31"
+- **Check:** the entry has no `"quantity"`; the project's exports hold rows after its year's December 31 (shared exports every year reads, or a single-folder project with next year's downloads). `tjs find-missing-history` shows "the run opens N units, the deepest shortage of the rows through 2024-12-31" under the position, and the run's ATTENTION line names the date it goes short again.
+- **Cause:** an entry's opening is the deepest shortage of its rows dated up to the project year's end; rows after it are a later year's (its own project sizes its own opening), so they never change this year's figures. Before, every row counted: in the shared layout a later year's short grew an earlier year's opening and sent that year's sales to manual reporting.
+- **Fix:** nothing when the later shortage belongs to a later year. To state the units held before the data yourself, give the entry `"quantity": N` (used exactly; `tjs find-missing-history --write-missing-history new.json` writes it with `_sized_through`).
 - **Fixed in:** unreleased
-- **Code:** `src/taxjson/lib/missing_history.py` — `synthesize_openings`, `episode_done`, `QUANTITY_KEY`, `unrecorded_quantity_entries`; `src/taxjson/bin/taxjson_gains.py` — `format_suggestions`
+- **Code:** `src/taxjson/lib/missing_history.py` — `synthesize_openings`, `sizing_until`, `ENV_SIZING_YEAR`, `window_sized_entries`, `QUANTITY_KEY`; `src/taxjson/bin/taxjson_run.py` — `_note_window_sized_openings`
+
+### "Warning: ATTENTION: missing_history.json lists QZQ.US / margin: the position goes short again on 2025-11-03 (70 units), after its opening (10 units, sized from the rows through 2024-12-31) is used up"
+- **Check:** `tjs find-missing-history` shows the opening under the position and the date it goes short again. With "after the N units its `quantity` records are used up": the entry's `quantity` is below the shortage in the year.
+- **Cause:** the position sells more than its opening and the purchases in the files: a later year's short or gap (the opening is sized from the rows through the year end, so a later year never changes this one), or a recorded `quantity` too low.
+- **Fix:** a later year's: nothing for this year — that year's project sizes its own opening (a real short needs nothing). A `quantity` too low: raise it to the units held before the data, or add the missing purchase.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `short_again_message`, `_short_again`
 
 ### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
 - **Check:** `git -C 2025 rev-parse --show-toplevel` and `git -C inputs rev-parse --show-toplevel` name different folders (or the second fails).

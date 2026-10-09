@@ -29,14 +29,18 @@
   (the shared exports and the year's slips, holdings/, taxjson.toml and
   ticker.map), ids replaced consistently in every file.
 
-### Fixed
+### Changed
 
-- A `missing_history.json` entry fills only its position's first
-  shortage (until the position is back at zero), and never more than the
-  new `quantity` it can record: a later short — an intraday crossing in a
-  margin account, or a later year's export — no longer grows the opening
-  and sends an earlier year's sales to manual reporting.
-  `find-missing-history --write-missing-history` records the quantity.
+- A `missing_history.json` opening is sized from the rows dated up to
+  December 31 of the project's year (the deepest shortage among them, as
+  before); rows after it — a later year's exports — never size it, so a
+  later year's short no longer sends an earlier year's sales to manual
+  reporting. A project whose exports end with its year is unchanged. An
+  entry can record `quantity`, the units held before the data, used
+  exactly. A listed position that goes short again once its opening is
+  used up is an ATTENTION line. `find-missing-history` shows the opening
+  the run applies under each listed position, and
+  `--write-missing-history` records `quantity` with `_sized_through`.
 
 ## v0.25.0 (2026-10-09)
 

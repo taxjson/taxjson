@@ -420,59 +420,180 @@ BUYSELL 2025-11-03 10:02:00 QZQ.US 70 USD 30.10 2108.00 1.00
 """
 
 
-class TestMissingHistoryFirstEpisode(unittest.TestCase):
-    """A missing_history.json entry fills its first shortage only: a
-    later year's short (shared exports bring it into every year) never
-    grows the opening — the earlier year's sales stay matched."""
+def _mh_tx(date, qty, symbol="QZQ.TO", account="margin"):
+    from taxjson.lib.core import TaxTransaction
+    return TaxTransaction(action="BUYSELL", date=date, time="10:00:00",
+                          symbol=symbol, quantity=qty, currency="CAD",
+                          price=1.0, net_amount=-qty, account=account)
 
-    def _project(self, year, entry):
+
+def _mh_open(txs, until, quantity=None, pair=("QZQ.TO", "margin")):
+    from taxjson.lib.missing_history import (MissingHistoryPairs,
+                                             synthesize_openings)
+    pairs = MissingHistoryPairs({pair})
+    if quantity is not None:
+        pairs.quantities[pair] = float(quantity)
+    _o, applied = synthesize_openings(txs, pairs, flag_stale=False,
+                                      until=until)
+    return applied[0]
+
+
+class TestMissingHistoryYearWindow(unittest.TestCase):
+    """A missing_history.json entry with no `quantity` fills the deepest
+    shortage of the rows dated up to the project year's end — main's
+    peak-short sizing within that window; rows after the year end
+    (later years' exports, shared by every year) never size it. A
+    recorded `quantity` sets the opening exactly. A position that goes
+    short again once its opening is used up is said (ATTENTION)."""
+
+    @rule("CA-ACB-11")
+    def test_shares_held_before_the_data_stay_unknown_cost(self):
+        # 100 held before the data: sell 60, buy 100, sell 140. Every
+        # sale draws on a pool still holding unknown-cost shares: the
+        # opening is the peak shortage (100), not the first dip (60).
+        txs = [_mh_tx("2024-02-01", -60), _mh_tx("2024-04-01", 100),
+               _mh_tx("2024-09-01", -140)]
+        e = _mh_open(txs, "2024-12-31")
+        self.assertEqual(e["opening_qty"], 100)
+        self.assertNotIn("short_again", e)
+
+    @rule("CA-ACB-11")
+    def test_two_missing_transfer_ins(self):
+        # Two lots transferred in with no record: 20 sold, 20 bought, 50
+        # sold — the opening covers the deeper second shortage.
+        txs = [_mh_tx("2024-02-01", -20), _mh_tx("2024-03-01", 20),
+               _mh_tx("2024-06-01", -50)]
+        self.assertEqual(_mh_open(txs, "2024-12-31")["opening_qty"], 50)
+
+    @rule("CA-ACB-11")
+    def test_a_later_year_never_sizes_an_earlier_one(self):
+        txs = [_mh_tx("2023-03-01", -10), _mh_tx("2023-06-01", 50),
+               _mh_tx("2024-08-01", -20), _mh_tx("2025-11-03", -100),
+               _mh_tx("2025-11-04", 70)]
+        e24 = _mh_open(txs, "2024-12-31")
+        self.assertEqual(e24["opening_qty"], 10)
+        self.assertEqual(e24["opening_all_rows"], 80)
+        # ... and the 2025 shortage beyond it is said, not silent.
+        self.assertEqual(e24["short_again"],
+                         {"date": "2025-11-03", "qty": 70.0})
+        from taxjson.lib.missing_history import (short_again_message,
+                                                 window_sized_entries)
+        msg = short_again_message(e24)
+        self.assertIn("goes short again on 2025-11-03", msg)
+        self.assertIn("does not change 2024", msg)
+        self.assertEqual(len(window_sized_entries([[e24]])), 1)
+        # The 2025 year sizes its own (the 2025 shortage included).
+        self.assertEqual(_mh_open(txs, "2025-12-31")["opening_qty"], 80)
+        # No tax year (a standalone tool): every row, as before.
+        self.assertEqual(_mh_open(txs, None)["opening_qty"], 80)
+
+    @rule("CA-ACB-11")
+    def test_quantity_sets_the_opening_exactly(self):
+        txs = [_mh_tx("2024-02-01", -60), _mh_tx("2024-04-01", 100),
+               _mh_tx("2024-09-01", -140)]
+        raised = _mh_open(txs, "2024-12-31", quantity=150)
+        self.assertEqual(raised["opening_qty"], 150)
+        self.assertNotIn("short_again", raised)
+        lowered = _mh_open(txs, "2024-12-31", quantity=80)
+        self.assertEqual(lowered["opening_qty"], 80)
+        self.assertEqual(lowered["recorded_quantity"], 80)
+        # Lowered below the shortage: the position goes short again.
+        self.assertEqual(lowered["short_again"],
+                         {"date": "2024-09-01", "qty": 20.0})
+        from taxjson.lib.missing_history import (short_again_message,
+                                                 window_sized_entries)
+        self.assertIn("Raise `quantity`", short_again_message(lowered))
+        # A recorded quantity is never "sized by the year end".
+        self.assertEqual(window_sized_entries([[lowered]]), [])
+
+    def test_the_alert_is_printed(self):
+        import contextlib
+        import io
+        from taxjson.lib.missing_history import (MissingHistoryPairs,
+                                                 synthesize_openings)
+        txs = [_mh_tx("2024-02-01", -10), _mh_tx("2024-03-01", 10),
+               _mh_tx("2025-02-01", -30)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            synthesize_openings(txs, MissingHistoryPairs(
+                {("QZQ.TO", "margin")}), until="2024-12-31")
+        self.assertIn("warning: ATTENTION: missing_history.json lists "
+                      "QZQ.TO / margin: the position goes short again on "
+                      "2025-02-01 (20 units)", err.getvalue())
+
+    def _project(self, year, entry, tt=None, shared=True, sheltered=False,
+                 country="usa"):
         top = Path(private_dir()) / "taxes"
-        (top / "inputs" / "margin").mkdir(parents=True)
-        (top / "inputs" / "margin" / "t.tt").write_text(_MH_TT)
-        d = top / str(year)
-        d.mkdir()
+        d = top / str(year) if shared else top
+        ins = top / "inputs" if shared else d / "inputs"
+        acct = "tfsa" if sheltered else "margin"
+        (ins / acct).mkdir(parents=True)
+        (ins / acct / "t.tt").write_text(tt or _MH_TT)
+        d.mkdir(exist_ok=True)
+        cur = "USD" if country == "usa" else "CAD"
         (d / "taxjson.toml").write_text(
-            "[settings]\n" f"year = {year}\n" 'country = "usa"\n'
-            'inputs_dir = "../inputs"\n' 'tax_date = "trade"\n'
-            'base_currency = "USD"\n\n[accounts.margin]\n'
-            'type = "taxable"\n')
+            "[settings]\n" f"year = {year}\n" f'country = "{country}"\n'
+            + ('inputs_dir = "../inputs"\n' if shared else "")
+            + ('tax_date = "trade"\n' if country == "usa"
+               else 'tax_date = "settle"\n')
+            + f'base_currency = "{cur}"\n\n[accounts.{acct}]\n'
+            + ('type = "sheltered"\n' if sheltered
+               else 'type = "taxable"\n'))
         (d / "missing_history.json").write_text(json.dumps([entry]))
         return d
 
     @rule("US-BASIS-04")
-    def test_a_later_short_does_not_grow_the_opening(self):
+    def test_a_later_years_short_does_not_change_an_earlier_year(self):
         d = self._project(2024, {"symbol": "QZQ.US", "account": "margin"})
         r = run_ok(self, d)
-        self.assertIn("entry records no quantity", r.stdout + r.stderr)
+        out = r.stdout + r.stderr
+        # Said where the year end decided the size ...
+        self.assertIn("1 entry records no quantity and later rows go "
+                      "shorter (QZQ.US/margin 10)", out)
+        self.assertIn("goes short again on 2025-11-03", out)
         doc = tjs("-C", str(d), "sum", "--json")
         acct = json.loads(doc.stdout)["filing"]["accounts"][0]
         # The 2024 sale of 20 is matched to the 2023 purchase, not to
-        # phantom opening shares the 2025 short would have added (it was
-        # sent to manual reporting, out of the totals).
+        # opening shares the 2025 short would have added (it was sent
+        # to manual reporting, out of the totals).
         self.assertEqual(acct["dispositions"], 1)
         self.assertAlmostEqual(acct["proceeds"], 499.00, places=2)
+        # find-missing-history reports the size the run applies.
+        r = tjs("-C", str(d), "find-missing-history")
+        self.assertIn("the run opens 10 units, the deepest shortage of "
+                      "the rows through 2024-12-31", r.stdout)
 
     @rule("CA-ACB-11")
-    def test_the_engine_sizes_the_first_episode(self):
-        from taxjson.lib.core import TaxTransaction
-        from taxjson.lib.missing_history import (MissingHistoryPairs,
-                                                 synthesize_openings)
+    def test_single_folder_keeps_every_sale_unknown_cost(self):
+        tt = ("BUYSELL 2024-02-01 10:00:00 QZQ.TO -60 CAD 20.00 1190.05 9.95\n"
+              "BUYSELL 2024-04-01 10:00:00 QZQ.TO 100 CAD 21.00 2109.95 9.95\n"
+              "BUYSELL 2024-09-01 10:00:00 QZQ.TO -140 CAD 25.00 3490.05 9.95\n")
+        d = self._project(2024, {"symbol": "QZQ.TO", "account": "margin"},
+                          tt=tt, shared=False, country="canada")
+        r = run_ok(self, d)
+        out = r.stdout + r.stderr
+        # Every row is in the year: the year end decides nothing.
+        self.assertNotIn("records no quantity", out)
+        self.assertNotIn("goes short again", out)
+        doc = json.loads(tjs("-C", str(d), "sum", "--json").stdout)
+        acct = doc["filing"]["accounts"][0]
+        # Both sales draw on a pool holding unknown-cost shares: none
+        # is in the totals.
+        self.assertEqual(acct["dispositions"], 0)
 
-        def tx(date, qty):
-            return TaxTransaction(action="BUYSELL", date=date,
-                                  time="10:00:00", symbol="QZQ.TO",
-                                  quantity=qty, currency="CAD", price=1.0,
-                                  net_amount=-qty, account="margin")
-        txs = [tx("2023-03-01", -10), tx("2023-06-01", 50),
-               tx("2024-08-01", -20), tx("2025-11-03", -100),
-               tx("2025-11-04", 70)]
-        pairs = MissingHistoryPairs({("QZQ.TO", "margin")})
-        _o, applied = synthesize_openings(txs, pairs, flag_stale=False)
-        self.assertEqual(applied[0]["opening_qty"], 10)
-        # A recorded quantity caps it.
-        pairs.quantities[("QZQ.TO", "margin")] = 4.0
-        _o, applied = synthesize_openings(txs, pairs, flag_stale=False)
-        self.assertEqual(applied[0]["opening_qty"], 4.0)
+    @rule("CA-ACB-11")
+    def test_registered_account_never_goes_short(self):
+        tt = ("BUYSELL 2024-02-01 10:00:00 QZQ.TO -60 CAD 20.00 1190.05 9.95\n"
+              "BUYSELL 2024-04-01 10:00:00 QZQ.TO 100 CAD 21.00 2109.95 9.95\n"
+              "BUYSELL 2024-09-01 10:00:00 QZQ.TO -140 CAD 25.00 3490.05 9.95\n")
+        d = self._project(2024, {"symbol": "QZQ.TO", "account": "tfsa"},
+                          tt=tt, shared=False, sheltered=True,
+                          country="canada")
+        r = tjs("-C", str(d), "run", "--no-input", "--strict")
+        out = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, out[-3000:])
+        self.assertNotIn("ATTENTION: short:", out)
+        self.assertNotIn("goes short again", out)
 
     def test_find_missing_history_records_the_quantity(self):
         d = self._project(2024, {"symbol": "QZQ.US", "account": "margin"})
@@ -482,8 +603,10 @@ class TestMissingHistoryFirstEpisode(unittest.TestCase):
                 "--write-missing-history", str(d / "new.json"))
         self.assertEqual(r.returncode, 0, r.stderr)
         rows = json.loads((d / "new.json").read_text())
-        q = {(e["symbol"], e["account"]): e.get("quantity") for e in rows}
-        self.assertEqual(q.get(("QZQ.US", "margin")), 10)
+        q = {(e["symbol"], e["account"]): (e.get("quantity"),
+                                           e.get("_sized_through"))
+             for e in rows}
+        self.assertEqual(q.get(("QZQ.US", "margin")), (10, "2024-12-31"))
 
 
 class TestRedactAYearFolder(unittest.TestCase):

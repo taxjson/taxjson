@@ -1016,7 +1016,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                   spot_crypto: bool = False,
                   country: Optional[str] = None,
                   transfers_as_acquisitions: bool = False,
-                  moves_out: Optional[list] = None):
+                  moves_out: Optional[list] = None,
+                  year: Optional[int] = None):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then missing-history
     opening synthesis. Returns (transactions, sheltered, affiliated,
@@ -1053,8 +1054,12 @@ def prepare_books(transactions, sheltered_transactions=(),
     missing_history_log: list = []
     if incomplete_history:
         mh_pairs = load_missing_history(Path(incomplete_history))
+        # Sized from the rows through the tax year's end (the request's
+        # year, else the project's: missing_history.sizing_until).
+        from taxjson.lib.missing_history import sizing_until
+        _until = sizing_until(year)
         transactions, missing_history_log = synthesize_openings(
-            transactions, mh_pairs)
+            transactions, mh_pairs, until=_until)
         # The wash context too (audit S021-09): a registered or
         # affiliated account with truncated history otherwise looks
         # short here, so its in-window rebuy is not "still held at day
@@ -1064,9 +1069,11 @@ def prepare_books(transactions, sheltered_transactions=(),
         # (Stale-entry ATTENTION lines come from the main book only:
         # a context book's pair is its own account's stage to flag.)
         sheltered_transactions, _sh_log = synthesize_openings(
-            sheltered_transactions, mh_pairs, flag_stale=False)
+            sheltered_transactions, mh_pairs, flag_stale=False,
+            until=_until)
         affiliated_transactions, _af_log = synthesize_openings(
-            affiliated_transactions, mh_pairs, flag_stale=False)
+            affiliated_transactions, mh_pairs, flag_stale=False,
+            until=_until)
         _ctx = {}
         for _label, _log in (('sheltered', _sh_log),
                              ('affiliated', _af_log)):
@@ -1139,11 +1146,19 @@ def prepare_books(transactions, sheltered_transactions=(),
                       f"writes missing_history.json).")
         # A short where none can exist (A2-0395 / A2-0137): the main
         # book's own accounts only — a context book's account says it in
-        # its own stage.
+        # its own stage. A listed pair that goes short only after the
+        # tax year its opening was sized for is said once, as the
+        # missing-history ATTENTION (short_again_message): a later
+        # year's gap, not this year's (CA-ACB-11 / US-BASIS-04).
         _main_accts = {t.account for t in transactions}
+        _later = {(e['symbol'], e['account'])
+                  for e in missing_history_log
+                  if e.get('short_again') and e.get('sized_through')
+                  and e['short_again']['date'] > e['sized_through']}
         for c in candidates:
             if (c.account not in _main_accts or _is_opt(c.symbol)
-                    or c.broker_says_closing):
+                    or c.broker_says_closing
+                    or (c.symbol, c.account) in _later):
                 continue
             if c.registered:
                 _w = _book_words(country)
@@ -1594,7 +1609,7 @@ def run_gains(transactions, sheltered_transactions=(),
             base_currency=HOME_CURRENCY.get(req.country),
             country=req.country,
             transfers_as_acquisitions=req.transfers_as_acquisitions,
-            moves_out=_netted_moves)
+            moves_out=_netted_moves, year=req.year)
 
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()
