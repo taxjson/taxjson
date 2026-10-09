@@ -1978,6 +1978,25 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "cash, shares held elsewhere) adds to the same $100,000, "
                  "so the report, its JSON (scope) and the checklist say "
                  "\"on these books\".", cont=True),
+            Rule("CA-RPT-17",
+                 "Filing position (taxjson's): an option listed in the "
+                 "United States on a Canadian issuer whose US and "
+                 "Canadian listings are one pooled security (a TOBASE "
+                 "line, tobase.map's included, booking the pair under "
+                 "the Canadian listing) follows the pooled listing: it "
+                 "is booked under the Canadian listing's option code and "
+                 "is not counted as specified foreign property. The "
+                 "reasoning: a property that confers a right to acquire "
+                 "another property is specified foreign property when "
+                 "that other property is (s.233.3(1)), and the shares of "
+                 "a corporation resident in Canada are not; the "
+                 "contract's US listing and clearing are not read as "
+                 "making it property held outside Canada. CRA's T1135 "
+                 "guidance does not address listed options. A pair "
+                 "booked under its US line (an issuer the master knows "
+                 "is domiciled outside Canada) keeps its options "
+                 "foreign, and a `T1135 SYMBOL COUNTRY` line in "
+                 "ticker.map sets another country for a contract."),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
                  "the gains engine computes it, day by day over the full "

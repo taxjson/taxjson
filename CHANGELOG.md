@@ -34,6 +34,12 @@
   TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), the
   one the books carry: the two are one listing.
 - IB's `GREY` listing venue is a US listing (`.US`), like `PINK` and `OTC`.
+- T1135 (documentation, no change in behaviour): taxjson's filing position
+  on a US-listed option of a Canadian issuer that a `TOBASE` line pools
+  under its Canadian listing is now stated (tax-logic CA-RPT-17): the
+  option follows the pooled listing and is not specified foreign
+  property, since a right to acquire shares of a Canadian-resident
+  corporation is not; CRA's guidance does not address listed options.
 
 ## v0.26.0 (2026-10-09)
 

@@ -1552,6 +1552,17 @@ T1135 SAMPLW.US   CA      # Canadian corp held on NYSE — not specified foreign
 T1135 GLXY.TO  USA     # foreign corp listed on TSX — still specified foreign property
 ```
 
+Options on a pooled Canadian issuer are a filing position taxjson takes
+(tax-logic CA-RPT-17): a US-listed option on a Canadian issuer whose US and
+Canadian listings one `TOBASE` line (tobase.map's included) pools under the
+Canadian listing is booked under the Canadian listing's option code and is
+not counted as specified foreign property. The reasoning: a right to acquire
+property is caught as specified foreign property when that property is
+(s.233.3(1)), and shares of a corporation resident in Canada are not; the
+contract's US listing and clearing are not read as making it property held
+outside Canada. CRA's T1135 guidance does not address listed options; a
+`T1135` line on the contract's booked symbol sets another country.
+
 Symbols with no market suffix (typically exchange-held crypto) are
 bucketed as country `CRYPTO` and counted toward the threshold: crypto held
 on a foreign exchange is generally specified foreign property, so map each

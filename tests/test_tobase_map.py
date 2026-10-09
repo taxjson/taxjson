@@ -686,5 +686,34 @@ class TestRun(unittest.TestCase):
                                   out)
 
 
+class TestT1135Options(unittest.TestCase):
+
+    @rule("CA-RPT-17")
+    def test_option_on_a_pooled_listing_follows_it(self):
+        # Filing position: a US-listed call on a Canadian issuer pooled
+        # by tobase.map is booked under the Canadian listing's option
+        # code and is not specified foreign property; a call on a US
+        # listing nothing pools stays foreign.
+        tt = ("BUYSELL 2025-02-03 10:00:00 QZAB270115C00010000.US 10 CAD "
+              "150.00 150000.00 0\n"
+              "BUYSELL 2025-02-03 10:00:00 QZZ270115C00010000.US 10 CAD "
+              "120.00 120000.00 0\n")
+        files = {"inputs/margin/m.tt": tt,
+                 "tobase.map": f"TOBASE QZAB.US QZA.TO  # master:{F1}\n",
+                 "ticker.map": ""}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(Path(td), accounts=_ACCTS,
+                                 files=files)["canada"]
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-1500:])
+            t = cli(root, "t1135", "--json")
+        self.assertEqual(t.returncode, 0, t.stderr[-1500:])
+        prop = {p["symbol"]: p for p in json.loads(t.stdout)["properties"]}
+        self.assertEqual(prop["QZZ270115C00010000.US"]["country"], "USA")
+        self.assertNotIn("QZAB270115C00010000.US", prop)
+        pooled = prop.get("QZA270115C00010000.TO")
+        self.assertTrue(pooled is None or not pooled.get("country"), pooled)
+
+
 if __name__ == "__main__":
     unittest.main()
