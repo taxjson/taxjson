@@ -15,15 +15,24 @@ venv/bin/pip install -e ".[fx,dev]"
 venv/bin/pip install --no-deps -e packages/taxjson-fetch
 
 # Pre-push personal-data scan (a push to a public repo IS publication).
-if [ -d .git/hooks ]; then
-  if [ -e .git/hooks/pre-push ] && [ ! -L .git/hooks/pre-push ]; then
-    echo "   NOTE: .git/hooks/pre-push already exists and is not ours — left alone; chain scripts/hooks/pre-push from it."
+# git's own hooks folder: <clone>/.git/hooks, which every worktree of the
+# clone shares (a worktree's .git is a file, so `.git/hooks` is not it).
+HOOKS_PATH="$(git config core.hooksPath || true)"
+COMMON="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [ -n "$HOOKS_PATH" ]; then
+  echo "   NOTE: core.hooksPath=$HOOKS_PATH is set — git runs the hooks there, not .git/hooks; install scripts/hooks/pre-push there."
+elif [ -n "$COMMON" ] && [ -d "$COMMON/hooks" ]; then
+  HOOK="$COMMON/hooks/pre-push"
+  if [ -e "$HOOK" ] && [ ! -L "$HOOK" ]; then
+    echo "   NOTE: $HOOK already exists and is not ours — left alone; chain scripts/hooks/pre-push from it."
+  elif [ -L "$HOOK" ] && [ -e "$HOOK" ]; then
+    echo "   pre-push hook already installed ($HOOK, shared by every worktree of this clone)"
   else
-    ln -sfn ../../scripts/hooks/pre-push .git/hooks/pre-push && echo "   pre-push hook installed (scripts/check-pii.sh)"
+    # Into the clone's own checkout (it outlives any worktree).
+    ln -sfn ../../scripts/hooks/pre-push "$HOOK" && echo "   pre-push hook installed (scripts/check-pii.sh)"
   fi
-  [ -z "$(git config core.hooksPath)" ] || echo "   NOTE: core.hooksPath=$(git config core.hooksPath) is set — git ignores .git/hooks; install scripts/hooks/pre-push there."
 else
-  echo "   NOTE: no .git/hooks directory (worktree?) — install scripts/hooks/pre-push as the pre-push hook by hand."
+  echo "   NOTE: no git hooks folder found — install scripts/hooks/pre-push as the pre-push hook by hand."
 fi
 DENY="$HOME/.config/taxjson/pii-denylist"
 if [ ! -e "$DENY" ]; then

@@ -26,9 +26,33 @@ import io
 import os
 import subprocess
 import sys
-from typing import IO, List, Optional, Tuple
+from typing import IO, List, Optional, Sequence, Tuple
 
 _ENV_FLAG = "TAXJSON_DISPATCH"
+
+# Python < 3.11 has no -P: `-c` puts the current directory first on
+# sys.path too, so the bootstrap drops that entry before it imports
+# anything (runpy included) and then runs the module as `-m` would.
+_SAFE_BOOT = ("import sys\n"
+              "if sys.path[:1] == ['']: del sys.path[0]\n"
+              "import runpy\n"
+              "runpy._run_module_as_main(sys.argv.pop(1))\n")
+
+
+def python_module_argv(module: str, args: Sequence[str] = (), *,
+                       legacy: Optional[bool] = None) -> List[str]:
+    """The argv that runs `python -m <module> ARGS` in a child process
+    WITHOUT the current directory on sys.path. A plain `python -m`
+    imports from the cwd first, so a json.py or csv.py planted in a
+    project folder ran inside `taxjson run`'s child processes (2026-10
+    security review H1). Python 3.11+: `-P`; older: the `-c` bootstrap
+    above. Every taxjson child Python process is launched through here
+    (`legacy` forces the bootstrap, for its test)."""
+    if legacy is None:
+        legacy = sys.version_info < (3, 11)
+    if legacy:
+        return [sys.executable, "-c", _SAFE_BOOT, module, *map(str, args)]
+    return [sys.executable, "-P", "-m", module, *map(str, args)]
 
 
 def tool_module(cmd: List[str]) -> Optional[Tuple[str, List[str]]]:
@@ -65,8 +89,10 @@ def run_cmd(cmd: List[str], *,
             # Out of process through the console-script trampoline: the
             # same one-line errors, umask and pipe handling as
             # `taxjson-<tool>` (re-audit A2-0161).
-            cmd = [cmd[0], "-m", "taxjson.bin._entry",
-                   spec[0].rsplit(".", 1)[-1], *spec[1]]
+            # Never with the cwd on sys.path (python_module_argv).
+            cmd = python_module_argv(
+                "taxjson.bin._entry",
+                [spec[0].rsplit(".", 1)[-1], *spec[1]])
         # Captured output is for a program (a work/ file, a .diag, a
         # caller that parses it): never wrapped (lib/out.unwrapped).
         env = (dict(os.environ, TAXJSON_WIDTH="0")

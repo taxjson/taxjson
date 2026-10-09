@@ -385,7 +385,8 @@ class TestCommand(unittest.TestCase):
             with self.subTest(country=country), \
                     tempfile.TemporaryDirectory() as td:
                 root = Path(td) / "p"
-                r = _cli(Path(td), "init", "--country", country, str(root))
+                r = _cli(Path(td), "init", "--single", "--country", country,
+                         str(root))
                 self.assertEqual(r.returncode, 0, r.stderr)
                 r = _cli(root, "format-map", "--check")
                 self.assertEqual(r.returncode, 0, r.stderr)

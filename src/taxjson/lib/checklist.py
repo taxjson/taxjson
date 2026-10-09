@@ -381,8 +381,10 @@ def default_run_sub(root: Path) -> Callable[..., Tuple[int, str, str]]:
     """Run `taxjson <argv>` on this project as a subprocess (the sub-
     commands sys.exit and print; a subprocess keeps that contained)."""
     def run(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
-        cmd = [sys.executable, "-m", "taxjson.bin.taxjson_run",
-               "-C", str(root)] + argv
+        from taxjson.lib.dispatch import python_module_argv
+        # Never with the project folder on sys.path (security review H1).
+        cmd = python_module_argv("taxjson.bin.taxjson_run",
+                                 ["-C", str(root), *argv])
         try:
             p = subprocess.run(cmd, capture_output=True, text=True,
                                stdin=subprocess.DEVNULL, timeout=timeout,
@@ -479,6 +481,44 @@ def _git(root: Path, *args: str) -> Tuple[int, str]:
     except (OSError, subprocess.TimeoutExpired):
         return 127, ""
     return p.returncode, (p.stdout or "")
+
+
+# Repo-local git config that makes `git status` run a command (a clean /
+# smudge / process filter, picked by .gitattributes) or read attributes
+# from elsewhere; diff textconv / command are refused too (2026-10
+# security review M3). The user's own global / system config (git-lfs)
+# is trusted.
+_GIT_COMMAND_KEYS = (r"^(filter\..*\.(clean|smudge|process)"
+                     r"|diff\..*\.(textconv|command)"
+                     r"|core\.attributesfile)$")
+
+
+def _git_refusal(root: Path) -> Optional[str]:
+    """Why the git checks are not run in this repository (a repo-local
+    config key that would make git run a command), or None. Reading
+    the config runs nothing."""
+    code, out = _git(root, "config", "--show-scope", "--includes",
+                     "--get-regexp", _GIT_COMMAND_KEYS)
+    if code not in (0, 1):                  # git before 2.26: no scope
+        code, out = _git(root, "config", "--local", "--includes",
+                         "--get-regexp", _GIT_COMMAND_KEYS)
+        out = "".join(f"local\t{ln}\n" for ln in out.splitlines())
+    for ln in out.splitlines():
+        scope, _, rest = ln.partition("\t")
+        key = rest.split(None, 1)[0] if rest.strip() else ""
+        if key and scope not in ("global", "system", "command"):
+            return (f"not checked: this repository's own git config sets "
+                    f"{key}, a command git would run — remove it "
+                    f"(`git config --unset {key}`) or check `git status` "
+                    f"yourself")
+    return None
+
+
+def _git_status(root: Path, *paths: str) -> Tuple[int, str]:
+    """`git status --porcelain -- paths` with no submodule recursion
+    (a submodule's own config is not looked at)."""
+    return _git(root, "status", "--porcelain", "--ignore-submodules=all",
+                "--", *paths)
 
 
 def _is_git_repo(root: Path) -> bool:
@@ -733,6 +773,9 @@ def d_inputs_committed(ctx: Ctx) -> Result:
     paths = ["inputs", "taxjson.toml", "ticker.map", "missing_history.json",
              "phantoms.json"]
     paths = [p for p in paths if (ctx.root / p).exists()]
+    refused = _git_refusal(ctx.root)
+    if refused:
+        return Result("inputs-committed", "blocked", refused)
     if _PL.shared_inputs(ctx.root):
         # The exports every year shares (lib/project_layout): git takes
         # a path beside the year folder in the same repository; a
@@ -750,7 +793,7 @@ def d_inputs_committed(ctx: Ctx) -> Result:
         paths += [_os.path.relpath(shared, ctx.root)]
         if _PL.slips_dir(ctx.root).exists():
             paths.append(_PL.SLIPS)
-    code, out = _git(ctx.root, "status", "--porcelain", "--", *paths)
+    code, out = _git_status(ctx.root, *paths)
     dirty = [ln for ln in out.splitlines() if ln.strip()]
     if code != 0:
         return Result("inputs-committed", "attention", "git status failed")
@@ -2309,7 +2352,10 @@ def d_lock_committed(ctx: Ctx) -> Result:
         return st
     if not _is_git_repo(ctx.root):
         return Result("lock-committed", "attention", "not a git repository")
-    code, out = _git(ctx.root, "status", "--porcelain", "--", "filed")
+    refused = _git_refusal(ctx.root)
+    if refused:
+        return Result("lock-committed", "blocked", refused)
+    code, out = _git_status(ctx.root, "filed")
     if out.strip():
         return Result("lock-committed", "todo", "filed/ has uncommitted changes")
     return Result("lock-committed", "done", "committed")

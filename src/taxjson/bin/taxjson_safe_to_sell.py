@@ -74,9 +74,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         except ValueError:
             parser.error(f"--date {args.date!r} is not a valid YYYY-MM-DD date")
 
-    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
-           "--taxable", *args.taxable, "--all", "--json",
-           "--country", args.country]
+    from taxjson.lib.dispatch import python_module_argv
+    # Never with the cwd on sys.path (security review H1).
+    cmd = python_module_argv("taxjson.bin.taxjson_wash_radar", [
+        "--taxable", *args.taxable, "--all", "--json",
+        "--country", args.country])
     if args.sheltered:
         cmd += ["--sheltered", *args.sheltered]
     if args.date:

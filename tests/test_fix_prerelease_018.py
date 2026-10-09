@@ -301,7 +301,7 @@ class TestInitDanglingSymlink(unittest.TestCase):
             outside.mkdir()
             for rel in ("ticker.map", ".gitignore"):
                 (root / rel).symlink_to(outside / rel)
-            r = cli(root, "init", "--country", "canada")
+            r = cli(root, "init", "--single", "--country", "canada")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(list(outside.iterdir()), [])
             self.assertTrue((root / "ticker.map").is_symlink())

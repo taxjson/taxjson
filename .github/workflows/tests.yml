@@ -5,7 +5,9 @@ name: tests
 # PII, suite, fuzz) for pull requests on the public repo. The PII stage
 # here has no private denylist, so it applies the generic patterns
 # (account-id shapes, home paths, e-mails, credentials) — enough to stop
-# a PR that carries a real-looking id before it is merged. macOS runners
+# a PR that carries a real-looking id before it is merged — to the tree
+# and, on a pull request, to every commit it adds (patch, message,
+# identities), as the pre-push hook does. macOS runners
 # are excluded to keep the matrix fast.
 on:
   push:
@@ -16,7 +18,8 @@ on:
   schedule:
     - cron: "17 6 * * *"     # nightly deep fuzz (UTC)
 
-# The workflow only reads the repository.
+# The workflow only reads the repository. Actions are pinned to a full
+# commit SHA (a moved tag cannot change what runs), the version beside it.
 permissions:
   contents: read
 
@@ -28,11 +31,11 @@ jobs:
     name: ruff (critical tier)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      - run: pip install ruff==0.16.8      # pinned: a new release cannot change the gate
       - run: ruff check --select E9,F63,F7,F82 src/ tests/ packages/
 
   gates:
@@ -41,14 +44,45 @@ jobs:
     name: consistency / tax-rules / pii
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.12"
       - run: pip install -e .
       - run: bash scripts/check-consistency.sh
       - run: python scripts/check_tax_rules.py
       - run: bash scripts/check-pii.sh
+
+  pr-commits:
+    # Every commit a pull request adds — its patch, message and author /
+    # committer identities — as the pre-push hook checks a push: the tree
+    # scan above sees only the final tree, and a value one commit adds
+    # and a later one removes is still published by the merge. Generic
+    # patterns only (no private files here). The scanner is the BASE
+    # branch's copy, so a pull request cannot weaken the check it is
+    # judged by.
+    if: github.event_name == 'pull_request'
+    name: pii / pull-request commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan the pull request's commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pii/scripts"
+          check="$RUNNER_TEMP/pii/scripts/check-pii.sh"
+          git show "$BASE_SHA:scripts/check-pii.sh" > "$check"
+          range="$BASE_SHA..$HEAD_SHA"
+          git log -p --no-merges --format='' "$range" -- | bash "$check" --diff
+          git log --no-merges --format=%B "$range" | bash "$check" --message
+          git log --no-merges --format='%an <%ae>%n%cn <%ce>' "$range" \
+            | sort -u | bash "$check" --identity
 
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -60,10 +94,10 @@ jobs:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -78,7 +112,7 @@ jobs:
       # The broker-fetch plugin, installed the way a user installs it.
       - name: Install and test taxjson-fetch
         run: |
-          pip install -e packages/taxjson-fetch
+          pip install --no-deps -e packages/taxjson-fetch
           python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py"
 
 
@@ -90,8 +124,8 @@ jobs:
     name: ubuntu / 3.12 / all extras
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.12"
       - name: Install package with all extras
@@ -109,8 +143,8 @@ jobs:
     name: ubuntu / 3.12 / nightly fuzz
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.12"
       - run: pip install -e .

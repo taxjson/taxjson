@@ -32,7 +32,7 @@ class TestOwnerOnlyModes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             proj = Path(tmp) / "proj"
             r = _run_loose(["taxjson.bin.taxjson_run", "init", str(proj),
-                            "--country", "canada"], cwd=REPO_ROOT)
+                            "--single", "--country", "canada"], cwd=REPO_ROOT)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(_mode(proj / "taxjson.toml"), 0o600)
             dirs = [d for d in (proj / "inputs").iterdir() if d.is_dir()]

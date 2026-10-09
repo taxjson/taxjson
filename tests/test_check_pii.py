@@ -341,6 +341,37 @@ class TestLowRoundGaps(_Sandbox):
         self.assertIn("file NAME carries an account-id shape", r.stdout)
         self.assertNotIn(_REAL_U, r.stdout)
 
+    # 2026-10 security review M6: the credential stage is
+    # case-insensitive and knows the broker tokens taxjson-fetch takes.
+    def test_credential_stage_broker_tokens_any_case(self):
+        tok = "aB3dE5" * 3                     # synthetic, 18 characters
+        digits = "4071" * 6                    # a flex-token shape
+        hits = [
+            "TOKEN" + "=" + tok + "x" * 4,
+            "Api_Key: " + tok + "x" * 4,
+            "taxjson fetch --refresh" + "-token " + tok,
+            "taxjson fetch --flex" + "-token=" + digits,
+            "export QUESTRADE_REFRESH" + "_TOKEN=" + tok,
+            "IBKR_FLEX" + "_TOKEN='" + digits + "'",
+            "my_flex" + "_token = " + tok,
+        ]
+        for text in hits:
+            r = self.scan("--text", stdin=text + "\n")
+            self.assertEqual(r.returncode, 1, text)
+            self.assertIn("credential-looking string", r.stdout)
+            self.assertNotIn(tok, r.stdout)
+            self.assertNotIn(digits, r.stdout)
+        misses = [
+            "taxjson fetch --refresh" + "-token YOUR_REFRESH_TOKEN",
+            "taxjson fetch --flex" + "-token \"$IBKR_FLEX_TOKEN\"",
+            "export QUESTRADE_REFRESH" + "_TOKEN=\"$(pass show qt)\"",
+            "IBKR_FLEX" + "_TOKEN=<your token>",
+            "--refresh" + "-token short",
+        ]
+        for text in misses:
+            r = self.scan("--text", stdin=text + "\n")
+            self.assertEqual(r.returncode, 0, text + r.stdout)
+
     # S024-11: account numbers under an Account column, and Webull's
     # bilingual label.
     def test_account_column_and_bilingual_label(self):
@@ -1077,6 +1108,32 @@ class TestReleaseAndCiGates(unittest.TestCase):
         for doc in ("scripts/ci.sh", "CONTRIBUTING.md"):
             self.assertNotIn("private repo", (REPO_ROOT / doc).read_text())
 
+    def test_workflow_scans_every_pull_request_commit(self):
+        # Security review M7: patch, message and identities of each
+        # commit, with the base branch's scanner; read-only token.
+        wf = (REPO_ROOT / ".github" / "workflows" / "tests.yml").read_text()
+        self.assertIn("\npermissions:\n  contents: read\n", wf)
+        job = wf[wf.index("\n  pr-commits:\n"):]
+        job = job[:job.index("\n  test:\n")]
+        self.assertIn("if: github.event_name == 'pull_request'", job)
+        self.assertIn("fetch-depth: 0", job)
+        run = job[job.index("run: |"):]
+        for part in ('git show "$BASE_SHA:scripts/check-pii.sh"',
+                     "git log -p --no-merges", "--diff", "--message",
+                     "--identity", 'range="$BASE_SHA..$HEAD_SHA"'):
+            self.assertIn(part, run)
+        self.assertNotIn("${{", run)          # event data only via env
+
+    def test_workflow_actions_pinned_by_sha(self):
+        # Security review LOW (j): a moved tag cannot change what runs.
+        import re
+        wf = (REPO_ROOT / ".github" / "workflows" / "tests.yml").read_text()
+        uses = re.findall(r"uses:\s*(\S+)(.*)", wf)
+        self.assertTrue(uses)
+        for ref, rest in uses:
+            self.assertRegex(ref, r"@[0-9a-f]{40}$", ref)
+            self.assertRegex(rest, r"#\s*v\d+\.\d+\.\d+", ref)
+        self.assertRegex(wf, r"pip install ruff==\d+\.\d+\.\d+")
 
 if __name__ == "__main__":
     unittest.main()

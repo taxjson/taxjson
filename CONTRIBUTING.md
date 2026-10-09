@@ -68,6 +68,9 @@ Mark a genuine false positive with a `# pii-ok` (or `pii-ok:`) comment on that
 line — the bare word does not count; bypass knowingly with
 `git push --no-verify`. Fixtures must be synthetic: fake account ids
 (`U1234567`, `99900001`), made-up ISINs, no real statements.
+A pull request gets the same check in CI with the generic patterns: every
+commit it adds (patch, message, author and committer identities), so
+commit with your GitHub `…@users.noreply.github.com` address.
 
 **Never put figures, ids or names from a real person's books into code,
 tests, docs, the CHANGELOG or commit messages** — yours or anyone else's.
@@ -138,11 +141,20 @@ Or use the wrapper:
 The broker-fetch plugin (`packages/taxjson-fetch`) has its own tests;
 they run from a checkout without installing the plugin (its
 `tests/_support.py` registers the entry point for the run), or after
-`pip install -e packages/taxjson-fetch`:
+`pip install --no-deps -e packages/taxjson-fetch` (after the core: `--no-deps`
+keeps pip from fetching a `taxjson` from PyPI to meet its dependency):
 
 ```bash
 PYTHONPATH=packages/taxjson-fetch/src python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" </dev/null
 ```
+
+Run taxjson on a project with the `taxjson` (`tjs`) console script, not
+`python -m taxjson.bin.taxjson_run` from inside the project folder:
+`python -m` puts the current directory first on `sys.path`, so a
+`json.py` or `csv.py` lying in the project would be imported and run
+(`python -P -m ...` on Python 3.11+ is safe). Code that starts a child
+Python process uses `taxjson.lib.dispatch.python_module_argv`, never
+`[sys.executable, "-m", ...]`.
 
 ### The full gate: `scripts/ci.sh`
 

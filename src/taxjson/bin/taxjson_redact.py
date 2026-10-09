@@ -10,7 +10,8 @@ What it changes, and nothing else:
     `"Account: 12345678 - Margin"` headers, Fidelity/Schwab-style
     `Z12345678` / `1234-5678` values in an account column, alphanumeric
     ids (`Account Number: 5MV07654`), any `account|acct|a/c … <id>` or
-    `transfer from|to [acct] <id>` phrase, `account = "<id>"` /
+    `transfer from|to [acct] <id>` phrase, an 8-digit number after a
+    broker's name (`Questrade 12345678`), `account = "<id>"` /
     `broker_account = "<id>"` / `"account_id": "<id>"` keys — each distinct id becomes a
     stable placeholder of the SAME shape (`U99900001`, `99900001`,
     `9990-0002`) and every occurrence in the file, descriptions
@@ -34,8 +35,10 @@ What it changes, and nothing else:
     lines, Canadian postal
     codes, street addresses, SIN-shaped (Luhn-valid) and SSN-shaped
     numbers;
-  * crypto — wallet addresses (bc1…, legacy 1…/3… base58, 0x + 40 hex),
-    on-chain transaction hashes and exchange transaction ids (Kraken
+  * crypto — wallet addresses (bc1…, legacy 1…/3… base58, 0x + 40 hex,
+    Solana base58, Cardano addr1…, XRP r…, Tron T…, Litecoin L…/M…/
+    ltc1…; any other 25+ character base58 / bech32 token is listed
+    for review), on-chain transaction hashes and exchange transaction ids (Kraken
     txid/refid, Coinbase ids, UUIDs): each distinct value becomes a
     stable same-shape pseudonym, shared by every file of one run, so
     rows that shared an id still share one (a Kraken trade's txid and
@@ -62,7 +65,9 @@ The report shows placeholders and id lengths, never the ids, checks
 that no collected id is left in the copy (any left over is counted and
 its lines listed for review), and lists
 (by line number only) the free-text lines that still hold name-like
-words or long digit runs it did not redact. `--check` writes nothing
+words (Title Case, 2-4 upper-case words that are no statement or
+security vocabulary, a `LAST, FIRST` cell) or long digit runs it did
+not redact. `--check` writes nothing
 and exits 1 when it finds anything to redact.
 
 With no FILE (`taxjson redact`, in a project or with -C DIR) the whole
@@ -82,6 +87,7 @@ import io
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 from taxjson.lib import project_layout as _PL
@@ -95,6 +101,20 @@ _ACCOUNT_PHRASE = re.compile(
     r"((?:\b(?:account|acct|a/c)\.?(?:\s*(?:#|number|num|no\.?|id))?\s*[:#]?\s*)"
     r"|(?:\btransfer(?:red)?\s+(?:from|to)\s+(?:(?:account|acct|a/c)\.?\s*)?(?:#\s*)?))"
     r"([A-Za-z0-9][A-Za-z0-9-]{4,16}[A-Za-z0-9])(?![A-Za-z0-9]|\.\d)",
+    re.IGNORECASE)
+# An 8-digit number right after a broker's name is that broker's
+# account number ("Transfer from Questrade <8 digits>", "TD <8 digits>"),
+# the shape Questrade, RBC, TD and the other Canadian dealers use
+# (2026-10 security review M5).
+_BROKER_ACCOUNT = re.compile(
+    r"\b(?:questrade|rbc(?:\s+direct(?:\s+investing)?)?|td(?:\s+direct"
+    r"(?:\s+investing)?|\s+waterhouse)?|bmo(?:\s+investorline)?|cibc"
+    r"(?:\s+investor'?s\s+edge)?|scotia(?:\s+itrade)?|itrade|national\s+bank"
+    r"(?:\s+direct(?:\s+brokerage)?)?|nbdb|qtrade|wealthsimple|desjardins"
+    r"|disnat|interactive\s+brokers|ibkr|webull|fidelity|schwab|vanguard"
+    r"|e\*?trade|hsbc(?:\s+investdirect)?|virtual\s+brokers|cibc)"
+    r"(?:\s+(?:inc|ltd|canada))?\.?\s*(?:account|acct|a/c)?\s*"
+    r"(?:#|no\.?|number)?\s*[:#-]?\s*(\d{8})(?!\d|\.\d)",
     re.IGNORECASE)
 # A config / JSON key naming an account: `broker_account = "..."` (the
 # live-holdings TOML fetch/verify write), `account = "..."`,
@@ -401,13 +421,28 @@ _US_ZIP_CELLS = re.compile(
 _SSN = re.compile(r"(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])")
 
 # Crypto wallets and transaction ids (pseudonymised, stable per value).
+# The un-prefixed base58 shapes (XRP r…, Tron T…, Litecoin L…/M…,
+# Solana's bare 32-44) are taken only when _plausible_wallet agrees
+# (mixed case and a digit), so a long upper-case word is never one
+# (2026-10 security review M4).
+_B58 = "1-9A-HJ-NP-Za-km-z"
 _WALLET = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"(?:bc1|tb1|ltc1)[ac-hj-np-z02-9]{11,87}"                    # bech32
     r"|(?:BC1|TB1|LTC1)[AC-HJ-NP-Z02-9]{11,87}"                   # BECH32 (A2-0452)
+    r"|(?:addr1|stake1)[ac-hj-np-z02-9]{40,110}"                  # Cardano
     r"|0x[0-9a-fA-F]{40}(?![0-9a-fA-F])"                          # EVM
-    r"|[13][a-km-zA-HJ-NP-Z1-9]{25,34}"                           # base58
+    r"|[13][a-km-zA-HJ-NP-Z1-9]{25,34}"                           # base58 BTC
+    rf"|[rTLM][{_B58}]{{24,34}}"                                  # XRP/Tron/LTC
+    rf"|[{_B58}]{{32,44}}"                                        # Solana
     r")(?![A-Za-z0-9])")
+# What still looks like an address after the patterns above: 25+
+# base58 characters, or a bech32 string (hrp + '1' + data) — listed
+# for REVIEW, never replaced (a wallet of a chain taxjson has no
+# pattern for).
+_WALLETISH = re.compile(
+    rf"(?<![A-Za-z0-9])(?:[{_B58}]{{25,}}"
+    r"|[a-z]{1,10}1[ac-hj-np-z02-9]{25,})(?![A-Za-z0-9])")
 _BECH32 = re.compile(r"(?:bc1|tb1|ltc1)[ac-hj-np-z02-9]{11,87}", re.IGNORECASE)
 _TXID = re.compile(
     r"(?<![A-Za-z0-9-])(?:"
@@ -536,12 +571,13 @@ def _pseudonym(orig: str, n: int) -> str:
     9990-prefixed counter — hex-valid, never a real address."""
     keep = 0
     low = orig.lower()
-    for pre in ("0x", "bc1", "tb1", "ltc1"):
+    for pre in ("0x", "bc1", "tb1", "ltc1", "addr1", "stake1"):
         if low.startswith(pre):
             keep = len(pre)
             break
     else:
-        if _WALLET.fullmatch(orig) and orig[:1] in "13":
+        if _WALLET.fullmatch(orig) and orig[:1] in "13rTLM" \
+                and len(orig) <= 35:
             keep = 1
     body_len = sum(c.isalnum() for c in orig[keep:])
     fill = ("9990" + str(n).zfill(max(body_len - 4, 1)))[-body_len:] if body_len else ""
@@ -552,12 +588,26 @@ def _pseudonym(orig: str, n: int) -> str:
 
 def _plausible_wallet(v: str) -> bool:
     """A base58 match must look like an address (mixed case plus a
-    digit), not a long upper-case word that happens to start with 1/3."""
-    if v[:1] not in "13":
+    digit), not a long upper-case word that happens to start with 1/3
+    (or r / T / L / M, or Solana's bare base58)."""
+    low = v.lower()
+    if low.startswith(("0x", "bc1", "tb1", "ltc1", "addr1", "stake1")):
         return True
     body = v[1:]
     return (any(c.islower() for c in body) and any(c.isupper() for c in body)
             and any(c.isdigit() for c in body))
+
+
+def _wallet_like(v: str) -> bool:
+    """A _WALLETISH token that is not one of this redactor's stand-ins
+    (a prefix kept, the rest 9990-counter digits): a bech32 string, or
+    base58 mixing upper case, lower case and digits."""
+    if "9990" in v and sum(c.isdigit() for c in v) >= len(v) - 6:
+        return False
+    if re.fullmatch(r"[a-z]{1,10}1[ac-hj-np-z02-9]{25,}", v):
+        return True
+    return (any(c.islower() for c in v) and any(c.isupper() for c in v)
+            and any(c.isdigit() for c in v))
 
 
 def _luhn_ok(digits: str) -> bool:
@@ -620,6 +670,18 @@ def _is_phrase_id(v: str) -> bool:
     return not any(c.islower() for c in v)
 
 
+def _is_broker_account(v: str) -> bool:
+    """8 digits after a broker's name: an account number unless it is a
+    real YYYYMMDD date."""
+    if not re.fullmatch(r"\d{8}", v):
+        return False
+    try:
+        datetime.strptime(v, "%Y%m%d")
+        return not 1900 <= int(v[:4]) <= 2100
+    except ValueError:
+        return True
+
+
 def _collect_ids(lines: List[str]) -> List[str]:
     ids: List[str] = []
     seen = set()
@@ -646,6 +708,8 @@ def _collect_ids(lines: List[str]) -> List[str]:
             add(m.group(2), _is_phrase_id)
         for m in _ACCOUNT_KEY.finditer(line):
             add(m.group(1))
+        for m in _BROKER_ACCOUNT.finditer(line):
+            add(m.group(1), _is_broker_account)
         cells = _split(line.rstrip("\r\n"))
         if not cells:
             continue
@@ -865,6 +929,54 @@ def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     return line
 
 
+# The currency codes an upper-case phrase of a statement is made of
+# ("USD CAD"), never a name.
+_CCY = frozenset("usd cad eur gbp jpy chf aud nzd hkd cny sgd mxn sek nok dkk "
+                 "btc eth".split())
+# Words of a security's name that a person's name does not carry: an
+# upper-case run holding one is a description, not a name.
+_SECURITY_WORDS = frozenset("""
+adr ads ag all-equity balanced bancorp banks bitcoin canada cl class cdn co
+covered digital emerging energy enhanced equity equal etn fin financial
+gambit global gold growth hedged high holdings hldgs intl international
+lp miners mining mgmt nv participation partners plc reit resources sa
+silver sponsored sub svgs technologies technology tr uranium units unit
+voting vtg weight yield ylt""".split())
+_CAPS_WORD = re.compile(rf"[{_UP}][{_UP}'’-]*\.?,?")
+# "Sample, Jane" / "SAMPLE, JANE Q": a whole cell that is a surname, a
+# comma and a given name (and an initial).
+_LAST_FIRST = re.compile(
+    rf"[{_UP}][{_AL}'’-]+,[ \t]*[{_UP}][{_AL}'’-]+(?:[ \t]+[{_UP}]\.?)?")
+
+
+def _caps_name(text: str) -> bool:
+    """2-4 upper-case words standing alone ("JANE Q SAMPLE"): none of
+    them statement vocabulary or a currency, at least two of 2+ letters,
+    and not part of a longer upper-case phrase — a word run joined to a
+    ticker, a number or punctuation ("ISHARES CORE S&P 500") is a
+    security's description, not a name (2026-10 security review M5)."""
+    seg: List[str] = []
+
+    def judge(seg: List[str]) -> bool:
+        if not 2 <= len(seg) <= 4 or not all(_CAPS_WORD.fullmatch(t)
+                                             for t in seg):
+            return False
+        words = [t.strip(".,").lower() for t in seg]
+        if any(w in _VOCAB or w in _CCY or w in _SECURITY_WORDS
+               or w == "redacted" for w in words):
+            return False
+        return sum(len(w) >= 2 for w in words) >= 2
+
+    for tok in text.split():
+        if any(c.islower() for c in tok):
+            if judge(seg):
+                return True
+            seg = []
+        else:
+            seg.append(tok)
+    return judge(seg)
+
+
 def _review(lineno: int, text: str, where: str, rep: Report) -> None:
     for ph in (*rep.accounts.values(), *rep.wallets.values(), *rep.txids.values()):
         if ph in text:
@@ -875,6 +987,12 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
         if not any(w in _VOCAB for w in words):
             reasons.append("name-like words")
             break
+    if not reasons:
+        last_first = _LAST_FIRST.fullmatch(text.strip())
+        if (last_first and not any(
+                w.strip(".,").lower() in _VOCAB | _CCY
+                for w in text.split())) or _caps_name(text):
+            reasons.append("name-like words")
     for m in _REVIEW_DIGITS.finditer(text):
         tok = m.group(0)
         if "9990" not in tok[:5] and not _DATE8.fullmatch(tok):
@@ -1211,6 +1329,9 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             rep.emails += k
         line = _WALLET.sub(wallet_repl, line)
         line = _TXID.sub(txid_repl, line)
+        if any(_wallet_like(m.group(0)) for m in _WALLETISH.finditer(line)):
+            rep.review.append((lineno, "a wallet-like token (25+ base58 / "
+                                       "bech32 characters) not replaced"))
         if not header_row:
             line = _redact_contact(line, rep, lineno)
         for pat in compiled:
@@ -1500,10 +1621,26 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
         raise SystemExit(exit_text(f"taxjson redact: {dst} is a symlink — refusing to write through it"))
     if dst.exists() and not force:
         raise SystemExit(exit_text(f"taxjson redact: {dst} exists (use --force to overwrite)"))
-    with open(dst, "w", encoding="utf-8", newline="") as fh:
-        if bom:
-            fh.write("﻿")
-        fh.write(new)
+    # The checks above can be raced (a link planted after them): the
+    # write itself never follows a symlink. A new copy is created with
+    # O_CREAT | O_EXCL | O_NOFOLLOW (anything that appeared at the name
+    # refuses); --force replaces the name through a temp file of its own
+    # (lib/safe_write), never opening what is there (2026-10 security
+    # review LOW g).
+    from taxjson.lib import safe_write
+    data = ("﻿" if bom else "") + new
+    if force:
+        safe_write.write_atomic(dst, data, encoding="utf-8", newline="")
+    else:
+        try:
+            fd = os.open(str(dst), os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError:
+            raise SystemExit(exit_text(
+                f"taxjson redact: {dst} appeared while redacting — "
+                f"nothing written (use --force to overwrite)")) from None
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(data)
     if written is not None:
         written.add(dst.resolve())
     return dst, rep
@@ -1634,6 +1771,15 @@ class _TreeFile:
         self.swept = 0
 
 
+def _inside(p: Path, folder: Path) -> bool:
+    """Whether `p` resolves to a place inside `folder`."""
+    try:
+        p.resolve(strict=True).relative_to(folder.resolve())
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
     """(folders, files, hidden-entry count) of `src`, relative to it,
     sorted. Hidden entries and Office lock files are left out (the run
@@ -1675,6 +1821,11 @@ def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
             tf = _TreeFile(rel_here / n)
             if p.is_symlink() and not p.exists():
                 tf.skip = "a symlink to a file that does not exist"
+            elif p.is_symlink() and not _inside(p, src):
+                # Its target is not one of your exports: a link to a
+                # private file elsewhere would land in the shared copy
+                # (2026-10 security review LOW g).
+                tf.skip = "a symlink to a file outside inputs/ (not followed)"
             elif not p.is_file():
                 tf.skip = "not a regular file"
             files.append(tf)

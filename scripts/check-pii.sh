@@ -742,7 +742,18 @@ report "social insurance number (labelled SIN / NAS, valid check digit)" \
   '(\b([Ss][Ii][Nn]|NAS)\b|[Ss]ocial [Ii]nsurance|[Aa]ssurance [Ss]ociale)[^0-9A-Za-z]{0,10}([Nn]umber|[Nn]o|[Nn]um.{1,2}ro)?[^0-9A-Za-z]{0,20}[0-9]{3}[ .-]?[0-9]{3}[ .-]?[0-9]{3}([^0-9]|$)' '' sin_label_filter
 report "social security number (labelled SSN / TIN / Tax ID)" \
   '(\b(SSN|I?TIN)\b|\b[Tt]ax ?[Ii][Dd]\b|[Ss]ocial [Ss]ecurity)[^0-9A-Za-z]{0,10}([Nn]umber|[Nn]o)?[^0-9A-Za-z]{0,20}[0-9]{3}[ .-]?[0-9]{2}[ .-]?[0-9]{4}([^0-9]|$)' '' ssn_filter
-report "credential-looking string"                      'ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}' ''
+# Case-insensitive (CI=-i also hides the hit's content): `TOKEN=`,
+# `Api_Key:` and `SECRET =` as well as the lower-case spellings. The
+# broker tokens taxjson-fetch takes: `--refresh-token <tok>` /
+# `--flex-token=<tok>` and a QUESTRADE_REFRESH_TOKEN / *_FLEX_TOKEN
+# assignment (exported or not) with a value of 12+ characters. An
+# all-capitals placeholder value (YOUR_REFRESH_TOKEN) is not a token
+# (2026-10 security review M6).
+CRED_RE='ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}|--(refresh|flex)-token[ =]["'"'"']?[A-Za-z0-9_.-]{12,}|(questrade_refresh_token|[a-z0-9_]*flex_token)[ ]*=[ ]*["'"'"']?[A-Za-z0-9_.-]{12,}'
+CRED_PLACEHOLDER='(--[Rr][Ee][Ff][Rr][Ee][Ss][Hh]-[Tt][Oo][Kk][Ee][Nn][ =]|--[Ff][Ll][Ee][Xx]-[Tt][Oo][Kk][Ee][Nn][ =]|[Tt][Oo][Kk][Ee][Nn]["'"'"' ]*[=:])["'"'"' ]*[A-Z_]{12,}([^A-Za-z0-9_.-]|$)'
+CI="-i"
+report "credential-looking string"                      "$CRED_RE" "$CRED_PLACEHOLDER"
+CI=""
 # A commit or tag MESSAGE (--message) never quotes a money amount with
 # thousands separators and cents (1,234,567.89): owner-book totals once
 # reached the public history that way (A2-1384). A synthetic number in a

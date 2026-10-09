@@ -901,6 +901,7 @@ def load_config(root: Path) -> Dict[str, Any]:
                      f"folder).")
     except Exception as e:
         _die(f"{path} is not valid TOML: {e}")
+    _refuse_outside_dir_links(root, cfg.get("accounts") or {})
     _refuse_bad_account_types(cfg)
     _normalize_settings(cfg)
     _refuse_folder_settings(root, cfg)
@@ -3805,6 +3806,36 @@ def cmd_migrate(args: argparse.Namespace) -> None:
             "*.migrated files once you are satisfied; run `taxjson run` to "
             "rebuild.", indent="  "):
         print(_ln)
+
+
+# The folders taxjson writes into: generated state, reports, the filed
+# lock, and the account folders (elections manifest, crypto_sends.tt).
+_WRITTEN_DIRS = ("work", "reports", "filed", "export", "inputs")
+
+
+def _refuse_outside_dir_links(root: Path, accounts: Dict[str, Any]) -> None:
+    """Die (exit 2) when a folder taxjson writes into is a symlink that
+    leaves the project: the books, reports and elections would land in
+    whatever it points at (2026-10 security review LOW c). A link inside
+    the project is kept, as for ticker.map (safe_write.link_outside)."""
+    from taxjson.lib.safe_write import link_outside
+    names = list(_WRITTEN_DIRS) + [f"inputs/{a}" for a in accounts]
+    bad = []
+    for n in names:
+        # (inputs/ shared by every year — lib/project_layout — is judged
+        # against the folder holding the year folders)
+        p = _PL.project_path(root, n)
+        target = link_outside(p, root if p.is_relative_to(root)
+                              else _PL.write_boundary(root))
+        if target is not None:
+            bad.append(f"{n}/ -> {target}")
+    if bad:
+        _die_input("folder(s) that are symlinks to outside the project — "
+                   "taxjson writes there; nothing was run:\n    "
+                   + "\n    ".join(bad),
+                   "Replace each link with a real folder (move its "
+                   "contents in), or run in the folder the link points "
+                   "into.")
 
 
 def _refuse_unreadable_project_inputs(root: Path) -> None:
@@ -6844,6 +6875,31 @@ def _warn_year_without_activity(year: Any, bases: List[Path]) -> None:
 _RUN_LOCK_FH = None
 
 
+def _loose_project_dirs(root: Path) -> List[str]:
+    """The project folder, inputs/ and reports/ when another user may
+    read or write them (group / other bits): taxjson creates them 0700,
+    an older release or a copy did not (2026-10 security review LOW f).
+    Empty on Windows."""
+    import os
+    if os.name == "nt":
+        return []
+    out = []
+    for p, shown in ((root, "the project folder"), (root / "inputs",
+                                                    "inputs/"),
+                     (root / "reports", "reports/")):
+        try:
+            if p.is_dir() and p.stat().st_mode & 0o066:
+                out.append(shown)
+        except OSError:
+            continue
+    return out
+
+
+def _shell_quote(p: Path) -> str:
+    import shlex
+    return shlex.quote(str(p))
+
+
 def _acquire_run_lock(cache: Path) -> None:
     """Hold an exclusive lock on work/.run.lock for the life of this
     process (released by the OS when it exits, however it exits). A
@@ -6853,22 +6909,22 @@ def _acquire_run_lock(cache: Path) -> None:
     global _RUN_LOCK_FH
     if _RUN_LOCK_FH is not None:
         return                          # `taxjson run run` chains
-    try:
-        import fcntl
-    except ImportError:                 # pragma: no cover — Windows
-        return
-    try:
-        fh = open(cache / ".run.lock", "a+", encoding="utf-8")
-    except OSError:
-        return
-    try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        fh.close()
+    # safe_write.file_lock: created owner-only and never through a
+    # symlink (a planted work/.run.lock link was opened "a+", creating
+    # or appending to its target; 2026-10 security review LOW b).
+    import contextlib
+    from taxjson.lib.safe_write import LockLinkError, file_lock
+
+    def busy() -> None:
         _die("another `taxjson run` is in progress in this project",
              "Wait for it to finish (or stop it), then re-run. Nothing "
              "was run.")
-    _RUN_LOCK_FH = fh
+    stack = contextlib.ExitStack()
+    try:
+        stack.enter_context(file_lock(cache / ".run.lock", on_wait=busy))
+    except LockLinkError as e:
+        _die(str(e), "Nothing was run.")
+    _RUN_LOCK_FH = stack
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -6896,6 +6952,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE)
+    _loose = _loose_project_dirs(root)
+    if _loose:
+        _say_once("loose-permissions", "warning",
+                  f"{', '.join(_loose)} can be read by other users of "
+                  f"this computer (made by an older taxjson or another "
+                  f"program; new files are owner-only)",
+                  f"Tighten it once: chmod -R go-rwx {_shell_quote(root)}",
+                  prog=_PROG)
     _since_warn = _grant_since_warning(settings, root, accounts)
     if _since_warn:
         # (a crypto-only project writes no options — nothing to warn about)

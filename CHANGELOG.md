@@ -25,6 +25,8 @@
 - `[settings] exports_dir`: the newest year's run copies its positions
   and wash radar there, with a README, for other tools.
 
+## v0.25.0 (2026-10-09)
+
 ### Changed
 
 - The `quick-start` command is removed; `taxjson checklist` replaces it.
@@ -184,6 +186,91 @@
   at a backup name is skipped for the next free `.bakN`, the backup is
   written owner-only and the console names it. The previous IB Flex
   statement's backup is kept the same way. (#18)
+
+### Security
+
+- A child Python process taxjson starts (the corp-action election
+  prompt in `taxjson run`, `taxjson checklist`'s sub-commands,
+  `taxjson-safe-to-sell`'s radar, `TAXJSON_DISPATCH=subprocess`) no
+  longer imports from the current directory: a `json.py` or `csv.py`
+  left in a project folder ran inside `taxjson run`. Children start with
+  `-P` (Python 3.11+) or a bootstrap that drops the current directory
+  first (3.9 / 3.10). Run taxjson as `taxjson` / `tjs`, not
+  `python -m taxjson...` from inside a project (SECURITY.md).
+- `taxjson checklist` no longer runs a command named by the project
+  repository's own git config: `git status` ran a clean / process filter
+  that `.git/config` and `.gitattributes` assign, so a project folder
+  from someone else could run anything. With such a key (a filter, a
+  diff textconv / command, `core.attributesFile`) in the repository's
+  config, `inputs-committed` and `lock-committed` are `[b]` with the key
+  named; filters in your global config (git-lfs) are unaffected.
+- `taxjson redact` replaces Solana, Cardano (`addr1…`), XRP (`r…`),
+  Tron (`T…`) and Litecoin (`L…`, `M…`, `ltc1…`) addresses with stable
+  same-shape pseudonyms, as it did Bitcoin and Ethereum ones; any other
+  token of 25+ base58 or bech32 characters is listed for review.
+- `taxjson redact` lists more names for review: 2-4 upper-case words
+  that are no statement or security vocabulary (`JANE Q SAMPLE`) and a
+  `LAST, FIRST` cell; a security's description (`ISHARES CORE S&P 500
+  ETF`, `APPLE INC`) is not listed. An 8-digit number after another
+  broker's name (`Transfer from Questrade 12345678`) is now replaced as
+  an account number.
+- `scripts/check-pii.sh` (the pre-push scan) finds a credential in any
+  letter case (`TOKEN=…`, `Api_Key: …`) and the broker tokens
+  taxjson-fetch takes: `--refresh-token <token>`, `--flex-token=<token>`
+  and a `QUESTRADE_REFRESH_TOKEN=` / `*_FLEX_TOKEN=` assignment, exported
+  or not. An all-capitals placeholder (`YOUR_REFRESH_TOKEN`) passes.
+- CI scans every commit a pull request adds — its patch, message and
+  author / committer identities — with the generic PII patterns, as the
+  pre-push hook scans a push, using the base branch's scanner.
+- The CI workflow pins `actions/checkout` and `actions/setup-python` to
+  full commit SHAs (the version in a comment beside each) and ruff to an
+  exact version.
+- `taxjson form-export --csv` / `taxjson-form-export --csv` write a text cell
+  that starts with `=`, `+`, `-`, `@`, a tab or a carriage return (a
+  description, symbol, account or note from your files) with a leading
+  `'`, so a spreadsheet shows it as text instead of running it as a
+  formula; numbers, negative ones included, are unchanged.
+- `taxjson run` takes its `work/.run.lock` like every other lock: created
+  owner-only and never through a symlink (a link planted there had its
+  target created or opened).
+- Every command stops (exit 2) when `work/`, `reports/`, `filed/`,
+  `export/`, `inputs/` or an account's `inputs/<account>/` folder is a
+  symlink to a place outside the project, naming each: taxjson writes
+  there, and the files went wherever the link pointed. A link inside the
+  project is kept.
+- `taxjson slip-audit --import-cra` hands pdftotext the PDF's absolute
+  path after `--` (a file named `-…` is never read as an option) and
+  refuses a PDF whose text runs past 8 MB instead of reading it all into
+  memory.
+- A tool run as `python -m taxjson.bin.<tool>` gets the owner-only
+  umask (files 0600, folders 0700) the `taxjson-<tool>` console scripts
+  already set.
+- `taxjson run` warns once when the project folder, `inputs/` or
+  `reports/` can be read or written by other users (folders made by an
+  older taxjson, `mkdir` or a copy keep the shell's permissions), with
+  the command that tightens it: `chmod -R go-rwx <project>`.
+- `taxjson redact` never writes its copy through a symlink that appears
+  at the copy's name after its checks (a new copy is created exclusively,
+  `--force` replaces the name), and in a project it does not copy a file
+  symlink that points outside `inputs/` into `inputs_redact/` (a warning
+  names it): a link to a private file elsewhere ended up in the copy
+  meant for sharing.
+- The README, CONTRIBUTING.md, the plugin's README, CI and `taxjson
+  fetch`'s install hint install the broker-fetch plugin from a checkout
+  with `pip install --no-deps -e packages/taxjson-fetch`, after the
+  core, so pip never looks its `taxjson` dependency up on PyPI (where
+  that name is not ours).
+- The price and rate caches' lock (`work/.price_cache.json.lock` and
+  the shared caches') is taken like `work/.run.lock`: owner-only and
+  never through a symlink.
+- SECURITY.md: vulnerabilities can be reported through GitHub's private
+  vulnerability reporting ("Report a vulnerability") as well as by
+  e-mail; a new "Release integrity" section says what protects the
+  release tags, releases and `main`, and that nothing is signed yet; the
+  temporary-file description matches what taxjson does (a uniquely named
+  `mkstemp` file, not a fixed `<file>.part`). `scripts/dev-setup.sh` in
+  a worktree finds the clone's shared hooks folder instead of saying to
+  install the pre-push hook by hand.
 
 ## v0.24.2 (2026-10-08)
 

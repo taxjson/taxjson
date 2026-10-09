@@ -494,7 +494,7 @@ class TestInit(unittest.TestCase):
             env.pop("PYTHONIOENCODING", None)
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "init",
-                 "--country", "ca", "--year", "2025", str(Path(td) / "p")],
+                 "--single", "--country", "ca", "--year", "2025", str(Path(td) / "p")],
                 capture_output=True, text=True, env=env,
                 stdin=subprocess.DEVNULL)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -508,7 +508,7 @@ class TestInit(unittest.TestCase):
             p = Path(td) / "p"
             p.mkdir()
             (p / "inputs").write_text("")
-            r = _cli(p, td, "init", "--country", "ca", str(p))
+            r = _cli(p, td, "init", "--single", "--country", "ca", str(p))
             self.assertNotIn("Traceback", r.stderr)
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("inputs", r.stderr)
