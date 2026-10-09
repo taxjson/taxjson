@@ -1115,7 +1115,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the project is `base_currency = "USD"` (a US project), `TAXJSON_OFFLINE` is set, and `pip show yfinance` finds nothing (taxjson installed without the `[fx]` extra). The run printed "Loading cached CAD → USD rates" just before.
 - **Cause:** a USD target's rates come from Yahoo Finance, so the rates helper refused to start without the `[fx]` extra, even offline, where it reads `~/.currency_price_cache.json` only and never calls Yahoo.
 - **Fix:** upgrade: offline, the helper reads the cache without the extra (a date the cache does not cover still stops the conversion, as in the entry above). Online, a USD target still needs the extra: re-run the installer with `TAXJSON_EXTRAS=fx`, or from a checkout `pip install -e '.[fx]'`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.26.1`
 - **Code:** `src/taxjson/bin/to_base_curr.py` — `main`, `needs the [fx] extra`, `offline_enabled`
 
 ## Options

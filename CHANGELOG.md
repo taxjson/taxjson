@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.26.1 (2026-10-09)
+
 ### Fixed
 
 - tests: CI is hermetic again. GitHub's `tests` workflow failed on every
