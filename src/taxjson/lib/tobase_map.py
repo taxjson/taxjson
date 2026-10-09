@@ -778,10 +778,11 @@ def books_changes(master: Master, books: Set[str], ticker_text: str
         hb = bool(_spellings(g.b) & books)
         if ha and hb:
             out.append((g, f"joins {g.a} and {g.b}: one ACB pool, one "
-                           f"security for the superficial-loss rule"))
+                           f"security for the superficial-loss rule (the "
+                           f"options of {g.a} are booked under {g.b})"))
         elif ha:
-            out.append((g, f"books {g.a} as {g.b} (the books hold no "
-                           f"{g.b} yet)"))
+            out.append((g, f"books {g.a} as {g.b}, its options too (the "
+                           f"books hold no {g.b} yet)"))
     return out
 
 
