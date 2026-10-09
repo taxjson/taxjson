@@ -389,5 +389,47 @@ class TestOutsideFolderLinksRefused(unittest.TestCase):
             self.assertNotIn("symlinks to outside", r.stderr)
 
 
+class TestPdftotextCall(unittest.TestCase):
+    """LOW (d): the PDF path is absolute after `--`, and the text read is
+    capped."""
+
+    def _fake(self, folder: Path, body: str) -> None:
+        exe = folder / "pdftotext"
+        exe.write_text("#!/bin/sh\n" + body)
+        exe.chmod(0o700)
+
+    def test_args_and_cap(self):
+        from taxjson.lib import cra_slips
+        with tempfile.TemporaryDirectory() as tmp:
+            bindir = Path(tmp) / "bin"
+            bindir.mkdir()
+            log = Path(tmp) / "argv.txt"
+            self._fake(bindir, f'printf "%s\\n" "$@" > {log}\n'
+                               'echo "2025 T5 slip"\n')
+            old_path, old_cwd = os.environ["PATH"], os.getcwd()
+            os.environ["PATH"] = f"{bindir}{os.pathsep}{old_path}"
+            os.chdir(tmp)
+            try:
+                (Path(tmp) / "-x.pdf").write_bytes(b"%PDF-1.4")
+                self.assertIn("T5 slip",
+                              cra_slips.pdf_text(Path("-x.pdf")))
+                args = log.read_text().splitlines()
+                self.assertEqual(args[-3:], ["--", str(Path(tmp).resolve()
+                                                      / "-x.pdf"), "-"])
+                self._fake(bindir, "yes 0123456789abcdef | head -c 300000"
+                                   "\n")
+                old_cap = cra_slips.PDF_TEXT_MAX
+                cra_slips.PDF_TEXT_MAX = 100000
+                try:
+                    with self.assertRaises(cra_slips.CraSlipError) as cm:
+                        cra_slips.pdf_text(Path("-x.pdf"))
+                    self.assertIn("not a CRA slip PDF", str(cm.exception))
+                finally:
+                    cra_slips.PDF_TEXT_MAX = old_cap
+            finally:
+                os.environ["PATH"] = old_path
+                os.chdir(old_cwd)
+
+
 if __name__ == "__main__":
     unittest.main()

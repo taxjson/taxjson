@@ -213,6 +213,10 @@
   symlink to a place outside the project, naming each: taxjson writes
   there, and the files went wherever the link pointed. A link inside the
   project is kept.
+- `taxjson slip-audit --import-cra` hands pdftotext the PDF's absolute
+  path after `--` (a file named `-…` is never read as an option) and
+  refuses a PDF whose text runs past 8 MB instead of reading it all into
+  memory.
 
 ## v0.24.2 (2026-10-08)
 

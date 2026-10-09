@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import itertools
 import re
+import os
 import shutil
 import subprocess
 import unicodedata
@@ -263,20 +264,66 @@ def pdf_text(path: Path) -> str:
         raise CraSlipError("pdftotext is not installed (poppler-utils: "
                            "`sudo apt install poppler-utils`, `brew "
                            "install poppler`); it reads the CRA PDFs")
+    # An absolute path after `--`: a file name starting with '-' is
+    # never read as an option (2026-10 security review LOW d).
+    arg = os.path.abspath(str(path))
     try:
-        p = subprocess.run([exe, "-layout", "-enc", "UTF-8", str(path), "-"],
-                           capture_output=True, timeout=60)
-    except subprocess.TimeoutExpired:
-        raise CraSlipError(f"pdftotext took over 60 s on "
-                           f"{shown_name(path)}") from None
+        p = subprocess.Popen([exe, "-layout", "-enc", "UTF-8", "--", arg,
+                              "-"], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL)
     except OSError as e:
         # The OSError's text names the path: only its reason is said.
         raise CraSlipError(f"pdftotext failed on {shown_name(path)}: "
                            f"{e.strerror or type(e).__name__}") from None
+    out, too_big = _read_capped(p, PDF_TEXT_MAX, 60)
+    if out is None:
+        raise CraSlipError(f"pdftotext took over 60 s on "
+                           f"{shown_name(path)}")
+    if too_big:
+        raise CraSlipError(f"pdftotext wrote over {PDF_TEXT_MAX // 2**20} "
+                           f"MB of text — not a CRA slip PDF")
     if p.returncode != 0:
         raise CraSlipError(f"pdftotext could not read it (exit "
                            f"{p.returncode})")
-    return p.stdout.decode("utf-8", errors="replace")
+    return out.decode("utf-8", errors="replace")
+
+
+# A CRA slip PDF is a few KB of text; a file that expands past this is
+# refused instead of read into memory.
+PDF_TEXT_MAX = 8 * 2**20
+
+
+def _read_capped(p: "subprocess.Popen", cap: int, timeout: float
+                 ) -> Tuple[Optional[bytes], bool]:
+    """(stdout, over the cap) of `p`, reading at most `cap` + 1 bytes;
+    the process is killed when it exceeds the cap or `timeout` seconds
+    ((None, False) on a timeout)."""
+    import threading
+    buf = bytearray()
+    over = [False]
+
+    def pump() -> None:
+        while True:
+            chunk = p.stdout.read(65536)
+            if not chunk:
+                return
+            buf.extend(chunk)
+            if len(buf) > cap:
+                over[0] = True
+                p.kill()
+                return
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        p.kill()
+        t.join(5)
+        p.wait()
+        return None, False
+    p.wait()
+    p.stdout.close()
+    return bytes(buf[:cap]), over[0]
 
 
 def read_pdf(path: Path) -> List[CraSlip]:
