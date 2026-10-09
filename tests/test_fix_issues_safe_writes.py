@@ -173,9 +173,6 @@ class TestFileLock(unittest.TestCase):
 # line) -> why it is not generated project state.
 _ALLOWED = {
     ("lib/json_cache.py",
-     'with open(str(path) + ".lock", "a") as lock:'):
-        "the cache's lock file (appends nothing)",
-    ("lib/json_cache.py",
      'with os.fdopen(fd, "w", encoding="utf-8") as f:'):
         "its own mkstemp temp file, renamed into place",
     ("bin/taxjson_redact.py",

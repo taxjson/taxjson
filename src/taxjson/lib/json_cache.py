@@ -23,12 +23,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
-try:                                    # POSIX; Windows saves unlocked
-    import fcntl
-except ImportError:                     # pragma: no cover
-    fcntl = None
-
-
 def save_json_cache(path, data: Dict[str, Any], *, merge: bool = False,
                     prog: str = "taxjson", label: str = "",
                     **dump_kw) -> bool:
@@ -38,12 +32,12 @@ def save_json_cache(path, data: Dict[str, Any], *, merge: bool = False,
     tmp = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(str(path) + ".lock", "a") as lock:
-            if fcntl is not None:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX)
-                except OSError:
-                    pass
+        # safe_write.file_lock: owner-only, never through a symlink (a
+        # link planted at `<cache>.lock` — work/.price_cache.json.lock in
+        # a project — had its target created or appended to; 2026-10
+        # security review, LOW b's sibling).
+        from taxjson.lib.safe_write import file_lock
+        with file_lock(str(path) + ".lock"):
             if merge:
                 try:
                     cur = json.loads(path.read_text(encoding="utf-8"))

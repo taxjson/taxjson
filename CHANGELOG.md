@@ -235,6 +235,9 @@
   with `pip install --no-deps -e packages/taxjson-fetch`, after the
   core, so pip never looks its `taxjson` dependency up on PyPI (where
   that name is not ours).
+- The price and rate caches' lock (`work/.price_cache.json.lock` and
+  the shared caches') is taken like `work/.run.lock`: owner-only and
+  never through a symlink.
 
 ## v0.24.2 (2026-10-08)
 

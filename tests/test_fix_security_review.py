@@ -543,5 +543,21 @@ class TestRedactFileSafety(unittest.TestCase):
             self.assertIsNone(skip["q.csv"])
 
 
+class TestCacheLockNeverFollowsALink(unittest.TestCase):
+    """LOW (b) sibling: the price/rate cache lock is safe_write.file_lock."""
+
+    def test_planted_cache_lock_symlink(self):
+        from taxjson.lib.json_cache import save_json_cache
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "work" / ".price_cache.json"
+            cache.parent.mkdir()
+            target = Path(tmp) / "outside.txt"
+            Path(str(cache) + ".lock").symlink_to(target)
+            self.assertTrue(save_json_cache(cache, {"a": 1}))
+            self.assertFalse(target.exists())
+            self.assertFalse(Path(str(cache) + ".lock").is_symlink())
+            self.assertEqual(cache.read_text(), '{"a": 1}')
+
+
 if __name__ == "__main__":
     unittest.main()
