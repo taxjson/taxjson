@@ -10,7 +10,7 @@ Website: **[taxjson.com](https://taxjson.com)** · one-line install below · eve
 
 ## Getting started
 
-New here? **[docs/getting-started.md](docs/getting-started.md)** walks a first project through, with worked examples. **`tjs quick-start`** prints every step with its command; in a project folder it marks each step done or not from the project's files and names the next one. In short:
+New here? **[docs/getting-started.md](docs/getting-started.md)** walks a first project through, with worked examples. **`tjs checklist`** prints every step with its command; in a project folder it checks each step, marks it done or not and names the next one. In short:
 
 1. Install: `bash -c "$(curl -fsSL https://taxjson.com/install.sh)"` ([Install](#install)).
 2. Make a project for the year you file: `mkdir -p ~/taxes/2025 && cd ~/taxes/2025 && tjs init --country canada --year 2025` (or `--country usa`), then set your accounts in `taxjson.toml`.
@@ -548,7 +548,7 @@ the broker's positions.
 Warning: 1 security paid income in 2025 that the books do not hold (a holding with no purchase in your files?): SAMPZ.TO
 (margin). Run `taxjson sanity`.
 
-Info: Then run `taxjson checklist`. `taxjson quick-start` lists every step and names the next one.
+Info: Then run `taxjson checklist`: it checks every step and names the next one.
 ```
 
 The same counts are written to `reports/run_summary.json`. A taxable
@@ -557,9 +557,10 @@ are also named on the console as the run builds that account.
 
 When the year is over, [`docs/filing.md`](./docs/filing.md) is the
 checklist that takes a project from "last export dropped in" to a filed
-and locked return — which command proves each step, in order — and
-`taxjson checklist` runs it: each step auto-detected, `--done ID` for
-the ones only you can confirm, `--walk` to go through the open ones.
+and locked return — which command proves each step — and `taxjson
+checklist` runs it, from set-up to year end: each step auto-detected,
+`--done ID` for the ones only you can confirm, `--walk` to go through
+the open ones.
 
 ### Project layout and configuration
 
@@ -799,7 +800,7 @@ Files the pipeline reads and writes (all map files are optional):
 
 | Command | Purpose |
 | --- | --- |
-| `taxjson quick-start [--all] [--json]` | Every step from install to filing, in order, each with the exact command(s) and a one-line why: install or upgrade, `init`, the accounts, the broker files, `run`, the gaps (missing history, transfers, ticker.map, journals, renames, crypto sends, `.tt` lines), tidying the config, the checks (`scan`, `sanity`, `edge-cases`, `wash-sales`, `check-dates`, `checklist`), the results and filing outputs, sharing a redacted sample and the year end. Inside a project (a `taxjson.toml` here, or `-C DIR`) each step is marked done `[x]`, needs attention `[!]`, to do `[ ]`, yours to run and read `[?]` or n/a `[-]` from the project's own files — the checklist's file-only checks, its `checklist.json` marks and `reports/run_summary.json` — and the first step to do or needing attention is marked `[>]`, its command on the last line; a done step shows one line (`--all`: every step's commands and why). Read-only: it runs no command, writes nothing and opens no connection (`checklist` runs the slow checks). `--json`: a stable schema ([docs/settings.md](docs/settings.md#taxjson-quick-start---json)). |
+| `taxjson checklist [--all] [--walk] [--done ID] [--skip ID] [--undo ID] [--quick] [--json]` | Every step from install to filing, in order, each with the exact command(s) and a one-line why, in ten sections: set up (install or upgrade, `init`, the accounts), the broker files (full year plus January, each broker's exports reaching the year end, the sheltered and crypto accounts), building the books (`run`, elections), the gaps (missing history, transfers, ticker.map, journals, renames, crypto sends, `.tt` lines, return of capital), tidying the config (`format`, committed inputs), the checks (`scan`, `sanity`, `edge-cases`, option-boundary, the superficial-loss / wash-sale denials, filing positions, `check-dates`, `audit`, `handoff`), the results and filing outputs (`sum`, the slips, `form-export`, T1135, carryover, FX on cash, carrying charges, estimate, AMT), trading through the year, sharing a redacted sample and the year end (`close-year`, the lock committed, next year's project, the notice of assessment). Inside a project (a `taxjson.toml` here, or `-C DIR`) each step is checked: a check runs the command that proves it (sanity, find-missing-history, elect, audit, option-boundary, handoff, reconcile-slips, form-export, t1135, carryover, fx-cash, amt, check-filed, git status) or reads the project's files, and shows done `[x]`, needs attention `[!]`, to do `[ ]`, blocked `[b]` (usually: run `taxjson run` first), to confirm `[m]`, yours to run and read `[?]`, n/a `[-]` or skipped `[~]`; the first step to do or needing attention is marked `[>]` and the last line names it with its command. A done step shows one line (`--all`: every step's commands and why). Nothing in the project is written but `checklist.json` (the marks). The steps no command can prove are confirmed with `--done ID` (marks live in `checklist.json`, commit it) and never hide a later finding — a step marked done whose detector finds a problem shows `[!]` (or `[b]` when the detector could not check) with the mark beside it and keeps the list open (`--skip` is the explicit "reviewed, accepted"); a `[?]` step can be ticked off the same way. form-export is checked against `sum`'s FOR THE RETURN totals and the taxable realized gain. US projects get the US names (1099-B, Form 8949 / Schedule D), `n/a` for Canada-only steps and only their own commands; a project with no taxable account gets `n/a` for the taxable-only steps. `--walk` visits the open steps one at a time; `--quick` skips the slow checks. Exit 1 while anything is open (a `[?]` step never keeps it open). Outside a project it prints the steps as a guide, exit 0. `--json`: a stable schema ([docs/settings.md](docs/settings.md#taxjson-checklist---json)). |
 | `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). The generated `taxjson.toml` lists every key the country's projects read, documented: the scaffold's values active, every other key commented out with its default (or an example where it has none), each key under its description, `[settings]` in groups and the other tables alphabetical, with one `=` column per table (see "Project layout and configuration"). `local_timezone` is set to this machine's IANA zone when it can be read (else left commented: the default zone). |
 | `taxjson format [--write [--no-backup] \| --check]` | Lay an existing `taxjson.toml` out like the template `init` writes (see "Project layout and configuration"): every key of the project's country in its place in its table (its `[settings]` group, or alphabetical; an account's `type` first) — the ones you set active with your values, the rest commented with their default — each under its description (account tables compact), one `=` column per table, accounts in your order, `[[...]]` entries in order, values in canonical TOML (strings quoted, dates as dates). Nothing is lost: keys the template does not know stay in their table under a "Not in the template" line, alphabetically (and are named on the console); a trailing comment moves onto its own line just above its key or table line (with the `#` lines that continue it, as the old aligned layout wrote them: indented under it, or padded `#   #   text` — padding dropped); a comment block stays above the key or table that follows it and moves with it (a block holding a commented-out key of your own, `# province = "BC"`, goes to that key; a block a blank line separates from the next table stays at the end of its table); a multi-line value with comments inside is kept as written; anything it cannot place goes to a "Your notes (kept by tjs format)" block at the end. Comment lines that are the template's own text (or an earlier `init`'s) are regenerated. The parsed configuration before and after must be identical, or nothing is written. Default: a dry run printing a unified diff; `--write` writes it (atomically, the file's mode kept, the old file saved as `taxjson.toml.bak`, or the next free `.bakN`; `--no-backup` skips that); `--check` exits 1 when the file is not formatted or a migration is pending (CI). Formatting a formatted file changes nothing. Like every command it refuses a config the config check refuses, and a project with old per-purpose files (`taxjson migrate` first). |
 | `taxjson format-map [--write [--no-backup] \| --check]` | Lay `ticker.map` out the way `init` writes it: a short header saying what the file is, then the rules in groups in a fixed order, each under a `## --- <Group> ---` heading naming its keywords — Spellings (`GLOBAL`, and `RENAME` without a date), Listings of one security (`TOBASE`, `DISTINCT`), Clean-up (`DELETE`), Lookups (`QUOTE`, `EXTRACT`, `CRYPTO`, `T1135` and the market lists `STABLE` ... `VENUE`), then Retired (`TRADINGVIEW`) and Unrecognized only when the file has such lines. It also migrates the legacy dated events: each `JOURNAL A B` becomes `TOBASE A B`, and each dated `RENAME OLD NEW YYYY-MM-DD [late=…]` moves, with its comments, to `inputs/<account>/renames.tt` as `RENAME YYYY-MM-DD OLD NEW [late=…]` (in the first account whose books carry the change and whose own `.tt` lines of it agree, one per account kind; a `.tt` RENAME applies to every account of its kind, securities or crypto); it simulates the run first and writes nothing (exit 2, naming the lines) unless the books stay the same — the project's own `.tt` RENAME lines included. Within a group your order is kept (the first matching `EXTRACT` wins). A rule line gets one space between fields (`EXTRACT` keeps its ` \| ` separators), the keyword upper case and an inline `# note` kept beside it; exact duplicate lines are dropped (named on the console). A comment block directly above a line (no blank line between) moves with it, and so does one directly below a line that a blank line ends; a commented-out rule (`# GLOBAL A B`) moves like a comment, or goes to its keyword's group on its own; any other comment block stays under the group heading it sits in (in a file never formatted: before the rule that follows it, or at the top when it comes before every rule). Comment lines are kept byte for byte (trailing blanks dropped); the header and group text it writes, and an older `init` template's comment paragraphs, are regenerated. A line `taxjson run` cannot use (no keyword, malformed, a second target for one symbol) is kept exactly as written, with its comments, in the Unrecognized group at the end, and the console names the problem of each. The parsed map before and after (plus the moved lines) must mean the same and every comment be kept, or nothing is written. Default: a dry run printing a unified diff, the `.tt` additions and the lines per group; `--write` writes it (the old file kept as `ticker.map.bak`, or the next free `.bakN`; `--no-backup` skips that); `--check` exits 1 when the file is not formatted, a migration is pending or `taxjson run` refuses the map (CI). Formatting a formatted file changes nothing. |
@@ -881,7 +882,6 @@ Files the pipeline reads and writes (all map files are optional):
 
 | Command | Purpose |
 | --- | --- |
-| `taxjson checklist [--walk] [--done ID] [--skip ID] [--undo ID] [--quick] [--json]` | The filing checklist ([`docs/filing.md`](./docs/filing.md)) as a command: every step is auto-detected by running the command that proves it (run, sanity, find-missing-history, renames, journals, elect, audit, option-boundary, reconcile-slips, form-export, t1135, check-filed, git status); the steps no command can prove are confirmed with `--done` (marks live in `checklist.json`, commit it) and never hide a later finding — a step marked done whose detector finds a problem shows `[!]` (or `[b]` when the detector could not check) with the mark beside it and keeps the list open (`--skip` is the explicit "reviewed, accepted"); form-export is checked against `sum`'s FOR THE RETURN totals and the taxable realized gain. US projects get the US names (1099-B, Form 8949 / Schedule D) and `n/a` for Canada-only steps; a project with no taxable account gets `n/a` for the taxable-only steps. `--walk` visits the open steps one at a time. Exit 1 while anything is open. |
 | `taxjson form-export` | Filing-shaped output: IRS Form 8949 / CRA Schedule 3 (default follows the country), or a TurboTax-importable TXF via `--form txf [--box A|B|C] --out gains.txf`. |
 | `taxjson t1135` | CRA T1135 foreign-property helper: filing-threshold test + per-property/per-country tables. |
 | `taxjson reconcile-slips SLIP.csv [SLIP.csv ...]` | Diff broker T5008 / 1099-B slips against computed dispositions before filing (exit 1 on mismatch); several slip files (one per broker) are reconciled together. |
@@ -931,17 +931,17 @@ Files the pipeline reads and writes (all map files are optional):
 Query/report commands are detailed below; every command also takes `--help`,
 and `taxjson --version` prints the installed version.
 
-### The workflow, step by step (`taxjson quick-start`)
+### The workflow, step by step (`taxjson checklist`)
 
-`tjs quick-start` is the map of the whole job: run it whenever you are not
-sure what comes next. Outside a project it prints every step; inside one it
-marks each from the project's files and ends with the next step's command.
-It never runs a command, writes a file or goes online, so it is safe to run
-at any time.
+`tjs checklist` is the map of the whole job: run it whenever you are not
+sure what comes next. Outside a project it prints every step; inside one
+it checks each, marks it from what the checks and the project's files
+say, and ends with the next step's command. It writes nothing to the
+project but your own marks (`checklist.json`).
 
-`--json` prints the same guide as one document, a stable schema
-(`schema_version` 1) described in
-[docs/settings.md](docs/settings.md#taxjson-quick-start---json).
+`--json` prints the same list as one document, a stable schema
+(`schema_version` 2) described in
+[docs/settings.md](docs/settings.md#taxjson-checklist---json).
 
 ### Query & report commands
 

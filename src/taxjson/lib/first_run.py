@@ -579,7 +579,7 @@ def render_blocks(doc: Dict[str, Any], *,
                "(docs/getting-started.md, step 5)"]]
     for kind, it in items:
         blocks.append(out.wrap(f"{kind}: {it}", w, "", hang))
-    blocks.append(out.wrap("Info: Then run `taxjson checklist`. `taxjson "
-                           "quick-start` lists every step and names the "
-                           "next one.", w, "", hang))
+    blocks.append(out.wrap("Info: Then run `taxjson checklist`: it checks "
+                           "every step and names the next one.", w, "",
+                           hang))
     return blocks

@@ -636,12 +636,11 @@ class TestChecklistWalkPrompts(unittest.TestCase):
     def test_eof_at_note_prompt(self):
         from taxjson.bin import taxjson_run as R
         cl = mock.Mock()
-        cl.STEPS = [("s1",), ("s2",)]
+        cl.item_ids.return_value = ["s1", "s2"]
         res = mock.Mock(passed=False, effective="open", detail="x",
                         override=None, note=None)
         cl.evaluate.return_value = [res]
-        cl.step_meta.return_value = (None, 1, "T", "cmd", "why")
-        cl.STAGES = [(1, "stage")]
+        cl.item_meta.return_value = (None, "Section", "T", "cmd", "why")
         cl.SYMBOL = {"open": "-"}
         ctx = mock.Mock(root=Path("/tmp/x"), year=2025,
                         settings={"country": "canada"})

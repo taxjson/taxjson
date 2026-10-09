@@ -184,10 +184,11 @@ class TestOverridesAndRender(unittest.TestCase):
             self.assertFalse(res["sanity"].passed)
             self.assertTrue(res["fees"].passed)
             text = cl.render(list(res.values()), 2025, "canada")
-            self.assertIn("[!] sanity", text)
+            # [>]: the next item (a finding to attend to).
+            self.assertRegex(text, r"\[>\] +\d+\. sanity ")
             flat = " ".join(text.split())
             self.assertIn("marked done: trades after the export the detector still says: 7 discrepancy(ies).", flat)
-            self.assertIn("[~] fees", text)
+            self.assertRegex(text, r"\[~\] +\d+\. fees ")
             cl.set_override(root, 2025, "sanity", None)
             self.assertIsNone(cl.evaluate(ctx, only=["sanity"])[0].override)
             # Marks recorded for another year are ignored, not applied.
@@ -198,13 +199,14 @@ class TestOverridesAndRender(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); _project(root)
             res = cl.evaluate(_ctx(root, {}), quick=True)
-            self.assertEqual(len(res), len(cl.STEPS))
+            self.assertEqual([r.id for r in res], cl.item_ids())
+            self.assertLessEqual({s[0] for s in cl.STEPS}, set(cl.item_ids()))
             doc = cl.to_json(res, 2025, "canada")
             self.assertFalse(doc["all_passed"])
-            self.assertEqual({s["id"] for s in doc["steps"]}, {s[0] for s in cl.STEPS})
+            self.assertEqual({s["id"] for s in doc["steps"]}, set(cl.item_ids()))
             text = cl.render(res, 2025, "canada", quick=True)
-            self.assertTrue(text.startswith("FILING CHECKLIST — tax year 2025 (canada) — quick:"))
-            for num, name in cl.STAGES:
+            self.assertTrue(text.startswith("CHECKLIST — tax year 2025 (canada) — quick:"))
+            for num, name in enumerate(cl.SECTIONS, 1):
                 self.assertIn(f"{num}. {name.upper()}", text)
 
 

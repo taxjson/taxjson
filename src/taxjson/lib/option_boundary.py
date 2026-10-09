@@ -580,7 +580,7 @@ def project_question_rows(root, cfg: Dict[str, Any],
     records how their write year was filed. Canada on grant timing only
     (a US premium is taxed at the close in every year, US-OPT-07); []
     when the project cannot be read. Reads files only (the run's
-    warning, quick-start)."""
+    warning, the checklist's option-boundary answers)."""
     import json as _json
     from pathlib import Path as _Path
     from taxjson.lib.country import CountryError, is_usa, settings_tax_date
@@ -691,7 +691,7 @@ def question_message(rows: List[Dict[str, Any]], year: int,
 
 
 def question_detail(rows: List[Dict[str, Any]], year: int) -> str:
-    """One line for the checklist / quick-start: the contracts, the
+    """One line for the checklist: the contracts, the
     premium at stake and the question."""
     total = sum(float(r.get("premium") or 0.0) for r in rows)
     wys = sorted({int(r["write_year"]) for r in rows})

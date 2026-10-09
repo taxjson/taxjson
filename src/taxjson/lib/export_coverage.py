@@ -1,6 +1,6 @@
 """Per-broker export coverage: a broker whose exports stop while it still
 holds positions (`taxjson run` Warning, `taxjson checklist`
-export-coverage, `taxjson quick-start` inputs).
+export-coverage).
 
 A data check, not a tax rule (both countries). For each account of the
 project (crypto accounts excepted: a coin is held for years with no row)
@@ -708,7 +708,7 @@ def message(g: Gap, year: int) -> Tuple[str, List[str]]:
 
 
 def detail(gaps: List[Gap]) -> str:
-    """One line for the checklist / quick-start (the gaps that still
+    """One line for the checklist (the gaps that still
     hold positions: an Info gap is not listed)."""
     gaps = [g for g in gaps if not g.info]
     parts = [f"{broker_name(g.broker)} exports for {g.account} end "

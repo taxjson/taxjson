@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- `taxjson quick-start` is merged into `taxjson checklist`; the
+  quick-start command is removed. `taxjson checklist` is now every step
+  from install to filing in ten sections (set up, the broker files,
+  building the books, the gaps, tidying the config, the checks, the
+  results, trading through the year, sharing a sample, the year end),
+  each with its command(s) and why: the filing checks run as before
+  (same ids, so `checklist.json` marks and their answers still apply,
+  same exit 1 while anything is open), the guide's other steps are
+  marked from the project's files, the next step is named with its
+  command on the last line, and `--all` shows every step's commands.
+  Outside a project it prints the steps as a guide (exit 0). `--json` is
+  a versioned schema (`schema_version` 2) that keeps the checklist's
+  keys (docs/settings.md). `taxjson init` and the run's closing summary
+  now point to `taxjson checklist`.
+
 
 ## v0.24.2 (2026-10-08)
 

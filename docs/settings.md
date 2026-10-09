@@ -191,7 +191,7 @@ The keys come in groups, in the order `taxjson init` writes them.
 #### Corporate actions
 
 #### `sheltered_elections`
-- **Meaning:** what a spin-off or merger in a sheltered account (Canada: RRSP, LIRA, TFSA, RESP, RRIF ...; US: IRA, Roth, 401(k), HSA, 529 ...) does when it has no saved election. `"zero"`: it is booked without asking — a spin-off's new shares at $0 cost with the parent keeping its whole cost, a merger's new shares taking the old shares' cost — with one `Info:` line per run; it is never pending, so `run --strict`, `elect --pending`, the checklist and quick-start do not wait for it. `"ask"`: it is asked like a taxable account's event (the prompt, `elect --pending`, exit 3 without a terminal). Either way an election saved with `taxjson elect` wins, and a taxable account is always asked. No tax depends on it: nothing is taxed inside the account, an in-kind move in or out is valued at fair market value, and the superficial-loss / wash-sale rule counts the account's units, not their cost (tax-logic CA-CORP-11 / US-CORP-12). The spun-off shares count as acquired for the superficial-loss rule (Canada, as under every spin-off election); in a US project they are not a wash-sale purchase (as under `tax_free_355`) unless you elect `taxable_distribution_301`.
+- **Meaning:** what a spin-off or merger in a sheltered account (Canada: RRSP, LIRA, TFSA, RESP, RRIF ...; US: IRA, Roth, 401(k), HSA, 529 ...) does when it has no saved election. `"zero"`: it is booked without asking — a spin-off's new shares at $0 cost with the parent keeping its whole cost, a merger's new shares taking the old shares' cost — with one `Info:` line per run; it is never pending, so `run --strict`, `elect --pending` and the checklist do not wait for it. `"ask"`: it is asked like a taxable account's event (the prompt, `elect --pending`, exit 3 without a terminal). Either way an election saved with `taxjson elect` wins, and a taxable account is always asked. No tax depends on it: nothing is taxed inside the account, an in-kind move in or out is valued at fair market value, and the superficial-loss / wash-sale rule counts the account's units, not their cost (tax-logic CA-CORP-11 / US-CORP-12). The spun-off shares count as acquired for the superficial-loss rule (Canada, as under every spin-off election); in a US project they are not a wash-sale purchase (as under `tax_free_355`) unless you elect `taxable_distribution_301`.
 - **Default:** `"zero"`.
 - **Country:** both.
 - **Change it when:** you want the sheltered holdings view to show a real cost for every spin-off, and to be asked for it.
@@ -818,34 +818,43 @@ Each journal:
 
 ---
 
-## `taxjson quick-start --json`
+## `taxjson checklist --json`
 
-The workflow, step by step, as one document: a stable schema for programs
-(new keys and new steps may be added; none is renamed or removed while
-`schema_version` is 1). It only reads the project's files: the checklist's
-file-reading checks, `checklist.json` marks and `reports/run_summary.json`.
-Code: `src/taxjson/lib/quick_start.py` — `to_json`, `SCHEMA_VERSION`,
-`STATUSES`.
+The checklist as one document: a stable schema for programs (new keys,
+statuses and items may be added; none is renamed or removed while
+`schema_version` is 2). Version 2 is the checklist and the former
+quick-start guide's JSON (version 1) in one: the checklist's keys
+(`year`, `country`, `all_passed`, and per step `id`, `title`, `command`,
+`status`, `effective`, `detail`, `override`, `note`, `finding`) are kept;
+its `stage` number is now `section`. Inside a project the checks run the
+commands that prove them; outside one nothing is evaluated.
+Code: `src/taxjson/lib/checklist.py` — `to_json`, `guide_json`,
+`SCHEMA_VERSION`, `STATUSES`.
 
 | Key | Meaning |
 | --- | --- |
-| `schema_version` | `1` |
+| `schema_version` | `2` |
 | `in_project` | `true` when the folder (or `-C DIR`) holds a taxjson.toml |
 | `year`, `country` | the project's `[settings]`; `null` outside a project |
-| `counts` | `{"done", "attention", "todo", "review", "n/a"}`: how many steps have each status; `null` outside a project |
-| `next` | `{"step", "id", "title", "do"}` of the first step that is `todo` or `attention` (`do`: what to do, usually its first command); `null` when none, and outside a project |
-| `steps` | one object per step, in order (below) |
+| `all_passed` | `true` when no step is open (the exit is then 0); `null` outside a project |
+| `counts` | `{"done", "skipped", "attention", "todo", "blocked", "manual", "review", "n/a"}`: how many steps have each effective status; `null` outside a project |
+| `next` | `{"step", "id", "title", "do"}` of the next step: the first one to do, needing attention or blocked that can be acted on now, else the first one to confirm (`do`: what to do, usually its first command); `null` when none, and outside a project |
+| `steps` | one object per step, in order (below); with `--only ID`, that step only |
 
 Each step:
 
 | Key | Meaning |
 | --- | --- |
-| `step`, `id` | its number (1, 2 ...) and a stable id (`install`, `inputs`, `run`, `missing-history`, `checklist`, `close-year` ...) |
-| `section`, `title` | the stage it belongs to (`Set up`, `Fill the gaps`, `Check` ...) and what it is |
+| `step`, `id` | its number (1, 2 ...) and a stable id — the id `--done` / `--skip` / `--undo` take and `checklist.json` records (`install`, `inputs-frozen`, `run-clean`, `missing-history`, `t5008`, `filed-lock` ...) |
+| `section`, `title` | the section it belongs to (`Set up`, `Get your files`, `Build the books`, `Fill the gaps`, `Tidy the config`, `Check`, `Results`, `Through the year`, `Share safely`, `Year end`) and what it is (a check's title in the project's country's words) |
+| `check` | `true` for a check (a detector proves it), `false` for a step marked from the project's files |
+| `command` | a check's proving command as one line (e.g. `taxjson find-missing-history`); a step's first command |
+| `commands` | `[{"command", "note", "country"}]`: the lines to type, a short note, and `"canada"` / `"usa"` for a command only one country has (`null` for both); inside a project the other country's are left out |
 | `how`, `why` | what to do besides the commands (may be empty), and why the step matters |
-| `commands` | `[{"command", "note", "country"}]`: the line to type, a short note, and `"canada"` / `"usa"` for a command only one country has (`null` for both); inside a project the other country's are left out |
-| `status` | `done`, `attention`, `todo`, `review` (yours to run and read: taxjson cannot tell whether you did) or `n/a`; `null` outside a project |
-| `detail` | what the project's files say about it (empty when nothing to say) |
+| `status` | what the detector or the step's rule found: `done`, `attention`, `todo`, `manual` (only you can confirm it), `blocked` (a prerequisite, usually `taxjson run`, is missing), `review` (yours to run and read: taxjson cannot tell whether you did) or `n/a`; `null` outside a project |
+| `effective` | the status with your mark applied: `skipped` for a skip, `done` for a done mark (never over a finding: a done mark on an `attention` or `blocked` step leaves it so, unless the attention was a question the mark answered) |
+| `detail` | what the check or the project's files say about it (empty when nothing to say) |
+| `override`, `note`, `finding` | your mark (`done`, `skipped` or `null`), its note, and the detector's finding when a mark sits beside one |
 | `next` | `true` for the step `next` names |
 
 ---

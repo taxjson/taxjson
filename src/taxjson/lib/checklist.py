@@ -1,29 +1,53 @@
-"""`taxjson checklist` — the filing checklist (docs/filing.md) as a command.
+"""`taxjson checklist`: every step from install to filing, in order, each
+checked for you.
 
-Every step names the command that proves it. A detector runs that
-command (or inspects the project) and reports one of:
+One ordered list in ten sections (SECTIONS: Set up, Get your files, Build
+the books, Fill the gaps, Tidy the config, Check, Results, Through the
+year, Share safely, Year end). Each item has its command(s) and a
+one-line why (items()). An item is either
 
-  done       the evidence is clean
-  attention  the evidence says something is wrong (fix, then re-check)
-  todo       the evidence is missing (the step has not been started)
-  manual     no evidence can prove it — the user confirms with
-             `taxjson checklist --done ID`
-  blocked    a prerequisite (usually `taxjson run`) is missing
-  n/a        the step does not apply to this project
+- a CHECK (an id in STEPS / DETECTORS): a detector runs the command that
+  proves it, or reads the project's files, and reports
+    done       the evidence is clean
+    attention  the evidence says something is wrong (fix, then re-check)
+    todo       the evidence is missing (the step has not been started)
+    manual     no evidence can prove it — the user confirms with
+               `taxjson checklist --done ID`
+    blocked    a prerequisite (usually `taxjson run`) is missing
+    n/a        the step does not apply to this project
+- or a STEP of the workflow no command can prove (STEP_RULES: install,
+  init, the config's layout, the views to read ...), marked from the
+  project's files the same way, or `review`: yours to run and read;
+  taxjson cannot tell whether you did. A review item never keeps the list
+  open.
 
-Overrides live in `checklist.json` at the project root (commit it): a
-step the user marks done or skipped keeps that mark until `--undo` or
+Overrides live in `checklist.json` at the project root (commit it): an
+item the user marks done or skipped keeps that mark until `--undo` or
 `--reset`. A mark never hides a detector's finding: a step marked DONE
 whose detector later says `attention` counts as attention (shown `[!]`
 with the mark and its note beside the finding), so a stale mark cannot
 turn the list green. `--skip` is the deliberate "reviewed, accepted"
-mark — the finding stays visible beside it.
+mark — the finding stays visible beside it. The first item to do (or
+needing attention) is the NEXT one, named with its command on the last
+line.
 
-Country: the steps are written for a Canadian return. A US project gets
+Outside a project (no taxjson.toml) the same items are printed as a
+step-by-step guide, without marks (render_guide).
+
+Every user-facing `taxjson` command is named by some item or listed in
+EXCLUDED with its reason; tests/test_checklist_items.py fails when a new
+command is in neither, an item names a command that does not exist, or
+two items share an id.
+
+Country: the checks are written for a Canadian return. A US project gets
 the US names where an equivalent exists (1099-B for the T5008, Form
 8949 / Schedule D for Schedule 3, ...) and `n/a` for the Canada-only
 steps; a project with no taxable account gets `n/a` for every step that
-only concerns taxable accounts.
+only concerns taxable accounts. The other country's commands are left
+out of a project's list.
+
+`--json`: schema_version 2 (docs/settings.md, "taxjson checklist
+--json"; to_json, guide_json).
 """
 from __future__ import annotations
 
@@ -42,87 +66,78 @@ STATE_FILE = "checklist.json"
 # run could not book.
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
 
-STAGES = [
-    (1, "Freeze the inputs"),
-    (2, "Build and clean"),
-    (3, "Reconcile to the slips"),
-    (4, "Produce the filing numbers"),
-    (5, "File and lock"),
-    (6, "After assessment"),
-]
-
-# Order matters: it is the order of docs/filing.md.
-# (id, stage, title, proves-it command, why)
-STEPS: List[Tuple[str, int, str, str, str]] = [
-    ("inputs-frozen", 1, "Full-year activity plus January of the next year",
+# The checks. (id, section, title, proves-it command, why); their place
+# in the list is items()'s.
+STEPS: List[Tuple[str, str, str, str, str]] = [
+    ("inputs-frozen", "Get your files", "Each account's broker exports, through January of the next year",
      "taxjson fetch / broker exports",
      "December trades settle in January and option closes after year end change the year."),
-    ("export-coverage", 1, "Each broker's exports reach the year end wherever it still holds positions",
+    ("export-coverage", "Get your files", "Each broker's exports reach the year end wherever it still holds positions",
      "taxjson run (its export-coverage warnings)",
      "A broker whose exports stop while it holds positions leaves its later sales, option "
      "expiries and income out of the books — nothing else says so."),
-    ("sheltered-inputs", 1, "Sheltered accounts' activity present",
+    ("sheltered-inputs", "Get your files", "Sheltered accounts' activity present",
      "inputs/<sheltered>/",
      "RRSP/LIRA/TFSA/RESP purchases decide the superficial-loss rule for the taxable accounts."),
-    ("crypto-inputs", 1, "Crypto ledgers and trades for the full year",
+    ("crypto-inputs", "Get your files", "Crypto ledgers and trades for the full year",
      "inputs/<crypto>/",
      "Every disposition of a coin, including swaps and fees, is a capital event."),
-    ("roc-entered", 1, "Return of capital (T3 box 42) entered before trusting any ACB",
+    ("roc-entered", "Fill the gaps", "Return of capital (T3 box 42) entered before trusting any ACB",
      "ADJUST lines / [[distributions]] in taxjson.toml",
      "Some funds publish ROC factors only after year end; without them the ACB is overstated."),
-    ("inputs-committed", 1, "Inputs, config, maps and manifests committed",
+    ("inputs-committed", "Tidy the config", "Inputs, config, maps and manifests committed",
      "git status",
      "The filed books must be rebuildable years later."),
-    ("run-clean", 2, "Full run with zero validation errors and nothing pending",
+    ("run-clean", "Build the books", "Full run with zero validation errors and nothing pending",
      "taxjson run",
      "A validation error means a row the engine could not book; a pending election means an account was skipped."),
-    ("check-dates", 2, "Every trade and settlement date is possible for its market",
+    ("check-dates", "Check", "Every trade and settlement date is possible for its market",
      "taxjson check-dates",
      "A date on a closed day, or a settlement before the trade, moves a sale to the wrong day's rate or the wrong year."),
-    ("sanity", 2, "Positions tie to the broker holdings",
+    ("sanity", "Check", "Positions tie to the broker holdings",
      "taxjson sanity",
      "The only acceptable differences are trades after the last export."),
-    ("missing-history", 2, "No position with missing cost basis affects the year",
+    ("missing-history", "Fill the gaps", "No position with missing cost basis affects the year",
      "taxjson find-missing-history",
      "Missing basis distorts the year either way: a sale with no earlier buy in the data "
      "(truncated history) is booked as a short and left out of the year, understating the "
      "proceeds and gain; shares acquired at $0 cost (an undeclared corporate action) "
      "overstate the gain by the missing basis."),
-    ("renames", 2, "Every ticker change dated; no undeclared trade in an old ticker after its rename",
+    ("renames", "Fill the gaps", "Every ticker change dated; no undeclared trade in an old ticker after its rename",
      "taxjson renames",
      "A rename carries the position and cost on its date; a later trade in the old ticker is "
      "another security unless ticker.map folds it (`late=fold` / `late=separate`)."),
-    ("journals", 2, "Every journal between two listings joined or settled",
+    ("journals", "Fill the gaps", "Every journal between two listings joined or settled",
      "taxjson journals --pending",
      "A broker journal moves a position from one listing of a security to another; one the books do "
      "not pool leaves a long on one listing and a short on the other, and a sale's cost wrong."),
-    ("elections", 2, "No unresolved merger or spin-off election",
+    ("elections", "Build the books", "No unresolved merger or spin-off election",
      "taxjson elect --pending",
      "A deferred election leaves the account out of the run."),
-    ("crypto-sends", 2, "Crypto sends classified (own wallet, gift or payment)",
+    ("crypto-sends", "Fill the gaps", "Crypto sends classified (own wallet, gift or payment)",
      "taxjson crypto-sends",
      "A crypto send that left your ownership is a disposition at fair value; only you know which sends did."),
-    ("audit", 2, "Every disposition traced and tied",
+    ("audit", "Check", "Every disposition traced and tied",
      "taxjson audit",
      "The audit walks each sale from the broker row to the reported gain."),
-    ("wash-reviewed", 2, "Every superficial-loss denial reviewed",
+    ("wash-reviewed", "Check", "Every superficial-loss denial reviewed",
      "taxjson wash-sales",
      "A permanently denied loss (registered-account or affiliated-person repurchase) is gone from "
      "your return; make sure each is real (an affiliated person adds it to their own ACB)."),
-    ("filing-positions", 2, "Every filing position against the superficial-loss rule confirmed",
+    ("filing-positions", "Check", "Every filing position against the superficial-loss rule confirmed",
      "taxjson sum (FILING POSITIONS)",
      "An ALLOWLOSS line claims a loss the rule would deny: it is your position, not the rule's "
      "test. Keep its reason and be ready to support it; delete the line to apply the rule."),
-    ("option-boundary", 2, "Year-straddling written options need no prior-year amendment",
+    ("option-boundary", "Check", "Year-straddling written options need no prior-year amendment",
      "taxjson option-boundary",
      "Under ITA s.49 an assignment in a later year moves the premium; a filed year may need a T1-ADJ."),
-    ("handoff", 2, "Last year's closing positions carried in exactly once",
+    ("handoff", "Check", "Last year's closing positions carried in exactly once",
      "taxjson handoff",
      "A Dec 31 trade settling in January, a dropped lot, or a correction applied to one year only makes a gain vanish or count twice."),
-    ("t5008", 3, "T5008 slips reconcile to the computed dispositions",
+    ("t5008", "Results", "T5008 slips reconcile to the computed dispositions",
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
-    ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the books' income (dividends, box 18, ROC, foreign tax, "
+    ("t5-t3", "Results", "T5 / T3 / NR4 slips agree with the books' income (dividends, box 18, ROC, foreign tax, "
      "interest)",
      "taxjson slip-audit",
      "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
@@ -135,46 +150,46 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "year, a T3's split (capital gains box 21, return of capital box 42). A difference "
      "you accept is answered per account by `taxjson checklist --done t5-t3`; NR4 slips "
      "are compared by hand."),
-    ("foreign-tax", 3, "Foreign tax withheld taken from the slips (line 40500 / T2209)",
+    ("foreign-tax", "Results", "Foreign tax withheld taken from the slips (line 40500 / T2209)",
      "T5 box 15/16, T3 box 33/34",
      "The credit is limited to what the slips show, not what the broker rows imply."),
-    ("form-export", 4, "Schedule 3 rows exported and their total equals the report",
+    ("form-export", "Results", "Schedule 3 rows exported and their total equals the report",
      "taxjson form-export",
      "The export is what goes on the return; the .sum is what the engine computed — they must agree."),
-    ("t1135", 4, "T1135 filed when foreign property cost exceeded CAD 100,000",
+    ("t1135", "Results", "T1135 filed when foreign property cost exceeded CAD 100,000",
      "taxjson t1135",
      "ITA 233.3: the test is on cost at any time in the year, not year-end value."),
-    ("carryover", 4, "Net capital losses of other years applied and recorded",
+    ("carryover", "Results", "Net capital losses of other years applied and recorded",
      "taxjson carryover, [carryover] claimed in taxjson.toml",
      "Line 25300; the ledger only knows what was claimed if you write it down — "
      "record the 100% loss applied (line 25300 divided by the inclusion rate)."),
-    ("fx-cash", 4, "FX gain on foreign cash reviewed (ITA s.39(1.1), $200 de minimis)",
+    ("fx-cash", "Results", "FX gain on foreign cash reviewed (ITA s.39(1.1), $200 de minimis)",
      "taxjson fx-cash",
      "Foreign currency is property; the net gain above $200 is a capital gain. The default "
      "ledger is NOT RELIABLE (it reads no conversions, deposits or margin balances); the "
      "opt-in ledger v2 (fx_cash_ledger = \"v2\") is under audit."),
-    ("fees", 4, "Carrying charges (margin interest) for line 22100 taken from the statements",
+    ("fees", "Results", "Carrying charges (margin interest) for line 22100 taken from the statements",
      "broker statements (`taxjson events` lists the INTEREST rows)",
      "Interest on money borrowed to invest is deductible on line 22100; trade "
      "commissions are not (they are already in the ACB and proceeds). The "
      "account .sum's CASH INTEREST line nets credit against debit interest, "
      "so it is not the interest paid."),
-    ("estimate", 4, "Tax estimate and instalment position checked",
+    ("estimate", "Results", "Tax estimate and instalment position checked",
      "taxjson estimate, taxjson instalments",
      "A sanity check on the tax owed and on what was already paid."),
-    ("amt", 4, "Minimum tax (AMT) and its carryover checked",
+    ("amt", "Results", "Minimum tax (AMT) and its carryover checked",
      "taxjson amt, [estimate] amt_carryover",
      "Minimum tax paid in the 7 preceding years is recovered against regular tax above "
      "the minimum (ITA s.120.2, line 40427), and a year where AMT binds starts a new "
      "carryover; the estimate applies one only when [estimate] amt_carryover (your notice of "
      "assessment / T691) or last year's close-year lock carries it."),
-    ("filed-lock", 5, "Return filed and the year locked",
+    ("filed-lock", "Year end", "Return filed and the year locked",
      "taxjson close-year",
      "The lock is what check-filed and option-boundary use to detect drift and to word a T1-ADJ."),
-    ("lock-committed", 5, "The filed/<year>.json lock committed",
+    ("lock-committed", "Year end", "The filed/<year>.json lock committed",
      "git status filed/",
      "The lock is the record of what was filed."),
-    ("noa", 6, "Notice of Assessment compared; net tax owing carried into next year's [instalments]",
+    ("noa", "Year end", "Notice of Assessment compared; net tax owing carried into next year's [instalments]",
      "prior_year_net_tax",
      "CRA charges interest on the least of the methods your figures support."),
 ]
@@ -262,8 +277,9 @@ def is_us(country: str) -> bool:
     return is_usa(country)
 
 
-def step_meta(sid: str, country: str) -> Tuple[str, int, str, str, str]:
-    """(id, stage, title, command, why) for this project's country."""
+def step_meta(sid: str, country: str) -> Tuple[str, str, str, str, str]:
+    """(id, section, title, command, why) of a check for this project's
+    country."""
     base = next(s for s in STEPS if s[0] == sid)
     if is_us(country) and isinstance(US_STEPS.get(sid), tuple):
         title, cmd, why = US_STEPS[sid]
@@ -277,7 +293,14 @@ def step_meta(sid: str, country: str) -> Tuple[str, int, str, str, str]:
 
 
 SYMBOL = {"done": "[x]", "attention": "[!]", "todo": "[ ]", "manual": "[m]",
-          "blocked": "[b]", "n/a": "[-]", "skipped": "[~]"}
+          "blocked": "[b]", "n/a": "[-]", "skipped": "[~]", "review": "[?]"}
+NEXT_MARK = "[>]"
+# Every effective status, in the order the counts are shown.
+STATUSES = ("done", "skipped", "attention", "todo", "blocked", "manual",
+            "review", "n/a")
+# Statuses that leave nothing to do: the exit is 0 when every item has
+# one. `review` (yours to run and read) never keeps the list open.
+PASSED = ("done", "n/a", "skipped", "review")
 
 
 @dataclass
@@ -298,6 +321,9 @@ class Result:
     # answers the keys it recorded (question_answers) and no others — a
     # later gap or contract is a new question (apply_override).
     answers: List[str] = field(default_factory=list)
+    # False for a `todo` nothing can be done about yet (the year is still
+    # open, a check --quick skipped): never the NEXT item, still open.
+    actionable: bool = True
 
     @property
     def effective(self) -> str:
@@ -316,7 +342,7 @@ class Result:
 
     @property
     def passed(self) -> bool:
-        return self.effective in ("done", "n/a", "skipped")
+        return self.effective in PASSED
 
 
 @dataclass
@@ -455,9 +481,15 @@ def _is_git_repo(root: Path) -> bool:
     return code == 0 and out.strip() == "true"
 
 
+# A captured message's program name and label: a detail shows the
+# message only (docs/output-style.md: no label behind a program name).
+_MSG_PREFIX = re.compile(r"^(?:(?:taxjson|tjs)[\w -]*:\s+)?"
+                         r"(?:(?:error|warning|note):\s+)?")
+
+
 def _last_line(text: str) -> str:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    return lines[-1] if lines else ""
+    return _MSG_PREFIX.sub("", lines[-1]) if lines else ""
 
 
 def _accounts_of(ctx: Ctx, kind: str) -> List[str]:
@@ -568,7 +600,8 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
         if ctx.today <= date(ctx.year, 12, 31):
             return Result("inputs-frozen", "todo",
                           f"year still open — {', '.join(ib_short)}; "
-                          f"download the rest of {ctx.year} after it ends")
+                          f"download the rest of {ctx.year} after it ends",
+                          actionable=False)
         return Result("inputs-frozen", "attention",
                       f"{', '.join(ib_short)} — {ctx.year} activity after "
                       f"it is not in the books; download the statement "
@@ -577,7 +610,8 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
         if ctx.today <= cutoff:
             return Result("inputs-frozen", "todo",
                           f"year still open — {', '.join(early)}; "
-                          f"re-export after {cutoff.isoformat()}")
+                          f"re-export after {cutoff.isoformat()}",
+                          actionable=False)
         return Result("inputs-frozen", "attention",
                       f"{', '.join(early)} was taken before "
                       f"{cutoff.isoformat()} — activity after it is not in "
@@ -587,7 +621,8 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
     if ctx.today <= cutoff:
         return Result("inputs-frozen", "todo",
                       f"year still open — latest activity {latest[:10] or '?'}; "
-                      f"re-export after {cutoff.isoformat()}")
+                      f"re-export after {cutoff.isoformat()}",
+                      actionable=False)
     return Result("inputs-frozen", "attention",
                   f"latest activity {latest[:10] or '?'} — January {ctx.year + 1} "
                   f"is not in the books yet")
@@ -2031,7 +2066,8 @@ def d_t1135(ctx: Ctx) -> Result:
                       f"below the CAD 100,000 threshold so far on these "
                       f"books (through {rep.get('as_of') or '?'}) — re-check "
                       f"after Dec 31; foreign property outside them (a "
-                      f"foreign bank account, cash) is not counted")
+                      f"foreign bank account, cash) is not counted",
+                      actionable=False)
     # The books only (S052-13, A2-0682): a foreign bank account or cash
     # outside them adds to the same threshold.
     return Result("t1135", "done",
@@ -2395,8 +2431,7 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
     removing a mark that was not there (nothing changed). `answers`: the
     question keys a DONE mark answers (QUESTION_STEPS, question_answers),
     stored with it."""
-    ids = {s[0] for s in STEPS}
-    if step not in ids:
+    if step not in item_ids():
         raise KeyError(step)
     with _StateLock(root):
         return _set_override_locked(root, year, step, mark, note, today,
@@ -2520,36 +2555,723 @@ def _set_override_locked(root: Path, year: int, step: str,
     return True
 
 
+# ------------------------------------------------------------------- items
+SCHEMA_VERSION = 2
+GUIDE = "docs/getting-started.md"
+INSTALL = 'bash -c "$(curl -fsSL https://taxjson.com/install.sh)"'
+
+SECTIONS = ("Set up", "Get your files", "Build the books", "Fill the gaps",
+            "Tidy the config", "Check", "Results", "Through the year",
+            "Share safely", "Year end")
+
+# Commands no item names, each with the reason (tests/test_checklist_items
+# reads this): every other command in taxjson_run._COMMAND_GROUPS must be
+# named by an item.
+EXCLUDED: Dict[str, str] = {
+    "deploy": "development machine only: puts a release on this "
+              "machine's production copy",
+    "promote": "development machine only: moves a release channel",
+}
+
+
+@dataclass(frozen=True)
+class Cmd:
+    command: str
+    note: str = ""
+    country: Optional[str] = None       # one country's projects only
+
+
+@dataclass(frozen=True)
+class Item:
+    """One line of the list. A check (its id in STEPS) takes its title
+    from step_meta (the US wording in a US project) and, when `why` is
+    empty, its why too; `section` is then STEPS' own."""
+    id: str
+    section: str
+    title: str
+    why: str
+    cmds: Tuple[Cmd, ...] = ()
+    how: str = ""
+    do: str = ""            # the closing line's action; default: cmds[0]
+    us_how: Optional[str] = None
+
+    @property
+    def check(self) -> bool:
+        return self.id in DETECTORS
+
+
+def _check(sid: str, why: str = "", cmds: Tuple[Cmd, ...] = (),
+           how: str = "", do: str = "",
+           us_how: Optional[str] = None) -> Item:
+    base = next(s for s in STEPS if s[0] == sid)
+    return Item(sid, base[1], "", why, cmds, how, do, us_how)
+
+
+def _spec(year: int, country: Optional[str]) -> List[Item]:
+    """Every item, in order, before the country's commands are picked.
+    `year` fills the example commands; `country` (None outside a project)
+    picks the init example."""
+    ctry = country or "canada"
+    nxt = year + 1
+    return [
+        # -------------------------------------------------------- set up
+        Item("install", "Set up", "Install or upgrade taxjson",
+             "The same line upgrades: the fix for a problem you hit "
+             "starts with the newest release.",
+             (Cmd(INSTALL, "installs, or upgrades in place"),
+              Cmd(INSTALL + " _ --channel beta",
+                  "stable (the default), beta, latest or dev"),
+              Cmd(INSTALL + " _ --without-fetch",
+                  "leave out the taxjson-fetch plugin"),
+              Cmd("tjs --version", "what is installed; `tjs channels`: "
+                  "where each channel points"),
+              Cmd("tjs help", "every command by group; `tjs COMMAND -h` "
+                  "explains one"))),
+        Item("init", "Set up", "Create the year's project",
+             "One folder per tax year: taxjson.toml, a ticker.map and an "
+             "inputs/<account>/ folder per account, each with a "
+             "README.txt naming the export to download.",
+             (Cmd(f"mkdir -p ~/taxes/{year} && cd ~/taxes/{year}",
+                  "the year you file"),
+              Cmd(f"tjs init --country {ctry} --year {year}",
+                  "or --country " + ("usa" if ctry == "canada"
+                                     else "canada")))),
+        Item("configure", "Set up", "Make taxjson.toml match your accounts",
+             "Sheltered accounts count too: a purchase there can deny a "
+             "loss in a taxable account. Crypto rows are dated in "
+             "local_timezone.",
+             (Cmd("tjs migrate", "an older project: moves its old map "
+                  "files into ticker.map / taxjson.toml"),),
+             how="One [accounts.NAME] section per account you have "
+                 "(type = \"taxable\" or \"sheltered\"; crypto = true for "
+                 "Coinbase or Kraken), the others deleted; with a crypto "
+                 "account, [settings] local_timezone (e.g. "
+                 "\"America/Toronto\").",
+             do="edit taxjson.toml"),
+        # ------------------------------------------------- get your files
+        _check("inputs-frozen",
+               "A sale's cost comes from its purchase, which may be years "
+               "back; December trades settle in January.",
+               (Cmd("tjs fetch", "with the taxjson-fetch plugin "
+                    "(Questrade, IBKR Flex); `tjs fetch --list` names the "
+                    "fetchers"),),
+               how="Download all the history each broker gives, through "
+                   "January of the next year, not just the tax year, and "
+                   "keep a positions report with book cost from the start "
+                   f"of that history and from today. Which export per "
+                   f"broker: {GUIDE}, step 3, and each folder's "
+                   "README.txt.",
+               do="download the exports into inputs/<account>/ (or "
+                  "`tjs fetch`)"),
+        _check("export-coverage",
+               cmds=(Cmd("tjs run", "its Warning names a broker whose "
+                         "exports stop while it holds positions"),
+                     Cmd("tjs checklist --done export-coverage",
+                         "the broker had no later activity: answers the "
+                         "gaps shown")),
+               do="download the later export (or confirm with `tjs "
+                  "checklist --done export-coverage`)"),
+        _check("sheltered-inputs",
+               how="Each RRSP / TFSA / LIRA / RESP account's exports in "
+                   "its inputs/<account>/ folder too.",
+               us_how="Each IRA / Roth / 401(k) account's exports in its "
+                      "inputs/<account>/ folder too.",
+               do="download the sheltered accounts' exports into "
+                  "inputs/<account>/"),
+        _check("crypto-inputs",
+               how="The Coinbase / Kraken ledgers and trade files for the "
+                   "whole year in the crypto account's inputs/<account>/.",
+               do="download the crypto ledgers into inputs/<account>/"),
+        # ------------------------------------------------ build the books
+        _check("run-clean",
+               "Its closing list names what the books show is still "
+               "incomplete, each with the command that fixes it.",
+               (Cmd("tjs run", "every file read, reports/ written; asks "
+                    "about mergers and spin-offs"),
+                Cmd("tjs run --no-input", "never asks: an open election "
+                    "exits 3 (next step)"))),
+        _check("elections",
+               "An account with an open election is left out of the run; "
+               "a spin-off valued at $0 books no income and a $0 cost.",
+               (Cmd("tjs elect --pending", "what is open, with ready "
+                    "--set lines"),
+                Cmd("tjs elect ACCOUNT --set ID=ELECTION", "record one"),
+                Cmd("tjs spinoffs", "each spin-off's election, value and "
+                    "cost; `tjs splits`: splits and consolidations"))),
+        # -------------------------------------------------- fill the gaps
+        _check("missing-history",
+               "Exports rarely reach back to every purchase: a sale with "
+               "no purchase is left out of the year, and a $0 cost "
+               "overstates the gain.",
+               (Cmd("tjs find-missing-history", "sales with no purchase, "
+                    "$0-cost shares, and the fixes in order"),
+                Cmd("tjs opening ACCOUNT FILE", "an opening balance from "
+                    "a positions report at the start of your history"),
+                Cmd("tjs find-missing-history --write-purchases",
+                    "drafts IB purchases from the broker's cost, as .tt "
+                    "lines to review"),
+                Cmd("tjs find-missing-history --write-missing-history",
+                    "only for what cannot be recovered"),
+                Cmd("tjs find-missing-history --write-missing-history "
+                    "--outside-year", "positions short in an earlier "
+                    "year that do not touch this one"),
+                Cmd("tjs list --negative", "the same positions in the "
+                    "holdings view"))),
+        Item("transfers", "Fill the gaps",
+             "Shares moved in from another broker",
+             "Their cost is the original purchase, not the day they "
+             "arrived.",
+             (Cmd("tjs transfers", "the custody moves the books leave "
+                  "out"),),
+             how="A transfer-in with no cost is kept out of the books: "
+                 f"enter its purchase as a .tt line ({GUIDE}, 5c)."),
+        Item("ticker-map", "Fill the gaps",
+             "Symbol spellings and listings (ticker.map)",
+             "Two spellings or listings of one security must be one "
+             "position for its cost to be right.",
+             (Cmd("tjs ticker-map --suggest", "the lines the last run "
+                  "suggested, each with its reason"),
+              Cmd("tjs ticker-map --suggest --write", "adds them, one by "
+                  "one (--all: every one)"))),
+        _check("journals",
+               "A journal the books do not pool leaves a long on one "
+               "listing and a short on the other.",
+               (Cmd("tjs journals --pending", "the journals not joined or "
+                    "settled"),)),
+        _check("renames",
+               "A rename carries the position and its cost on its date; a "
+               "later trade in the old ticker is another security unless "
+               "ticker.map says otherwise.",
+               (Cmd("tjs renames --pending", "the renames to declare or "
+                    "resolve"),
+                Cmd("tjs renames", "every rename with its date and "
+                    "source"))),
+        _check("crypto-sends",
+               cmds=(Cmd("tjs crypto-sends", "the sends that did not "
+                         "arrive in another of your accounts"),
+                     Cmd("tjs crypto-sends ACCOUNT --set ID=self",
+                         "or payment, or gift", "canada"),
+                     Cmd("tjs crypto-sends ACCOUNT --set ID=self",
+                         "or payment", "usa"))),
+        Item("tt-lines", "Fill the gaps",
+             "Anything no export holds: .tt lines",
+             "The run reads a .tt file like a broker file; `tjs run "
+             "--strict` refuses a line whose total is not quantity x "
+             "price +/- fee.",
+             (Cmd("tjs events", "the books' rows in the same .tt format, "
+                  "to copy from"),),
+             how="A purchase from before your downloads, a dividend from "
+                 "a slip (Webull), a return of capital (ADJUST): a line "
+                 "in a .tt file in inputs/<account>/ (README, "
+                 "\"Importing manual cost basis\"). Non-cash fund "
+                 "distributions go in [[distributions]] in "
+                 "taxjson.toml."),
+        _check("roc-entered",
+               cmds=(Cmd("tjs roc-sum", "the year's return of capital "
+                         "per security, as the books hold it"),),
+               how="An ADJUST line in a .tt file, or [[distributions]] in "
+                   "taxjson.toml, per fund that published one (README, "
+                   "\"Non-cash distributions\"); then confirm with `tjs "
+                   "checklist --done roc-entered`."),
+        # ------------------------------------------------ tidy the config
+        Item("format", "Tidy the config", "Lay out the config files",
+             "The same layout every year, so a diff of two years' "
+             "projects shows only what changed; no number changes.",
+             (Cmd("tjs format", "taxjson.toml as the template lays it "
+                  "out: shows the diff"),
+              Cmd("tjs format --write", "applies it (keeps "
+                  "taxjson.toml.bak)"),
+              Cmd("tjs format-map --write", "ticker.map in keyword "
+                  "groups; dated events move to .tt lines (`tjs "
+                  "format-map` shows the diff)"))),
+        _check("inputs-committed",
+               cmds=(Cmd("git status", "what is not committed yet"),),
+               do="commit inputs/, taxjson.toml and ticker.map"),
+        # ---------------------------------------------------------- check
+        Item("scan", "Check", "Look for tax-efficiency mistakes",
+             "Advice on where you hold what; it changes no number of "
+             "this year.",
+             (Cmd("tjs scan", "e.g. a dividend payer held where its "
+                  "withholding is lost, a listing pair ticker.map does "
+                  "not join"),)),
+        _check("sanity",
+               "Missing history in a position you still hold shows only "
+               "here: the books cannot see a purchase that is not in the "
+               "files.",
+               (Cmd("tjs sanity", "against the holdings files named in "
+                    "taxjson.toml (holdings = [...])"),
+                Cmd("tjs sanity ACCOUNT=FILE", "against one positions "
+                    "report: an IB statement, an RBC Holdings Export or a "
+                    "[[holding]] .toml"))),
+        Item("edge-cases", "Check", "Trades on a boundary",
+             "A trade a day either side of Dec 31, or of a loss's 30-day "
+             "window, changes the year or the denial.",
+             (Cmd("tjs edge-cases", "each one, with where it lands and "
+                  "why"),)),
+        _check("option-boundary",
+               "A contract written before option_grant_timing_since and "
+               "closed this year is taxed at the close: right only if the "
+               "year it was written did not report its premium (ITA "
+               "s.49(1)), which only you know.",
+               (Cmd("tjs option-boundary", "each contract, where its "
+                    "premium lands and what to do", "canada"),
+                Cmd("tjs list", "the option positions: one past its "
+                    "expiry needs its expiry, exercise or assignment row",
+                    "usa")),
+               how="If last year's return reported the premiums when "
+                   "written, set option_grant_timing_since = <that year> "
+                   "in [settings]; if it did not, confirm with `tjs "
+                   "checklist --done option-boundary`.",
+               us_how=""),
+        _check("wash-reviewed",
+               "A loss denied by a registered-account (US: IRA) "
+               "repurchase is gone for good: make sure each is real.",
+               (Cmd("tjs wash-sales", "each loss denied this year, and "
+                    "why"),
+                Cmd("tjs wash-sales --explain", "with the matching "
+                    "purchases"))),
+        _check("filing-positions",
+               cmds=(Cmd("tjs sum", "FILING POSITIONS lists each "
+                         "ALLOWLOSS line with the loss it claims"),)),
+        _check("check-dates",
+               "A date on a closed day, or a settlement before the trade, "
+               "moves a sale to the wrong rate or year.",
+               (Cmd("tjs check-dates", "every date against its market's "
+                    "calendar"),)),
+        _check("audit",
+               "The audit walks each sale from the broker row to the "
+               "reported gain.",
+               (Cmd("tjs audit", "every disposition traced and tied out; "
+                    "`tjs audit SYMBOL`: one security"),)),
+        _check("handoff",
+               "A Dec 31 trade settling in January, or a dropped lot, "
+               "makes a gain vanish or count twice.",
+               (Cmd("tjs handoff", "this year's opening against last "
+                    "year's close-year record"),),
+               how="Set [settings] prior_year_record to last year's "
+                   "filed/<year>.json (your first year: confirm with `tjs "
+                   "checklist --done handoff`)."),
+        # -------------------------------------------------------- results
+        Item("sum", "Results", "Read the year's numbers",
+             "`Done.` does not mean right: read them once the gaps are "
+             "filled.",
+             (Cmd("tjs sum", "the year's gains, ending with the lines for "
+                  "your return"),
+              Cmd("tjs list", "what the books hold, with book cost (`tjs "
+                  "list margin 2026-04-28`: as of a date); `tjs shares`: "
+                  "per symbol across accounts"))),
+        Item("explore", "Results", "Look closer at any number",
+             "Every figure traces back to a broker row and a stated "
+             "rule.",
+             (Cmd("tjs audit SYMBOL", "each gain traced to its broker "
+                  "row"),
+              Cmd("tjs tax-logic", "every rule taxjson applies, one line "
+                  "each"),
+              Cmd("tjs gains", "rows; also `tjs trades`, `tjs events`, "
+                  "`tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, "
+                  "`tjs leaps`"),
+              Cmd("tjs divs-sum", "totals; also `tjs dil-sum`, `tjs "
+                  "roc-sum`, `tjs fees-sum`, `tjs leaps-sum`, `tjs "
+                  "ccd-sum`, `tjs trades-sum`, `tjs winners`, `tjs "
+                  "stats`"))),
+        _check("t5008",
+               "The tax authority matches your return to the slips: a "
+               "difference explained now is not a letter later.",
+               (Cmd("tjs reconcile-slips inputs/slips/*.csv", "the T5008 "
+                    "CSVs against the dispositions", "canada"),
+                Cmd("tjs reconcile-slips inputs/slips/*.csv", "the 1099-B "
+                    "/ 1099-DA CSVs against the dispositions", "usa"))),
+        _check("t5-t3",
+               "The slip is what the return reports: a box-18 "
+               "capital-gains dividend, a T3's return of capital or a "
+               "payment the exports missed shows up here, with the lines "
+               "that fix the books.",
+               (Cmd("tjs slip-audit", "the slips typed into inputs/slips/"
+                    "slips.toml (`tjs slip-audit --template`) and IB's "
+                    "dividends reports, box by box", "canada"),
+                Cmd("tjs divs-sum", "with `tjs roc-sum`: compare the "
+                    "TAXABLE lines with the 1099-DIV by hand", "usa")),
+               how="Type each T5 / T3 into inputs/slips/slips.toml (or "
+                   "drop IB's U*.YYYY.dividends.csv there), then run it.",
+               us_how=""),
+        _check("foreign-tax",
+               how="Line 40500 / T2209 from the slips: T5 box 15/16, T3 "
+                   "box 33/34.",
+               us_how="Form 1116 from the 1099-DIV, box 7.",
+               do="take the foreign tax from the slips, then `tjs "
+                  "checklist --done foreign-tax`"),
+        _check("form-export",
+               "The export is what goes on the return; its totals must "
+               "equal `tjs sum`.",
+               (Cmd("tjs form-export", "the Schedule 3 rows", "canada"),
+                Cmd("tjs form-export", "the Form 8949 rows and Schedule D",
+                    "usa"),
+                Cmd("tjs form-export --form txf --out gains.txf",
+                    "a TurboTax import", "usa"))),
+        _check("t1135",
+               cmds=(Cmd("tjs t1135", "foreign property test and tables",
+                         "canada"),)),
+        _check("carryover",
+               cmds=(Cmd("tjs carryover", "capital-loss carryforward "
+                         "across years"),)),
+        _check("fx-cash",
+               cmds=(Cmd("tjs fx-cash", "currency gains on foreign "
+                         "cash"),)),
+        _check("fees",
+               cmds=(Cmd("tjs events", "lists the INTEREST rows"),),
+               do="take the interest paid from the statements, then `tjs "
+                  "checklist --done fees`"),
+        _check("estimate",
+               "A check on what you owe before you file.",
+               (Cmd("tjs estimate", "tax on the year's investment income "
+                    "([estimate] other_income in taxjson.toml)"),
+                Cmd("tjs instalments", "instalments due, paid and "
+                    "interest", "canada"))),
+        _check("amt",
+               cmds=(Cmd("tjs amt", "minimum tax, line by line",
+                         "canada"),)),
+        # ----------------------------------------------- through the year
+        Item("trading", "Through the year", "Before you trade",
+             "The loss rules look 30 days both ways: check before the "
+             "trade, not after.",
+             (Cmd("tjs wash-radar", "the loss windows open today"),
+              Cmd("tjs buy-check SYMBOL", "would buying today cancel a "
+                  "recent loss?"),
+              Cmd("tjs sell-check SYMBOL", "would selling at a loss "
+                  "today keep the loss?"),
+              Cmd("tjs harvest", "unrealized gains and losses at current "
+                  "prices (looks them up)"),
+              Cmd("tjs watch", "what changed since the last watch "
+                  "(cron)"))),
+        # --------------------------------------------------- share safely
+        Item("redact", "Share safely", "Share a sample, never the exports",
+             "For a bug report or a broker taxjson does not read yet; "
+             "the redactor works from patterns, so read the copy first.",
+             (Cmd("tjs redact", "copies inputs/ to inputs_redact/ with "
+                  "account numbers and names replaced"),)),
+        # ------------------------------------------------------- year end
+        _check("filed-lock",
+               "The lock is what the drift check and next year's handoff "
+               "compare with.",
+               (Cmd("tjs close-year", "after filing: filed/<year>.json "
+                    "(commit it)"),
+                Cmd("tjs check-filed", "later: recomputes filed years and "
+                    "shows any drift"))),
+        _check("lock-committed",
+               cmds=(Cmd("git status filed/", "the lock not committed "
+                         "yet"),),
+               do="commit filed/<year>.json"),
+        Item("next-year", "Year end", "Start next year's project",
+             "Next year's cost comes from this year's books.",
+             (Cmd(f"tjs init --country {ctry} --year {nxt} ../{nxt}",
+                  "a folder beside this one"),),
+             how=f"Copy inputs/ and ticker.map into the new folder, set "
+                 f"[settings] prior_year_record = "
+                 f"\"../{year}/filed/{year}.json\" in its taxjson.toml, "
+                 f"then `tjs handoff` there."),
+        _check("noa",
+               how="Compare the Notice of Assessment with the return; "
+                   "carry its net tax owing into next year's "
+                   "[instalments] prior_year_net_tax.",
+               us_how="",
+               do="compare the NOA, then `tjs checklist --done noa`"),
+    ]
+
+
+def items(year: int, country: Optional[str] = None) -> List[Item]:
+    """The list, in order, for a project of `country` (None outside a
+    project: every command, the Canadian titles). In a project the other
+    country's commands are left out, and a check gets its country's
+    title, why and how."""
+    from dataclasses import replace
+    out = []
+    for it in _spec(year, country):
+        if it.check:
+            _id, _sec, title, _cmd, why = step_meta(it.id, country
+                                                    or "canada")
+            us = country is not None and is_us(country)
+            # A US project: the check's US why (or its n/a reason).
+            it = replace(
+                it, title=title,
+                why=why if (us and it.id in US_STEPS) or not it.why
+                else it.why,
+                how=(it.us_how if us and it.us_how is not None
+                     else it.how))
+        if country:
+            it = replace(it, cmds=tuple(c for c in it.cmds
+                                        if c.country in (None, country)))
+        out.append(it)
+    return out
+
+
+def item_ids() -> List[str]:
+    """Every item id, in order (the same for both countries)."""
+    return [it.id for it in _spec(2025, None)]
+
+
+def item_meta(sid: str, country: Optional[str]) -> Tuple[str, str, str,
+                                                         str, str]:
+    """(id, section, title, command, why) of any item: a check's
+    step_meta, a step's own text (its first command)."""
+    if sid in DETECTORS:
+        return step_meta(sid, country or "canada")
+    it = next(i for i in items(date.today().year - 1, country)
+              if i.id == sid)
+    return (it.id, it.section, it.title,
+            it.cmds[0].command if it.cmds else "", it.why)
+
+
+_TJS = re.compile(r"(?<![\w-])tjs ([a-z][a-z0-9-]*)")
+
+
+def named_commands(year: int = 2025) -> Dict[str, List[str]]:
+    """{command: [item ids naming it]} over every command, note, how and
+    why text of the list (`tjs NAME`), both countries."""
+    out: Dict[str, List[str]] = {}
+    for it in _spec(year, None):
+        texts = [it.why, it.how, it.do, it.us_how or ""] \
+            + [t for c in it.cmds for t in (c.command, c.note)]
+        for t in texts:
+            for m in _TJS.finditer(t):
+                ids = out.setdefault(m.group(1), [])
+                if it.id not in ids:
+                    ids.append(it.id)
+    return out
+
+
+# ------------------------------------------------------------ step rules
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("taxjson")
+    except Exception:                                   # noqa: BLE001
+        return "unknown"
+
+
+def _load_json(p: Path) -> Optional[Dict[str, Any]]:
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+class _Facts:
+    """What several items read, read once: whether `taxjson run` wrote
+    reports, and its closing counts (reports/run_summary.json,
+    lib/first_run) for this year."""
+
+    def __init__(self, ctx: Ctx):
+        self.ctx = ctx
+        rep = ctx.reports
+        self.ran = rep.is_dir() and any(rep.glob("*.sum"))
+        self._summ: Any = False
+
+    @property
+    def summ(self) -> Optional[Dict[str, Any]]:
+        if self._summ is False:
+            from taxjson.lib import first_run as fr
+            doc = (_load_json(self.ctx.reports / fr.SUMMARY_FILE)
+                   if self.ran else None)
+            if doc is not None and str(doc.get("year")) != str(self.ctx.year):
+                doc = None
+            self._summ = doc
+        return self._summ
+
+    def wait(self, sid: str) -> Result:
+        """A step that reads the run's summary, before there is one."""
+        from taxjson.lib import first_run as fr
+        if not self.ran:
+            return Result(sid, "todo", "after `tjs run`")
+        return Result(sid, "todo", f"no reports/{fr.SUMMARY_FILE} for "
+                      f"{self.ctx.year} — re-run `tjs run`")
+
+
+def s_install(ctx: Ctx, f: _Facts) -> Result:
+    return Result("install", "done", f"taxjson {_version()}")
+
+
+def s_init(ctx: Ctx, f: _Facts) -> Result:
+    c = ctx.settings.get("country")
+    return Result("init", "done", f"taxjson.toml for {ctx.year}"
+                  + (f" ({c})" if c else ""))
+
+
+def s_configure(ctx: Ctx, f: _Facts) -> Result:
+    from taxjson.lib.migrate import legacy_files, legacy_message
+    issues = []
+    legacy = legacy_files(ctx.root)
+    if legacy:
+        issues.append(legacy_message(legacy))
+    accounts = {n: a for n, a in ctx.accounts.items() if isinstance(a, dict)}
+    if not accounts:
+        issues.append("no [accounts.NAME] section")
+    crypto = sorted(n for n, a in accounts.items() if a.get("crypto") is True)
+    if crypto and not ctx.settings.get("local_timezone"):
+        issues.append(f"[accounts.{crypto[0]}] is a crypto account but "
+                      f"[settings] has no local_timezone — set it, or "
+                      f"delete the section if you have no crypto")
+    if issues:
+        return Result("configure", "attention", "; ".join(issues))
+    return Result("configure", "done", ", ".join(
+        f"{n} ({'crypto' if a.get('crypto') else a.get('type', '?')})"
+        for n, a in accounts.items()))
+
+
+def s_transfers(ctx: Ctx, f: _Facts) -> Result:
+    from taxjson.lib import first_run as fr
+    summ = f.summ
+    if summ is None:
+        return f.wait("transfers")
+    tn = summ.get("transfer_in_no_cost") or []
+    tb = summ.get("transfer_in_book_value") or []
+    if tn:
+        return Result("transfers", "attention", f"{len(tn)} transfer-in(s) "
+                      f"kept out with no cost: {fr._names(tn)}")
+    if tb:
+        return Result("transfers", "review", f"{len(tb)} transfer-in(s) at "
+                      f"the broker's book value: {fr._names(tb)} — is it "
+                      f"your cost?")
+    return Result("transfers", "done", "no transfer-in without its cost")
+
+
+def s_ticker_map(ctx: Ctx, f: _Facts) -> Result:
+    if not (f.ran and ctx.cache.is_dir()):
+        return Result("ticker-map", "todo", "after `tjs run`")
+    from taxjson.lib import ticker_map_suggest as TS
+    offer, _skipped = TS.pending(ctx.root)
+    if offer:
+        return Result("ticker-map", "todo", f"{len(offer)} line(s) the "
+                      f"last run suggested: decide each")
+    return Result("ticker-map", "done", "nothing suggested")
+
+
+def s_tt_lines(ctx: Ctx, f: _Facts) -> Result:
+    tts = sorted(p for n in ctx.accounts
+                 for p in _data_files(ctx.root / "inputs" / n)
+                 if p.suffix.lower() == ".tt")
+    return Result("tt-lines", "review",
+                  f"{len(tts)} .tt file(s) in inputs/" if tts else "")
+
+
+def s_format(ctx: Ctx, f: _Facts) -> Result:
+    from taxjson.lib.config_template import format_config
+    from taxjson.lib.ticker_map_format import format_map
+    loose = []
+    try:
+        text = (ctx.root / "taxjson.toml").read_bytes().decode("utf-8-sig")
+        if format_config(text).changed:
+            loose.append("taxjson.toml")
+    except Exception:                                   # noqa: BLE001
+        loose.append("taxjson.toml")
+    tm = ctx.root / "ticker.map"
+    if tm.is_file():
+        try:
+            res = format_map(tm.read_bytes().decode("utf-8-sig"),
+                             migrate=True)
+        except Exception as e:                          # noqa: BLE001
+            return Result("format", "attention", f"ticker.map: {e}")
+        if res.problems:
+            return Result("format", "attention",
+                          f"{len(res.problems)} ticker.map problem(s) `tjs "
+                          f"run` refuses — `tjs format-map` names them")
+        if res.changed or res.migration_pending:
+            loose.append("ticker.map")
+    if loose:
+        return Result("format", "review", " and ".join(loose)
+                      + " not in the template layout")
+    return Result("format", "done", "taxjson.toml and ticker.map laid out")
+
+
+def _review(sid: str) -> Callable[[Ctx, _Facts], Result]:
+    def rule(ctx: Ctx, f: _Facts) -> Result:
+        return Result(sid, "review")
+    return rule
+
+
+def s_next_year(ctx: Ctx, f: _Facts) -> Result:
+    if (ctx.root / "filed" / f"{ctx.year}.json").is_file():
+        return Result("next-year", "review", f"start {ctx.year + 1}")
+    return Result("next-year", "review", "after you file")
+
+
+# The items no detector proves: each marked from the project's files.
+STEP_RULES: Dict[str, Callable[[Ctx, _Facts], Result]] = {
+    "install": s_install,
+    "init": s_init,
+    "configure": s_configure,
+    "transfers": s_transfers,
+    "ticker-map": s_ticker_map,
+    "tt-lines": s_tt_lines,
+    "format": s_format,
+    "scan": _review("scan"),
+    "edge-cases": _review("edge-cases"),
+    "sum": _review("sum"),
+    "explore": _review("explore"),
+    "trading": _review("trading"),
+    "redact": _review("redact"),
+    "next-year": s_next_year,
+}
+
+
+def _before_run(sid: str, ctx: Ctx, f: _Facts) -> Optional[Result]:
+    """A check's state before there is anything for its detector to
+    read: no export at all, no `taxjson run` yet. None: run it."""
+    if sid == "inputs-frozen":
+        names = list(ctx.accounts)
+        if names and not any(_data_files(ctx.root / "inputs" / n)
+                             for n in names):
+            return Result(sid, "todo", "no broker exports yet in "
+                          + ", ".join(f"inputs/{n}/" for n in names))
+    if sid == "run-clean" and not f.ran:
+        return Result(sid, "todo", "no reports/ yet")
+    return None
+
+
 # ----------------------------------------------------------------- evaluate
 def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
              quick: bool = False,
              progress: Optional[Callable[[str, str], None]] = None) -> List[Result]:
-    """Run the detectors (all, or `only` these ids). `progress(id, command)`
-    is called before each slow detector so a caller can say what it is
-    waiting on — the audit alone can take a minute on a big book."""
+    """Every item's result, in the list's order (all, or `only` these
+    ids): a check's detector, a step's rule, each with its checklist.json
+    mark applied. `progress(id, command)` is called before each slow
+    detector so a caller can say what it is waiting on — the audit alone
+    can take a minute on a big book."""
     state = load_state(ctx.root)
     overrides = state.get("overrides") or {}
     if state.get("year") not in (None, ctx.year) and overrides:
         # Marks from another year's project copied along — not this year's.
         overrides = {}
-    us = is_us(ctx.settings.get("country"))
+    country = ctx.settings.get("country")
+    us = is_us(country)
     has_taxable = any(a.get("type") == "taxable" for a in ctx.accounts.values())
+    facts = _Facts(ctx)
     results: List[Result] = []
-    for sid, stage, title, cmd, why in STEPS:
+    for sid in item_ids():
         if only and sid not in only:
             continue
         ov = overrides.get(sid) or {}
+        if sid in STEP_RULES:
+            try:
+                r = STEP_RULES[sid](ctx, facts)
+            except Exception as e:      # an item must never take the list down
+                r = Result(sid, "blocked", f"could not check: {e}")
+            apply_override(r, ov)
+            results.append(r)
+            continue
         if us and isinstance(US_STEPS.get(sid), str):
             results.append(Result(sid, "n/a", US_STEPS[sid]))
             continue
         if not has_taxable and sid in TAXABLE_ONLY:
             results.append(Result(sid, "n/a", "no taxable account — nothing to report"))
             continue
-        if quick and sid in SLOW:
-            r = Result(sid, "todo", "skipped by --quick (run without it to check)")
-        else:
+        r = _before_run(sid, ctx, facts)
+        if r is None and quick and sid in SLOW:
+            r = Result(sid, "todo", "skipped by --quick (run without it to check)",
+                       actionable=False)
+        if r is None:
             if progress and sid in SLOW:
-                progress(sid, step_meta(sid, ctx.settings.get("country"))[3])
+                progress(sid, step_meta(sid, country)[3])
             try:
                 r = DETECTORS[sid](ctx)
             except Exception as e:      # a detector must never take the list down
@@ -2557,6 +3279,25 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
         apply_override(r, ov)
         results.append(r)
     return results
+
+
+def next_result(results: List[Result]) -> Optional[Result]:
+    """The NEXT item: the first one to do, needing attention or blocked
+    that something can be done about now; else the first one to confirm
+    (manual); None when nothing is left."""
+    for r in results:
+        if r.effective in ("attention", "todo", "blocked") and r.actionable:
+            return r
+    return next((r for r in results if r.effective == "manual"), None)
+
+
+def _do(it: Item, r: Optional[Result] = None) -> str:
+    """What the closing line tells the user to do for item `it`."""
+    if r is not None and r.effective == "manual":
+        return f"confirm it, then `tjs checklist --done {it.id}`"
+    if it.do:
+        return it.do
+    return f"`{it.cmds[0].command}`" if it.cmds else it.title
 
 
 def stderr_progress(sid: str, cmd: str) -> None:
@@ -2573,43 +3314,83 @@ def stderr_progress(sid: str, cmd: str) -> None:
     print(f"  checking {sid} ({cmd}) ...", file=sys.stderr, flush=True)
 
 
+
+
+# ------------------------------------------------------------------ output
+def _cmd_lines(it: Item, w: int, lead: str, country: Optional[str]
+               ) -> List[str]:
+    """Each command on its own line, never wrapped, its note after
+    `  # ` when it fits, else wrapped on the lines under it."""
+    from taxjson.lib.out import printable, wrap
+
+    def shown(c: Cmd) -> str:
+        # Outside a project a one-country command says whose it is, as
+        # the help page marks it.
+        if c.country and not country:
+            who = "Canada" if c.country == "canada" else "USA"
+            return f"({who}) {c.note}"
+        return c.note
+    col = max((len(c.command) for c in it.cmds if len(c.command) <= 44),
+              default=0)
+    out: List[str] = []
+    for c in it.cmds:
+        note = shown(c)
+        cmd = printable(c.command) if w > 0 else c.command
+        line = f"{lead}{cmd.ljust(col)}  # {note}" if note else lead + cmd
+        if not note or w <= 0 or len(line) <= w:
+            out.append(line.rstrip())
+            continue
+        out.append(lead + cmd)
+        out.extend(wrap(f"# {note}", w, lead + "  ", lead + "    "))
+    return out
+
+
+def counts(results: List[Result]) -> Dict[str, int]:
+    """{effective status: how many items}, every status in STATUSES."""
+    return {s: sum(1 for r in results if r.effective == s) for s in STATUSES}
+
+
 def render(results: List[Result], year: int, country: str,
-           quick: bool = False, width_: Optional[int] = None) -> str:
-    """The checklist in the house layout (docs/output-style.md): a title
-    and the counts, then one section per stage; each step is its mark,
-    id and title on one line with its detail wrapped under the title,
-    one blank line between steps. The last line says how to walk the
-    open steps."""
+           quick: bool = False, width_: Optional[int] = None,
+           show_all: bool = False) -> str:
+    """The list in the house layout (docs/output-style.md): a title and
+    the counts, then one section per SECTIONS entry; each item is its
+    mark, number, id and title on one line, its state wrapped under the
+    title, then — while it is open — its commands; the NEXT item and one
+    needing attention also say how and why (`show_all`: every item). The
+    legend, then the last line: the next item and what to do."""
     from taxjson.lib.out import Doc, wrap
-    by_stage: Dict[int, List[Result]] = {}
-    for r in results:
-        stage = next(s[1] for s in STEPS if s[0] == r.id)
-        by_stage.setdefault(stage, []).append(r)
-    total = len(results)
-    done = sum(1 for r in results if r.passed)
-    att = sum(1 for r in results if r.effective == "attention")
-    man = sum(1 for r in results if r.effective == "manual")
-    todo = sum(1 for r in results if r.effective in ("todo", "blocked"))
-    d = Doc(f"FILING CHECKLIST — tax year {year} ({country})"
+    its = {it.id: it for it in items(year, country)}
+    num = {sid: i + 1 for i, sid in enumerate(its)}
+    c = counts(results)
+    total = len(results) - c["n/a"]
+    done = c["done"] + c["skipped"]
+    d = Doc(f"CHECKLIST — tax year {year} ({country})"
             f"{' — quick' if quick else ''}: {done}/{total} done",
             width_=width_)
-    d.para(f"{att} need attention, {man} need your confirmation, "
-           f"{todo} to do")
-    # The step id column: the longest id, so every title starts at the
-    # same column and a detail wraps under it.
+    d.para(f"{c['attention']} need attention, {c['todo']} to do, "
+           f"{c['blocked']} blocked, {c['manual']} to confirm, "
+           f"{c['review']} to run and read yourself, {c['n/a']} n/a")
+    nxt = next_result(results)
     idw = max((len(r.id) for r in results), default=0)
-    lead = " " * (2 + 3 + 1 + idw + 2)
-    for num, name in STAGES:
-        rows = by_stage.get(num)
+    by_sec: Dict[str, List[Result]] = {}
+    for r in results:
+        by_sec.setdefault(its[r.id].section, []).append(r)
+    for k, sec in enumerate(SECTIONS, 1):
+        rows = by_sec.get(sec)
         if not rows:
             continue
-        d.section(f"{num}. {name.upper()}")
+        d.section(f"{k}. {sec.upper()}")
         for i, r in enumerate(rows):
             if i:
                 d.blank()
-            sym = SYMBOL[r.effective]
-            title = step_meta(r.id, country)[2]
-            for ln in wrap(title, d.w, f"  {sym} {r.id:<{idw}}  ", lead):
+            it = its[r.id]
+            eff = r.effective
+            mark = NEXT_MARK if nxt is not None and r.id == nxt.id \
+                else SYMBOL[eff]
+            head = f"  {mark} {num[r.id]:>2}. {r.id:<{idw}}  "
+            lead = " " * len(head)
+            for ln in wrap(it.title, d.w, head, lead):
                 d.line(ln)
             if r.override:
                 d.para(f"marked {r.override}"
@@ -2618,22 +3399,121 @@ def render(results: List[Result], year: int, country: str,
                     d.para(f"the detector still says: {r.finding}", lead)
             elif r.detail:
                 d.para(r.detail, lead)
+            # A done, skipped or n/a item is its state line; an open one
+            # adds its commands; the next one and one that needs
+            # attention also say how and why (--all: every item).
+            full = (show_all or (nxt is not None and r.id == nxt.id)
+                    or eff == "attention")
+            if full and it.how:
+                d.para(it.how, lead)
+            if full or eff in ("todo", "blocked", "manual", "review"):
+                for ln in _cmd_lines(it, d.w, lead, country):
+                    d.line(ln)
+            if full and it.why:
+                d.para(f"Why: {it.why}", lead)
     d.blank()
     d.line("[x] done  [!] needs attention  [ ] to do  [b] blocked  "
-           "[-] n/a  [~] skipped")
-    d.line("[m] confirm it, then `taxjson checklist --done ID`")
-    d.line("Walk the open steps one at a time: `taxjson checklist --walk`")
+           "[-] n/a  [~] skipped  [>] next")
+    d.para("[m] confirm it, then `tjs checklist --done ID`; [?] yours to "
+           "run and read (`--done ID` ticks it off)")
+    d.para("One at a time: `tjs checklist --walk`; every item's commands "
+           "and why: `tjs checklist --all`")
+    if nxt is not None:
+        d.para(f"Next (step {num[nxt.id]}, {nxt.id}): "
+               f"{_do(its[nxt.id], nxt)}")
+    elif all(r.passed for r in results):
+        d.para("Nothing left to do now: the [?] items are yours to run "
+               "and read.")
+    elif quick:
+        d.para("Nothing to do now: run without --quick to check the rest.")
+    else:
+        d.para("Nothing to do until the year ends: re-check then.")
     return d.text()
 
 
-def to_json(results: List[Result], year: int, country: str) -> Dict[str, Any]:
-    meta = {s[0]: step_meta(s[0], country) for s in STEPS}
+def render_guide(year: Optional[int] = None,
+                 width_: Optional[int] = None) -> str:
+    """Outside a project: every item as a numbered step with its
+    commands, how and why — no marks."""
+    from taxjson.lib.out import Doc, wrap
+    year = year or date.today().year - 1
+    its = items(year, None)
+    d = Doc("CHECKLIST — from install to filing, step by step",
+            width_=width_)
+    d.para("Each step: the command(s) to type and why. `tjs` is the "
+           f"short name of `taxjson`. Worked examples: {GUIDE}.")
+    for k, sec in enumerate(SECTIONS, 1):
+        d.section(f"{k}. {sec.upper()}")
+        first = True
+        for n, it in enumerate(its, 1):
+            if it.section != sec:
+                continue
+            if not first:
+                d.blank()
+            first = False
+            head = f"  {n:>2}. "
+            lead = " " * len(head)
+            for ln in wrap(it.title, d.w, head, lead):
+                d.line(ln)
+            if it.how:
+                d.para(it.how, lead)
+            for ln in _cmd_lines(it, d.w, lead, None):
+                d.line(ln)
+            if it.why:
+                d.para(f"Why: {it.why}", lead)
+    d.blank()
+    d.para("In a project folder (or `tjs -C DIR checklist`) each step is "
+           "checked and marked done or not, and the next one named.")
+    return d.text()
+
+
+def _item_json(n: int, it: Item, r: Optional[Result], is_next: bool,
+               country: Optional[str]) -> Dict[str, Any]:
+    command = (step_meta(it.id, country or "canada")[3] if it.check
+               else (it.cmds[0].command if it.cmds else ""))
     return {
+        "step": n, "id": it.id, "section": it.section, "title": it.title,
+        "check": it.check, "command": command,
+        "commands": [{"command": c.command, "note": c.note,
+                      "country": c.country} for c in it.cmds],
+        "how": it.how, "why": it.why,
+        "status": r.status if r else None,
+        "effective": r.effective if r else None,
+        "detail": r.detail if r else "",
+        "override": r.override if r else None,
+        "note": r.note if r else "",
+        "finding": r.finding if r else "",
+        "next": is_next,
+    }
+
+
+def to_json(results: List[Result], year: int, country: str) -> Dict[str, Any]:
+    """The list as one document (schema_version 2, docs/settings.md)."""
+    its = {it.id: it for it in items(year, country)}
+    num = {sid: i + 1 for i, sid in enumerate(its)}
+    nxt = next_result(results)
+    nit = its[nxt.id] if nxt is not None else None
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "in_project": True,
         "year": year, "country": country,
         "all_passed": all(r.passed for r in results),
-        "steps": [{"id": r.id, "stage": meta[r.id][1], "title": meta[r.id][2],
-                   "command": meta[r.id][3], "status": r.status,
-                   "effective": r.effective, "detail": r.detail,
-                   "override": r.override, "note": r.note,
-                   "finding": r.finding} for r in results],
+        "counts": counts(results),
+        "next": ({"step": num[nit.id], "id": nit.id, "title": nit.title,
+                  "do": _do(nit, nxt)} if nit is not None else None),
+        "steps": [_item_json(num[r.id], its[r.id], r,
+                             nxt is not None and r.id == nxt.id, country)
+                  for r in results],
+    }
+
+
+def guide_json(year: Optional[int] = None) -> Dict[str, Any]:
+    """Outside a project: the same schema, nothing evaluated."""
+    year = year or date.today().year - 1
+    return {
+        "schema_version": SCHEMA_VERSION, "in_project": False,
+        "year": None, "country": None, "all_passed": None,
+        "counts": None, "next": None,
+        "steps": [_item_json(n, it, None, False, None)
+                  for n, it in enumerate(items(year, None), 1)],
     }

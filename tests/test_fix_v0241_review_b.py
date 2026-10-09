@@ -50,7 +50,6 @@ from test_fix_rbc import HDR as RBC_HDR, row as rbc_row
 from taxjson.lib import checklist as cl
 from taxjson.lib import export_coverage as EC
 from taxjson.lib import listing_suffix as LS
-from taxjson.lib import quick_start as QS
 from taxjson.lib import xlist_loss_radar as XR
 from taxjson.lib.symbol_codes import exact_name
 
@@ -337,8 +336,6 @@ class TestExportCoverageMarkPerGap(unittest.TestCase):
                              ["margin|rbc_direct|2026-04-28"])
             res, = cl.evaluate(ctx, only=["export-coverage"])
             self.assertEqual(res.effective, "done")
-            self.assertEqual(QS.evaluate(root, today=date(2026, 10, 8))
-                             .states["inputs"].status, "done")
             text = flat(console(tj(root, "run", "--no-input")))
             self.assertNotIn("Warning: RBC Direct Investing exports", text)
             self.assertIn("marked done in checklist.json (export-coverage)",
@@ -354,8 +351,6 @@ class TestExportCoverageMarkPerGap(unittest.TestCase):
             self.assertIn("not answered by the done mark", res.detail)
             self.assertIn("RBC Direct Investing for margin to 2026-06-30",
                           res.detail)
-            self.assertEqual(QS.evaluate(root, today=date(2026, 10, 8))
-                             .states["inputs"].status, "attention")
 
     def test_legacy_mark_without_answers_answers_nothing(self):
         r = cl.Result("export-coverage", "attention", "x", question=True,
@@ -398,8 +393,6 @@ class TestOptionMarkPerContract(unittest.TestCase):
             self.assertEqual(res.effective, "attention")
             self.assertIn("ZZR261218C00060000.TO written 2025-12-15",
                           res.detail)
-            self.assertEqual(QS.evaluate(root, today=date(2026, 10, 1))
-                             .states["option-timing"].status, "attention")
 
 
 # ============================================================ L5: radar

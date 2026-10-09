@@ -4,7 +4,7 @@
    `option_grant_timing_since` and closed in the project year is taxed at
    the close — right only if the write year's return did not report the
    premium. The run warns with the premium at stake, option-boundary
-   asks, the checklist and quick-start need attention; a DONE mark or the
+   asks, the checklist needs attention; a DONE mark or the
    setting lowered to the write year settles it. Never asked in a US
    project.
 2. The cross-listing loss radar (CA-XLIST-05 / US-XLIST-04) judges the
@@ -14,8 +14,8 @@
    companies.
 3. Per-broker export coverage (lib/export_coverage): a broker whose
    exports end before the year end (today in the running year) while it
-   holds positions is a run Warning, the checklist's export-coverage
-   step and quick-start's inputs step.
+   holds positions is a run Warning and the checklist's export-coverage
+   step.
 4. A sheltered account's corporate-action election is still asked, and
    says there is no tax in the account (its holdings still count for the
    superficial-loss rule).
@@ -37,7 +37,6 @@ from taxjson.lib import checklist as cl
 from taxjson.lib import out
 from taxjson.lib import export_coverage as EC
 from taxjson.lib import option_boundary as OB
-from taxjson.lib import quick_start as QS
 from taxjson.lib import xlist_loss_radar as XR
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.symbol_codes import exact_name
@@ -183,7 +182,7 @@ class TestTransitionQuestionProject(unittest.TestCase):
         self.assertIn("QUESTION:", q[0]["action"])
 
     @rule("CA-OPT-11")
-    def test_checklist_and_quick_start_until_marked(self):
+    def test_checklist_until_marked(self):
         d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
         shutil.copytree(self.root, d)
         res = cl.d_option_boundary(ctx_of(d, 2026, date(2026, 10, 1)))
@@ -191,8 +190,9 @@ class TestTransitionQuestionProject(unittest.TestCase):
         self.assertTrue(res.question)
         self.assertIn("did your 2025 return report these premiums", res.detail)
         self.assertIn("400.00 of premium taxed in 2026", res.detail)
-        g = QS.evaluate(d, today=date(2026, 10, 1))
-        self.assertEqual(g.states["option-timing"].status, "attention")
+        res, = cl.evaluate(ctx_of(d, 2026, date(2026, 10, 1)),
+                           only=["option-boundary"])
+        self.assertEqual(res.effective, "attention")
         # The answer: a DONE mark settles it everywhere.
         tj(d, "checklist", "--done", "option-boundary", "--note",
            "2025 filed on close timing", check=False)
@@ -200,8 +200,6 @@ class TestTransitionQuestionProject(unittest.TestCase):
                            only=["option-boundary"])
         self.assertEqual(res.effective, "done")
         self.assertIn("did your 2025 return", res.finding)
-        g = QS.evaluate(d, today=date(2026, 10, 1))
-        self.assertEqual(g.states["option-timing"].status, "done")
         text = flat(console(tj(d, "run", "--no-input")))
         self.assertNotIn("Warning: 1 option contract", text)
         self.assertIn("answered in checklist.json (option-boundary marked "
@@ -231,8 +229,10 @@ class TestTransitionQuestionUSA(unittest.TestCase):
             self.assertNotIn("transition close timing", text)
             self.assertEqual(OB.project_question_rows(root, cfg_of(root)),
                              [])
-            g = QS.evaluate(root, today=date(2026, 10, 1))
-            self.assertEqual(g.states["option-timing"].status, "n/a")
+            res, = cl.evaluate(ctx_of(root, 2026, date(2026, 10, 1)),
+                               only=["option-boundary"])
+            self.assertFalse(res.question)
+            self.assertNotIn("did your 2025 return", res.detail)
 
 
 # -------------------------------------------------------- 2. xlist radar
@@ -427,7 +427,7 @@ class TestExportCoverage(unittest.TestCase):
         self.assertIn("The export's date range ends 2025-09-30.", text)
         self.assertEqual(out.lint(self.r.stdout), [])
 
-    def test_checklist_and_quick_start(self):
+    def test_checklist(self):
         res = cl.d_export_coverage(ctx_of(self.root, 2025, date(2026, 3, 1)))
         self.assertEqual(res.status, "attention")
         # A question even for the export's own end (v0.24.1 review: the
@@ -436,10 +436,10 @@ class TestExportCoverage(unittest.TestCase):
         self.assertTrue(res.question)
         self.assertEqual(res.answers, ["margin|webull|2025-09-30"])
         self.assertIn("Webull exports for margin end 2025-09-30", res.detail)
-        g = QS.evaluate(self.root, today=date(2026, 3, 1))
-        self.assertEqual(g.states["inputs"].status, "attention")
-        self.assertIn("download the rest of the year",
-                      g.states["inputs"].detail)
+        res, = cl.evaluate(ctx_of(self.root, 2025, date(2026, 3, 1)),
+                           only=["export-coverage"])
+        self.assertEqual(res.effective, "attention")
+        self.assertIn("download the rest of the year", res.detail)
 
     def test_no_nag_when_every_position_is_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -180,7 +180,7 @@ class TestCommandEdges(unittest.TestCase):
             self.assertEqual(json.loads(r.stdout)["recorded"][0]["mark"], "reset")
             r = _cli(root, "--only", "bogus")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("ids: inputs-frozen", r.stderr)
+            self.assertIn("ids: install, init", r.stderr)
 
     def test_walk_reprompts_and_quit_exits_1_with_summary(self):
         from taxjson.bin.taxjson_run import _checklist_walk
@@ -197,7 +197,7 @@ class TestCommandEdges(unittest.TestCase):
             self.assertEqual(cm.exception.code, 1)
             text = out.getvalue()
             self.assertIn("unknown key 'x' — [d]one  [s]kip", text)
-            self.assertIn("FILING CHECKLIST — tax year 2025", text)
+            self.assertIn("CHECKLIST — tax year 2025", text)
             # [d]one closes the only open step: exit normally.
             answers = iter(["d", ""])
             with mock.patch.object(builtins, "input", lambda *_: next(answers)), \

@@ -1127,7 +1127,7 @@ class _CappedHelpFormatter(argparse.HelpFormatter):
 # sits in exactly one group (tests/test_cli_polish.py); the README's
 # command table uses the same groups in the same order.
 _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Set up", ("quick-start", "init", "format", "format-map", "migrate",
+    ("Set up", ("checklist", "init", "format", "format-map", "migrate",
                 "fetch", "elect", "ticker-map")),
     ("Build the books", ("run", "crypto-sends", "find-missing-history",
                          "opening")),
@@ -1140,7 +1140,7 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
                         "leaps-sum", "roc-sum", "trades-sum", "winners")),
     ("Before you trade", ("wash-radar", "buy-check", "sell-check",
                           "harvest", "scan", "watch")),
-    ("Before you file", ("checklist", "form-export", "t1135",
+    ("Before you file", ("form-export", "t1135",
                          "reconcile-slips", "slip-audit", "carryover",
                          "option-boundary",
                          "close-year", "check-filed", "handoff")),
@@ -15688,17 +15688,38 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
 
 
 def cmd_checklist(args: argparse.Namespace) -> None:
-    """`taxjson checklist`: the filing checklist (docs/filing.md) with each
-    step auto-detected — the command that proves a step is run and its
-    verdict shown — plus manual marks for the steps no command can prove
+    """`taxjson checklist`: every step from install to filing, in order
+    (lib/checklist.items), each checked for you — a check runs the
+    command that proves it (or reads the project's files) and shows its
+    verdict — plus manual marks for the items no command can prove
     (`--done ID`, `--skip ID`, `--undo ID`; stored in checklist.json at the
-    project root, which you should commit). `--walk` steps through the open
-    items one at a time. Exit 1 while anything is open."""
+    project root, which you should commit). The last line names the next
+    item and its command. `--walk` steps through the open items one at a
+    time. Exit 1 while anything is open. Outside a project (no
+    taxjson.toml) it prints the same list as a step-by-step guide, exit
+    0."""
     import json as _json
     from datetime import date as _date
     from taxjson.lib import checklist as cl
 
     root = Path(args.dir).resolve()
+    if not (root / "taxjson.toml").exists():
+        used = [f for f, v in (("--done", args.done), ("--skip", args.skip),
+                               ("--undo", args.undo), ("--reset", args.reset),
+                               ("--walk", args.walk), ("--only", args.only),
+                               ("--quick", args.quick), ("--show", args.show),
+                               ("--note", args.note)) if v]
+        if used:
+            _die_input(f"{used[0]} needs a project: no taxjson.toml in "
+                       f"{root}",
+                       "Run `taxjson checklist` in the project folder (or "
+                       "`taxjson -C DIR checklist`); here it prints the "
+                       "steps.")
+        if args.json:
+            _json_out(cl.guide_json())
+            return
+        print(cl.render_guide())
+        return
     cfg = load_config(root)
     settings = cfg.get("settings") or {}
     year = settings.get("year")
@@ -15706,7 +15727,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         _die("[settings] year is required in taxjson.toml")
     country = _country(settings)
 
-    ids = [s[0] for s in cl.STEPS]
+    ids = cl.item_ids()
     if args.note and not (args.done or args.skip):
         _die("--note goes with --done or --skip (it is stored with "
              "the mark)")
@@ -15799,7 +15820,8 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
     else:
-        print(cl.render(results, year, country, quick=args.quick))
+        print(cl.render(results, year, country, quick=args.quick,
+                        show_all=args.all))
     if not all(r.passed for r in results):
         sys.exit(1)
 
@@ -15822,9 +15844,9 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     while anything is still open (also after [q]uit)."""
     from taxjson.lib.out import kv_lines, wrap
     country = _country(ctx.settings)
-    ids = [s[0] for s in cl.STEPS if not only or s[0] in only]
+    ids = [sid for sid in cl.item_ids() if not only or sid in only]
     keys = "[d]one  [s]kip  [r]e-check  [n]ext  [q]uit  (Enter = next)"
-    print("FILING CHECKLIST WALK")
+    print("CHECKLIST WALK")
     print(f"For each open step: {keys}\n")
     seen = 0
     quit_early = False
@@ -15833,18 +15855,18 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
         r = cl.evaluate(ctx, only=[sid], quick=quick,
                         progress=cl.stderr_progress)[0]
         if r.passed:
-            for ln in wrap(f"{cl.SYMBOL[r.effective]} {sid}: {r.detail}"
+            for ln in wrap(f"{cl.SYMBOL[r.effective]} {sid}"
+                           + (f": {r.detail}" if r.detail else "")
                            + (f" (marked {r.override})" if r.override
                               else ""), None, "  ", "      "):
                 print(ln)
             continue
         seen += 1
-        _, stage, title, cmd, why = cl.step_meta(sid, country)
-        stage_name = dict(cl.STAGES)[stage]
+        _, section, title, cmd, why = cl.item_meta(sid, country)
         show = True
         while True:
             if show:
-                print(f"\n{stage}. {stage_name.upper()} — {sid}")
+                print(f"\n{section.upper()} — {sid}")
                 for ln in wrap(title, None, "  ", "  "):
                     print(ln)
                 for ln in kv_lines([
@@ -22760,33 +22782,10 @@ def cmd_init(args: argparse.Namespace) -> None:
     print("  3. Run:")
     # A command to copy: its own line, never wrapped.
     print(f"       taxjson -C {_shlex.quote(str(root))} run")
-    print("  4. Every step after that, and which one is next:")
-    print(f"       taxjson -C {_shlex.quote(str(root))} quick-start")
+    print("  4. Every step after that, checked, and which one is next:")
+    print(f"       taxjson -C {_shlex.quote(str(root))} checklist")
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
-
-
-def cmd_quick_start(args: argparse.Namespace) -> None:
-    """`taxjson quick-start [--all] [--json]`: the workflow, step by
-    step (lib/quick_start). Outside a project every step with its
-    commands; inside one (taxjson.toml in -C DIR) each step marked from
-    the project's files and the next one named. Read-only: no command
-    run, no file written, no network."""
-    from taxjson.lib import quick_start as QS
-    root = Path(args.dir).resolve()
-    if (root / "taxjson.toml").is_file():
-        # The checks it reads may print their own notes (a built-in
-        # market list entry, say); a guide that runs nothing shows none.
-        import contextlib
-        import io
-        with contextlib.redirect_stderr(io.StringIO()):
-            guide = QS.evaluate(root)
-    else:
-        guide = QS.outside()
-    if args.json:
-        _json_out(QS.to_json(guide))
-        return
-    print(QS.render(guide, show_all=args.all))
 
 
 # The carryover flag means what each country's return does with it
@@ -23009,25 +23008,6 @@ def _build_parser(prog: str = "taxjson"
                         help="Tax year for the generated config "
                              "(default: current year)")
     p_init.set_defaults(func=cmd_init)
-
-    p_qs = sub.add_parser(
-        "quick-start",
-        help="Every step from install to filing; which is next",
-        description="The whole workflow as numbered steps, each with the "
-                    "exact command(s) and why. Inside a project (a "
-                    "taxjson.toml here, or -C DIR) each step is marked "
-                    "done, needs attention, to do, yours to review or "
-                    "n/a from the project's files, and the next one is "
-                    "named with its command. Reads files only: it runs "
-                    "nothing, writes nothing and opens no connection "
-                    "(`taxjson checklist` runs the slow checks).")
-    p_qs.add_argument("--all", action="store_true",
-                      help="Show every step's commands and why, also "
-                           "the done ones")
-    p_qs.add_argument("--json", action="store_true",
-                      help="Emit the guide as JSON (a stable schema, "
-                           "schema_version 1: docs/settings.md)")
-    p_qs.set_defaults(func=cmd_quick_start)
 
     p_tx = sub.add_parser(
         "events",
@@ -23742,11 +23722,17 @@ def _build_parser(prog: str = "taxjson"
 
     p_ck = sub.add_parser(
         "checklist",
-        help="The filing checklist, each step checked for you",
-        description="The filing checklist (docs/filing.md) with each "
-             "step auto-detected by running the command that proves it; "
-             "--done/--skip/--undo record the steps no command can "
-             "prove; --walk steps through the open ones.")
+        help="Every step from install to filing, checked; which is next",
+        description="Every step from install to filing, in order, each "
+             "with its command(s) and why. Inside a project (a "
+             "taxjson.toml here, or -C DIR) each step is checked — by "
+             "running the command that proves it, or from the project's "
+             "files — and marked done, needs attention, to do, blocked, "
+             "to confirm, yours to run and read or n/a; the last line "
+             "names the next step and its command. --done/--skip/--undo "
+             "record the steps no command can prove; --walk steps "
+             "through the open ones. Exit 1 while anything is open. "
+             "Outside a project it prints the steps as a guide (exit 0).")
     p_ck.add_argument("--walk", action="store_true",
                       help="Interactive: visit each open step in turn")
     p_ck.add_argument("--done", metavar="ID", action="append",
@@ -23764,8 +23750,12 @@ def _build_parser(prog: str = "taxjson"
                            "(audit, sanity, ...)")
     p_ck.add_argument("--show", action="store_true",
                       help="With --done/--skip/--undo: also print the checklist")
+    p_ck.add_argument("--all", action="store_true",
+                      help="Show every step's commands and why, also "
+                           "the done ones")
     p_ck.add_argument("--json", action="store_true",
-                      help="Emit JSON instead of text")
+                      help="Emit JSON instead of text (a stable schema, "
+                           "schema_version 2: docs/settings.md)")
     p_ck.set_defaults(func=cmd_checklist)
 
     p_san = sub.add_parser(
@@ -24440,11 +24430,10 @@ def _main() -> None:
             # `taxjson run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
-        if args.cmd not in ("init", "help", "migrate",
-                            "quick-start") + _RELEASE_CMDS:
+        if args.cmd not in ("init", "help", "migrate") + _RELEASE_CMDS:
             # An old per-purpose file (yf_ticker.map, distributions.map
-            # ...) stops every command, whatever it reads (lib/migrate);
-            # quick-start names it as the step to do.
+            # ...) stops every command, whatever it reads (lib/migrate),
+            # naming `taxjson migrate`.
             _refuse_legacy_project_files(Path(args.dir).resolve())
         _enforce_command_country(args)
         _refuse_artifact_account(args)

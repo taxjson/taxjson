@@ -66,10 +66,10 @@ class TestStyledNonZeroExits(unittest.TestCase):
         assert_styled(self, r.stdout)
         lines = r.stdout.splitlines()
         self.assertTrue(lines[0].startswith(
-            "FILING CHECKLIST — tax year 2024 (canada): "))
-        self.assertIn("1. FREEZE THE INPUTS", lines)
-        self.assertEqual(lines[-1], "Walk the open steps one at a time: "
-                                    "`taxjson checklist --walk`")
+            "CHECKLIST — tax year 2024 (canada): "))
+        self.assertIn("1. SET UP", lines)
+        self.assertIn("2. GET YOUR FILES", lines)
+        self.assertTrue(lines[-1].startswith("Next (step "), lines[-1])
         # A step's detail wraps under its title, not under the mark.
         i = next(k for k, ln in enumerate(lines)
                  if "missing-history" in ln and "[!]" in ln)

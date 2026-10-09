@@ -9,11 +9,11 @@ Claude Code, Codex, Gemini CLI, Cursor and Copilot read this file.
 
 ## Helping someone use taxjson
 
-1. **Start with `tjs quick-start` in their project folder:** every step
-   from install to filing, each marked done or not from the project's
-   files, and the next one named with its command (read-only). Then run
-   the checks: `tjs checklist`, `tjs sanity` (positions against the
-   broker's holdings), `tjs find-missing-history` and, in Canada,
+1. **Start with `tjs checklist` in their project folder:** every step
+   from install to filing, each checked and marked done or not, and the
+   next one named with its command (it writes only `checklist.json`
+   marks). Then the detail behind a step: `tjs sanity` (positions against
+   the broker's holdings), `tjs find-missing-history` and, in Canada,
    `tjs slip-audit` (the T5 / T3 slips against the books' income). The console summary at the end of `tjs run`
    lists what to look at. Most problems are an input (a missing older export,
    a transfer in, an election not made), not a bug. Say which it is.
