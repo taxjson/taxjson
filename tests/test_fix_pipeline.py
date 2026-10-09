@@ -129,8 +129,11 @@ class TestAccountTypeCheckedEverywhere(unittest.TestCase):
     def _refused(self, *args):
         r = _run_cli(self.root, *args)
         self.assertNotEqual(r.returncode, 0, (args, r.stdout))
-        self.assertIn("[accounts.margin] type must be", r.stderr, args)
-        self.assertIn("'Taxable'", r.stderr, args)
+        # The checklist shows it as its configure item (the checks
+        # blocked, exit 1) instead of only an error.
+        said = r.stdout if args[0] == "checklist" else r.stderr
+        self.assertIn("[accounts.margin] type must be", said, args)
+        self.assertIn("'Taxable'", said, args)
 
     def test_filing_commands_refuse_an_invalid_type(self):
         for args in (("estimate",), ("instalments",), ("sum",),

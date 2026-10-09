@@ -15741,8 +15741,8 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
     file `taxjson migrate` moves — is the configure item's finding, not
     an error instead of the list (quick-start showed it): the TOML is
     read leniently and the checks that need the strict config are
-    blocked. Only a file with no readable year, country or account
-    names still stops here, with the loader's own message."""
+    blocked. Only a file with no readable (or plausible) year, country
+    or account names still stops here, with the loader's own message."""
     import contextlib
     import io
     from taxjson.lib.country import CountryError, settings_country
@@ -15758,9 +15758,12 @@ def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
         cfg = tomllib.loads(raw.decode("utf-8-sig"))
         settings = cfg.get("settings")
         accounts = cfg.get("accounts") or {}
-        ok = (isinstance(settings, dict) and isinstance(accounts, dict)
-              and isinstance(settings.get("year"), int)
-              and not isinstance(settings.get("year"), bool)
+        year = settings.get("year") if isinstance(settings, dict) else None
+        # The loader's plausible range (_normalize_settings): a typo'd
+        # year still stops here, never a list for tax year 1850.
+        ok = (isinstance(accounts, dict)
+              and isinstance(year, int) and not isinstance(year, bool)
+              and 1900 <= year <= date_cls.today().year + 1
               and all(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", str(n))
                       and str(n).upper() != "COMBINED" for n in accounts))
         if ok:
