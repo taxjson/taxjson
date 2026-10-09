@@ -148,5 +148,46 @@ class TestExportsManifest(unittest.TestCase):
         self.assertTrue(keep.is_file())
 
 
+_DATES_TT = """\
+# synthetic
+BUYSELL 2024-03-06 10:00:00 QZQ.TO 10 CAD 20.00 209.95 9.95
+BUYSELL 2026-03-04 10:00:00 QZQ.TO -5 CAD 22.00 100.05 9.95
+BUYSELL 2026-03-11 10:00:00 QZQ.TO -5 CAD 23.00 105.05 9.95
+"""
+
+
+class TestCheckDatesLaterYears(unittest.TestCase):
+    """M4: a year folder reading shared exports sees later years' rows."""
+
+    def test_shared_layout_counts_later_rows_as_info(self):
+        top = Path(private_dir()) / "taxes"
+        (top / "inputs" / "margin").mkdir(parents=True)
+        (top / "inputs" / "margin" / "t.tt").write_text(_DATES_TT)
+        y = _year(top, 2024)
+        run_ok(self, y)
+        r = tjs("-C", str(y), "check-dates", "--json")
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr)
+        doc = json.loads(r.stdout)
+        self.assertEqual(doc["errors"], 0, doc["counts"])
+        self.assertEqual(doc["later_years"], 2)
+        r = tjs("-C", str(y), "check-dates")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("Info: 2 row(s) dated after 2025", r.stdout)
+
+    def test_single_folder_still_reports_them(self):
+        root = Path(private_dir()) / "p"
+        (root / "inputs" / "margin").mkdir(parents=True)
+        (root / "inputs" / "margin" / "t.tt").write_text(_DATES_TT)
+        (root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2024\ncountry = "canada"\n\n'
+            '[accounts.margin]\ntype = "taxable"\n')
+        run_ok(self, root)
+        r = tjs("-C", str(root), "check-dates", "--json")
+        self.assertEqual(r.returncode, 1)
+        doc = json.loads(r.stdout)
+        self.assertEqual(doc["counts"]["ERROR"].get("out-of-range"), 2)
+        self.assertEqual(doc["later_years"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

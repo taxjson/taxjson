@@ -28,6 +28,9 @@
   folder or the project's own folders is refused), and each export
   replaces only the files the previous one wrote (listed in
   `.taxjson-exports.json` there).
+- `taxjson check-dates` in a year folder reading shared exports counts
+  the later years' rows in one Info line instead of an out-of-range
+  error each.
 - `taxjson redact` in a year folder of a shared-exports project writes
   that year as a redacted single-folder project inside the year folder
   (the shared exports and the year's slips, holdings/, taxjson.toml and

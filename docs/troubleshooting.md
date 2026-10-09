@@ -51,6 +51,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/project_layout.py` — `exports_overlap`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_write_exports`, `_exports_manifest`, `_EXPORTS_MANIFEST`
 
+### `tjs check-dates` in a year folder: "out-of-range: … — far outside the project year 2024" for every row of a later year
+- **Check:** the project reads a shared `inputs_dir`, and the rows are dated in a later year (the newer exports every year shares).
+- **Cause:** the check took any row more than a year after the project year for an impossible date; with exports shared by every year, later years' rows are expected.
+- **Fix:** upgrade: in a year folder reading shared exports they are one line, "Info: N row(s) dated after 2025: later years' exports in the shared inputs folder, expected", and their dates are checked like the others; a date after today or before 1990 is still an error. A single-folder project still reports them.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/check_dates.py` — `analyze`, `render`, `later years' exports`
+
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
 - **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.
