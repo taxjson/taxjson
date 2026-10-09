@@ -287,7 +287,7 @@ taxable accounts run as one blended pass and are split back per account.
 - `src/taxjson/lib/pipeline.py` — `run_gains`, `GainsRequest`, `prepare_books`, `engine_options`, `option_timing_from_settings`, `option_timing_flags`, `place_retro_wash_adjustments`, `annotate_inventory_multipliers`, `declared_multipliers`, `tt_json_path`: one gains run; US retroactive wash adjustments and contract multipliers.
 - `src/taxjson/bin/taxjson_gains.py` — `main`, `_request`, `_suggest_missing_history_and_exit`, `write_traces_file`: the `taxjson-gains` tool.
 - `src/taxjson/bin/taxjson_split_gains.py` — `split_for_account`, `main`: splits a blended gains run back into per-account files.
-- `src/taxjson/bin/taxjson_run.py` — `stage_wash_pass`, `stage_blended_wash_pass`, `_blend_conservation_gaps`, `_wash_flags`, `_render_wash_outputs`: the wash passes in a run.
+- `src/taxjson/bin/taxjson_run.py` — `stage_wash_pass`, `stage_blended_wash_pass`, `_blend_conservation_gaps`, `_wash_flags`, `_render_wash_outputs`, `_record_wash_inputs`: the wash passes in a run, and the record of what each wash file was built from (`work/.wash_inputs.json`, for the stale check).
 
 ## Per-account reports
 
@@ -303,7 +303,7 @@ come after.
 - `src/taxjson/bin/taxjson_leaps_gains.py` — `process_data`, `main`: long options by underlying.
 - `src/taxjson/bin/taxjson_export.py` — `render_report`, `render_holdings_toml`, `process_data_report`, `main`: holdings as a text report or a TOML snapshot.
 - `src/taxjson/bin/taxjson_fees.py` — `aggregate`, `metrics`, `render_text`, `render_json`, `main`: the fee report by broker (`taxjson-fees-sum`).
-- `src/taxjson/lib/report_model.py` — `build_account_report`, `resolve_gains_files`, `render_table`, `align_columns`, `fmt_money`: shared report pieces and the account report JSON.
+- `src/taxjson/lib/report_model.py` — `build_account_report`, `resolve_gains_files`, `stale_wash_inputs`, `record_wash_inputs`, `render_table`, `align_columns`, `fmt_money`: shared report pieces and the account report JSON; which gains file a report reads and whether the wash-adjusted one is stale (its own books, and every member of its cross-account pass, from `work/.wash_inputs.json`).
 
 ## Output style and messages
 
@@ -449,7 +449,7 @@ files into ticker.map and taxjson.toml.
 - `src/taxjson/lib/config_check.py` — `settings_problems`, `account_type_problems`, `account_name_problem`, `ACCOUNT_TYPES`, `ACCOUNT_KEYS`, `RETIRED_SETTINGS`: the checks every config reader applies.
 - `src/taxjson/lib/config_template.py` — `SETTINGS_SPEC`, `ACCOUNT_SPEC`, `TABLES`, `render_init`, `format_config`, `scaffold_document`, `Key`: every key taxjson reads, documented per country.
 - `src/taxjson/lib/migrate.py` — `plan`, `apply`, `Plan`, `legacy_files`, `LEGACY_FILES`, `MigrateError`: moving old files into the new places.
-- `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup.
+- `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `file_lock`, `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup; `file_lock` serializes a read-modify-write. Generated state in `work/` goes through `write_atomic`; `tests/test_fix_issues_safe_writes.py` lists the reviewed direct writes left in the core.
 - `src/taxjson/lib/tomlcompat.py` — `tomllib`: the tomllib or tomli import.
 
 ## The Canada and USA partition
@@ -483,8 +483,8 @@ downloads.
 - `src/taxjson/lib/fetchers.py` — `discover`, `Fetcher`, `FetchRequest`, `ENTRY_POINT_GROUP`, `add_fetcher_arguments`, `listing`: the core side of the plugin contract.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_fetch`, `_no_fetcher_exit`, `_fetch_plugin_note`, `_fetch_brokerages`: `taxjson fetch`.
 - `packages/taxjson-fetch/src/taxjson_fetch/plugin.py` — `BrokerFetcher`: the object the core loads.
-- `packages/taxjson-fetch/src/taxjson_fetch/command.py` — `run`, `_merge_csv_text`, `_questrade_token_file`, `_flex_lost_dates`, `_qt_trim_file`: the fetch command (token file, merging a re-fetch into the existing CSV).
-- `packages/taxjson-fetch/src/taxjson_fetch/api.py` — `qt_refresh`, `qt_activities`, `qt_positions`, `flex_fetch`, `positions_to_holdings_toml`, `mask_account_number`: the Questrade and Flex API clients.
+- `packages/taxjson-fetch/src/taxjson_fetch/command.py` — `run`, `_run`, `_merge_csv_text`, `_questrade_token_file`, `_qt_open_session`, `_questrade_token_write`, `_flex_lost_dates`, `_qt_trim_file`: the fetch command (one per project under `work/.fetch.lock`; the token's read, refresh and save under a lock beside the token file; merging a re-fetch into the existing CSV; `--trim-overlap` backups through `backup_copy`).
+- `packages/taxjson-fetch/src/taxjson_fetch/api.py` — `qt_refresh`, `qt_activities`, `qt_positions`, `flex_fetch`, `positions_to_holdings_toml`, `mask_account_number`, `write_private`: the Questrade and Flex API clients, and the owner-only atomic writer of fetched files.
 - `packages/taxjson-fetch/pyproject.toml` — `taxjson.fetchers`: the entry-point registration.
 
 ## Release channels and install

@@ -9,7 +9,6 @@ TOML writers are in taxjson_fetch.api; the core's `taxjson fetch`
 dispatcher calls run() through taxjson_fetch.plugin.
 """
 import re
-import shutil
 import sys
 from datetime import date as date_cls, datetime
 from pathlib import Path
@@ -43,28 +42,63 @@ def _questrade_token_file(cache: Path) -> Path:
 
 
 def _questrade_token_write(tok_cache: Path, token: str) -> None:
-    """Persist the ROTATED token atomically (tmp + rename), mode 600 — a
-    later failure must not lose it, since the old one is already dead."""
-    import os as _os
+    """Persist the ROTATED token atomically, mode 600 — a later failure
+    must not lose it, since the old one is already dead. Staged in a
+    temp file of this write's own (core safe_write.write_atomic: new,
+    owner-only, never through a symlink) and renamed over the token
+    file: one fixed `<token>.part` let two overlapping saves publish an
+    empty token (GitHub issue #13). The read-refresh-save around it is
+    serialized by _qt_open_session."""
+    from taxjson.lib.safe_write import write_atomic
     tok_cache.parent.mkdir(parents=True, exist_ok=True)
-    tmp = tok_cache.with_name(tok_cache.name + ".part")
-    # 0600 from the first byte, and a FRESH file: a stale .part (or a
-    # symlink planted there) is unlinked, then O_EXCL|O_NOFOLLOW refuses
-    # to follow or reuse anything that reappears before the open.
-    tmp.unlink(missing_ok=True)
-    fd = _os.open(str(tmp), _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL
-                  | getattr(_os, "O_NOFOLLOW", 0), 0o600)
-    try:
-        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(token + "\n")
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
-    tmp.replace(tok_cache)
-    try:
-        _os.chmod(tok_cache, 0o600)          # belt: pre-existing target
-    except OSError:
-        pass
+    write_atomic(tok_cache, token + "\n")
+
+
+class QtAuthError(RuntimeError):
+    """A Questrade refresh failed; `token` is the one that was tried
+    (for _qt_auth_hint — never printed)."""
+
+    def __init__(self, msg: str, token: str):
+        super().__init__(msg)
+        self.token = token
+
+
+def _qt_open_session(tok_cache: Path, http, *, explicit: str = "",
+                     on_wait=None) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Log in to Questrade with the rotating refresh token: read it
+    (`explicit` --refresh-token > the token file > $QUESTRADE_REFRESH_
+    TOKEN), refresh, and save the rotated token — all under one lock
+    beside the token file (`<token file>.lock`). Every refresh kills the
+    token it used, so two fetches (two projects share the file) that
+    both read the old token before either saved the new one left the
+    second with a dead token (GitHub issue #13): the second now waits
+    and reads the token the first saved. Returns (session, token used),
+    or (None, "") when there is no token; a failed refresh raises
+    QtAuthError."""
+    import os as _os
+    from taxjson.lib.safe_write import file_lock
+    tok_cache.parent.mkdir(parents=True, exist_ok=True)
+    lock = tok_cache.with_name(tok_cache.name + ".lock")
+    with file_lock(lock, on_wait=on_wait):
+        token = (explicit
+                 or (tok_cache.read_text(encoding="utf-8").strip()
+                     if tok_cache.exists() else "")
+                 or _os.environ.get("QUESTRADE_REFRESH_TOKEN", "").strip())
+        if not token:
+            return None, ""
+        try:
+            session = F.qt_refresh(token, http)
+        except RuntimeError as e:
+            raise QtAuthError(str(e), token) from e
+        # Persist the ROTATED token immediately — a later failure must
+        # not lose it (the old one is now dead).
+        _questrade_token_write(tok_cache, session["refresh_token"])
+        return session, token
+
+
+def _token_wait_note(say, tok_cache: Path):
+    return lambda: say(f"  waiting for another `taxjson fetch` to finish "
+                       f"with the Questrade token ({tok_cache.name}) ...")
 
 
 def _qt_auth_hint(token: str, tok_cache: Path, *,
@@ -97,7 +131,6 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
     [[holding]] file `taxjson sanity` reads). Returns
     {account: toml_path}. Shares the rotated-token session flow with
     the activity fetch."""
-    import os as _os
     from datetime import datetime as _dt
     fetch_cfg = _fetch_sources(cfg)
     out: Dict[str, Path] = {}
@@ -115,20 +148,16 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             _die(f"[accounts.{a}]: {e}")
         if qt_session is None:
             tok_cache = _questrade_token_file(cache)
-            token = ((tok_cache.read_text(encoding="utf-8").strip()
-                      if tok_cache.exists() else "")
-                     or _os.environ.get("QUESTRADE_REFRESH_TOKEN",
-                                        "").strip())
-            if not token:
+            try:
+                qt_session, _tok = _qt_open_session(
+                    tok_cache, http,
+                    on_wait=_token_wait_note(say, tok_cache))
+            except QtAuthError as e:
+                _die(f"Questrade auth failed: {e}"
+                     + _qt_auth_hint(e.token, tok_cache))
+            if qt_session is None:
                 _die("no Questrade refresh token — run `taxjson "
                      "fetch --refresh-token ...` once first.")
-            try:
-                qt_session = F.qt_refresh(token, http)
-            except RuntimeError as e:
-                _die(f"Questrade auth failed: {e}"
-                     + _qt_auth_hint(token, tok_cache))
-            _questrade_token_write(tok_cache,
-                                   qt_session["refresh_token"])
         try:
             positions = F.qt_positions(qt_session, number, http)
         except RuntimeError as e:
@@ -382,11 +411,13 @@ def _row_date_in_window(first_field: str, start_iso: str,
     return start_iso <= first_field[:10] <= end_iso
 
 
-def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
+def _qt_trim_file(path: Path, start_iso: str, end_iso: str, *,
+                  backups: Optional[List[Path]] = None) -> int:
     """Rewrite a Questrade CSV keeping only rows dated OUTSIDE the
     fetch window (the fetched file owns the window — and nothing
-    else). The original is kept as <name>.bak. Returns the number of
-    rows removed; unparseable rows are kept (safe side)."""
+    else). The original is kept as <name>.bak (or the next free
+    <name>.bakN; its path is appended to `backups`). Returns the number
+    of rows removed; unparseable rows are kept (safe side)."""
     import csv as _csv
     import io as _io
     # Decoded like the parser (A2-1040): a UTF-16 export read as UTF-8
@@ -411,15 +442,17 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
         # Never clobber an existing backup: a second --trim-overlap
         # run would replace the FULL original with the already-trimmed
         # copy, silently destroying the only copy of the trimmed rows.
-        bak = path.with_name(path.name + ".bak")
-        n = 2
-        while bak.exists():
-            bak = path.with_name(f"{path.name}.bak{n}")
-            n += 1
-        # Copy, then write the trimmed file atomically and private
-        # (0600) like every fetched file — replace-then-write_text left
-        # a 0664 file, and no file at all if the write failed (R1-74).
-        shutil.copy2(path, bak)
+        # backup_copy takes the next free name by lexists — a symlink
+        # at a .bak name, dangling or not, is skipped, never written
+        # through: Path.exists() is False for a dangling link and
+        # shutil.copy2 then copied the CSV to the link's target outside
+        # the project (GitHub issue #18) — and writes the copy
+        # owner-only. Then the trimmed file is written atomically and
+        # private (0600) like every fetched file (R1-74).
+        from taxjson.lib.safe_write import backup_copy
+        bak = backup_copy(path)
+        if backups is not None:
+            backups.append(bak)
         buf = _io.StringIO()
         _csv.writer(buf, lineterminator="\n").writerows(keep)
         F.write_private(path, buf.getvalue())
@@ -516,6 +549,21 @@ def _flex_lost_dates(existing: str, new: str, year: Any) -> List[str]:
 
 
 def run(request) -> Dict[str, Any]:
+    """`taxjson fetch`, one per project at a time: the whole command
+    (each account's read of its existing CSV, the merge and the write
+    back, the backups, --trim-overlap) runs under work/.fetch.lock, so
+    a second fetch in the same project waits instead of merging into a
+    file the first is rewriting (a lost update; GitHub issue #13)."""
+    from taxjson.lib.safe_write import file_lock
+    work = Path(request.work)
+    work.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with file_lock(work / ".fetch.lock", on_wait=lambda: request.say(
+            "waiting for another `taxjson fetch` in this project to "
+            "finish ...")):
+        return _run(request)
+
+
+def _run(request) -> Dict[str, Any]:
     """Download every account in request.accounts (each declares
     `brokerage = "questrade"` or `"ibkr_flex"`) into inputs/<account>/:
     questrade_<year>.csv through the Questrade REST API, ib_flex.csv
@@ -578,29 +626,24 @@ def run(request) -> Dict[str, Any]:
                 sys.exit(f"taxjson fetch: [accounts.{a}]: {e}")
             if qt_session is None:
                 tok_cache = _questrade_token_file(cache)
-                token = (getattr(args, "refresh_token", None)
-                         or (tok_cache.read_text(encoding="utf-8")
-                             .strip() if tok_cache.exists() else "")
-                         or _os.environ.get("QUESTRADE_REFRESH_TOKEN",
-                                            "").strip())
-                if not token:
+                try:
+                    qt_session, _tok = _qt_open_session(
+                        tok_cache, http,
+                        explicit=getattr(args, "refresh_token", None)
+                        or "",
+                        on_wait=_token_wait_note(say, tok_cache))
+                except QtAuthError as e:
+                    sys.exit(f"taxjson fetch: Questrade auth failed: "
+                             f"{e}" + _qt_auth_hint(
+                                 e.token, tok_cache,
+                                 explicit=bool(getattr(
+                                     args, "refresh_token", None))))
+                if qt_session is None:
                     sys.exit("taxjson fetch: no Questrade refresh "
                              "token — pass --refresh-token once (or "
                              "set $QUESTRADE_REFRESH_TOKEN); the "
                              "rotating chain then lives in "
                              f"{tok_cache}.")
-                try:
-                    qt_session = F.qt_refresh(token, http)
-                except RuntimeError as e:
-                    sys.exit(f"taxjson fetch: Questrade auth failed: "
-                             f"{e}" + _qt_auth_hint(
-                                 token, tok_cache,
-                                 explicit=bool(getattr(
-                                     args, "refresh_token", None))))
-                # Persist the ROTATED token immediately — a later
-                # failure must not lose it (the old one is now dead).
-                _questrade_token_write(tok_cache,
-                                       qt_session["refresh_token"])
             _fetch_year = (getattr(args, "year", None)
                            or cfg.get("settings", {}).get("year"))
             try:
@@ -681,9 +724,11 @@ def run(request) -> Dict[str, Any]:
             if overlap and getattr(args, "trim_overlap", False):
                 results[a]["trimmed"] = []
                 for sib, n in overlap:
+                    _baks: List[Path] = []
                     try:
                         cut = _qt_trim_file(sib, start.isoformat(),
-                                            end.isoformat())
+                                            end.isoformat(),
+                                            backups=_baks)
                     except ValueError as e:
                         print(f"taxjson fetch: WARNING: {a}/{e}",
                               file=sys.stderr)
@@ -695,7 +740,7 @@ def run(request) -> Dict[str, Any]:
                         {"file": sib.name, "rows": cut})
                     say(f"  {sib.name}: trimmed {cut} row(s) inside "
                         f"the fetched window (original kept as "
-                        f"{sib.name}.bak)")
+                        f"{_baks[0].name if _baks else sib.name + '.bak'})")
             elif overlap:
                 for sib, n in overlap:
                     print(f"taxjson fetch: WARNING: {a}/{sib.name} has "
@@ -781,13 +826,10 @@ def run(request) -> Dict[str, Any]:
                 continue
             if _existing and _existing != text:
                 # Never lose the previous statement: numbered backups,
-                # like --trim-overlap's (not read by `taxjson run`).
-                bak = out.with_name(out.name + ".bak")
-                n = 2
-                while bak.exists():
-                    bak = out.with_name(f"{out.name}.bak{n}")
-                    n += 1
-                F.write_private(bak, _existing)
+                # like --trim-overlap's (not read by `taxjson run`),
+                # never through a link at a .bak name (#18).
+                from taxjson.lib.safe_write import backup_copy
+                bak = backup_copy(out)
             # Atomic like the Questrade path: a crash mid-write must
             # not leave a truncated statement for the next run.
             F.write_private(out, text)

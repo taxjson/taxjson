@@ -547,33 +547,25 @@ def toml_str(value: Any) -> str:
 
 
 def write_private(path: Any, text: str) -> None:
-    """Write a fetched statement / snapshot atomically (.part + rename)
-    as 0600 inside a 0700 directory. mkdir(mode=) does not tighten a
-    directory that already exists, so the chmod is explicit; the .part
-    is created fresh (O_EXCL, never through a symlink)."""
+    """Write a fetched statement / snapshot atomically as 0600 inside a
+    0700 directory. mkdir(mode=) does not tighten a directory that
+    already exists, so the chmod is explicit. The text is staged in a
+    temp file of this write's OWN (core safe_write.write_atomic: a new
+    owner-only `<name>.<random>.part`, never through a symlink) and
+    renamed over `path`: two overlapping writers each publish only
+    their own complete file. One fixed `<name>.part` let a second
+    writer replace the first one's temp, so the first rename published
+    the second's unfinished file (GitHub issue #13)."""
     import os
     from pathlib import Path as _P
+    from taxjson.lib.safe_write import write_atomic
     path = _P(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         os.chmod(path.parent, 0o700)
     except OSError:
         pass
-    tmp = path.with_name(path.name + ".part")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-            fh.write(text)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    tmp.replace(path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    write_atomic(path, text, newline="")
 
 
 def activity_type_counts(activities: List[Dict[str, Any]]) -> Dict[str, int]:

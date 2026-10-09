@@ -54,6 +54,46 @@
 
 ### Fixed
 
+- An opening snapshot (`OPENING` line) that would leave out a buy of
+  the tax year closing a short position (a short cover, or a buy that
+  crosses from short to long) now stops the run, as a left-out sale of
+  the year already did, naming the cover. It used to be dropped
+  silently, and the short sale's gain fell out of the year in both
+  countries. Whether a left-out row realizes a gain is read from the
+  position, walked back from the snapshot's quantity (#11).
+- An order the broker cancels in two parts (two IB `Ca` rows, in one
+  statement or across two) is removed in full: the second cancellation,
+  cancelling exactly what the first left, matched neither the order's
+  original size nor (as a part) the reduced one, so it stayed booked as
+  a phantom sale, with a wrong gain, a wrong cost on the shares and a
+  false "original fill is in none of this account's inputs" warning
+  (#12).
+- After `taxjson run --account B`, every taxable account blended with B
+  in the cross-account pass is reported stale (`sum`, `form-export`,
+  the checklist warn; `close-year` stops), not only B. The pass now
+  records its members and a fingerprint of each one's books; the check
+  used to compare an account's own books only, so another account's
+  rebuild left the old blended numbers served without a warning. (#15)
+- `taxjson-explain` refuses a trade row without its `net_amount` (or
+  `quantity`), as `taxjson-gains` does; it used to trace the purchase at
+  cost 0 and the whole sale as gain. The check now sits where every gains
+  computation starts, for the main and the context books, from a file or
+  stdin, and `taxjson-sort`, `taxjson-merge2` and `taxjson-convert-currency`
+  keep the amount missing instead of writing a 0. An explicit
+  `"net_amount": 0` is still a legal amount (#14).
+- A JSON book row with an empty date, a trade (or split, transfer,
+  adjustment, opening) with an empty or missing symbol, or an action the
+  engines do not book is refused with a message naming the row. Such a
+  book used to compute at exit 0: an undated sale sorted first and a later
+  purchase became a short cover. A fee, interest or tax row without a
+  symbol is still fine (#16).
+- `taxjson-form-export` refuses a gains file whose disposition lacks its
+  gain, its units or a date, naming the row; the row used to be left out
+  of the export in silence when another row was complete. The
+  same check covers `taxjson-sum-gains`, `taxjson-reconcile-slips`, the
+  option reports, `taxjson-t1135`, close-year, check-filed and
+  `taxjson-carryover`. Dividend rows and unknown-cost rows keep their own
+  shape (#17).
 - An ALLOWLOSS line that names no denied loss now says how the books
   spell the sale it meant: the day's trades of the line's root, on any
   listing, are listed first and never cut (a busy day's list was cut at
@@ -77,40 +117,27 @@
   holding the Webull export, and only when the books hold one. Two such
   accounts of one broker are not told apart by a guess: the slip is
   listed.
-- An opening snapshot (`OPENING` line) that would leave out a buy of
-  the tax year closing a short position (a short cover, or a buy that
-  crosses from short to long) now stops the run, as a left-out sale of
-  the year already did, naming the cover. It used to be dropped
-  silently, and the short sale's gain fell out of the year in both
-  countries. Whether a left-out row realizes a gain is read from the
-  position, walked back from the snapshot's quantity (#11).
-- An order the broker cancels in two parts (two IB `Ca` rows, in one
-  statement or across two) is removed in full: the second cancellation,
-  cancelling exactly what the first left, matched neither the order's
-  original size nor (as a part) the reduced one, so it stayed booked as
-  a phantom sale, with a wrong gain, a wrong cost on the shares and a
-  false "original fill is in none of this account's inputs" warning
-  (#12).
-- `taxjson-explain` refuses a trade row without its `net_amount` (or
-  `quantity`), as `taxjson-gains` does; it used to trace the purchase at
-  cost 0 and the whole sale as gain. The check now sits where every gains
-  computation starts, for the main and the context books, from a file or
-  stdin, and `taxjson-sort`, `taxjson-merge2` and `taxjson-convert-currency`
-  keep the amount missing instead of writing a 0. An explicit
-  `"net_amount": 0` is still a legal amount (#14).
-- A JSON book row with an empty date, a trade (or split, transfer,
-  adjustment, opening) with an empty or missing symbol, or an action the
-  engines do not book is refused with a message naming the row. Such a
-  book used to compute at exit 0: an undated sale sorted first and a later
-  purchase became a short cover. A fee, interest or tax row without a
-  symbol is still fine (#16).
-- `taxjson-form-export` refuses a gains file whose disposition lacks its
-  gain, its units or a date, naming the row; the row used to be left out
-  of the export in silence when another row was complete. The
-  same check covers `taxjson-sum-gains`, `taxjson-reconcile-slips`, the
-  option reports, `taxjson-t1135`, close-year, check-filed and
-  `taxjson-carryover`. Dividend rows and unknown-cost rows keep their own
-  shape (#17).
+- `taxjson run` no longer writes through a symlink in `work/`: a link at
+  `work/loss_overrides.json` (written on every run) made the run
+  overwrite the file it pointed at, outside the project. Every generated
+  file the run keeps (the loss-override state, `.diag` diagnostics, the
+  skipped-account and own-account-move state, markers, a new elections
+  manifest, a pending-elections file) is now written to a temp file of
+  its own and renamed over the name, replacing a link there; a test
+  lists every remaining direct write in the core. (#19)
+- `taxjson fetch` (the taxjson-fetch plugin): two writes of one file
+  no longer share one `<file>.part` temp file, which let the first
+  rename publish the second writer's unfinished (empty) file and made
+  the second fail; each write now has a temp file of its own. One fetch
+  runs per project at a time (a second one waits), and the Questrade
+  token's read, refresh and save happen under a lock beside the token
+  file, so a second fetch uses the token the first one saved instead of
+  the one it killed. (#13)
+- `taxjson fetch --trim-overlap` no longer copies the original CSV
+  outside the project through a dangling `<export>.bak` symlink: a link
+  at a backup name is skipped for the next free `.bakN`, the backup is
+  written owner-only and the console names it. The previous IB Flex
+  statement's backup is kept the same way. (#18)
 
 ## v0.24.2 (2026-10-08)
 

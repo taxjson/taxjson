@@ -220,19 +220,24 @@ def write_state(cache: Path, items: Sequence[Dict[str, Any]]) -> None:
     """work/loss_overrides.json: the run's lines. Rewritten only when
     they change (so `run --fast` keeps its cache); a project that never
     had a line never gets the file, one whose lines were deleted keeps
-    an empty list (its mtime tells the cached gains to rebuild)."""
+    an empty list (its mtime tells the cached gains to rebuild).
+    Written through safe_write: a symlink at the name (to a file outside
+    the project, or dangling) is replaced by the state file, never
+    written through (GitHub issue #19)."""
+    from taxjson.lib.safe_write import write_atomic
     p = state_path(cache)
     if not items and not p.exists():
         return
     text = json.dumps({"schema_version": SCHEMA,
                        "overrides": list(items)}, indent=2) + "\n"
-    try:
-        if p.read_text(encoding="utf-8") == text:
-            return
-    except OSError:
-        pass
+    if not p.is_symlink():
+        try:
+            if p.read_text(encoding="utf-8") == text:
+                return
+        except OSError:
+            pass
     p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    p.write_text(text, encoding="utf-8")
+    write_atomic(p, text)
 
 
 def read_state(cache: Path) -> List[Dict[str, Any]]:

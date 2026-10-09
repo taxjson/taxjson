@@ -32,7 +32,8 @@ class TestOwnerOnlyModes(unittest.TestCase):
             out = d / "questrade_2026.csv"
             out.write_text("old")
             os.chmod(out, 0o644)
-            # A symlink planted at the .part path is replaced, not followed.
+            # A symlink planted at the old fixed .part name is never
+            # followed: each write has a temp file of its own (#13).
             victim = Path(tmp) / "victim"
             victim.write_text("keep")
             (d / "questrade_2026.csv.part").symlink_to(victim)
@@ -41,7 +42,9 @@ class TestOwnerOnlyModes(unittest.TestCase):
             self.assertEqual(_mode(out), 0o600)
             self.assertEqual(out.read_text(), "Transaction Date\n")
             self.assertEqual(victim.read_text(), "keep")
-            self.assertFalse((d / "questrade_2026.csv.part").exists())
+            self.assertEqual(sorted(p.name for p in d.iterdir()
+                                    if p.name.endswith(".part")
+                                    and not p.is_symlink()), [])
 
     def test_token_part_is_created_fresh_never_through_a_symlink(self):
         from taxjson_fetch.command import _questrade_token_write

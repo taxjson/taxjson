@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from taxjson.lib import out as _out
+from taxjson.lib.safe_write import write_atomic
 from taxjson.lib.country import add_country_argument
 
 from taxjson.lib.corp_actions import (
@@ -609,7 +610,8 @@ def main():
                                    sheltered=args.sheltered)
                 Path(args.pending_json).parent.mkdir(parents=True,
                                                      exist_ok=True)
-                Path(args.pending_json).write_text(
+                write_atomic(
+                    Path(args.pending_json),
                     json.dumps(doc, indent=2, sort_keys=True),
                     encoding="utf-8")
                 emit_line(f"taxjson-corp-actions: note: pending elections "

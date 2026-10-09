@@ -379,8 +379,9 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
             newer = stale_wash_inputs(wash)
             if newer:
                 from taxjson.lib.stage_msg import emit_line
-                emit_line(f"warning: {wash.name} is OLDER than "
-                          f"{', '.join(newer)} — wash-adjusted numbers are "
+                emit_line(f"warning: {wash.name} was built before "
+                          f"{', '.join(newer)} changed — wash-adjusted "
+                          f"numbers are "
                           f"stale (run a full `taxjson run` before "
                           f"filing from this output).",
                           file=_sys.stderr)
@@ -390,14 +391,97 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
     return out
 
 
+# The blended (cross-account) passes' record of what each wash file was
+# built from: {"wash": {<acct>_gains_wash.json: {"blend", "wash": fp,
+# "inputs": {name: fp | None}}}} with fp = {size, mtime_ns, sha256}.
+# Dot-prefixed: no account discovery glob may see it.
+WASH_INPUTS_FILE = ".wash_inputs.json"
+
+
+def _sha256(p: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _fingerprint(p: Path) -> "Optional[dict]":
+    """size + mtime_ns + sha256 of a file; None when it does not exist."""
+    try:
+        st = p.stat()
+        return {"size": st.st_size, "mtime_ns": st.st_mtime_ns,
+                "sha256": _sha256(p)}
+    except OSError:
+        return None
+
+
+def _matches(fp: Any, p: Path) -> bool:
+    """Is `p` still the file `fp` fingerprinted (None: still absent)?
+    Size and mtime equal is a match; a file rewritten with the same
+    bytes (a --fast no-op) matches by its hash."""
+    try:
+        st = p.stat()
+    except OSError:
+        return fp is None
+    if not isinstance(fp, dict):
+        return False
+    if st.st_size != fp.get("size"):
+        return False
+    if st.st_mtime_ns == fp.get("mtime_ns"):
+        return True
+    try:
+        return _sha256(p) == fp.get("sha256")
+    except OSError:
+        return False
+
+
+def _read_wash_inputs(cache: Path) -> dict:
+    try:
+        doc = json.loads((Path(cache) / WASH_INPUTS_FILE)
+                         .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    w = doc.get("wash") if isinstance(doc, dict) else None
+    return w if isinstance(w, dict) else {}
+
+
+def record_wash_inputs(cache: Path, washes: Iterable[Path],
+                       inputs: Iterable[Path], *, blend: str) -> None:
+    """After a wash pass wrote `washes` from `inputs` (every member's
+    base and plain gains, the sheltered book, the loss-override state —
+    a missing one recorded as absent), remember what each was built
+    from, for stale_wash_inputs: a blended result depends on EVERY
+    account in the blend, and `run --account B` rebuilds B without the
+    blended pass (GitHub issue #15). Written by the run (under its run
+    lock), owner-only, never through a link (safe_write)."""
+    from taxjson.lib.safe_write import write_atomic
+    cache = Path(cache)
+    fps = {Path(p).name: _fingerprint(Path(p)) for p in inputs}
+    entries = _read_wash_inputs(cache)
+    for w in washes:
+        w = Path(w)
+        entries[w.name] = {"blend": blend, "wash": _fingerprint(w),
+                           "inputs": fps}
+    write_atomic(cache / WASH_INPUTS_FILE,
+                 json.dumps({"schema_version": 1, "wash": entries},
+                            indent=2, sort_keys=True) + "\n")
+
+
 def stale_wash_inputs(wash: Path) -> "list[str]":
     """The inputs of a `<acct>_gains_wash.json` rebuilt AFTER it — its
     account's plain gains and base book, and the combined sheltered book
     (`run --account <sheltered>` rebuilds sheltered_base.json but skips
     the wash pass, so a registered-account buy that makes a taxable loss
-    superficial never reached the served numbers; 2026-09 audit R1-251).
-    Empty when the wash file is current. One second of slack absorbs
-    filesystem timestamp granularity within one run."""
+    superficial never reached the served numbers; 2026-09 audit R1-251)
+    — and every input of the blend it came from that changed since
+    (another taxable account's books after `run --account <other>`:
+    GitHub issue #15), from the record the wash pass kept
+    (WASH_INPUTS_FILE). A wash file with no record (an older taxjson
+    wrote it) counts any other account's base or plain gains newer than
+    it (accounts as resolve_gains_files finds them). Empty when the wash file is current. One second of slack
+    absorbs filesystem timestamp granularity within one run."""
     wash = Path(wash)
     name = wash.name[: -len("_gains_wash.json")]
     try:
@@ -413,6 +497,27 @@ def stale_wash_inputs(wash: Path) -> "list[str]":
                 out.append(p.name)
         except OSError:
             continue
+    rec = _read_wash_inputs(wash.parent).get(wash.name)
+    if (isinstance(rec, dict) and isinstance(rec.get("inputs"), dict)
+            and _matches(rec.get("wash"), wash)):
+        for inp, fp in sorted(rec["inputs"].items()):
+            if inp not in out and not _matches(fp, wash.with_name(inp)):
+                out.append(inp)
+        return out
+    others = sorted(
+        {f.name[: -len("_gains.json")]
+         for f in wash.parent.glob("*_gains.json")
+         if not f.name.startswith(".")
+         and not f.name.endswith(("_raw_gains.json",
+                                  "_raw_base_gains.json"))} - {name})
+    for other in others:
+        for p in (wash.with_name(f"{other}_base.json"),
+                  wash.with_name(f"{other}_gains.json")):
+            try:
+                if p.name not in out and p.stat().st_mtime > w + 1.0:
+                    out.append(p.name)
+            except OSError:
+                continue
     return out
 
 

@@ -32,7 +32,8 @@ overwrites whatever it points at — a file outside the project too.
   back hold a lock around the whole step — the run lock
   (taxjson_run._acquire_run_lock, one `taxjson run` per project), the
   checklist state lock (checklist._StateLock) and the shared price/rate
-  caches' lock (json_cache.save_json_cache).
+  caches' lock (json_cache.save_json_cache); file_lock is the general
+  form (the fetch plugin's project and Questrade-token locks).
 """
 from __future__ import annotations
 
@@ -197,6 +198,56 @@ def backup_copy(path: Union[str, Path]) -> Path:
     if not os.path.lexists(str(bak)):
         write_atomic(bak, data, keep_mode=False)
     return bak
+
+
+@contextlib.contextmanager
+def file_lock(lock_path: Union[str, Path], *,
+              on_wait=None) -> Iterator[None]:
+    """`with file_lock(p):` — hold an exclusive advisory lock (POSIX
+    flock) on the lock file `p` for the block, so a read-modify-write
+    (read a file, change it, write it back) or a read-refresh-save of a
+    rotating token cannot interleave with another process's or thread's
+    (unique temp files make each WRITE atomic, not the whole step). The
+    lock file holds no data; it is created owner-only and never through
+    a symlink (O_NOFOLLOW). `on_wait()` is called once when another
+    holder makes this one wait. Where flock is unavailable (Windows, a
+    file system without locks) or the lock file cannot be opened, the
+    block runs unlocked, as before."""
+    try:
+        import fcntl
+    except ImportError:                             # pragma: no cover
+        fcntl = None
+    fd = None
+    if fcntl is not None:
+        try:
+            fd = os.open(str(lock_path),
+                         os.O_RDWR | os.O_CREAT
+                         | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_CLOEXEC", 0), 0o600)
+        except OSError:
+            fd = None
+    if fd is not None:
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if on_wait is not None:
+                    on_wait()
+                fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            os.close(fd)                            # no locking here
+            fd = None
+        except BaseException:
+            os.close(fd)
+            raise
+    try:
+        yield
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 class OutsideLinkError(ValueError):
