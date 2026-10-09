@@ -93,7 +93,9 @@
   the checklist warn; `close-year` stops), not only B. The pass now
   records its members and a fingerprint of each one's books; the check
   used to compare an account's own books only, so another account's
-  rebuild left the old blended numbers served without a warning. (#15)
+  rebuild left the old blended numbers served without a warning. The
+  account's own books are judged by that record too, so a `run --account`
+  of the account itself that rebuilds the same books does not warn. (#15)
 - `taxjson-explain` refuses a trade row without its `net_amount` (or
   `quantity`), as `taxjson-gains` does; it used to trace the purchase at
   cost 0 and the whole sale as gain. The check now sits where every gains

@@ -120,6 +120,29 @@ class TestStaleWashInputsUnit(unittest.TestCase):
             _put(files["b_base.json"], text, 120)
             self.assertEqual(stale_wash_inputs(wa), [])
 
+    def test_own_inputs_rebuilt_unchanged_are_current(self):
+        # A no-op `run --account a`: a's own base and gains rewritten
+        # later with the same bytes — current by the record's hash (it
+        # used to warn by their mtime); changed bytes are still stale.
+        from taxjson.lib.report_model import stale_wash_inputs
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            files, (wa, _wb) = self._blend(work)
+            for n in ("a_base.json", "a_gains.json"):
+                _put(files[n], files[n].read_text(), 400)
+            self.assertEqual(stale_wash_inputs(wa), [])
+            _put(files["a_gains.json"], json.dumps({"n": "x"}), 500)
+            self.assertEqual(stale_wash_inputs(wa), ["a_gains.json"])
+
+    def test_own_inputs_without_a_record_go_by_mtime(self):
+        from taxjson.lib.report_model import stale_wash_inputs
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            wa = _put(work / "a_gains_wash.json", "{}", 150)
+            _put(work / "a_gains.json", "{}", 400)
+            _put(work / "a_base.json", "{}", 100)
+            self.assertEqual(stale_wash_inputs(wa), ["a_gains.json"])
+
     def test_a_wash_file_rewritten_outside_the_blend_ignores_it(self):
         # The record describes the wash file it fingerprinted; a wash
         # file written since (by a pass that kept no record) falls back

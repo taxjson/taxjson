@@ -478,8 +478,10 @@ def stale_wash_inputs(wash: Path) -> "list[str]":
     — and every input of the blend it came from that changed since
     (another taxable account's books after `run --account <other>`:
     GitHub issue #15), from the record the wash pass kept
-    (WASH_INPUTS_FILE). A wash file with no record (an older taxjson
-    wrote it) counts any other account's base or plain gains newer than
+    (WASH_INPUTS_FILE) — by that record's fingerprints, the account's
+    own inputs included, so a rebuild with the same bytes is current. A
+    wash file with no record (an older taxjson wrote it) counts its own
+    inputs and any other account's base or plain gains newer than
     it (accounts as resolve_gains_files finds them). Empty when the wash file is current. One second of slack
     absorbs filesystem timestamp granularity within one run."""
     wash = Path(wash)
@@ -488,22 +490,31 @@ def stale_wash_inputs(wash: Path) -> "list[str]":
         w = wash.stat().st_mtime
     except OSError:
         return []
+    rec = _read_wash_inputs(wash.parent).get(wash.name)
+    recorded = (rec["inputs"] if isinstance(rec, dict)
+                and isinstance(rec.get("inputs"), dict)
+                and _matches(rec.get("wash"), wash) else None)
     out = []
     for p in (wash.with_name(f"{name}_gains.json"),
               wash.with_name(f"{name}_base.json"),
               wash.with_name("sheltered_base.json")):
+        if recorded is not None and p.name in recorded:
+            # The record's fingerprint judges the account's OWN inputs
+            # too: a no-op `run --account <this>` rewrites them with the
+            # same bytes (newer, not changed) — no warning for that.
+            if not _matches(recorded[p.name], p):
+                out.append(p.name)
+            continue
         try:
             if p.stat().st_mtime > w + 1.0:
                 out.append(p.name)
         except OSError:
             continue
-    rec = _read_wash_inputs(wash.parent).get(wash.name)
-    if (isinstance(rec, dict) and isinstance(rec.get("inputs"), dict)
-            and _matches(rec.get("wash"), wash)):
-        for inp, fp in sorted(rec["inputs"].items()):
+    if recorded is not None:
+        for inp, fp in sorted(recorded.items()):
             if inp not in out and not _matches(fp, wash.with_name(inp)):
                 out.append(inp)
-        return out
+        return sorted(out)
     others = sorted(
         {f.name[: -len("_gains.json")]
          for f in wash.parent.glob("*_gains.json")
