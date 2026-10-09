@@ -349,6 +349,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `income_not_held`, `that the books do not hold`
 
+### "Error: account margin: the opening balance of QZS.US dated 2025-01-31 would leave out 1 short cover(s) of the 2025 tax year (first: 2025-01-06 cover of 10 QZS.US: a buy of 10 that closes a short position)"; on an older release the run went on and the cover's gain was in no total
+- **Check:** the account has an `OPENING` line (`inputs/<account>/opening_<date>.tt`) dated in the tax year, and its rows of that symbol before the snapshot include a buy that closes a short position (a short sale, or a written option bought back). `tjs sum` on an older release has no disposition for that cover.
+- **Cause:** an opening snapshot leaves the account's earlier rows of its symbols out of the books (tax-logic CA-OPEN-03 / US-OPEN-03), and a left-out sale of the tax year stops the run. Only sales (negative quantities) were checked: a cover is a positive-quantity buy, so a cover of the tax year was dropped silently and the short sale's gain or loss fell out of the year in both countries. The check now reads each left-out row's position, walked back from the snapshot's quantity, and stops on a cover too (including a buy that crosses from short to long).
+- **Fix:** upgrade and `tjs run`. Take the snapshot from a statement before the year's first sale or cover of that symbol (December 31 of the year before), or remove the `OPENING` line and supply the history.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/opening.py` — `apply_opening_cutoff`, `_realizations_left_out`
+
 ## Holdings
 
 ### "Info: 5 accounts with open positions and no holdings file to check them against" (or `tjs sanity`: "Error: no arguments, and no account in taxjson.toml declares `holdings = [...]`")
@@ -543,6 +550,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/bin/taxjson_apply_distributions.py` — `_warn_roc_overlaps`, `reduced TWICE`; `src/taxjson/bin/taxjson_run.py` — `_warn_dist_double_entry`
 
 ## Interactive Brokers
+
+### "Warning: QZK.US: the broker cancelled (Ca) a trade of 6 @ 10 on 2025-02-03, but the original fill is in none of this account's inputs" after "Info: the broker cancelled (Ca) 4 of the QZK.US order of 10 @ 10 … The order is booked as 6"
+- **Check:** IB cancelled one order in two parts (two `Ca` rows, in one statement or in two), and together they cancel the whole order: the second cancels exactly what the first left. `tjs sum` books a sale of the second quantity that never happened.
+- **Cause:** the cancellation pairing (`taxjson-merge2` across statements, and the IB parser within one) reduced the order by the first cancellation, then looked for an exact match of the second on the order's ORIGINAL size and for a partial match on the reduced one. Cancelling exactly the rest matched neither, so it stayed booked as a reversing trade: a phantom sale with a wrong gain, and the wrong cost left on the shares.
+- **Fix:** upgrade and `tjs run`. Both searches now read the order as the earlier cancellations left it; the last cancellation removes the order ("dropped the rest (6) of the QZK.US trade of 10 …").
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/trade_cancel.py` — `pair_cancellations`, `trade_cancel_what`; `src/taxjson/bin/taxjson_merge2.py` — `cancel_trade_pairs`
 
 ### IB: "Warning: U1234567.csv: the statement has no Cash Report" or "Error: U1***.csv: parsed rows do not reconcile with IB's own Cash Report"
 - **Check:** the file has no `Cash Report,Header,…` lines (a Flex query or a customised statement). For the error, the next line names the currency and the line, e.g. `USD Dividends: parsed 2.50 vs Cash Report 3.50 (diff -1.00)`.

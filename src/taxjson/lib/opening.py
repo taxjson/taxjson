@@ -20,9 +20,12 @@ the CUT-OFF (CA-OPEN-03, US-OPEN-03):
   symbol, cost adjustments); income rows (dividends, interest,
   withholding) always stay;
 * a row is "on or before" by its trade date;
-* a SALE left out that falls in the project's tax year (or later) stops
-  the run: its gain would silently drop out of the year. Take the
-  snapshot before the year's first sale of that symbol instead.
+* a SALE or a SHORT COVER left out that falls in the project's tax
+  year (or later) stops the run: its gain would silently drop out of
+  the year. A cover (a buy that closes or crosses a short position) is
+  read from the position, walked back from the snapshot's quantity
+  (issue #11). Take the snapshot before the year's first sale or cover
+  of that symbol instead.
 
 One snapshot date per symbol per account: two OPENING rows of one
 symbol with different dates in one account are refused (which rows
@@ -161,27 +164,29 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
             continue
         dropped.setdefault(acct, []).append((t, hit))
     if year:
-        bad = []
-        for acct, rows in dropped.items():
-            for t, hit in rows:
-                q = float(_get(t, 'quantity', 0.0) or 0.0)
-                if (_get(t, 'action') in ('BUYSELL', 'ASSIGN') and q < 0):
-                    last = max(str(_get(t, 'date')),
-                               str(_get(t, 'date_settle')) or '')
-                    if last[:4] >= str(year):
-                        bad.append((t, hit))
+        bad = _realizations_left_out(dropped, txs, by_acct, year)
         if bad:
-            t, hit = bad[0]
+            t, hit, kind, closed = bad[0]
+            acct = str(_get(t, 'account'))
+            n_sale = sum(1 for b in bad if b[2] == 'sale')
+            n_cover = len(bad) - n_sale
+            what = ' and '.join(
+                x for x in (f"{n_sale} sale(s)" if n_sale else '',
+                            f"{n_cover} short cover(s)" if n_cover else '')
+                if x)
+            qty = abs(float(_get(t, 'quantity', 0.0) or 0.0))
+            first = (f"{_get(t, 'date')} cover of {closed:g} "
+                     f"{_get(t, 'symbol')}: a buy of {qty:g} that closes "
+                     f"a short position" if kind == 'cover' else
+                     f"{_get(t, 'date')} {qty:g} {_get(t, 'symbol')}")
             raise OpeningError(
-                f"account {_get(t, 'account')}: the opening balance of "
-                f"{hit} dated {by_acct[str(_get(t, 'account'))][hit]}"
-                f" would leave out {len(bad)} sale(s) of the {year} tax "
-                f"year (first: {_get(t, 'date')} "
-                f"{abs(float(_get(t, 'quantity', 0.0))):g} "
-                f"{_get(t, 'symbol')}) — their gains would drop out of "
+                f"account {acct}: the opening balance of "
+                f"{hit} dated {by_acct[acct][hit]}"
+                f" would leave out {what} of the {year} tax "
+                f"year (first: {first}) — their gains would drop out of "
                 f"the year. Take the snapshot from a statement before "
-                f"the year's first sale (e.g. December 31 of the year "
-                f"before), or remove the OPENING line(s).")
+                f"the year's first sale or cover (e.g. December 31 of "
+                f"the year before), or remove the OPENING line(s).")
     for acct in sorted(dropped):
         rows = dropped[acct]
         syms = sorted({hit for _t, hit in rows})
@@ -193,3 +198,67 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
               f" — left out of the books so the shares are not counted "
               f"twice (income rows stay).", file=report)
     return kept
+
+
+def _realizations_left_out(dropped: Dict[str, List], txs: List,
+                           by_acct: Dict[str, Dict[str, str]],
+                           year: int) -> List[Tuple]:
+    """The left-out rows that realize a gain or loss in `year` or later,
+    as (row, snapshot symbol, 'sale' | 'cover', quantity closed),
+    earliest first.
+
+    A SALE (a BUYSELL / ASSIGN of negative quantity) always counts —
+    it may sell held shares or write an option, whose premium is
+    income of the write date in a Canadian grant-timing book. A
+    positive-quantity row counts when it closes a SHORT position (a
+    cover, or a buy that crosses from short to long; issue #11): it
+    realizes the short sale's gain. The position each row met is read
+    BACKWARD from the snapshot's own quantity (the snapshot is the
+    truth on its day), so a book whose history starts after the shares
+    were bought does not mistake a later buy for a cover."""
+    open_qty: Dict[Tuple[str, str], float] = {}
+    for t in txs:
+        if is_opening_row(t):
+            key = (str(_get(t, 'account')), str(_get(t, 'symbol')))
+            open_qty[key] = (open_qty.get(key, 0.0)
+                             + float(_get(t, 'quantity', 0.0) or 0.0))
+    bad: List[Tuple] = []
+    for acct, rows in dropped.items():
+        groups: Dict[str, List] = {}
+        for i, (t, hit) in enumerate(rows):
+            groups.setdefault(hit, []).append((i, t))
+        for hit, grp in groups.items():
+            grp.sort(key=lambda it: (str(_get(it[1], 'date')),
+                                     str(_get(it[1], 'time')), it[0]))
+            pos: Dict[str, float] = {hit: open_qty.get((acct, hit), 0.0)}
+            for _i, t in reversed(grp):
+                act = _get(t, 'action')
+                sym = str(_get(t, 'symbol'))
+                q = float(_get(t, 'quantity', 0.0) or 0.0)
+                if act == 'SPLIT':
+                    # Undo `old -> new` at `ratio`: before it, the new
+                    # symbol's position was the old one's (taken as
+                    # nil of its own) and 1/ratio the size.
+                    ratio = q if abs(q) > 1e-12 else 1.0
+                    dst = str(_get(t, 'symbol_new')).strip() or sym
+                    after = pos.pop(dst, 0.0)
+                    pos[sym] = after / ratio
+                    continue
+                if act not in ('BUYSELL', 'ASSIGN', 'TRANSFER',
+                               'OPENING_BALANCE'):
+                    continue
+                before = pos.get(sym, 0.0) - q
+                pos[sym] = before
+                if act not in ('BUYSELL', 'ASSIGN'):
+                    continue
+                last = max(str(_get(t, 'date')),
+                           str(_get(t, 'date_settle')) or '')
+                if last[:4] < str(year):
+                    continue
+                if q < 0:
+                    bad.append((t, hit, 'sale', -q))
+                elif q > 0 and before < -1e-9:
+                    bad.append((t, hit, 'cover', min(q, -before)))
+    bad.sort(key=lambda b: (str(_get(b[0], 'date')),
+                            str(_get(b[0], 'time'))))
+    return bad

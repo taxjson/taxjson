@@ -55,7 +55,7 @@ from taxjson.bin.taxjson_convert_currency import (
 )
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
 from taxjson.lib.corporate_timeline import normalize_symbol_new
-from taxjson.lib.trade_cancel import pair_cancellations
+from taxjson.lib.trade_cancel import pair_cancellations, trade_cancel_what
 
 
 def warn_duplicate_splits(txs, conflicts=None) -> int:
@@ -269,7 +269,8 @@ def cancel_trade_pairs(txs):
               f"on {orig.date} (one execution); the order is booked as "
               f"{red.quantity:g}.")
     for orig, _ca in pairs:
-        emit_line(f"note: dropped the {orig.symbol} trade of "
+        what = trade_cancel_what(orig.quantity, _ca.quantity)
+        emit_line(f"note: dropped {what} {orig.symbol} trade of "
               f"{orig.quantity:g} @ {orig.price:g} on {orig.date} and "
               f"its broker cancellation (Ca) from another statement.")
     for ca in unmatched:
@@ -438,8 +439,8 @@ def main():
     parser.add_argument(
         '--year', type=int, default=None,
         help="The project's tax year: an opening snapshot (OPENING rows) "
-             "that would leave out a sale of this year or later is "
-             "refused instead of dropping the sale's gain.",
+             "that would leave out a sale or a short cover of this year "
+             "or later is refused instead of dropping its gain.",
     )
     parser.add_argument(
         '--require-inputs', action='store_true',

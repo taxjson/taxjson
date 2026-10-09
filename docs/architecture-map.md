@@ -109,7 +109,7 @@ changes) is built across all of an account's files before rows are emitted.
 - `src/taxjson/lib/brokerages/rbc_direct.py` — `RbcBrokerage`, `read_rbc_rows`, `classify_rbc_row`, `RbcAccountContext`, `build_rbc_account_context`, `_plan_reinvest_reversals`, `rbc_coverage_messages`, `is_holdings_export`, `RbcFormatError`: RBC Direct Investing; every row is classified by its activity label and event code; date coverage, holdings files and format refusals.
 - `src/taxjson/lib/brokerages/ib_extractor.py` — `IbBrokerage`, `parse_file`, `prepare_files`, `reconcile_files`, `resolve_unmatched_ca`, `ib_year_coverage`, `get_ib_settlement`, `_ib_market_trade_date`, `_ib_xfer_cancels`, `_ib_fold_refund`, `_ib_temp_folds`, `_map_names_temp`, `_project_map_names`, `_ib_fold_rows`, `_warn_stock_aliases`, `_security_name`: Interactive Brokers activity statements (every section of one CSV; a row's security name from the instrument on its own listing's market when several share its symbol); coverage gaps, settlement and trade dates, cancellations and fee refunds; IB's temporary time-stamped symbols folded onto their ticker (unless a ticker.map line names the stamped symbol), and one contract under two symbols (a dated RENAME hint).
 - `src/taxjson/lib/brokerages/webull.py` — `WebullBrokerage`, `label_hits`, `_WEBULL_OPTION_RE`, `_deliverable_size`: Webull exports (both column layouts, matched by header label).
-- `src/taxjson/lib/trade_cancel.py` — `pair_cancellations`, `is_trade_cancel`, `TRADE_CANCEL_TYPE`: an IB `Ca` cancellation netted against its original.
+- `src/taxjson/lib/trade_cancel.py` — `pair_cancellations`, `is_trade_cancel`, `TRADE_CANCEL_TYPE`, `trade_cancel_what`: an IB `Ca` cancellation netted against its original (a partial one reduces it; later ones match what is left).
 - `src/taxjson/lib/futures.py` — `settle_futures`, `is_plain_future`, `method_for`, `section_1256_kind`: plain futures booked on a settlement basis.
 
 ## Crypto parsers
@@ -245,7 +245,7 @@ positions report.
 - `src/taxjson/bin/taxjson_convert_tt.py` — `parse_inkind_line`: the `.tt` INKIND line (a value, never a row of the books).
 - `src/taxjson/bin/taxjson_run.py` — `stage_transfer_arrivals`, `transfer_arrivals`, `stage_own_account_moves`, `own_account_custody_moves`, `_stage_crypto_sends`, `cmd_crypto_sends`, `cmd_opening`, `_opening_lines`: where the run books arrivals and own-account moves; the crypto sends hook and `taxjson crypto-sends`; `taxjson opening`, which writes OPENING lines from a positions report.
 - `src/taxjson/lib/crypto_sends.py` — `load_transfer_rows`, `match_transfers`, `build_report`, `record_decision`, `prompt_undecided`, `render_tt`, `DECISIONS`: crypto sends, their decisions and the generated crypto_sends.tt.
-- `src/taxjson/lib/opening.py` — `apply_opening_cutoff`, `snapshots`, `OpeningError`, `ATTENTION_OPENING`: OPENING rows and the cutoff they impose on earlier rows.
+- `src/taxjson/lib/opening.py` — `apply_opening_cutoff`, `snapshots`, `OpeningError`, `ATTENTION_OPENING`, `_realizations_left_out`: OPENING rows and the cutoff they impose on earlier rows (a left-out sale or short cover of the tax year stops the run).
 - `src/taxjson/lib/pipeline.py` — `_handle_transfers`, `_net_cross_account_transfers`, `TransferValidationError`, `transfers_in_loss_windows`, `transfers_as_acquisitions`: transfer handling before the engine runs.
 
 ## Missing purchase history

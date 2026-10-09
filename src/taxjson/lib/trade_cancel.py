@@ -61,6 +61,17 @@ def cancels(orig: Any, ca: Any) -> bool:
     return abs(p_o - p_c) <= 1e-6 * max(1.0, abs(p_c))
 
 
+def trade_cancel_what(q_orig: float, q_ca: float) -> str:
+    """'the' for a cancellation of a whole trade, 'the rest (N) of the'
+    for one that cancels what earlier cancellations left of it (the
+    pair's original keeps its booked size; issue #12)."""
+    q_o = float(q_orig or 0.0)
+    q_c = float(q_ca or 0.0)
+    if abs(q_o + q_c) <= 1e-9 * max(1.0, abs(q_c)):
+        return 'the'
+    return f'the rest ({-q_c:g}) of the'
+
+
 def _probe(orig: Any, qty: float) -> dict:
     """`orig` as a dict with its quantity replaced (for `cancels`)."""
     d = dict(orig) if isinstance(orig, dict) else orig.to_dict()
@@ -108,7 +119,12 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None
 
     Returns (kept, pairs, unmatched): `kept` in the input order, `pairs`
     as (original, cancellation), `unmatched` the cancellation rows whose
-    original is not in `txs` (they stay in `kept`). Among several
+    original is not in `txs` (they stay in `kept`). Candidates are
+    judged on their current quantity: after a partial cancellation
+    (below) the reduced order is what a later cancellation must match,
+    and one cancelling exactly its rest pairs with the original row
+    (the order is gone in full; the cancelled quantity is the
+    cancellation's). Among several
     candidate originals the one with the same time wins, else the latest
     one before the cancellation in the list, else the first after it.
 
@@ -125,8 +141,13 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None
     for ci, ca in enumerate(txs):
         if not is_trade_cancel(ca):
             continue
+        # Both searches read each original as it stands NOW: an order
+        # an earlier cancellation already reduced is matched by its
+        # residual (cancelling exactly the rest removes it), never by
+        # its original size (issue #12).
         cands = [i for i, t in enumerate(txs)
-                 if i not in used and i != ci and cancels(t, ca)]
+                 if i not in used and i != ci
+                 and cancels(replaced.get(i, t), ca)]
         if not cands:
             part = [i for i, t in enumerate(txs)
                     if i not in used and i != ci and not is_trade_cancel(t)

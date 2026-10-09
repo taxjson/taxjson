@@ -259,6 +259,112 @@ class TestCutoff(unittest.TestCase):
         out, _ = self._apply(rows, year=2026)
         self.assertEqual(len(out), 1)
 
+    # Issue #11: a short COVER is a positive-quantity row, so the sale
+    # refusal above never saw it; whether a left-out row realizes a gain
+    # is read from the position (walked back from the snapshot's).
+    @staticmethod
+    def _short_book(lot=""):
+        return [tx("BUYSELL", "2024-12-02", "SYNTH.US", -10, 100,
+                   account="demo"),
+                tx("BUYSELL", "2025-01-06", "SYNTH.US", 10, 80,
+                   account="demo"),
+                tx("BUYSELL", "2025-01-15", "SYNTH.US", 5, 50,
+                   account="demo"),
+                opening("2025-01-31", "SYNTH.US", 5, 50, lot=lot,
+                        account="demo")]
+
+    @rule("CA-OPEN-03")
+    @rule("US-OPEN-03")
+    def test_short_cover_of_the_tax_year_refused(self):
+        book = self._short_book(lot="2025-01-15")
+        # Without the snapshot the cover realizes 20 in both countries.
+        r = gains_both(book[:3], year=2025)
+        for c in ("canada", "usa"):
+            self.assertAlmostEqual(r[c]["summary"]["total_gain"], 20.0,
+                                   places=6, msg=c)
+        for country in ("canada", "usa"):
+            with self.assertRaises(OpeningError, msg=country) as cm:
+                self._apply(self._short_book(lot="2025-01-15"),
+                            year=2025, country=country,
+                            base_currency="USD")
+            msg = str(cm.exception)
+            self.assertIn("1 short cover(s) of the 2025 tax year", msg)
+            self.assertIn("2025-01-06 cover of 10 SYNTH.US", msg)
+            self.assertNotIn("sale(s)", msg)
+            # A cover of an earlier year is history the snapshot replaces.
+            out, _ = self._apply(self._short_book(lot="2025-01-15"),
+                                 year=2026, country=country,
+                                 base_currency="USD")
+            self.assertEqual(len(out), 1)
+            self.assertTrue(is_opening_row(out[0]))
+
+    @rule("CA-OPEN-03")
+    @rule("US-OPEN-03")
+    def test_buy_crossing_from_short_to_long_refused(self):
+        rows = [tx("BUYSELL", "2024-11-04", "SYNTH.US", -10, 100,
+                   account="demo"),
+                tx("BUYSELL", "2025-01-06", "SYNTH.US", 15, 120,
+                   account="demo"),
+                opening("2025-01-31", "SYNTH.US", 5, 40, lot="2025-01-06",
+                        account="demo")]
+        for country in ("canada", "usa"):
+            with self.assertRaises(OpeningError, msg=country) as cm:
+                self._apply(list(rows), year=2025, country=country,
+                            base_currency="USD")
+            self.assertIn("2025-01-06 cover of 10 SYNTH.US",
+                          str(cm.exception))
+
+    @rule("CA-OPEN-03")
+    def test_sale_and_cover_named_together(self):
+        rows = [tx("BUYSELL", "2024-11-04", "SAMPB.TO", -10, 100,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-01-06", "SAMPB.TO", 12, 96,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-01-10", "SAMPB.TO", 0.5, 4,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-01-20", "SAMPB.TO", -2, 20,
+                   currency="CAD"),
+                opening("2025-01-31", "SAMPB.TO", 0.5, 4, currency="CAD")]
+        with self.assertRaises(OpeningError) as cm:
+            self._apply(rows, year=2025)
+        msg = str(cm.exception)
+        self.assertIn("1 sale(s) and 1 short cover(s) of the 2025 tax year",
+                      msg)
+        self.assertIn("(first: 2025-01-06 cover of 10 SAMPB.TO", msg)
+
+    @rule("CA-OPEN-03")
+    @rule("US-OPEN-03")
+    def test_buy_after_a_sale_of_unrecorded_shares_is_not_a_cover(self):
+        # The books start after the shares were bought: walked back from
+        # the snapshot, the 2024 sale sold shares that were held, so the
+        # 2025 buy closes nothing.
+        rows = [tx("BUYSELL", "2024-06-03", "SYNTH.US", -10, 100,
+                   account="demo"),
+                tx("BUYSELL", "2025-01-06", "SYNTH.US", 10, 80,
+                   account="demo"),
+                opening("2025-01-31", "SYNTH.US", 20, 160,
+                        lot="2025-01-06", account="demo")]
+        for country in ("canada", "usa"):
+            out, err = self._apply(list(rows), year=2025, country=country,
+                                   base_currency="USD")
+            self.assertEqual(len(out), 1, country)
+            self.assertIn("2 earlier row(s) of SYNTH.US", err)
+
+    @rule("CA-OPEN-03")
+    def test_cover_of_a_renamed_symbol_refused(self):
+        rows = [tx("BUYSELL", "2024-11-04", "SAMPOLD.TO", -10, 100,
+                   currency="CAD"),
+                tx("SPLIT", "2024-12-02", "SAMPOLD.TO", 2, 0, currency="",
+                   symbol_new="SAMPB.TO"),
+                tx("BUYSELL", "2025-01-06", "SAMPB.TO", 20, 90,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-01-08", "SAMPB.TO", 3, 30,
+                   currency="CAD"),
+                opening("2025-01-31", "SAMPB.TO", 3, 30, currency="CAD")]
+        with self.assertRaises(OpeningError) as cm:
+            self._apply(rows, year=2025)
+        self.assertIn("2025-01-06 cover of 20 SAMPB.TO", str(cm.exception))
+
     @rule("CA-OPEN-03")
     def test_two_snapshot_dates_for_one_symbol_refused(self):
         rows = [opening("2024-12-31", "SAMPB.TO", 5, 50, currency="CAD"),
