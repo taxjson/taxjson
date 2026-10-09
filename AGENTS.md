@@ -56,8 +56,8 @@ IRS guidance and a tax professional.
 
 - **Set up:** `scripts/dev-setup.sh` (venv, editable install, ruff, the
   pre-push hook), then `source setup.sh`.
-- **The gate:** `scripts/ci.sh` (lint, consistency, tax-rules, PII scan,
-  suite, the no-extras check, fuzzers; `--quick` skips the fuzzers).
+- **The gate:** `scripts/ci.sh` (lint, consistency, tax-rules, PII, suite
+  in parallel, no-extras, fuzzers; `--quick` skips the fuzzers).
   Read its last line for PASS: a pipe hides the exit status. One module: `cd
   tests && TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing, run
   the gate once in a fresh `git clone` (it catches untracked files).

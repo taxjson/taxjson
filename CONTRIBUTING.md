@@ -132,10 +132,25 @@ The package uses a `src/` layout, so tests import it **as installed** —
 run `pip install -e .` (from Setup above) first, then:
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py" </dev/null
+python scripts/run_tests_parallel.py          # the suite on min(CPUs, 16) processes
+python scripts/run_tests_parallel.py test_x test_y   # some modules, in parallel
+python -m unittest discover -s tests -p "test_*.py" </dev/null   # serial
 ```
 
-Or use the wrapper:
+`scripts/run_tests_parallel.py` (standard library only) runs each test
+module in a process of its own — its own `TMPDIR` and its own synthetic
+HOME — `--jobs N` at a time, longest first by the times the previous
+run recorded in `.ci/test-durations.json` (gitignored; the file size
+stands in on a fresh clone). It prints a line per module that fails
+(`-v`: every module), each failure's full output, the total and the
+slowest 15 modules, and it fails unless every module passed AND the
+tests run add up to the serial discovery's count. A module slow enough
+to hold up the whole run is split into a process per test class. It
+never retries: a test that fails only in parallel shares something it
+must not — a fixed temp path, a port, a file in the checkout — and is a
+bug to fix. `--serial` runs the plain serial discovery.
+
+Or use the wrapper (serial, verbose):
 
 ```bash
 ./run_tests.sh
@@ -170,10 +185,19 @@ the lint stage; `pip install -e ".[dev]"` (or `scripts/dev-setup.sh`)
 installs it:
 
 ```bash
-scripts/ci.sh            # lint (ruff, critical tier) + suite + fuzzers at CI depth  (~2 min)
-scripts/ci.sh --nightly  # fuzzers at 5000/3000/1600 books                            (~5 min)
-scripts/ci.sh --quick    # lint + suite only                                          (~40 s)
+scripts/ci.sh            # lint (ruff, critical tier) + suite + fuzzers at CI depth
+scripts/ci.sh --nightly  # fuzzers at 5000/3000/1600 books
+scripts/ci.sh --quick    # lint + suite only
+scripts/ci.sh --serial   # ...with the suite in one process (the old way; a fallback)
 ```
+
+The suite stage runs `scripts/run_tests_parallel.py` (`TAXJSON_TEST_JOBS=N`
+picks the process count). Measured on a 20-core machine (2026-10, ~8,350
+tests): serial 1,054 s; parallel 107 s on 16 processes (94 s on 20,
+128 s on 12, 180 s on 8, 327 s on 4). No module dominates: the slowest
+take 25-45 s, under the run's own length, so none is split. The whole
+default gate: 129 s (suite 98 s, fuzzers 10 s, the other stages ~20 s),
+was 18-20 minutes.
 
 Every run appends one line to `.ci/history.log` (gitignored) with the
 commit, mode, result and wall time, so "when was this last green?" has

@@ -12,6 +12,10 @@
 #                            mutates engine files in place — run it
 #                            alone, never alongside edits)
 #   scripts/ci.sh --quick    lint + suite (and no-extras) only
+#   scripts/ci.sh --serial   ...the suite in one process (the fallback;
+#                            default: scripts/run_tests_parallel.py on
+#                            min(CPUs, 16) processes, TAXJSON_TEST_JOBS=N
+#                            to choose)
 #
 # Exit 0 only when every stage passes. A one-line result is appended
 # to .ci/history.log (gitignored) so the last green commit is on record.
@@ -34,9 +38,11 @@ trap 'exit 143' TERM
 export TMPDIR="$CI_TMP"
 PY="${PYTHON:-$PWD/venv/bin/python3}"
 MODE=default
+SERIAL=""
 for a in "$@"; do case "$a" in
   --nightly) MODE=nightly ;; --mutation) MODE=mutation ;; --quick) MODE=quick ;;
-  -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+  --serial) SERIAL=--serial ;;
+  -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
   *) echo "unknown flag: $a" >&2; exit 2 ;;
 esac; done
 
@@ -81,7 +87,15 @@ SUITE_ENV=(env HOME="$CI_TMP/home" XDG_CACHE_HOME="$CI_TMP/home/.cache"
 # Unwrapped (docs/output-style.md): a phrase a test looks for never
 # depends on where a temp path made a message wrap. The style tests set
 # their own width (tests/_style.py, tests/test_output_style.py).
-stage suite "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" -m unittest discover -s tests -p "test_*.py" -q
+# In parallel (scripts/run_tests_parallel.py): a process per module, each
+# with its own TMPDIR and synthetic HOME, longest first by the times the
+# last run recorded (.ci/test-durations.json); the tests run must add up
+# to the serial discovery's count. --serial: one process, as before.
+SUITE_ARGS=()
+if [ -n "$SERIAL" ]; then SUITE_ARGS=(--serial)
+elif [ -n "${TAXJSON_TEST_JOBS:-}" ]; then SUITE_ARGS=(--jobs "$TAXJSON_TEST_JOBS"); fi
+stage suite "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
+  ${SUITE_ARGS[@]+"${SUITE_ARGS[@]}"}
 # The tests that touch an optional extra, with every extra hidden, as
 # GitHub's matrix jobs install taxjson (seconds; scripts/ci_no_extras.sh).
 stage no-extras bash scripts/ci_no_extras.sh "$PY"

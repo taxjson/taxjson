@@ -517,11 +517,13 @@ a channel's release; `release.sh` cuts a tag after the full gate;
 ## The CI gate and repository checks
 
 `scripts/ci.sh` is the gate: lint, consistency, tax-rules, PII scan, the full
-suite (core and the fetch plugin, in an empty HOME, offline), the
-extras-sensitive tests with the extras hidden, and the fuzzers. A push must
+suite (core and the fetch plugin, in an empty HOME, offline; the core suite
+in parallel), the extras-sensitive tests with the extras hidden, and the
+fuzzers. A push must
 see its result line PASS. The pre-push hook scans what a push would publish.
 
-- `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`, `SUITE_ENV`, `stage no-extras`: the gate's stages.
+- `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`, `--serial`, `SUITE_ENV`, `stage no-extras`: the gate's stages.
+- `scripts/run_tests_parallel.py` — `discover_modules`, `plan`, `child_env`, `parse_result`, `_COLLECT`, `DURATIONS`, `SPLIT_OVER`: the suite on N processes (a process per module, its own TMPDIR and HOME, longest first, the count checked against discovery).
 - `scripts/ci_no_extras.sh` — `hide_extras`, `EXTRAS_TESTS`, `NONET`, `env -i`: the tests that touch an optional extra, run as a core install (no extras, empty HOME, no network).
 - `tests/_hermetic/__init__.py` — `install`, `rate_cache`, `SYNTHETIC_RATES`: the synthetic HOME (offline, made-up exchange rates) every test process runs in.
 - `scripts/check-consistency.sh` — `CHANGELOG`, `channels.json`: versions, CHANGELOG heading and channels agree.
@@ -556,4 +558,5 @@ Style tests build small synthetic projects and check every line printed.
 - `tests/test_output_style.py` — `TestWidth`, `TestWrapAndMessages`: the output style.
 - `tests/test_check_pii.py` — `TestTreeScan`, `TestDiffAndPush`: the PII scanner.
 - `tests/test_knowledge_pack.py` — `TestArchitectureMap`, `TestReferences`: every path and symbol this map names still exists.
+- `tests/test_fast_gate.py` — `TestPlan`, `TestRunner`: the parallel runner.
 - `run_tests.sh` — `unittest`: runs the suite with the project venv.

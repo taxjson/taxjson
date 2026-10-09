@@ -162,8 +162,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
+      # In parallel, a process per module (scripts/run_tests_parallel.py:
+      # min(CPUs, 16) processes — 4 on a hosted runner — each with its
+      # own TMPDIR and synthetic HOME; it checks the tests run add up to
+      # the serial discovery's count). Measured pinned to 4 and 2 cores
+      # before it replaced the serial run here; `--serial` is the fallback.
       - name: Run tests
-        run: python -m unittest discover -s tests -p "test_*.py"
+        run: python scripts/run_tests_parallel.py
 
       # The broker-fetch plugin, installed the way a user installs it.
       - name: Install and test taxjson-fetch
@@ -192,7 +197,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[all,dev]"
       - name: Run tests
-        run: python -m unittest discover -s tests -p "test_*.py"
+        run: python scripts/run_tests_parallel.py
 
   fuzz-nightly:
     # The three property fuzzers at nightly depth (the suite runs them

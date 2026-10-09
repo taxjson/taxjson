@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- Developers: the gate's test suite runs in parallel
+  (`scripts/run_tests_parallel.py`, standard library only): a process per
+  test module, each with its own temp folder and synthetic HOME, longest
+  first, `--jobs N` at a time (default: the CPU count, at most 16). It
+  fails unless every module passes and the tests run add up to the serial
+  discovery's count; nothing is retried. On a 20-core machine the suite
+  went from about 18 minutes to under 2. `scripts/ci.sh --serial` keeps
+  the one-process run.
 
 ## v0.26.1 (2026-10-09)
 
