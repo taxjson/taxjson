@@ -44,6 +44,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/project_layout.py` — `setting_problems`, `a year folder holds that year's project`
 
+### "Error: [settings] exports_dir = '../inputs' overlaps the inputs folder (inputs_dir) (…): the newest year's run replaces files in exports_dir"
+- **Check:** `grep _dir 2025/taxjson.toml`: `exports_dir` is (or holds, or sits inside) the inputs folder, the holdings folder, a year folder, the project's `work/`, `reports/` or `filed/`, or the project folder; every command stops at the config check.
+- **Cause:** the newest year's run replaces its positions and wash-radar files in `exports_dir`; in a folder that holds anything else it could overwrite an export, a snapshot or a year's results.
+- **Fix:** a folder of its own beside the year folders: `exports_dir = "../exports"`. The run removes there only the files its previous export wrote (listed in `exports/.taxjson-exports.json`); anything else in the folder is never touched.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `exports_overlap`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_write_exports`, `_exports_manifest`, `_EXPORTS_MANIFEST`
+
+### `tjs check-dates` in a year folder: "out-of-range: … — far outside the project year 2024" for every row of a later year
+- **Check:** the project reads a shared `inputs_dir`, and the rows are dated in a later year (the newer exports every year shares).
+- **Cause:** the check took any row more than a year after the project year for an impossible date; with exports shared by every year, later years' rows are expected.
+- **Fix:** upgrade: in a year folder reading shared exports they are one line, "Info: N row(s) dated after 2025: later years' exports in the shared inputs folder, expected", and their dates are checked like the others; a date after today or before 1990 is still an error. A single-folder project still reports them.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/check_dates.py` — `analyze`, `render`, `later years' exports`
+
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
 - **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.
@@ -443,11 +457,11 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no snapshot in the project's holdings/`
 
 ### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
-- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, and its name does not start with an account name.
-- **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared.
-- **Fix:** add the id under its account (`broker_accounts = ["…"]`), or rename the file `<account>_holdings.toml`. An id two accounts declare is refused the same way.
+- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.
+- **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared. (Before the fix, a file an account lists in its own `holdings = [...]` was named here too, though that account compares it.)
+- **Fix:** add the id under its account (`broker_accounts = ["…"]`), rename the file `<account>_holdings.toml`, or list it in the account's `holdings = [...]`. An id two accounts declare is refused the same way.
 - **Fixed in:** unreleased
-- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `claims it`
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `listed_files`, `claims it`
 
 ### `tjs sanity`: "QZD.U.TO MISSING_IN_TAXJSON" (or `QTY_MISMATCH` on QZD.TO) for a listing the run joined by its transfer journal
 - **Check:** the run's console said "joined as one security by their transfer journal: QZD.U.TO ↔ QZD.TO …" and `work/ticker.map.effective` has the `TOBASE` / `JOURNAL` line; `ticker.map` itself has no line for the pair. The books hold the position under one symbol, the broker lists it under both.

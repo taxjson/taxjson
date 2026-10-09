@@ -14887,7 +14887,7 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
     if _hnote:
         notes.append(_hnote)
     if _hfolder is not None:
-        _found, _hnotes = _HD.discover(_hfolder, accounts_cfg)
+        _found, _hnotes = _HD.discover(_hfolder, accounts_cfg, root)
         notes += _hnotes
         for name, paths in _found.items():
             files_of.setdefault(name, []).extend(paths)
@@ -19403,6 +19403,28 @@ Read them; do not edit them.
 """
 
 
+_EXPORTS_README_NAME = "README.txt"
+# The files the last export wrote: the next one removes only those it no
+# longer writes (`_write_exports`).
+_EXPORTS_MANIFEST = ".taxjson-exports.json"
+
+
+def _exports_manifest(dst: Path) -> List[str]:
+    """The plain file names the previous export recorded writing ([]
+    without a readable manifest; a name with a path in it is never
+    one)."""
+    import json
+    try:
+        doc = json.loads((dst / _EXPORTS_MANIFEST).read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    files = doc.get("files") if isinstance(doc, dict) else None
+    return [f for f in (files if isinstance(files, list) else [])
+            if isinstance(f, str) and f and f == Path(f).name
+            and f not in (".", "..") and not f.startswith(".")]
+
+
 def _write_exports(root: Path, settings: Dict[str, Any],
                    reports_dir: Path) -> None:
     """The newest year's run: copy its positions and wash radar from
@@ -19419,19 +19441,33 @@ def _write_exports(root: Path, settings: Dict[str, Any],
     from taxjson.lib.safe_write import write_atomic
     if dst.is_symlink():
         raise OSError(f"{dst} is a symlink")
+    # (load_config refused an exports_dir overlapping another folder:
+    # lib/project_layout.exports_overlap; said again here, never a
+    # write into inputs, holdings or a year folder.)
+    _ov = _PL.exports_overlap(root, settings)
+    if _ov:
+        raise OSError(_ov)
     dst.mkdir(parents=True, exist_ok=True, mode=0o700)
-    for pat in _EXPORT_PATTERNS:
-        for old in dst.glob(pat):
-            if old.is_file() or old.is_symlink():
-                old.unlink()
-    n = 0
-    for pat in _EXPORT_PATTERNS:
-        for f in sorted(reports_dir.glob(pat)):
-            if f.is_file() and not f.name.startswith("."):
-                write_atomic(dst / f.name, f.read_bytes())
-                n += 1
-    write_atomic(dst / "README.txt", _EXPORTS_README.format(
+    srcs = [f for pat in _EXPORT_PATTERNS
+            for f in sorted(reports_dir.glob(pat))
+            if f.is_file() and not f.name.startswith(".")]
+    names = sorted({f.name for f in srcs} | {_EXPORTS_README_NAME})
+    # Only the files the previous export wrote (its manifest) and this
+    # one no longer writes are removed: a file someone else put in the
+    # folder is never touched.
+    for old in sorted(set(_exports_manifest(dst)) - set(names)):
+        p = dst / old
+        if p.is_file() or p.is_symlink():
+            p.unlink()
+    for f in srcs:
+        write_atomic(dst / f.name, f.read_bytes())
+    n = len(srcs)
+    write_atomic(dst / _EXPORTS_README_NAME, _EXPORTS_README.format(
         year=year, folder=root.name))
+    import json
+    write_atomic(dst / _EXPORTS_MANIFEST, json.dumps(
+        {"schema_version": 1, "year": year, "files": names},
+        indent=2) + "\n")
     _say("note", f"{n} file(s) for other tools -> "
          f"{_PL.shown(dst, root)}/ (the newest year's)", indent="  ",
          file=sys.stdout)

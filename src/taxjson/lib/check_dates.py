@@ -256,6 +256,11 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
     futures_settle = futures_settle_mode(settings)
     issues: List[Dict[str, Any]] = []
     checked = 0
+    # With exports shared by every year (`inputs_dir`), rows of later
+    # years are expected here: counted (one Info line), not errors.
+    from taxjson.lib.project_layout import shared_inputs
+    shared = shared_inputs(root)
+    later = 0
     per_source: Dict[str, int] = {}
 
     def add(sev, code, msg, acct, label, r, detail=""):
@@ -288,7 +293,9 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                     add("ERROR", "bad-date", "trade date does not parse",
                         acct, label, r)
                     continue
-                if td.year < 1990 or td.year > year + 1:
+                if shared and td.year > year + 1:
+                    later += 1
+                if td.year < 1990 or (td.year > year + 1 and not shared):
                     # One error per bad date: a far-future row was also
                     # counted as dated after today (A2-1192).
                     add("ERROR", "out-of-range",
@@ -435,7 +442,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
         counts[i["severity"]][i["code"]] = \
             counts[i["severity"]].get(i["code"], 0) + 1
     return {"year": year, "checked": checked, "sources": per_source,
-            "issues": issues, "counts": counts,
+            "issues": issues, "counts": counts, "later_years": later,
             "errors": sum(counts.get("ERROR", {}).values()),
             "warnings": sum(counts.get("WARN", {}).values())}
 
@@ -475,6 +482,12 @@ def render(doc: Dict[str, Any], show_all: bool = False,
             if not show_all and len(rows) > per_code:
                 d.para(f"... {len(rows) - per_code} more (--all lists "
                        f"them)", "    ")
+    if doc.get("later_years"):
+        d.blank()
+        d.para(f"Info: {doc['later_years']} row(s) dated after "
+               f"{doc['year'] + 1}: later years' exports in the shared "
+               f"inputs folder, expected (checked like the others; a "
+               f"date after today is still an error).")
     d.blank()
     if not doc["issues"]:
         d.para("Every date lands where its market allows.")

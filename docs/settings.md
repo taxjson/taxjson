@@ -105,6 +105,7 @@ Where the project reads its exports and positions and writes files for other too
 - **Default:** none: nothing is copied.
 - **Country:** both.
 - **Change it when:** `taxjson init` sets it (`"../exports"`).
+- **Rules:** a folder of its own: one that is, holds or sits inside the inputs folder (shared or the project's `inputs/`), the holdings folder, a year folder, the project's `work/`, `reports/` or `filed/`, or the project folder is refused, naming it (`src/taxjson/lib/project_layout.py` — `exports_overlap`). Each export records the files it wrote in `.taxjson-exports.json` there, and the next removes only those it no longer writes: a file you put in the folder is never touched.
 - **Example:** `exports_dir = "../exports"`
 
 #### Currencies
@@ -698,7 +699,7 @@ Every buy/sell row is cross-checked (amount vs qty × price ± fee within 1%, du
 
 ## holdings/: the year's positions snapshots
 
-The broker's positions files for the tax year, as a download tool writes them (one `[[holding]]` TOML per broker account; see [Holdings TOML](#holdings-toml)). `taxjson sanity` with no arguments and the end of `taxjson run` compare the books with them, without a `holdings = [...]` setting; an account that has one keeps its own files. Code: `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `snapshot_date`.
+The broker's positions files for the tax year, as a download tool writes them (one `[[holding]]` TOML per broker account; see [Holdings TOML](#holdings-toml)). `taxjson sanity` with no arguments and the end of `taxjson run` compare the books with them, without a `holdings = [...]` setting; an account that has one keeps its own files (a file it lists is never another account's, nor named as unclaimed). Code: `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `snapshot_date`.
 
 - A file belongs to the account whose `account` or `broker_accounts` holds the file's `[meta] account`; else to the account its name starts with (`margin_holdings.toml`, `margin_ib_holdings.toml`). A file no account claims, or two do, is named in a note and not compared. Several files of one account are compared together.
 - A snapshot is compared at its date: `[meta] as_of`, else the day of `[meta] generated_at`. One dated after the books' last day is compared with the latest books, with a note.

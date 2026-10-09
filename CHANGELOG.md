@@ -21,9 +21,17 @@
   the broker's positions snapshots in the year's `holdings/` folder with
   no `holdings = [...]` setting, matching each file to its account by its
   `[meta] account` (new `[accounts.NAME] broker_accounts`) or its name,
-  at the snapshot's date (`as_of`, else `generated_at`).
+  at the snapshot's date (`as_of`, else `generated_at`); a file an
+  account lists in its own `holdings = [...]` stays that account's.
 - `[settings] exports_dir`: the newest year's run copies its positions
-  and wash radar there, with a README, for other tools.
+  and wash radar there, with a README, for other tools. It must be a
+  folder of its own (one overlapping the inputs, the holdings, a year
+  folder or the project's own folders is refused), and each export
+  replaces only the files the previous one wrote (listed in
+  `.taxjson-exports.json` there).
+- `taxjson check-dates` in a year folder reading shared exports counts
+  the later years' rows in one Info line instead of an out-of-range
+  error each.
 - `taxjson redact` in a year folder of a shared-exports project writes
   that year as a redacted single-folder project inside the year folder
   (the shared exports and the year's slips, holdings/, taxjson.toml and
