@@ -120,7 +120,11 @@ class TestGroupedHelp(unittest.TestCase):
         self.assertNotIn("Other commands", out)
         # Each command sits under its own group's heading.
         for i, (title, names) in enumerate(_COMMAND_GROUPS):
-            end = pos[i + 1] if i + 1 < len(pos) else out.index("\noptions:")
+            # argparse's heading: "options:" from Python 3.10,
+            # "optional arguments:" before.
+            opts = ("\noptions:" if "\noptions:" in out
+                    else "\noptional arguments:")
+            end = pos[i + 1] if i + 1 < len(pos) else out.index(opts)
             section = out[pos[i]:end]
             self.assertEqual(
                 [n for n in _listed(section)],

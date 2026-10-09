@@ -128,7 +128,7 @@ class TestSanityMissingHoldingsFile(unittest.TestCase):
             self.assertNotIn("in every group.", r.stdout)
             j = _cli(root, "sanity", "--json")
             self.assertFalse(json.loads(j.stdout)["complete"])
-            import tomllib
+            from taxjson.lib.tomlcompat import tomllib
             cfg = tomllib.loads((root / "taxjson.toml").read_text())
             ctx = cl.Ctx(root=root, cfg=cfg, year=2026,
                          today=date(2026, 9, 29),
@@ -167,7 +167,7 @@ class TestMissingHistoryIncomplete(unittest.TestCase):
             p = root / "work" / "cash_base.json"
             p.write_text(p.read_text()[: len(p.read_text()) // 2])
             r = _cli(root, "find-missing-history")
-            import tomllib
+            from taxjson.lib.tomlcompat import tomllib
             ctx = cl.Ctx(root=root,
                          cfg=tomllib.loads((root / "taxjson.toml").read_text()),
                          year=2025, today=date(2026, 9, 29),
@@ -238,7 +238,7 @@ class TestDiffManualReporting(unittest.TestCase):
 # --------------------------------------------------------- S030-08 TOML
 class TestHoldingsTomlOptionUnits(unittest.TestCase):
     def test_option_cost_per_share_unit_is_stated(self):
-        import tomllib
+        from taxjson.lib.tomlcompat import tomllib
         tt = ("BUYSELL 2026-03-02 10:00:00 QZY270618C00045000.TO 2 CAD 5.00 "
               "-1001.30 1.30\n"
               "BUYSELL 2026-03-09 10:00:00 QZY270618C00045000.TO -1 CAD 4.00 "

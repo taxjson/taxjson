@@ -114,7 +114,7 @@ class TestTomlStrEscapesControls(unittest.TestCase):
     character (an ESC from broker data) wrote a file TOML refuses."""
 
     def test_round_trip(self):
-        import tomllib
+        from taxjson.lib.tomlcompat import tomllib
         from taxjson.bin.taxjson_export import _toml_str
         for raw in ("AB\x1bC", "X\x00Y\x7fZ", 'q"\\b\n\r\t\x08\x0c',
                     "".join(chr(c) for c in range(0x20)) + "\x7f"):
