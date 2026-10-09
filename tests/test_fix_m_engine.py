@@ -1157,7 +1157,9 @@ class TestPhantomWalks(unittest.TestCase):
         self.assertEqual(sizes, {100.0})
 
     def test_rename_chain_both_ends_listed_is_deterministic(self):
-        # S021-04: same numbers under every PYTHONHASHSEED.
+        # S021-04: same numbers under every PYTHONHASHSEED. No tax year
+        # is set, so every row sizes the one opening: the deepest
+        # shortage of the chain (15 after the rename), CA-ACB-11.
         import os
         import subprocess
         import sys
@@ -1180,6 +1182,7 @@ class TestPhantomWalks(unittest.TestCase):
         outs = set()
         for seed in ('0', '1', '2', '3', '7'):
             env = {**os.environ, 'PYTHONHASHSEED': seed}
+            env.pop('TAXJSON_MISSING_HISTORY_YEAR', None)
             r = subprocess.run([sys.executable, '-c', code], env=env,
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)

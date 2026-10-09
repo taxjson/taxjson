@@ -58,8 +58,73 @@ class MissingHistoryFileConflict(ValueError):
 class MissingHistoryPairs(set):
     """The (symbol, account) pairs load_missing_history read, carrying
     the file's name as the user has it on disk (missing_history.json, or
-    the legacy phantoms.json) so every note and warning names it."""
+    the legacy phantoms.json) so every note and warning names it, and
+    each entry's recorded `quantity` (`quantities`: the opening it sets,
+    exactly; an entry without one is sized from the rows through the
+    tax year's end — synthesize_openings)."""
     source_name = MISSING_HISTORY_FILE
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.quantities: Dict[Tuple[str, str], float] = {}
+        # The last date whose rows size an opening ('YYYY-12-31', the
+        # project's year end: _size_until_for), None for every row.
+        self.size_until: Optional[str] = None
+
+
+# The entry key that records how many shares (units) an opening fills:
+# written by `find-missing-history --write-missing-history`.
+QUANTITY_KEY = "quantity"
+
+# The tax year an opening is sized for: an entry without a `quantity`
+# fills the deepest shortage of its rows dated up to Dec 31 of that year
+# (synthesize_openings). `taxjson` names the project's year and folder
+# here for every command and stage (taxjson_run.load_config:
+# sizing_env_value); load_missing_history gives a file IN that folder
+# the window (MissingHistoryPairs.size_until), so a file of another
+# folder — a standalone tool, a test — never picks up a stray year. A
+# gains stage's own --year sets it too (pipeline.prepare_books).
+# Without either, every row counts.
+ENV_SIZING_YEAR = "TAXJSON_MISSING_HISTORY_YEAR"
+
+
+def sizing_env_value(root: Any, year: Any) -> Optional[str]:
+    """ENV_SIZING_YEAR's value for project `root` of tax year `year`
+    ("YEAR<TAB>folder"), None without a year."""
+    if sizing_until(year) is None:
+        return None
+    try:
+        folder = Path(root).resolve()
+    except (OSError, RuntimeError):
+        folder = Path(root).absolute()
+    return f"{int(year)}\t{folder}"
+
+
+def sizing_until(year: Any = None) -> Optional[str]:
+    """The last date ('YYYY-12-31') whose rows size a missing-history
+    opening for tax year `year`; None (every row) without one."""
+    if year in (None, '') or isinstance(year, bool):
+        return None
+    try:
+        y = int(str(year).strip())
+    except (TypeError, ValueError):
+        return None
+    return f"{y:04d}-12-31" if 1000 <= y <= 9999 else None
+
+
+def _size_until_for(path: Path) -> Optional[str]:
+    """The window ENV_SIZING_YEAR gives a missing-history file at
+    `path`: its project's year end when the file sits in the folder the
+    variable names, else None."""
+    raw = (os.environ.get(ENV_SIZING_YEAR) or "").strip()
+    if "\t" not in raw:
+        return None
+    year, folder = raw.split("\t", 1)
+    try:
+        here = Path(path).resolve().parent
+    except (OSError, RuntimeError):
+        return None
+    return sizing_until(year) if str(here) == folder else None
 
 
 def _source_name(pairs) -> str:
@@ -2110,9 +2175,14 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
             *complete[0], file_name, more=complete[1:]), file=sys.stderr)
 
 
-def format_suggestions(candidates: List[MissingHistoryCandidate]) -> str:
+def format_suggestions(candidates: List[MissingHistoryCandidate],
+                       quantities: Optional[Dict[Tuple[str, str], float]]
+                       = None, sized_through: Optional[str] = None) -> str:
     """Write the candidate JSON to a string. Underscore-prefixed fields are
-    notes for human review; the loader ignores them."""
+    notes for human review; the loader ignores them. `quantities`: the
+    units each entry's opening fills, as the run sizes it
+    (synthesize_openings: the rows through `sized_through`, the tax
+    year's end), recorded as `quantity` with `_sized_through`."""
     entries = []
     for c in candidates:
         note = (
@@ -2128,9 +2198,13 @@ def format_suggestions(candidates: List[MissingHistoryCandidate]) -> str:
                     "history, not a short or a written option"
                     + (f" (IB Basis {c.broker_basis})"
                        if c.broker_basis else ""))
+        _q = (quantities or {}).get((c.symbol, c.account))
         entries.append({
             "symbol": c.symbol,
             "account": c.account,
+            **({QUANTITY_KEY: round(_q, 10)} if _q else {}),
+            **({"_sized_through": sized_through}
+               if _q and sized_through else {}),
             "_note": note,
             "_first_negative": c.first_negative_date,
             # Full precision (audit S074-22: a 3e-05 BTC short read
@@ -2145,8 +2219,9 @@ def format_suggestions(candidates: List[MissingHistoryCandidate]) -> str:
 def load_missing_history(path: Path) -> MissingHistoryPairs:
     """Load a missing-history file (missing_history.json, or the legacy
     phantoms.json). Returns a set of (symbol, account) pairs that knows
-    the file's name (MissingHistoryPairs.source_name).
-    Underscore-prefixed metadata fields are ignored. A leading BOM
+    the file's name (MissingHistoryPairs.source_name), each entry's
+    `quantity` and, for the project's own file, its year end
+    (size_until). Underscore-prefixed metadata fields are ignored. A leading BOM
     (an editor's UTF-8 save) is dropped, as for every other user-edited
     file (re-audit A2-1453)."""
     with open(path, 'r', encoding='utf-8-sig') as f:
@@ -2162,6 +2237,9 @@ def load_missing_history(path: Path) -> MissingHistoryPairs:
                          f"entries")
     out = MissingHistoryPairs()
     out.source_name = Path(path).name or MISSING_HISTORY_FILE
+    # The project's year end when this is the file of the project the
+    # run names (ENV_SIZING_YEAR): its openings are sized through it.
+    out.size_until = _size_until_for(Path(path))
     for i, entry in enumerate(data):
         if not isinstance(entry, dict):
             raise ValueError(f"{path}[{i}]: expected an object")
@@ -2174,8 +2252,61 @@ def load_missing_history(path: Path) -> MissingHistoryPairs:
         # Book symbols are upper-case: a hand-typed 'xyz.to' used to
         # match nothing and read as "data does not go negative" (audit
         # S075-24 / S076-00).
-        out.add((str(symbol).strip().upper(), str(account).strip()))
+        pair = (str(symbol).strip().upper(), str(account).strip())
+        out.add(pair)
+        q = entry.get(QUANTITY_KEY)
+        if q is not None:
+            if isinstance(q, bool) or not isinstance(q, (int, float)) \
+                    or not q > 0 or q != q or q == float("inf"):
+                raise ValueError(f"{path}[{i}]: {QUANTITY_KEY!r} must be "
+                                 f"a positive number (got {q!r})")
+            out.quantities[pair] = float(q)
     return out
+
+
+def window_sized_entries(logs: Iterable[Iterable[Dict[str, Any]]]
+                         ) -> List[Dict[str, Any]]:
+    """The applied-log entries (synthesize_openings) whose size the tax
+    year's end decided: no recorded `quantity`, and the rows after the
+    year end go shorter than the rows up to it (sizing over every row
+    would have opened more). One per (symbol, account)."""
+    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for log in logs:
+        for e in log or ():
+            if (isinstance(e, dict) and e.get('sized_through')
+                    and e.get('recorded_quantity') is None
+                    and float(e.get('opening_all_rows') or 0.0)
+                    > float(e.get('opening_qty') or 0.0) + 1e-6):
+                out.setdefault((e.get('symbol', ''), e.get('account', '')),
+                               e)
+    return [out[k] for k in sorted(out)]
+
+
+def short_again_message(entry: Dict[str, Any],
+                        file_name: str = MISSING_HISTORY_FILE) -> str:
+    """One ATTENTION line for a listed position that goes short again
+    once its opening is used up (synthesize_openings `short_again`)."""
+    sym, acct = entry.get('symbol'), entry.get('account')
+    sa = entry['short_again']
+    q = float(entry.get('opening_qty') or 0.0)
+    until = entry.get('sized_through')
+    head = (f"{file_name} lists {sym} / {acct}: the position goes short "
+            f"again on {sa['date']} ({sa['qty']:g} units)")
+    if entry.get('recorded_quantity') is not None:
+        return (f"{head}, after the {q:g} units its `quantity` records are "
+                f"used up — those sales have no purchase and no opening. "
+                f"Raise `quantity` to the units held before the data, or "
+                f"add the missing purchase.")
+    if until and sa['date'] > until:
+        opened = (f"its opening ({q:g} units, sized from the rows through "
+                  f"{until}) is used up" if q > 0 else
+                  f"no opening (the rows through {until} never go short)")
+        return (f"{head}, after {opened}: a short or a gap of a later "
+                f"year, which does not change {until[:4]}. That year's "
+                f"project sizes its own opening; if it is a real short, "
+                f"nothing to do.")
+    return (f"{head}, after its opening of {q:g} units is used up — "
+            f"those sales have no purchase and no opening.")
 
 
 # The replacement rule a manual warning names, and the date its ±30-day
@@ -2272,19 +2403,45 @@ def detect_superficial_loss_warnings(
     return out
 
 
+def _short_again(entry: Dict[str, Any],
+                 path: List[Tuple[str, float, float]],
+                 opening_qty: float) -> None:
+    """Mark `entry` with the first row where the position, its opening
+    of `opening_qty` (opening-date units) included, goes short again:
+    {'date', 'qty'} in that row's units."""
+    for d, run, factor in path:
+        if run + opening_qty < -1e-6 * max(1.0, opening_qty):
+            entry['short_again'] = {
+                'date': d, 'qty': round(abs(run + opening_qty) * factor,
+                                        10)}
+            return
+
+
 def synthesize_openings(
     transactions: List[TaxTransaction],
     pairs: Optional[Set[Tuple[str, str]]] = None,
     *, warn: bool = False,
     flag_stale: bool = True,
     phantoms: Optional[Set[Tuple[str, str]]] = None,
+    until: Optional[str] = None,
 ) -> Tuple[List[TaxTransaction], List[Dict[str, Any]]]:
     """For each (symbol, account) in pairs, compute the minimum running
-    position over the data and prepend an OPENING_BALANCE transaction with
-    quantity = abs(min). Returns (new_tx_list, applied) where `applied` is
-    a per-entry log of what was inserted (or skipped, when the data didn't
-    actually need an opening balance — useful for surfacing mis-classified
-    entries the user can prune).
+    position over the rows dated up to `until` (the tax year's end,
+    'YYYY-12-31'; default the loaded file's project year end,
+    MissingHistoryPairs.size_until, else every row) and prepend an OPENING_BALANCE transaction
+    with quantity = abs(min) — or exactly the entry's recorded
+    `quantity` (pairs.quantities), raising or lowering it. Rows after
+    the year end never size it: with exports shared by every year, a
+    later year's short or gap would otherwise grow an earlier year's
+    opening (tax-logic CA-ACB-11 / US-BASIS-04). Returns (new_tx_list,
+    applied) where `applied` is a per-entry log of what was inserted (or
+    skipped, when the data didn't actually need an opening balance —
+    useful for surfacing mis-classified entries the user can prune).
+
+    A listed position that goes short again once its opening is used up
+    (a later year's short, a recorded quantity below the shortage) is
+    logged as `short_again` and, with `flag_stale`, said as an ATTENTION
+    line (short_again_message).
 
     No-op for pairs that don't go negative in the data: the log entry
     notes this so the user knows the missing-history entry was redundant.
@@ -2306,6 +2463,9 @@ def synthesize_openings(
     if not pairs:
         return list(transactions), []
     label = _source_name(pairs)
+    pairs_in = pairs
+    if until is None:
+        until = getattr(pairs, "size_until", None)
 
     # Compute min running position per LISTED pair — same walk as
     # detect_missing_history but restricted to listed pairs (expanded to their
@@ -2378,8 +2538,16 @@ def synthesize_openings(
     # accounting made a forward split size the opening 2x too big: the pool
     # never drained, the taint never cleared, and later dispositions were
     # silently dropped from gains.)
+    # min_running: the deepest shortage of the rows dated up to `until`
+    # (the tax year's end) — what the opening fills. min_all: over every
+    # row (what it would be without the year end; said when it differs,
+    # window_sized_entries). path: each row's running position, to find
+    # where the position goes short again once the opening is used up.
     min_running: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
+    min_all: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
     running: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
+    path: Dict[Tuple[str, str], List[Tuple[str, float, float]]] = {
+        p: [] for p in pairs}
     split_factor: Dict[Tuple[str, str], float] = {p: 1.0 for p in pairs}
     # pair -> (anchor_symbol, anchor_date): first activity anywhere in the
     # pair's chain. The opening must carry the chain's EARLIEST symbol.
@@ -2407,8 +2575,13 @@ def synthesize_openings(
                 split_factor[pair] *= ratio
             continue
         running[pair] += tx.quantity / split_factor[pair]
-        if running[pair] < min_running[pair]:
+        if running[pair] < min_all[pair]:
+            min_all[pair] = running[pair]
+        if (until is None or str(tx.date)[:10] <= until) \
+                and running[pair] < min_running[pair]:
             min_running[pair] = running[pair]
+        path[pair].append((str(tx.date)[:10], running[pair],
+                           split_factor[pair]))
         if tx.currency and pair not in currency:
             currency[pair] = tx.currency
 
@@ -2443,14 +2616,34 @@ def synthesize_openings(
                           f"spelling.", file=sys.stderr)
             applied.append(entry)
             continue
-        if min_pos >= -1e-6:
+        _rec = (getattr(pairs_in, "quantities", None) or {}).get(
+            (symbol, account))
+        if _rec is None and min_pos >= -1e-6:
+            if min_all[(symbol, account)] < -1e-6:
+                # Short only after the year end: no opening for this
+                # year (a later year's project sizes its own).
+                entry['sized_through'] = until
+                entry['opening_all_rows'] = abs(min_all[(symbol, account)])
+                entry['note'] = (f'not short through {until} — no opening '
+                                 f'for this year')
+                _short_again(entry, path[(symbol, account)], 0.0)
+                applied.append(entry)
+                continue
             # Listed in the file but the data is actually complete.
             # Surface this so the user can prune the file.
             entry['note'] = 'no opening needed — data does not go negative for this pair'
             applied.append(entry)
             continue
 
-        opening_qty = abs(min_pos)
+        opening_qty = abs(min(min_pos, 0.0))
+        entry['sized_through'] = until
+        entry['opening_all_rows'] = abs(min(min_all[(symbol, account)], 0.0))
+        if _rec is not None:
+            # The quantity the entry records IS the opening: the units
+            # held before the data, as the user states them (raising or
+            # lowering what the rows show).
+            opening_qty = _rec
+            entry['recorded_quantity'] = _rec
         # Anchor on the CHAIN's earliest symbol and ONE DAY BEFORE its first
         # activity. The earliest symbol lets the engine replay the opening
         # through any rename. The opening anchors ON that first-activity
@@ -2481,7 +2674,15 @@ def synthesize_openings(
         entry['inserted'] = True
         entry['anchor_date'] = anchor_date
         entry['anchor_symbol'] = anchor_symbol
+        _short_again(entry, path[(symbol, account)], opening_qty)
         applied.append(entry)
+
+    if flag_stale:
+        for entry in applied:
+            if entry.get('short_again'):
+                emit_line("warning: ATTENTION: "
+                          + short_again_message(entry, label),
+                          file=sys.stderr)
 
     inserted = {(e['symbol'], e['account']) for e in applied
                 if e.get('inserted')}

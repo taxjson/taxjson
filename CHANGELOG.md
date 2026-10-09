@@ -2,6 +2,82 @@
 
 ## Unreleased
 
+### Added
+
+- One folder of exports for every year: `taxjson init` now makes
+  `inputs/<account>/` once for every year's broker exports and the year's
+  folder (`2025/`), a complete project of its own (`taxjson.toml`,
+  `ticker.map`, `holdings/`, results) whose new `[settings] inputs_dir`
+  reads the shared exports (`init --single` keeps one folder for one
+  year). `taxjson new-year YYYY` starts the next year's folder from the
+  previous year's settings, map and `missing_history.json` (the accounts'
+  `holdings` lists commented out: last year's snapshots), `taxjson align
+  --from YEAR` brings another year's map lines and settings over (a map
+  line that contradicts this year's is skipped and listed), `taxjson
+  years` lists each year with its state (and `--diff` two years'
+  differences; holdings paths and broker account ids are never
+  compared), and `taxjson migrate --to-years` converts a single-folder
+  project. A filed year whose shared exports changed says so in `sum`,
+  the checklist and `years`, and its run reports the drift against its
+  lock. A folder setting that leaves the folder holding the project, an
+  `inputs_dir` inside the project itself, and a folder inside another
+  year's folder are refused. A command that writes into the shared
+  exports (`opening`, `format-map --write`, `find-missing-history
+  --write-purchases`) says the file applies to every year.
+- `taxjson sanity` (and the end of `taxjson run`) compares the books with
+  the broker's positions snapshots in the year's `holdings/` folder with
+  no `holdings = [...]` setting, matching each file to its account by its
+  `[meta] account` (new `[accounts.NAME] broker_accounts`) or its name,
+  at the snapshot's date (`as_of`, else `generated_at`); a file an
+  account lists in its own `holdings = [...]` stays that account's.
+- `[settings] exports_dir`: the newest year's run copies its positions
+  and wash radar there, with a README, for other tools. It must be a
+  folder of its own (one overlapping the inputs, the holdings, a year
+  folder or the project's own folders is refused), and each export
+  replaces only the files the previous one wrote (listed in
+  `.taxjson-exports.json` there).
+- `taxjson check-dates` in a year folder reading shared exports counts
+  the later years' rows in one Info line instead of an out-of-range
+  error each.
+- `taxjson redact` in a year folder of a shared-exports project writes
+  that year as a redacted single-folder project inside the year folder
+  (the shared exports and the year's slips, holdings/, taxjson.toml and
+  ticker.map), ids replaced consistently in every file; an account's
+  `holdings` list names the copied files by their names in the copy.
+- `taxjson fetch` (the taxjson-fetch plugin) in a year folder whose
+  exports are shared downloads into the shared `inputs_dir` folder, with
+  a note that the download applies to every year (it wrote to the year
+  folder's own `inputs/`, which the run does not read); replacing
+  `ib_flex.csv` there is refused when it would drop any year's activity.
+  `fetch --positions` writes `<account>_live_holdings.toml` into the
+  year's holdings folder, where `taxjson sanity` finds it (it was
+  `work/`). Fetchers get the folders in `FetchRequest.inputs` /
+  `holdings`.
+
+### Changed
+
+- `taxjson init DIR` makes the folder of exports for every year:
+  `DIR/inputs/<account>/` and the year's project in `DIR/<year>/`. So
+  `tjs init DIR && tjs -C DIR run` now needs `tjs -C DIR/<year> run`, or
+  `tjs init --single DIR` for the one-folder layout of earlier releases.
+  Existing projects are unchanged.
+- A `missing_history.json` opening is sized from the rows dated up to
+  December 31 of the project's year (the deepest shortage among them, as
+  before); rows after it — a later year's exports — never size it, so a
+  later year's short no longer sends an earlier year's sales to manual
+  reporting. A project whose exports end with its year is unchanged. An
+  entry can record `quantity`, the units held before the data, used
+  exactly. A listed position that goes short again once its opening is
+  used up is an ATTENTION line. `find-missing-history` shows the opening
+  the run applies under each listed position, and
+  `--write-missing-history` records `quantity` with `_sized_through`.
+
+### Fixed
+
+- In a year folder that reads shared exports, the IB parse finds the year's
+  project (not the folder above the exports): a one-contract-id ticker
+  change is judged with the project's `.tt` RENAME lines and its
+  ticker.map's dated RENAME lines, as in a single-folder project.
 
 ## v0.25.0 (2026-10-09)
 

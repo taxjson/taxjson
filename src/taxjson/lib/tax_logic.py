@@ -92,6 +92,9 @@ VARIANT_AXES: Dict[str, Dict[str, Tuple[Any, ...]]] = {
 NON_RULE_SETTINGS: Dict[str, str] = {
     "year": "which year is reported",
     "prior_year_record": "a file path for the handoff check",
+    "inputs_dir": "where the broker exports are read from (a folder path)",
+    "holdings_dir": "where sanity finds the positions snapshots",
+    "exports_dir": "where the newest year copies files for other tools",
     "source_currencies": "which FX rate series are fetched",
     "cross_asset": "retired; warned about and ignored",
     "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
@@ -1280,7 +1283,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(its old name phantoms.json is still read): sales that "
                  "draw on them have an unknown cost — they are listed "
                  "for manual reporting and left out of the totals, with no superficial-loss "
-                 "test, until the position is fully sold.", cont=True),
+                 "test, until the position is fully sold. The opening is "
+                 "the `quantity` the entry records (the units held before "
+                 "the data), else the deepest shortage of the position's "
+                 "rows dated up to December 31 of the tax year: a later "
+                 "year's rows never size it. A position that goes short "
+                 "again once the opening is used up is flagged.", cont=True),
             Rule("CA-ACB-12",
                  "A loss within 30 days (settle dates) of such a sale, or "
                  "such a sale at a loss with a purchase in that window, is "
@@ -2993,7 +3001,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "before the data starts) go in missing_history.json "
                  "(its old name phantoms.json is still read): sales that "
                  "draw on them have an unknown cost — they are listed "
-                 "for manual reporting and left out of the totals. A loss within 30 days "
+                 "for manual reporting and left out of the totals. The "
+                 "opening is the `quantity` the entry records (the units "
+                 "held before the data), else the deepest shortage of the "
+                 "position's rows dated up to December 31 of the tax "
+                 "year: a later year's rows never size it. A position "
+                 "that goes short again once the opening is used up is "
+                 "flagged. A loss within 30 days "
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
                  "wash-sale check (not for crypto accounts)."),

@@ -32,7 +32,8 @@ Claude Code, Codex, Gemini CLI, Cursor and Copilot read this file.
 **Privacy.** Work from tjs command output. Never read the raw CSVs in a
 user's `inputs/`. Never put their amounts, account numbers or names anywhere
 (issues, commits, docs, chat logs) without asking. To share a sample,
-`tjs redact` copies `inputs/` to a redacted `inputs_redact/`; review it first.
+`tjs redact` copies `inputs/` to a redacted `inputs_redact/`; review it first
+(in a year folder with shared exports: that year as a runnable project).
 
 **No tax advice.** taxjson is a calculator that shows its work. Explain what
 it computed and which rule it applied; for what to file, point to the CRA or

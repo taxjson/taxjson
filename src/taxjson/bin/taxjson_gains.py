@@ -304,7 +304,21 @@ def _suggest_missing_history_and_exit(args, transactions,
     # 'cannot write <path>: ...' for a directory or a missing folder,
     # not 'cannot read' / 'no such file' (re-audit A2-1432).
     from taxjson.lib.cli_diag import write_text_atomic
-    write_text_atomic(_out, format_suggestions(candidates))
+    # Each entry records the shares its opening fills, sized as the run
+    # sizes it: the deepest shortage of the rows through the tax year's
+    # end (--year, else the project's), CA-ACB-11 / US-BASIS-04.
+    from taxjson.lib.missing_history import synthesize_openings, sizing_until
+    _qty = {}
+    _until = sizing_until(args.year)
+    try:
+        _ok_pairs = {(c.symbol, c.account) for c in candidates}
+        _o, _applied = synthesize_openings(all_for_detection, _ok_pairs,
+                                           flag_stale=False, until=_until)
+        _qty = {(e['symbol'], e['account']): e['opening_qty']
+                for e in _applied if e.get('inserted')}
+    except Exception:                                   # noqa: BLE001
+        _qty = {}
+    write_text_atomic(_out, format_suggestions(candidates, _qty, _until))
     n_reg = sum(1 for c in candidates if c.registered)
     print(
         f"Wrote {len(candidates)} candidate(s) to {args.suggest_missing_history} "

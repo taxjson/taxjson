@@ -24,7 +24,8 @@ def _init(path, force=False, country="canada", year=None):
             mock.patch("taxjson.lib.config_template.system_timezone",
                        return_value="America/Toronto"):
         cmd_init(argparse.Namespace(path=str(path), dir=".", force=force,
-                                    country=country, year=year))
+                                    country=country, year=year,
+                                    single=True))
 
 
 class TestInit(unittest.TestCase):

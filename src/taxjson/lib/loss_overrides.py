@@ -41,6 +41,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from taxjson.lib import project_layout as _PL
 
 KEYWORD = "ALLOWLOSS"
 FORM = 'ALLOWLOSS <sale date> <symbol> [<qty>] reason="<text>"'
@@ -172,7 +173,7 @@ def read_project(root: Path, accounts: Dict[str, Any]) -> List[Dict[str, Any]]:
     seen: Dict[Tuple, str] = {}
     for acct in sorted(accounts or {}):
         acfg = accounts.get(acct) or {}
-        for tt in tt_files(Path(root) / "inputs" / acct):
+        for tt in tt_files(_PL.inputs_dir(Path(root)) / acct):
             try:
                 text = read_text_utf8(tt)
             except (OSError, ValueError):

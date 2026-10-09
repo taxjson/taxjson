@@ -244,7 +244,7 @@ class TestRunStyle(unittest.TestCase):
                     tempfile.TemporaryDirectory() as tmp:
                 r = subprocess.run(
                     [sys.executable, "-m", "taxjson.bin.taxjson_run", "init",
-                     "--country", country, "--year", "2024",
+                     "--single", "--country", country, "--year", "2024",
                      str(Path(tmp) / "p")], capture_output=True, text=True,
                     env=env(), cwd=tmp, stdin=subprocess.DEVNULL)
                 self.assertEqual(r.returncode, 0, r.stderr)

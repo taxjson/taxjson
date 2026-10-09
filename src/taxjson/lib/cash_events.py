@@ -49,6 +49,7 @@ import re
 from datetime import date as _date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 KEYWORDS = ("FXCONV", "CASHMOVE", "CASHOPEN", "CASHBAL", "CASHBOOK")
 FORMS = {
@@ -286,7 +287,7 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
     problems: List[str] = []
     for acct in sorted(accounts or {}):
         acfg = accounts.get(acct) or {}
-        for tt in tt_files(Path(root) / "inputs" / acct):
+        for tt in tt_files(_PL.inputs_dir(Path(root)) / acct):
             try:
                 text = read_text_utf8(tt)
             except (OSError, ValueError):
@@ -580,7 +581,7 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
         acfg = accounts.get(label) or {}
         if acfg.get("type") != "taxable":
             continue
-        folder = Path(root) / "inputs" / label
+        folder = _PL.inputs_dir(Path(root)) / label
         for row in native_by_label.get(label, []):
             src = re.sub(r"#\d+$", "", str(row.get("source") or ""))
             sa = str(row.get("source_account") or "")

@@ -60,6 +60,7 @@ from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from taxjson.lib import project_layout as _PL
 
 # The keywords a suggestion may carry.
 KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DISTINCT", "RENAME", "CRYPTO",
@@ -434,10 +435,8 @@ def _export_names(root: Path) -> Dict[str, Set[Tuple[str, ...]]]:
     """{listing: its security names} from the parsed exports of every
     taxjson.toml account (cross_listings.gather)."""
     from taxjson.lib import cross_listings as XL
-    from taxjson.lib.tomlcompat import tomllib
     try:
-        cfg = tomllib.loads((root / "taxjson.toml").read_text(
-            encoding="utf-8-sig")) if tomllib is not None else {}
+        cfg = _PL.read_config_soft(root)
     except (OSError, ValueError, UnicodeDecodeError):
         cfg = {}
     accts = cfg.get("accounts") if isinstance(cfg, dict) else None
@@ -448,13 +447,13 @@ def _export_names(root: Path) -> Dict[str, Set[Tuple[str, ...]]]:
 
 
 def _holdings_files(root: Path) -> List[Path]:
-    """The holdings files taxjson.toml's accounts list (`holdings`)."""
-    from taxjson.lib.tomlcompat import tomllib
-    cfg_path = root / "taxjson.toml"
-    if tomllib is None or not cfg_path.is_file():
+    """The holdings files taxjson.toml's accounts list (`holdings`,
+    relative to the project), and the positions snapshots in the year's
+    holdings/ folder (lib/holdings_dir)."""
+    if not _PL.has_config(root):
         return []
     try:
-        cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8-sig"))
+        cfg = _PL.read_config_soft(root)
     except (OSError, ValueError, UnicodeDecodeError):
         return []
     out: List[Path] = []
@@ -467,6 +466,9 @@ def _holdings_files(root: Path) -> List[Path]:
             pp = pp if pp.is_absolute() else root / pp
             if pp.is_file():
                 out.append(pp)
+    from taxjson.lib.holdings_dir import snapshot_files
+    out += [q for q in snapshot_files(_PL.holdings_folder(root))
+            if q not in out]
     return out
 
 
@@ -475,7 +477,7 @@ def books_symbols(root: Path) -> Set[str]:
     them — the evidence a conditional hint needs: each account's parsed
     exports and transfer sidecars, corporate-action rows and .tt files
     (OPENING balances too) in work/ (never a derived book: those carry
-    the map's renames), plus the holdings files taxjson.toml lists. An
+    the map's renames), plus the holdings files (_holdings_files). An
     option adds its underlying listing."""
     from taxjson.bin.taxjson_run import _AUDIT_DERIVED_SUFFIXES
     from taxjson.lib.core import parse_option_underlying
@@ -605,7 +607,7 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
     in neither list (books_symbols), and neither is a conditional join
     of two listings the exports show apart (cross_listings.shown_apart:
     a CDR, another company): holding both is no evidence they are one."""
-    st = map_state(Path(root) / "ticker.map")
+    st = map_state(_PL.ticker_map_path(Path(root)))
     offer: List[Suggestion] = []
     skipped: List[Tuple[Suggestion, str]] = []
     froms: Dict[str, str] = {}
@@ -667,7 +669,7 @@ def verify(root: Path, offer: Iterable[Suggestion] = ()
                        certainty="verify", kind="map-gap",
                        alternative=g.distinct)
         if st is None:
-            st = map_state(Path(root) / "ticker.map")
+            st = map_state(_PL.ticker_map_path(Path(root)))
         if already(s, st):
             continue
         out.append(s)

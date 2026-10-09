@@ -90,6 +90,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 _IB_ID = re.compile(r"(?<![A-Za-z0-9])(?:DU|U|F|I)\d{7,8}(?![0-9])")
 # Free text needs 7+ characters (5+ digits) — a 5-digit "id" is too
@@ -1761,8 +1762,10 @@ class _TreeFile:
     """One file of inputs/: its path relative to inputs/, and what was
     done with it (text + report, or why it is skipped)."""
 
-    def __init__(self, rel: Path) -> None:
+    def __init__(self, rel: Path, src: Optional[Path] = None) -> None:
         self.rel = rel
+        # The file read (None: the inputs folder / rel).
+        self.src = src
         self.text: Optional[str] = None
         self.bom = b""
         self.rep: Optional[Report] = None
@@ -1779,11 +1782,18 @@ def _inside(p: Path, folder: Path) -> bool:
         return False
 
 
-def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
+def _walk_inputs(src: Path, prefix: Optional[Path] = None,
+                 inside: Optional[Path] = None
+                 ) -> Tuple[List[Path], List[_TreeFile], int]:
     """(folders, files, hidden-entry count) of `src`, relative to it,
     sorted. Hidden entries and Office lock files are left out (the run
     never reads them); a symlinked folder is listed as a skipped file
-    entry; a dangling link or a special file is skipped."""
+    entry; a dangling link or a special file is skipped. `prefix`: the
+    folder the entries go under in the copy (each file then records its
+    source); `inside`: the folder a file link may point into (default
+    `src`; a multi-year project's shared inputs: the folder holding the
+    year folders — lib/project_layout)."""
+    inside = inside or src
     dirs: List[Path] = []
     files: List[_TreeFile] = []
     hidden = 0
@@ -1805,22 +1815,25 @@ def _walk_inputs(src: Path) -> Tuple[List[Path], List[_TreeFile], int]:
                 hidden += 1
                 continue
             if (here / n).is_symlink():
-                tf = _TreeFile(rel_here / n)
+                tf = (_TreeFile(prefix / rel_here / n, here / n)
+                      if prefix is not None else _TreeFile(rel_here / n))
                 tf.skip = "a symlinked folder (not followed)"
                 files.append(tf)
                 continue
             keep.append(n)
-            dirs.append(rel_here / n)
+            dirs.append(rel_here / n if prefix is None
+                        else prefix / rel_here / n)
         dirnames[:] = keep
         for n in sorted(filenames):
             if n.startswith((".", "~$")):
                 hidden += 1
                 continue
             p = here / n
-            tf = _TreeFile(rel_here / n)
+            tf = (_TreeFile(prefix / rel_here / n, p) if prefix is not None
+                  else _TreeFile(rel_here / n))
             if p.is_symlink() and not p.exists():
                 tf.skip = "a symlink to a file that does not exist"
-            elif p.is_symlink() and not _inside(p, src):
+            elif p.is_symlink() and not _inside(p, inside):
                 # Its target is not one of your exports: a link to a
                 # private file elsewhere would land in the shared copy
                 # (2026-10 security review LOW g).
@@ -2048,13 +2061,96 @@ def _write_tree(dst: Path, dirs: List[Path], files: List[_TreeFile],
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+# A year's own files the redacted copy of a multi-year project carries,
+# beside its inputs/ and holdings/.
+_PROJECT_FILES = (_PL.CONFIG, _PL.TICKER_MAP, "missing_history.json")
+
+
+def _project_tree(root: Path, inputs: Path
+                  ) -> Tuple[List[Path], List[_TreeFile], int]:
+    """(folders, files, hidden count) of a multi-year project's year as
+    one single-folder project: inputs/ (the shared folder, a file link
+    allowed to point anywhere in the folder holding the years, then the
+    year's own inputs/), holdings/, and the year's own files."""
+    bound = _PL.write_boundary(root)
+    dirs: List[Path] = [Path(_PL.INPUTS)]
+    files: List[_TreeFile] = []
+    hidden = 0
+    seen: set = set()
+    for src, prefix, inside in (
+            (inputs, Path(_PL.INPUTS), bound),
+            (root / _PL.INPUTS, Path(_PL.INPUTS), root / _PL.INPUTS),
+            (_PL.holdings_folder(root), Path(_PL.HOLDINGS), bound)):
+        if not src.is_dir():
+            continue
+        if prefix not in dirs:
+            dirs.append(prefix)
+        d, f, h = _walk_inputs(src, prefix, inside)
+        dirs += [x for x in d if x not in dirs]
+        for tf in f:
+            if tf.rel in seen:
+                tf.skip = "a second file of that name (the year's own)"
+            seen.add(tf.rel)
+            files.append(tf)
+        hidden += h
+    for name in _PROJECT_FILES:
+        q = root / name
+        if q.is_file() and not q.is_symlink():
+            files.append(_TreeFile(Path(name), q))
+    return dirs, files, hidden
+
+
+def _copy_holdings_lists(root: Path, inputs: Path, files: List[_TreeFile],
+                         names: Dict[Path, Path]) -> None:
+    """The copied taxjson.toml's `holdings = [...]` lists as the
+    redacted project finds them: a file copied into it (the year's
+    holdings/, the shared inputs/) by its name in the copy (renamed
+    when its name held an id), any other file (outside the copy) left
+    out — and the key commented out when nothing is left — so the
+    redacted project runs."""
+    cfg_tf = next((f for f in files if f.rel == Path(_PL.CONFIG)
+                   and f.text is not None), None)
+    if cfg_tf is None:
+        return
+    accounts = (_PL.read_config_soft(root).get("accounts") or {})
+    hold = _PL.holdings_folder(root)
+    text = cfg_tf.text
+    for name, acfg in accounts.items():
+        if not isinstance(acfg, dict) or "holdings" not in acfg:
+            continue
+        h = acfg["holdings"]
+        listed = h if isinstance(h, list) else [h]
+        out: List[str] = []
+        for x in listed:
+            if not isinstance(x, str):
+                continue
+            q = Path(x).expanduser()
+            q = q if q.is_absolute() else root / q
+            q = Path(os.path.abspath(q))
+            for folder, prefix in ((hold, Path(_PL.HOLDINGS)),
+                                   (inputs, Path(_PL.INPUTS)),
+                                   (root / _PL.INPUTS, Path(_PL.INPUTS))):
+                try:
+                    rel = prefix / q.relative_to(os.path.abspath(folder))
+                except ValueError:
+                    continue
+                if rel in names:
+                    out.append(names[rel].as_posix())
+                break
+        text = _PL.set_key_text(
+            text, f"accounts.{name}.holdings",
+            (out if isinstance(h, list) else out[0]) if out else None)
+    cfg_tf.text = text
+
+
 def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                 check_only: bool, force: bool) -> int:
     """`taxjson redact` with no FILE: copy `root`/inputs/ to
     `root`/inputs_redact/ (or `out`), redacted. 0 done (or --check found
     nothing), 1 --check found something, 2 refused."""
     from taxjson.lib.out import relpath
-    inputs = root / "inputs"
+    inputs = _PL.inputs_dir(root)
+    shared = _PL.shared_inputs(root)
     if not inputs.is_dir():
         _diag("error", f"no inputs/ folder in {root}",
               ["Run it in a taxjson project (or pass -C DIR), or name the "
@@ -2076,7 +2172,15 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         step("Checking inputs/ (nothing is written)")
     else:
         step(f"Copying inputs/ to {shown_dst}")
-    dirs, files, hidden = _walk_inputs(inputs)
+    if shared:
+        # One folder of exports for every year (lib/project_layout): the
+        # copy is a single-folder project of this year — the shared
+        # exports and the year's own inputs/ (its slips) under inputs/,
+        # its holdings/ snapshots, taxjson.toml (the folder settings
+        # left out) and ticker.map — written in the year's folder.
+        dirs, files, hidden = _project_tree(root, inputs)
+    else:
+        dirs, files, hidden = _walk_inputs(inputs)
     known_ids: Dict[str, str] = {}
     pseudonyms = Pseudonyms()
     compiled, _ = compile_patterns(extra)
@@ -2084,7 +2188,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         if f.skip is not None:
             continue
         try:
-            raw = (inputs / f.rel).read_bytes()
+            raw = (f.src if f.src is not None else inputs / f.rel).read_bytes()
         except OSError as e:
             f.skip = f"it cannot be read ({e.strerror or e})"
             continue
@@ -2097,12 +2201,25 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         except UnicodeDecodeError:
             f.skip = "a UTF-16 byte-order mark on text that is not UTF-16"
             continue
+        if shared and f.rel == Path(_PL.CONFIG):
+            # The redacted project reads its own inputs/ and holdings/.
+            for _k in _PL.FOLDER_KEYS:
+                text = _PL.set_key_text(text, f"settings.{_k}", None)
+        if shared and str(f.rel) in _PROJECT_FILES:
+            # Settings and symbol rules, not an export: only the ids
+            # found in the exports are replaced in them (the sweep
+            # below) — the export heuristics read a rule line such as
+            # `GLOBAL OLD NEW` as a name.
+            f.text, f.rep = text, Report()
+            continue
         f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms)
         f.rep.patterns += sum(len(p.findall(f.rel.stem)) for p in compiled)
         if enc != "utf-8":
             f.rep.notes.append(f"The input was {enc}; the copy is UTF-8.")
     names = _tree_names(dirs, files, known_ids, compiled)
     _sweep(files, known_ids, pseudonyms)
+    if shared:
+        _copy_holdings_lists(root, inputs, files, names)
     text_files = [f for f in files if f.text is not None]
     step(f"Redacting {_plural(len(text_files), 'file')}")
     found = False
@@ -2125,7 +2242,8 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     sys.stdout.flush()          # the warnings (stderr) after the lines above
     for f in files:
         if f.skip is not None:
-            _diag("warning", f"inputs/{f.rel.as_posix()} not copied: {f.skip}",
+            _diag("warning", f"{'' if shared else 'inputs/'}"
+                  f"{f.rel.as_posix()} not copied: {f.skip}",
                   ["Review it by hand and add it to the copy yourself if it "
                    "belongs in the sample."])
     if hidden:
@@ -2139,7 +2257,8 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         verb = "would be renamed" if check_only else "renamed"
         _diag("note", f"{_plural(len(renamed), 'name')} held an account id or "
                       f"a denylisted word; {verb} in the copy",
-              [f"inputs/{r.as_posix()} → {shown_dst}{n.as_posix()}"
+              [f"{'' if shared else 'inputs/'}{r.as_posix()} → "
+               f"{shown_dst}{n.as_posix()}"
                for r, n in renamed]
               + ["This map is shown here only, never written into the copy."
                  + (" Rename a renamed account folder in the taxjson.toml you "
@@ -2154,7 +2273,11 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     except OSError as e:
         _diag("error", f"{dst}: {e.strerror or e} — nothing written")
         return 2
-    step(f"Done. Review {shown_dst} before sharing it.")
+    step(f"Done. Review {shown_dst} before sharing it."
+         + (f" It is a single-folder project of {root.name} (inputs/ — "
+            f"the shared exports and the year's own —, holdings/, "
+            f"taxjson.toml, ticker.map): `taxjson -C {shown_dst} run` "
+            f"runs it." if shared else ""))
     return 0
 
 

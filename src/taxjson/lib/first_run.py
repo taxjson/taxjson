@@ -36,6 +36,7 @@ from taxjson.lib.missing_history import (
     detect_missing_history, detect_zero_basis_acquisitions,
     is_registered_account)
 from taxjson.lib.corporate_timeline import normalize_symbol_new
+from taxjson.lib import project_layout as _PL
 
 SUMMARY_FILE = "run_summary.json"
 
@@ -398,7 +399,7 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                  and a.get("type") in ("taxable", "sheltered")}
     crypto = {n for n, a in accounts.items()
               if isinstance(a, dict) and a.get("crypto")}
-    tm = root / "ticker.map"
+    tm = _PL.ticker_map_path(root)
     from taxjson.lib.missing_history import walk_journal_symbols
     journal = walk_journal_symbols(cache, tm if tm.is_file() else None)
     txs, failed = load_books(cache)

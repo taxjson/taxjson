@@ -125,13 +125,18 @@ def _qt_auth_hint(token: str, tok_cache: Path, *,
 
 
 def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
-                      wanted: List[str], http, say) -> Dict[str, Path]:
+                      wanted: List[str], http, say,
+                      holdings: Optional[Path] = None) -> Dict[str, Path]:
     """Fetch live Questrade positions for each fetch-enabled account in
-    `wanted` and write work/<account>_live_holdings.toml (the
-    [[holding]] file `taxjson sanity` reads). Returns
+    `wanted` and write <holdings>/<account>_live_holdings.toml: the
+    year's holdings folder (`holdings`, default root/holdings —
+    lib/holdings_dir), where `taxjson sanity` and the end of `taxjson
+    run` find a [[holding]] file by its name with no setting. (It used
+    to go to work/, which sanity read only when named.) Returns
     {account: toml_path}. Shares the rotated-token session flow with
     the activity fetch."""
     from datetime import datetime as _dt
+    out_dir = Path(holdings) if holdings is not None else root / "holdings"
     fetch_cfg = _fetch_sources(cfg)
     out: Dict[str, Path] = {}
     qt_session = None
@@ -185,12 +190,32 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             positions, a, number,
             _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
             book_symbols=_book_syms)
-        toml_path = cache / f"{a}_live_holdings.toml"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        toml_path = out_dir / f"{a}_live_holdings.toml"
         F.write_private(toml_path, text)
         n = sum(1 for pz in positions if pz.get("openQuantity"))
-        say(f"  {a}: {n} live position(s) -> {toml_path.name}")
+        say(f"  {a}: {n} live position(s) -> "
+            f"{_shown(toml_path, root)}")
         out[a] = toml_path
+    _year = (cfg.get("settings") or {}).get("year")
+    if out and isinstance(_year, int) and _year < _dt.now().year:
+        # A year folder keeps the snapshot taken at its year end
+        # (lib/holdings_dir): today's positions belong to this year's.
+        say(f"  note: these are today's positions, in the {_year} "
+            f"project's holdings folder — keep the snapshot taken at the "
+            f"end of {_year} there, and today's in the current year's "
+            f"project.")
     return out
+
+
+def _shown(path: Path, root: Path) -> str:
+    """`path` relative to the project (../inputs/margin/x.csv for the
+    shared inputs folder), else as is."""
+    import os as _os
+    try:
+        return _os.path.relpath(str(path), str(root))
+    except ValueError:
+        return str(path)
 
 
 def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
@@ -534,14 +559,18 @@ def _flex_span(text: str) -> Optional[Tuple[str, str]]:
     return (days[0], days[-1]) if days else None
 
 
-def _flex_lost_dates(existing: str, new: str, year: Any) -> List[str]:
+def _flex_lost_dates(existing: str, new: str, year: Any,
+                     every_year: bool = False) -> List[str]:
     """Dates of `year` the existing ib_flex.csv covers but the new
     download's span (_flex_span) does not: overwriting would delete
     those rows. A Flex query set to 'Year to date' re-fetched in January
-    replaced a whole year of activity at exit 0 (S007-00)."""
-    if not year or not existing:
+    replaced a whole year of activity at exit 0 (S007-00). `every_year`
+    (exports shared by every year's project): the dates of ANY year —
+    another year's project reads the same file."""
+    if (not year and not every_year) or not existing:
         return []
-    old = [d for d in _flex_dates(existing) if d[:4] == str(year)]
+    old = [d for d in _flex_dates(existing)
+           if every_year or d[:4] == str(year)]
     got = _flex_span(new)
     if not got:
         return old
@@ -560,7 +589,17 @@ def run(request) -> Dict[str, Any]:
     with file_lock(work / ".fetch.lock", on_wait=lambda: request.say(
             "waiting for another `taxjson fetch` in this project to "
             "finish ...")):
-        return _run(request)
+        if not getattr(request, "shared_inputs", False) \
+                or getattr(request, "dry_run", False):
+            return _run(request)
+        # Exports shared by every year's project: a fetch in another
+        # year folder writes the same files.
+        shared = Path(request.inputs)
+        shared.mkdir(parents=True, exist_ok=True)
+        with file_lock(shared / ".fetch.lock", on_wait=lambda: request.say(
+                "waiting for another `taxjson fetch` writing the shared "
+                "inputs folder to finish ...")):
+            return _run(request)
 
 
 def _run(request) -> Dict[str, Any]:
@@ -570,11 +609,18 @@ def _run(request) -> Dict[str, Any]:
     through the IBKR Flex Web Service — files the core's existing
     parsers read; hand-exported CSVs keep working side by side.
     Returns {account: result} for `taxjson fetch --json`. Moved from
-    the core's cmd_fetch, which is now the plugin dispatcher."""
+    the core's cmd_fetch, which is now the plugin dispatcher.
+
+    `inputs/` is request.inputs: with `[settings] inputs_dir` the folder
+    of exports every year's project shares (said once: the download
+    applies to every year); an older core sends none (root/inputs)."""
     args = request.args
     root = request.root
     cache = request.work
     cfg = request.config
+    inputs = Path(getattr(request, "inputs", None) or Path(root) / "inputs")
+    shared = bool(getattr(request, "shared_inputs", False))
+    holdings = getattr(request, "holdings", None)
     fetch_cfg = _fetch_sources(cfg)
     wanted = list(request.accounts)
     say = request.say
@@ -610,10 +656,14 @@ def _run(request) -> Dict[str, Any]:
     http = F.default_http_get
     qt_session = None
     import os as _os
+    if shared and wanted:
+        say(f"  note: the downloads go to {_shown(inputs, root)}/, the "
+            f"exports folder shared by every year's project: they apply "
+            f"to every year.")
     for a in wanted:
         fc = fetch_cfg[a]
         source = fc["source"]
-        acct_dir = root / "inputs" / a
+        acct_dir = inputs / a
         if source == "questrade":
             number = fc["number"]
             if not number:
@@ -802,7 +852,8 @@ def _run(request) -> Dict[str, Any]:
             _pyear = cfg.get("settings", {}).get("year")
             _existing = (out.read_text(encoding="utf-8", errors="replace")
                          if out.exists() else "")
-            _lost = _flex_lost_dates(_existing, text, _pyear)
+            _lost = _flex_lost_dates(_existing, text, _pyear,
+                                     every_year=shared)
             _got = _flex_span(text)
             _span = f"{_got[0]}..{_got[-1]}" if _got else "no dated rows"
             if _lost:
@@ -851,11 +902,12 @@ def _run(request) -> Dict[str, Any]:
                      f"'questrade' or 'ibkr_flex', got {source!r}.")
     if getattr(args, "positions", False) \
             and not getattr(args, "dry_run", False):
-        live = _qt_live_holdings(root, cache, cfg, wanted, http, say)
+        live = _qt_live_holdings(root, cache, cfg, wanted, http, say,
+                                 holdings=holdings)
         for a, pth in live.items():
-            results.setdefault(a, {})["live_holdings"] = pth.name
+            results.setdefault(a, {})["live_holdings"] = _shown(pth, root)
         if live and not json_mode:
-            files_str = " ".join(str(pv) for pv in live.values())
-            print(f"cross-check after rebuilding: taxjson run sanity "
-                  f"{' '.join(live)} {files_str}")
+            # sanity finds the holdings folder's files with no argument
+            # (lib/holdings_dir).
+            print("cross-check after rebuilding: taxjson run sanity")
     return results

@@ -23,6 +23,111 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `load_config`, `no taxjson.toml in`
 
+### "Error: `sum` works on one year's project, and this folder holds the year folders 2024, 2025 (with the exports they share)"
+- **Check:** `ls` shows `inputs/` and year folders (`2024/`, `2025/`) but no `taxjson.toml`: the folder of exports every year shares (`tjs init`'s layout). `tjs years` lists the years.
+- **Cause:** every command but `init`, `years`, `new-year`, `redact`, `tax-logic` and `help` works on one year's project, and this folder holds several; taxjson never guesses which.
+- **Fix:** `cd 2025` (or `tjs -C 2025 sum`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_years_root`, `_YEARS_ROOT_CMDS`
+
+### "Error: [settings] inputs_dir = '../../shared' leads to …, outside … (the folder that holds this project)"
+- **Check:** the same for `holdings_dir` and `exports_dir`; every command stops at the config check (exit 1). `ls -l` the folder: a symlink pointing further out counts too.
+- **Cause:** the shared folders of one folder of exports for every year sit beside the year folders; a path leading outside the folder that holds the project could read or write anywhere.
+- **Fix:** keep the shared folder inside the folder holding the year folders (`inputs_dir = "../inputs"`); replace a symlink leading out with the folder itself.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `folder_setting`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_refuse_folder_settings`
+
+### "Error: [settings] year = 2024 but this folder is 2025: a year folder holds that year's project"
+- **Check:** the project reads a shared `inputs_dir` and its folder is named for a year; `grep year 2025/taxjson.toml`.
+- **Cause:** with one folder of exports for every year, a year folder's name says which year's project it is; a copied `taxjson.toml` whose `year` was not changed would build the other year's books in this folder.
+- **Fix:** set `year` to the folder's year (or move the project to the right folder). `tjs new-year 2026` makes the next year's folder with the year already set.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `setting_problems`, `a year folder holds that year's project`
+
+### "Error: [settings] exports_dir = '../inputs' overlaps the inputs folder (inputs_dir) (…): the newest year's run replaces files in exports_dir"
+- **Check:** `grep _dir 2025/taxjson.toml`: `exports_dir` is (or holds, or sits inside) the inputs folder, the holdings folder, a year folder, the project's `work/`, `reports/` or `filed/`, or the project folder; every command stops at the config check.
+- **Cause:** the newest year's run replaces its positions and wash-radar files in `exports_dir`; in a folder that holds anything else it could overwrite an export, a snapshot or a year's results.
+- **Fix:** a folder of its own beside the year folders: `exports_dir = "../exports"`. The run removes there only the files its previous export wrote (listed in `exports/.taxjson-exports.json`); anything else in the folder is never touched.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `exports_overlap`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_write_exports`, `_exports_manifest`, `_EXPORTS_MANIFEST`
+
+### `tjs check-dates` in a year folder: "out-of-range: … — far outside the project year 2024" for every row of a later year
+- **Check:** the project reads a shared `inputs_dir`, and the rows are dated in a later year (the newer exports every year shares).
+- **Cause:** the check took any row more than a year after the project year for an impossible date; with exports shared by every year, later years' rows are expected.
+- **Fix:** upgrade: in a year folder reading shared exports they are one line, "Info: N row(s) dated after 2025: later years' exports in the shared inputs folder, expected", and their dates are checked like the others; a date after today or before 1990 is still an error. A single-folder project still reports them.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/check_dates.py` — `analyze`, `render`, `later years' exports`
+
+### "Error: [settings] inputs_dir = 'exports' names a folder inside this project" (or "names a folder inside 2024/, another year's project")
+- **Check:** `grep _dir taxjson.toml` in the year folder: the setting points into the year folder itself or into another year folder.
+- **Cause:** `inputs_dir` names the folder of exports every year shares, beside the year folders; a folder inside one year's project is that year's own, and another year's folder belongs to that year.
+- **Fix:** `inputs_dir = "../inputs"` (the folder beside the year folders), or remove the setting to read this project's own `inputs/`. The same for `holdings_dir` pointing into another year's folder (`exports_dir` there is refused as an overlap).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `folder_setting`, `_year_folders_beside`
+
+### "Warning: no inputs dir for account 'margin' (inputs/margin); skipping" in a year folder, with "Info: ../inputs/margin/ is beside this year folder, but this project reads its own inputs/"
+- **Check:** the year folder's `taxjson.toml` has no `inputs_dir`, and `ls ..` shows the shared `inputs/` (a year folder made by hand, or copied from a single-folder project).
+- **Cause:** without `inputs_dir` a project reads its own `inputs/`; the exports every year shares are not read.
+- **Fix:** add `inputs_dir = "../inputs"` to `[settings]` and `tjs run`. (With the setting, a missing account folder is named by its real path, `../inputs/rrsp`.)
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `stage_account`, `is beside this year folder`
+
+### "Error: ../inputs/crypto/crypto_sends.tt (a .tt file you wrote) and work/crypto_sends/crypto/crypto_sends.tt (generated from sends.json by `taxjson crypto-sends`) have the same name"
+- **Check:** `head -1 ../inputs/crypto/crypto_sends.tt` has no "# GENERATED" line; the year generates its own from `sends.json`.
+- **Cause:** both files would be read as the account's `crypto_sends` .tt, and only one of them would reach the books.
+- **Fix:** rename yours (`crypto_manual.tt`) and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_account_tt_files`, `have the same name`
+
+### `tjs align --write --all`: "Warning: 1 ticker.map line(s) of 2024 not brought over: each contradicts this map's lines"
+- **Check:** the listed line renames a symbol this year's ticker.map already renames to another target (or closes a rename cycle).
+- **Cause:** the two years' maps disagree; bringing the line over would make the map contradict itself, which `tjs run` refuses. The other lines are brought over.
+- **Fix:** decide which target is right for this year and edit ticker.map by hand.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `not brought over`
+
+### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
+- **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
+- **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.
+- **Fix:** nothing when the account is not this year's. When it is, add the `[accounts.rrsp2]` table (`tjs align --from 2025` brings it from the year that has it) and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `unconfigured_inputs`; `src/taxjson/bin/taxjson_run.py` — `not an account of`
+
+### "Warning: these books are not the clean result of the current inputs - inputs changed since the last full run (added: inputs/margin/late.tt) … 2024 is filed (filed/2024.json) and its inputs changed since the last run"
+- **Check:** `tjs years` shows the filed year with "inputs changed since"; the file is a download saved in the shared `inputs/` while working on a later year.
+- **Cause:** every year reads the shared exports, so a new or corrected file can change a filed year's figures; its books in `work/` were built before it.
+- **Fix:** `tjs run` in the filed year's folder: it recomputes the year and warns `filed 2024 DRIFTED vs 2024.json` when the filed figures moved (then amend the return, or keep the books consistent with it), or says `filed 2024: OK`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_filed_year_stale_hint`, `_check_filed_years`; `src/taxjson/lib/checklist.py` — `d_filed_lock`, `inputs_changed`
+
+### "Warning: ../inputs/crypto/crypto_sends.tt: generated by an older taxjson into the exports every year shares — not read"
+- **Check:** the file starts with "# GENERATED by `taxjson crypto-sends --write`"; the project reads a shared `inputs_dir`.
+- **Cause:** the sales of your crypto-send decisions are generated from `sends.json` and the year's own ticker.map; with exports shared by every year, each year generates them in its own `work/crypto_sends/` so no year's run rewrites another's. The old file in the shared folder would book them twice.
+- **Fix:** delete it once no single-folder project still reads that folder; nothing is lost (the decisions are in `sends.json`). A `.tt` file of that name you wrote yourself (no GENERATED line) is read as before.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_account_tt_files`; `src/taxjson/lib/crypto_sends.py` — `tt_path`, `GENERATED_DIR`
+
+### "Info: missing_history.json: 1 entry records no quantity and later rows go shorter (QZQ.US/margin 10): each opening is sized from the rows through 2024-12-31"
+- **Check:** the entry has no `"quantity"`; the project's exports hold rows after its year's December 31 (shared exports every year reads, or a single-folder project with next year's downloads). `tjs find-missing-history` shows "the run opens N units, the deepest shortage of the rows through 2024-12-31" under the position, and the run's ATTENTION line names the date it goes short again.
+- **Cause:** an entry's opening is the deepest shortage of its rows dated up to the project year's end; rows after it are a later year's (its own project sizes its own opening), so they never change this year's figures. Before, every row counted: in the shared layout a later year's short grew an earlier year's opening and sent that year's sales to manual reporting.
+- **Fix:** nothing when the later shortage belongs to a later year. To state the units held before the data yourself, give the entry `"quantity": N` (used exactly; `tjs find-missing-history --write-missing-history new.json` writes it with `_sized_through`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `synthesize_openings`, `sizing_until`, `_size_until_for`, `window_sized_entries`, `QUANTITY_KEY`; `src/taxjson/bin/taxjson_run.py` — `_note_window_sized_openings`
+
+### "Warning: ATTENTION: missing_history.json lists QZQ.US / margin: the position goes short again on 2025-11-03 (70 units), after its opening (10 units, sized from the rows through 2024-12-31) is used up"
+- **Check:** `tjs find-missing-history` shows the opening under the position and the date it goes short again. With "after the N units its `quantity` records are used up": the entry's `quantity` is below the shortage in the year.
+- **Cause:** the position sells more than its opening and the purchases in the files: a later year's short or gap (the opening is sized from the rows through the year end, so a later year never changes this one), or a recorded `quantity` too low.
+- **Fix:** a later year's: nothing for this year — that year's project sizes its own opening (a real short needs nothing). A `quantity` too low: raise it to the units held before the data, or add the missing purchase.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `short_again_message`, `_short_again`
+
+### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
+- **Check:** `git -C 2025 rev-parse --show-toplevel` and `git -C inputs rev-parse --show-toplevel` name different folders (or the second fails).
+- **Cause:** the year folder is its own repository, so the shared `inputs/` beside it is committed nowhere the checklist can see.
+- **Fix:** one repository for the whole folder: `git init` in the folder holding the year folders (move a year folder's history in with `git subtree`, or start fresh), then commit `inputs/` and the year folders.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/checklist.py` — `d_inputs_committed`, `project's git repository`
+
 ### `tjs checklist` prints only "Error: [accounts.crypto] is a crypto account but [settings] has no local_timezone" (or "Error: this project still has yf_ticker.map …") instead of the list
 - **Check:** `tjs --version` is a development build after v0.24.2; `tjs init` ran on a machine whose zone is UTC or cannot be read (no `local_timezone` written), or the project root holds an old map file such as `yf_ticker.map`.
 - **Cause:** the checklist loaded taxjson.toml the way every other command does, and that loader refuses such a config, so a fresh project got the error alone instead of the list with the configure step needing attention.
@@ -372,12 +477,19 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Holdings
 
-### "Info: 5 accounts with open positions and no holdings file to check them against" (or `tjs sanity`: "Error: no arguments, and no account in taxjson.toml declares `holdings = [...]`")
-- **Check:** `tjs checklist` shows step `sanity` as `[m]`.
+### "Info: 5 accounts with open positions and no holdings file to check them against" (or `tjs sanity`: "Error: no arguments, no snapshot in the project's holdings/ folder, and no account in taxjson.toml declares `holdings = [...]`")
+- **Check:** `tjs checklist` shows step `sanity` as `[m]`; `ls holdings/` is empty.
 - **Cause:** nothing compares the books' positions with the broker's own positions report yet.
-- **Fix:** export the broker's positions (or write a holdings TOML) and add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`; then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
+- **Fix:** save the broker's positions snapshot (a `[[holding]]` TOML, as a download tool writes it) in the year's `holdings/` folder, named for the account (`margin_holdings.toml`) or carrying its broker account id in `[meta] account`; or add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`. Then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
 - **Fixed in:** —
-- **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no arguments, and no account in `
+- **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no snapshot in the project's holdings/`
+
+### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
+- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.
+- **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared. (Before the fix, a file an account lists in its own `holdings = [...]` was named here too, though that account compares it.)
+- **Fix:** add the id under its account (`broker_accounts = ["…"]`), rename the file `<account>_holdings.toml`, or list it in the account's `holdings = [...]`. An id two accounts declare is refused the same way.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `listed_files`, `claims it`
 
 ### `tjs sanity`: "QZD.U.TO MISSING_IN_TAXJSON" (or `QTY_MISMATCH` on QZD.TO) for a listing the run joined by its transfer journal
 - **Check:** the run's console said "joined as one security by their transfer journal: QZD.U.TO ↔ QZD.TO …" and `work/ticker.map.effective` has the `TOBASE` / `JOURNAL` line; `ticker.map` itself has no line for the pair. The books hold the position under one symbol, the broker lists it under both.

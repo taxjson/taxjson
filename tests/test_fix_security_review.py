@@ -358,7 +358,7 @@ class TestOutsideFolderLinksRefused(unittest.TestCase):
     def test_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proj"
-            r = self._cli(root, "init", "--country", "canada")
+            r = self._cli(root, "init", "--single", "--country", "canada")
             self.assertEqual(r.returncode, 0, r.stderr)
             acct = sorted(d.name for d in (root / "inputs").iterdir()
                           if d.is_dir())[0]
@@ -470,7 +470,8 @@ class TestLoosePermissionWarning(unittest.TestCase):
     def test_warned_once_then_quiet(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "proj"
-            self.assertEqual(self._cli(root, "init", "--country",
+            self.assertEqual(self._cli(root, "init", "--single",
+                                       "--country",
                                        "canada").returncode, 0)
             toml = root / "taxjson.toml"
             text = toml.read_text()

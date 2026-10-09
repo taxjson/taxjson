@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 LATE_FOLD = "fold"
 LATE_SEPARATE = "separate"
@@ -639,7 +640,7 @@ def _load_rows(path: Path) -> List[Dict[str, Any]]:
 def _ticker_map(root: Path):
     """(TickerMap, base-stage undated renames) of the project, or
     (None, {}) without a map."""
-    p = Path(root) / "ticker.map"
+    p = _PL.ticker_map_path(Path(root))
     if not p.exists():
         return None, {}
     from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
@@ -781,7 +782,7 @@ def rename_hints(root: Path, cfg: Dict[str, Any],
     if not cache.is_dir():
         return []
     accounts = list(cfg.get("accounts") or {})
-    st = TS.map_state(Path(root) / "ticker.map")
+    st = TS.map_state(_PL.ticker_map_path(Path(root)))
     booked = {(e["old"], e["new"]) for e in events}
     out: List[Dict[str, Any]] = []
     seen = set()

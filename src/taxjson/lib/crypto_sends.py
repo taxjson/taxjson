@@ -44,6 +44,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 MANIFEST_NAME = "sends.json"
 TT_NAME = "crypto_sends.tt"
@@ -1164,7 +1165,7 @@ def build_report(root: Path, cfg: Dict[str, Any],
         present = {(a, b) for a, fs in broker_files.items() for b, _p in fs}
     rows = load_transfer_rows(cache, accts, present)
     assign_send_ids(rows)
-    man_paths = {a: root / "inputs" / a / MANIFEST_NAME for a in accts}
+    man_paths = {a: _PL.inputs_dir(root) / a / MANIFEST_NAME for a in accts}
     all_decisions = {a: load_decisions(p)["sends"]
                      for a, p in man_paths.items()}
     unpaired = {(a, sid) for a, d in all_decisions.items()
@@ -1276,7 +1277,7 @@ def build_report(root: Path, cfg: Dict[str, Any],
             "cross_account_moves": cross,
             "network_fees": fees,
             "manifest": str(man_path),
-            "tt_file": str(root / "inputs" / acct / TT_NAME),
+            "tt_file": str(tt_path(root, acct)),
         }
     if pool is not None:
         out["pool"] = {k: v for k, v in pool.items() if k != "results"}
@@ -1304,7 +1305,7 @@ def own_moves(root: Path, cfg: Dict[str, Any],
     unpaired = set()
     for a in accts:
         for sid, rec in load_decisions(
-                Path(root) / "inputs" / a / MANIFEST_NAME)["sends"].items():
+                _PL.inputs_dir(Path(root)) / a / MANIFEST_NAME)["sends"].items():
             if rec.get("unpair"):
                 unpaired.add((a, sid))
     _u, pairs = match_transfers(rows, unpaired)
@@ -1336,7 +1337,7 @@ def matched_send(report_rows_root: Path, cfg: Dict[str, Any], acct: str,
     rows = load_transfer_rows(report_rows_root / "work", accts, present)
     assign_send_ids(rows)
     unpaired = {(a, k) for a in accts for k, rec in load_decisions(
-        report_rows_root / "inputs" / a / MANIFEST_NAME)["sends"].items()
+        _PL.inputs_dir(report_rows_root) / a / MANIFEST_NAME)["sends"].items()
         if rec.get("unpair")}
     _u, pairs = match_transfers(rows, unpaired)
     for o, i in pairs:
@@ -1494,6 +1495,22 @@ def read_tt(path: Path) -> Optional[str]:
         raise ValueError(f"cannot read {path} ({why}).") from None
 
 
+# Where a project with shared exports (lib/project_layout) generates an
+# account's sends file: its own work/, never the shared inputs/ — the
+# file follows this year's ticker.map, and another year's run must not
+# rewrite this year's books.
+GENERATED_DIR = "crypto_sends"
+
+
+def tt_path(root, acct: str) -> Path:
+    """The generated crypto_sends.tt of `acct`: inputs/<acct>/, or with
+    shared exports work/crypto_sends/<acct>/ (read by the run as one of
+    the account's .tt files)."""
+    if _PL.shared_inputs(root):
+        return Path(root) / "work" / GENERATED_DIR / str(acct) / TT_NAME
+    return _PL.inputs_dir(root) / str(acct) / TT_NAME
+
+
 def write_tt(path: Path, text: Optional[str]) -> str:
     """'written' | 'unchanged' | 'removed' | 'absent'. Refuses to touch
     a crypto_sends.tt it did not generate."""
@@ -1514,6 +1531,8 @@ def write_tt(path: Path, text: Optional[str]) -> str:
         return "absent"
     from taxjson.lib.cli_diag import write_text_atomic
     try:
+        # (work/crypto_sends/<acct>/ with shared exports: tt_path)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_text_atomic(path, text)
     except OSError as e:
         raise ValueError(str(e)) from None

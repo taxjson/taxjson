@@ -39,6 +39,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from taxjson.lib import project_layout as _PL
 
 
 def symbol_root(sym: str) -> Tuple[str, str]:
@@ -168,7 +169,7 @@ def _map_view(root: Path) -> Tuple[Dict[str, str], Dict[str, str],
                                          to_base=True)))
         except Exception:                               # noqa: BLE001
             pass
-    tm_path = root / "ticker.map"
+    tm_path = _PL.ticker_map_path(root)
     if tm_path.is_file():
         try:
             tmap = _parse_map_file(tm_path)[0]
@@ -261,10 +262,8 @@ def map_gaps(root: Path) -> Tuple[List[MapGap], List[str]]:
 
 
 def _config(root: Path) -> Dict[str, Any]:
-    from taxjson.lib.tomlcompat import tomllib
     try:
-        cfg = tomllib.loads((Path(root) / "taxjson.toml").read_text(
-            encoding="utf-8-sig")) if tomllib is not None else {}
+        cfg = _PL.read_config_soft(root)
     except (OSError, ValueError, UnicodeDecodeError):
         cfg = {}
     return cfg if isinstance(cfg, dict) else {}
@@ -308,7 +307,7 @@ def unused_rules(root: Path) -> Tuple[List[UnusedRule], List[str]]:
     source cannot be read the first list is empty: its symbols are
     unknown (module docstring)."""
     root = Path(root)
-    tm_path = root / "ticker.map"
+    tm_path = _PL.ticker_map_path(root)
     if not tm_path.is_file():
         return [], []
     from taxjson.bin.taxjson_ticker_map import _parse_map_file
