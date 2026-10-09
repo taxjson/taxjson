@@ -3707,6 +3707,9 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     if settings.get(_PL.INPUTS_KEY) is not None:
         _die_input("this project already reads a shared inputs folder "
                    f"([settings] {_PL.INPUTS_KEY})")
+    # An old per-purpose map (yf_ticker.map ...) would stay behind at the
+    # top, read by no year: `taxjson migrate` folds it in first.
+    _refuse_legacy_project_files(root)
     if not isinstance(year, int):
         _die_input("[settings] year is required")
     dest = root / str(year)
@@ -3723,10 +3726,19 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     text = _PL.set_key_text(text, f"settings.{_PL.EXPORTS_KEY}",
                             f"../{_PL.EXPORTS}")
     fixed = []
+    moved_rel = {_PL.shown(a, root) for a, _b in moves}
 
     def _down(v):
+        """A path relative to the project, as written from the year
+        folder: one into an item that moves with it (holdings/x.toml,
+        filed/2023.json, inputs/slips/...) stays as it is; anything
+        else (inputs/<account>/..., ../other) gains a `../`."""
         if isinstance(v, str) and v and not v.startswith("~") \
                 and not _os.path.isabs(v):
+            norm = _os.path.normpath(v)
+            if any(norm == m or norm.startswith(m + _os.sep)
+                   for m in moved_rel):
+                return v
             return _os.path.join("..", v)
         return v
     pyr = settings.get("prior_year_record")
@@ -3764,6 +3776,18 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     if gi.is_file() and "exports/" not in gi.read_text(encoding="utf-8"):
         write_atomic(gi, gi.read_text(encoding="utf-8").rstrip("\n")
                      + "\nexports/\n")
+    # What stays at the top besides the shared folders: no year reads
+    # it (a note of the user's, a script, a stray export).
+    _kept = {_PL.INPUTS, _PL.EXPORTS, str(year), ".git", ".gitignore",
+             ".gitattributes"}
+    try:
+        left = sorted(e.name for e in root.iterdir()
+                      if e.name not in _kept)
+    except OSError:
+        left = []
+    if left:
+        print(f"Left at the top (no year reads them; move what belongs "
+              f"to {year} into {year}/): " + ", ".join(left))
     print(f"Done. `taxjson -C {year} run` rebuilds the books there; "
           f"`taxjson new-year {year + 1}` here starts the next year. "
           f"Commit the move (git mv keeps the history).")

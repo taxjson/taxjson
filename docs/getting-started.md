@@ -884,9 +884,12 @@ and a complete project per tax year beside them.
 `--dry-run` first) keeps `inputs/` where it is and moves the project's
 own files (`taxjson.toml`, `ticker.map`, `missing_history.json`,
 `checklist.json`, `work/`, `reports/`, `filed/`, `inputs/slips/` as
-`inputs/slips/`) into a folder named for its year, setting `inputs_dir` and
-`exports_dir` and moving relative `holdings` and `prior_year_record`
-paths one level down. To fold several year projects (`~/taxes/2024/`,
+`inputs/slips/`, `holdings/`) into a folder named for its year, setting
+`inputs_dir` and `exports_dir`; a relative `holdings` or
+`prior_year_record` path into a folder that moves with it
+(`holdings/margin.toml`) stays as written, any other gains a `../`. It
+first refuses an old per-purpose map (`tjs migrate` folds it in), and
+lists the files it leaves at the top (no year reads them). To fold several year projects (`~/taxes/2024/`,
 `~/taxes/2025/`, each with its own `inputs/`) into one: in a new folder,
 `tjs migrate --to-years` the newest one there, copy each older project's
 own files (not its `inputs/`) into a folder named for its year, add

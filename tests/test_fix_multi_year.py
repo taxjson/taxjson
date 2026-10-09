@@ -701,6 +701,38 @@ class TestScaffolds(unittest.TestCase):
         run_ok(self, y)
         self.assertEqual(tjs("-C", str(y), "sum", "--json").stdout, want)
 
+    def test_migrate_to_years_keeps_paths_into_moved_folders(self):
+        from taxjson.lib.tomlcompat import tomllib
+        s = single("usa", 2025)
+        (s / "holdings").mkdir()
+        (s / "holdings" / "margin.toml").write_text("")
+        (s / "notes.txt").write_text("mine\n")
+        cfg = (s / "taxjson.toml").read_text().replace(
+            '[accounts.margin]\ntype = "taxable"\n',
+            '[accounts.margin]\ntype = "taxable"\nholdings = '
+            '["holdings/margin.toml", "./holdings/b.toml", '
+            '"inputs/margin/pos.toml"]\n')
+        (s / "taxjson.toml").write_text(cfg)
+        r = tjs("-C", str(s), "migrate", "--to-years")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        doc = tomllib.loads((s / "2025" / "taxjson.toml").read_text())
+        # holdings/ moves into the year folder with taxjson.toml: its
+        # paths stay as written; inputs/ stays at the top.
+        self.assertEqual(doc["accounts"]["margin"]["holdings"],
+                         ["holdings/margin.toml", "./holdings/b.toml",
+                          "../inputs/margin/pos.toml"])
+        self.assertIn("Left at the top (no year reads them", r.stdout)
+        self.assertIn("notes.txt", r.stdout)
+
+    def test_migrate_to_years_refuses_a_legacy_map_first(self):
+        s = single("usa", 2025)
+        (s / "yf_ticker.map").write_text("# old\n")
+        r = tjs("-C", str(s), "migrate", "--to-years")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("yf_ticker.map", r.stdout + r.stderr)
+        self.assertFalse((s / "2025").exists())
+        self.assertTrue((s / "taxjson.toml").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
