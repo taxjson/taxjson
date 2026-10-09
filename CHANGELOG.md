@@ -238,6 +238,14 @@
 - The price and rate caches' lock (`work/.price_cache.json.lock` and
   the shared caches') is taken like `work/.run.lock`: owner-only and
   never through a symlink.
+- SECURITY.md: vulnerabilities can be reported through GitHub's private
+  vulnerability reporting ("Report a vulnerability") as well as by
+  e-mail; a new "Release integrity" section says what protects the
+  release tags, releases and `main`, and that nothing is signed yet; the
+  temporary-file description matches what taxjson does (a uniquely named
+  `mkstemp` file, not a fixed `<file>.part`). `scripts/dev-setup.sh` in
+  a worktree finds the clone's shared hooks folder instead of saying to
+  install the pre-push hook by hand.
 
 ## v0.24.2 (2026-10-08)
 

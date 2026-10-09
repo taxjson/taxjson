@@ -4,7 +4,11 @@
 
 If you believe you've found a security issue in taxjson — particularly anything that could lead to incorrect tax computation in a way an attacker could trigger, or any code path that mishandles file contents on a user's machine — please report it privately rather than opening a public issue.
 
-**Email:** ckscijdtest@gmail.com
+- **GitHub:** the repository's **Security** tab → **Report a
+  vulnerability** (GitHub's private vulnerability reporting:
+  https://github.com/taxjson/taxjson/security/advisories/new). The
+  report is visible only to you and the maintainers.
+- **Email:** ckscijdtest@gmail.com
 
 Please include:
 
@@ -142,12 +146,17 @@ once per run when the project folder, `inputs/` or `reports/` is open
 to other users, naming the command that tightens the project once:
 `chmod -R go-rwx <project>`.
 
-Files are replaced through a temporary sibling (`<file>.part`) that is
-created fresh — an existing entry at that name is removed first and the
-create refuses a symlink — then renamed into place. A symlink planted at
-a temporary or a final name in `work/`, `reports/` or the project is
-therefore never written through: the link itself is replaced by the new
-file, and its target, inside or outside the project, is left alone.
+Files are replaced through a temporary file of their own: a new,
+uniquely named sibling (`<file>.<random>.part`, made by
+`tempfile.mkstemp` — `O_CREAT | O_EXCL | O_NOFOLLOW`, mode `0600`, so it
+never reuses or follows anything already at a name), written, flushed
+and fsync'd, then renamed over the final name. A symlink planted at a
+final name in `work/`, `reports/` or the project is therefore never
+written through: the link itself is replaced by the new file, and its
+target, inside or outside the project, is left alone. Lock files
+(`work/.run.lock`, the price caches', the fetch plugin's) are opened
+with `O_NOFOLLOW` too; a link at a lock's name is replaced by a lock
+file of its own.
 `taxjson migrate` (which rewrites your `ticker.map` / `taxjson.toml`)
 refuses, before writing anything, when either is a symlink to a file
 outside the project; a link inside the project is kept and its target
@@ -190,6 +199,28 @@ without them gets the generic checks.
 it recognises from an export so it can be shared as a parser sample —
 it is pattern-based, so review the output (the report lists the lines
 to read) before attaching it anywhere.
+
+## Release integrity
+
+Releases are the `vX.Y.Z` tags of github.com/taxjson/taxjson; the
+installer clones that repository over HTTPS and checks out the tag
+`channels.json` on `main` names for your channel. What protects them:
+
+- **Tags:** a repository rule lets only the repository's admins create
+  a `v*` tag, and nobody may move or delete one once it exists.
+- **Releases:** GitHub releases are immutable — a published release's
+  tag and assets cannot be changed afterwards.
+- **`main`:** a repository rule refuses deleting the branch and force
+  pushes, so published history is not rewritten.
+- **Dependencies:** Dependabot security updates are on (the core's
+  only required dependencies are `tomli` before Python 3.11 and `tzdata`
+  on Windows; the extras have more).
+
+Nothing is signed yet: commits, tags and releases carry no GPG/SSH or
+Sigstore signature, so an install trusts GitHub, its HTTPS and the
+maintainer's account. To check an install by hand, compare
+`git -C ~/.local/share/taxjson rev-parse HEAD` with the commit the tag
+shows on GitHub.
 
 ## Supported versions
 
