@@ -22,11 +22,21 @@ from pathlib import Path
 from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, settings_for
 
+from _style import CapturedWidth
+
 from taxjson.lib.country import CANADA, USA, HOME_CURRENCY
+
+# The assertions read captured output (`note:`), TAXJSON_WIDTH=0.
+_WIDTH = CapturedWidth()
 
 
 def setUpModule():
     os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 _SPIN = ('PARNT(US0000000777) Spinoff  1 for 4 '

@@ -28,7 +28,10 @@ GIT_ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
                GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="Sam",
                GIT_AUTHOR_EMAIL="sam@example.com", GIT_COMMITTER_NAME="Sam",
                GIT_COMMITTER_EMAIL="sam@example.com",
-               GIT_TERMINAL_PROMPT="0")
+               GIT_TERMINAL_PROMPT="0",
+               # Captured, unwrapped: a message naming a long temp path
+               # must not wrap inside a phrase a test looks for.
+               TAXJSON_WIDTH="0")
 for _k in ("TAXJSON_DEV_DIR", "TAXJSON_PROD_DIR", "TAXJSON_CHANNEL",
            "TAXJSON_OFFLINE", "TAXJSON_PROMOTE_TRAILERS", "TAXJSON_DIR",
            "TAXJSON_BIN", "TAXJSON_DRY_RUN", "TAXJSON_REMEMBER_CHANNEL",
