@@ -124,6 +124,8 @@ Semantic versioning, applied to tax output: a change that alters any filed numbe
 
 Never `git push --tags`: `scripts/release.sh` pushes the one tag, by name. The `pre-push` hook (`scripts/hooks/pre-push`, installed by `scripts/dev-setup.sh`) refuses a push that carries any tag that is not named `vX.Y.Z`, is a lightweight tag, or points at a commit that is not on the remote's `main` (or on the `main` the same push sends), and every push that deletes or moves a tag. On GitHub, a ruleset refuses creating, moving or deleting the old pre-release tag ranges, and releases are immutable.
 
+`scripts/dev-setup.sh` (or `scripts/dev-setup.sh --hook-only`) installs the hook into the clone's own hooks folder (`git rev-parse --git-common-dir`/hooks, shared by every worktree; the installed file runs the pushing worktree's own `scripts/hooks/pre-push`). It does so even when a global `core.hooksPath` is set — git then runs that folder's `pre-push` instead — and says whether that global hook chains to the clone's own (one that runs `"$(git rev-parse --git-common-dir)/hooks/pre-push"` does); when it does not, it warns that the guard will not run.
+
 ## Rolling back
 
 Never move or delete a published tag — installers may already have it. Roll the channel back instead: `scripts/promote.sh v0.16.0` (it asks before moving `stable` backwards), and new installs on `stable` get the good release again. Installs already on the bad release stay there — a channel never moves an install backwards — until the fix ships: fix it on `main`, cut the next patch (`scripts/release.sh v0.17.1`), and promote that. A user who cannot wait pins the good release: `--channel v0.16.0`.

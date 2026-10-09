@@ -501,7 +501,7 @@ a channel's release; `release.sh` cuts a tag after the full gate;
 - `scripts/channels.sh` — `taxjson channels`: the channel page from a checkout.
 - `src/taxjson/lib/channels.py` — `read_channels`, `parse_channels`, `release_tags`, `status`, `render`, `dev_checkout`: `taxjson channels`, and the checkout `promote` and `deploy` use.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_channels`, `cmd_promote`, `cmd_deploy`, `_run_script`, `_RELEASE_CMDS`: the release commands.
-- `scripts/dev-setup.sh` — `venv/bin/pip install`, `pre-push`: developer setup (venv, editable installs, the hook).
+- `scripts/dev-setup.sh` — `venv/bin/pip install`, `install_hook`, `--hook-only`: developer setup (venv, editable installs, the pre-push hook in the clone's own hooks folder).
 
 ## The CI gate and repository checks
 

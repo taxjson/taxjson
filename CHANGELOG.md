@@ -19,6 +19,13 @@
   `tests.yml` run to be green (`TAXJSON_PROMOTE_IGNORE_CI=1` overrides,
   with a warning). A refused push takes the promote commit back.
 
+### Changed
+
+- `scripts/dev-setup.sh` installs the pre-push hook into the clone's own
+  hooks folder (shared by its worktrees) even when a global
+  `core.hooksPath` is set, and says whether that global hook chains to
+  it; `--hook-only` installs just the hook.
+
 
 ## v0.25.0 (2026-10-09)
 

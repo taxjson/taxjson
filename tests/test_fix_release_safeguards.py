@@ -561,5 +561,100 @@ class TestPromoteGates(_PromoteRepo):
                          {"stable": "v0.2.0", "beta": "v0.3.0"})
 
 
+class TestDevSetupHook(_Sandbox):
+    """scripts/dev-setup.sh --hook-only installs the pre-push hook into
+    the clone's own hooks folder (--git-common-dir), from a worktree too,
+    whether or not a global core.hooksPath is set."""
+
+    # The shape of a global hook that chains to the repo's own one.
+    _CHAIN = ('#!/bin/sh\ninput="$(cat)"\n'
+              'own="$(git rev-parse --git-common-dir)/hooks/pre-push"\n'
+              'if [ -x "$own" ]; then printf \'%s\\n\' "$input" | "$own" "$@"; '
+              'exit $?; fi\nexit 0\n')
+
+    def setUp(self):
+        super().setUp()
+        self.origin = self.d / "origin.git"
+        self.git(self.d, "init", "-q", "--bare", "-b", "main",
+                 str(self.origin))
+        self.clone = self.d / "clone"
+        self.git(self.d, "clone", "-q", str(self.origin), str(self.clone))
+        self.git(self.clone, "symbolic-ref", "HEAD", "refs/heads/main")
+        (self.clone / "scripts" / "hooks").mkdir(parents=True)
+        for f in ("dev-setup.sh", "check-pii.sh"):
+            shutil.copy(REPO / "scripts" / f, self.clone / "scripts" / f)
+        shutil.copy(REPO / "scripts" / "hooks" / "pre-push",
+                    self.clone / "scripts" / "hooks" / "pre-push")
+        (self.clone / ".gitignore").write_text("scripts/\n")
+        (self.clone / "a.txt").write_text("a\n")
+        self.git(self.clone, "add", "-A")
+        self.git(self.clone, "commit", "-q", "-m", "a")
+        self.git(self.clone, "push", "-q", "origin", "main")
+        self.wt = self.d / "wt"
+        self.git(self.clone, "worktree", "add", "-q", "-b", "feature",
+                 str(self.wt))
+        # The worktree has its own copy of the (ignored) scripts.
+        shutil.copytree(self.clone / "scripts", self.wt / "scripts")
+        self.hook = self.clone / ".git" / "hooks" / "pre-push"
+
+    def global_hooks(self, body):
+        g = self.d / "globalhooks"
+        g.mkdir(exist_ok=True)
+        if body is not None:
+            self._stub("pre-push", body, where=g)
+        cfg = self.d / "gitconfig"
+        cfg.write_text(f"[core]\n\thooksPath = {g}\n")
+        self.env["GIT_CONFIG_GLOBAL"] = str(cfg)
+
+    def setup_hook(self, cwd):
+        return subprocess.run(
+            ["bash", str(cwd / "scripts" / "dev-setup.sh"), "--hook-only"],
+            cwd=cwd, capture_output=True, text=True, env=self.env)
+
+    def test_from_a_worktree_with_a_chaining_global_hook(self):
+        self.global_hooks(self._CHAIN)
+        r = self.setup_hook(self.wt)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"pre-push hook installed: {self.hook}", r.stdout)
+        self.assertIn("which chains to the hook above", r.stdout)
+        self.assertNotIn("WARNING", r.stdout)
+        self.assertTrue(os.access(self.hook, os.X_OK))
+        self.assertIn("taxjson pre-push wrapper", self.hook.read_text())
+        # A real push from the worktree: global hook -> the clone's
+        # wrapper -> the worktree's own scripts/hooks/pre-push.
+        self.git(self.wt, "tag", "stray-tag")
+        r = subprocess.run(["git", "push", "-q", "origin", "stray-tag"],
+                           cwd=self.wt, capture_output=True, text=True,
+                           env=self.env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("stray-tag: not a release tag", r.stderr)
+        self.assertEqual(self.git(self.wt, "ls-remote", "--tags", "origin"),
+                         "")
+        # Idempotent: a re-run replaces its own wrapper.
+        r = self.setup_hook(self.clone)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("pre-push hook installed", r.stdout)
+
+    def test_global_hook_that_does_not_chain_is_named(self):
+        self.global_hooks("#!/bin/sh\nexit 0\n")
+        r = self.setup_hook(self.clone)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(self.hook.is_file())
+        self.assertIn("WARNING: core.hooksPath=", r.stdout)
+        self.assertIn("will NOT run on push", r.stdout)
+
+    def test_old_symlink_replaced_foreign_hook_left_alone(self):
+        self.hook.parent.mkdir(exist_ok=True)
+        os.symlink("../../scripts/hooks/pre-push", self.hook)
+        r = self.setup_hook(self.clone)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(self.hook.is_symlink())
+        self.assertIn("taxjson pre-push wrapper", self.hook.read_text())
+        self.hook.write_text("#!/bin/sh\necho mine\n")
+        r = self.setup_hook(self.clone)
+        self.assertIn("already exists and is not ours", r.stdout)
+        self.assertEqual(self.hook.read_text(), "#!/bin/sh\necho mine\n")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -50,7 +50,9 @@ credential-looking strings, and — for the maintainer — a **private denylist*
 at `~/.config/taxjson/pii-denylist` (one regex per line: your real account
 numbers, name, addresses; it lives outside every repository, so the strings
 it guards are never themselves committed). It runs in every `scripts/ci.sh`
-mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs, which
+mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs (into
+the clone's own hooks folder, also when a global `core.hooksPath` chains
+to it; `--hook-only` installs just the hook), which
 scans only what a push would add — the diff lines (the net diff and the
 added lines of every pushed commit: a value added in one commit and removed
 in the next is still published), the text inside binary
