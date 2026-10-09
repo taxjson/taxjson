@@ -40,7 +40,7 @@ tjs promote v0.17.0      # stable → v0.17.0   (tjs promote v0.17.0 beta; no ve
 tjs channels             # where everything points (works on any install; --json, all)
 ```
 
-`promote` and `deploy` refuse anywhere no development checkout is found;
+`deploy` then checks that the production copy is checked out at the tag and that its `taxjson --version` reports that release, and fails loudly (exit 1) when either disagrees. `promote` and `deploy` refuse anywhere no development checkout is found;
 everyone else upgrades by re-running the installer.
 
 So the rhythm is: tag as often as you like, and `tjs deploy` each tag to

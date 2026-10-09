@@ -498,18 +498,27 @@ class TestChannelsCommand(_Repos):
         self.assertIn("promoting what this machine runs: v0.2.0", r.stdout)
         self.assertEqual(self.origin_channels()["beta"], "v0.2.0")
 
-    def test_deploy_moves_the_production_copy_and_keeps_its_channel(self):
+    def _deploy_env(self, stub_text):
         stub = self.d / "stub"
-        stub.mkdir()
+        stub.mkdir(exist_ok=True)
         for name in ("python3", "python3.9", "python3.10", "python3.11",
                      "python3.12", "python3.13"):
-            (stub / name).write_text(_PY_STUB)
+            (stub / name).write_text(stub_text)
             (stub / name).chmod(0o755)
-        env = dict(PATH=f"{stub}:{os.environ['PATH']}",
-                   TAXJSON_BIN=str(self.d / "bin"))
+        return dict(PATH=f"{stub}:{self.path}",
+                    TAXJSON_BIN=str(self.d / "bin"))
+
+    def test_deploy_moves_the_production_copy_and_keeps_its_channel(self):
+        # The stub install's `taxjson --version` reports the release its
+        # checkout is at, as a real editable install would.
+        env = self._deploy_env(_PY_STUB.replace(
+            'echo "taxjson 0.0.0"',
+            'echo "taxjson $(git -C "$(dirname "$0")/../.." tag --points-at '
+            'HEAD --sort=-v:refname | head -1 | cut -c2-)"'))
         r = self.cli("deploy", **env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("channel latest → release v0.3.0", r.stdout)
+        self.assertIn("deployed v0.3.0:", r.stdout)
         on = self.git(self.prod, "describe", "--tags", "--exact-match")
         self.assertEqual(on, "v0.3.0")
         self.assertEqual((self.home / ".config" / "taxjson" / "channel")
@@ -522,6 +531,14 @@ class TestChannelsCommand(_Repos):
         r = self.cli("deploy", "v1", **env)
         self.assertEqual(r.returncode, 2)
         self.assertIn("is not a release", r.stderr)
+
+    def test_deploy_fails_loudly_when_the_version_disagrees(self):
+        # The installed package still reports another version.
+        r = self.cli("deploy", **self._deploy_env(_PY_STUB))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("the production copy does not run v0.3.0", r.stderr)
+        self.assertIn("--version` says 'taxjson 0.0.0'", r.stderr)
+        self.assertIn("not 'taxjson 0.3.0'", r.stderr)
 
 
 class TestReleaseGroup(unittest.TestCase):

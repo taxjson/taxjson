@@ -35,6 +35,9 @@
   checkout keeps no token (`persist-credentials: false`). The pull-request
   template asks for `scripts/ci.sh` and synthetic data only, with no
   personal data in the change, its commits or the description.
+- `taxjson deploy` checks that the production copy is at the tag and that
+  its `taxjson --version` reports that release, and fails (exit 1) naming
+  both when they disagree.
 
 
 ## v0.25.0 (2026-10-09)
