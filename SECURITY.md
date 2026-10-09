@@ -115,6 +115,19 @@ the Questrade access token is only ever sent to
 `https://*.questrade.com` — an `api_server` elsewhere in the login
 response is refused.
 
+## Code that runs
+
+taxjson never imports code from your project folder. The `taxjson` /
+`tjs` console scripts do not put the current directory on `sys.path`,
+and every child Python process taxjson starts (the corp-action
+election prompt of `taxjson run`, `taxjson checklist`'s sub-commands,
+`taxjson-safe-to-sell`'s radar) runs with `-P` (Python 3.11+) or a
+bootstrap that drops the current directory before importing anything
+(3.9 / 3.10). Running `python -m taxjson...` yourself from inside a
+project folder is not covered: `python -m` imports from the current
+directory first, so a `json.py` someone left there would run. Use the
+console script, or `python -P -m` on 3.11+.
+
 ## Files on disk
 
 `taxjson` and every `taxjson-*` tool set an owner-only umask (`077`)

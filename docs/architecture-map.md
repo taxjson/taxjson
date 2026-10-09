@@ -48,7 +48,7 @@ known tool in this process unless a TTY is needed or `TAXJSON_DISPATCH=subproces
 
 - `pyproject.toml` — `project.scripts`, `taxjson-merge2`, `taxjson-gains`, `taxjson-corp-actions`: the list of console scripts and the module each one runs.
 - `src/taxjson/bin/_entry.py` — `private_umask`, `__getattr__`: the trampoline from `taxjson-<tool>` to the module's `main()`.
-- `src/taxjson/lib/dispatch.py` — `run_cmd`, `tool_module`, `_use_subprocess`, `TAXJSON_DISPATCH`: in-process execution of a tool, with the subprocess fallback.
+- `src/taxjson/lib/dispatch.py` — `run_cmd`, `tool_module`, `_use_subprocess`, `TAXJSON_DISPATCH`, `python_module_argv`: in-process execution of a tool, with the subprocess fallback; every child Python process is launched through `python_module_argv` (`-P`, or the `_SAFE_BOOT` bootstrap before 3.11) so the current directory is never on `sys.path`.
 - `src/taxjson/bin/taxjson_run.py` — `_cmd`, `run_to_file`, `run_capture`, `_exec_tool`, `_run_cmd`: how the orchestrator calls a tool and captures its stdout and `.diag` stderr.
 
 ## The taxjson run orchestrator

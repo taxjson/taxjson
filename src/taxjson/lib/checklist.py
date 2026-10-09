@@ -380,8 +380,10 @@ def default_run_sub(root: Path) -> Callable[..., Tuple[int, str, str]]:
     """Run `taxjson <argv>` on this project as a subprocess (the sub-
     commands sys.exit and print; a subprocess keeps that contained)."""
     def run(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
-        cmd = [sys.executable, "-m", "taxjson.bin.taxjson_run",
-               "-C", str(root)] + argv
+        from taxjson.lib.dispatch import python_module_argv
+        # Never with the project folder on sys.path (security review H1).
+        cmd = python_module_argv("taxjson.bin.taxjson_run",
+                                 ["-C", str(root), *argv])
         try:
             p = subprocess.run(cmd, capture_output=True, text=True,
                                stdin=subprocess.DEVNULL, timeout=timeout,

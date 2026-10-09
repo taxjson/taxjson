@@ -162,6 +162,17 @@
   written owner-only and the console names it. The previous IB Flex
   statement's backup is kept the same way. (#18)
 
+### Security
+
+- A child Python process taxjson starts (the corp-action election
+  prompt in `taxjson run`, `taxjson checklist`'s sub-commands,
+  `taxjson-safe-to-sell`'s radar, `TAXJSON_DISPATCH=subprocess`) no
+  longer imports from the current directory: a `json.py` or `csv.py`
+  left in a project folder ran inside `taxjson run`. Children start with
+  `-P` (Python 3.11+) or a bootstrap that drops the current directory
+  first (3.9 / 3.10). Run taxjson as `taxjson` / `tjs`, not
+  `python -m taxjson...` from inside a project (SECURITY.md).
+
 ## v0.24.2 (2026-10-08)
 
 ### Added

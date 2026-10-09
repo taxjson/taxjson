@@ -144,6 +144,14 @@ they run from a checkout without installing the plugin (its
 PYTHONPATH=packages/taxjson-fetch/src python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" </dev/null
 ```
 
+Run taxjson on a project with the `taxjson` (`tjs`) console script, not
+`python -m taxjson.bin.taxjson_run` from inside the project folder:
+`python -m` puts the current directory first on `sys.path`, so a
+`json.py` or `csv.py` lying in the project would be imported and run
+(`python -P -m ...` on Python 3.11+ is safe). Code that starts a child
+Python process uses `taxjson.lib.dispatch.python_module_argv`, never
+`[sys.executable, "-m", ...]`.
+
 ### The full gate: `scripts/ci.sh`
 
 Run this before every push. It is the authoritative CI; the workflow
