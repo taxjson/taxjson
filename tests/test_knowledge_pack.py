@@ -104,6 +104,16 @@ def check_refs(where, text, bad):
         syms = _TICKS.findall(m.group(2))
         if sym0:
             syms.insert(0, sym0)
+        # Every backticked identifier after the list too (the list used
+        # to stop at a parenthetical, so a removed `cmd_scan` after one
+        # went unchecked): `path` — `a` (what it does, `b`), `c` names b
+        # and c in path as well. The span ends where the reference's own
+        # parenthetical closes or at the next path outside a
+        # parenthetical; a reference nested in a parenthetical is its
+        # own (skipped here until that parenthetical closes).
+        for tok in _span_idents(text, m.end()):
+            if tok not in syms:
+                syms.append(tok)
         seen.add(m.start(1))
         _check_one(where, path, syms, bad)
     for m in _TICKS.finditer(text):
@@ -112,6 +122,31 @@ def check_refs(where, text, bad):
         path, sym = _split_path_symbol(m.group(1))
         if _is_repo_path(path):
             _check_one(where, path, [sym] if sym else [], bad)
+
+
+_SPAN_EVENT = re.compile(r"`([^`]+)`|[()]")
+
+
+def _span_idents(text, pos):
+    """The backticked identifiers a reference ending at `pos` goes on to
+    name (check_refs)."""
+    out, depth, skip = [], 0, None
+    for e in _SPAN_EVENT.finditer(text, pos):
+        tok = e.group(1)
+        if tok is None:
+            depth += 1 if e.group(0) == "(" else -1
+            if depth < 0:
+                break
+            if skip is not None and depth < skip:
+                skip = None
+            continue
+        if _is_repo_path(_split_path_symbol(tok)[0]):
+            if depth == 0:
+                break
+            skip = depth if skip is None else min(skip, depth)
+        elif skip is None and _IDENT.match(tok) and "." not in tok:
+            out.append(tok)
+    return out
 
 
 def _check_one(where, path, syms, bad):

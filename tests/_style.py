@@ -38,7 +38,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "style"
 # The default elections the builder saves (the countries' taxable ones).
 _ELECTION = {"canada": "taxable_deemed_dividend",
              "usa": "taxable_distribution_301"}
-# Synthetic current prices for harvest / scan / watch (asof today).
+# Synthetic current prices for harvest / tips / watch (asof today).
 _PRICES = {"QZQ": 22.0, "SAMPA": 31.0, "SAMPB": 10.0, "NVDA": 120.0,
            "MSFT": 420.0, "PARN": 45.0, "SPNC": 30.0, "XYZQ": 55.0,
            "OLDCO": 18.0, "GHOSTQ": 14.0}

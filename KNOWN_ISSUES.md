@@ -221,7 +221,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### A loss across two unjoined listings of one security is flagged, not denied
 - **Where:** `src/taxjson/lib/xlist_loss_radar.py` (tax-logic CA-XLIST-05 / US-XLIST-04).
-- **Current behavior:** two listings (a TSX line and its NYSE line) are one security only when ticker.map, a `.tt` JOURNAL line or a transfer journal joins them. A loss on one with the other listing of the same root bought within 30 days under an equal name is a run Warning, a `ticker-map --suggest` line, a `scan` XLIST-LOSS finding and a `run --strict` stop — but the loss stays allowed until ticker.map says `TOBASE` (one security) or `DISTINCT` (two). Listings of different roots (a different-root dual listing) or names that differ are not flagged, nor is a `.tt`-only book (no names).
+- **Current behavior:** two listings (a TSX line and its NYSE line) are one security only when ticker.map, a `.tt` JOURNAL line or a transfer journal joins them. A loss on one with the other listing of the same root bought within 30 days under an equal name is a run Warning, a `ticker-map --suggest` line (its `TOBASE` suggestion) and a `run --strict` stop — but the loss stays allowed until ticker.map says `TOBASE` (one security) or `DISTINCT` (two). Listings of different roots (a different-root dual listing) or names that differ are not flagged, nor is a `.tt`-only book (no names).
 - **Why deferred:** a name match is evidence, not proof (two share classes, a CDR, another company reusing a root); joining on it would change the books silently.
 - **Workaround:** answer each Warning with the `TOBASE` or `DISTINCT` line it names; `taxjson tips --online` clusters different-root listings by issuer name.
 
