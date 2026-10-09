@@ -1108,6 +1108,21 @@ class TestReleaseAndCiGates(unittest.TestCase):
         for doc in ("scripts/ci.sh", "CONTRIBUTING.md"):
             self.assertNotIn("private repo", (REPO_ROOT / doc).read_text())
 
+    def test_workflow_scans_every_pull_request_commit(self):
+        # Security review M7: patch, message and identities of each
+        # commit, with the base branch's scanner; read-only token.
+        wf = (REPO_ROOT / ".github" / "workflows" / "tests.yml").read_text()
+        self.assertIn("\npermissions:\n  contents: read\n", wf)
+        job = wf[wf.index("\n  pr-commits:\n"):]
+        job = job[:job.index("\n  test:\n")]
+        self.assertIn("if: github.event_name == 'pull_request'", job)
+        self.assertIn("fetch-depth: 0", job)
+        run = job[job.index("run: |"):]
+        for part in ('git show "$BASE_SHA:scripts/check-pii.sh"',
+                     "git log -p --no-merges", "--diff", "--message",
+                     "--identity", 'range="$BASE_SHA..$HEAD_SHA"'):
+            self.assertIn(part, run)
+        self.assertNotIn("${{", run)          # event data only via env
 
 if __name__ == "__main__":
     unittest.main()

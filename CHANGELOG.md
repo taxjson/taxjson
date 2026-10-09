@@ -194,6 +194,9 @@
   taxjson-fetch takes: `--refresh-token <token>`, `--flex-token=<token>`
   and a `QUESTRADE_REFRESH_TOKEN=` / `*_FLEX_TOKEN=` assignment, exported
   or not. An all-capitals placeholder (`YOUR_REFRESH_TOKEN`) passes.
+- CI scans every commit a pull request adds — its patch, message and
+  author / committer identities — with the generic PII patterns, as the
+  pre-push hook scans a push, using the base branch's scanner.
 
 ## v0.24.2 (2026-10-08)
 

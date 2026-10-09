@@ -68,6 +68,9 @@ Mark a genuine false positive with a `# pii-ok` (or `pii-ok:`) comment on that
 line — the bare word does not count; bypass knowingly with
 `git push --no-verify`. Fixtures must be synthetic: fake account ids
 (`U1234567`, `99900001`), made-up ISINs, no real statements.
+A pull request gets the same check in CI with the generic patterns: every
+commit it adds (patch, message, author and committer identities), so
+commit with your GitHub `…@users.noreply.github.com` address.
 
 **Never put figures, ids or names from a real person's books into code,
 tests, docs, the CHANGELOG or commit messages** — yours or anyone else's.
