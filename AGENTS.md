@@ -32,11 +32,8 @@ Claude Code, Codex, Gemini CLI, Cursor and Copilot read this file.
 **Privacy.** Work from tjs command output. Never read the raw CSVs in a
 user's `inputs/`. Never put their amounts, account numbers or names anywhere
 (issues, commits, docs, chat logs) without asking. To share a sample,
-`tjs redact` copies `inputs/` to a redacted `inputs_redact/`; review it first.
-In a year folder of one folder of exports for every year (`inputs_dir =
-"../inputs"`), it writes `<year>/inputs_redact/`: that year as a redacted
-single-folder project (the shared exports and the year's slips, `holdings/`,
-`taxjson.toml`, `ticker.map`), which `tjs -C <year>/inputs_redact run` runs.
+`tjs redact` copies `inputs/` to a redacted `inputs_redact/`; review it first
+(in a year folder with shared exports: that year as a runnable project).
 
 **No tax advice.** taxjson is a calculator that shows its work. Explain what
 it computed and which rule it applied; for what to file, point to the CRA or
@@ -51,9 +48,7 @@ IRS guidance and a tax professional.
 - Reproduce it on a made-up CSV: copy the broker's `examples/*_demo.csv`,
   edit rows to the same shape (same columns, actions and wording pattern;
   made-up values and ids), run taxjson on it to confirm it fails the same
-  way, and attach that file. `tjs redact` output is a fallback, after review
-  (run it in the year folder with the problem; with shared exports `tjs years`
-  shows the layout).
+  way, and attach that file. `tjs redact` output is a fallback, after review.
 - Show the person the full report first; then file it with
   `gh issue create --repo taxjson/taxjson`, or give them the text.
 
