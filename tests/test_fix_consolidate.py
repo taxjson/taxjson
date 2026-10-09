@@ -263,8 +263,10 @@ class TestConfigTables(unittest.TestCase):
     def test_fingerprint_tracks_ticker_map_only(self):
         from taxjson.lib import checklist as cl
         from taxjson.bin import taxjson_run as R
+        # tobase.map (the interlisted pairs, read with ticker.map) is an
+        # input of the books too.
         self.assertEqual(cl.PROJECT_ROOT_MAPS,
-                         ("ticker.map", "missing_history.json",
+                         ("ticker.map", "tobase.map", "missing_history.json",
                           "phantoms.json"))
         self.assertEqual(R._PROJECT_ROOT_INPUTS, cl.PROJECT_ROOT_MAPS)
 

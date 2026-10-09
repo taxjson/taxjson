@@ -20,9 +20,10 @@ listings (a TOBASE / JOURNAL / GLOBAL / DELETE / dated RENAME of
 either, a TOBASE booking another listing under the one the pair would
 move, a DISTINCT pair) (an Info line when the two disagree;
 nothing when ticker.map pools the same pair). In a Canadian project a
-TSX Venture listing and its TSX spelling (X.V, X.TO) are one listing
-for the TOBASE and DISTINCT lines of both files (every parser books a
-Venture line as X.TO; a hand-written X.V is the same shares). A US
+TSX Venture listing and its TSX spelling (X.V, X.TO) are one listing:
+a TOBASE or DISTINCT line of either file naming X.V also covers X.TO,
+the spelling every parser and .tt line books a Venture line under (so
+a line naming X.TO needs nothing more). A US
 project does not read tobase.map (US-XLIST-05).
 
 An ended interlisting is never deleted: its lines carry `until=DATE`
@@ -108,6 +109,12 @@ def venue_alias(sym: str) -> Optional[str]:
     if s.endswith(".TO") and len(s) > 3:
         return s[:-3] + ".V"
     return None
+
+
+def _book_spellings(sym: str) -> Set[str]:
+    """`sym` and, for a Venture spelling X.V, the X.TO the books carry."""
+    a = venue_alias(sym) if str(sym).upper().endswith(".V") else None
+    return {sym, a} if a else {sym}
 
 
 def _spellings(sym: str) -> Set[str]:
@@ -469,13 +476,15 @@ def compute_overlay(ticker_text: str, tob: Optional[TobaseFile],
             ov.lines.append(f"TOBASE {a} {b}")
             ov.generated.add(a)
             ov.applied += 1
-    # .V / .TO: one listing (Canada). Every TOBASE line's two symbols and
-    # every DISTINCT pair also cover the other spelling.
+    # .V / .TO: one listing (Canada). A TOBASE or DISTINCT line naming a
+    # Venture spelling X.V also covers X.TO, the spelling the books carry
+    # (every parser and .tt line books a Venture line in CAD as X.TO, so
+    # the books never hold X.V: a line naming X.TO needs nothing more).
     tob_pairs = list(tm.tobase.items()) + [
         tuple(x.split()[1:]) for x in ov.lines if x.startswith("TOBASE ")]
     for f, t in tob_pairs:
         for x in (f, t):
-            alt = venue_alias(x)
+            alt = venue_alias(x) if x.endswith(".V") else None
             if alt is None or alt in ren.raw or alt == t:
                 continue
             if alt in tm.delete or alt in decided and decided[alt] != \
@@ -493,8 +502,8 @@ def compute_overlay(ticker_text: str, tob: Optional[TobaseFile],
         if len(p) != 2:
             continue
         x, y = sorted(p)
-        for sx in _spellings(x):
-            for sy in _spellings(y):
+        for sx in _book_spellings(x):
+            for sy in _book_spellings(y):
                 q = frozenset((sx, sy))
                 if q in have or sx == sy:
                     continue

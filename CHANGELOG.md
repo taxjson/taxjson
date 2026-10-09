@@ -31,8 +31,8 @@
 ### Changed
 
 - In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
-  TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), and
-  the reverse: the two are one listing.
+  TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), the
+  one the books carry: the two are one listing.
 - IB's `GREY` listing venue is a US listing (`.US`), like `PINK` and `OTC`.
 
 ## v0.26.0 (2026-10-09)

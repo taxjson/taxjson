@@ -220,10 +220,13 @@ class TestOverlay(unittest.TestCase):
             self.assertEqual(ren["QZV.TO"], "QZV.V")
             self.assertEqual(ren["QZVB.US"], "QZV.V")
             self.assertIn(frozenset(("QZW.US", "QZW.TO")), tm.distinct)
+        # A line naming X.TO adds nothing: the books never hold X.V (a
+        # Venture line in CAD is booked X.TO by every parser).
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, ticker="TOBASE QZVB.US QZV.TO\n")
-            ren = merge_renames(_parse_map_file(root / "ticker.map")[0], True)
-            self.assertEqual(ren["QZV.V"], "QZV.TO")
+            tm = _parse_map_file(root / "ticker.map")[0]
+            self.assertEqual(merge_renames(tm, True), {"QZVB.US": "QZV.TO"})
+            self.assertEqual(tm.generated, frozenset())
 
     @rule_absent("CA-XLIST-06", country="usa")
     @rule("US-XLIST-05")
@@ -251,7 +254,6 @@ class TestOverlay(unittest.TestCase):
             self.assertIn("QZUU.TO", named)
             self.assertNotIn("QZAB.US", named)
             self.assertNotIn("QZA.TO", named)
-            self.assertNotIn("QZUU.V", named)
 
     def test_unused_rule_check_skips_generated_lines(self):
         with tempfile.TemporaryDirectory() as td:

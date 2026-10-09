@@ -24176,7 +24176,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_tb = sub.add_parser(
         "update-tobase-map",
-        help="Bring tobase.map (the interlisted pairs) up to date",
+        help="Update the interlisted pairs (tobase.map)",
         description="Canada: compare the project's tobase.map, the "
                     "interlisted master's pairs (a TSX line and its US "
                     "exchange and OTC listings: one security), with the "
