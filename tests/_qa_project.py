@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import _hermetic  # noqa: F401  (a synthetic HOME, offline: tests/_hermetic)
+
 REPO = Path(__file__).resolve().parent.parent
 ENV = dict(os.environ, TAXJSON_OFFLINE="1", PYTHONPATH=str(REPO / "src"),
            NO_COLOR="1")

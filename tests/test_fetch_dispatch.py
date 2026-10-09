@@ -25,6 +25,7 @@ from unittest import mock
 
 from taxjson.lib import fetchers as FP
 from _style import CapturedWidth
+from _tmpfiles import private_dir
 
 
 # Captured output (TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite):
@@ -77,6 +78,13 @@ class _Patched(unittest.TestCase):
 
     def setUp(self):
         CALLS.clear()
+        # The fetchers are fakes (no network): fetch as on a machine
+        # without TAXJSON_OFFLINE, which the test suite sets for every
+        # test (tests/_hermetic). The offline tests set it themselves.
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("TAXJSON_OFFLINE", None)
         p = mock.patch.object(FP, "_entry_points",
                               return_value=_eps(*self.EPS))
         p.start()
@@ -171,12 +179,34 @@ class TestNoFetcherInstalled(_Patched):
         self.assertIn("brokerage", hits[0])
 
 
+def _tomli_alone() -> str:
+    """A folder holding only a copy of the installed `tomli` (every file
+    its distribution installed, a compiled helper module included)."""
+    import shutil
+    from importlib import metadata
+    dist = metadata.distribution("tomli")
+    d = Path(private_dir())
+    for f in dist.files or ():
+        if f.parts[0] == ".." or f.parts[0].endswith(".dist-info"):
+            continue
+        src = Path(dist.locate_file(f))
+        if src.is_file():
+            (d / f).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, d / f)
+    return str(d)
+
+
 class TestNoFetcherCli(unittest.TestCase):
     """The real CLI with no site-packages (`python -S`): no installed
     plugin can be seen, whatever this environment holds."""
 
     def _cli(self, root, *args):
-        env = dict(os.environ, PYTHONPATH=str(SRC))
+        path = [str(SRC)]
+        if sys.version_info < (3, 11):
+            # No site-packages, so no `tomli` (the 3.9/3.10 dependency
+            # standing in for tomllib): a private copy of it alone.
+            path.append(_tomli_alone())
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(path))
         return subprocess.run(
             [sys.executable, "-S", "-m", "taxjson.bin.taxjson_run",
              "-C", str(root), *args], cwd=REPO_ROOT, env=env,

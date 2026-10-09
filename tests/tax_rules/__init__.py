@@ -41,6 +41,8 @@ import inspect
 import os
 from typing import Callable, List, Tuple
 
+import _hermetic  # noqa: F401  (a synthetic HOME, offline: tests/_hermetic)
+
 from taxjson.lib.country import (COUNTRIES, ENGINE_GUARD_ENV,
                                  canonical_country)
 from taxjson.lib.tax_logic import rule_country

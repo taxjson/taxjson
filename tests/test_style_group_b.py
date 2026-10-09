@@ -117,7 +117,8 @@ class TestBothCountries(unittest.TestCase):
         out = project("canada").run("form-export").stdout
         self.assertNotIn(" | ", out)
         self.assertIn("- NVDA.US: superficial loss", out)
-        self.assertIn("Line 13200 (gain/loss): 81.30", _flat(out))
+        # The synthetic rates of tests/_hermetic (USD→CAD 1.35).
+        self.assertIn("Line 13200 (gain/loss): -351.55", _flat(out))
 
     def test_reconcile_slips(self):
         for country, slip in (("canada", "inputs/slips/t5008.csv"),
