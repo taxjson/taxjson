@@ -497,6 +497,39 @@ class TestFormerIds(unittest.TestCase):
             self.assertNotIn("tips", json.loads(
                 (root / cl.STATE_FILE).read_text())["overrides"])
 
+    def test_every_former_quick_start_id_is_an_alias(self):
+        """Each quick-start step id that is a check's id now names that
+        check: --done/--skip/--only/--undo take it."""
+        ids = set(cl.item_ids())
+        renamed = {o: n for o, n in QUICK_START_IDS.items() if o != n}
+        renamed.pop("scan")         # tips: the item was renamed itself
+        for old, new in renamed.items():
+            self.assertEqual(cl.ID_ALIASES.get(old), new, old)
+        for old in cl.ID_ALIASES:
+            self.assertNotIn(old, ids, old)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "p"
+            shutil.copytree(project("canada").root, root)
+            r = _cli("-C", str(root), "checklist", "--done", "slips",
+                     "--skip", "close-year", "--skip", "option-timing",
+                     "--done", "filing", "--note", "n")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            ov = json.loads((root / cl.STATE_FILE).read_text())["overrides"]
+            self.assertEqual({k: v["status"] for k, v in ov.items()},
+                             {"t5008": "done", "filed-lock": "skipped",
+                              "option-boundary": "skipped",
+                              "form-export": "done"})
+            r = _cli("-C", str(root), "checklist", "--only", "slips",
+                     "--json")
+            doc = json.loads(r.stdout)
+            self.assertEqual([s["id"] for s in doc["steps"]], ["t5008"])
+            self.assertEqual(doc["steps"][0]["override"], "done")
+            r = _cli("-C", str(root), "checklist", "--undo", "slips",
+                     "--undo", "close-year")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            ov = json.loads((root / cl.STATE_FILE).read_text())["overrides"]
+            self.assertEqual(sorted(ov), ["form-export", "option-boundary"])
+
     def test_tips_is_a_review_item_that_never_keeps_the_list_open(self):
         item = {it.id: it for it in cl.items(2025, "canada")}["tips"]
         self.assertEqual(item.cmds[0].command, "tjs tips")

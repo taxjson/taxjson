@@ -3022,8 +3022,16 @@ def item_ids() -> List[str]:
 
 
 # An item's former id: still accepted in checklist.json marks and on the
-# command line (--done/--skip/--undo/--only), read as the new id.
-ID_ALIASES: Dict[str, str] = {"scan": "tips"}
+# command line (--done/--skip/--undo/--only), read as the new id — the
+# renamed `scan` item, and each quick-start step id that is a check's id
+# now (quick-start was merged into the checklist).
+ID_ALIASES: Dict[str, str] = {
+    "scan": "tips",
+    "inputs": "inputs-frozen", "run": "run-clean",
+    "option-timing": "option-boundary", "wash-sales": "wash-reviewed",
+    "slips": "t5008", "slip-audit": "t5-t3", "filing": "form-export",
+    "close-year": "filed-lock",
+}
 
 
 def canonical_id(sid: Optional[str]) -> Optional[str]:

@@ -16,7 +16,11 @@
   command on the last line, and `--all` shows every step's commands.
   Outside a project it prints the steps as a guide (exit 0). `--json` is
   a versioned schema (`schema_version` 2) that keeps the checklist's
-  keys (docs/settings.md). `taxjson init` and the run's closing summary
+  keys, except that a step's `stage` is now `section`
+  (docs/settings.md). A quick-start step id that is now a check's id
+  (`inputs`, `run`, `option-timing`, `wash-sales`, `slips`,
+  `slip-audit`, `filing`, `close-year`) is still accepted by `--done`,
+  `--skip`, `--only` and `--undo`, and names that check. `taxjson init` and the run's closing summary
   now point to `taxjson checklist`.
 - `taxjson scan` is renamed `taxjson tips` and removed (no alias). Tips
   is advice for next year — where you hold what (a Canadian dividend
