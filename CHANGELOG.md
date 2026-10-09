@@ -24,6 +24,11 @@
   secret / token name; a `# pii-ok` comment marks a test fixture. CI runs
   gitleaks 8.28.0 (checksum-verified) on every commit a push or pull
   request adds, with `.gitleaks.toml` allowing made-up fixtures.
+- New `scripts/check-public.sh`: scans what GitHub serves beside the code
+  (every release's notes, issues, pull requests and their comments; read
+  only, through `gh api`) with `scripts/check-pii.sh`, naming the item of
+  each masked hit. `scripts/promote.sh` runs it before moving a channel
+  forward (skipped with a warning without `gh`).
 
 ### Changed
 

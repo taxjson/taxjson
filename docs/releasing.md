@@ -73,7 +73,13 @@ GitHub Actions `tests.yml` run for the push of the tag's commit to
 `main` must have passed (`gh api`; a run still going is waited for; no
 run, a failed run or no `gh` refuses).
 `TAXJSON_PROMOTE_IGNORE_CI=1` promotes without that check and prints a
-warning. Moving a channel BACKWARDS (a rollback) is not held to CI,
+warning. A forward move then runs `scripts/check-public.sh`: it reads
+what GitHub serves beside the code — every release's notes, every issue
+and pull request, and their comments (`gh api`, read-only) — and scans it
+with `scripts/check-pii.sh` (release notes as `--message`), naming the
+item of each hit, masked; a hit stops the promote. Without a working
+`gh` that scan is skipped with a warning. Run it any time:
+`scripts/check-public.sh` (exit 1 a hit, 2 cannot check). Moving a channel BACKWARDS (a rollback) is not held to CI,
 since an older tag may predate a CI fix, and asks `[y/N]` first;
 anything but `y` changes nothing. When the push is refused (main moved
 on meanwhile) or the PII gate refuses, the promote commit is taken back
@@ -83,7 +89,8 @@ and other staged or uncommitted work is left alone. Trailers
 go on the commit only when you pass them:
 `TAXJSON_PROMOTE_TRAILERS='Co-Authored-By: …' scripts/promote.sh v0.17.0`.
 `TAXJSON_SLUG` names the GitHub repository when `origin` is not a
-github.com URL (default `taxjson/taxjson`).
+github.com URL (default `taxjson/taxjson`); `release.sh` and
+`check-public.sh` read it too.
 
 ### What the installer does with a channel
 

@@ -197,7 +197,10 @@ without them gets the generic checks. Those include secrets: a PEM
 private key, GitHub, Anthropic, Slack and AWS key formats, and a
 high-entropy value after a key / secret / token name. CI also runs
 gitleaks (a pinned release, checked against its sha256) on every commit
-a push or pull request adds.
+a push or pull request adds. `scripts/check-public.sh` applies the same
+scan to what GitHub serves beside the code (release notes, issues, pull
+requests and comments), read-only; `scripts/promote.sh` runs it before
+moving a channel forward.
 
 `taxjson redact` strips the account numbers, names and contact details
 it recognises from an export so it can be shared as a parser sample —

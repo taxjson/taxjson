@@ -390,6 +390,17 @@ class TestTagGuard(_Sandbox):
                       self.git(self.repo, "ls-remote", "--tags", "origin"))
 
 
+def _public_api(releases=(), issues=(), issue_comments=(),
+                review_comments=(), commit_comments=()):
+    """gh api answers for what scripts/check-public.sh reads."""
+    base = "repos/taxjson/taxjson/"
+    return {base + "releases?": list(releases),
+            base + "issues?": list(issues),
+            base + "issues/comments?": list(issue_comments),
+            base + "pulls/comments?": list(review_comments),
+            base + "comments?": list(commit_comments)}
+
+
 class _PromoteRepo(_Sandbox):
     """A bare origin with annotated v0.1.0..v0.3.0 on main and
     channels.json (stable v0.2.0, beta v0.3.0), and a clone holding
@@ -404,8 +415,8 @@ class _PromoteRepo(_Sandbox):
         self.git(self.d, "clone", "-q", str(self.origin), str(self.dev))
         self.git(self.dev, "symbolic-ref", "HEAD", "refs/heads/main")
         (self.dev / "scripts").mkdir()
-        shutil.copy(REPO / "scripts" / "promote.sh",
-                    self.dev / "scripts" / "promote.sh")
+        for f in ("promote.sh", "check-public.sh", "check-pii.sh"):
+            shutil.copy(REPO / "scripts" / f, self.dev / "scripts" / f)
         for i, tag in enumerate(("v0.1.0", "v0.2.0", "v0.3.0")):
             (self.dev / "f.txt").write_text(f"{i}\n")
             self.git(self.dev, "add", "-A")
@@ -420,9 +431,11 @@ class _PromoteRepo(_Sandbox):
                  "v0.2.0", "v0.3.0")
         self.api({})
 
-    def api(self, table):
+    def api(self, table, public=None):
+        """The stub's API answers: `table`, then what GitHub serves
+        beside the code (empty unless `public` says otherwise)."""
         f = self.d / "api.json"
-        f.write_text(json.dumps(table))
+        f.write_text(json.dumps(dict(table, **_public_api(**(public or {})))))
         self.env["GH_STUB_API"] = str(f)
 
     @staticmethod
@@ -777,6 +790,110 @@ class TestWorkflowHygiene(unittest.TestCase):
         self.assertIn("`scripts/ci.sh` passes locally", t)
         self.assertIn("- [ ] Test data is synthetic only", t)
         self.assertIn("No personal data", t)
+
+
+class TestCheckPublic(_Sandbox):
+    """scripts/check-public.sh reads what GitHub serves beside the code
+    (stub gh, read-only) and scans it with check-pii.sh."""
+
+    def setUp(self):
+        super().setUp()
+        self.env["TAXJSON_SLUG"] = "taxjson/taxjson"
+
+    def run_check(self, **public):
+        f = self.d / "api.json"
+        f.write_text(json.dumps(_public_api(**public)))
+        self.env["GH_STUB_API"] = str(f)
+        return subprocess.run(["bash", str(REPO / "scripts" / "check-public.sh")],
+                              capture_output=True, text=True, env=self.env)
+
+    URL = "https://github.com/taxjson/taxjson/issues/"
+
+    def test_clean_and_read_only(self):
+        r = self.run_check(
+            releases=[{"tag_name": "v1.0.0", "name": "taxjson v1.0.0",
+                       "body": "- Faster runs.\r\n- Fix a typo."}],
+            issues=[{"html_url": self.URL + "3", "title": "Crash on import",
+                     "body": "Steps: run on the demo CSV."}],
+            issue_comments=[{"html_url": self.URL + "3#issuecomment-9",
+                             "body": "Thanks, fixed."}])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("check-public: clean — what GitHub serves for "
+                      "taxjson/taxjson: 1 releases, 1 issues, 1 "
+                      "issue-comments, 0 review-comments, 0 commit-comments",
+                      r.stdout)
+        calls = [c for c in self.gh_calls() if c[0] == "api"]
+        self.assertEqual(len(calls), 5)
+        for c in calls:                       # GETs only
+            self.assertEqual(c[:2], ["api", "--paginate"], c)
+            self.assertFalse({"-X", "--method", "-f", "-F", "--input"} & set(c))
+
+    def test_hits_are_masked_and_located(self):
+        r = self.run_check(
+            issues=[{"html_url": self.URL + "3", "title": "ok", "body": "ok"},
+                    {"html_url": self.URL + "4", "title": "Import fails",
+                     "body": f"Hi, I am {_NAME}.\nTotal {_AMOUNT}."}],
+            review_comments=[{"html_url": self.URL.replace("issues", "pull")
+                              + "5#discussion_r1",
+                              "body": "mail me: quinn" + "@corp.io"}])
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("!! issues of taxjson/taxjson:", r.stdout)
+        self.assertIn("private denylist match", r.stdout)
+        self.assertIn(f"   in {self.URL}4:\n", r.stdout)
+        self.assertNotIn(f"in {self.URL}3:", r.stdout)
+        self.assertIn("!! review-comments of taxjson/taxjson:", r.stdout)
+        self.assertIn("pull/5#discussion_r1:", r.stdout)
+        self.assertNotIn(_NAME, r.stdout + r.stderr)
+        self.assertNotIn("corp.io", r.stdout + r.stderr)
+        # An amount in an issue is the reporter's business; in a release
+        # note (scanned as a message) it is refused.
+        self.assertNotIn("money amount", r.stdout)
+        r = self.run_check(releases=[{"tag_name": "v1.0.0", "name": "n",
+                                      "body": f"Totals {_AMOUNT} now."}])
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("money amount", r.stdout)
+        self.assertIn("in release v1.0.0:", r.stdout)
+
+    def test_cannot_check_fails_closed(self):
+        f = self.d / "api.json"
+        table = _public_api()
+        table["repos/taxjson/taxjson/issues/comments?"] = {"__fail__": 1}
+        f.write_text(json.dumps(table))
+        self.env["GH_STUB_API"] = str(f)
+        r = subprocess.run(["bash", str(REPO / "scripts" / "check-public.sh")],
+                           capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("could not read the issue-comments", r.stderr)
+        self.env["GH_STUB_AUTH"] = "fail"
+        r = self.run_check()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not logged in", r.stderr)
+        env = dict(self.env, PATH=self.path_without_gh())
+        r = subprocess.run(["bash", str(REPO / "scripts" / "check-public.sh")],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("gh is not installed", r.stderr)
+
+
+class TestPromotePublicGate(_PromoteRepo):
+    def test_a_hit_on_github_stops_a_forward_promote(self):
+        self.api(self.runs(("completed", "success")), public={
+            "issue_comments": [{"html_url": "https://github.com/taxjson/"
+                                "taxjson/issues/2#issuecomment-1",
+                                "body": f"signed, {_NAME}"}]})
+        r = self.promote("v0.3.0")
+        self.assertIn("!! issue-comments of taxjson/taxjson:", r.stdout)
+        self.assertRefused(r, "scripts/check-public.sh refused")
+        # A rollback is not held to it.
+        r = self.promote("v0.1.0", "beta", stdin="y\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_skipped_with_a_warning_without_gh(self):
+        self.env["GH_STUB_AUTH"] = "fail"
+        r = self.promote("v0.3.0", TAXJSON_PROMOTE_IGNORE_CI="1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("issues and comments on GitHub NOT scanned", r.stderr)
+        self.assertEqual(self.origin_channels()["stable"], "v0.3.0")
 
 
 if __name__ == "__main__":

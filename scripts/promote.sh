@@ -20,7 +20,9 @@
 # value is read from origin/main:channels.json. A forward move also
 # needs the GitHub Actions tests.yml run for the push of the tag's
 # commit to main to be green (gh api; it waits for a run still going;
-# TAXJSON_PROMOTE_IGNORE_CI=1 skips the check, with a warning).
+# TAXJSON_PROMOTE_IGNORE_CI=1 skips the check, with a warning), and a
+# clean scripts/check-public.sh (release notes, issues and comments on
+# GitHub; skipped with a warning without a working gh).
 # A refused push takes the promote commit back off main.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -96,7 +98,20 @@ ci_gate() {
   fi
   echo "✓ CI passed on $TAG (tests.yml)"
 }
-if [ "$NEWER" != "$CURRENT" ]; then ci_gate; fi
+# What GitHub serves beside the code (release notes, issues, pull
+# requests, comments), scanned for personal data before a release
+# reaches more people (scripts/check-public.sh, read-only). Without a
+# working gh it is skipped with a warning.
+public_gate() {
+  if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+    echo "⚠ WARNING: release notes, issues and comments on GitHub NOT scanned — gh is not installed or not logged in." >&2
+    return 0
+  fi
+  [ -f scripts/check-public.sh ] || die "scripts/check-public.sh is missing from this checkout."
+  TAXJSON_SLUG="$SLUG" bash scripts/check-public.sh \
+    || die "scripts/check-public.sh refused (above): fix what GitHub serves first — nothing changed."
+}
+if [ "$NEWER" != "$CURRENT" ]; then ci_gate; public_gate; fi
 
 sed -i.bak -E "s/(\"$CH\"[[:space:]]*:[[:space:]]*\")v[^\"]*(\")/\1$TAG\2/" channels.json && rm -f channels.json.bak
 grep -q "\"$CH\": \"$TAG\"" channels.json || { git checkout -- channels.json; die "Could not update channels.json."; }
