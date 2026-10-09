@@ -15,7 +15,8 @@ per broker account, as a download tool writes it (taxjson-fetch
 - a snapshot is compared at its date (`[meta] as_of`, else the day of
   `[meta] generated_at`); one newer than the books' last day is compared
   with the latest books, with a note;
-- an account with its own `holdings = [...]` keeps those files.
+- an account with its own `holdings = [...]` keeps those files (a file
+  it lists is not another account's, nor unclaimed).
 
 Keep a snapshot taken at (or just after) the year end in each year's
 folder: a later year's snapshot belongs in the later year's.
@@ -105,18 +106,51 @@ def folder_for(root: Path, year: Optional[int] = None
     return (d if snapshot_files(d) else None), None
 
 
-def discover(folder: Path, accounts_cfg: Dict[str, Any]
+def _resolved(p: Path) -> Path:
+    try:
+        return p.resolve()
+    except (OSError, RuntimeError):
+        return p.absolute()
+
+
+def listed_files(root: Path, accounts_cfg: Dict[str, Any]) -> set:
+    """The files the accounts' own `holdings = [...]` settings name,
+    resolved as the sanity check reads them (`~` expanded, relative to
+    the project)."""
+    out = set()
+    for a in (accounts_cfg or {}).values():
+        raw = a.get("holdings") if isinstance(a, dict) else None
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple)):
+            continue
+        for x in raw:
+            if not isinstance(x, str) or not x.strip():
+                continue
+            pp = Path(x).expanduser()
+            out.add(_resolved(pp if pp.is_absolute() else Path(root) / pp))
+    return out
+
+
+def discover(folder: Path, accounts_cfg: Dict[str, Any],
+             root: Optional[Path] = None
              ) -> Tuple[Dict[str, List[str]], List[str]]:
     """({account: [file paths]}, notes) for the folder's snapshots. An
     account with its own `holdings = [...]` is left out (its setting
-    wins); a file no account claims, or two do, is named in a note."""
+    wins), and so is a file such a setting names (`root`: the project
+    the paths are relative to; default the folder's parent); a file no
+    account claims, or two do, is named in a note."""
     accts = {str(n): a for n, a in (accounts_cfg or {}).items()
              if isinstance(a, dict) and not a.get("holdings")}
+    listed = listed_files(Path(root) if root is not None
+                          else Path(folder).parent, accounts_cfg)
     ids = {n: set(broker_ids(a)) for n, a in accts.items()}
     files_of: Dict[str, List[str]] = {}
     notes: List[str] = []
     by_len = sorted(accts, key=lambda n: (-len(n), n))
     for p in snapshot_files(folder):
+        if _resolved(p) in listed:
+            continue                # an account's holdings = [...] has it
         who = None
         acc = _meta(p).get("account") or _meta(p).get("broker_account")
         if acc:

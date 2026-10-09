@@ -21,7 +21,8 @@
   the broker's positions snapshots in the year's `holdings/` folder with
   no `holdings = [...]` setting, matching each file to its account by its
   `[meta] account` (new `[accounts.NAME] broker_accounts`) or its name,
-  at the snapshot's date (`as_of`, else `generated_at`).
+  at the snapshot's date (`as_of`, else `generated_at`); a file an
+  account lists in its own `holdings = [...]` stays that account's.
 - `[settings] exports_dir`: the newest year's run copies its positions
   and wash radar there, with a README, for other tools. It must be a
   folder of its own (one overlapping the inputs, the holdings, a year

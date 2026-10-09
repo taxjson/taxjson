@@ -461,7 +461,7 @@ lib/project_layout; each year keeps its own taxjson.toml and ticker.map.
 
 - `src/taxjson/lib/project_layout.py` — `inputs_dir`, `shared_inputs`, `ticker_map_path`, `data_file`, `slips_dir`, `holdings_folder`, `exports_folder`, `project_path`, `write_boundary`, `folder_setting`, `setting_problems` (a folder leaving the folder that holds the project; a year folder holding another year), `exports_overlap` (an `exports_dir` overlapping the inputs, holdings, a year folder or the project's own folders), `unconfigured_inputs`, `local_input_folders`, `year_dirs`, `multi_root`, `new_year_text`, `compare`, `set_key_text`, `years_report`: where a project's files are, and the year-folder tools.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_years`, `cmd_new_year`, `cmd_align`, `_years_folder`, `_refuse_years_root`, `_YEARS_ROOT_CMDS`, `_refuse_folder_settings`, `_migrate_to_years`, `_write_exports`, `_EXPORT_PATTERNS`, `_exports_manifest`, `_EXPORTS_MANIFEST` (the files the last export wrote; only those are replaced): `years`, `new-year`, `align`, the refusal in the folder holding the years, `migrate --to-years` and the newest year's exports/.
-- `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `broker_ids`, `snapshot_date`, `snapshot_files`: the year's holdings/ snapshots `sanity` finds by `[meta] account` or file name (`src/taxjson/bin/taxjson_run.py` — `_sanity_items_from_config`, `_holdings_folder_in_use`).
+- `src/taxjson/lib/holdings_dir.py` — `discover`, `listed_files`, `folder_for`, `broker_ids`, `snapshot_date`, `snapshot_files`: the year's holdings/ snapshots `sanity` finds by `[meta] account` or file name (`src/taxjson/bin/taxjson_run.py` — `_sanity_items_from_config`, `_holdings_folder_in_use`).
 
 ## The Canada and USA partition
 

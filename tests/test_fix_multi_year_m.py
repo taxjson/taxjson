@@ -189,5 +189,48 @@ class TestCheckDatesLaterYears(unittest.TestCase):
         self.assertEqual(doc["later_years"], 0)
 
 
+class TestHoldingsListedByAnAccount(unittest.TestCase):
+    """M5: a file an account's own `holdings = [...]` lists is claimed."""
+
+    def test_discover_skips_files_an_account_lists(self):
+        from taxjson.lib import holdings_dir as HD
+        root = Path(private_dir()) / "p"
+        h = root / "holdings"
+        h.mkdir(parents=True)
+        for n in ("U5550001_positions.toml", "tfsa_x.toml",  # pii-ok
+                  "stray.toml"):
+            (h / n).write_text('[[holding]]\nsymbol = "QZQ.TO"\n'
+                               'quantity = 1\ncurrency = "CAD"\n')
+        accounts = {
+            "margin": {"type": "taxable",
+                       "holdings": ["holdings/U5550001_positions.toml"]},  # pii-ok
+            "tfsa": {"type": "sheltered"},
+        }
+        found, notes = HD.discover(h, accounts, root)
+        self.assertEqual(found, {"tfsa": [str(h / "tfsa_x.toml")]})
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("stray.toml: no account claims it", notes[0])
+
+    def test_sanity_names_no_false_unclaimed_file(self):
+        top = multi("canada", years=(2025,))
+        y = top / "2025"
+        (y / "holdings").mkdir()
+        (y / "holdings" / "ib_U5550001.toml").write_text(  # pii-ok
+            '[meta]\nas_of = "2025-12-31"\n\n'
+            '[[holding]]\nsymbol = "QZQ.TO"\nquantity = 0\n'
+            'currency = "CAD"\n')
+        cfg = y / "taxjson.toml"
+        cfg.write_text(cfg.read_text().replace(
+            '[accounts.margin]\ntype = "taxable"',
+            '[accounts.margin]\ntype = "taxable"\n'
+            'holdings = ["holdings/ib_U5550001.toml"]'))  # pii-ok
+        run_ok(self, y)
+        r = tjs("-C", str(y), "sanity", "--json")
+        self.assertIn(r.returncode, (0, 1), r.stderr)
+        doc = json.loads(r.stdout)
+        self.assertNotIn("no account claims it", " ".join(doc["notes"])
+                         + r.stderr + r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

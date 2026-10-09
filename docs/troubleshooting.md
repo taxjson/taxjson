@@ -450,11 +450,11 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no snapshot in the project's holdings/`
 
 ### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
-- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, and its name does not start with an account name.
-- **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared.
-- **Fix:** add the id under its account (`broker_accounts = ["…"]`), or rename the file `<account>_holdings.toml`. An id two accounts declare is refused the same way.
+- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.
+- **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared. (Before the fix, a file an account lists in its own `holdings = [...]` was named here too, though that account compares it.)
+- **Fix:** add the id under its account (`broker_accounts = ["…"]`), rename the file `<account>_holdings.toml`, or list it in the account's `holdings = [...]`. An id two accounts declare is refused the same way.
 - **Fixed in:** unreleased
-- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `claims it`
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `listed_files`, `claims it`
 
 ### `tjs sanity`: "QZD.U.TO MISSING_IN_TAXJSON" (or `QTY_MISMATCH` on QZD.TO) for a listing the run joined by its transfer journal
 - **Check:** the run's console said "joined as one security by their transfer journal: QZD.U.TO ↔ QZD.TO …" and `work/ticker.map.effective` has the `TOBASE` / `JOURNAL` line; `ticker.map` itself has no line for the pair. The books hold the position under one symbol, the broker lists it under both.

@@ -14828,7 +14828,7 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
     if _hnote:
         notes.append(_hnote)
     if _hfolder is not None:
-        _found, _hnotes = _HD.discover(_hfolder, accounts_cfg)
+        _found, _hnotes = _HD.discover(_hfolder, accounts_cfg, root)
         notes += _hnotes
         for name, paths in _found.items():
             files_of.setdefault(name, []).extend(paths)
