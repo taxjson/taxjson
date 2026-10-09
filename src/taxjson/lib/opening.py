@@ -164,7 +164,8 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
             continue
         dropped.setdefault(acct, []).append((t, hit))
     if year:
-        bad = _realizations_left_out(dropped, txs, by_acct, year)
+        bad = _realizations_left_out(dropped, txs, by_acct, year,
+                                     renames)
         if bad:
             t, hit, kind, closed = bad[0]
             acct = str(_get(t, 'account'))
@@ -200,9 +201,18 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
     return kept
 
 
+def _when(t, index: int) -> Tuple[str, str, int]:
+    """A row's place in the walk: its date, its time (a missing time is
+    00:00:00, as the engines order it) and its place in the input."""
+    return (str(_get(t, 'date')), str(_get(t, 'time') or '00:00:00'),
+            index)
+
+
 def _realizations_left_out(dropped: Dict[str, List], txs: List,
                            by_acct: Dict[str, Dict[str, str]],
-                           year: int) -> List[Tuple]:
+                           year: int,
+                           renames: Optional[List[Tuple[str, str, str]]]
+                           = None) -> List[Tuple]:
     """The left-out rows that realize a gain or loss in `year` or later,
     as (row, snapshot symbol, 'sale' | 'cover', quantity closed),
     earliest first.
@@ -215,7 +225,17 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
     realizes the short sale's gain. The position each row met is read
     BACKWARD from the snapshot's own quantity (the snapshot is the
     truth on its day), so a book whose history starts after the shares
-    were bought does not mistake a later buy for a cover."""
+    were bought does not mistake a later buy for a cover.
+
+    A split or consolidation is an event of the security, not of an
+    account: the walk undoes every SPLIT row up to the snapshot day that
+    leads to the snapshot's symbol, whichever account's export carries
+    it (each event once), and none of the account's own twice."""
+    from taxjson.lib.corporate_timeline import normalize_symbol_new
+    renames = renames or []
+    where = {id(t): i for i, t in enumerate(txs)}
+    splits = [(i, t) for i, t in enumerate(txs)
+              if _get(t, 'action') == 'SPLIT']
     open_qty: Dict[Tuple[str, str], float] = {}
     for t in txs:
         if is_opening_row(t):
@@ -225,11 +245,24 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
     bad: List[Tuple] = []
     for acct, rows in dropped.items():
         groups: Dict[str, List] = {}
-        for i, (t, hit) in enumerate(rows):
-            groups.setdefault(hit, []).append((i, t))
+        for t, hit in rows:
+            if _get(t, 'action') != 'SPLIT':
+                groups.setdefault(hit, []).append((where[id(t)], t))
         for hit, grp in groups.items():
-            grp.sort(key=lambda it: (str(_get(it[1], 'date')),
-                                     str(_get(it[1], 'time')), it[0]))
+            day = by_acct[acct][hit]
+            seen = set()
+            for i, t in splits:
+                d = str(_get(t, 'date'))
+                sym = str(_get(t, 'symbol'))
+                if d > day or _final_symbol(sym, renames, day) != hit:
+                    continue
+                key = (d, sym, normalize_symbol_new(
+                    sym, str(_get(t, 'symbol_new'))),
+                    round(float(_get(t, 'quantity', 0.0) or 0.0), 9))
+                if key not in seen:
+                    seen.add(key)
+                    grp.append((i, t))
+            grp.sort(key=lambda it: _when(it[1], it[0]))
             pos: Dict[str, float] = {hit: open_qty.get((acct, hit), 0.0)}
             for _i, t in reversed(grp):
                 act = _get(t, 'action')
@@ -259,6 +292,5 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
                     bad.append((t, hit, 'sale', -q))
                 elif q > 0 and before < -1e-9:
                     bad.append((t, hit, 'cover', min(q, -before)))
-    bad.sort(key=lambda b: (str(_get(b[0], 'date')),
-                            str(_get(b[0], 'time'))))
+    bad.sort(key=lambda b: _when(b[0], where[id(b[0])]))
     return bad

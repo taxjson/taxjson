@@ -1332,7 +1332,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "theirs), so no share is counted twice. A sale of the tax "
                  "year among them, or a buy of the tax year that closes "
                  "a short position (a cover, read from the position "
-                 "walked back from the snapshot's), stops the run; one "
+                 "walked back from the snapshot's, undoing each split of "
+                 "the security once whichever account's rows carry it), "
+                 "stops the run; one "
                  "symbol has one snapshot date per account.", cont=True),
         ]),
         ("Dispositions (Schedule 3)", [
@@ -3032,7 +3034,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "theirs), so no share is counted twice. A sale of the tax "
                  "year among them, or a buy of the tax year that closes "
                  "a short position (a cover, read from the position "
-                 "walked back from the snapshot's), stops the run; one "
+                 "walked back from the snapshot's, undoing each split of "
+                 "the security once whichever account's rows carry it), "
+                 "stops the run; one "
                  "symbol has one snapshot date per account.", cont=True),
             Rule("US-STKDIV-01",
                  "A stock dividend is not income (§305(a)): the basis of "

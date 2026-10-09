@@ -366,6 +366,53 @@ class TestCutoff(unittest.TestCase):
         self.assertIn("2025-01-06 cover of 20 SAMPB.TO", str(cm.exception))
 
     @rule("CA-OPEN-03")
+    @rule("US-OPEN-03")
+    def test_cover_before_a_split_another_account_carries_refused(self):
+        # A split is the security's event: carried only by another
+        # account's rows it still turns the 2 left after the cover into
+        # the snapshot's 20 (walked back: 20 -> 2 -> -10, a cover of 10).
+        book = [tx("BUYSELL", "2024-12-02", "SYNTH.US", -10, 100,
+                   account="demo"),
+                tx("BUYSELL", "2025-01-06", "SYNTH.US", 12, 96,
+                   account="demo"),
+                tx("SPLIT", "2025-01-10", "SYNTH.US", 10, 0,
+                   account="other", currency=""),
+                opening("2025-01-31", "SYNTH.US", 20, 16,
+                        lot="2025-01-06", account="demo")]
+        for country in ("canada", "usa"):
+            with self.assertRaises(OpeningError, msg=country) as cm:
+                self._apply(list(book), year=2025, country=country,
+                            base_currency="USD")
+            self.assertIn("2025-01-06 cover of 10 SYNTH.US",
+                          str(cm.exception))
+        # Carried by both accounts, the one event is undone once.
+        both = book[:3] + [tx("SPLIT", "2025-01-10", "SYNTH.US", 10, 0,
+                              account="demo", currency="")] + book[3:]
+        with self.assertRaises(OpeningError) as cm:
+            self._apply(both, year=2025)
+        self.assertIn("2025-01-06 cover of 10 SYNTH.US", str(cm.exception))
+
+    @rule("CA-OPEN-03")
+    def test_a_row_without_a_time_is_at_midnight(self):
+        # A consolidation (ratio 0.1) stamped 00:00:00, then a buy of the
+        # same day with no time, in that order: the engines order the
+        # missing time as 00:00:00, after the consolidation (its place in
+        # the input breaks the tie), so the buy of 10 covers the 5 short
+        # left (-50 -> -5 -> +5). Sorting the missing time first walked
+        # the buy before the consolidation and saw no cover.
+        rows = [tx("BUYSELL", "2024-12-02", "SAMPB.TO", -50, 500,
+                   currency="CAD", account="demo"),
+                tx("SPLIT", "2025-01-06", "SAMPB.TO", 0.1, 0, currency="",
+                   account="demo", time="00:00:00"),
+                tx("BUYSELL", "2025-01-06", "SAMPB.TO", 10, 100,
+                   currency="CAD", account="demo", time=""),
+                opening("2025-01-31", "SAMPB.TO", 5, 50, currency="CAD",
+                        account="demo")]
+        with self.assertRaises(OpeningError) as cm:
+            self._apply(rows, year=2025)
+        self.assertIn("2025-01-06 cover of 5 SAMPB.TO", str(cm.exception))
+
+    @rule("CA-OPEN-03")
     def test_two_snapshot_dates_for_one_symbol_refused(self):
         rows = [opening("2024-12-31", "SAMPB.TO", 5, 50, currency="CAD"),
                 opening("2025-06-30", "SAMPB.TO", 5, 50, currency="CAD")]

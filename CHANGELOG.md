@@ -77,7 +77,9 @@
   the year already did, naming the cover. It used to be dropped
   silently, and the short sale's gain fell out of the year in both
   countries. Whether a left-out row realizes a gain is read from the
-  position, walked back from the snapshot's quantity (#11).
+  position, walked back from the snapshot's quantity, undoing each split
+  of the security once whichever account's rows carry it and ordering a
+  row with no time at 00:00:00 as the engines do (#11).
 - An order the broker cancels in two parts (two IB `Ca` rows, in one
   statement or across two) is removed in full: the second cancellation,
   cancelling exactly what the first left, matched neither the order's

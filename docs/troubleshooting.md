@@ -365,10 +365,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### "Error: account margin: the opening balance of QZS.US dated 2025-01-31 would leave out 1 short cover(s) of the 2025 tax year (first: 2025-01-06 cover of 10 QZS.US: a buy of 10 that closes a short position)"; on an older release the run went on and the cover's gain was in no total
 - **Check:** the account has an `OPENING` line (`inputs/<account>/opening_<date>.tt`) dated in the tax year, and its rows of that symbol before the snapshot include a buy that closes a short position (a short sale, or a written option bought back). `tjs sum` on an older release has no disposition for that cover.
-- **Cause:** an opening snapshot leaves the account's earlier rows of its symbols out of the books (tax-logic CA-OPEN-03 / US-OPEN-03), and a left-out sale of the tax year stops the run. Only sales (negative quantities) were checked: a cover is a positive-quantity buy, so a cover of the tax year was dropped silently and the short sale's gain or loss fell out of the year in both countries. The check now reads each left-out row's position, walked back from the snapshot's quantity, and stops on a cover too (including a buy that crosses from short to long).
+- **Cause:** an opening snapshot leaves the account's earlier rows of its symbols out of the books (tax-logic CA-OPEN-03 / US-OPEN-03), and a left-out sale of the tax year stops the run. Only sales (negative quantities) were checked: a cover is a positive-quantity buy, so a cover of the tax year was dropped silently and the short sale's gain or loss fell out of the year in both countries. The check now reads each left-out row's position, walked back from the snapshot's quantity, and stops on a cover too (including a buy that crosses from short to long). The walk undoes each split of the security once, whichever account's rows carry it, and orders a row with no time at 00:00:00, as the engines do.
 - **Fix:** upgrade and `tjs run`. Take the snapshot from a statement before the year's first sale or cover of that symbol (December 31 of the year before), or remove the `OPENING` line and supply the history.
 - **Fixed in:** unreleased
-- **Code:** `src/taxjson/lib/opening.py` — `apply_opening_cutoff`, `_realizations_left_out`
+- **Code:** `src/taxjson/lib/opening.py` — `apply_opening_cutoff`, `_realizations_left_out`, `_when`
 
 ## Holdings
 
