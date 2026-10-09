@@ -537,6 +537,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Interactive Brokers
 
+### "Warning: QZK.US: the broker cancelled (Ca) a trade of 6 @ 10 on 2025-02-03, but the original fill is in none of this account's inputs" after "Info: the broker cancelled (Ca) 4 of the QZK.US order of 10 @ 10 … The order is booked as 6"
+- **Check:** IB cancelled one order in two parts (two `Ca` rows, in one statement or in two), and together they cancel the whole order: the second cancels exactly what the first left. `tjs sum` books a sale of the second quantity that never happened.
+- **Cause:** the cancellation pairing (`taxjson-merge2` across statements, and the IB parser within one) reduced the order by the first cancellation, then looked for an exact match of the second on the order's ORIGINAL size and for a partial match on the reduced one. Cancelling exactly the rest matched neither, so it stayed booked as a reversing trade: a phantom sale with a wrong gain, and the wrong cost left on the shares.
+- **Fix:** upgrade and `tjs run`. Both searches now read the order as the earlier cancellations left it; the last cancellation removes the order ("dropped the rest (6) of the QZK.US trade of 10 …").
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/trade_cancel.py` — `pair_cancellations`, `trade_cancel_what`; `src/taxjson/bin/taxjson_merge2.py` — `cancel_trade_pairs`
+
 ### IB: "Warning: U1234567.csv: the statement has no Cash Report" or "Error: U1***.csv: parsed rows do not reconcile with IB's own Cash Report"
 - **Check:** the file has no `Cash Report,Header,…` lines (a Flex query or a customised statement). For the error, the next line names the currency and the line, e.g. `USD Dividends: parsed 2.50 vs Cash Report 3.50 (diff -1.00)`.
 - **Cause:** taxjson checks the money it parsed against IB's own Cash Report totals, per currency: dividends, payments in lieu, withholding, interest, other fees, commissions and trades. Without the section the check is off, and the run says so. A mismatch means a row was dropped, doubled or mis-signed (often an edited statement), and the parse stops.

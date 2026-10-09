@@ -339,7 +339,8 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_mentioned)
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
                                       ib_spinoff_parts, ib_tender_root)
-from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE, pair_cancellations
+from taxjson.lib.trade_cancel import (TRADE_CANCEL_TYPE, pair_cancellations,
+                                      trade_cancel_what)
 
 # Statement sections that are statement METADATA or roll-ups of rows the
 # parser reads elsewhere — never tax events of their own. Any section
@@ -2720,7 +2721,8 @@ class IbBrokerage(BaseBrokerage):
                 kept, tpairs, unpaired = pair_cancellations(txs)
                 txs[:] = kept
                 for _o, _c in tpairs:
-                    emit_line(f"note: {nm_}: IB cancelled (Ca) the "
+                    emit_line(f"note: {nm_}: IB cancelled (Ca) "
+                          f"{trade_cancel_what(_o['quantity'], _c['quantity'])} "
                           f"{_o['symbol']} trade of {_o['quantity']:g} @ "
                           f"{_o['price']:g} on {_o['date']} — no other "
                           f"statement holds its original; the trade and "
@@ -5544,7 +5546,8 @@ class IbBrokerage(BaseBrokerage):
             transactions[:] = _kept
             expiry_txs[:] = [t for t in expiry_txs if id(t) not in _gone]
             for _o, _c in _pairs:
-                emit_line(f"note: {shown_name(path)}: IB cancelled (Ca) the "
+                emit_line(f"note: {shown_name(path)}: IB cancelled (Ca) "
+                      f"{trade_cancel_what(_o['quantity'], _c['quantity'])} "
                       f"{_o['symbol']} trade of {_o['quantity']:g} @ "
                       f"{_o['price']:g} on {_o['date']} — the trade and "
                       f"its cancellation are both dropped.")
