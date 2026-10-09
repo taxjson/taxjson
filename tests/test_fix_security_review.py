@@ -192,5 +192,54 @@ class TestChecklistGitRunsNoRepoCommand(unittest.TestCase):
                              "todo")
 
 
+class TestRedactWallets(unittest.TestCase):
+    """M4: Solana, Cardano, XRP, Tron and Litecoin addresses are
+    pseudonymised; any other wallet-like token goes to REVIEW. All
+    addresses below are made up (right alphabet and length only)."""
+
+    ADDRS = {
+        "solana": "SoLana5ampLe7xYzABCDEFGHJKMNPQRSTUVWXYZabcde",
+        "cardano": "addr1q" + "x9y8w7v6u5t4s3r2q0pzn" * 3,
+        "xrp": "rSampLe7xYzABCDEFGHJKMNPQRSTUVw",
+        "tron": "TSampLe7xYzABCDEFGHJKMNPQRSTUVWXa",
+        "litecoin-L": "LSampLe7xYzABCDEFGHJKMNPQRSTUVWXa",
+        "litecoin-M": "MSampLe7xYzABCDEFGHJKMNPQRSTUVWXa",
+        "litecoin-bech32": "ltc1q" + "x9y8w7v6u5t4s3r2q0pz" * 2,
+    }
+
+    def test_each_chain_is_replaced_stably(self):
+        from taxjson.bin.taxjson_redact import redact_text
+        for chain, addr in self.ADDRS.items():
+            with self.subTest(chain=chain):
+                text = ("Timestamp,Notes\n"
+                        f"2025-01-01,Sent 1 to {addr}\n"
+                        f"2025-01-02,Again to {addr}\n")
+                out, rep = redact_text(text)
+                self.assertNotIn(addr, out)
+                self.assertEqual(len(rep.wallets), 1)
+                a, b = (ln.split()[-1] for ln in out.splitlines()[1:])
+                self.assertEqual(a, b)
+                self.assertEqual(len(a), len(addr))
+                self.assertEqual(rep.review, [])
+
+    def test_words_and_ids_are_not_wallets(self):
+        from taxjson.bin.taxjson_redact import redact_text
+        text = ("Date,Description,Amount\n"
+                "2025-01-01,TRANSFERREDFROMSAMPLEHOLDINGSACCOUNTX,1\n"
+                "2025-01-02,Rebalancing contribution for the quarterly,1\n")
+        out, rep = redact_text(text)
+        self.assertEqual(out, text)
+        self.assertEqual(rep.wallets, {})
+
+    def test_unknown_chain_goes_to_review(self):
+        from taxjson.bin.taxjson_redact import redact_text
+        text = ("Date,Notes,Amount\n"
+                "2025-01-01,To zz1" + "x9y8w7v6u5t4s3r2q0pzx9y8w" + ",1\n"
+                "2025-01-02,Memo 9aBcDeFgHjKmNpQrStUvWxYzAbCdEfGhJkMnPqRsTuVwXyZaBcDeFgHjKm,1\n")
+        out, rep = redact_text(text)
+        self.assertEqual(sorted({n for n, why in rep.review
+                                 if "wallet-like" in why}), [2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,8 +34,10 @@ What it changes, and nothing else:
     lines, Canadian postal
     codes, street addresses, SIN-shaped (Luhn-valid) and SSN-shaped
     numbers;
-  * crypto — wallet addresses (bc1…, legacy 1…/3… base58, 0x + 40 hex),
-    on-chain transaction hashes and exchange transaction ids (Kraken
+  * crypto — wallet addresses (bc1…, legacy 1…/3… base58, 0x + 40 hex,
+    Solana base58, Cardano addr1…, XRP r…, Tron T…, Litecoin L…/M…/
+    ltc1…; any other 25+ character base58 / bech32 token is listed
+    for review), on-chain transaction hashes and exchange transaction ids (Kraken
     txid/refid, Coinbase ids, UUIDs): each distinct value becomes a
     stable same-shape pseudonym, shared by every file of one run, so
     rows that shared an id still share one (a Kraken trade's txid and
@@ -400,13 +402,28 @@ _US_ZIP_CELLS = re.compile(
 _SSN = re.compile(r"(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])")
 
 # Crypto wallets and transaction ids (pseudonymised, stable per value).
+# The un-prefixed base58 shapes (XRP r…, Tron T…, Litecoin L…/M…,
+# Solana's bare 32-44) are taken only when _plausible_wallet agrees
+# (mixed case and a digit), so a long upper-case word is never one
+# (2026-10 security review M4).
+_B58 = "1-9A-HJ-NP-Za-km-z"
 _WALLET = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"(?:bc1|tb1|ltc1)[ac-hj-np-z02-9]{11,87}"                    # bech32
     r"|(?:BC1|TB1|LTC1)[AC-HJ-NP-Z02-9]{11,87}"                   # BECH32 (A2-0452)
+    r"|(?:addr1|stake1)[ac-hj-np-z02-9]{40,110}"                  # Cardano
     r"|0x[0-9a-fA-F]{40}(?![0-9a-fA-F])"                          # EVM
-    r"|[13][a-km-zA-HJ-NP-Z1-9]{25,34}"                           # base58
+    r"|[13][a-km-zA-HJ-NP-Z1-9]{25,34}"                           # base58 BTC
+    rf"|[rTLM][{_B58}]{{24,34}}"                                  # XRP/Tron/LTC
+    rf"|[{_B58}]{{32,44}}"                                        # Solana
     r")(?![A-Za-z0-9])")
+# What still looks like an address after the patterns above: 25+
+# base58 characters, or a bech32 string (hrp + '1' + data) — listed
+# for REVIEW, never replaced (a wallet of a chain taxjson has no
+# pattern for).
+_WALLETISH = re.compile(
+    rf"(?<![A-Za-z0-9])(?:[{_B58}]{{25,}}"
+    r"|[a-z]{1,10}1[ac-hj-np-z02-9]{25,})(?![A-Za-z0-9])")
 _BECH32 = re.compile(r"(?:bc1|tb1|ltc1)[ac-hj-np-z02-9]{11,87}", re.IGNORECASE)
 _TXID = re.compile(
     r"(?<![A-Za-z0-9-])(?:"
@@ -535,12 +552,13 @@ def _pseudonym(orig: str, n: int) -> str:
     9990-prefixed counter — hex-valid, never a real address."""
     keep = 0
     low = orig.lower()
-    for pre in ("0x", "bc1", "tb1", "ltc1"):
+    for pre in ("0x", "bc1", "tb1", "ltc1", "addr1", "stake1"):
         if low.startswith(pre):
             keep = len(pre)
             break
     else:
-        if _WALLET.fullmatch(orig) and orig[:1] in "13":
+        if _WALLET.fullmatch(orig) and orig[:1] in "13rTLM" \
+                and len(orig) <= 35:
             keep = 1
     body_len = sum(c.isalnum() for c in orig[keep:])
     fill = ("9990" + str(n).zfill(max(body_len - 4, 1)))[-body_len:] if body_len else ""
@@ -551,12 +569,26 @@ def _pseudonym(orig: str, n: int) -> str:
 
 def _plausible_wallet(v: str) -> bool:
     """A base58 match must look like an address (mixed case plus a
-    digit), not a long upper-case word that happens to start with 1/3."""
-    if v[:1] not in "13":
+    digit), not a long upper-case word that happens to start with 1/3
+    (or r / T / L / M, or Solana's bare base58)."""
+    low = v.lower()
+    if low.startswith(("0x", "bc1", "tb1", "ltc1", "addr1", "stake1")):
         return True
     body = v[1:]
     return (any(c.islower() for c in body) and any(c.isupper() for c in body)
             and any(c.isdigit() for c in body))
+
+
+def _wallet_like(v: str) -> bool:
+    """A _WALLETISH token that is not one of this redactor's stand-ins
+    (a prefix kept, the rest 9990-counter digits): a bech32 string, or
+    base58 mixing upper case, lower case and digits."""
+    if "9990" in v and sum(c.isdigit() for c in v) >= len(v) - 6:
+        return False
+    if re.fullmatch(r"[a-z]{1,10}1[ac-hj-np-z02-9]{25,}", v):
+        return True
+    return (any(c.islower() for c in v) and any(c.isupper() for c in v)
+            and any(c.isdigit() for c in v))
 
 
 def _luhn_ok(digits: str) -> bool:
@@ -1210,6 +1242,9 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             rep.emails += k
         line = _WALLET.sub(wallet_repl, line)
         line = _TXID.sub(txid_repl, line)
+        if any(_wallet_like(m.group(0)) for m in _WALLETISH.finditer(line)):
+            rep.review.append((lineno, "a wallet-like token (25+ base58 / "
+                                       "bech32 characters) not replaced"))
         if not header_row:
             line = _redact_contact(line, rep, lineno)
         for pat in compiled:

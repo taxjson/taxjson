@@ -179,6 +179,10 @@
   diff textconv / command, `core.attributesFile`) in the repository's
   config, `inputs-committed` and `lock-committed` are `[b]` with the key
   named; filters in your global config (git-lfs) are unaffected.
+- `taxjson redact` replaces Solana, Cardano (`addr1…`), XRP (`r…`),
+  Tron (`T…`) and Litecoin (`L…`, `M…`, `ltc1…`) addresses with stable
+  same-shape pseudonyms, as it did Bitcoin and Ethereum ones; any other
+  token of 25+ base58 or bech32 characters is listed for review.
 
 ## v0.24.2 (2026-10-08)
 
