@@ -944,9 +944,10 @@ class TestScanSanityFetch(unittest.TestCase):
                 '[[holding]]\nsymbol = "AAQ.TO"\nquantity = 100\n'
                 '[[holding]]\nsymbol = "AAQ261218C00040000.US"\n'
                 'quantity = 2\n')
-            r = _run_cli(root, "tips")
-            self.assertIn("MAP-GAP", r.stdout)
-            self.assertIn("AAQ.TO/AAQ.US", r.stdout)
+            r = _run_cli(root, "ticker-map", "--suggest")
+            self.assertIn("To verify", r.stdout)
+            self.assertIn("TOBASE AAQ.US AAQ.TO   or   DISTINCT AAQ.US "
+                          "AAQ.TO", r.stdout)
 
     def _sanity_project(self, tmp):
         root = _project(tmp, _CONFIG + '[accounts.kr]\ntype = '

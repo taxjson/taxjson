@@ -12149,13 +12149,6 @@ def cmd_tips(args: argparse.Namespace) -> None:
       TFSA-US-DIV  a US-domiciled dividend payer inside a TFSA — the 15%
                    US withholding is unrecoverable there (an RRSP is
                    treaty-exempt; a taxable account can claim the FTC).
-      MAP-GAP      ticker.map coverage: a .US and a Canadian listing of
-                   one root seen in the project with no GLOBAL/TOBASE/
-                   JOURNAL or DISTINCT line for them — unless the exports
-                   show them apart (the Canadian line a depositary
-                   receipt, or names of different companies). The
-                   message says whether the names agree, differ in form,
-                   or were not compared (verify first).
 
     With --online (Yahoo Finance; candidates to verify, not verdicts):
     MAP-GAP? — a .TO twin of a US-listed dividend payer the map doesn't
@@ -12169,8 +12162,9 @@ def cmd_tips(args: argparse.Namespace) -> None:
 
     The map's own hygiene is `taxjson ticker-map --suggest`: a loss on
     one listing with the other bought in its window (lib/
-    xlist_loss_radar), and the rules no symbol reaches (lib/
-    map_hygiene.unused_rules).
+    xlist_loss_radar), a same-root listing pair the map does not answer
+    (MAP-GAP, lib/map_hygiene.map_gaps) and the rules no symbol reaches
+    (lib/map_hygiene.unused_rules).
 
     Exit 0 with or without tips (advice never fails a command); 2 when
     the project cannot be read (no holdings reports, a damaged report or
@@ -12281,30 +12275,12 @@ def cmd_tips(args: argparse.Namespace) -> None:
         return frozenset((a.upper(), b.upper())) in distinct_pairs
 
     # Every (root, suffix) sighting across holdings + dividend history +
-    # the map itself — the cross-listing evidence base.
-    seen_suffixes: Dict[str, set] = {}
-
-    from taxjson.lib.core import (is_option_symbol as _is_opt,
-                                  parse_option_underlying as _opt_und)
-
-    def _see(sym: str) -> None:
-        # An option is a sighting of its underlying's listing: a pair
-        # evidenced on one side only by options was a clean report
-        # while the engine kept two identity classes (S042-04).
-        if _is_opt(sym):
-            sym = _opt_und(sym) or sym
-        r, suf = _MH.symbol_root(sym)
-        if suf:
-            seen_suffixes.setdefault(r, set()).add(suf)
-
-    for rows in holdings.values():
-        for h in rows:
-            _see(str(h.get("symbol") or ""))
-    for sym in div_syms:
-        _see(sym)
-    for old, new in renames_u.items():
-        _see(old)
-        _see(new)
+    # the map itself — the cross-listing evidence base (an option is a
+    # sighting of its underlying, S042-04).
+    seen_suffixes = _MH.sightings(
+        [str(h.get("symbol") or "") for rows in holdings.values()
+         for h in rows] + sorted(div_syms) + list(renames_u)
+        + list(renames_u.values()))
 
     from taxjson.lib.markets import canadian_suffixes as _ca_sufs
     _CA_SUFS = tuple(sorted(_ca_sufs()))
@@ -12374,7 +12350,8 @@ def cmd_tips(args: argparse.Namespace) -> None:
                     _ca = " or ".join(_ca_twins(rt, sym_u))
                     _chk = ("" if _twins_proved(rt, sym_u) else
                             f" (verify {_ca} is the same security first: "
-                            f"only the letters match — see MAP-GAP)")
+                            f"only the letters match — `taxjson "
+                            f"ticker-map --suggest` lists the pair)")
                     findings.append((
                         "US-LISTING", name, sym,
                         f"Canadian issuer held via its US listing in a "
@@ -12388,46 +12365,6 @@ def cmd_tips(args: argparse.Namespace) -> None:
                         "withholding is unrecoverable here. Prefer the "
                         "RRSP (treaty-exempt) or a taxable account "
                         "(foreign tax credit claimable)."))
-
-    # MAP-GAP: a US and a Canadian listing of one root, both seen, no
-    # map line joining or parting them: a candidate (interlisted shares
-    # usually keep their letters) — unless the exports show the two
-    # apart (the Canadian line a receipt, names of different
-    # companies): those are two securities and need no DISTINCT line.
-    from taxjson.lib.cross_listings import tobase_direction
-    for rt in sorted(seen_suffixes):
-        sufs = seen_suffixes[rt]
-        if "US" not in sufs:
-            continue
-        for _cs in sorted(s for s in sufs if s in _CA_SUFS):
-            _ca = f"{rt}.{_cs}"
-            _us = f"{rt}.US"
-            if _declared_distinct(_us, _ca):
-                continue        # user's DISTINCT ruling — settled
-            if _us in renames_u or _ca in renames_u:
-                continue
-            _v, _what = _verdict(_us, _ca)
-            if _v in _MH.APART:
-                continue
-            _frm, _to = tobase_direction(
-                _us, _ca, str(settings.get("base_currency") or "")
-                .upper() or None)
-            _lines = (f"`TOBASE {_frm} {_to}` (one cost pool, and the "
-                      f"loss rules see both); if not, "
-                      f"`DISTINCT {_us} {_ca}`.")
-            if _v == "same":
-                _msg = (f"{_us} and {_ca} carry the same name "
-                        f"({_what!r}) but ticker.map does not join them "
-                        f"— if they are one security add {_lines}")
-            elif _v == "unequal":
-                _msg = (f"{_us} and {_ca} share their letters but "
-                        f"{_what} — verify, then if they are one "
-                        f"security add {_lines}")
-            else:
-                _msg = (f"{_us} and {_ca} share their letters; "
-                        f"names not compared ({_what}) — verify, then if "
-                        f"they are one security add {_lines}")
-            findings.append(("MAP-GAP", "-", f"{_ca}/{_us}", _msg))
 
     from taxjson.lib.offline import offline_enabled as _offline
     if getattr(args, "online", False) and _offline():
@@ -15059,10 +14996,14 @@ def cmd_renames(args: argparse.Namespace) -> None:
 def cmd_ticker_map(args: argparse.Namespace) -> None:
     """`taxjson ticker-map --suggest [--write [--all]] [--json]`: every
     ticker.map line the last run suggested (lib/ticker_map_suggest),
-    each with its reason; --write appends the chosen ones to ticker.map
-    (one by one on a terminal: y/n/q; --all: every one), a comment line
-    above each, never a line the map already answers, through
-    safe_write with a backup of the old file."""
+    each with its reason; the listing pairs the map does not answer
+    (MAP-GAP, "verify": TOBASE if one security, DISTINCT if two); the
+    rules no symbol of the books reaches (lib/map_hygiene: "Unused
+    rules, delete?", never written). --write appends the chosen lines
+    to ticker.map (one by one on a terminal: y/n/q, and for a pair to
+    verify t/d/s/q; --all: every evidence line, never a pair to
+    verify), a comment line above each, never a line the map already
+    answers, through safe_write with a backup of the old file."""
     from taxjson.lib import ticker_map_suggest as TS
     from taxjson.lib.out import Doc
     root = Path(args.dir).resolve()
@@ -15075,22 +15016,29 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         _die("no work/ — run `taxjson run` first",
              "The suggestions come from the run's messages.")
     offer, skipped = TS.pending(root)
+    # The listing pairs the map does not answer (MAP-GAP): to verify,
+    # asked on a terminal, never added by --all.
+    verify, gap_unread = TS.verify(root, offer)
     # The rules no symbol of the books reaches (root-aware: an option's
     # underlying and a rename chain keep a rule live): listed to delete
     # by hand, never written (lib/map_hygiene).
     from taxjson.lib import map_hygiene as MH
     unused, unread = MH.unused_rules(root)
+    interactive = (bool(getattr(args, "write", False)) and not args.all
+                   and sys.stdin.isatty())
     if getattr(args, "json", False):
-        _json_out({"suggestions": [s.record() for s in offer],
+        _json_out({"suggestions": [s.record() for s in offer + verify],
                    "skipped": [dict(s.record(), why=w, by=(
                        "suggestion" if TS.covered_by_suggestion(w)
                        else "ticker.map")) for s, w in skipped],
                    "unused": [u.record() for u in unused],
-                   "unused_unread": list(unread)})
+                   "unused_unread": list(unread),
+                   "map_gap_unread": list(gap_unread)})
         if not args.write:
             return
-    elif not args.write or not offer:
-        d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run")
+    elif not args.write or not (offer or (verify and interactive)):
+        d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run"
+                + (f", {len(verify)} to verify" if verify else ""))
         if offer:
             d.blank()
             for s in offer:
@@ -15099,6 +15047,16 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                                  "   (a .tt line: add it to a .tt file of "
                                  "the account)" if s.tt else ""))
                 d.para(s.reason, indent="  ")
+        if verify:
+            d.section(f"To verify: one security or two? ({len(verify)})")
+            for s in verify:
+                d.line(f"{s.line}   or   {s.alternative}")
+                d.para(s.reason, indent="  ")
+        if gap_unread:
+            d.blank()
+            d.para(f"The listing-pair check skipped what it could not "
+                   f"read: {'; '.join(gap_unread)} — re-run `taxjson "
+                   f"run`.")
         # A suggestion another one covers is not answered by the map:
         # its own heading.
         covered = [x for x in skipped if TS.covered_by_suggestion(x[1])]
@@ -15121,20 +15079,23 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         d.blank()
         d.para("Add a line only when it is right for your securities: "
                "`taxjson ticker-map --suggest --write` asks for each one "
-               "(--all adds every one), then re-run `taxjson run`."
-               if offer else
+               "(a pair to verify: TOBASE, DISTINCT or skip; --all adds "
+               "only the lines the run's evidence names, never a pair to "
+               "verify), then re-run `taxjson run`."
+               if offer or verify else
                "Nothing to add; an unused rule is harmless — delete it by "
                "hand only if its symbol will not return." if unused else
                "Nothing to add.")
         d.print()
         return
-    interactive = sys.stdin.isatty() and not args.all
     if not interactive and not args.all:
         _die_input("ticker-map --write: not a terminal, so nothing can be "
                    "asked",
-                   "Add --all to append every suggestion, or run it in a "
-                   "terminal to choose one by one.")
+                   "Add --all to append every suggestion the run's "
+                   "evidence names, or run it in a terminal to choose one "
+                   "by one.")
     chosen = []
+    stopped = False
     for s in offer:
         if s.template:
             # A placeholder (<LISTING>, <words ...>) would rename rows to
@@ -15157,10 +15118,41 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             except EOFError:
                 ans = "q"
             if ans.startswith("q"):
+                stopped = True
                 break
             if not ans.startswith("y"):
                 continue
         chosen.append(s)
+    for s in verify:
+        if not interactive:
+            # --all writes only what the evidence proves: a shared root
+            # is a candidate, never proof (MAP-GAP).
+            print(f"Not added (to verify — one security or two? `taxjson "
+                  f"ticker-map --suggest --write` on a terminal asks): "
+                  f"{s.line} / {s.alternative}")
+            continue
+        if stopped:
+            break
+        print(f"{s.line}   or   {s.alternative}")
+        for ln in _out_wrap(s.reason, indent="  ", hang="  "):
+            print(ln)
+        try:
+            ans = input("One security or two? [t]OBASE / [d]ISTINCT / "
+                        "[s]kip / [q]uit ").strip().lower()
+        except EOFError:
+            ans = "q"
+        if ans.startswith("q"):
+            break
+        # The comment above the line records the answer and what the
+        # exports showed (the reason's first clause, without the lines).
+        why = s.reason.split(" — ")[0]
+        if ans.startswith("t"):
+            chosen.append(TS.Suggestion(
+                s.line, f"one security (your answer): {why}", s.source))
+        elif ans.startswith("d"):
+            chosen.append(TS.Suggestion(
+                s.alternative, f"two securities (your answer): {why}",
+                s.source))
     if not chosen:
         print("Nothing added to ticker.map.")
         return
@@ -23032,10 +23024,11 @@ def _build_parser(prog: str = "taxjson"
         description="Advice for next year on where you hold what: "
                     "Canadian dividend payers held through their US "
                     "listing in a taxable account or a TFSA, US dividend "
-                    "payers in a TFSA (unrecoverable withholding), and "
-                    "listing pairs ticker.map does not join. It changes "
-                    "no number of this year. Exit 0 with or without "
-                    "tips; 2 when the project cannot be read.")
+                    "payers in a TFSA (unrecoverable withholding). It "
+                    "changes no number of this year (listing pairs "
+                    "ticker.map does not join: `taxjson ticker-map "
+                    "--suggest`). Exit 0 with or without tips; 2 when "
+                    "the project cannot be read.")
     p_tips.add_argument("--online", action="store_true",
                         help="Also probe Yahoo Finance for .TO twins of "
                              "unmapped US-listed dividend payers and "
@@ -23493,17 +23486,21 @@ def _build_parser(prog: str = "taxjson"
              "suggested — two listings a transfer journal pairs but the "
              "run did not join, a Questrade code with a likely ticker, "
              "a ticker change IB, Questrade or RBC shows, a coin's "
-             "Yahoo id — each with its reason. --write appends the "
-             "chosen ones (asked one by one on a terminal; --all: every "
-             "one), with a comment, never one the map already answers, "
-             "keeping a backup of the old file.")
+             "Yahoo id — each with its reason; the listing pairs that "
+             "share their letters with no TOBASE or DISTINCT line (to "
+             "verify); the rules no symbol of the books reaches (unused, "
+             "never written). --write appends the chosen ones (asked one "
+             "by one on a terminal; --all: every line the run's evidence "
+             "names, never a pair to verify), with a comment, never one "
+             "the map already answers, keeping a backup of the old file.")
     p_tm.add_argument("--suggest", action="store_true",
                       help="List the suggested lines (required)")
     p_tm.add_argument("--write", action="store_true",
                       help="Append the chosen lines to ticker.map")
     p_tm.add_argument("--all", action="store_true",
-                      help="With --write: append every suggestion without "
-                           "asking")
+                      help="With --write: append every line the run's "
+                           "evidence names without asking (never a "
+                           "listing pair to verify)")
     p_tm.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_tm.set_defaults(func=cmd_ticker_map)

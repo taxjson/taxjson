@@ -114,8 +114,11 @@ class TestTips(unittest.TestCase):
                              "a ticker was sent to Yahoo while offline")
 
     def test_online_findings_have_a_stable_order(self):
-        names = {"GOOG.US": ["Alphabet Inc.", "Alphabet Inc."],
-                 "GOOGL.US": ["Alphabet Inc.", "Alphabet Inc."],
+        # Keyed by Yahoo's spelling (the probe asks for it, B14): the
+        # same-root MAP-GAP these listings also make is `ticker-map
+        # --suggest`'s now, so the order is the online findings'.
+        names = {"GOOG": ["Alphabet Inc.", "Alphabet Inc."],
+                 "GOOGL": ["Alphabet Inc.", "Alphabet Inc."],
                  "GOOG.TO": ["Alphabet Inc.",
                              "ALPHABET CDR (CAD HEDGED)"],
                  "GOOGL.NE": ["Alphabet Inc.", "Alphabet Inc."]}

@@ -2737,9 +2737,11 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
              "Two spellings or listings of one security must be one "
              "position for its cost to be right.",
              (Cmd("tjs ticker-map --suggest", "the lines the last run "
-                  "suggested, each with its reason"),
+                  "suggested, each with its reason, and the listing pairs "
+                  "to verify (one security or two)"),
               Cmd("tjs ticker-map --suggest --write", "adds them, one by "
-                  "one (--all: every one)"))),
+                  "one (--all: every line the evidence names; a pair to "
+                  "verify is asked on a terminal)"))),
         _check("journals",
                "A journal the books do not pool leaves a long on one "
                "listing and a short on the other.",
@@ -3156,6 +3158,18 @@ def s_ticker_map(ctx: Ctx, f: _Facts) -> Result:
         return Result("ticker-map", "todo", "after `tjs run`")
     from taxjson.lib import ticker_map_suggest as TS
     offer, _skipped = TS.pending(ctx.root)
+    # A listing pair the map does not answer (MAP-GAP) is a question
+    # only the user can answer: one security (TOBASE) or two (DISTINCT).
+    verify, _unread = TS.verify(ctx.root, offer)
+    if verify:
+        return Result("ticker-map", "attention",
+                      f"{len(verify)} listing pair(s) to verify — one "
+                      f"security (TOBASE) or two (DISTINCT): "
+                      + ", ".join(f"{s.symbols[0]}/{s.symbols[1]}"
+                                  for s in verify[:3])
+                      + (" ..." if len(verify) > 3 else "")
+                      + (f"; {len(offer)} more line(s) the last run "
+                         f"suggested" if offer else ""))
     if offer:
         return Result("ticker-map", "todo", f"{len(offer)} line(s) the "
                       f"last run suggested: decide each")

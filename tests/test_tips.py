@@ -2,10 +2,10 @@
 
 Checks pinned: US-LISTING (cross-listed Canadian dividend payer held via
 its US line in taxable/TFSA), TFSA-US-DIV (US-domiciled payer in a
-TFSA), MAP-GAP (both listings seen, no ticker.map consolidation), plan
-inference, exit codes (0 with or without tips: advice for next year
+TFSA), plan inference, exit codes (0 with or without tips: advice for next year
 never fails; 2 when the project cannot be read). `taxjson scan` is gone
-(no alias); its unused-rule note is `ticker-map --suggest`'s.
+(no alias); its MAP-GAP pairs and unused-rule note are `ticker-map
+--suggest`'s.
 """
 
 import json
@@ -98,10 +98,15 @@ class TestTips(unittest.TestCase):
                           "rrsp": _holdings_toml("AEM.TO")},
                 raws={"margin": _raw_json("AEM.US")})
             r = _run(root)
+            _r, doc = _suggest_json(root)
         self.assertEqual(r.returncode, 0)
         self.assertIn("US-LISTING", r.stdout)
-        self.assertIn("MAP-GAP", r.stdout)
-        self.assertIn("AEM.TO/AEM.US", r.stdout)
+        # The pair itself is `ticker-map --suggest`'s, to verify (it was
+        # scan's MAP-GAP).
+        self.assertNotIn("MAP-GAP", r.stdout)
+        gap, = [s for s in doc["suggestions"] if s["kind"] == "map-gap"]
+        self.assertEqual((gap["line"], gap["alternative"]),
+                         ("TOBASE AEM.US AEM.TO", "DISTINCT AEM.US AEM.TO"))
 
     def test_distinct_ruling_silences_map_gap(self):
         # Same book as the twin test, but the user has RECORDED that
@@ -117,7 +122,9 @@ class TestTips(unittest.TestCase):
                 raws={"margin": _raw_json("AEM.US")},
                 ticker_map="DISTINCT AEM.US AEM.TO\n")
             r = _run(root)
-        self.assertNotIn("MAP-GAP", r.stdout)
+            _r, doc = _suggest_json(root)
+        self.assertEqual([s for s in doc["suggestions"]
+                          if s["kind"] == "map-gap"], [])
         # ...and US-LISTING too: DISTINCT says AEM.TO is another
         # instrument, so "hold AEM.TO instead" would be wrong advice
         # (audit S042-06; this line used to assert the opposite).
@@ -182,8 +189,10 @@ class TestTips(unittest.TestCase):
                 raws={},
                 ticker_map="TOBASE AEM.US AEM.TO\n")
             r = _run(root)
+            _r, doc = _suggest_json(root)
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertNotIn("MAP-GAP", r.stdout)
+        self.assertEqual([s for s in doc["suggestions"]
+                          if s["kind"] == "map-gap"], [])
 
     def test_non_dividend_payer_not_flagged(self):
         # US line of a Canadian issuer but NO dividends observed — the

@@ -33,6 +33,18 @@
   --json` record now carries `kind` and `certainty`. The checklist's
   step is `tips`, still yours to run and read; a mark saved under
   `scan` (and `--done scan`) still applies to it.
+- A `.US` and a Canadian listing of one root with no ticker.map line
+  joining or parting them, and not joined by the run itself (scan's
+  MAP-GAP, which also asked about those) is now a pair to verify in
+  `taxjson ticker-map --suggest`, with the same reason (whether the
+  names agree, differ in form, or were not compared): `--write` asks on
+  a terminal — `TOBASE` (one security), `DISTINCT` (two) or skip — and
+  `--write --all` never adds one, since a shared root is a candidate,
+  not proof (`--all` adds only the lines the run's evidence names). In
+  `--json` such a suggestion has `kind` "map-gap", `certainty` "verify"
+  and its `alternative` (the `DISTINCT` line). The checklist's
+  ticker-map step needs attention while a pair is open; `tips` no longer
+  lists it.
 
 
 ## v0.24.2 (2026-10-08)

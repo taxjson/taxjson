@@ -1,11 +1,24 @@
-"""ticker.map hygiene read from the last run's files: the rules no symbol
-of the books reaches (`taxjson ticker-map --suggest`, "unused rule,
-delete?"), and the listing helpers `taxjson tips` and the map checks
-share (a symbol's root and listing suffix, the security names the
-exports give each listing, and what those names say about a US and a
-Canadian listing of one root).
+"""ticker.map hygiene read from the last run's files, for `taxjson
+ticker-map --suggest`: the listing pairs the map does not answer
+(map_gaps, MAP-GAP: "verify"), the rules no symbol of the books reaches
+("unused rule, delete?"), and the listing helpers `taxjson tips` shares
+(a symbol's root and listing suffix, the listings the books show, the
+security names the exports give each listing, and what those names say
+about a US and a Canadian listing of one root).
 
 A data check, not a tax rule (both countries). Nothing here writes.
+
+MAP-GAP (map_gaps): a .US and a Canadian listing of one root, both seen
+in the project (the per-listing holdings reports, which are built before
+TOBASE; the dividend history; the map's own renames — an option counts
+for its underlying), with no GLOBAL/TOBASE/JOURNAL or DISTINCT line for
+them, and not joined by the last run itself (its effective map) —
+unless the exports show the two apart (the Canadian line a depositary
+receipt, or names of different companies: pair_verdict).
+Interlisted shares usually keep their letters, so the pair is a
+candidate to VERIFY, never a line the evidence proves: the reason says
+whether the names agree, differ in form, or were not compared, and
+names both answers (`TOBASE` if one security, `DISTINCT` if two).
 
 Unused rules (unused_rules) are judged the way the ENGINE applies the
 map (taxjson_ticker_map.map_symbol): a rule's FROM must equal a symbol
@@ -25,7 +38,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
 def symbol_root(sym: str) -> Tuple[str, str]:
@@ -86,6 +99,165 @@ def pair_verdict(us: str, ca: str, names: Dict[str, set],
         return "unequal", why
     common = sorted(nu & nc)
     return "same", shown.get(common[0], " ".join(common[0]))
+
+
+def sightings(symbols: Iterable[str]) -> Dict[str, Set[str]]:
+    """{root: the listing suffixes seen} of US and Canadian listings
+    among `symbols` (an option is a sighting of its underlying: a pair
+    evidenced on one side only by options was missed, S042-04)."""
+    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    out: Dict[str, Set[str]] = {}
+    for sym in symbols:
+        sym = str(sym or "")
+        if is_option_symbol(sym):
+            sym = parse_option_underlying(sym) or sym
+        r, suf = symbol_root(sym)
+        if suf:
+            out.setdefault(r, set()).add(suf)
+    return out
+
+
+@dataclass
+class MapGap:
+    """A US and a Canadian listing of one root the map does not answer."""
+    us: str
+    ca: str
+    verdict: str        # pair_verdict kind: same | unequal | unknown
+    tobase: str         # `TOBASE FROM TO` (tobase_direction)
+    distinct: str       # `DISTINCT US CA`
+    reason: str
+
+
+def gap_reason(us: str, ca: str, verdict: str, what: str,
+               tobase: str, distinct: str) -> str:
+    """The MAP-GAP sentence: what the names show, then both answers."""
+    lines = (f"`{tobase}` (one cost pool, and the loss rules see both); "
+             f"if not, `{distinct}`.")
+    if verdict == "same":
+        return (f"{us} and {ca} carry the same name ({what!r}) but "
+                f"ticker.map does not join them — if they are one "
+                f"security add {lines}")
+    if verdict == "unequal":
+        return (f"{us} and {ca} share their letters but {what} — verify, "
+                f"then if they are one security add {lines}")
+    return (f"{us} and {ca} share their letters; names not compared "
+            f"({what}) — verify, then if they are one security add "
+            f"{lines}")
+
+
+def _map_view(root: Path) -> Tuple[Dict[str, str], Dict[str, str],
+                                   Set[frozenset]]:
+    """(the base-stage renames: ticker.map's, plus those of the last
+    run's effective map — the joins the run made itself
+    (cross_listings), each said by a Warning naming the DISTINCT line
+    that undoes it —, ticker.map's GLOBAL renames, its DISTINCT pairs),
+    upper-cased ({} for a map that cannot be read: `taxjson run`
+    refuses it). Read quietly: a listing's JSON stays JSON."""
+    from taxjson.bin.taxjson_ticker_map import _parse_map_file, merge_renames
+    from taxjson.lib.cross_listings import EFFECTIVE_MAP
+    root = Path(root)
+    base: Dict[str, str] = {}
+    glob: Dict[str, str] = {}
+    distinct: Set[frozenset] = set()
+    up = lambda d: {str(k).upper(): str(v).upper()      # noqa: E731
+                    for k, v in d.items()}
+    eff = root / "work" / EFFECTIVE_MAP
+    if eff.is_file():
+        try:
+            base.update(up(merge_renames(_parse_map_file(eff)[0],
+                                         to_base=True)))
+        except Exception:                               # noqa: BLE001
+            pass
+    tm_path = root / "ticker.map"
+    if tm_path.is_file():
+        try:
+            tmap = _parse_map_file(tm_path)[0]
+            base.update(up(merge_renames(tmap, to_base=True)))
+            glob = up(merge_renames(tmap, to_base=False))
+            distinct = {frozenset(str(x).upper() for x in pair)
+                        for pair in getattr(tmap, "distinct", ()) or ()}
+        except Exception:                               # noqa: BLE001
+            pass
+    return base, glob, distinct
+
+
+def books_listings(root: Path, accounts: Iterable[str]
+                   ) -> Tuple[Set[str], List[str]]:
+    """(the symbols held in each account's per-listing holdings report
+    and paid a dividend in its raw book, the files that could not be
+    read). The holdings report is built before TOBASE, so the listing
+    actually held is visible."""
+    from taxjson.lib.tomlcompat import tomllib
+    root = Path(root)
+    syms: Set[str] = set()
+    unread: List[str] = []
+    for acct in accounts:
+        f = root / "reports" / f"{acct}_holdings.toml"
+        if f.is_file() and tomllib is not None:
+            try:
+                rows = tomllib.loads(f.read_text(encoding="utf-8")).get(
+                    "holding", [])
+                if not isinstance(rows, list):
+                    raise ValueError("`holding` is not a list")
+                syms.update(str(h.get("symbol") or "").upper()
+                            for h in rows if isinstance(h, dict))
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                unread.append(f"reports/{f.name} ({e})")
+        f = root / "work" / f"{acct}_raw.json"
+        if f.is_file():
+            try:
+                doc = json.loads(f.read_text(encoding="utf-8"))
+                rows = doc.get("transactions") if isinstance(doc, dict) \
+                    else None
+                for t in rows if isinstance(rows, list) else []:
+                    if isinstance(t, dict) and t.get("action") in (
+                            "DIVIDEND", "DIVIDEND_IN_LIEU"):
+                        syms.add(str(t.get("symbol") or "").upper())
+            except (OSError, ValueError, RecursionError) as e:
+                unread.append(f"work/{f.name} ({e})")
+    syms.discard("")
+    return syms, unread
+
+
+def map_gaps(root: Path) -> Tuple[List[MapGap], List[str]]:
+    """(every MAP-GAP of the project — module docstring —, the files
+    that could not be read)."""
+    from taxjson.lib.cross_listings import tobase_direction
+    from taxjson.lib.markets import canadian_suffixes
+    root = Path(root)
+    cfg = _config(root)
+    accts = cfg.get("accounts") if isinstance(cfg.get("accounts"),
+                                              dict) else {}
+    equity = [str(n) for n, a in accts.items()
+              if not (isinstance(a, dict) and a.get("crypto"))]
+    base_ccy = str(((cfg.get("settings") or {}).get("base_currency")
+                    or "")).upper() or None
+    renames, glob, distinct = _map_view(root)
+    syms, unread = books_listings(root, equity)
+    seen = sightings(list(syms) + list(renames) + list(renames.values()))
+    ca_sufs = canadian_suffixes()
+    names: Optional[Tuple[Dict[str, set], Dict[tuple, str]]] = None
+    out: List[MapGap] = []
+    for rt in sorted(seen):
+        sufs = seen[rt]
+        if "US" not in sufs:
+            continue
+        for cs in sorted(x for x in sufs if x in ca_sufs):
+            us, ca = f"{rt}.US", f"{rt}.{cs}"
+            if frozenset((us, ca)) in distinct:
+                continue            # the user's DISTINCT ruling
+            if us in renames or ca in renames:
+                continue
+            if names is None:
+                names = listing_names(root / "work", equity, glob)
+            verdict, what = pair_verdict(us, ca, names[0], names[1])
+            if verdict in APART:
+                continue
+            frm, to = tobase_direction(us, ca, base_ccy)
+            tob, dis = f"TOBASE {frm} {to}", f"DISTINCT {us} {ca}"
+            out.append(MapGap(us, ca, verdict, tob, dis,
+                              gap_reason(us, ca, verdict, what, tob, dis)))
+    return out, unread
 
 
 def _config(root: Path) -> Dict[str, Any]:

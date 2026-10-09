@@ -1,5 +1,6 @@
-"""`taxjson tips` (scan before) stops asking about pairs that are evidently not one
-security (owner, 2026-10-07).
+"""`taxjson tips` (US-LISTING) and `taxjson ticker-map --suggest` (MAP-GAP;
+both `taxjson scan` before) stop asking about pairs that are evidently
+not one security (owner, 2026-10-07).
 
 Interlisted shares usually keep their letters (QZX.TO / QZX.US), so a
 same-root US and Canadian pair with no ticker.map line stays a MAP-GAP
@@ -37,12 +38,32 @@ def tearDownModule():
     _WIDTH.stop()
 
 
-def _run(root, *args):
+def _cmd(root, *args):
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-         "tips", *args],
+         *args],
         cwd=REPO_ROOT, capture_output=True, text=True,
         env=dict(os.environ, TAXJSON_OFFLINE="1"))
+
+
+class _Both:
+    """`tips` (US-LISTING) and `ticker-map --suggest` (MAP-GAP, its pairs
+    "To verify") of one project, read as one output."""
+
+    def __init__(self, root):
+        tips = _cmd(root, "tips")
+        sug = _cmd(root, "ticker-map", "--suggest")
+        self.stdout = tips.stdout + "\n" + sug.stdout
+        self.stderr = tips.stderr + sug.stderr
+        self.returncode = tips.returncode or sug.returncode
+
+
+def _run(root):
+    return _Both(root)
+
+
+# A MAP-GAP is a pair `ticker-map --suggest` lists to verify.
+GAP = "To verify: one security or two?"
 
 
 def _holdings(*symbols):
@@ -105,7 +126,7 @@ class TestMapGapEvidence(unittest.TestCase):
                 "margin": {"QZX.US": "QZX ENERGY CORP"},
                 "rrsp": {"QZX.TO": "QZX ENERGY CDR (CAD HEDGED)"}})
             r = _run(root)
-        self.assertNotIn("MAP-GAP", r.stdout, r.stdout)
+        self.assertNotIn(GAP, r.stdout, r.stdout)
         self.assertNotIn("US-LISTING", r.stdout, r.stdout)
 
     def test_receipt_word_alone_is_not_a_twin(self):
@@ -113,7 +134,7 @@ class TestMapGapEvidence(unittest.TestCase):
             root = _project(tmp, names={
                 "rrsp": {"QZX.TO": "QZX ENERGY CORP CDR"}})
             r = _run(root)
-        self.assertNotIn("MAP-GAP", r.stdout, r.stdout)
+        self.assertNotIn(GAP, r.stdout, r.stdout)
         self.assertNotIn("US-LISTING", r.stdout, r.stdout)
 
     def test_another_issuer_is_not_a_twin(self):
@@ -122,7 +143,7 @@ class TestMapGapEvidence(unittest.TestCase):
                 "margin": {"QZX.US": "QZX REALTY TRUST INC"},
                 "rrsp": {"QZX.TO": "SAMPLEX US DOLLAR CURRENCY ETF"}})
             r = _run(root)
-        self.assertNotIn("MAP-GAP", r.stdout, r.stdout)
+        self.assertNotIn(GAP, r.stdout, r.stdout)
         self.assertNotIn("US-LISTING", r.stdout, r.stdout)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
@@ -133,7 +154,7 @@ class TestMapGapEvidence(unittest.TestCase):
             (root / "reports" / "rrsp_holdings.toml").write_text(
                 _holdings("QZX.NE"))
             r = _run(root)
-        self.assertNotIn("MAP-GAP", r.stdout, r.stdout)
+        self.assertNotIn(GAP, r.stdout, r.stdout)
         self.assertNotIn("US-LISTING", r.stdout, r.stdout)
 
     @rule("CA-SCAN-02")
@@ -143,7 +164,7 @@ class TestMapGapEvidence(unittest.TestCase):
             root = _project(tmp, names=_SAME)
             r = _run(root)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("MAP-GAP", r.stdout)
+        self.assertIn(GAP, r.stdout)
         self.assertIn("QZX.US and QZX.TO carry the same name "
                       "('QZX ENERGY CORP')", r.stdout)
         self.assertIn("ticker.map does not join them", r.stdout)
@@ -160,7 +181,7 @@ class TestMapGapEvidence(unittest.TestCase):
             root = _project(tmp)
             r = _run(root)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("MAP-GAP", r.stdout)
+        self.assertIn(GAP, r.stdout)
         self.assertIn("names not compared (no security name for either "
                       "listing) — verify", r.stdout)
         self.assertIn("`TOBASE QZX.US QZX.TO`", r.stdout)
@@ -181,7 +202,7 @@ class TestMapGapEvidence(unittest.TestCase):
                 "margin": {"QZX.US": "QZX ENERGY CORP"},
                 "rrsp": {"QZX.TO": "QZX ENERGY LTD"}})
             r = _run(root)
-        self.assertIn("MAP-GAP", r.stdout)
+        self.assertIn(GAP, r.stdout)
         self.assertIn("share their letters but the names are not equal",
                       r.stdout)
 
@@ -191,7 +212,7 @@ class TestMapGapEvidence(unittest.TestCase):
                 root = _project(tmp, names=names,
                                 ticker_map="DISTINCT QZX.US QZX.TO\n")
                 r = _run(root)
-            self.assertNotIn("MAP-GAP", r.stdout)
+            self.assertNotIn(GAP, r.stdout)
             self.assertNotIn("US-LISTING", r.stdout)
 
     @rule("CA-SCAN-02")
@@ -201,7 +222,7 @@ class TestMapGapEvidence(unittest.TestCase):
             r = _run(root)
         self.assertIn("hold QZX.TO instead", r.stdout)
         self.assertNotIn("verify", r.stdout)
-        self.assertNotIn("MAP-GAP", r.stdout)
+        self.assertNotIn(GAP, r.stdout)
 
 
 def _lint(taxable, sheltered):
@@ -284,6 +305,117 @@ class TestSuggestConditionalHintEvidence(unittest.TestCase):
             offer, _ = TS.pending(self._root(td, "QZLR RESEARCH CORP"))
         self.assertEqual([s.line for s in offer],
                          ["TOBASE QZLR.US QZLR.TO"])
+
+
+class TestMapGapIsASuggestionToVerify(unittest.TestCase):
+    """MAP-GAP moved from `scan` to `ticker-map --suggest` (owner,
+    2026-10-09): a pair to verify ("verify" certainty, its DISTINCT
+    alternative), asked TOBASE / DISTINCT / skip on a terminal, never
+    added by --all; `tips` no longer lists it; the checklist's
+    ticker-map step needs attention while one is open."""
+
+    def test_json_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, names=_SAME)
+            r = _cmd(root, "ticker-map", "--suggest", "--json")
+            tips = _cmd(root, "tips")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(r.stdout)
+        gap, = [s for s in doc["suggestions"] if s["kind"] == "map-gap"]
+        self.assertEqual(gap["certainty"], "verify")
+        self.assertEqual(gap["line"], "TOBASE QZX.US QZX.TO")
+        self.assertEqual(gap["alternative"], "DISTINCT QZX.US QZX.TO")
+        self.assertIn("carry the same name ('QZX ENERGY CORP')",
+                      gap["reason"])
+        self.assertNotIn("MAP-GAP", tips.stdout)
+        self.assertIn("US-LISTING", tips.stdout)
+
+    def test_tips_points_an_unproved_twin_at_the_suggestions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            tips = _cmd(root, "tips")
+        self.assertIn("verify QZX.TO is the same security first: only "
+                      "the letters match — `taxjson ticker-map --suggest` "
+                      "lists the pair", " ".join(tips.stdout.split()))
+
+    def test_a_pair_the_run_joined_itself_is_answered(self):
+        # The run's effective map carries the joins it made itself (each
+        # said by a Warning naming the DISTINCT line that undoes it).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, names=_SAME)
+            (root / "work" / "ticker.map.effective").write_text(
+                "TOBASE QZX.US QZX.TO\n")
+            r = _cmd(root, "ticker-map", "--suggest", "--json")
+        doc = json.loads(r.stdout)
+        self.assertEqual([s for s in doc["suggestions"]
+                          if s["kind"] == "map-gap"], [])
+
+    def test_write_all_never_adds_a_pair_to_verify(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, names=_SAME)
+            r = _cmd(root, "ticker-map", "--suggest", "--write", "--all")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse((root / "ticker.map").exists(), r.stdout)
+        self.assertIn("never a pair to verify", " ".join(r.stdout.split()))
+
+    def _ask(self, root, answer):
+        import builtins
+        import contextlib
+        import io
+        from unittest import mock
+        import argparse
+        from taxjson.bin import taxjson_run as TR
+        args = argparse.Namespace(dir=str(root), suggest=True, write=True,
+                                  all=False, json=False)
+        tty = mock.Mock()
+        tty.isatty.return_value = True
+        out = io.StringIO()
+        with mock.patch.object(TR.sys, "stdin", tty), \
+                mock.patch.object(builtins, "input",
+                                  side_effect=[answer]), \
+                contextlib.redirect_stdout(out):
+            TR.cmd_ticker_map(args)
+        return out.getvalue()
+
+    def test_terminal_asks_tobase_or_distinct(self):
+        for answer, want in (("d", "DISTINCT QZX.US QZX.TO"),
+                             ("t", "TOBASE QZX.US QZX.TO")):
+            with self.subTest(answer=answer), \
+                    tempfile.TemporaryDirectory() as tmp:
+                root = _project(tmp, names=_SAME)
+                out = self._ask(root, answer)
+                text = (root / "ticker.map").read_text()
+                self.assertIn(f"\n{want}\n", text, out)
+                self.assertEqual(text.count("QZX.US QZX.TO"), 1, text)
+                self.assertIn("(your answer): QZX.US and QZX.TO carry "
+                              "the same name", text)
+
+    def test_terminal_skip_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, names=_SAME)
+            out = self._ask(root, "s")
+            self.assertFalse((root / "ticker.map").exists())
+        self.assertIn("Nothing added to ticker.map.", out)
+
+    def test_checklist_step_needs_attention(self):
+        from datetime import date
+        from taxjson.lib import checklist as cl
+        from taxjson.lib.tomlcompat import tomllib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, names=_SAME)
+            cfg = tomllib.loads((root / "taxjson.toml").read_text())
+            ctx = cl.Ctx(root=root, cfg=cfg, year=2026,
+                         today=date(2026, 3, 1),
+                         run_sub=lambda argv, timeout=900: (0, "", ""))
+            facts = cl._Facts(ctx)
+            facts.ran = True
+            res = cl.s_ticker_map(ctx, facts)
+            self.assertEqual(res.status, "attention", res.detail)
+            self.assertIn("1 listing pair(s) to verify", res.detail)
+            self.assertIn("QZX.US/QZX.TO", res.detail)
+            (root / "ticker.map").write_text("DISTINCT QZX.US QZX.TO\n")
+            res = cl.s_ticker_map(ctx, facts)
+            self.assertEqual(res.status, "done", res.detail)
 
 
 if __name__ == "__main__":
