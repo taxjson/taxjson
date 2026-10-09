@@ -12,6 +12,19 @@
   manifest, a pending-elections file) is now written to a temp file of
   its own and renamed over the name, replacing a link there; a test
   lists every remaining direct write in the core. (#19)
+- `taxjson fetch` (the taxjson-fetch plugin): two writes of one file
+  no longer share one `<file>.part` temp file, which let the first
+  rename publish the second writer's unfinished (empty) file and made
+  the second fail; each write now has a temp file of its own. One fetch
+  runs per project at a time (a second one waits), and the Questrade
+  token's read, refresh and save happen under a lock beside the token
+  file, so a second fetch uses the token the first one saved instead of
+  the one it killed. (#13)
+- `taxjson fetch --trim-overlap` no longer copies the original CSV
+  outside the project through a dangling `<export>.bak` symlink: a link
+  at a backup name is skipped for the next free `.bakN`, the backup is
+  written owner-only and the console names it. The previous IB Flex
+  statement's backup is kept the same way. (#18)
 
 ## v0.24.2 (2026-10-08)
 

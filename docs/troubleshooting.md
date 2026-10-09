@@ -883,6 +883,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/brokerages/webull.py` — `_mark_assignments`, `exercise_fee`, `no exercise/assignment charge is configured for`
 
+### `tjs fetch`: an empty `questrade_2025.csv` (or `ib_flex.csv`, or Questrade token file) after two fetches ran at once, "FileNotFoundError: … questrade_2025.csv.part", or "Questrade auth failed" right after another fetch succeeded
+- **Check:** two `taxjson fetch` commands overlapped: two terminals, a scheduled fetch, or two projects fetching Questrade at the same time (they share `~/.questrade_token`).
+- **Cause:** the fetch plugin staged every write in one fixed `<file>.part`: the second writer replaced the first one's temp file, so the first rename published the second's unfinished (empty) file and the second rename failed. Two fetches could also both read the Questrade token before either saved the rotated one; each refresh kills the token it used, so the second refresh failed, or two fetches of one project merged into the same CSV and the last write lost the other's rows.
+- **Fix:** upgrade: each write has a temp file of its own, one fetch runs per project at a time (a second one says "waiting for another `taxjson fetch` in this project to finish"), and the token's read, refresh and save happen under a lock beside the token file. On an older release, run one fetch at a time; re-fetch a file left empty (the next fetch re-covers the window); after a dead token, start a new chain with `tjs fetch --refresh-token <new token>`.
+- **Fixed in:** unreleased
+- **Code:** `packages/taxjson-fetch/src/taxjson_fetch/api.py` — `write_private`; `packages/taxjson-fetch/src/taxjson_fetch/command.py` — `run`, `_qt_open_session`, `_questrade_token_write`; `src/taxjson/lib/safe_write.py` — `file_lock`, `write_atomic`
+
+### `tjs fetch --trim-overlap`: the original CSV was copied outside the project, to where an `<export>.bak` symlink pointed
+- **Check:** `ls -l inputs/<account>/` shows `<export>.bak ->` a path, and the file it points at holds the full original export.
+- **Cause:** the backup name was chosen with a test that is false for a dangling symlink, so a link at `<export>.bak` was taken as a free name and the copy was written to the link's target.
+- **Fix:** upgrade: a symlink at a `.bak` name, dangling or not, is skipped and the backup goes to the next free `<export>.bakN`, written owner-only; the console line names the backup. The previous IB Flex statement's backup is kept the same way. On an older release, remove the `.bak` link before `--trim-overlap` and delete the outside copy.
+- **Fixed in:** unreleased
+- **Code:** `packages/taxjson-fetch/src/taxjson_fetch/command.py` — `_qt_trim_file`; `src/taxjson/lib/safe_write.py` — `backup_copy`
+
 ## Crypto
 
 ### "Info: 1 crypto send(s) not yet classified as self / gift / payment"

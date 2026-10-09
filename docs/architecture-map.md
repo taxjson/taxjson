@@ -447,7 +447,7 @@ files into ticker.map and taxjson.toml.
 - `src/taxjson/lib/config_check.py` — `settings_problems`, `account_type_problems`, `account_name_problem`, `ACCOUNT_TYPES`, `ACCOUNT_KEYS`, `RETIRED_SETTINGS`: the checks every config reader applies.
 - `src/taxjson/lib/config_template.py` — `SETTINGS_SPEC`, `ACCOUNT_SPEC`, `TABLES`, `render_init`, `format_config`, `scaffold_document`, `Key`: every key taxjson reads, documented per country.
 - `src/taxjson/lib/migrate.py` — `plan`, `apply`, `Plan`, `legacy_files`, `LEGACY_FILES`, `MigrateError`: moving old files into the new places.
-- `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup.
+- `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `file_lock`, `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup; `file_lock` serializes a read-modify-write. Generated state in `work/` goes through `write_atomic`; `tests/test_fix_issues_safe_writes.py` lists the reviewed direct writes left in the core.
 - `src/taxjson/lib/tomlcompat.py` — `tomllib`: the tomllib or tomli import.
 
 ## The Canada and USA partition
@@ -481,8 +481,8 @@ downloads.
 - `src/taxjson/lib/fetchers.py` — `discover`, `Fetcher`, `FetchRequest`, `ENTRY_POINT_GROUP`, `add_fetcher_arguments`, `listing`: the core side of the plugin contract.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_fetch`, `_no_fetcher_exit`, `_fetch_plugin_note`, `_fetch_brokerages`: `taxjson fetch`.
 - `packages/taxjson-fetch/src/taxjson_fetch/plugin.py` — `BrokerFetcher`: the object the core loads.
-- `packages/taxjson-fetch/src/taxjson_fetch/command.py` — `run`, `_merge_csv_text`, `_questrade_token_file`, `_flex_lost_dates`, `_qt_trim_file`: the fetch command (token file, merging a re-fetch into the existing CSV).
-- `packages/taxjson-fetch/src/taxjson_fetch/api.py` — `qt_refresh`, `qt_activities`, `qt_positions`, `flex_fetch`, `positions_to_holdings_toml`, `mask_account_number`: the Questrade and Flex API clients.
+- `packages/taxjson-fetch/src/taxjson_fetch/command.py` — `run`, `_run`, `_merge_csv_text`, `_questrade_token_file`, `_qt_open_session`, `_questrade_token_write`, `_flex_lost_dates`, `_qt_trim_file`: the fetch command (one per project under `work/.fetch.lock`; the token's read, refresh and save under a lock beside the token file; merging a re-fetch into the existing CSV; `--trim-overlap` backups through `backup_copy`).
+- `packages/taxjson-fetch/src/taxjson_fetch/api.py` — `qt_refresh`, `qt_activities`, `qt_positions`, `flex_fetch`, `positions_to_holdings_toml`, `mask_account_number`, `write_private`: the Questrade and Flex API clients, and the owner-only atomic writer of fetched files.
 - `packages/taxjson-fetch/pyproject.toml` — `taxjson.fetchers`: the entry-point registration.
 
 ## Release channels and install

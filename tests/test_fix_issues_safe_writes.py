@@ -99,6 +99,42 @@ class TestGeneratedStateLinks(unittest.TestCase):
             self.assertIn("lira", link.read_text(encoding="utf-8"))
 
 
+class TestFileLock(unittest.TestCase):
+    """safe_write.file_lock (the fetch plugin's locks, #13)."""
+
+    def test_second_holder_waits_until_the_first_leaves(self):
+        import threading
+        from taxjson.lib.safe_write import file_lock
+        with tempfile.TemporaryDirectory() as td:
+            lock = Path(td) / "state.lock"
+            waiting, entered = threading.Event(), threading.Event()
+
+            def second():
+                with file_lock(lock, on_wait=waiting.set):
+                    entered.set()
+
+            with file_lock(lock):
+                t = threading.Thread(target=second)
+                t.start()
+                self.assertTrue(waiting.wait(30))
+                self.assertFalse(entered.is_set())
+            t.join(30)
+            self.assertTrue(entered.is_set())
+            self.assertEqual(os.stat(lock).st_mode & 0o777, 0o600)
+
+    def test_a_symlink_at_the_lock_name_is_never_followed(self):
+        from taxjson.lib.safe_write import file_lock
+        with tempfile.TemporaryDirectory() as td:
+            outside = Path(td) / "outside"
+            lock = Path(td) / "state.lock"
+            lock.symlink_to(outside)
+            ran = []
+            with file_lock(lock):
+                ran.append(1)               # runs, unlocked
+            self.assertEqual(ran, [1])
+            self.assertFalse(os.path.lexists(str(outside)))
+
+
 # Reviewed direct writes: (file under src/taxjson, the stripped source
 # line) -> why it is not generated project state.
 _ALLOWED = {

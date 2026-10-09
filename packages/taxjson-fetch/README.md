@@ -60,7 +60,8 @@ Questrade window), `--refresh-token` (Questrade, first run) /
 `--flex-token` (IBKR), `--positions` (snapshot live Questrade holdings
 into `work/<account>_live_holdings.toml` for `taxjson sanity`) and
 `--trim-overlap` (trim manually exported Questrade rows inside the
-fetched window, keeping a `.bak`). The core adds `--list`, `--fetcher`,
+fetched window, keeping a `.bak`; a symlink at that name is skipped,
+never followed, for the next free `.bakN`). The core adds `--list`, `--fetcher`,
 `--json` and `--dry-run`.
 
 Downloads land as `inputs/<account>/questrade_<year>.csv` (the whole
@@ -68,7 +69,11 @@ tax-year window, union-merged on every fetch) and
 `inputs/<account>/ib_flex.csv` (replaced, the previous copy kept as
 `.bak`; a download that would drop activity of the tax year is refused
 and saved as `ib_flex.csv.new`) — the formats the core's parsers read
-from manual exports, which keep working side by side.
+from manual exports, which keep working side by side. Every file is
+written to a new owner-only temp file of its own and renamed into place,
+and one `taxjson fetch` runs per project at a time (a second one waits
+on `work/.fetch.lock`), so two fetches never publish each other's
+unfinished file or lose each other's merged rows.
 
 ## Credentials and network
 
@@ -76,7 +81,10 @@ Credentials never go in `taxjson.toml`. Questrade takes a refresh token
 once (`--refresh-token` or `$QUESTRADE_REFRESH_TOKEN`) and caches the
 rotated token in `~/.questrade_token` (0600, rotated atomically; shared
 machine-wide because Questrade runs one rotating chain per API app;
-`$QUESTRADE_TOKEN_FILE` overrides). IBKR reads `$IBKR_FLEX_TOKEN`.
+`$QUESTRADE_TOKEN_FILE` overrides). The read, refresh and save of the
+token happen under a lock beside it (`~/.questrade_token.lock`): a second
+fetch waits and uses the token the first one saved, since each refresh
+kills the token it used. IBKR reads `$IBKR_FLEX_TOKEN`.
 Prefer the environment variables over the flags, which show in `ps`.
 
 Network, only when you run `taxjson fetch`: `https://login.questrade.com`
