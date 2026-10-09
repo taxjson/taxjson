@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Fixed
+
+- tests: CI is hermetic again. GitHub's `tests` workflow failed on every
+  push while the local gate passed, because the suite read the
+  developer's own exchange-rate cache, network and optional extras. Every
+  test process now runs in a synthetic HOME with made-up exchange rates,
+  offline; the style projects' build cleans up after a failure instead of
+  hiding it behind "File exists"; tests that need pandas skip without it;
+  tests run on Python 3.9 and 3.10 again (the `tomli` fallback, argparse's
+  older "optional arguments:" heading, no `-P`); and the gate runs the
+  suite in an empty HOME and the extras-sensitive tests with every extra
+  hidden (`scripts/ci_no_extras.sh`), so it can no longer pass while CI
+  fails.
+- Offline (`TAXJSON_OFFLINE=1`), a USD-base project installed without the
+  `[fx]` extra stopped at "taxjson-to-base-curr needs the [fx] extra for
+  a USD target" even with every rate it needed cached; offline the rates
+  now come from the cache without it.
 
 ## v0.26.0 (2026-10-09)
 

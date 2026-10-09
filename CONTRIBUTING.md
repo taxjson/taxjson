@@ -179,6 +179,17 @@ Every run appends one line to `.ci/history.log` (gitignored) with the
 commit, mode, result and wall time, so "when was this last green?" has
 an answer.
 
+The suite runs in an empty HOME, offline, as on a GitHub runner: every
+test process gets a synthetic HOME with made-up exchange rates and
+`TAXJSON_OFFLINE=1` (`tests/_hermetic`), so a test never reads your rate
+cache or the network. A test of an online path injects its fetcher, or
+clears `TAXJSON_OFFLINE` itself. GitHub's matrix jobs install no optional
+extras: a test that needs one skips without it, and the gate's
+`no-extras` stage (`scripts/ci_no_extras.sh`, seconds) runs the tests
+that touch an extra with every extra hidden. Add a new such test module
+to its `EXTRAS_TESTS`; `scripts/ci_no_extras.sh venv/bin/python3 test_x`
+runs any module that way.
+
 ### Property fuzzers
 
 Three seeded fuzzers assert LAWS of the domain over generated books —

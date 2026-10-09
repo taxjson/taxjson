@@ -517,10 +517,13 @@ a channel's release; `release.sh` cuts a tag after the full gate;
 ## The CI gate and repository checks
 
 `scripts/ci.sh` is the gate: lint, consistency, tax-rules, PII scan, the full
-suite (core and the fetch plugin) and the fuzzers. A push must see its result
-line PASS. The pre-push hook scans what a push would publish.
+suite (core and the fetch plugin, in an empty HOME, offline), the
+extras-sensitive tests with the extras hidden, and the fuzzers. A push must
+see its result line PASS. The pre-push hook scans what a push would publish.
 
-- `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`: the gate's stages.
+- `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`, `SUITE_ENV`, `stage no-extras`: the gate's stages.
+- `scripts/ci_no_extras.sh` — `hide_extras`, `EXTRAS_TESTS`, `NONET`, `env -i`: the tests that touch an optional extra, run as a core install (no extras, empty HOME, no network).
+- `tests/_hermetic/__init__.py` — `install`, `rate_cache`, `SYNTHETIC_RATES`: the synthetic HOME (offline, made-up exchange rates) every test process runs in.
 - `scripts/check-consistency.sh` — `CHANGELOG`, `channels.json`: versions, CHANGELOG heading and channels agree.
 - `scripts/check-pii.sh` — `main`, `report`, `amount_filter`, `sin_filter`, `entropy_filter`, `CRED_RE`, `--diff`: the personal-data and secret scan (tree, diff, messages).
 - `scripts/check-public.sh` — `SPLIT_PY`, `gh api --paginate`, `check-pii.sh`: scans release notes, issues, pull requests and comments on GitHub (read-only).

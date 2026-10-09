@@ -4,12 +4,14 @@
 # hosted runner) and suite stages for pull requests on the public repo.
 #
 #   scripts/ci.sh            lint + full suite (core and the packages/
-#                            fetch plugin) + fuzzers at CI depth
+#                            fetch plugin; an empty HOME, offline) + the
+#                            extras-sensitive tests with no extras
+#                            + fuzzers at CI depth
 #   scripts/ci.sh --nightly  ...fuzzers at nightly depth (minutes)
 #   scripts/ci.sh --mutation ...plus the mutation harness (an hour+;
 #                            mutates engine files in place — run it
 #                            alone, never alongside edits)
-#   scripts/ci.sh --quick    lint + suite only
+#   scripts/ci.sh --quick    lint + suite (and no-extras) only
 #
 # Exit 0 only when every stage passes. A one-line result is appended
 # to .ci/history.log (gitignored) so the last green commit is on record.
@@ -34,7 +36,7 @@ PY="${PYTHON:-$PWD/venv/bin/python3}"
 MODE=default
 for a in "$@"; do case "$a" in
   --nightly) MODE=nightly ;; --mutation) MODE=mutation ;; --quick) MODE=quick ;;
-  -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
   *) echo "unknown flag: $a" >&2; exit 2 ;;
 esac; done
 
@@ -69,14 +71,24 @@ stage consistency bash scripts/check-consistency.sh
 stage tax-rules "$PY" scripts/check_tax_rules.py
 # The tree scan covers packages/ (every tracked and untracked file).
 stage pii bash scripts/check-pii.sh
+# An empty HOME and cache folder, as on a GitHub runner: the suite never
+# reads the developer's rate cache (tests/_hermetic also gives every test
+# process a synthetic HOME with made-up rates, offline). The suite used
+# to pass here and fail on every hosted run because it did.
+mkdir -p "$CI_TMP/home/.cache"
+SUITE_ENV=(env HOME="$CI_TMP/home" XDG_CACHE_HOME="$CI_TMP/home/.cache"
+           XDG_CONFIG_HOME="$CI_TMP/home/.config" TAXJSON_OFFLINE=1)
 # Unwrapped (docs/output-style.md): a phrase a test looks for never
 # depends on where a temp path made a message wrap. The style tests set
 # their own width (tests/_style.py, tests/test_output_style.py).
-stage suite env TAXJSON_WIDTH=0 "$PY" -m unittest discover -s tests -p "test_*.py" -q
+stage suite "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" -m unittest discover -s tests -p "test_*.py" -q
+# The tests that touch an optional extra, with every extra hidden, as
+# GitHub's matrix jobs install taxjson (seconds; scripts/ci_no_extras.sh).
+stage no-extras bash scripts/ci_no_extras.sh "$PY"
 # The broker-fetch plugin (packages/taxjson-fetch): its own tests, run
 # from the checkout whether or not it is pip-installed here (its
 # tests/_support.py registers the entry point when it is not).
-stage fetch-plugin env PYTHONPATH="$PWD/packages/taxjson-fetch/src${PYTHONPATH:+:$PYTHONPATH}" \
+stage fetch-plugin "${SUITE_ENV[@]}" PYTHONPATH="$PWD/packages/taxjson-fetch/src${PYTHONPATH:+:$PYTHONPATH}" \
   "$PY" -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" -q
 
 # 3. Property fuzzers at depth. The suite already runs them at the
