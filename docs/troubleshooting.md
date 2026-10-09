@@ -23,7 +23,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `load_config`, `no taxjson.toml in`
 
-### "Error: this folder holds the year projects 2024, 2025, and `sum` works on one of them"
+### "Error: `sum` works on one year's project, and this folder holds the year folders 2024, 2025 (with the exports they share)"
 - **Check:** `ls` shows `inputs/` and year folders (`2024/`, `2025/`) but no `taxjson.toml`: the folder of exports every year shares (`tjs init`'s layout). `tjs years` lists the years.
 - **Cause:** every command but `init`, `years`, `new-year`, `redact`, `tax-logic` and `help` works on one year's project, and this folder holds several; taxjson never guesses which.
 - **Fix:** `cd 2025` (or `tjs -C 2025 sum`).
@@ -57,6 +57,34 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** upgrade: in a year folder reading shared exports they are one line, "Info: N row(s) dated after 2025: later years' exports in the shared inputs folder, expected", and their dates are checked like the others; a date after today or before 1990 is still an error. A single-folder project still reports them.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/check_dates.py` — `analyze`, `render`, `later years' exports`
+
+### "Error: [settings] inputs_dir = 'exports' names a folder inside this project" (or "names a folder inside 2024/, another year's project")
+- **Check:** `grep _dir taxjson.toml` in the year folder: the setting points into the year folder itself or into another year folder.
+- **Cause:** `inputs_dir` names the folder of exports every year shares, beside the year folders; a folder inside one year's project is that year's own, and another year's folder belongs to that year.
+- **Fix:** `inputs_dir = "../inputs"` (the folder beside the year folders), or remove the setting to read this project's own `inputs/`. The same for `holdings_dir` pointing into another year's folder (`exports_dir` there is refused as an overlap).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `folder_setting`, `_year_folders_beside`
+
+### "Warning: no inputs dir for account 'margin' (inputs/margin); skipping" in a year folder, with "Info: ../inputs/margin/ is beside this year folder, but this project reads its own inputs/"
+- **Check:** the year folder's `taxjson.toml` has no `inputs_dir`, and `ls ..` shows the shared `inputs/` (a year folder made by hand, or copied from a single-folder project).
+- **Cause:** without `inputs_dir` a project reads its own `inputs/`; the exports every year shares are not read.
+- **Fix:** add `inputs_dir = "../inputs"` to `[settings]` and `tjs run`. (With the setting, a missing account folder is named by its real path, `../inputs/rrsp`.)
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `stage_account`, `is beside this year folder`
+
+### "Error: ../inputs/crypto/crypto_sends.tt (a .tt file you wrote) and work/crypto_sends/crypto/crypto_sends.tt (generated from sends.json by `taxjson crypto-sends`) have the same name"
+- **Check:** `head -1 ../inputs/crypto/crypto_sends.tt` has no "# GENERATED" line; the year generates its own from `sends.json`.
+- **Cause:** both files would be read as the account's `crypto_sends` .tt, and only one of them would reach the books.
+- **Fix:** rename yours (`crypto_manual.tt`) and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_account_tt_files`, `have the same name`
+
+### `tjs align --write --all`: "Warning: 1 ticker.map line(s) of 2024 not brought over: each contradicts this map's lines"
+- **Check:** the listed line renames a symbol this year's ticker.map already renames to another target (or closes a rename cycle).
+- **Cause:** the two years' maps disagree; bringing the line over would make the map contradict itself, which `tjs run` refuses. The other lines are brought over.
+- **Fix:** decide which target is right for this year and edit ticker.map by hand.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `not brought over`
 
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).

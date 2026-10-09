@@ -2100,6 +2100,49 @@ def _project_tree(root: Path, inputs: Path
     return dirs, files, hidden
 
 
+def _copy_holdings_lists(root: Path, inputs: Path, files: List[_TreeFile],
+                         names: Dict[Path, Path]) -> None:
+    """The copied taxjson.toml's `holdings = [...]` lists as the
+    redacted project finds them: a file copied into it (the year's
+    holdings/, the shared inputs/) by its name in the copy (renamed
+    when its name held an id), any other file (outside the copy) left
+    out — and the key commented out when nothing is left — so the
+    redacted project runs."""
+    cfg_tf = next((f for f in files if f.rel == Path(_PL.CONFIG)
+                   and f.text is not None), None)
+    if cfg_tf is None:
+        return
+    accounts = (_PL.read_config_soft(root).get("accounts") or {})
+    hold = _PL.holdings_folder(root)
+    text = cfg_tf.text
+    for name, acfg in accounts.items():
+        if not isinstance(acfg, dict) or "holdings" not in acfg:
+            continue
+        h = acfg["holdings"]
+        listed = h if isinstance(h, list) else [h]
+        out: List[str] = []
+        for x in listed:
+            if not isinstance(x, str):
+                continue
+            q = Path(x).expanduser()
+            q = q if q.is_absolute() else root / q
+            q = Path(os.path.abspath(q))
+            for folder, prefix in ((hold, Path(_PL.HOLDINGS)),
+                                   (inputs, Path(_PL.INPUTS)),
+                                   (root / _PL.INPUTS, Path(_PL.INPUTS))):
+                try:
+                    rel = prefix / q.relative_to(os.path.abspath(folder))
+                except ValueError:
+                    continue
+                if rel in names:
+                    out.append(names[rel].as_posix())
+                break
+        text = _PL.set_key_text(
+            text, f"accounts.{name}.holdings",
+            (out if isinstance(h, list) else out[0]) if out else None)
+    cfg_tf.text = text
+
+
 def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                 check_only: bool, force: bool) -> int:
     """`taxjson redact` with no FILE: copy `root`/inputs/ to
@@ -2175,6 +2218,8 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             f.rep.notes.append(f"The input was {enc}; the copy is UTF-8.")
     names = _tree_names(dirs, files, known_ids, compiled)
     _sweep(files, known_ids, pseudonyms)
+    if shared:
+        _copy_holdings_lists(root, inputs, files, names)
     text_files = [f for f in files if f.text is not None]
     step(f"Redacting {_plural(len(text_files), 'file')}")
     found = False

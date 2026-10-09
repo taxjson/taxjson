@@ -515,12 +515,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
         n_date = sum(1 for d in ds if d.date is None)
         n_cost = sum(1 for d in ds if d.cost is None)
         n_chk = sum(1 for d in ds if d.warn)
-        shown = out
-        try:
-            shown = out.resolve().relative_to(root.resolve()) if root \
-                else out
-        except ValueError:
-            pass
+        shown = _PL.shown(out, root) if root else out
         parts = [f"{n} {what}" for n, what in (
             (n_lot, "from IB's closed lots"),
             (n_ib, "from IB's Basis"),
@@ -542,7 +537,21 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
             "the placeholders, then rename the file to end in .tt (e.g. "
             "purchases.tt) and `taxjson run`; `taxjson find-missing-"
             "history` should then drop the fixed positions.")
+    if root and _PL.shared_inputs(root) and any(
+            _inside(out, _PL.inputs_dir(root)) for out in targets.values()):
+        # The exports every year's project reads (lib/project_layout).
+        _P.para(f"Note: the drafts are in {_PL.shown(_PL.inputs_dir(root), root)}"
+                f"/, the exports folder every year's project shares: "
+                f"renamed to .tt, a purchase applies to every year.")
     return 1 if unchecked else 0
+
+
+def _inside(path, folder) -> bool:
+    try:
+        Path(path).resolve().relative_to(Path(folder).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 @guard_main("taxjson-missing-history")

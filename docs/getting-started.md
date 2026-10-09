@@ -854,15 +854,22 @@ and a complete project per tax year beside them.
 - **A new year:** `tjs new-year 2026` in `~/taxes` (or any year folder)
   creates `2026/` from the newest earlier year: its `taxjson.toml` (year
   set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's
-  `[estimate]` and `[instalments]` commented out for reference) and
-  `ticker.map` copied, and an empty `holdings/`.
+  `[estimate]` and `[instalments]` commented out for reference, and each
+  account's `holdings` list commented out: those are 2025's snapshots),
+  `ticker.map` and `missing_history.json` copied, and an empty
+  `holdings/`. An entry of `missing_history.json` without a `quantity` is
+  sized from the rows through each year's own December 31, so a later
+  year's short never changes an earlier year.
 - **Keeping the years aligned:** a map line or setting added in one year
   is not in the others. `tjs years` lists each year with its state (filed
   or open, last run, whether its inputs changed since) and says when its
   map or settings differ from the newest year's; `tjs years --diff 2024
   2025` shows the differences, and `tjs align --from 2025` in `2026/`
   brings chosen lines and settings over (asked one by one, or `--all`;
-  the previous file is kept as `.bak`; 2025 is never written).
+  the previous file is kept as `.bak`; 2025 is never written; a map line
+  that contradicts this year's is skipped and listed). The accounts'
+  `holdings` lists and broker account ids are each year's own: never
+  shown as differences or brought over.
 - **A filed year and later downloads.** A new export in `inputs/` can
   change a filed year's figures (a late correction, a January
   settlement). That year's `tjs sum` and checklist then say its inputs
@@ -876,7 +883,11 @@ and a complete project per tax year beside them.
   (`exports_dir`).
 - **Inside one folder.** `inputs_dir`, `holdings_dir` and `exports_dir`
   must stay inside the folder that holds the year folders (`~/taxes`): a
-  path or symlink leading further out is refused. Keep the whole folder
+  path or symlink leading further out is refused, and so is one into
+  another year's folder (or, for `inputs_dir`, into the year folder
+  itself). A command that writes into the shared `inputs/` (`tjs
+  opening`, `tjs format-map --write`, `tjs find-missing-history
+  --write-purchases`) says the file applies to every year. Keep the whole folder
   in one git repository (`git init` in `~/taxes`): the checklist's
   "inputs committed" step looks at the shared `inputs/` too.
 

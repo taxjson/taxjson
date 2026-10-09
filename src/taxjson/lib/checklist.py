@@ -1233,10 +1233,15 @@ def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
 
 
 def d_sanity(ctx: Ctx) -> Result:
-    if not any(a.get("holdings") for a in ctx.accounts.values()):
+    from taxjson.lib.holdings_dir import folder_for
+    if not any(a.get("holdings") for a in ctx.accounts.values()) \
+            and folder_for(ctx.root)[0] is None:
+        _hold = _PL.shown(_PL.holdings_folder(ctx.root), ctx.root)
         return Result("sanity", "manual",
-                      "no `holdings = [...]` in taxjson.toml — run "
-                      "`taxjson sanity ACCOUNT=FILE.toml` by hand")
+                      f"no positions snapshot in {_hold}/ and no "
+                      f"`holdings = [...]` in taxjson.toml — save the "
+                      f"broker's positions in {_hold}/, or run `taxjson "
+                      f"sanity ACCOUNT=FILE.toml` by hand")
     code, out, err = ctx.sub("sanity")
     incomplete = [ln for ln in out.splitlines()
                   if ln.startswith("INCOMPLETE")]
@@ -2904,7 +2909,8 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                "Missing history in a position you still hold shows only "
                "here: the books cannot see a purchase that is not in the "
                "files.",
-               (Cmd("tjs sanity", "against the holdings files named in "
+               (Cmd("tjs sanity", "against the positions snapshots in "
+                    "the year's holdings/ and the files named in "
                     "taxjson.toml (holdings = [...])"),
                 Cmd("tjs sanity ACCOUNT=FILE", "against one positions "
                     "report: an IB statement, an RBC Holdings Export or a "
@@ -3330,8 +3336,15 @@ def _review(sid: str) -> Callable[[Ctx, _Facts], Result]:
 
 
 def s_next_year(ctx: Ctx, f: _Facts) -> Result:
+    nxt = ctx.year + 1
+    if (ctx.root.parent / str(nxt) / _PL.CONFIG).is_file() \
+            and _PL.YEAR_DIR_RE.match(ctx.root.name):
+        # The next year's folder is there already (`tjs new-year`).
+        return Result("next-year", "done",
+                      f"{nxt}/ is started — `tjs -C ../{nxt} checklist` "
+                      f"there")
     if (ctx.root / "filed" / f"{ctx.year}.json").is_file():
-        return Result("next-year", "review", f"start {ctx.year + 1}")
+        return Result("next-year", "review", f"start {nxt}")
     return Result("next-year", "review", "after you file")
 
 

@@ -243,8 +243,9 @@ class BookRow:
 
 # ------------------------------------------------------------ helpers
 def slips_dir(root: Path) -> Path:
-    """inputs/slips/; a multi-year project's year folder: <year>/slips/
-    (lib/project_layout.slips_dir)."""
+    """The project's own inputs/slips/ — with exports shared by every
+    year too: the year folder's inputs/slips/, since slips belong to one
+    tax year (lib/project_layout.slips_dir)."""
     return _PL.slips_dir(root)
 
 

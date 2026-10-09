@@ -149,7 +149,32 @@ def folder_setting(root, key: str, settings: Optional[Dict[str, Any]]
                           f"folder itself or the folder holding it — name "
                           f"a folder inside it, such as "
                           f"\"../{_KEY_EXAMPLE.get(key, INPUTS)}\"")
+    if key == INPUTS_KEY and _overlaps(real, root):
+        # A folder inside this project is not a shared one: the
+        # project's own exports are read from inputs/ with no setting.
+        raise LayoutError(f"[settings] {key} = {v!r} names a folder "
+                          f"inside this project — {key} names the folder "
+                          f"of exports every year shares, beside the year "
+                          f"folders (\"../{INPUTS}\"); for this project's "
+                          f"own inputs/ remove the setting")
+    # (exports_dir: exports_overlap names any year folder it overlaps)
+    for y in (_year_folders_beside(root) if key != EXPORTS_KEY else ()):
+        if y != root and _overlaps(real, y):
+            raise LayoutError(f"[settings] {key} = {v!r} names a folder "
+                              f"inside {y.name}/, another year's project "
+                              f"— name a folder beside the year folders, "
+                              f"such as \"../{_KEY_EXAMPLE.get(key, INPUTS)}"
+                              f"\"")
     return real
+
+
+def _year_folders_beside(root: Path) -> List[Path]:
+    """The folders named YYYY beside `root` (resolved)."""
+    try:
+        return [_resolved(p) for p in Path(root).parent.iterdir()
+                if YEAR_DIR_RE.match(p.name) and p.is_dir()]
+    except OSError:
+        return []
 
 
 def _folder(root, key: str, default: Optional[str]) -> Optional[Path]:
@@ -458,12 +483,19 @@ YEAR_ONLY_TABLES = ("estimate", "instalments")
 def new_year_text(text: str, old_year: int, new_year: int) -> str:
     """Last year's taxjson.toml as next year's: `year` set, the
     prior_year_record pointed at last year's lock, and the year's own
-    tables ([estimate], [instalments]) commented out under a note —
+    tables ([estimate], [instalments]) and each account's `holdings`
+    (last year's positions snapshots) commented out under a note —
     everything else (accounts, settings, comments) kept as written."""
     out: List[str] = []
     table = None
     have_prior = False
+    in_holdings = False
     for ln in text.splitlines():
+        if in_holdings:
+            # The rest of a multi-line `holdings = [...]` array.
+            out.append("# " + ln)
+            in_holdings = "]" not in ln.split("#", 1)[0]
+            continue
         m = re.match(r"^\s*\[+\s*([A-Za-z0-9_.]+)\s*\]+", ln)
         if m:
             table = m.group(1).split(".")[0]
@@ -476,6 +508,17 @@ def new_year_text(text: str, old_year: int, new_year: int) -> str:
         if table in YEAR_ONLY_TABLES and ln.strip() \
                 and not ln.lstrip().startswith("#"):
             out.append("# " + ln)
+            continue
+        if table == "accounts" and re.match(r"^\s*holdings\s*=", ln):
+            # Last year's positions snapshots are not this year's: the
+            # new year's go in its holdings/ (found by account), or are
+            # listed here again (lib/holdings_dir).
+            out.append(f"## {old_year}'s positions snapshots, commented "
+                       f"out by `taxjson new-year`: save {new_year}'s in "
+                       f"holdings/, or list them here.")
+            out.append("# " + ln)
+            val = ln.split("=", 1)[1].split("#", 1)[0]
+            in_holdings = "[" in val and "]" not in val
             continue
         if table == "settings":
             if re.match(r"^\s*year\s*=", ln):
@@ -534,13 +577,27 @@ def flat_keys(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 # Keys that differ from year to year by design.
 _PER_YEAR_KEYS = ("settings.year", "settings.prior_year_record")
+# Account keys never compared or brought over: the year's own positions
+# snapshots (`holdings`), and the broker's account ids and query id
+# (an id is the user's, never shown in a list of differences).
+_ACCOUNT_KEYS_APART = ("holdings", "account", "broker_accounts",
+                       "query_id")
+
+
+def _compared(key: str) -> bool:
+    parts = key.split(".")
+    if key in _PER_YEAR_KEYS or parts[0] in YEAR_ONLY_TABLES:
+        return False
+    return not (parts[0] == "accounts" and len(parts) == 3
+                and parts[2] in _ACCOUNT_KEYS_APART)
 
 
 def compare(here: Path, other: Path) -> Dict[str, Any]:
     """What differs between two projects' ticker.map rules and
     taxjson.toml keys (`taxjson align`, `taxjson years --diff`): rules
-    only in one, keys set differently (`year`, prior_year_record and the
-    year's own tables left out; arrays of tables compared whole)."""
+    only in one, keys set differently (`year`, prior_year_record, the
+    year's own tables and the accounts' holdings and broker ids left
+    out: _compared; arrays of tables compared whole)."""
     a, b = map_rules(here / TICKER_MAP), map_rules(other / TICKER_MAP)
     try:
         fa = flat_keys(read_config(here))
@@ -548,9 +605,7 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     except LayoutError:
         fa, fb = {}, {}
     keys = sorted(k for k in set(fa) | set(fb)
-                  if k not in _PER_YEAR_KEYS
-                  and k.split(".", 1)[0] not in YEAR_ONLY_TABLES
-                  and fa.get(k) != fb.get(k))
+                  if _compared(k) and fa.get(k) != fb.get(k))
     return {
         "map_only_here": [r for r in a if r not in b],
         "map_only_there": [r for r in b if r not in a],

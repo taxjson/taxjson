@@ -80,16 +80,6 @@ def _meta(path: Path) -> Dict[str, Any]:
     return m if isinstance(m, dict) else {}
 
 
-def snapshot_date(path: Path) -> str:
-    """The positions' date: [meta] as_of, else the day of [meta]
-    generated_at; '' when neither reads."""
-    try:
-        from taxjson.lib.positions_reports import read_positions
-        return read_positions(Path(path)).as_of or ""
-    except Exception:                                   # noqa: BLE001
-        return ""
-
-
 def snapshot_files(folder: Path) -> List[Path]:
     if not folder.is_dir():
         return []

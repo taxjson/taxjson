@@ -2337,6 +2337,24 @@ def _say_once(key: Any, kind: str, text: str, *details: str,
     _say(kind, text, *details, **kw)
 
 
+def _shared_inputs_note(root: Path, path: Path, prog: str) -> None:
+    """A file this command wrote into the exports folder every year's
+    project shares ([settings] inputs_dir): one note that it applies to
+    every year, not only this one (lib/project_layout). Silent for a
+    single-folder project and for a file outside that folder."""
+    if not _PL.shared_inputs(root):
+        return
+    try:
+        Path(path).resolve().relative_to(_PL.inputs_dir(root).resolve())
+    except (ValueError, OSError):
+        return
+    _say_once(("shared-write", str(path)), "note",
+              f"{_PL.shown(path, root)} is in the exports folder every "
+              f"year's project shares: it applies to every year",
+              "Each year's run reads it; `taxjson run` in another year's "
+              "folder shows what it changes there.", prog=prog)
+
+
 # The cross-listing joins this run computed: {work dir: (map path or
 # None, analysis)} — once per run (lib/cross_listings).
 _XLIST_THIS_RUN: Dict[Path, Tuple[Optional[Path], Dict[str, Any]]] = {}
@@ -3113,7 +3131,19 @@ def _account_tt_files(acct_dir: Path, cache: Path, name: str
             continue
         keep.append(t)
     gen = CS.tt_path(root, name)
-    return keep + ([gen] if gen.is_file() else [])
+    if not gen.is_file():
+        return keep
+    mine = [t for t in keep if t.name.lower() == CS.TT_NAME]
+    if mine:
+        # Both would convert to one work/<acct>_tt_crypto_sends.json
+        # (pipeline.tt_json_path): one of them silently dropped.
+        _die_input(f"{_PL.shown(mine[0], root)} (a .tt file you wrote) and "
+                   f"{_PL.shown(gen, root)} (generated from sends.json by "
+                   f"`taxjson crypto-sends`) have the same name, so the "
+                   f"run would read only one of them",
+                   f"Rename yours (e.g. {name}_sends_manual.tt) and run "
+                   f"again.")
+    return keep + [gen]
 
 
 def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
@@ -3295,9 +3325,24 @@ def _is_us(cfg: Dict[str, Any]) -> bool:
                                                                  "usa")
 
 
+def _sends_tt_shown(root: Path, acct: str) -> str:
+    """The generated crypto_sends.tt of `acct` as the user finds it:
+    inputs/<acct>/crypto_sends.tt, or with shared exports this year's
+    work/crypto_sends/<acct>/crypto_sends.tt (crypto_sends.tt_path)."""
+    from taxjson.lib import crypto_sends as CS
+    return _PL.shown(CS.tt_path(root, acct), root)
+
+
+def _sends_json_shown(root: Path, acct: str) -> str:
+    """The account's sends.json (the decisions) as the user finds it:
+    inputs/<acct>/sends.json, or ../inputs/<acct>/sends.json."""
+    from taxjson.lib import crypto_sends as CS
+    return _PL.shown(_PL.inputs_dir(root) / acct / CS.MANIFEST_NAME, root)
+
+
 def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
                      ) -> Tuple[str, List[Dict[str, Any]]]:
-    """(Re)write inputs/<acct>/crypto_sends.tt from the report. Returns
+    """(Re)write the generated crypto_sends.tt (crypto_sends.tt_path) from the report. Returns
     (write status, duplicate hand-written lines). Raises
     crypto_sends.RefusedDecision AFTER writing the file without them
     when a saved decision is one the country refuses (a US gift:
@@ -3316,9 +3361,9 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
                          CS.render_tt(acct, entries, report["country"]))
     if refused:
         raise CS.RefusedDecision(
-            f"inputs/{acct}/{CS.MANIFEST_NAME}: "
+            f"{_sends_json_shown(root, acct)}: "
             + "; ".join(e["refused"] for e in refused)
-            + f" (inputs/{acct}/{CS.TT_NAME} {status} without it)")
+            + f" ({_sends_tt_shown(root, acct)} {status} without it)")
     if unpriced:
         _fee = [e["id"] for e in unpriced if e.get("network_fee")]
         _dec = [e["id"] for e in unpriced if not e.get("network_fee")]
@@ -3334,7 +3379,7 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
                 + ([f"`taxjson crypto-sends {acct} --set {i}=fee "
                     f"--price P` (the network fee hidden in a send that "
                     f"arrived short)" for i in _fee[:1]] if _fee else []))
-            + f". inputs/{acct}/{CS.TT_NAME} {status} with the "
+            + f". {_sends_tt_shown(root, acct)} {status} with the "
               f"{len(entries)} priced line(s).")
         _exc.dups = CS.duplicate_lines(_PL.inputs_dir(root) / acct, entries)
         _exc.status = status
@@ -3359,11 +3404,14 @@ def _disposing_word(country: str) -> str:
                     if d in CS.DISPOSING)
 
 
-def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
+def _dup_warning(acct: str, dups: List[Dict[str, Any]],
+                 root: Optional[Path] = None) -> List[str]:
     """One line per hand-written .tt line that books a send the
     generated crypto_sends.tt also books — both file names, the send
     and its timestamp. Nothing is deleted: the owner picks the line."""
     from taxjson.lib import crypto_sends as CS
+    gen = (_sends_tt_shown(root, acct) if root is not None
+           else f"inputs/{acct}/{CS.TT_NAME}")
     out = []
     for d in dups:
         when = (d["timestamp"] if d["same_time"]
@@ -3371,15 +3419,15 @@ def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
                      f"another date or time, or a near quantity)")
         if d["id"].endswith("-fee"):
             out.append(
-                f"{d['file']} line {d['line']} and inputs/{acct}/"
-                f"{CS.TT_NAME} both sell {CS.fmt_qty(d['quantity'])} "
+                f"{d['file']} line {d['line']} and {gen} "
+                f"both sell {CS.fmt_qty(d['quantity'])} "
                 f"{d['symbol']} on {when} (the network fee {d['id']}, "
                 f"booked from the send that arrived short) — that "
                 f"disposition is counted twice. Delete the hand-written "
                 f"line.")
             continue
         out.append(
-            f"{d['file']} line {d['line']} and inputs/{acct}/{CS.TT_NAME} "
+            f"{d['file']} line {d['line']} and {gen} "
             f"both sell {CS.fmt_qty(d['quantity'])} {d['symbol']} on "
             f"{when} (send {d['id']}) — that disposition is counted "
             f"twice. Delete the hand-written line (crypto_sends.tt is "
@@ -3491,7 +3539,7 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                      f"Decide each with `taxjson crypto-sends {name} "
                      f"--set ID=...`.")
         if adoc.get("orphans"):
-            _say("note", f"inputs/{name}/{CS.MANIFEST_NAME} has "
+            _say("note", f"{_sends_json_shown(root, name)} has "
                  f"{len(adoc['orphans'])} decision(s) for send ids that "
                  f"no longer exist ({', '.join(adoc['orphans'][:3])}"
                  f"{' ...' if len(adoc['orphans']) > 3 else ''})",
@@ -3506,15 +3554,13 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
             status, dups = getattr(e, "status", ""), getattr(e, "dups", [])
             # A declared disposition the run could not book (R1-104).
             _problems.append((UNBOOKED_PREFIX, str(e)))
-        _tt_shown = (f"inputs/{name}/{CS.TT_NAME}"
-                     if not _PL.shared_inputs(root)
-                     else _PL.shown(CS.tt_path(root, name), root))
+        _tt_shown = _sends_tt_shown(root, name)
         if status == "written":
             _step(f"Writing crypto sends {_tt_shown}")
         elif status == "removed":
             _step(f"Removing crypto sends {_tt_shown}")
         # Booked twice (A2-0127): --strict stops, the .sum says so.
-        _dups = _dup_warning(name, dups)
+        _dups = _dup_warning(name, dups, root)
     except CS.RefusedDecision as e:
         # A saved decision the country refuses (a US gift): not booked,
         # and the run stops until sends.json says what it was.
@@ -3531,16 +3577,16 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
             # Booking it on a guess is worse than stopping (audit A2-0415).
             _diag.unlink(missing_ok=True)
             _die(f"{name}: crypto sends: {e}",
-                 f"The generated inputs/{name}/{CS.TT_NAME} was written "
-                 f"from the earlier decisions and is not booked on a "
-                 f"guess — fix the cause above (the decisions are in "
-                 f"inputs/{name}/{CS.MANIFEST_NAME}), or delete "
+                 f"The generated {_sends_tt_shown(root, name)} was "
+                 f"written from the earlier decisions and is not booked "
+                 f"on a guess — fix the cause above (the decisions are "
+                 f"in {_sends_json_shown(root, name)}), or delete "
                  f"{CS.TT_NAME} to run without the decided sales, and "
                  f"run again.")
         msg = (f"{e} The decided gift(s)/payment(s) it names are NOT "
                f"booked"
-               + (f"; the previous inputs/{name}/{CS.TT_NAME} is still "
-                  f"booked as it was" if tt.exists() else "")
+               + (f"; the previous {_sends_tt_shown(root, name)} is "
+                  f"still booked as it was" if tt.exists() else "")
                + ". `run --strict` refuses this.")
         _problems.append((UNBOOKED_PREFIX, msg))
     for _p, w in _problems:
@@ -3940,10 +3986,25 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     first so each one's sends pair against current arrivals."""
     acct_dir = inputs_dir / name
     if not acct_dir.exists():
-        # Once per run: the first pass stages the account too.
+        # Once per run: the first pass stages the account too. The
+        # folder is named as it is (../inputs/tfsa with shared exports).
+        _root = cache.parent
         _say_once(("no-dir", name), "warning",
-                  f"no inputs dir for account '{name}' (inputs/{name}); "
-                  f"skipping", prog=_PROG)
+                  f"no inputs dir for account '{name}' "
+                  f"({_PL.shown(acct_dir, _root)}); skipping", prog=_PROG)
+        _sib = _root.parent / _PL.INPUTS
+        if (not _PL.shared_inputs(_root)
+                and _PL.YEAR_DIR_RE.match(_root.name)
+                and (_sib / name).is_dir()):
+            # A year folder beside a folder of exports for every year
+            # that does not read it (a hand-made year folder).
+            _say_once(("no-dir-shared",), "note",
+                      f"../{_PL.INPUTS}/{name}/ "
+                      f"is beside this year folder, but this project "
+                      f"reads its own {_PL.INPUTS}/",
+                      f"To read the exports every year shares, add "
+                      f"`{_PL.INPUTS_KEY} = \"../{_PL.INPUTS}\"` to "
+                      f"[settings] in taxjson.toml.", prog=_PROG)
         return None
 
     base_currency = settings["base_currency"]
@@ -10008,15 +10069,15 @@ def _cannot_write_decisions(path, e: OSError) -> str:
     inputs/<acct>/, a full disk): it was a PermissionError traceback on
     sends.json.part (re-audit A2-1416)."""
     return (f"cannot write {path}: {e.strerror or e} — nothing was "
-            f"saved; make inputs/{Path(path).parent.name}/ writable and "
-            f"re-run.")
+            f"saved; make {Path(path).parent}/ writable and re-run.")
 
 
 def cmd_crypto_sends(args: argparse.Namespace) -> None:
     """`taxjson crypto-sends`: every outgoing crypto transfer that did
     not arrive in another of your crypto accounts, with your decision (self /
     gift / payment), its fair value and the ready .tt line; --set
-    records a decision, --write regenerates inputs/<acct>/crypto_sends.tt."""
+    records a decision, --write regenerates the account's crypto_sends.tt
+    (inputs/<acct>/, or with shared exports work/crypto_sends/<acct>/)."""
     from taxjson.lib import crypto_sends as CS
     root = Path(args.dir).resolve()
     cfg = load_config(root)
@@ -10058,7 +10119,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                 sid = sid.strip()
                 if not CS.clear_decision(_man, sid):
                     _die(f"no saved decision for {sid!r} in "
-                         f"inputs/{acct}/{_MN}.")
+                         f"{_sends_json_shown(root, acct)}.")
                 print(f"removed: {sid} (undecided again — `taxjson run` "
                       f"asks, or `--set {sid}=...`)")
         except ValueError as e:
@@ -10113,7 +10174,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                     print(f"saved: {sid} priced at {args.price:g} "
                           f"{light['base_currency']} per "
                           f"{fee_ids[sid]['symbol']}  "
-                          f"(inputs/{acct}/{CS.MANIFEST_NAME})")
+                          f"({_sends_json_shown(root, acct)})")
                     continue
                 if dec not in CS.DECISIONS:
                     _die(f"decision {dec!r} for {sid} — expected one of "
@@ -10159,7 +10220,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                     _die_input(_cannot_write_decisions(adoc["manifest"], e))
                 print(f"saved: {sid} = {dec}"
                       f"{' (unpaired)' if unpair else ''}  "
-                      f"(inputs/{acct}/{CS.MANIFEST_NAME})")
+                      f"({_sends_json_shown(root, acct)})")
             if not args.write:
                 print(f"Regenerate the .tt lines: `taxjson crypto-sends "
                       f"{acct} --write` (or just `taxjson run`).")
@@ -10172,9 +10233,9 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         if args.write:
             status, dups = _crypto_sends_tt(root, acct, report)
             n = len(CS.tt_entries(report["accounts"][acct])[0])
-            print(f"inputs/{acct}/{CS.TT_NAME}: {status} "
+            print(f"{_sends_tt_shown(root, acct)}: {status} "
                   f"({n} BUYSELL line(s)); `taxjson run` books it.")
-            for w in _dup_warning(acct, dups):
+            for w in _dup_warning(acct, dups, root):
                 _view_msg("warning", w)
             return
     except ValueError as e:
@@ -10304,17 +10365,17 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                                  f" --price P` (a `-fee` id: `--set "
                                  f"ID=fee --price P`)."])
         if want == have:
-            last = (f"inputs/{acct}/{CS.TT_NAME}: up to date "
+            last = (f"{_sends_tt_shown(root, acct)}: up to date "
                     f"({len(entries)} line(s))." if have else
                     f"No {_disposing_word(report['country'])} or network "
                     f"fee needs a sale line.")
         else:
-            last = (f"inputs/{acct}/{CS.TT_NAME}: OUT OF DATE — run "
+            last = (f"{_sends_tt_shown(root, acct)}: OUT OF DATE — run "
                     f"`taxjson crypto-sends {acct} --write` (or `taxjson "
                     f"run`).")
         doc.para(last)
         for w in _dup_warning(acct, CS.duplicate_lines(
-                _PL.inputs_dir(root) / acct, entries)):
+                _PL.inputs_dir(root) / acct, entries), root):
             doc.message("warning", w)
         for w in _crypto_sends_problems(acct, adoc):
             doc.message("warning", w)
@@ -17165,7 +17226,8 @@ def cmd_opening(args: argparse.Namespace) -> None:
                     and parts[2].upper() in syms:
                 clash.append((f.name, parts[2].upper()))
     if clash:
-        _die(f"inputs/{name}/{clash[0][0]} already has OPENING lines for "
+        _die(f"{_PL.shown(acct_dir / clash[0][0], root)} already has "
+             f"OPENING lines for "
              f"{', '.join(sorted({s for _f, s in clash})[:6])}",
              "One opening per symbol per account: remove that file, or "
              "the lines, first.")
@@ -17196,7 +17258,7 @@ def cmd_opening(args: argparse.Namespace) -> None:
         pass
     else:
         if out.exists() and not args.force:
-            _die(f"inputs/{name}/{out.name} exists",
+            _die(f"{_PL.shown(out, root)} exists",
                  f"Pass --force to replace it (the old file is kept as "
                  f"{out.name}.bak, or the next free .bakN).")
         acct_dir.mkdir(parents=True, exist_ok=True)
@@ -17210,6 +17272,7 @@ def cmd_opening(args: argparse.Namespace) -> None:
                   prog="taxjson opening")
         from taxjson.lib.cli_diag import write_text_atomic
         write_text_atomic(out, text)
+        _shared_inputs_note(root, out, "taxjson opening")
     for n in report.notes + notes:
         _note(n, prog="taxjson opening")
     for sym, why in skipped:
@@ -17219,7 +17282,7 @@ def cmd_opening(args: argparse.Namespace) -> None:
              f"above) — nothing written")
     where = ("(dry run — nothing written)" if getattr(args, "dry_run",
                                                        False)
-             else f"-> inputs/{name}/{out.name}")
+             else f"-> {_PL.shown(out, root)}")
     for ln in _wrap(f"{len(lines)} OPENING line(s) for account {name} as "
                     f"of {snapshot} {where}"
                     + (f"; {len(skipped)} position(s) skipped (see above)"
@@ -18577,18 +18640,24 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
              *[f"- {p}" for p in probs],
              "The figures below may leave sales out or carry default FX; "
              "fix and re-run `taxjson run` before using them."
-             + _filed_year_stale_hint(root, cfg),
+             + _filed_year_stale_hint(root, cfg, probs),
              prog=_cmd_prog())
     return probs
 
 
-def _filed_year_stale_hint(root: Path, cfg: Dict[str, Any]) -> str:
-    """When the books' year is filed (filed/<year>.json): the sentence
-    saying the changed inputs may have moved the filed figures — in a
+def _filed_year_stale_hint(root: Path, cfg: Dict[str, Any],
+                           probs: List[str]) -> str:
+    """When the books' year is filed (filed/<year>.json) and one of
+    `probs` (_run_state_problems) is that the inputs changed: the
+    sentence saying they may have moved the filed figures — in a
     multi-year project a shared input or ticker.map edited while
-    working on a later year (lib/project_layout)."""
+    working on a later year (lib/project_layout). Any other problem (a
+    run that did not finish) gets no such sentence."""
     year = (cfg.get("settings") or {}).get("year")
     if year is None or not (root / "filed" / f"{year}.json").is_file():
+        return ""
+    if not any(str(p).startswith("inputs changed since the last")
+               for p in probs):
         return ""
     return (f" {year} is filed (filed/{year}.json) and its inputs changed "
             f"since the last run: `taxjson run` here recomputes the year "
@@ -22960,7 +23029,9 @@ def cmd_format_map(args: argparse.Namespace) -> None:
         except (OutsideLinkError, OSError) as e:
             _fail(rel, e)
         written.append(rel)
-        print(f"wrote {rel} ({n_rules} ticker change(s) from ticker.map)")
+        print(f"wrote {_PL.shown(p, root)} ({n_rules} ticker change(s) "
+              f"from ticker.map)")
+        _shared_inputs_note(root, p, prog)
     try:
         bak = write_user_file(tm, res.text, root,
                               suffix=".format.part",
@@ -23367,10 +23438,15 @@ def cmd_new_year(args: argparse.Namespace) -> None:
     try:
         folder.mkdir(exist_ok=True, mode=0o700)
         write_atomic(folder / "taxjson.toml", new_text)
-        if (prev / "ticker.map").is_file() \
-                and not (folder / "ticker.map").exists():
-            write_atomic(folder / "ticker.map",
-                         (prev / "ticker.map").read_bytes())
+        from taxjson.lib.missing_history import MISSING_HISTORY_FILE
+        copied = []
+        for _name in ("ticker.map", MISSING_HISTORY_FILE):
+            # missing_history.json: the positions bought before the data
+            # are the same every year (an entry without `quantity` is
+            # sized through the new year's end: CA-ACB-11).
+            if (prev / _name).is_file() and not (folder / _name).exists():
+                write_atomic(folder / _name, (prev / _name).read_bytes())
+                copied.append(_name)
         hold = _PL.holdings_folder(folder)
         if hold == folder / _PL.HOLDINGS:
             hold.mkdir(exist_ok=True, mode=0o700)
@@ -23379,8 +23455,10 @@ def cmd_new_year(args: argparse.Namespace) -> None:
     for _ln in _out_wrap(
             f"Created {year}/ from {prev_year}/: taxjson.toml (year {year}, "
             f"prior_year_record ../{prev_year}/filed/{prev_year}.json, the "
-            f"{prev_year} [estimate] / [instalments] commented out), "
-            f"ticker.map, holdings/.", indent="", hang=""):
+            f"{prev_year} [estimate] / [instalments] and accounts' "
+            f"holdings commented out), "
+            + "".join(f"{n}, " for n in copied) + "holdings/.",
+            indent="", hang=""):
         print(_ln)
     _yd = _shlex.quote(str(folder))
     shared = _PL.shared_inputs(folder)
@@ -23481,22 +23559,36 @@ def cmd_align(args: argparse.Namespace) -> None:
     keys = [k for k in c["keys"]
             if _ask(f"set {k['key']} = {_setting_text(k['there'])}")]
     done = []
+    skipped: List[Tuple[str, List[str]]] = []
     if lines:
         tm = _PL.ticker_map_path(root)
         cur = tm.read_text(encoding="utf-8-sig") if tm.is_file() else ""
-        text = (cur.rstrip("\n") + ("\n\n" if cur.strip() else "")
+        head = (cur.rstrip("\n") + ("\n\n" if cur.strip() else "")
                 + f"# from {other.name}/ticker.map (`taxjson align`, "
-                  f"{date_cls.today().isoformat()})\n"
-                + "\n".join(lines) + "\n")
+                  f"{date_cls.today().isoformat()})\n")
         from taxjson.bin.taxjson_ticker_map import map_file_problems
         import tempfile as _tf
-        with _tf.TemporaryDirectory() as _d:
-            _probe = Path(_d) / "ticker.map"
-            _probe.write_text(text, encoding="utf-8")
-            _problems = map_file_problems(_probe)
-        if _problems:
-            _die("the lines would make ticker.map contradict itself — "
-                 "nothing was written", *[f"- {p}" for p in _problems])
+
+        def _problems_of(t: str) -> List[str]:
+            with _tf.TemporaryDirectory() as _d:
+                _probe = Path(_d) / "ticker.map"
+                _probe.write_text(t, encoding="utf-8")
+                return list(map_file_problems(_probe))
+        # A line that would make the map contradict itself (with this
+        # map's lines, or one brought over before it) is skipped and
+        # listed; the others are brought over.
+        before = set(_problems_of(cur))
+        kept: List[str] = []
+        for ln in lines:
+            new = [p for p in _problems_of(head + "\n".join(kept + [ln])
+                                           + "\n") if p not in before]
+            if new:
+                skipped.append((ln, new))
+            else:
+                kept.append(ln)
+        lines = kept
+    if lines:
+        text = head + "\n".join(lines) + "\n"
         bak = write_user_file(tm, text, root)
         done.append(f"ticker.map: {len(lines)} line(s) added"
                     + (f" (the previous file kept as {bak.name})"
@@ -23516,6 +23608,13 @@ def cmd_align(args: argparse.Namespace) -> None:
                     + (f" (the previous file kept as {bak.name})"
                        if bak else ""))
     print("\n".join(done) if done else "Nothing brought over.")
+    if skipped:
+        _say("warning", f"{len(skipped)} ticker.map line(s) of "
+             f"{other.name} not brought over: each contradicts this "
+             f"map's lines",
+             *[f"- {ln}: {'; '.join(why)}" for ln, why in skipped],
+             "Decide which line is right for this year and edit "
+             "ticker.map by hand.", prog=_cmd_prog())
     if done:
         print("Run `taxjson run` to rebuild the books with them.")
 
@@ -25491,11 +25590,12 @@ def _refuse_years_root(args: argparse.Namespace) -> None:
     y = years[-1]
     here = args.dir in (".", "./", "")
     where = str(y) if here else _os.path.join(args.dir, str(y))
-    _die_input(f"this folder holds the year projects "
-               f"{', '.join(str(x) for x in years)}, and `{args.cmd}` "
-               f"works on one of them",
-               f"Run it in a year folder: `cd {where}` (or `{_PROG} -C "
-               f"{where} {args.cmd} ...`). `{_PROG} years` lists them.")
+    _die_input(f"`{args.cmd}` works on one year's project, and this "
+               f"folder holds the year folders "
+               f"{', '.join(str(x) for x in years)} (with the exports "
+               f"they share)",
+               f"Run it in a year folder: `cd {where}`, or `{_PROG} -C "
+               f"{where} {args.cmd}`. `{_PROG} years` lists the years.")
 
 
 # Commands that read the work/ books and print figures or verdicts from

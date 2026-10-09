@@ -447,9 +447,9 @@ def _export_names(root: Path) -> Dict[str, Set[Tuple[str, ...]]]:
 
 
 def _holdings_files(root: Path) -> List[Path]:
-    """The holdings files taxjson.toml's accounts list (`holdings`)."""
-    # (a multi-year project's year folder: the merged configuration,
-    # a root path read from the root — lib/project_layout)
+    """The holdings files taxjson.toml's accounts list (`holdings`,
+    relative to the project), and the positions snapshots in the year's
+    holdings/ folder (lib/holdings_dir)."""
     if not _PL.has_config(root):
         return []
     try:
@@ -466,6 +466,9 @@ def _holdings_files(root: Path) -> List[Path]:
             pp = pp if pp.is_absolute() else root / pp
             if pp.is_file():
                 out.append(pp)
+    from taxjson.lib.holdings_dir import snapshot_files
+    out += [q for q in snapshot_files(_PL.holdings_folder(root))
+            if q not in out]
     return out
 
 
@@ -474,7 +477,7 @@ def books_symbols(root: Path) -> Set[str]:
     them — the evidence a conditional hint needs: each account's parsed
     exports and transfer sidecars, corporate-action rows and .tt files
     (OPENING balances too) in work/ (never a derived book: those carry
-    the map's renames), plus the holdings files taxjson.toml lists. An
+    the map's renames), plus the holdings files (_holdings_files). An
     option adds its underlying listing."""
     from taxjson.bin.taxjson_run import _AUDIT_DERIVED_SUFFIXES
     from taxjson.lib.core import parse_option_underlying

@@ -699,7 +699,7 @@ Every buy/sell row is cross-checked (amount vs qty × price ± fee within 1%, du
 
 ## holdings/: the year's positions snapshots
 
-The broker's positions files for the tax year, as a download tool writes them (one `[[holding]]` TOML per broker account; see [Holdings TOML](#holdings-toml)). `taxjson sanity` with no arguments and the end of `taxjson run` compare the books with them, without a `holdings = [...]` setting; an account that has one keeps its own files (a file it lists is never another account's, nor named as unclaimed). Code: `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `snapshot_date`.
+The broker's positions files for the tax year, as a download tool writes them (one `[[holding]]` TOML per broker account; see [Holdings TOML](#holdings-toml)). `taxjson sanity` with no arguments and the end of `taxjson run` compare the books with them, without a `holdings = [...]` setting; an account that has one keeps its own files (a file it lists is never another account's, nor named as unclaimed). Code: `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `listed_files`.
 
 - A file belongs to the account whose `account` or `broker_accounts` holds the file's `[meta] account`; else to the account its name starts with (`margin_holdings.toml`, `margin_ib_holdings.toml`). A file no account claims, or two do, is named in a note and not compared. Several files of one account are compared together.
 - A snapshot is compared at its date: `[meta] as_of`, else the day of `[meta] generated_at`. One dated after the books' last day is compared with the latest books, with a note.

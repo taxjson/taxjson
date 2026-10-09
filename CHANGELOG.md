@@ -10,13 +10,20 @@
   `ticker.map`, `holdings/`, results) whose new `[settings] inputs_dir`
   reads the shared exports (`init --single` keeps one folder for one
   year). `taxjson new-year YYYY` starts the next year's folder from the
-  previous year's settings and map, `taxjson align --from YEAR` brings
-  another year's map lines and settings over, `taxjson years` lists each
-  year with its state (and `--diff` two years' differences), and
-  `taxjson migrate --to-years` converts a single-folder project. A filed
-  year whose shared exports changed says so in `sum`, the checklist and
-  `years`, and its run reports the drift against its lock. A folder
-  setting that leaves the folder holding the project is refused.
+  previous year's settings, map and `missing_history.json` (the accounts'
+  `holdings` lists commented out: last year's snapshots), `taxjson align
+  --from YEAR` brings another year's map lines and settings over (a map
+  line that contradicts this year's is skipped and listed), `taxjson
+  years` lists each year with its state (and `--diff` two years'
+  differences; holdings paths and broker account ids are never
+  compared), and `taxjson migrate --to-years` converts a single-folder
+  project. A filed year whose shared exports changed says so in `sum`,
+  the checklist and `years`, and its run reports the drift against its
+  lock. A folder setting that leaves the folder holding the project, an
+  `inputs_dir` inside the project itself, and a folder inside another
+  year's folder are refused. A command that writes into the shared
+  exports (`opening`, `format-map --write`, `find-missing-history
+  --write-purchases`) says the file applies to every year.
 - `taxjson sanity` (and the end of `taxjson run`) compares the books with
   the broker's positions snapshots in the year's `holdings/` folder with
   no `holdings = [...]` setting, matching each file to its account by its
@@ -35,7 +42,8 @@
 - `taxjson redact` in a year folder of a shared-exports project writes
   that year as a redacted single-folder project inside the year folder
   (the shared exports and the year's slips, holdings/, taxjson.toml and
-  ticker.map), ids replaced consistently in every file.
+  ticker.map), ids replaced consistently in every file; an account's
+  `holdings` list names the copied files by their names in the copy.
 - `taxjson fetch` (the taxjson-fetch plugin) in a year folder whose
   exports are shared downloads into the shared `inputs_dir` folder, with
   a note that the download applies to every year (it wrote to the year
