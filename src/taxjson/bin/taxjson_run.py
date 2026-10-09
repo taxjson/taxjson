@@ -4898,9 +4898,35 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(base_json))
     run_to_file(cmd, wash_gains)
+    _record_wash_inputs(cache, [wash_gains], [name], sheltered_base,
+                        tag=name)
     _LOSS_CONTEXT_GAINS.append(wash_gains)
     _render_wash_outputs(name, settings, cache, reports_dir,
                          wash_gains, base_json)
+
+
+def _record_wash_inputs(cache: Path, washes: List[Path], names: List[str],
+                        sheltered_base: Optional[Path], *, tag: str) -> None:
+    """Remember what the wash files were built from (every member's
+    base and plain gains, the sheltered book, the loss-override state)
+    so a later `run --account <member>` makes them stale for every
+    account of the blend, not only the one rerun (GitHub issue #15;
+    report_model.stale_wash_inputs). Advisory: a failure is a warning."""
+    from taxjson.lib.report_model import record_wash_inputs
+    from taxjson.lib.loss_overrides import state_path
+    inputs = [cache / f"{n}{suf}" for n in names
+              for suf in ("_base.json", "_gains.json")]
+    inputs.append(sheltered_base if sheltered_base is not None
+                  else cache / "sheltered_base.json")
+    inputs.append(state_path(cache))
+    try:
+        record_wash_inputs(cache, washes, inputs, blend=tag)
+    except OSError as e:
+        _say("warning", f"could not record the inputs of the "
+             f"cross-account pass: {e}",
+             "A later `run --account` may leave the wash-adjusted "
+             "numbers stale without a warning; run a full `taxjson run` "
+             "before filing.", indent="  ")
 
 
 # The gains files of this run's passes WITH the sheltered context (the
@@ -6241,6 +6267,9 @@ def stage_blended_wash_pass(names: List[str],
         _render_wash_outputs(name, settings, cache, reports_dir,
                              wash_gains, cache / f"{name}_base.json",
                              blended=True)
+    _record_wash_inputs(cache, [cache / f"{n}_gains_wash.json"
+                                for n in names], names,
+                        sheltered_base, tag=tag)
     # Conservation check: the splitter apportions blended inventory
     # rows by each account's BASE-book balance, which does not include
     # missing-history (OPENING_BALANCE) shares synthesized in-memory

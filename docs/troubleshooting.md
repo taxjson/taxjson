@@ -1024,6 +1024,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `d_renames`; `src/taxjson/lib/renames.py` — `rename_hints`, `_LOOKS_RE`
 
+### "warning: margin_gains_wash.json was built before cash_base.json changed — wash-adjusted numbers are stale", or no such warning for an account after `tjs run --account` rebuilt ANOTHER taxable account
+- **Check:** a `tjs run --account <one account>` ran after the last full `tjs run`. The file names in the warning say which books changed since the cross-account pass: another taxable account's `_base.json` / `_gains.json`, `sheltered_base.json` or `loss_overrides.json`. `tjs checklist` puts audit and form-export at attention ("older than their inputs") and `tjs close-year` stops ("are STALE").
+- **Cause:** a taxable account's wash-adjusted numbers come from one pass over every taxable account (Canada pools the cost of identical property across them and a buy in one can make a loss in another superficial; the US matches wash sales across them). `run --account` skips that pass. The check used to compare only the account's own books, so after a rebuild of another account the old blended numbers were served without a warning.
+- **Fix:** run a full `tjs run` (no `--account`) before using or filing any figure. Since the fix, the pass records each member's books and a fingerprint of each, and a change in any of them marks every account of that pass stale; on an older release, run the full `tjs run` after any `--account` run.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/report_model.py` — `stale_wash_inputs`, `record_wash_inputs`, `WASH_INPUTS_FILE`, `resolve_gains_files`; `src/taxjson/bin/taxjson_run.py` — `_record_wash_inputs`, `stage_blended_wash_pass`
+
 ### "Warning: these books are not the clean result of the current inputs"
 - **Check:** `tjs checklist` step `run-clean` names the problem: validation errors in the last run, an account deferred on elections, inputs newer than the books, or a run that did not finish.
 - **Cause:** a report command (sum, list, form-export, …) reads the books in `work/`, and those no longer match `inputs/` and taxjson.toml.

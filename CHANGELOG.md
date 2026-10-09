@@ -25,6 +25,12 @@
   at a backup name is skipped for the next free `.bakN`, the backup is
   written owner-only and the console names it. The previous IB Flex
   statement's backup is kept the same way. (#18)
+- After `taxjson run --account B`, every taxable account blended with B
+  in the cross-account pass is reported stale (`sum`, `form-export`,
+  the checklist warn; `close-year` stops), not only B. The pass now
+  records its members and a fingerprint of each one's books; the check
+  used to compare an account's own books only, so another account's
+  rebuild left the old blended numbers served without a warning. (#15)
 
 ## v0.24.2 (2026-10-08)
 

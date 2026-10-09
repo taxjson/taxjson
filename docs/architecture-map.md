@@ -287,7 +287,7 @@ taxable accounts run as one blended pass and are split back per account.
 - `src/taxjson/lib/pipeline.py` — `run_gains`, `GainsRequest`, `prepare_books`, `engine_options`, `option_timing_from_settings`, `option_timing_flags`, `place_retro_wash_adjustments`, `annotate_inventory_multipliers`, `declared_multipliers`, `tt_json_path`: one gains run; US retroactive wash adjustments and contract multipliers.
 - `src/taxjson/bin/taxjson_gains.py` — `main`, `_request`, `_suggest_missing_history_and_exit`, `write_traces_file`: the `taxjson-gains` tool.
 - `src/taxjson/bin/taxjson_split_gains.py` — `split_for_account`, `main`: splits a blended gains run back into per-account files.
-- `src/taxjson/bin/taxjson_run.py` — `stage_wash_pass`, `stage_blended_wash_pass`, `_blend_conservation_gaps`, `_wash_flags`, `_render_wash_outputs`: the wash passes in a run.
+- `src/taxjson/bin/taxjson_run.py` — `stage_wash_pass`, `stage_blended_wash_pass`, `_blend_conservation_gaps`, `_wash_flags`, `_render_wash_outputs`, `_record_wash_inputs`: the wash passes in a run, and the record of what each wash file was built from (`work/.wash_inputs.json`, for the stale check).
 
 ## Per-account reports
 
@@ -303,7 +303,7 @@ come after.
 - `src/taxjson/bin/taxjson_leaps_gains.py` — `process_data`, `main`: long options by underlying.
 - `src/taxjson/bin/taxjson_export.py` — `render_report`, `render_holdings_toml`, `process_data_report`, `main`: holdings as a text report or a TOML snapshot.
 - `src/taxjson/bin/taxjson_fees.py` — `aggregate`, `metrics`, `render_text`, `render_json`, `main`: the fee report by broker (`taxjson-fees-sum`).
-- `src/taxjson/lib/report_model.py` — `build_account_report`, `resolve_gains_files`, `render_table`, `align_columns`, `fmt_money`: shared report pieces and the account report JSON.
+- `src/taxjson/lib/report_model.py` — `build_account_report`, `resolve_gains_files`, `stale_wash_inputs`, `record_wash_inputs`, `render_table`, `align_columns`, `fmt_money`: shared report pieces and the account report JSON; which gains file a report reads and whether the wash-adjusted one is stale (its own books, and every member of its cross-account pass, from `work/.wash_inputs.json`).
 
 ## Output style and messages
 

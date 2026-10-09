@@ -142,7 +142,11 @@ class TestCloseYearRefusesBrokenBooks(_Base):
         os.utime(b, (st.st_atime, st.st_mtime))
         r = _run_cli(p, "close-year")
         self.assertNotEqual(r.returncode, 0, r.stdout)
-        self.assertIn("work/margin_base.json", r.stderr)
+        # Either stop names the damaged book: the unreadable-file check,
+        # or (GitHub #15) the stale check, since the blended pass's
+        # fingerprint of margin_base.json no longer matches.
+        self.assertRegex(r.stderr, r"work/margin_base\.json|"
+                                   r"older than margin_base\.json")
         self.assertIn("Nothing was written", r.stderr)
         self.assertFalse((p / "filed" / "2025.json").exists())
 
