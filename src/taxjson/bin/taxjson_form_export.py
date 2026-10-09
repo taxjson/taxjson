@@ -85,6 +85,7 @@ the project's country).
 from taxjson.lib.out import exit_text
 import argparse
 import csv
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1322,8 +1323,35 @@ def write_csv(rep: Dict[str, Any], path: Path) -> None:
 _write_csv = write_csv      # the old name, kept for its importers
 
 
+# A text cell a spreadsheet would read as a formula: `=`, `+`, `-`, `@`,
+# a tab or a carriage return first. A description, symbol, account or
+# note comes from the user's exports and files, so such a cell gets a
+# leading `'` (shown as text, never evaluated); a number — a negative
+# gain included — is written as is (2026-10 security review LOW a).
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+_PLAIN_NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+
+
+def spreadsheet_cell(v: Any) -> Any:
+    """`v` safe to open in a spreadsheet (see _FORMULA_START)."""
+    if (isinstance(v, str) and v.startswith(_FORMULA_START)
+            and not _PLAIN_NUMBER.fullmatch(v)):
+        return "'" + v
+    return v
+
+
+class _SafeCsvWriter:
+    """csv.writer whose every row goes through spreadsheet_cell."""
+
+    def __init__(self, f) -> None:
+        self._w = csv.writer(f)
+
+    def writerow(self, row) -> None:
+        self._w.writerow([spreadsheet_cell(v) for v in row])
+
+
 def _rows_csv(rep: Dict[str, Any], f) -> None:
-    w = csv.writer(f)
+    w = _SafeCsvWriter(f)
     if rep["form"] == "8949":
         w.writerow(["part", "description", "date_acquired", "date_sold",
                     "proceeds", "cost", "code", "adjustment",

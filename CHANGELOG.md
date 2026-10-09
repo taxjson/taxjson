@@ -200,6 +200,11 @@
 - The CI workflow pins `actions/checkout` and `actions/setup-python` to
   full commit SHAs (the version in a comment beside each) and ruff to an
   exact version.
+- `taxjson form-export --csv` / `taxjson-form-export --csv` write a text cell
+  that starts with `=`, `+`, `-`, `@`, a tab or a carriage return (a
+  description, symbol, account or note from your files) with a leading
+  `'`, so a spreadsheet shows it as text instead of running it as a
+  formula; numbers, negative ones included, are unchanged.
 
 ## v0.24.2 (2026-10-08)
 

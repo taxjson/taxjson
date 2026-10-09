@@ -288,5 +288,37 @@ class TestRedactNameReview(unittest.TestCase):
         self.assertIn("20250115", out)     # a date, not an id
 
 
+class TestFormExportCsvFormulas(unittest.TestCase):
+    """LOW (a): a text cell a spreadsheet would evaluate is written as
+    text; numbers (negative ones included) stay numbers."""
+
+    def test_schedule3_and_8949_rows(self):
+        import csv
+        import io
+        from taxjson.bin.taxjson_form_export import _rows_csv
+        evil = '=HYPERLINK("http://example.com/x","click")'
+        s3 = {"form": "schedule3", "rows": [{
+            "line": "13200", "proceeds_line": "13199", "gain_line": "13200",
+            "property": evil, "units": 10, "symbol": "+ZZQ",
+            "acq_year": 2024, "proceeds": 100.0, "acb": 150.0,
+            "outlays": 0.0, "gain": -50.0, "denied": 0.0,
+            "notes": "@SUM(A1)"}]}
+        f8949 = {"form": "8949", "part_I": [{
+            "description": "-2+3 ZZQ", "date_acquired": "2025-01-02",
+            "date_sold": "2025-02-03", "proceeds": "-12.50", "cost": 1.0,
+            "code": "", "adjustment": "", "gain": -13.5,
+            "account": "\tacct", "boxes": "\rA"}], "part_II": []}
+        for rep, want in ((s3, {3: "'" + evil, 5: "'+ZZQ",
+                                12: "'@SUM(A1)", 10: "-50.0"}),
+                          (f8949, {1: "'-2+3 ZZQ", 4: "-12.50",
+                                   8: "-13.5", 9: "'\tacct",
+                                   10: "'\rA"})):
+            buf = io.StringIO()
+            _rows_csv(rep, buf)
+            row = list(csv.reader(io.StringIO(buf.getvalue())))[1]
+            for i, v in want.items():
+                self.assertEqual(row[i], v, (rep["form"], i))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -406,7 +406,7 @@ Form 8949 and TXF for the US). `t1135` helps with the foreign property form.
 computed dispositions; `slip-audit` (Canada) compares the T5 and T3 slips
 with the books' income. `carryover` keeps the loss carry-forward ledger.
 
-- `src/taxjson/bin/taxjson_form_export.py` — `main`, `build_schedule3`, `schedule3_line`, `build_8949`, `build_txf`, `filing_lines`: the form renderers.
+- `src/taxjson/bin/taxjson_form_export.py` — `main`, `build_schedule3`, `schedule3_line`, `build_8949`, `build_txf`, `filing_lines`: the form renderers; `write_csv` (`--csv`) writes each cell through `spreadsheet_cell` (a formula-looking text cell gets a leading quote).
 - `src/taxjson/bin/taxjson_t1135.py` — `build_report`, `render_report`, `walk_costs`, `classify_country`, `FILING_THRESHOLD`: T1135 cost amounts by country.
 - `src/taxjson/bin/taxjson_reconcile_slips.py` — `reconcile`, `load_slip`, `load_computed`, `render`, `SlipRefused`: slip reconciliation.
 - `src/taxjson/lib/slip_audit.py` — `audit`, `load_slips_file`, `load_books`, `ib_slips`, `report_identity`, `annual_average`, `_audit_group`, `_match_payments`, `_securities`, `_suggest_cgd`, `_suggest_roc`, `question_keys`, `template`, `render`: `taxjson slip-audit` — the slips in inputs/slips/ (slips.toml, IB's dividends reports) against the books' income per account, broker account, currency and box; the suggestions; the checklist's t5-t3 step (`src/taxjson/lib/checklist.py` — `d_t5_t3`).
