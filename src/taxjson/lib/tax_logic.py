@@ -92,6 +92,9 @@ VARIANT_AXES: Dict[str, Dict[str, Tuple[Any, ...]]] = {
 NON_RULE_SETTINGS: Dict[str, str] = {
     "year": "which year is reported",
     "prior_year_record": "a file path for the handoff check",
+    "inputs_dir": "where the broker exports are read from (a folder path)",
+    "holdings_dir": "where sanity finds the positions snapshots",
+    "exports_dir": "where the newest year copies files for other tools",
     "source_currencies": "which FX rate series are fetched",
     "cross_asset": "retired; warned about and ignored",
     "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
