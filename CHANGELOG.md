@@ -54,6 +54,14 @@
 
 ### Fixed
 
+- `taxjson checklist` in a project every other command refuses — a crypto
+  account and no `local_timezone` (what `taxjson init` writes on a
+  machine whose zone is UTC or cannot be read), or an old map file such
+  as `yf_ticker.map` — shows the list again, with the configure step
+  needing attention and saying what to fix (set the zone, or run
+  `taxjson migrate`), and the checks that need the config blocked until
+  it is fixed ("fix the configuration first"); exit 1. It printed only
+  the error.
 - An opening snapshot (`OPENING` line) that would leave out a buy of
   the tax year closing a short position (a short cover, or a buy that
   crosses from short to long) now stops the run, as a left-out sale of

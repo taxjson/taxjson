@@ -464,7 +464,11 @@ class TestLocks(unittest.TestCase):
             for cmd in (("handoff",), ("checklist", "--quick"), ("run", "--no-input")):
                 r = tj(p, *cmd, check=False)
                 self.assertNotEqual(r.returncode, 0, cmd)
-                self.assertIn("prior_year_record must be a path string", r.stderr, cmd)
+                # The checklist shows it as its configure item (exit 1,
+                # the rest of the list blocked) instead of only an error.
+                self.assertIn("prior_year_record must be a path string",
+                              r.stdout if cmd[0] == "checklist"
+                              else r.stderr, cmd)
             (p / "taxjson.toml").write_text(TOML.replace("year = 2025\n", ""))
             r = tj(p, "handoff", check=False)
             self.assertNotEqual(r.returncode, 0)

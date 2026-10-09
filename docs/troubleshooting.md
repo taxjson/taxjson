@@ -30,6 +30,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_checklist`; `src/taxjson/lib/checklist.py` — `items`, `to_json`
 
+### `tjs checklist` prints only "Error: [accounts.crypto] is a crypto account but [settings] has no local_timezone" (or "Error: this project still has yf_ticker.map …") instead of the list
+- **Check:** `tjs --version` is a pre-release build of the merged checklist; `tjs init` ran on a machine whose zone is UTC or cannot be read (no `local_timezone` written), or the project root holds an old map file such as `yf_ticker.map`.
+- **Cause:** the merged checklist loaded taxjson.toml the way every other command does, and that loader refuses such a config, so a fresh project got the error alone where quick-start showed the list with the configure step needing attention.
+- **Fix:** upgrade. The checklist now reads the file leniently: `[>] configure` needs attention with what to fix (set `local_timezone`, or run `taxjson migrate`), and the checks that need a loadable config show `[b]` "fix the configuration first (the configure item)" until you fix it; exit 1 (not ready). Only a taxjson.toml with no readable year, country or account names still stops with the error.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_checklist_config`, `cmd_checklist`; `src/taxjson/lib/checklist.py` — `s_configure`, `CONFIG_FIRST`, `config_error`
+
 ### "Error: argument COMMAND: invalid choice: 'scan' (choose from 'run', 'elect', …)"
 - **Check:** `tjs help` lists `tips` under "Before you trade" and no scan; `tjs --version` is newer than v0.24.2.
 - **Cause:** `scan` mixed two jobs: advice on where you hold what (for next year; it changes no number of this year) and ticker.map hygiene. It was renamed `tips` and removed (no alias), and its map checks moved to `tjs ticker-map --suggest`.

@@ -352,6 +352,10 @@ class Ctx:
     year: int
     today: date
     run_sub: Callable[..., Tuple[int, str, str]]
+    # Why the strict loader (taxjson_run.load_config) refuses this
+    # taxjson.toml, read leniently instead ("" = it loads): the
+    # configure item says it and the checks are blocked until fixed.
+    config_error: str = ""
     cache: Path = field(init=False)
     reports: Path = field(init=False)
 
@@ -3129,6 +3133,10 @@ def s_configure(ctx: Ctx, f: _Facts) -> Result:
         issues.append(f"[accounts.{crypto[0]}] is a crypto account but "
                       f"[settings] has no local_timezone — set it, or "
                       f"delete the section if you have no crypto")
+    if ctx.config_error and not issues:
+        # Refused for another reason (a setting the country does not
+        # own, ...): the loader's own message names it.
+        issues.append(ctx.config_error)
     if issues:
         return Result("configure", "attention", "; ".join(issues))
     return Result("configure", "done", ", ".join(
@@ -3225,6 +3233,10 @@ def s_next_year(ctx: Ctx, f: _Facts) -> Result:
     return Result("next-year", "review", "after you file")
 
 
+# A check's detail while taxjson.toml is refused (Ctx.config_error).
+CONFIG_FIRST = "fix the configuration first (the configure item)"
+
+
 # The items no detector proves: each marked from the project's files.
 STEP_RULES: Dict[str, Callable[[Ctx, _Facts], Result]] = {
     "install": s_install,
@@ -3294,6 +3306,12 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
             continue
         if not has_taxable and sid in TAXABLE_ONLY:
             results.append(Result(sid, "n/a", "no taxable account — nothing to report"))
+            continue
+        if ctx.config_error:
+            # Every check reads the books through the config every
+            # command refuses: none can run until configure is fixed.
+            results.append(apply_override(
+                Result(sid, "blocked", CONFIG_FIRST), ov))
             continue
         r = _before_run(sid, ctx, facts)
         if r is None and quick and sid in SLOW:

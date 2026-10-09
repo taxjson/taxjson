@@ -15599,7 +15599,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             return
         print(cl.render_guide())
         return
-    cfg = load_config(root)
+    cfg, cfg_error = _checklist_config(root)
     settings = cfg.get("settings") or {}
     year = settings.get("year")
     if not isinstance(year, int):
@@ -15671,7 +15671,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         return
 
     ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=_date.today(),
-                 run_sub=cl.default_run_sub(root))
+                 run_sub=cl.default_run_sub(root), config_error=cfg_error)
     if args.only:
         args.only = cl.canonical_id(args.only)
     only = [args.only] if args.only else None
@@ -15706,6 +15706,50 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                         show_all=args.all))
     if not all(r.passed for r in results):
         sys.exit(1)
+
+
+def _checklist_config(root: Path) -> Tuple[Dict[str, Any], str]:
+    """(taxjson.toml, "" or why every other command refuses it) for the
+    checklist. A config the strict loader refuses — a crypto account and
+    no local_timezone (what `init` writes on a UTC machine), an old map
+    file `taxjson migrate` moves — is the configure item's finding, not
+    an error instead of the list (quick-start showed it): the TOML is
+    read leniently and the checks that need the strict config are
+    blocked. Only a file with no readable year, country or account
+    names still stops here, with the loader's own message."""
+    import contextlib
+    import io
+    from taxjson.lib.country import CountryError, settings_country
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf):
+            return load_config(root), ""
+    except SystemExit as e:
+        strict = e
+        text = e.code if isinstance(e.code, str) else buf.getvalue()
+    try:
+        raw = (root / "taxjson.toml").read_bytes()
+        cfg = tomllib.loads(raw.decode("utf-8-sig"))
+        settings = cfg.get("settings")
+        accounts = cfg.get("accounts") or {}
+        ok = (isinstance(settings, dict) and isinstance(accounts, dict)
+              and isinstance(settings.get("year"), int)
+              and not isinstance(settings.get("year"), bool)
+              and all(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", str(n))
+                      and str(n).upper() != "COMBINED" for n in accounts))
+        if ok:
+            settings["country"] = settings_country(settings)
+    except (OSError, UnicodeError, ValueError, TypeError, CountryError):
+        ok = False
+    if not ok:
+        if not isinstance(strict.code, str) and buf.getvalue():
+            sys.stderr.write(buf.getvalue())
+        raise strict
+    # The loader's message without its `taxjson checklist: error:`
+    # headline prefix, on one line.
+    msg = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
+    msg = re.sub(r"^(?:Error:\s*|.*?: error:\s*)", "", msg, count=1)
+    return cfg, msg or "taxjson.toml is refused by every other command"
 
 
 def _walk_interrupted(sid: str, ctx) -> None:
@@ -24321,10 +24365,12 @@ def _main() -> None:
             # `taxjson run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
-        if args.cmd not in ("init", "help", "migrate") + _RELEASE_CMDS:
+        if args.cmd not in ("init", "help", "migrate", "checklist") \
+                + _RELEASE_CMDS:
             # An old per-purpose file (yf_ticker.map, distributions.map
             # ...) stops every command, whatever it reads (lib/migrate),
-            # naming `taxjson migrate`.
+            # naming `taxjson migrate` — the checklist shows it as its
+            # configure item instead (_checklist_config).
             _refuse_legacy_project_files(Path(args.dir).resolve())
         _enforce_command_country(args)
         _refuse_artifact_account(args)

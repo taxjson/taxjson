@@ -288,15 +288,59 @@ class TestFreshProject(unittest.TestCase):
                          "Next (step 4, inputs-frozen): download the exports "
                          "into inputs/<account>/ (or `tjs fetch`)")
 
-    def test_no_zone_with_a_crypto_account_stops_on_the_config(self):
-        """A config every command refuses stops the checklist the same
-        way (exit 1), naming what to set."""
+    def test_no_zone_with_a_crypto_account_is_the_configure_item(self):
+        """A config every other command refuses (what `init` writes on a
+        UTC machine: a crypto account, no local_timezone) is the
+        configure item's attention, with the rest of the list — the
+        checks that need the config blocked until it is fixed — not an
+        error instead of the list. Exit 1: not ready."""
         with tempfile.TemporaryDirectory() as d:
             root = self._init(d, "UTC")
+            r = _cli("-C", str(root), "checklist", "--json")
+            t = _cli("-C", str(root), "checklist")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        doc = json.loads(r.stdout)
+        st = {s["id"]: s for s in doc["steps"]}
+        self.assertEqual(len(st), len(cl.item_ids()))
+        self.assertEqual(st["configure"]["effective"], "attention")
+        self.assertIn("local_timezone", st["configure"]["detail"])
+        self.assertEqual(doc["next"]["id"], "configure")
+        for sid in ("install", "init"):
+            self.assertEqual(st[sid]["effective"], "done", sid)
+        for sid in ("inputs-frozen", "run-clean", "audit", "form-export"):
+            self.assertEqual(st[sid]["effective"], "blocked", sid)
+            self.assertEqual(st[sid]["detail"], cl.CONFIG_FIRST, sid)
+        self.assertEqual(t.returncode, 1, t.stderr)
+        self.assertNotIn("Error", t.stderr)
+        self.assertRegex(t.stdout, r"(?m)^  \[>\]  3\. configure ")
+        self.assertIn("Next (step 3, configure)", t.stdout)
+
+    def test_a_legacy_map_file_is_the_configure_item(self):
+        """An old map file every other command stops for (exit 2) is
+        the configure item's attention naming `taxjson migrate`."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._init(d, "America/Toronto")
+            (root / "yf_ticker.map").write_text("ABC ABC.TO\n")
+            r = _cli("-C", str(root), "checklist", "--json", "--quick")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        doc = json.loads(r.stdout)
+        st = {s["id"]: s for s in doc["steps"]}
+        self.assertEqual(st["configure"]["effective"], "attention")
+        self.assertIn("yf_ticker.map", st["configure"]["detail"])
+        self.assertIn("taxjson migrate", st["configure"]["detail"])
+        self.assertEqual(doc["next"]["id"], "configure")
+        self.assertEqual(st["run-clean"]["effective"], "blocked")
+
+    def test_an_unreadable_year_still_stops(self):
+        """Only a config with no readable year stops the list."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             r = _cli("-C", str(root), "checklist", "--json", "--quick")
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertEqual(r.stdout, "")
-        self.assertIn("local_timezone", r.stderr)
+        self.assertIn("year", r.stderr)
 
     def test_a_config_without_accounts_is_the_configure_step(self):
         with tempfile.TemporaryDirectory() as d:
