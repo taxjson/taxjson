@@ -23722,7 +23722,7 @@ def _build_parser(prog: str = "taxjson"
 
     p_ck = sub.add_parser(
         "checklist",
-        help="Every step from install to filing, checked; which is next",
+        help="Every step from install to filing, checked",
         description="Every step from install to filing, in order, each "
              "with its command(s) and why. Inside a project (a "
              "taxjson.toml here, or -C DIR) each step is checked — by "

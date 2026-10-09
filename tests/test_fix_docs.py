@@ -94,8 +94,9 @@ class TestNoPhantomCommands(unittest.TestCase):
 
     def test_unreleased_names_real_commands(self):
         # Removed commands the CHANGELOG still names: "the removed taxjson
-        # verify", and the web UI's `taxjson serve`.
-        subs = _subcommands() | {"verify", "serve"}
+        # verify", the web UI's `taxjson serve`, and `taxjson quick-start`
+        # (merged into `taxjson checklist`).
+        subs = _subcommands() | {"verify", "serve", "quick-start"}
         named = set(re.findall(r"`taxjson ([a-z][a-z0-9-]+)", _unreleased()))
         self.assertEqual(sorted(named - subs), [])
 
