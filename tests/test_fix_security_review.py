@@ -320,5 +320,29 @@ class TestFormExportCsvFormulas(unittest.TestCase):
                 self.assertEqual(row[i], v, (rep["form"], i))
 
 
+class TestRunLockNeverFollowsALink(unittest.TestCase):
+    """LOW (b): work/.run.lock is taken through safe_write.file_lock."""
+
+    def test_planted_lock_symlink_target_untouched(self):
+        from taxjson.bin import taxjson_run as tr
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "work"
+            cache.mkdir()
+            target = Path(tmp) / "outside.txt"
+            (cache / ".run.lock").symlink_to(target)
+            old = tr._RUN_LOCK_FH
+            tr._RUN_LOCK_FH = None
+            try:
+                tr._acquire_run_lock(cache)
+                self.assertFalse(target.exists())
+                self.assertFalse((cache / ".run.lock").is_symlink())
+                self.assertEqual((cache / ".run.lock").stat().st_mode
+                                 & 0o077, 0)
+            finally:
+                if tr._RUN_LOCK_FH is not None:
+                    tr._RUN_LOCK_FH.close()
+                tr._RUN_LOCK_FH = old
+
+
 if __name__ == "__main__":
     unittest.main()

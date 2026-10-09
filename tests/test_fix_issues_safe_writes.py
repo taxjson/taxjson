@@ -182,9 +182,6 @@ _ALLOWED = {
      "with os.fdopen(fd, 'w', encoding='utf-8') as f:"):
         "Manifest.save's own mkstemp temp file, renamed into place",
     ("bin/taxjson_run.py",
-     'fh = open(cache / ".run.lock", "a+", encoding="utf-8")'):
-        "the run lock (appends nothing)",
-    ("bin/taxjson_run.py",
      '_probe.write_text(text, encoding="utf-8")'):
         "scratch copy in a TemporaryDirectory",
     ("bin/taxjson_run.py",

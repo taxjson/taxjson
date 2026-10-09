@@ -205,6 +205,9 @@
   description, symbol, account or note from your files) with a leading
   `'`, so a spreadsheet shows it as text instead of running it as a
   formula; numbers, negative ones included, are unchanged.
+- `taxjson run` takes its `work/.run.lock` like every other lock: created
+  owner-only and never through a symlink (a link planted there had its
+  target created or opened).
 
 ## v0.24.2 (2026-10-08)
 

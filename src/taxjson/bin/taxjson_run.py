@@ -6714,22 +6714,22 @@ def _acquire_run_lock(cache: Path) -> None:
     global _RUN_LOCK_FH
     if _RUN_LOCK_FH is not None:
         return                          # `taxjson run run` chains
-    try:
-        import fcntl
-    except ImportError:                 # pragma: no cover — Windows
-        return
-    try:
-        fh = open(cache / ".run.lock", "a+", encoding="utf-8")
-    except OSError:
-        return
-    try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        fh.close()
+    # safe_write.file_lock: created owner-only and never through a
+    # symlink (a planted work/.run.lock link was opened "a+", creating
+    # or appending to its target; 2026-10 security review LOW b).
+    import contextlib
+    from taxjson.lib.safe_write import LockLinkError, file_lock
+
+    def busy() -> None:
         _die("another `taxjson run` is in progress in this project",
              "Wait for it to finish (or stop it), then re-run. Nothing "
              "was run.")
-    _RUN_LOCK_FH = fh
+    stack = contextlib.ExitStack()
+    try:
+        stack.enter_context(file_lock(cache / ".run.lock", on_wait=busy))
+    except LockLinkError as e:
+        _die(str(e), "Nothing was run.")
+    _RUN_LOCK_FH = stack
 
 
 def cmd_run(args: argparse.Namespace) -> None:
