@@ -47,6 +47,19 @@
   lists it.
 
 
+### Fixed
+
+- An ALLOWLOSS line that names no denied loss now says how the books
+  spell the sale it meant: the day's trades of the line's root, on any
+  listing, are listed first and never cut (a busy day's list was cut at
+  twelve and could leave the sale out), and the message names the
+  spelling to write — the other listing of the root that day ("the
+  books spell this sale … — write `ALLOWLOSS …`, or if the two listings
+  are one security add `TOBASE …` to ticker.map"), the symbol a
+  ticker.map rule books it under, or a sale of the root a few days off
+  (trade and settlement dates apart by the settlement gap). Both
+  countries.
+
 ## v0.24.2 (2026-10-08)
 
 ### Added

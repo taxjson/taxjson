@@ -1059,6 +1059,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/loss_overrides.py` — `problems`, `plan`, `parse_line`, `_comment_start`
 
+### "Error: 1 .tt ALLOWLOSS line(s) name no single denied superficial loss" — "no denied loss matches QZL.TO sold 2024-12-16 in account margin; that day's trades in account margin: …" and the sale is not in the list
+- **Check:** `tjs wash-sales` spells the denied sale another way: the other listing of the same root (`QZL.US` where the line says `QZL.TO`, with no `TOBASE` line joining the two), the symbol a ticker.map rule books it under, or a date a few days off (the trade date where the line has a settlement date the books do not, or the other way round).
+- **Cause:** the line names a sale by the symbol and date the books carry. The message listed the day's trades in the engine's order and cut the list at twelve, so on a busy day the sale the line meant could be cut away, and it never said which spelling the books use.
+- **Fix:** upgrade: the day's trades of the line's root, on any listing, come first and are never cut, and the message says how the books spell the sale — "the books spell this sale QZL.US — write `ALLOWLOSS 2024-12-16 QZL.US ...`, or if the two listings are one security add `TOBASE QZL.US QZL.TO` to ticker.map", "ticker.map books QZO.US as QZN.US — write …", or "the books have a sale of QZL.TO traded 2024-12-13, settled 2024-12-16 — write `ALLOWLOSS 2024-12-13 QZL.TO ...`". Correct the line (or add the `TOBASE` line if the listings are one security: the denial then sits on the joined symbol) and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/loss_overrides.py` — `spelling_hint`, `_day_trades`, `listing_root`, `NEAR_DAYS`, `map_view`, `the books spell this sale`; `src/taxjson/bin/taxjson_run.py` — `_say_loss_overrides`
+
 ### `tjs form-export` (or `tjs audit`) shows an ALLOWLOSS sale as an ordinary loss: no note, "disallowed 0.00", and `tjs wash-sales --explain` says "no matching gains found"
 - **Check:** `tjs sum` lists the sale under FILING POSITIONS.
 - **Cause:** the return forms and the per-sale traces did not read the position the run recorded on the sale's rows (`loss_override`), so a claimed loss the rule would deny looked like any other loss.

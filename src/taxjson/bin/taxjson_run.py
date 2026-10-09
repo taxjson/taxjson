@@ -2396,7 +2396,9 @@ def _say_loss_overrides(root: Path, settings: Dict[str, Any], cache: Path,
     rule = ("wash sale" if country in ("us", "usa")
             else "superficial loss")
     if full:
-        probs = LO.problems(items, expected)
+        # ticker.map's spellings: a line naming a sale the books spell
+        # another way says how (LO.spelling_hint).
+        probs = LO.problems(items, expected, spellings=LO.map_view(root))
         if probs:
             _die(f"{len(probs)} .tt {LO.KEYWORD} line(s) name no single "
                  f"denied {rule}",

@@ -56,6 +56,13 @@ _REASON_RE = re.compile(r'reason\s*=\s*"([^"]*)"')
 # Units: the pool's own tolerance is far below this; a declared quantity
 # is what the broker printed.
 _QTY_TOL = 1e-6
+# A sale this many calendar days from the line's date (by trade or
+# settlement date) is "near" for the no-match message: the settlement
+# gap (T+1, T+2 before May 2024) over a weekend.
+NEAR_DAYS = 4
+# The day's trades the no-match message lists besides the same root's
+# (those are always listed).
+DAY_SHOWN = 12
 
 
 class LossOverrideError(ValueError):
@@ -278,6 +285,9 @@ class Plan:
         # {index: [units of each same-day sale one of whose fills, not
         # the sale, has the declared quantity]} (the message's hint).
         self.fill_of: Dict[int, List[float]] = {}
+        # {index: [the account's sales of the line's root, on any
+        # listing, a few days off (NEAR_DAYS)]} (the message's hint).
+        self.near_rows: Dict[int, List[Any]] = {}
 
     def __bool__(self) -> bool:
         return bool(self.overrides)
@@ -299,12 +309,19 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
     grp = disposition_groups(rows)
     for i, ov in enumerate(pl.overrides):
         d = ov["date"]
-        mine = [t for t in rows
-                if t.account == ov["account"]
-                and t.action in ("BUYSELL", "ASSIGN")
-                and abs(float(t.quantity or 0)) > 0
-                and d in (t.date, t.date_settle or t.date)]
+        trades = [t for t in rows
+                  if t.account == ov["account"]
+                  and t.action in ("BUYSELL", "ASSIGN")
+                  and abs(float(t.quantity or 0)) > 0]
+        mine = [t for t in trades if d in (t.date, t.date_settle or t.date)]
         pl.day_rows[i] = mine
+        root = listing_root(ov["symbol"])
+        today = {id(t) for t in mine}
+        pl.near_rows[i] = [
+            t for t in trades
+            if root and id(t) not in today and float(t.quantity) < 0
+            and _near(d, t.date, t.date_settle or t.date)
+            and listing_root(t.symbol) == root]
         by_g: Dict[int, List[Any]] = {}
         for t in mine:
             if t.symbol != ov["symbol"]:
@@ -334,6 +351,46 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
                 # refuses two lines of one sale before the engine).
                 pl.row_of.setdefault(t.id, i)
     return pl
+
+
+def listing_root(sym: Any) -> str:
+    """The root a share listing's spellings share (QZL.TO, QZL.US and a
+    bare QZL: QZL; a class share keeps its letter, QZL.B.TO: QZL.B); ""
+    for an option (its own contract, never a spelling of a share)."""
+    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.map_hygiene import symbol_root
+    sym = str(sym or "").upper()
+    if not sym or is_option_symbol(sym):
+        return ""
+    return symbol_root(sym)[0]
+
+
+def _near(day: str, *dates: str) -> bool:
+    """`day` within NEAR_DAYS of any of `dates` (and not one of them)."""
+    for x in dates:
+        n = _days(day, x)
+        if n is not None and 0 < abs(n) <= NEAR_DAYS:
+            return True
+    return False
+
+
+def _trade(t, symbol: str) -> Dict[str, Any]:
+    return {"symbol": t.symbol, "date": t.date,
+            "date_settle": t.date_settle or t.date,
+            "qty": float(t.quantity),
+            "same_root": bool(listing_root(symbol))
+            and listing_root(t.symbol) == listing_root(symbol)}
+
+
+def _day_trades(symbol: str, rows: Sequence[Any]) -> List[Dict[str, Any]]:
+    """The day's trades for the no-match message: every trade of the
+    line's root, on any listing, first and never cut; then the others
+    in the engine's order, DAY_SHOWN in all (a busy day's list cut at a
+    fixed count once left out the very sale the line meant)."""
+    recs = [_trade(t, symbol) for t in rows]
+    same = [r for r in recs if r["same_root"]]
+    rest = [r for r in recs if not r["same_root"]]
+    return same + rest[:max(0, DAY_SHOWN - len(same))]
 
 
 def new_record() -> Dict[str, Any]:
@@ -421,10 +478,15 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
             "reason": ov.get("reason") or "", "country": country,
             "status": status, "sales": sales,
             "fill_of": [round(q, 9) for q in pl.fill_of.get(i, [])],
-            "day_trades": [{"symbol": t.symbol, "date": t.date,
-                            "date_settle": t.date_settle or t.date,
-                            "qty": float(t.quantity)}
-                           for t in pl.day_rows.get(i, [])][:12],
+            "day_trades": _day_trades(ov["symbol"],
+                                      pl.day_rows.get(i, [])),
+            "near_trades": [_trade(t, ov["symbol"])
+                            for t in pl.near_rows.get(i, [])],
+            # Every symbol sold that day (a ticker.map spelling of the
+            # line's symbol need not share its root: spelling_hint).
+            "day_sales": sorted({str(t.symbol) for t in
+                                 pl.day_rows.get(i, [])
+                                 if float(t.quantity) < 0}),
         })
     return out
 
@@ -512,9 +574,13 @@ def _units(x) -> str:
 
 
 def problems(items: Sequence[Dict[str, Any]],
-             expected: Sequence[Dict[str, Any]] = ()) -> List[str]:
+             expected: Sequence[Dict[str, Any]] = (),
+             spellings: Optional[Tuple[Dict[str, str], Iterable]] = None
+             ) -> List[str]:
     """One line per override that names no denied loss, or several
-    (and per line of the project the final books never saw)."""
+    (and per line of the project the final books never saw).
+    `spellings`: (ticker.map's renames, its DISTINCT pairs) — map_view —
+    so a line naming a sale the books spell another way says how."""
     out = []
     recorded = {it.get("where") for it in items}
     # Two lines naming one sale in different spellings (with and without
@@ -577,11 +643,78 @@ def problems(items: Sequence[Dict[str, Any]],
                     if days else
                     f"; account {it.get('account')} has no trade traded or "
                     f"settled that day")
+        hint = spelling_hint(it, spellings)
         out.append(f"{it.get('where')}: {it.get('line')!r} — no denied "
                    f"loss matches {what} in account {it.get('account')}"
-                   + seen_txt + " (`taxjson wash-sales` lists the "
+                   + seen_txt + (f"; {hint}" if hint else "")
+                   + " (`taxjson wash-sales` lists the "
                    "denied ones; the symbol as the books spell it)")
     return out
+
+
+def map_view(root: Path) -> Tuple[Dict[str, str], set]:
+    """(the renames the run's books were merged with — the effective map,
+    else ticker.map —, ticker.map's DISTINCT pairs), upper-cased: the
+    `spellings` problems() reads."""
+    from taxjson.lib.xlist_loss_radar import _map_rules
+    try:
+        return _map_rules(Path(root), Path(root) / "work")
+    except Exception:                                   # noqa: BLE001
+        return {}, set()
+
+
+def spelling_hint(it: Dict[str, Any],
+                  spellings: Optional[Tuple[Dict[str, str], Iterable]]
+                  = None) -> str:
+    """How the books spell the sale a no-match line meant, or "": a
+    ticker.map rule that books the line's symbol under another one, or a
+    sale of the same root on another listing that day — or, failing
+    those, on a date a few days off (the trade and settlement dates
+    apart by the settlement gap)."""
+    sym = str(it.get("symbol") or "").upper()
+    day = str(it.get("date") or "")
+    qty = f" {_units(it.get('qty'))}" if it.get("qty") else ""
+    renames, distinct = spellings or ({}, ())
+    renames = {str(k).upper(): str(v).upper() for k, v in renames.items()}
+    distinct = {frozenset(str(x).upper() for x in p) for p in distinct}
+    sales = [d for d in it.get("day_trades") or [] if d.get("qty", 0) < 0]
+    booked = renames.get(sym)
+    sold = {str(x).upper() for x in it.get("day_sales") or []} | {
+        str(d.get("symbol")).upper() for d in sales}
+    if booked and booked != sym and booked in sold:
+        return (f"ticker.map books {sym} as {booked} — write `{KEYWORD} "
+                f"{day} {booked}{qty} ...`")
+    other = [d for d in sales if d.get("same_root")
+             and str(d.get("symbol")).upper() != sym]
+    near = [d for d in it.get("near_trades") or [] if d.get("same_root")]
+    if other:
+        o = str(other[0]["symbol"]).upper()
+        return (f"the books spell this sale {o} — write `{KEYWORD} {day} "
+                f"{o}{qty} ...`" + _join_hint(o, sym, it, renames,
+                                               distinct))
+    if near:
+        n = near[0]
+        o = str(n["symbol"]).upper()
+        return (f"the books have a sale of {o} traded {n['date']}, "
+                f"settled {n['date_settle']} — write `{KEYWORD} "
+                f"{n['date']} {o}{qty} ...`"
+                + (_join_hint(o, sym, it, renames, distinct)
+                   if o != sym else ""))
+    return ""
+
+
+def _join_hint(books: str, line: str, it: Dict[str, Any],
+               renames: Dict[str, str], distinct: set) -> str:
+    """", or if the two listings are one security add `TOBASE ...`" —
+    unless ticker.map keeps them apart or already joins them."""
+    if frozenset((books, line)) in distinct or renames.get(line) == books \
+            or renames.get(books) == line:
+        return ""
+    from taxjson.lib.cross_listings import tobase_direction
+    base = "USD" if str(it.get("country") or "") in ("usa", "us") else "CAD"
+    frm, to = tobase_direction(books, line, base)
+    return (f", or if the two listings are one security add `TOBASE "
+            f"{frm} {to}` to ticker.map")
 
 
 def _why(sale: Dict[str, Any], country: str) -> str:

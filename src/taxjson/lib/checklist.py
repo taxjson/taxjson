@@ -1585,7 +1585,7 @@ def d_filing_positions(ctx: Ctx) -> Result:
         if f.is_file():
             files[n] = f
     items = LO.gather(files)
-    probs = LO.problems(items, expected)
+    probs = LO.problems(items, expected, spellings=LO.map_view(ctx.root))
     if probs:
         return Result("filing-positions", "attention",
                       f"{len(probs)} {LO.KEYWORD} line(s) name no single "
