@@ -84,6 +84,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 _IB_ID = re.compile(r"(?<![A-Za-z0-9])(?:DU|U|F|I)\d{7,8}(?![0-9])")
 # Free text needs 7+ characters (5+ digits) — a 5-digit "id" is too
@@ -1903,7 +1904,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     `root`/inputs_redact/ (or `out`), redacted. 0 done (or --check found
     nothing), 1 --check found something, 2 refused."""
     from taxjson.lib.out import relpath
-    inputs = root / "inputs"
+    inputs = _PL.inputs_dir(root)
     if not inputs.is_dir():
         _diag("error", f"no inputs/ folder in {root}",
               ["Run it in a taxjson project (or pass -C DIR), or name the "

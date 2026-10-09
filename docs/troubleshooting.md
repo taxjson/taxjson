@@ -23,6 +23,48 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `load_config`, `no taxjson.toml in`
 
+### "Error: this folder holds the year projects 2024, 2025, and `sum` works on one of them"
+- **Check:** `ls` shows `inputs/` and year folders (`2024/`, `2025/`) but no `taxjson.toml`: the folder of exports every year shares (`tjs init`'s layout). `tjs years` lists the years.
+- **Cause:** every command but `init`, `years`, `new-year`, `redact`, `tax-logic` and `help` works on one year's project, and this folder holds several; taxjson never guesses which.
+- **Fix:** `cd 2025` (or `tjs -C 2025 sum`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_years_root`, `_YEARS_ROOT_CMDS`
+
+### "Error: [settings] inputs_dir = '../../shared' leads to …, outside … (the folder that holds this project)"
+- **Check:** the same for `holdings_dir` and `exports_dir`; every command stops at the config check (exit 1). `ls -l` the folder: a symlink pointing further out counts too.
+- **Cause:** the shared folders of one folder of exports for every year sit beside the year folders; a path leading outside the folder that holds the project could read or write anywhere.
+- **Fix:** keep the shared folder inside the folder holding the year folders (`inputs_dir = "../inputs"`); replace a symlink leading out with the folder itself.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `folder_setting`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_refuse_folder_settings`
+
+### "Error: [settings] year = 2024 but this folder is 2025: a year folder holds that year's project"
+- **Check:** the project reads a shared `inputs_dir` and its folder is named for a year; `grep year 2025/taxjson.toml`.
+- **Cause:** with one folder of exports for every year, a year folder's name says which year's project it is; a copied `taxjson.toml` whose `year` was not changed would build the other year's books in this folder.
+- **Fix:** set `year` to the folder's year (or move the project to the right folder). `tjs new-year 2026` makes the next year's folder with the year already set.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `setting_problems`, `a year folder holds that year's project`
+
+### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
+- **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
+- **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.
+- **Fix:** nothing when the account is not this year's. When it is, add the `[accounts.rrsp2]` table (`tjs align --from 2025` brings it from the year that has it) and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `unconfigured_inputs`; `src/taxjson/bin/taxjson_run.py` — `not an account of`
+
+### "Warning: these books are not the clean result of the current inputs - inputs changed since the last full run (added: inputs/margin/late.tt) … 2024 is filed (filed/2024.json) and its inputs changed since the last run"
+- **Check:** `tjs years` shows the filed year with "inputs changed since"; the file is a download saved in the shared `inputs/` while working on a later year.
+- **Cause:** every year reads the shared exports, so a new or corrected file can change a filed year's figures; its books in `work/` were built before it.
+- **Fix:** `tjs run` in the filed year's folder: it recomputes the year and warns `filed 2024 DRIFTED vs 2024.json` when the filed figures moved (then amend the return, or keep the books consistent with it), or says `filed 2024: OK`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_filed_year_stale_hint`, `_check_filed_years`; `src/taxjson/lib/checklist.py` — `d_filed_lock`, `inputs_changed`
+
+### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
+- **Check:** `git -C 2025 rev-parse --show-toplevel` and `git -C inputs rev-parse --show-toplevel` name different folders (or the second fails).
+- **Cause:** the year folder is its own repository, so the shared `inputs/` beside it is committed nowhere the checklist can see.
+- **Fix:** one repository for the whole folder: `git init` in the folder holding the year folders (move a year folder's history in with `git subtree`, or start fresh), then commit `inputs/` and the year folders.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/checklist.py` — `d_inputs_committed`, `project's git repository`
+
 ### `tjs checklist` prints only "Error: [accounts.crypto] is a crypto account but [settings] has no local_timezone" (or "Error: this project still has yf_ticker.map …") instead of the list
 - **Check:** `tjs --version` is a development build after v0.24.2; `tjs init` ran on a machine whose zone is UTC or cannot be read (no `local_timezone` written), or the project root holds an old map file such as `yf_ticker.map`.
 - **Cause:** the checklist loaded taxjson.toml the way every other command does, and that loader refuses such a config, so a fresh project got the error alone instead of the list with the configure step needing attention.
@@ -358,12 +400,19 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Holdings
 
-### "Info: 5 accounts with open positions and no holdings file to check them against" (or `tjs sanity`: "Error: no arguments, and no account in taxjson.toml declares `holdings = [...]`")
-- **Check:** `tjs checklist` shows step `sanity` as `[m]`.
+### "Info: 5 accounts with open positions and no holdings file to check them against" (or `tjs sanity`: "Error: no arguments, no snapshot in the project's holdings/ folder, and no account in taxjson.toml declares `holdings = [...]`")
+- **Check:** `tjs checklist` shows step `sanity` as `[m]`; `ls holdings/` is empty.
 - **Cause:** nothing compares the books' positions with the broker's own positions report yet.
-- **Fix:** export the broker's positions (or write a holdings TOML) and add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`; then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
+- **Fix:** save the broker's positions snapshot (a `[[holding]]` TOML, as a download tool writes it) in the year's `holdings/` folder, named for the account (`margin_holdings.toml`) or carrying its broker account id in `[meta] account`; or add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`. Then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
 - **Fixed in:** —
-- **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no arguments, and no account in `
+- **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no snapshot in the project's holdings/`
+
+### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
+- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, and its name does not start with an account name.
+- **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared.
+- **Fix:** add the id under its account (`broker_accounts = ["…"]`), or rename the file `<account>_holdings.toml`. An id two accounts declare is refused the same way.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `claims it`
 
 ### `tjs sanity`: "QZD.U.TO MISSING_IN_TAXJSON" (or `QTY_MISMATCH` on QZD.TO) for a listing the run joined by its transfer journal
 - **Check:** the run's console said "joined as one security by their transfer journal: QZD.U.TO ↔ QZD.TO …" and `work/ticker.map.effective` has the `TOBASE` / `JOURNAL` line; `ticker.map` itself has no line for the pair. The books hold the position under one symbol, the broker lists it under both.

@@ -228,7 +228,7 @@ class TestOutsideAProject(unittest.TestCase):
 # ---------------------------------------------------------------- inside
 class TestFreshProject(unittest.TestCase):
     def _init(self, d, tz):
-        r = _cli("init", "--country", "canada", "--year", "2025",
+        r = _cli("init", "--single", "--country", "canada", "--year", "2025",
                  str(Path(d) / "p"), TZ=tz)
         self.assertEqual(r.returncode, 0, r.stderr)
         return Path(d) / "p"

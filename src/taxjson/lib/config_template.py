@@ -213,6 +213,15 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "default: required with a crypto account."),
     Key("prior_year_record", '"../{prev_year}/filed/{prev_year}.json"',
         "Last year's close-year record (`taxjson handoff`). No default."),
+    Key("inputs_dir", '"../inputs"',
+        "The folder of the broker exports (inputs/<account>/), when the "
+        "years share one beside the year folders. Default: inputs/ here."),
+    Key("holdings_dir", '"holdings"',
+        "The year's broker positions snapshots `taxjson sanity` reads. "
+        "Default: holdings/ here."),
+    Key("exports_dir", '"../exports"',
+        "Where the newest year's run copies its positions and wash radar "
+        "for other tools. No default."),
     Key("leaps_months", "9",
         "Options bought more than this many months before expiry count as "
         "LEAPS (the leaps and leaps-sum views only; no tax figure). "
@@ -299,6 +308,10 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
     Key("holdings", '["~/broker/{name}_holdings.toml"]',
         "Positions files `taxjson sanity` reconciles against. Default: "
         "none."),
+    Key("broker_accounts", '["ACCOUNT_ID"]',
+        "The broker account ids of this account's statements: a holdings/ "
+        "snapshot whose [meta] account is one of them is this account's. "
+        "Default: `account`."),
     Key("combined_broker_accounts", "false",
         "true: every broker account in these statements is yours, taxable "
         "together."),
@@ -327,6 +340,7 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
 SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Project", ("year", "country", "province", "tax_date",
                  "local_timezone", "prior_year_record")),
+    ("Folders", ("inputs_dir", "holdings_dir", "exports_dir")),
     ("Currencies", ("base_currency", "source_currencies", "fx_cash_gains",
                     "fx_cash_ledger", "fx_cash_inflow_cost")),
     ("Options", ("option_premium_timing", "option_grant_timing_since",
@@ -1336,11 +1350,15 @@ def input_readme(country: str, name: str) -> str:
 
 
 def render_init(country: str, year: Optional[int] = None,
-                tz: Optional[str] = None) -> Tuple[str, Tuple[str, ...]]:
-    """(taxjson.toml text, account names) for `taxjson init`."""
+                tz: Optional[str] = None,
+                extra: Optional[Dict[str, Any]] = None
+                ) -> Tuple[str, Tuple[str, ...]]:
+    """(taxjson.toml text, account names) for `taxjson init`; `extra`:
+    [settings] values added (a year folder's inputs_dir ...)."""
     country = C.canonical_country(country)
     yr = int(year) if year is not None else _date.today().year
     doc = scaffold_document(country, yr, tz)
+    doc["settings"].update(extra or {})
     return render_document(doc, country, yr), tuple(doc["accounts"])
 
 

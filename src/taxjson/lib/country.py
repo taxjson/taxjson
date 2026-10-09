@@ -285,6 +285,9 @@ SETTING_COUNTRY: Dict[str, str] = {
     "fx_cash_inflow_cost": BOTH,    # v2: declared (default) | spot
     "futures_settle": BOTH,
     "prior_year_record": BOTH,
+    "inputs_dir": BOTH,
+    "holdings_dir": BOTH,
+    "exports_dir": BOTH,
     "local_timezone": BOTH,         # the zone crypto UTC stamps are dated in
     "leaps_months": BOTH,           # the LEAPS views' cut-off (no tax effect)
     # s.54 superficial loss in Canada, §1091 in the US: a sheltered

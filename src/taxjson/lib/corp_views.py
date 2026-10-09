@@ -26,6 +26,7 @@ from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT, SHELTERED_DEFAULT,
                                       declares_zero_value)
 from taxjson.lib.country import (CANADA, USA, display_name, home_currency,
                                  settings_country)
+from taxjson.lib import project_layout as _PL
 
 _FMV_RE = re.compile(r"FMV\s+([\d,]+(?:\.\d+)?)\s+([A-Z]{3})")
 
@@ -61,7 +62,7 @@ def _manifest(root: Path, acct: str) -> Dict[str, Any]:
     refused with elect's one-line error (A2-0968): it crashed on a
     wrong-shape file and read an unreadable one as 'no elections'."""
     from taxjson.lib.corp_actions import Manifest, ManifestError
-    for p in (Path(root) / "inputs" / acct / "manifest.json",
+    for p in (_PL.inputs_dir(Path(root)) / acct / "manifest.json",
               Path(root) / "work" / f"{acct}_manifest.json"):
         if not p.exists() and not p.is_symlink():
             continue
@@ -140,7 +141,7 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     groups: Dict[str, List[Path]] = {}
     for ln in lines:
         kind, _, name = ln.partition("/")
-        path = root / "inputs" / acct / name
+        path = _PL.inputs_dir(root) / acct / name
         if EXTRACTORS.get(kind) is None or not path.exists():
             continue
         groups.setdefault(kind, []).append(path)

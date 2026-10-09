@@ -56,6 +56,7 @@ from taxjson.lib.missing_history import (
     stale_entry_message, is_registered_account, DRAFT_NAME,
     DATE_PLACEHOLDER as _PH_DATE, COST_PLACEHOLDER as _PH_COST,
 )
+from taxjson.lib import project_layout as _PL
 
 
 def _diag(text, file=None):
@@ -289,7 +290,9 @@ def _project_root(path):
     except (OSError, RuntimeError):
         return None
     for d in (p.parent, p.parent.parent):
-        if (d / "taxjson.toml").is_file():
+        # (a multi-year project's year folder, whose taxjson.toml is
+        # optional, is one: lib/project_layout)
+        if _PL.has_config(d):
             return d
     return None
 
@@ -431,7 +434,7 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
                       f"or pass --write-purchases FILE.", file=sys.stderr)
                 return 2
     targets = {a: (explicit if explicit is not None
-                   else root / "inputs" / a / DRAFT_NAME)
+                   else _PL.inputs_dir(root) / a / DRAFT_NAME)
                for a in drafting}
     for a, out in targets.items():
         if (out.exists() or out.is_symlink()) and not args.force:

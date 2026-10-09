@@ -73,6 +73,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 STEP = "export-coverage"
 # In the running year, an export whose explicit end is this many days
@@ -479,7 +480,7 @@ def account_gaps(root: Path, acct: str, year: int, today: date
                  if f]
         for n in names:
             add_source(by_source, n, b)
-        folder = root / "inputs" / acct
+        folder = _PL.inputs_dir(root) / acct
         inputs[b] = [folder / n for n in names if (folder / n).is_file()]
         for r in _rows(_load(cache / f"{acct}_{b}_corp.json")):
             corp_keys.setdefault(_row_key(_as_booked(r, renames)), b)

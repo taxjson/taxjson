@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- One folder of exports for every year: `taxjson init` now makes
+  `inputs/<account>/` once for every year's broker exports and the year's
+  folder (`2025/`), a complete project of its own (`taxjson.toml`,
+  `ticker.map`, `holdings/`, results) whose new `[settings] inputs_dir`
+  reads the shared exports (`init --single` keeps one folder for one
+  year). `taxjson new-year YYYY` starts the next year's folder from the
+  previous year's settings and map, `taxjson align --from YEAR` brings
+  another year's map lines and settings over, `taxjson years` lists each
+  year with its state (and `--diff` two years' differences), and
+  `taxjson migrate --to-years` converts a single-folder project. A filed
+  year whose shared exports changed says so in `sum`, the checklist and
+  `years`, and its run reports the drift against its lock. A folder
+  setting that leaves the folder holding the project is refused.
+- `taxjson sanity` (and the end of `taxjson run`) compares the books with
+  the broker's positions snapshots in the year's `holdings/` folder with
+  no `holdings = [...]` setting, matching each file to its account by its
+  `[meta] account` (new `[accounts.NAME] broker_accounts`) or its name,
+  at the snapshot's date (`as_of`, else `generated_at`).
+- `[settings] exports_dir`: the newest year's run copies its positions
+  and wash radar there, with a README, for other tools.
+
 ### Changed
 
 - The `quick-start` command is removed; `taxjson checklist` replaces it.

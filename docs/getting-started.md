@@ -34,19 +34,24 @@ Other ways to install (from a checkout, channels) are in the README's
 
 ## 2. Create a project
 
-One folder per tax year. Name the year you are filing:
+One folder for your taxes, with a project per tax year inside it. Name
+the year you are filing:
 
 ```bash
-mkdir -p ~/taxes/2025 && cd ~/taxes/2025
-tjs init --country canada --year 2025      # or --country usa
+tjs init --country canada --year 2025 ~/taxes     # or --country usa
+cd ~/taxes/2025
 ```
 
-`init` writes `taxjson.toml`, a `ticker.map` and one folder per account
-under `inputs/`: `margin`, `tfsa`, `rrsp` and `crypto` for Canada
-(`margin`, `roth`, `401k`, `crypto` for the US). Each folder's
-`README.txt` says which export to download from each broker.
+`init` writes one folder per account under `~/taxes/inputs/`: `margin`,
+`tfsa`, `rrsp` and `crypto` for Canada (`margin`, `roth`, `401k`,
+`crypto` for the US) — every year's exports go there — and the year's
+project, `~/taxes/2025/`: `taxjson.toml`, a `ticker.map` and an empty
+`holdings/`. Each account folder's `README.txt` says which export to
+download from each broker. Every command runs in the year's folder.
+(`tjs init --single` makes one folder for one year instead, with
+`inputs/` inside it; see "One folder of exports for every year" below.)
 
-Open `taxjson.toml` and make the accounts match yours. A line starting
+Open `2025/taxjson.toml` and make the accounts match yours. A line starting
 `## ` is a description; a line starting with a single `# ` is a setting
 switched off (`# province = "ON"`): delete the `# ` to switch it on.
 
@@ -65,7 +70,8 @@ switched off (`# province = "ON"`): delete the `# ` to switch it on.
 
 ## 3. Download your broker files
 
-Put each account's files in its own folder, `inputs/<account>/`. Any file
+Put each account's files in its own folder, `inputs/<account>/` (beside
+the year folders: one folder per account for every year). Any file
 name works: taxjson recognises each broker's export by its header, and
 `taxjson run` prints which broker it read each file as. Several files for
 one account are fine; overlapping rows are read once.
@@ -733,13 +739,17 @@ date. It is the sign of a purchase still missing.
 
 ## 6. Check against the broker
 
-Before you file, update the positions file from step 5 with the broker's
-**year-end** positions (or give `sanity` the year-end IB statement or
-RBC Holdings Export itself) and run `tjs sanity` again. A report dated
+Before you file, save the broker's **year-end** positions in the year's
+`holdings/` folder (a `[[holding]]` TOML per broker account, as a
+download tool writes it; `tjs sanity` finds each file's account by its
+`[meta] account` or its name, `margin_holdings.toml`), or update the
+positions file from step 5 (or give `sanity` the year-end IB statement or
+RBC Holdings Export itself), and run `tjs sanity` again. A report dated
 before the books' last row is compared with the books' positions on its
 own date. Every difference is either a trade after your last export or
-something still missing. Once `holdings = [...]` is set (a `.toml` or a
-broker's report), every run ends with the same check:
+something still missing. Once `holdings/` holds a snapshot or
+`holdings = [...]` is set (a `.toml` or a broker's report), every run
+ends with the same check:
 
 ```
 ==> Checking positions against the broker's holdings files
@@ -763,7 +773,8 @@ import the PDFs CRA My Account shows under "Tax information slips"
 (`tjs slip-audit --import-cra <folder> --write`), type them into
 `inputs/slips/slips.toml` (`tjs slip-audit --template` prints one to fill
 in) or drop IBKR's dividends report
-(`U*.YYYY.dividends.csv`) in `inputs/slips/`, then
+(`U*.YYYY.dividends.csv`) in `inputs/slips/`, then (with one folder of
+exports for every year the slips are the year's own: `2025/slips/`)
 
 ```bash
 tjs slip-audit
@@ -791,6 +802,93 @@ to confirm. A missing purchase that affects the year shows as:
 Work through it until every step is done or marked. Each step is
 explained in [filing.md](filing.md). `tjs checklist --walk` goes through
 the open ones one at a time.
+
+## One folder of exports for every year
+
+`tjs init` makes this layout: the broker exports once, for every year,
+and a complete project per tax year beside them.
+
+```
+~/taxes/
+  inputs/<account>/     every year's exports, .tt lines, manifest.json
+  exports/              the newest year's positions and wash radar
+  2024/                 the 2024 project
+    taxjson.toml        year = 2024, inputs_dir = "../inputs"
+    ticker.map
+    holdings/           2024's broker positions snapshots
+    slips/              2024's slips (slips.toml, IB's report, T5008)
+    filed/ work/ reports/ checklist.json
+  2025/                 the 2025 project, the same shape
+```
+
+- **Each year is its own project.** Its `taxjson.toml` and `ticker.map`
+  are read exactly as a single-folder project's: a change to 2025's map
+  never touches 2024's books. Only `inputs/` is shared, through
+  `inputs_dir = "../inputs"` in each year's `[settings]`
+  ([settings.md](settings.md#folders)). Run every command in a year
+  folder (`cd 2025`, or `tjs -C 2025 run`); in `~/taxes` itself a
+  command that needs a year is refused, naming the year folders.
+- **What is shared and what is the year's own.** Shared, in
+  `inputs/<account>/`: the broker exports, the `.tt` lines you write,
+  `manifest.json` (your corporate-action elections) and `sends.json`
+  (your crypto-send decisions). A run never writes there: only a
+  decision you make — `tjs elect … --set`, `tjs crypto-sends … --set`,
+  or an answer at the run's prompt — is saved there, and it applies to
+  every year. The year's own, in its folder: `taxjson.toml`,
+  `ticker.map`, `missing_history.json`, `slips/`, `holdings/`,
+  `checklist.json`, `work/` (where it generates its `crypto_sends.tt`
+  from `sends.json` and its own map), `reports/` and `filed/`.
+- **Downloads go into `inputs/<account>/`**, all years together (file
+  names can carry the period). Each year's books are built from all of
+  them, as a single-folder project's are. A folder of an account a year
+  does not have (an RRSP split in 2025, seen from 2024) is not read by
+  that year, with one `Info:` line.
+- **The year's positions snapshots go in its `holdings/`**: keep one taken
+  at (or just after) the year end there. `tjs sanity` and the end of
+  `tjs run` find them without a setting (step 6).
+- **A new year:** `tjs new-year 2026` in `~/taxes` (or any year folder)
+  creates `2026/` from the newest earlier year: its `taxjson.toml` (year
+  set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's
+  `[estimate]` and `[instalments]` commented out for reference) and
+  `ticker.map` copied, and an empty `holdings/`.
+- **Keeping the years aligned:** a map line or setting added in one year
+  is not in the others. `tjs years` lists each year with its state (filed
+  or open, last run, whether its inputs changed since) and says when its
+  map or settings differ from the newest year's; `tjs years --diff 2024
+  2025` shows the differences, and `tjs align --from 2025` in `2026/`
+  brings chosen lines and settings over (asked one by one, or `--all`;
+  the previous file is kept as `.bak`; 2025 is never written).
+- **A filed year and later downloads.** A new export in `inputs/` can
+  change a filed year's figures (a late correction, a January
+  settlement). That year's `tjs sum` and checklist then say its inputs
+  changed since the last run, and `tjs run` in its folder recomputes it
+  and warns `filed 2024 DRIFTED` against `filed/2024.json` when the
+  filed figures moved; `tjs years` shows which years changed. Amend the
+  return, or keep the books consistent with it.
+- **`exports/`**: the newest year's full run copies its
+  `<account>_holdings.toml` and wash radar there, with a `README.txt`
+  naming the year, for other tools to read whatever the year
+  (`exports_dir`).
+- **Inside one folder.** `inputs_dir`, `holdings_dir` and `exports_dir`
+  must stay inside the folder that holds the year folders (`~/taxes`): a
+  path or symlink leading further out is refused. Keep the whole folder
+  in one git repository (`git init` in `~/taxes`): the checklist's
+  "inputs committed" step looks at the shared `inputs/` too.
+
+**From a single-folder project.** `tjs migrate --to-years` in it (with
+`--dry-run` first) keeps `inputs/` where it is and moves the project's
+own files (`taxjson.toml`, `ticker.map`, `missing_history.json`,
+`checklist.json`, `work/`, `reports/`, `filed/`, `inputs/slips/` as
+`slips/`) into a folder named for its year, setting `inputs_dir` and
+`exports_dir` and moving relative `holdings` and `prior_year_record`
+paths one level down. To fold several year projects (`~/taxes/2024/`,
+`~/taxes/2025/`, each with its own `inputs/`) into one: in a new folder,
+`tjs migrate --to-years` the newest one there, copy each older project's
+own files (not its `inputs/`) into a folder named for its year, add
+`inputs_dir = "../inputs"` to its `[settings]`, and copy any export
+the shared `inputs/<account>/` does not have yet (the run reads
+overlapping rows once). Then `tjs run` in each year: a filed year's run
+says whether its figures still match its lock.
 
 ## What the books cannot see
 

@@ -452,6 +452,17 @@ files into ticker.map and taxjson.toml.
 - `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `file_lock` (a link at the lock name replaced, `LockLinkError` when it cannot be), `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup; `file_lock` serializes a read-modify-write. Generated state in `work/` goes through `write_atomic`; `tests/test_fix_issues_safe_writes.py` lists the reviewed direct writes left in the core.
 - `src/taxjson/lib/tomlcompat.py` — `tomllib`: the tomllib or tomli import.
 
+## One folder of exports for every year
+
+`init` (by default) writes inputs/<account>/ shared by year folders, each a
+complete project whose `[settings] inputs_dir` / `holdings_dir` /
+`exports_dir` name the shared folders. Every input path goes through
+lib/project_layout; each year keeps its own taxjson.toml and ticker.map.
+
+- `src/taxjson/lib/project_layout.py` — `inputs_dir`, `shared_inputs`, `ticker_map_path`, `data_file`, `slips_dir`, `holdings_folder`, `exports_folder`, `project_path`, `write_boundary`, `folder_setting`, `setting_problems` (a folder leaving the folder that holds the project; a year folder holding another year), `unconfigured_inputs`, `year_dirs`, `multi_root`, `new_year_text`, `compare`, `set_key_text`, `years_report`: where a project's files are, and the year-folder tools.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_years`, `cmd_new_year`, `cmd_align`, `_years_folder`, `_refuse_years_root`, `_YEARS_ROOT_CMDS`, `_refuse_folder_settings`, `_migrate_to_years`, `_write_exports`, `_EXPORT_PATTERNS`: `years`, `new-year`, `align`, the refusal in the folder holding the years, `migrate --to-years` and the newest year's exports/.
+- `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `broker_ids`, `snapshot_date`, `snapshot_files`: the year's holdings/ snapshots `sanity` finds by `[meta] account` or file name (`src/taxjson/bin/taxjson_run.py` — `_sanity_items_from_config`, `_holdings_folder_in_use`).
+
 ## The Canada and USA partition
 
 Canadian and US rules never mix. One module resolves a project's country and

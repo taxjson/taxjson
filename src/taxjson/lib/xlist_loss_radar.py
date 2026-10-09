@@ -65,6 +65,7 @@ from dataclasses import dataclass, field
 from datetime import date as _date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from taxjson.lib import project_layout as _PL
 
 STATE = "xlist_loss_radar.state"
 FORMAT = "xlist_loss_radar/1"
@@ -307,7 +308,7 @@ def _map_rules(root: Path, cache: Path
     except ImportError:                             # pragma: no cover
         return renames, distinct
     eff = cache / XL.EFFECTIVE_MAP
-    tm = root / "ticker.map"
+    tm = _PL.ticker_map_path(root)
     for p, what in ((eff if eff.is_file() else tm, "renames"),
                     (tm, "distinct")):
         if not p.is_file():
@@ -570,7 +571,7 @@ def answered(f: Dict[str, Any], root: Path) -> Optional[str]:
     joining the two), else None — the map may have changed since the
     run wrote the state."""
     from taxjson.lib import ticker_map_suggest as TS
-    st = TS.map_state(Path(root) / "ticker.map")
+    st = TS.map_state(_PL.ticker_map_path(Path(root)))
     return TS.already(TS.Suggestion(str(f.get("tobase") or ""), "", ""), st)
 
 

@@ -63,6 +63,7 @@ import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 SCHEMA_VERSION = 1
 SLIPS_DIR = ("inputs", "slips")
@@ -242,7 +243,9 @@ class BookRow:
 
 # ------------------------------------------------------------ helpers
 def slips_dir(root: Path) -> Path:
-    return Path(root).joinpath(*SLIPS_DIR)
+    """inputs/slips/; a multi-year project's year folder: <year>/slips/
+    (lib/project_layout.slips_dir)."""
+    return _PL.slips_dir(root)
 
 
 def _root(sym: str) -> str:
@@ -801,7 +804,7 @@ def load_books(root: Path, cfg: Dict[str, Any], year: int,
     for acct in accounts:
         base = _load_doc(cache / f"{acct}_base.json")
         if base is None:
-            if (Path(root) / "inputs" / acct).is_dir():
+            if (_PL.inputs_dir(Path(root)) / acct).is_dir():
                 problems.append(f"{acct}: no readable work/{acct}_base.json "
                                 f"— run `taxjson run`")
             continue

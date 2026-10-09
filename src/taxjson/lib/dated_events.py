@@ -67,6 +67,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from taxjson.lib import project_layout as _PL
 
 STATE = "dated_events.state"
 FORMAT = "dated_events/1"
@@ -214,7 +215,7 @@ def read_declarations(root: Path, accounts: Dict[str, Any]) -> Declarations:
     tt_renames: List[DatedRename] = []
     for acct in sorted(accounts or {}):
         acfg = accounts.get(acct) or {}
-        for tt in tt_files(root / "inputs" / acct):
+        for tt in tt_files(_PL.inputs_dir(root) / acct):
             try:
                 text = read_text_utf8(tt)
             except (OSError, ValueError):
@@ -724,9 +725,7 @@ def tt_renames(root: Path, accounts: Optional[Dict[str, Any]] = None
 
 def _project_accounts(root: Path) -> Dict[str, Any]:
     try:
-        from taxjson.lib.tomlcompat import tomllib
-        doc = tomllib.loads((Path(root) / "taxjson.toml").read_text(
-            encoding="utf-8-sig"))
+        doc = _PL.read_config_soft(root)
     except Exception:                               # noqa: BLE001
         return {}
     accts = doc.get("accounts") if isinstance(doc, dict) else None

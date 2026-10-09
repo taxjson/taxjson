@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 FORMAT = "taxjson-journals/1"
 STATES = ("joined", "suggested", "refused")
@@ -86,7 +87,7 @@ class _Map:
         cache = root / "work"
         eff = cache / XL.EFFECTIVE_MAP
         self.path: Optional[Path] = eff if eff.is_file() else (
-            root / "ticker.map" if (root / "ticker.map").is_file() else None)
+            _PL.ticker_map_path(root) if (_PL.ticker_map_path(root)).is_file() else None)
         self.raw: Dict[str, str] = {}
         self.lines: Dict[str, Tuple[str, str]] = {}
         self.distinct: Dict[frozenset, Tuple[str, str]] = {}

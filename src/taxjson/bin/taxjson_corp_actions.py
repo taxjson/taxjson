@@ -436,6 +436,12 @@ def main():
              "--country's home currency, CAD or USD).",
     )
     parser.add_argument(
+        '--decisions-only', action='store_true',
+        help='Save to the manifest only the elections answered at the '
+             'prompt: never a rekey of old ids or an automatic election '
+             '(a manifest shared by every year, written by no run as a '
+             'side effect)')
+    parser.add_argument(
         '--ticker-map', metavar='FILE', default=None,
         help="The project's ticker.map (`taxjson run` passes it): a "
              "temporary code it already renames is not warned about.",
@@ -564,7 +570,7 @@ def main():
     # the human-legible scheme — silently, before anything consults
     # the manifest, so an id-scheme change never re-prompts for (or
     # orphans) decisions the user already made.
-    if manifest.migrate_legacy(events):
+    if manifest.migrate_legacy(events) and not args.decisions_only:
         manifest.save(manifest_path)
     for _note in manifest.migration_notes:
         emit_line(f"note: {_note}.", file=sys.stderr)
@@ -574,7 +580,7 @@ def main():
     # is still written, so the audit trail is intact and `taxjson elect
     # --redo` can override like any hand-made election.
     auto_applied = apply_auto_defaults(events, manifest, args.country)
-    if auto_applied:
+    if auto_applied and not args.decisions_only:
         manifest.save(manifest_path)
         for ev in auto_applied:
             emit_line(f"note: auto-elected {ev.event_id} ({ev.summary()}) — "

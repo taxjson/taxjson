@@ -15,10 +15,13 @@ A project is a folder:
 | `inputs/<crypto account>/sends.json`, `crypto_sends.tt` | your crypto-send decisions and the sales generated from them | [sends.json](#inputscrypto-accountsendsjson-and-crypto_sendstt) |
 | `missing_history.json` | sales whose purchase is not in your files | [missing_history.json](#missing_historyjson) |
 | holdings TOML (anywhere) | a broker's positions, for `taxjson sanity` / `taxjson opening` | [Holdings TOML](#holdings-toml) |
-| `inputs/slips/slips.toml`, `inputs/slips/U*.YYYY.dividends.csv` | your T5 / T3 slips and IB's dividends reports, for `taxjson slip-audit` | [inputs/slips/](#inputsslips-slipstoml-and-ibs-dividends-reports) |
+| `inputs/slips/slips.toml`, `inputs/slips/U*.YYYY.dividends.csv` | your T5 / T3 slips and IB's dividends reports, for `taxjson slip-audit` (`slips/` in the project when `inputs_dir` names a shared folder) | [inputs/slips/](#inputsslips-slipstoml-and-ibs-dividends-reports) |
 | `inputs/slips/*.csv` | T5008 / 1099-B slips, for `taxjson reconcile-slips` | — |
+| `holdings/*.toml` | the year's broker positions snapshots, read by `taxjson sanity` with no setting | [holdings/](#holdings-the-years-positions-snapshots) |
 | `filed/<year>.json` | close-year locks | [filed/YEAR.json](#filedyearjson-close-year-locks) |
 | `work/`, `reports/` | rebuilt by every `taxjson run`; never edited | — |
+
+The exports can live in a folder every year's project shares: `taxjson init` makes that layout by default — `inputs/<account>/` beside the year folders (`2025/`), each a complete project whose `taxjson.toml` names the shared folder with `inputs_dir = "../inputs"` (see [Folders](#folders); docs/getting-started.md, "One folder of exports for every year"). Each year still has its own `taxjson.toml`, `ticker.map`, `missing_history.json` and results; only the exports are shared.
 
 Rules every reader applies:
 
@@ -74,10 +77,35 @@ The keys come in groups, in the order `taxjson init` writes them.
 
 #### `prior_year_record`
 - **Meaning:** the path to last year's close-year lock, read by `taxjson handoff`, `taxjson carryover`, `taxjson option-boundary`, `taxjson edge-cases` and the carry-forwards of the estimate.
-- **Default:** none (then `filed/<year-1>.json` in this project, if any).
+- **Default:** none (then `filed/<year-1>.json` in this project, if any). `taxjson new-year` sets it to the previous year folder's lock.
 - **Country:** both.
 - **Change it when:** each year's project lives in its own folder.
 - **Example:** `prior_year_record = "../2024/filed/2024.json"`
+
+#### Folders
+
+Where the project reads its exports and positions and writes files for other tools. A relative path is read from the project folder; every one must stay inside the folder that holds the project (its parent) — a path or symlink leading further out is refused, naming it (`src/taxjson/lib/project_layout.py` — `folder_setting`, `setting_problems`).
+
+#### `inputs_dir`
+- **Meaning:** the folder of the broker exports (`<folder>/<account>/`: CSVs, `.tt` files, `manifest.json`, `sends.json`), when the year projects share one. The run reads it like `inputs/`; a folder of an account this year's `taxjson.toml` does not have (one split later, one closed earlier) is not read, with one `Info:` line. With it, a year folder named `YYYY` must hold that year's project (`year`), and the year's slips are in the project's `slips/` (slips belong to one year).
+- **Default:** `inputs/` in the project.
+- **Country:** both.
+- **Change it when:** `taxjson init` sets it (`"../inputs"`); `taxjson migrate --to-years` sets it on an existing project.
+- **Example:** `inputs_dir = "../inputs"`
+
+#### `holdings_dir`
+- **Meaning:** the folder of the year's broker positions snapshots `taxjson sanity` (and the end of `taxjson run`) compares the books with, with no `holdings = [...]` setting (see [holdings/](#holdings-the-years-positions-snapshots)).
+- **Default:** `holdings/` in the project.
+- **Country:** both.
+- **Change it when:** your download tool writes the snapshots elsewhere inside the folder holding the project.
+- **Example:** `holdings_dir = "holdings"`
+
+#### `exports_dir`
+- **Meaning:** where the newest year's full run copies its `reports/<account>_holdings.toml` (positions with their filing cost) and wash radar (`wash_radar_*.json` and `.rpt`), with a `README.txt` naming the year, for other tools to read whatever the year. An older year's run leaves it alone ("newest": no year folder `YYYY` beside this one has a later year).
+- **Default:** none: nothing is copied.
+- **Country:** both.
+- **Change it when:** `taxjson init` sets it (`"../exports"`).
+- **Example:** `exports_dir = "../exports"`
 
 #### Currencies
 
@@ -236,11 +264,18 @@ One table per folder under `inputs/` (the folder name is the account name). Name
 - **Example:** `transfers = true`
 
 #### `holdings`
-- **Meaning:** positions files `taxjson sanity` reconciles against with no arguments (IB statements, RBC Holdings Exports, holdings TOMLs); a full `taxjson run` also checks them at the end and warns, never fails.
+- **Meaning:** positions files `taxjson sanity` reconciles against with no arguments (IB statements, RBC Holdings Exports, holdings TOMLs); a full `taxjson run` also checks them at the end and warns, never fails. Without it, the account's snapshots in the year's [holdings/](#holdings-the-years-positions-snapshots) folder are found by themselves.
 - **Default:** none.
 - **Country:** both.
 - **Change it when:** you keep the broker's year-end positions.
 - **Example:** `holdings = ["~/broker/margin_holdings.toml"]`
+
+#### `broker_accounts`
+- **Meaning:** the broker account ids of this account's statements, when there are several (one taxjson account spanning two IB accounts): a `holdings/` snapshot whose `[meta] account` is one of them, or `account`, is this account's. Compared by letters and digits, case-insensitive; shown masked.
+- **Default:** none (`account` alone).
+- **Country:** both.
+- **Change it when:** a snapshot is named for its broker account rather than for the taxjson account.
+- **Example:** `broker_accounts = ["ACCOUNT_A", "ACCOUNT_B"]`
 
 #### `combined_broker_accounts`
 - **Meaning:** `true` declares that every broker account in this folder's statements is yours and taxable together; the "statement spans N accounts" ATTENTION becomes a one-line note with masked ids.
@@ -661,6 +696,14 @@ Every buy/sell row is cross-checked (amount vs qty × price ± fee within 1%, du
 
 ---
 
+## holdings/: the year's positions snapshots
+
+The broker's positions files for the tax year, as a download tool writes them (one `[[holding]]` TOML per broker account; see [Holdings TOML](#holdings-toml)). `taxjson sanity` with no arguments and the end of `taxjson run` compare the books with them, without a `holdings = [...]` setting; an account that has one keeps its own files. Code: `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `snapshot_date`.
+
+- A file belongs to the account whose `account` or `broker_accounts` holds the file's `[meta] account`; else to the account its name starts with (`margin_holdings.toml`, `margin_ib_holdings.toml`). A file no account claims, or two do, is named in a note and not compared. Several files of one account are compared together.
+- A snapshot is compared at its date: `[meta] as_of`, else the day of `[meta] generated_at`. One dated after the books' last day is compared with the latest books, with a note.
+- Keep a snapshot taken at (or just after) the year end in that year's folder: it is the year's closing positions. A later download belongs in the later year's `holdings/`.
+
 ## Holdings TOML
 
 A broker's positions on a date, read by `taxjson sanity` (and `[accounts.NAME] holdings`) and `taxjson opening`; `taxjson fetch --positions` writes one for Questrade. Never booked by `taxjson run`. Both countries. Reader: `src/taxjson/lib/positions_reports.py` — `_read_toml`.
@@ -759,7 +802,7 @@ Every hint is a non-negative amount. A run with `--no-input` leaves unresolved e
 
 ## inputs/CRYPTO ACCOUNT/sends.json and crypto_sends.tt
 
-`sends.json` holds your decision for each crypto send that did not arrive in another of your crypto accounts; `taxjson crypto-sends --set ID=DECISION` writes it. Commit it. `crypto_sends.tt` is generated from it (one sale at fair value per gift or payment, and per network fee): never edit it; a hand-written file of that name is never overwritten. Reader: `src/taxjson/lib/crypto_sends.py` — `load_decisions`, `record_decision`, `DECISIONS`, `REFUSED`.
+`sends.json` holds your decision for each crypto send that did not arrive in another of your crypto accounts; `taxjson crypto-sends --set ID=DECISION` writes it. Commit it. `crypto_sends.tt` is generated from it (with a shared `inputs_dir`, in the year's `work/crypto_sends/<account>/`: a run never writes the shared folder) (one sale at fair value per gift or payment, and per network fee): never edit it; a hand-written file of that name is never overwritten. Reader: `src/taxjson/lib/crypto_sends.py` — `load_decisions`, `record_decision`, `DECISIONS`, `REFUSED`.
 
 ```json
 {"schema_version": 1, "sends": {
@@ -784,6 +827,17 @@ Country: `gift` is Canada only (a disposition at fair value, s.69(1)(b)); a US p
 Written by `taxjson close-year`: the closed year's sales, year-end positions and cost, its country and date basis, and the carry-forwards (net capital loss or US short/long-term carryover; Canada's minimum tax carryover); with `fx_cash_ledger = "v2"` and a computed ledger, `fx_cash_v2` — each account's foreign cash and its cost at Dec 31, each debt — the next year's opening pool. Read by `taxjson check-filed`, `taxjson handoff`, `taxjson carryover`, `taxjson option-boundary` and the next year's estimate (through `prior_year_record`). Commit it; do not edit it. A lock closed under the other country's rules is refused.
 
 ---
+
+## `taxjson years --json`
+
+The year projects of a folder of exports shared by every year (`taxjson years` there or in a year folder): a stable schema for programs (new keys may be added; none is renamed or removed while `schema_version` is 1). Code: `src/taxjson/lib/project_layout.py` — `years_report`.
+
+| Key | Meaning |
+| --- | --- |
+| `schema_version`, `root`, `newest` | `1`, the folder holding the year folders, the newest year |
+| `years` | one object per year folder (`YYYY/` with a `taxjson.toml`), oldest first (below) |
+
+Each year: `year`, `folder`; `filed` (its `filed/<year>.json` exists), `closed_at`, `partial_lock` (taken before the year ended), `totals` (`realized`, `disallowed`, `income` of the lock); `last_run` (the last full run, ISO), `stale` (`true` when the inputs or settings changed since; `null` when there is no run), `changed` (what changed); `differs_from_newest` (`{"map_rules", "keys"}`: how many ticker.map rules and settings differ from the newest year's; `null` for the newest); `marks` (`{"done", "skipped"}` checklist marks); `problem` (a file that cannot be read, else `null`).
 
 ## `taxjson journals --json`
 

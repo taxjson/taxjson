@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from taxjson.lib import project_layout as _PL
 
 STATE_FILE = "checklist.json"
 # taxjson_run.UNBOOKED_PREFIX: a parser row that is a tax event the
@@ -541,7 +542,7 @@ def _rbc_as_of_by_account(paths: List[Path]) -> List[Tuple[str, str]]:
 # ---------------------------------------------------------------- detectors
 def d_inputs_frozen(ctx: Ctx) -> Result:
     missing = [n for n in ctx.accounts
-               if not _data_files(ctx.root / "inputs" / n)
+               if not _data_files(_PL.inputs_dir(ctx.root) / n)
                and (ctx.accounts[n].get("type") == "taxable")]
     if missing:
         return Result("inputs-frozen", "todo",
@@ -574,7 +575,7 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
         # one label may hold two RBC accounts' exports, and B's later
         # export certified A's early one (A2-1147).
         for who, asof in _rbc_as_of_by_account(
-                [p for p in _data_files(ctx.root / "inputs" / n)
+                [p for p in _data_files(_PL.inputs_dir(ctx.root) / n)
                  if p.suffix.lower() == ".csv"]):
             if asof < cutoff.isoformat():
                 early.append(f"{n} (RBC export{who} as of {asof})")
@@ -586,7 +587,7 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
     ib_short = []
     for n in _accounts_of(ctx, "taxable"):
         _ib = []
-        for p in _data_files(ctx.root / "inputs" / n):
+        for p in _data_files(_PL.inputs_dir(ctx.root) / n):
             if p.suffix.lower() != ".csv":
                 continue
             try:
@@ -663,7 +664,7 @@ def d_sheltered_inputs(ctx: Ctx) -> Result:
     names = _accounts_of(ctx, "sheltered")
     if not names:
         return Result("sheltered-inputs", "n/a", "no sheltered account configured")
-    empty = [n for n in names if not _data_files(ctx.root / "inputs" / n)]
+    empty = [n for n in names if not _data_files(_PL.inputs_dir(ctx.root) / n)]
     if empty:
         # US: an IRA's repurchase (Rev. Rul. 2008-5), never Canada's
         # affiliated persons (A2-1260).
@@ -679,7 +680,7 @@ def d_crypto_inputs(ctx: Ctx) -> Result:
     names = _accounts_of(ctx, "crypto")
     if not names:
         return Result("crypto-inputs", "n/a", "no crypto account configured")
-    empty = [n for n in names if not _data_files(ctx.root / "inputs" / n)]
+    empty = [n for n in names if not _data_files(_PL.inputs_dir(ctx.root) / n)]
     if empty:
         return Result("crypto-inputs", "todo", f"empty: {', '.join(empty)}")
     return Result("crypto-inputs", "done", ", ".join(names))
@@ -732,6 +733,23 @@ def d_inputs_committed(ctx: Ctx) -> Result:
     paths = ["inputs", "taxjson.toml", "ticker.map", "missing_history.json",
              "phantoms.json"]
     paths = [p for p in paths if (ctx.root / p).exists()]
+    if _PL.shared_inputs(ctx.root):
+        # The exports every year shares (lib/project_layout): git takes
+        # a path beside the year folder in the same repository; a
+        # repository of the year folder alone does not hold them.
+        import os as _os
+        shared = _PL.inputs_dir(ctx.root)
+        code, top = _git(shared, "rev-parse", "--show-toplevel")
+        code2, here = _git(ctx.root, "rev-parse", "--show-toplevel")
+        if code or code2 or top.strip() != here.strip():
+            return Result("inputs-committed", "attention",
+                          f"{_PL.shown(shared, ctx.root)}/ is not in this "
+                          f"project's git repository — keep the year "
+                          f"folders and the shared inputs/ in one "
+                          f"repository (`git init` in the folder above)")
+        paths += [_os.path.relpath(shared, ctx.root)]
+        if _PL.slips_dir(ctx.root).exists():
+            paths.append(_PL.SLIPS)
     code, out = _git(ctx.root, "status", "--porcelain", "--", *paths)
     dirty = [ln for ln in out.splitlines() if ln.strip()]
     if code != 0:
@@ -839,7 +857,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     # that died on one account, or a single `run --account X`, left the
     # others without books while this step said done (S018-02).
     unreported = [n for n in ctx.accounts
-                  if _data_files(ctx.root / "inputs" / n)
+                  if _data_files(_PL.inputs_dir(ctx.root) / n)
                   and not (ctx.reports / f"{n}.sum").is_file()]
     if unreported:
         problems.append(f"no reports/<account>.sum for {', '.join(unreported)} "
@@ -878,7 +896,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     # it (R1-248) — the checklist must not call that run clean.
     sheets = []
     for n in ctx.accounts:
-        folder = ctx.root / "inputs" / n
+        folder = _PL.inputs_dir(ctx.root) / n
         if not folder.is_dir():
             continue
         stems = {p.stem.lower() for p in _data_files(folder)}
@@ -934,8 +952,10 @@ _ACCOUNT_SIDECARS = ("manifest.json", "sends.json")
 # comment) does not make the books stale (A2-0681, A2-1157).
 _PLANNING_TABLES = ("instalments", "estimate", "carryover",
                     "capital_gains_dividends")
-_PLANNING_SETTINGS = ("province", "prior_year_record")
-_PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id")
+_PLANNING_SETTINGS = ("province", "prior_year_record", "holdings_dir",
+                      "exports_dir")
+_PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id",
+                          "broker_accounts")
 
 
 def _skipped_input_name(name: str) -> bool:
@@ -949,10 +969,11 @@ def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
     """Every file `taxjson run` reads to build the books: the project-
     root config and maps, and each configured account's activity files,
     generic-mapping sidecars (inputs/<acct>/*.toml), its elections
-    manifest and its crypto send decisions."""
+    manifest and its crypto send decisions (from the shared inputs/ when
+    `inputs_dir` names one — lib/project_layout)."""
     out = [root / n for n in _ROOT_INPUTS if (root / n).is_file()]
     for n in sorted((cfg.get("accounts") or {})):
-        folder = root / "inputs" / n
+        folder = _PL.inputs_dir(root) / n
         if not folder.is_dir():
             continue
         out += sorted(p for p in folder.iterdir()
@@ -1005,13 +1026,22 @@ def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
         if p.name == "manifest.json" and _empty_manifest(p):
             continue
         try:
-            out[p.relative_to(root).as_posix()] = (
+            out[_fp_key(root, p)] = (
                 _run_config_digest(p) if p.parent == root
                 and p.name == "taxjson.toml"
                 else hashlib.sha256(p.read_bytes()).hexdigest())
         except OSError:
             continue
     return out
+
+
+def _fp_key(root: Path, p: Path) -> str:
+    """A fingerprinted file's name: relative to the project, or for a
+    shared inputs/ folder (lib/project_layout) "inputs/<account>/..."."""
+    try:
+        return p.relative_to(root).as_posix()
+    except ValueError:
+        return p.relative_to(_PL.inputs_dir(root).parent).as_posix()
 
 
 def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
@@ -1022,7 +1052,7 @@ def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
     import hashlib
     paths = [root / n for n in _LEGACY_ROOT_INPUTS if (root / n).is_file()]
     for n in sorted((cfg.get("accounts") or {})):
-        folder = root / "inputs" / n
+        folder = _PL.inputs_dir(root) / n
         if folder.is_dir():
             paths += sorted(p for p in folder.iterdir()
                             if p.is_file() and not p.name.startswith(".")
@@ -1030,7 +1060,7 @@ def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
     out: Dict[str, str] = {}
     for p in paths:
         try:
-            out[p.relative_to(root).as_posix()] = hashlib.sha256(
+            out[_fp_key(root, p)] = hashlib.sha256(
                 p.read_bytes()).hexdigest()
         except OSError:
             continue
@@ -1123,10 +1153,10 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
     except OSError:
         return why
     legacy = set(_canon_fingerprint(doc["files"]))
-    newer = sorted(p.relative_to(root).as_posix()
+    newer = sorted(_fp_key(root, p)
                    for p in _input_paths(root, cfg)
-                   if _LEGACY_INPUT_NAMES.get(p.relative_to(root).as_posix(),
-                                              p.relative_to(root).as_posix())
+                   if _LEGACY_INPUT_NAMES.get(_fp_key(root, p),
+                                              _fp_key(root, p))
                    not in legacy
                    and p.name != "taxjson.toml"
                    and not (p.name == "manifest.json" and _empty_manifest(p))
@@ -1334,7 +1364,7 @@ def d_crypto_sends(ctx: Ctx) -> Result:
             stale.append(n)
         # A hand-written .tt line selling what crypto_sends.tt sells:
         # both are booked (A2-0127).
-        dups += cs.duplicate_lines(ctx.root / "inputs" / n,
+        dups += cs.duplicate_lines(_PL.inputs_dir(ctx.root) / n,
                                    cs.disposing_entries(a))
     if dups:
         d0 = dups[0]
@@ -1470,7 +1500,7 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
         if not f.is_file():
             f = ctx.cache / f"{n}_gains.json"
         if not f.is_file():
-            if _data_files(ctx.root / "inputs" / n):
+            if _data_files(_PL.inputs_dir(ctx.root) / n):
                 missing.append(n)
             continue
         try:
@@ -1821,7 +1851,7 @@ def slip_files(root: Path) -> List[Path]:
     file under an account folder is that account's input, never a slip
     because '1099' or 't5008' appears in its name (an account number or
     a date run matched, S067-23)."""
-    slips = root / "inputs" / "slips"
+    slips = _PL.slips_dir(root)
     if not slips.is_dir():
         return []
     # IB's dividends report is a T5/T3 source (`taxjson slip-audit`,
@@ -1835,7 +1865,7 @@ def slip_files(root: Path) -> List[Path]:
 
 
 def _unread_slip_files(root: Path) -> List[Path]:
-    slips = root / "inputs" / "slips"
+    slips = _PL.slips_dir(root)
     if not slips.is_dir():
         return []
     # slips.toml holds the T5/T3 slips `taxjson slip-audit` reads.
@@ -2242,6 +2272,19 @@ def d_filed_lock(ctx: Ctx) -> Result:
     st = _lock_state(ctx, "filed-lock")
     if st is not None:
         return st
+    # check-filed recomputes from work/: books built before an input
+    # changed (in a multi-year project, a shared input or ticker.map
+    # edited while working on a later year) would say "no drift" about
+    # figures the change may have moved.
+    try:
+        changed = inputs_changed(ctx.root, ctx.cfg)
+    except Exception:                                   # noqa: BLE001
+        changed = None
+    if changed:
+        return Result("filed-lock", "attention",
+                      f"inputs changed since the last run ({changed}) — "
+                      f"`taxjson run` recomputes the filed year against "
+                      f"filed/{ctx.year}.json")
     code, out, err = ctx.sub("check-filed")
     if code != 0:
         # Only a reported DRIFT is drift; a failed recompute (bad
@@ -2638,20 +2681,26 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
               Cmd("tjs help", "every command by group; `tjs COMMAND -h` "
                   "explains one"))),
         Item("init", "Set up", "Create the year's project",
-             "One folder per tax year: taxjson.toml, a ticker.map and an "
-             "inputs/<account>/ folder per account, each with a "
-             "README.txt naming the export to download.",
-             (Cmd(f"mkdir -p ~/taxes/{year} && cd ~/taxes/{year}",
-                  "the year you file"),
-              Cmd(f"tjs init --country {ctry} --year {year}",
+             "One folder of exports for every year: inputs/<account>/ "
+             "(each with a README.txt naming the export to download) "
+             "shared by the year folders, each a complete project with "
+             "its own taxjson.toml, ticker.map and holdings/.",
+             (Cmd(f"tjs init --country {ctry} --year {year} ~/taxes",
                   "or --country " + ("usa" if ctry == "canada"
-                                     else "canada")))),
+                                     else "canada")
+                  + f"; then cd ~/taxes/{year}"),
+              Cmd(f"tjs new-year {year}",
+                  "the year's folder, from last year's (in the folder "
+                  "holding the years)"),
+              Cmd("tjs years", "the year folders and their state"))),
         Item("configure", "Set up", "Make taxjson.toml match your accounts",
              "Sheltered accounts count too: a purchase there can deny a "
              "loss in a taxable account. Crypto rows are dated in "
              "local_timezone.",
              (Cmd("tjs migrate", "an older project: moves its old map "
-                  "files into ticker.map / taxjson.toml"),),
+                  "files into ticker.map / taxjson.toml"),
+              Cmd(f"tjs align --from {year - 1}", "another year's "
+                  "ticker.map lines and settings that differ")),
              how="One [accounts.NAME] section per account you have "
                  "(type = \"taxable\" or \"sheltered\"; crypto = true for "
                  "Coinbase or Kraken), the others deleted; with a crypto "
@@ -2974,12 +3023,24 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                do="commit filed/<year>.json"),
         Item("next-year", "Year end", "Start next year's project",
              "Next year's cost comes from this year's books.",
-             (Cmd(f"tjs init --country {ctry} --year {nxt} ../{nxt}",
-                  "a folder beside this one"),),
-             how=f"Copy inputs/ and ticker.map into the new folder, set "
-                 f"[settings] prior_year_record = "
-                 f"\"../{year}/filed/{year}.json\" in its taxjson.toml, "
-                 f"then `tjs handoff` there."),
+             (Cmd(f"tjs new-year {nxt}",
+                  "one folder of exports for every year: the next year's "
+                  "folder beside this one, with copies of this year's "
+                  "taxjson.toml and ticker.map"),
+              Cmd(f"tjs init --single --country {ctry} --year {nxt} "
+                  f"../{nxt}", "a single-folder project: a folder beside "
+                  "this one"),
+              Cmd(f"tjs align --from {year}", "later, in the new year: "
+                  "the map lines and settings that differ, to bring "
+                  "over")),
+             how=f"With shared exports the new year reads the same "
+                 f"inputs/; new-year sets its prior_year_record to this "
+                 f"year's lock. A single-folder project: copy inputs/ and "
+                 f"ticker.map into the new folder, set [settings] "
+                 f"prior_year_record = \"../{year}/filed/{year}.json\" in "
+                 f"its taxjson.toml. Then `tjs handoff` there. Keep a "
+                 f"broker positions snapshot taken at (or just after) "
+                 f"the year end in this year's holdings/."),
         _check("noa",
                how="Compare the Notice of Assessment with the return; "
                    "carry its net tax owing into next year's "
@@ -3181,7 +3242,7 @@ def s_ticker_map(ctx: Ctx, f: _Facts) -> Result:
 
 def s_tt_lines(ctx: Ctx, f: _Facts) -> Result:
     tts = sorted(p for n in ctx.accounts
-                 for p in _data_files(ctx.root / "inputs" / n)
+                 for p in _data_files(_PL.inputs_dir(ctx.root) / n)
                  if p.suffix.lower() == ".tt")
     return Result("tt-lines", "review",
                   f"{len(tts)} .tt file(s) in inputs/" if tts else "")
@@ -3197,7 +3258,7 @@ def s_format(ctx: Ctx, f: _Facts) -> Result:
             loose.append("taxjson.toml")
     except Exception:                                   # noqa: BLE001
         loose.append("taxjson.toml")
-    tm = ctx.root / "ticker.map"
+    tm = _PL.ticker_map_path(ctx.root)
     if tm.is_file():
         try:
             res = format_map(tm.read_bytes().decode("utf-8-sig"),
@@ -3256,7 +3317,7 @@ def _before_run(sid: str, ctx: Ctx, f: _Facts) -> Optional[Result]:
     read: no export at all, no `taxjson run` yet. None: run it."""
     if sid == "inputs-frozen":
         names = list(ctx.accounts)
-        if names and not any(_data_files(ctx.root / "inputs" / n)
+        if names and not any(_data_files(_PL.inputs_dir(ctx.root) / n)
                              for n in names):
             return Result(sid, "todo", "no broker exports yet in "
                           + ", ".join(f"inputs/{n}/" for n in names))

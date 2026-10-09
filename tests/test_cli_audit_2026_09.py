@@ -216,7 +216,10 @@ class TestInit(unittest.TestCase):                   # B8 + polish
                  str(target), "--country", "ca", "--year", "2025"],
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"taxjson -C '{target.resolve()}' run", r.stdout)
+        # (one project for every year: the commands run in the year's
+        # folder)
+        self.assertIn(f"taxjson -C '{target.resolve() / '2025'}' run",
+                      r.stdout)
 
     def test_far_future_year_rejected(self):
         with tempfile.TemporaryDirectory() as td:
@@ -230,7 +233,7 @@ class TestInit(unittest.TestCase):                   # B8 + polish
     def test_force_backs_up_and_lists_orphans(self):
         with tempfile.TemporaryDirectory() as td:
             base = [sys.executable, "-m", "taxjson.bin.taxjson_run",
-                    "init", td, "--year", "2025"]
+                    "init", "--single", td, "--year", "2025"]
             subprocess.run(base + ["--country", "ca"], cwd=REPO_ROOT,
                            capture_output=True, check=True)
             r = subprocess.run(base + ["--country", "us", "--force"],

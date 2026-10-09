@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
+from taxjson.lib import project_layout as _PL
 
 # The 1% of qty x price (x size) a total may differ by, with its floor
 # in the line's currency: a cent of rounding on a tiny total is never a
@@ -181,7 +182,7 @@ def project_mismatches(root: Path, accounts: Iterable[str]
     root = Path(root)
     out: List[Tuple[str, str, Mismatch]] = []
     for acct in accounts:
-        d = root / "inputs" / str(acct)
+        d = _PL.inputs_dir(root) / str(acct)
         try:
             tts = sorted(p for p in d.iterdir()
                          if p.is_file() and p.suffix.lower() == ".tt")

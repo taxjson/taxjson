@@ -30,6 +30,7 @@ TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
 # installed, so a project that used `taxjson fetch` keeps validating.
 ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                 "brokerage", "account", "query_id", "holdings",
+                "broker_accounts",
                 "combined_broker_accounts", "exercise_fee",
                 "year_end_posting")
 ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
@@ -187,6 +188,15 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
                 f"[accounts.{name}] exercise_fee must be a number such "
                 f"as 1.00 (the broker's exercise/assignment charge, no "
                 f"quotes), got {_fee!r}")
+        _bas = acfg.get("broker_accounts")
+        if _bas is not None and not (
+                isinstance(_bas, list)
+                and all(isinstance(x, str) and x.strip() for x in _bas)):
+            # The ids a holdings/ snapshot's [meta] account is matched
+            # against (lib/holdings_dir); a number would never match.
+            out.append(f"[accounts.{name}] broker_accounts must be a list "
+                       f"of quoted broker account ids, e.g. "
+                       f"[\"ACCOUNT_A\", \"ACCOUNT_B\"]")
         _yep = acfg.get("year_end_posting")
         if _yep is not None:
             from taxjson.lib.brokerages.rbc_direct import parse_month_day
