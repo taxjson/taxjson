@@ -2,9 +2,6 @@
 
 ## Unreleased
 
-
-## v0.26.0 (2026-10-09)
-
 ### Added
 
 - Interlisted shares (Canada): taxjson ships a master of Canadian shares
@@ -30,6 +27,17 @@
 - `scripts/build_interlisted.py` rebuilds the master: an offline,
   append-only build from a cache outside the repository; the network
   fetch is a maintainer step.
+
+### Changed
+
+- In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
+  TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), and
+  the reverse: the two are one listing.
+- IB's `GREY` listing venue is a US listing (`.US`), like `PINK` and `OTC`.
+
+## v0.26.0 (2026-10-09)
+
+### Added
 
 - One folder of exports for every year: `taxjson init` now makes
   `inputs/<account>/` once for every year's broker exports and the year's
@@ -83,10 +91,6 @@
 
 ### Changed
 
-- In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
-  TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), and
-  the reverse: the two are one listing.
-- IB's `GREY` listing venue is a US listing (`.US`), like `PINK` and `OTC`.
 
 - `taxjson init DIR` makes the folder of exports for every year:
   `DIR/inputs/<account>/` and the year's project in `DIR/<year>/`. So
