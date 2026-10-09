@@ -23,7 +23,11 @@
   `[meta] account` (new `[accounts.NAME] broker_accounts`) or its name,
   at the snapshot's date (`as_of`, else `generated_at`).
 - `[settings] exports_dir`: the newest year's run copies its positions
-  and wash radar there, with a README, for other tools.
+  and wash radar there, with a README, for other tools. It must be a
+  folder of its own (one overlapping the inputs, the holdings, a year
+  folder or the project's own folders is refused), and each export
+  replaces only the files the previous one wrote (listed in
+  `.taxjson-exports.json` there).
 - `taxjson redact` in a year folder of a shared-exports project writes
   that year as a redacted single-folder project inside the year folder
   (the shared exports and the year's slips, holdings/, taxjson.toml and

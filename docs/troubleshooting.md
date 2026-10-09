@@ -44,6 +44,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/project_layout.py` — `setting_problems`, `a year folder holds that year's project`
 
+### "Error: [settings] exports_dir = '../inputs' overlaps the inputs folder (inputs_dir) (…): the newest year's run replaces files in exports_dir"
+- **Check:** `grep _dir 2025/taxjson.toml`: `exports_dir` is (or holds, or sits inside) the inputs folder, the holdings folder, a year folder, the project's `work/`, `reports/` or `filed/`, or the project folder; every command stops at the config check.
+- **Cause:** the newest year's run replaces its positions and wash-radar files in `exports_dir`; in a folder that holds anything else it could overwrite an export, a snapshot or a year's results.
+- **Fix:** a folder of its own beside the year folders: `exports_dir = "../exports"`. The run removes there only the files its previous export wrote (listed in `exports/.taxjson-exports.json`); anything else in the folder is never touched.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `exports_overlap`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_write_exports`, `_exports_manifest`, `_EXPORTS_MANIFEST`
+
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
 - **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.

@@ -105,6 +105,7 @@ Where the project reads its exports and positions and writes files for other too
 - **Default:** none: nothing is copied.
 - **Country:** both.
 - **Change it when:** `taxjson init` sets it (`"../exports"`).
+- **Rules:** a folder of its own: one that is, holds or sits inside the inputs folder (shared or the project's `inputs/`), the holdings folder, a year folder, the project's `work/`, `reports/` or `filed/`, or the project folder is refused, naming it (`src/taxjson/lib/project_layout.py` — `exports_overlap`). Each export records the files it wrote in `.taxjson-exports.json` there, and the next removes only those it no longer writes: a file you put in the folder is never touched.
 - **Example:** `exports_dir = "../exports"`
 
 #### Currencies

@@ -308,7 +308,9 @@ def multi_root(root) -> Optional[Path]:
 
 def setting_problems(root, settings: Dict[str, Any]) -> List[str]:
     """What load_config refuses about the folder settings: a path that
-    is not one or leaves the folder holding the project; a year folder
+    is not one or leaves the folder holding the project; an
+    `exports_dir` that overlaps another folder (exports_overlap); a
+    year folder
     (named YYYY) of a shared-exports project whose `year` is another."""
     out = []
     for key in FOLDER_KEYS:
@@ -316,6 +318,9 @@ def setting_problems(root, settings: Dict[str, Any]) -> List[str]:
             folder_setting(root, key, settings)
         except LayoutError as e:
             out.append(str(e))
+    ov = exports_overlap(root, settings)
+    if ov:
+        out.append(ov)
     d = _resolved(root)
     year = settings.get("year")
     if (settings.get(INPUTS_KEY) is not None and YEAR_DIR_RE.match(d.name)
@@ -325,6 +330,61 @@ def setting_problems(root, settings: Dict[str, Any]) -> List[str]:
                    f"a year folder holds that year's project — fix `year`, "
                    f"or move the project to a folder named {year}")
     return out
+
+
+def _overlaps(a: Path, b: Path) -> bool:
+    """`a` and `b` are the same folder, or one holds the other."""
+    return a == b or a in b.parents or b in a.parents
+
+
+def exports_overlap(root, settings: Dict[str, Any]) -> Optional[str]:
+    """Why `exports_dir` cannot be used, or None: the newest year's run
+    replaces files there (taxjson_run `_write_exports`), so it must be a
+    folder of its own — not the same as, inside or holding the inputs
+    (the shared folder or the project's own inputs/), the holdings
+    folder, a year folder (YYYY beside the project, this one included),
+    the project's work/, reports/ or filed/, or the project folder."""
+    if settings.get(EXPORTS_KEY) is None:
+        return None
+    try:
+        exp = folder_setting(root, EXPORTS_KEY, settings)
+    except LayoutError:
+        return None                 # said by setting_problems already
+    if exp is None:
+        return None
+    d = _resolved(root)
+    bound = d.parent
+    places: List[Tuple[str, Path]] = [
+        (f"the project's {n}/ folder", d / n)
+        for n in ("work", "reports", "filed")]
+    for key, default, what in ((INPUTS_KEY, INPUTS, "inputs folder"),
+                               (HOLDINGS_KEY, HOLDINGS, "holdings folder")):
+        try:
+            p = folder_setting(root, key, settings)
+        except LayoutError:
+            p = None
+        if p is not None:
+            places.append((f"the {what} ({key})", p))
+        places.append((f"the project's {default}/ folder", d / default))
+    places.append(("this project's folder", d))
+    years: List[Path] = []
+    try:
+        years += [p for p in bound.iterdir()
+                  if YEAR_DIR_RE.match(p.name) and p.is_dir()]
+    except OSError:
+        pass
+    if YEAR_DIR_RE.match(exp.name) and exp.parent == bound:
+        years.append(exp)           # a year folder still to be made
+    for y in sorted({_resolved(p) for p in years}):
+        places.append((f"the year folder {y.name}/", y))
+    v = settings.get(EXPORTS_KEY)
+    for what, p in places:
+        if _overlaps(exp, _resolved(p)):
+            return (f"[settings] {EXPORTS_KEY} = {v!r} overlaps {what} "
+                    f"({p}): the newest year's run replaces files in "
+                    f"{EXPORTS_KEY} — name a folder of its own beside the "
+                    f"year folders, such as \"../{EXPORTS}\"")
+    return None
 
 
 def unconfigured_inputs(root, accounts: Dict[str, Any]) -> List[str]:
