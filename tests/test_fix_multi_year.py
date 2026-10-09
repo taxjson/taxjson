@@ -486,6 +486,62 @@ class TestMissingHistoryFirstEpisode(unittest.TestCase):
         self.assertEqual(q.get(("QZQ.US", "margin")), 10)
 
 
+class TestRedactAYearFolder(unittest.TestCase):
+    """`taxjson redact` in a year folder: a single-folder project of that
+    year (the shared exports, the year's slips and holdings/, its
+    taxjson.toml and ticker.map), written in the year folder only, with
+    the broker ids pseudonymised everywhere, holdings/ included."""
+
+    def test_redacted_year_runs_as_a_single_project(self):
+        top = multi("canada", years=(2024, 2025))
+        repo = Path(__file__).resolve().parent.parent
+        shutil.copy(repo / "examples" / "ib_demo.csv",
+                    top / "inputs" / "margin" / "U1234567_2024.csv")  # pii-ok
+        y = top / "2024"
+        (y / "inputs" / "slips").mkdir(parents=True)
+        (y / "inputs" / "slips" / "slips.toml").write_text("year = 2024\n")
+        (y / "holdings").mkdir()
+        (y / "holdings" / "U1234567_holdings.toml").write_text(  # pii-ok
+            '[meta]\naccount = "U1234567"\nas_of = "2024-12-31"\n\n'  # pii-ok
+            '[[holding]]\nsymbol = "QZQ.TO"\nquantity = 50\n'
+            'currency = "CAD"\n')
+        (y / "ticker.map").write_text("GLOBAL ZZOLDQ.TO ZZNEWQ.TO\n")
+        run_ok(self, y)
+        want = json.loads(tjs("-C", str(y), "sum", "--json").stdout)
+        # A file link in the shared inputs is followed when it stays in
+        # the folder holding the years, skipped when it leaves it.
+        (top / "notes").mkdir()
+        (top / "notes" / "n.txt").write_text("synthetic note\n")
+        far = Path(private_dir()) / "private.txt"
+        far.write_text("not for sharing\n")
+        os.symlink(top / "notes" / "n.txt", top / "inputs" / "near.txt")
+        os.symlink(far, top / "inputs" / "far.txt")
+        outside = {k: v for k, v in _tree(top).items()
+                   if not k.startswith("2024/")}
+        r = tjs("-C", str(y), "redact")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual({k: v for k, v in _tree(top).items()
+                          if not k.startswith("2024/")}, outside,
+                         "redact wrote outside the year folder")
+        red = y / "inputs_redact"
+        copy = _tree(red)
+        blob = b"".join(copy.values()) + "".join(copy).encode()
+        self.assertNotIn(b"U1234567", blob)  # pii-ok (synthetic)
+        self.assertIn("inputs/slips/slips.toml", copy)
+        self.assertTrue(any(k.startswith("holdings/") for k in copy))
+        self.assertIn("ticker.map", copy)
+        self.assertIn("inputs/near.txt", copy)
+        self.assertNotIn("inputs/far.txt", copy)
+        self.assertIn("far.txt not copied", r.stderr)
+        cfg = (red / "taxjson.toml").read_text()
+        self.assertNotRegex(cfg, r"(?m)^inputs_dir")
+        # It runs where it is, as a single-folder project, to the same
+        # figures.
+        run_ok(self, red)
+        got = json.loads(tjs("-C", str(red), "sum", "--json").stdout)
+        self.assertEqual(got["filing"], want["filing"])
+
+
 class TestScaffolds(unittest.TestCase):
     def test_init_makes_the_layout_and_single_the_old_one(self):
         top = Path(private_dir()) / "t"

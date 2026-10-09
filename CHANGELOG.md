@@ -24,6 +24,10 @@
   at the snapshot's date (`as_of`, else `generated_at`).
 - `[settings] exports_dir`: the newest year's run copies its positions
   and wash radar there, with a README, for other tools.
+- `taxjson redact` in a year folder of a shared-exports project writes
+  that year as a redacted single-folder project inside the year folder
+  (the shared exports and the year's slips, holdings/, taxjson.toml and
+  ticker.map), ids replaced consistently in every file.
 
 ### Fixed
 

@@ -112,7 +112,12 @@ report): run `tjs redact` in the project. It copies `inputs/` to
 `inputs_redact/` and replaces account numbers, names and contact details
 in the copy, file names included; `inputs/` is not changed, and the run
 never reads `inputs_redact/`. Read the copy before you share it: the
-redactor works from patterns, so it can miss something.
+redactor works from patterns, so it can miss something. With one folder
+of exports for every year, run it in the year's folder: `2025/inputs_redact/`
+is then that year as a single-folder project (the shared exports and the
+year's slips under `inputs/`, its `holdings/`, `taxjson.toml` and
+`ticker.map`), runnable where it is; nothing outside the year folder is
+written.
 
 ## 4. Run
 
