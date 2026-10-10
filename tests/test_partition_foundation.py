@@ -169,6 +169,8 @@ _CA_ONLY_SETTINGS = {
     "option_buyback_loss_superficial": "true",
     "foreign_return_of_capital": '"dividend"',
     "corporate_distributions": '["XYZ.TO"]',
+    # The tobase.map every year shares (CA-XLIST-06; US-XLIST-05).
+    "tobase_map": '"../tobase.map"',
 }
 _CA_ONLY_TABLES = {
     "[instalments]": '[instalments]\nbasis = "current_year"\n',
