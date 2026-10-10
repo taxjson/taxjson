@@ -5,12 +5,16 @@
 ### Changed
 
 - The check commands print the essentials first (docs/output-style.md):
-  `sanity`, `find-missing-history`, `slip-audit`, `edge-cases` and
-  `close-year` keep their tables and figures, put a one-line legend
+  `sanity`, `find-missing-history`, `slip-audit`, `edge-cases`,
+  `close-year` and `ticker-map --suggest` keep their tables and figures, put a one-line legend
   above a table that needs one, and end with one-line `! ` items naming
   the command with the detail. The explanations, fix steps, per-row
   reasoning, notes and empty sections they printed before are behind
   the new `--details` flag; nothing was dropped. `--json` is unchanged.
+- `taxjson years` is a table, one row per year (state, totals, last
+  run, changed inputs, what differs from the newest year), with one
+  line per thing to do; `--details` prints each year in words as
+  before.
 
 ## v0.27.1 (2026-10-10)
 

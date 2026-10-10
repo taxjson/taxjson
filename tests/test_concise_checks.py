@@ -126,5 +126,69 @@ class TestCloseYear(unittest.TestCase):
                               _flat(d.stdout))
 
 
+class TestTickerMapSuggest(unittest.TestCase):
+
+    def test_style_projects(self):
+        for country in ("canada", "usa"):
+            with self.subTest(country=country):
+                r = _run(country, "ticker-map", "--suggest")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                assert_concise(self, r.stdout, r.stderr)
+
+    def test_suggestions_and_details(self):
+        import tempfile
+        import test_fix_cross_listings as XT
+        from test_fix_ticker_map_suggest import _tjs
+        with tempfile.TemporaryDirectory() as tmp:
+            root = XT._projects(
+                tmp, tail="GLOBAL SAMPZ.TO SAMPY.TO\n",
+                in_desc="SAMPQ ENERGY INC PFD SER 2 TRANSFER")["canada"]
+            self.assertEqual(_tjs(root, "run", "--no-input").returncode, 0)
+            r = _tjs(root, "ticker-map", "--suggest")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            assert_concise(self, r.stdout, r.stderr)
+            self.assertLess(r.stdout.index("Lines for ticker.map"),
+                            r.stdout.index("TOBASE SAMPQ.TO"))
+            self.assertIn("\nTOBASE SAMPQ.TO SAMPR.TO\n", r.stdout)
+            self.assertIn("tjs ticker-map --suggest --write", r.stdout)
+            self.assertNotIn("Add a line only when", r.stdout)
+            d = _tjs(root, "ticker-map", "--suggest", "--details")
+            for frag in ("Add a line only when it is right for your "
+                         "securities", "(stock rows, option roots"):
+                self.assertIn(frag, _flat(d.stdout))
+
+
+class TestYears(unittest.TestCase):
+
+    def test_table_and_details(self):
+        import test_fix_multi_year as M
+        top = M.multi("canada", years=(2024, 2025))
+        for y in (2024, 2025):
+            M.run_ok(self, top / str(y))
+        r = M.tjs("-C", str(top / "2024"), "close-year", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        (top / "2024" / "ticker.map").write_text("GLOBAL ABCX.US ABCX.TO\n")
+        import subprocess
+        import sys
+        from _style import env
+
+        def years(*a):
+            return subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "years",
+                 *a], cwd=top, capture_output=True, text=True,
+                env=env(**W), timeout=900, stdin=subprocess.DEVNULL)
+        r = years()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        assert_concise(self, r.stdout, r.stderr,
+                       legend="INPUTS: changed since")
+        self.assertRegex(r.stdout, r"\n2024 +filed ")
+        self.assertIn("! Inputs changed since the last run of 2024 — "
+                      "tjs -C 2024 run", r.stdout)
+        self.assertIn("tjs years --diff 2024 2025", r.stdout)
+        d = years("--details")
+        self.assertIn("rechecks the filed figures against the lock",
+                      _flat(d.stdout))
+
+
 if __name__ == "__main__":
     unittest.main()

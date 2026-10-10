@@ -640,7 +640,8 @@ class TestRunNoteWording(unittest.TestCase):
             (root / 'work' / 'margin_questrade.json').write_text(json.dumps(
                 {'transactions': [{'symbol': 'XEI.TO',
                                    'action': 'BUYSELL'}]}))
-            r = _run_cli(root, 'ticker-map', '--suggest')
+            # (each rule's reason: --details, docs/output-style.md)
+            r = _run_cli(root, 'ticker-map', '--suggest', '--details')
         # Each rule is listed as written, its reason under it.
         self.assertIn('Unused rules, delete? (1)', r.stdout)
         self.assertIn('\nTOBASE AAQ.US AAQ.TO\n', r.stdout)

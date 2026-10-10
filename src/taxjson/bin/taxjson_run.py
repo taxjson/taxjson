@@ -15732,20 +15732,33 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             return
     elif not args.write or not (offer or (verify and interactive)
                                 or (tob_covered and interactive)):
+        # Essentials first (docs/output-style.md): the lines; each one's
+        # reason, the skipped ones and the advice behind --details.
+        _det = _details(args)
         d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run"
                 + (f", {len(verify)} to verify" if verify else ""))
         if offer:
             d.blank()
+            if not _det:
+                d.line("Lines for ticker.map, from the run's evidence (a "
+                       "pair's reason under it; every reason: --details).")
             for s in offer:
-                d.line(s.line + ("   (a template: edit, then add it by "
-                                 "hand)" if s.template else
-                                 "   (a .tt line: add it to a .tt file of "
-                                 "the account)" if s.tt else ""))
-                d.para(s.reason, indent="  ")
+                d.line(s.line + (("   (a template: edit, then add it by "
+                                  "hand)" if _det else "   (template: edit "
+                                  "it, add by hand)") if s.template else
+                                 ("   (a .tt line: add it to a .tt file of "
+                                  "the account)" if _det else
+                                  "   (a .tt line)") if s.tt else ""))
+                if _det or s.conditional or s.keyword in ("TOBASE",
+                                                          "DISTINCT"):
+                    # A pair joins (or parts) two listings' cost: its
+                    # evidence stays in the default view.
+                    d.para(s.reason, indent="  ")
         if verify:
             d.section(f"To verify: one security or two? ({len(verify)})")
             for s in verify:
                 d.line(f"{s.line}   or   {s.alternative}")
+                # (the evidence to choose by: kept in the default view)
                 d.para(s.reason, indent="  ")
         if gap_unread:
             d.blank()
@@ -15757,31 +15770,58 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         covered = [x for x in skipped if TS.covered_by_suggestion(x[1])]
         answered = [x for x in skipped
                     if not TS.covered_by_suggestion(x[1])]
+        _skip_lines = []
         for head, items in (("Already answered by ticker.map", answered),
                             ("Covered by another suggestion", covered)):
-            if items:
+            if items and _det:
                 d.section(f"{head} ({len(items)})")
                 for s, why in items:
                     d.item(f"{s.line}: {why}", "  ")
+            elif items:
+                _skip_lines.append(f"{head} ({len(items)})")
+        if _skip_lines:
+            d.blank()
+            d.line("; ".join(_skip_lines)
+                   + " — tjs ticker-map --suggest --details")
         if unused:
             d.section(f"Unused rules, delete? ({len(unused)})")
             for u in unused:
                 d.line(u.line)
-                d.para(u.reason, indent="  ")
+                if _det:
+                    d.para(u.reason, indent="  ")
         if tob_covered:
             d.section(f"Covered by tobase.map (delete?) "
                       f"({len(tob_covered)})")
             for c in tob_covered:
                 d.item(f"{c.rule} (ticker.map:{c.lineno}): {c.where} "
                        f"states the same pair", "  ")
-            d.para("Keeping them is harmless: your line holds even if "
-                   "the interlisted master later retracts the pair. "
-                   "`taxjson ticker-map --suggest --write` on a terminal "
-                   "asks for each (keep is the default).", indent="  ")
+            if _det:
+                d.para("Keeping them is harmless: your line holds even if "
+                       "the interlisted master later retracts the pair. "
+                       "`taxjson ticker-map --suggest --write` on a "
+                       "terminal asks for each (keep is the default).",
+                       indent="  ")
         if unread:
             d.blank()
             d.para(MH.first_unread(unread))
         d.blank()
+        if not _det:
+            from taxjson.lib.out import act as _act
+            if args.write and args.all and verify and not offer:
+                d.line(_act("Nothing written: --all, never a pair to "
+                            "verify; answer each",
+                            "tjs ticker-map --suggest --write"))
+            elif offer or verify:
+                d.line(_act("Add only the lines right for your "
+                            "securities, then `tjs run`",
+                            "tjs ticker-map --suggest --write"))
+            elif unused or tob_covered:
+                d.line("Nothing to add; the lines above are harmless "
+                       "(why: --details).")
+            else:
+                d.line("Nothing to add.")
+            d.print()
+            return
         d.para("Add a line only when it is right for your securities: "
                "`taxjson ticker-map --suggest --write` asks for each one "
                "(a pair to verify: TOBASE, DISTINCT or skip; --all adds "
@@ -23678,6 +23718,9 @@ def cmd_years(args: argparse.Namespace) -> None:
         _json_out(rep)
         return
     from taxjson.lib import out as _out
+    if not _details(args):
+        _years_table(top, rep)
+        return
     print(f"Year projects in {top}")
     if not rep["years"]:
         print(_out.fill("No year folder yet — `taxjson new-year YYYY` "
@@ -23738,6 +23781,86 @@ def cmd_years(args: argparse.Namespace) -> None:
                 f"here makes them one file every year reads", None, "",
                 "  "):
             print(_ln)
+
+
+def _years_table(top: Path, rep: Dict[str, Any]) -> None:
+    """`taxjson years`, the default view (docs/output-style.md,
+    Essentials first): one table row per year, then one line per thing
+    to do; --details prints each year's state in words."""
+    from taxjson.lib import out as _out
+    print(f"YEAR PROJECTS — {top}")
+    if not rep["years"]:
+        print()
+        print(_out.act("No year folder yet", "tjs new-year YYYY"))
+        return
+    newest = rep["newest"]
+    body = []
+    for r in rep["years"]:
+        state = (("filed " + (r["closed_at"][:10] if r["closed_at"] else "")
+                  ).strip() + ("*" if r["partial_lock"] else "")
+                 if r["filed"] else "open")
+        t = r["totals"] or {}
+        diff = r["differs_from_newest"] or {}
+        vs = ", ".join(x for x in (
+            f"{diff['map_rules']} rule(s)" if diff.get("map_rules") else "",
+            f"{diff['tobase_rules']} tobase line(s)"
+            if diff.get("tobase_rules") else "",
+            f"{diff['keys']} setting(s)" if diff.get("keys") else "") if x)
+        marks = r["marks"]
+        body.append([str(r["year"]), state,
+                     f"{float(t.get('realized') or 0):,.2f}" if t else "",
+                     f"{float(t.get('disallowed') or 0):,.2f}" if t else "",
+                     r["last_run"][:16].replace("T", " ")
+                     if r["last_run"] else "not run",
+                     "changed" if r["stale"] else "",
+                     vs or ("" if r["year"] == newest else "same"),
+                     f"{marks['done']} done" if marks["done"] else ""])
+    print()
+    print(f"INPUTS: changed since that year's last run; VS {newest}: what "
+          f"differs from the newest year."
+          + (" *: locked before the year ended." if any(
+              r["partial_lock"] for r in rep["years"]) else ""))
+    for _ln in _out.fit_table(
+            ["YEAR", "STATE", "REALIZED", "DENIED", "LAST RUN", "INPUTS",
+             f"VS {newest}", "CHECKLIST"], body,
+            aligns=["<", "<", ">", ">", "<", "<", "<", "<"],
+            drop=(7, 3), key=0):
+        print(_ln)
+    acts = []
+    stale = [r for r in rep["years"] if r["stale"]]
+    if stale:
+        acts.append(_out.act(
+            f"Inputs changed since the last run of "
+            f"{', '.join(str(r['year']) for r in stale[:3])}"
+            + (f" +{len(stale) - 3}" if len(stale) > 3 else ""),
+            f"tjs -C {stale[0]['year']} run"))
+    for r in rep["years"]:
+        if r["problem"]:
+            acts.append(_out.act(f"{r['year']}: {r['problem']}"[:80],
+                                 "tjs years --details"))
+    differ = [r for r in rep["years"] if r["year"] != newest and any(
+        (r["differs_from_newest"] or {}).get(k)
+        for k in ("map_rules", "keys", "tobase_rules"))]
+    if differ:
+        acts.append(f"What differs: tjs years --diff {differ[0]['year']} "
+                    f"{newest}")
+    shared: Dict[str, List[int]] = {}
+    own = [r["year"] for r in rep["years"]
+           if r.get("tobase_map") and not r.get("tobase_shared")]
+    for r in rep["years"]:
+        if r.get("tobase_shared"):
+            shared.setdefault(r["tobase_map"], []).append(r["year"])
+    for p, ys in sorted(shared.items()):
+        acts.append(f"tobase.map: {p}, shared by "
+                    f"{', '.join(str(y) for y in ys)}")
+    if own:
+        acts.append(_out.act(f"tobase.map: a copy in each of "
+                             f"{', '.join(str(y) for y in own[:4])}; make "
+                             f"them one file", "tjs migrate"))
+    if acts:
+        print()
+        for a in acts:
+            print(a)
 
 
 def cmd_new_year(args: argparse.Namespace) -> None:
