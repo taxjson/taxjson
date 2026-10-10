@@ -1020,25 +1020,22 @@ def set_key_after(text: str, dotted: str, value: Any,
                   after: str) -> str:
     """set_key_text, a key not set yet going on the line after the key
     `after` of the same table when that is set (`tobase_map` beside
-    `inputs_dir`), else where set_key_text puts it."""
-    parts = dotted.split(".")
-    table, key = ".".join(parts[:-1]), parts[-1]
-    lines = text.splitlines()
-    cur = None
+    `inputs_dir`), else where set_key_text puts it. Tables and keys are
+    read with toml_statements (quoted or hyphenated names, values over
+    several lines)."""
+    parts = tuple(dotted.split("."))
+    table, key = parts[:-1], parts[-1]
     at = None
-    for i, ln in enumerate(lines):
-        m = _TABLE_RE.match(ln)
-        if m:
-            cur = m.group(1).replace('"', "")
+    for st in toml_statements(text):
+        if st.kind != "kv" or st.table != table or len(st.key) != 1:
             continue
-        if cur != table:
-            continue
-        if re.match(rf"^\s*{re.escape(key)}\s*=", ln):
+        if st.key[0] == key:
             return set_key_text(text, dotted, value)
-        if at is None and re.match(rf"^\s*{re.escape(after)}\s*=", ln):
-            at = i
+        if at is None and st.key[0] == after:
+            at = st.last
     if at is None or value is None:
         return set_key_text(text, dotted, value)
+    lines = text.splitlines()
     lines.insert(at + 1, f"{key} = {toml_value(value)}")
     return "\n".join(lines) + "\n"
 
