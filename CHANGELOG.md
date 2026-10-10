@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- `taxjson checklist` shows the essentials: the done count, one row per
+  section with its counts, one line per step needing attention (its id,
+  what was found and the command to run; steps blocked for one reason
+  share a line), and the next step last. `--all` (or `--details`) is the
+  full list with every step's state, commands and why. One progress line
+  instead of one per check.
 
 ## v0.27.1 (2026-10-10)
 

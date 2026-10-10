@@ -250,10 +250,12 @@ class TestFreshProject(unittest.TestCase):
             self.assertEqual(st["run-clean"]["effective"], "todo")
             self.assertEqual(st["run-clean"]["detail"], "no reports/ yet")
             r = _cli("-C", str(root), "checklist")
+            full = _cli("-C", str(root), "checklist", "--all")
         self.assertEqual(r.returncode, 1, r.stderr)
         assert_styled(self, r.stdout, PIPE_WIDTH)
-        self.assertRegex(r.stdout, r"(?m)^  \[>\]  4\. inputs-frozen +Each "
-                                   r"account's broker exports")
+        # The marked list is --all (the default view is the counts).
+        self.assertRegex(full.stdout, r"(?m)^  \[>\]  4\. inputs-frozen +"
+                                      r"Each account's broker exports")
         self.assertEqual(r.stdout.splitlines()[-1],
                          "Next (step 4, inputs-frozen): download the exports "
                          "into inputs/<account>/ (or `tjs fetch`)")
@@ -268,6 +270,7 @@ class TestFreshProject(unittest.TestCase):
             root = self._init(d, "UTC")
             r = _cli("-C", str(root), "checklist", "--json")
             t = _cli("-C", str(root), "checklist")
+            tall = _cli("-C", str(root), "checklist", "--all")
         self.assertEqual(r.returncode, 1, r.stderr)
         doc = json.loads(r.stdout)
         st = {s["id"]: s for s in doc["steps"]}
@@ -282,7 +285,8 @@ class TestFreshProject(unittest.TestCase):
             self.assertEqual(st[sid]["detail"], cl.CONFIG_FIRST, sid)
         self.assertEqual(t.returncode, 1, t.stderr)
         self.assertNotIn("Error", t.stderr)
-        self.assertRegex(t.stdout, r"(?m)^  \[>\]  3\. configure ")
+        self.assertRegex(tall.stdout, r"(?m)^  \[>\]  3\. configure ")
+        self.assertRegex(t.stdout, r"(?m)^! 3 configure: ")
         self.assertIn("Next (step 3, configure)", t.stdout)
 
     def test_a_legacy_map_file_is_the_configure_item(self):
@@ -373,16 +377,23 @@ class TestAfterARun(unittest.TestCase):
                 self.assertEqual(r.returncode, 1, r.stderr)
                 assert_styled(self, r.stdout, PIPE_WIDTH)
                 out = r.stdout
-                self.assertRegex(out, r"(?m)^  \[!\] 10\. missing-history +"
-                                      r"No position with missing cost basis")
+                # The default view (docs/output-style.md, Essentials
+                # first): a counts row per section, an `! ` line per
+                # item needing attention, the next step last.
+                self.assertRegex(out, r"(?m)^! 10 missing-history: ")
                 self.assertRegex(out.splitlines()[-1],
                                  r"^Next \(step \d+, [a-z0-9-]+\): ")
-                for sec in cl.SECTIONS:
-                    self.assertIn(f". {sec.upper()}", out)
-                # A done item is its state line; --all shows its commands.
+                for k, sec in enumerate(cl.SECTIONS, 1):
+                    self.assertRegex(out, rf"(?m)^{k}\. {sec} ")
+                # --all is the full list: each item, its commands.
                 self.assertNotIn("tjs run --no-input", out)
                 full = self.out(country, "--all")
                 assert_styled(self, full.stdout, PIPE_WIDTH)
+                self.assertRegex(full.stdout,
+                                 r"(?m)^  \[!\] 10\. missing-history +"
+                                 r"No position with missing cost basis")
+                for sec in cl.SECTIONS:
+                    self.assertIn(f". {sec.upper()}", full.stdout)
                 self.assertIn("tjs run --no-input", full.stdout)
                 doc = json.loads(self.out(country, "--json").stdout)
                 self.assertEqual(full.stdout.count("Why: "),

@@ -66,6 +66,11 @@ STATE_FILE = "checklist.json"
 # taxjson_run.UNBOOKED_PREFIX: a parser row that is a tax event the
 # run could not book.
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
+# The sub-commands whose TEXT a detector reads (sanity, find-missing-
+# history, elect --pending, audit, check-filed) run with --details: the
+# long form, whatever their default view leaves out
+# (docs/output-style.md, Essentials first).
+LONG_FORM = "--details"
 
 # The checks. (id, section, title, proves-it command, why); their place
 # in the list is items()'s.
@@ -1276,7 +1281,7 @@ def d_sanity(ctx: Ctx) -> Result:
                       f"`holdings = [...]` in taxjson.toml — save the "
                       f"broker's positions in {_hold}/, or run `taxjson "
                       f"sanity ACCOUNT=FILE.toml` by hand")
-    code, out, err = ctx.sub("sanity")
+    code, out, err = ctx.sub("sanity", LONG_FORM)
     incomplete = [ln for ln in out.splitlines()
                   if ln.startswith("INCOMPLETE")]
     if code == 0 and incomplete:
@@ -1302,7 +1307,7 @@ def _mh_name(ctx) -> str:
 
 
 def d_missing_history(ctx: Ctx) -> Result:
-    code, out, err = ctx.sub("find-missing-history")
+    code, out, err = ctx.sub("find-missing-history", LONG_FORM)
     if code != 0:
         # Exit 1 is "no base files" / "no transactions loaded": nothing
         # was checked, so it is never "nothing affects the year".
@@ -1372,7 +1377,7 @@ def _zero_value_elections(ctx: Ctx) -> int:
 
 
 def d_elections(ctx: Ctx) -> Result:
-    code, out, err = ctx.sub("elect", "--pending")
+    code, out, err = ctx.sub("elect", "--pending", LONG_FORM)
     # A deferred FMV is an unresolved election too: booked at $0 it
     # carries no income and a $0 cost for the new shares (R1-11).
     zero = _zero_value_elections(ctx)
@@ -1521,7 +1526,7 @@ def d_audit(ctx: Ctx) -> Result:
     if st is not None:
         st.id = "audit"
         return st
-    code, out, err = ctx.sub("audit")
+    code, out, err = ctx.sub("audit", LONG_FORM)
     if not out:
         return Result("audit", "blocked", _last_line(err) or f"exit {code}")
     bad = 0
@@ -2358,7 +2363,7 @@ def d_filed_lock(ctx: Ctx) -> Result:
                       f"inputs changed since the last run ({changed}) — "
                       f"`taxjson run` recomputes the filed year against "
                       f"filed/{ctx.year}.json")
-    code, out, err = ctx.sub("check-filed")
+    code, out, err = ctx.sub("check-filed", LONG_FORM)
     if code != 0:
         # Only a reported DRIFT is drift; a failed recompute (bad
         # config, unreadable lock, crash) is not a reason to amend a
@@ -3552,6 +3557,27 @@ def stderr_progress(sid: str, cmd: str) -> None:
     print(f"  checking {sid} ({cmd}) ...", file=sys.stderr, flush=True)
 
 
+def once_progress() -> Callable[[str, str], None]:
+    """The default view's progress: shown to a person, ONE step before
+    the first slow check (`==> Running the checks' commands ...`), not a
+    step per check (`--all` keeps those); captured (width 0), the
+    stderr_progress lines."""
+    from taxjson.lib import out
+    shown = []
+
+    def progress(sid: str, cmd: str) -> None:
+        if out.width(sys.stderr) <= 0:
+            stderr_progress(sid, cmd)
+            return
+        if not shown:
+            shown.append(sid)
+            out.show(out.wrap("==> Running the checks' commands (sanity, "
+                              "audit, ...: a minute on a big book)", None,
+                              "", "", stream=sys.stderr), sys.stderr)
+            sys.stderr.flush()
+    return progress
+
+
 
 
 # ------------------------------------------------------------------ output
@@ -3661,6 +3687,113 @@ def render(results: List[Result], year: int, country: str,
                f"{_do(its[nxt.id], nxt)}")
     elif all(r.passed for r in results):
         d.para("Nothing left to do now: the [?] items are yours to run "
+               "and read.")
+    elif quick:
+        d.para("Nothing to do now: run without --quick to check the rest.")
+    else:
+        d.para("Nothing to do until the year ends: re-check then.")
+    return d.text()
+
+
+ACT_WIDTH = 100     # an `! ` line is never wrapped (docs/output-style.md)
+
+
+def _act_line(head: str, detail: str, cmd: str,
+              width_: int = ACT_WIDTH) -> str:
+    """`! <head>: <detail> — <cmd>` within `width_` columns: a long
+    detail is cut at a word and ends `...` (`--all` shows it whole)."""
+    from taxjson.lib.out import act
+    detail = " ".join(str(detail or "").split())
+    # The command is said once, at the end: a detail closing on its own
+    # `taxjson X` pointer loses it.
+    detail = re.sub(r"\s+—\s+`(?:taxjson|tjs) [^`]+`\.?$", "", detail)
+    line = act(f"{head}: {detail}" if detail else head, cmd or None)
+    if len(line) <= width_ or not detail:
+        return line
+    room = width_ - len(act(f"{head}: ...", cmd or None))
+    cut = detail[:max(room, 0) + 1]
+    cut = cut[:cut.rfind(" ")] if " " in cut else cut[:max(room, 0)]
+    return act(f"{head}: {cut.rstrip(' ,;:—-')}...", cmd or None)
+
+
+def render_summary(results: List[Result], year: int, country: str,
+                   quick: bool = False,
+                   width_: Optional[int] = None) -> str:
+    """The default view (docs/output-style.md, Essentials first): the
+    title with the done count, one table row per section with its
+    counts, one `! ` line per item needing attention or blocked (id,
+    what, the command), the pointer to the full list, and the last line:
+    the next item and what to do (as render())."""
+    from taxjson.lib.out import Doc
+    its = {it.id: it for it in items(year, country)}
+    num = {sid: i + 1 for i, sid in enumerate(its)}
+    c = counts(results)
+    total = len(results) - c["n/a"]
+    done = c["done"] + c["skipped"]
+    d = Doc(f"CHECKLIST — tax year {year} ({country})"
+            f"{' — quick' if quick else ''}: {done}/{total} done",
+            width_=width_)
+    by_sec: Dict[str, List[Result]] = {}
+    for r in results:
+        by_sec.setdefault(its[r.id].section, []).append(r)
+    body = []
+    for k, sec in enumerate(SECTIONS, 1):
+        rows = by_sec.get(sec)
+        if not rows:
+            continue
+        sc = counts(rows)
+
+        def n(*sts: str) -> str:
+            v = sum(sc[s] for s in sts)
+            return str(v) if v else "-"
+        body.append([f"{k}. {sec}",
+                     f"{sc['done'] + sc['skipped']}/{len(rows) - sc['n/a']}",
+                     n("attention"), n("blocked"), n("todo"), n("manual"),
+                     n("review")])
+    d.blank()
+    d.table(["SECTION", "DONE", "ATTENTION", "BLOCKED", "TO DO",
+             "CONFIRM", "READ"], body,
+            aligns=["<", ">", ">", ">", ">", ">", ">"])
+    acts = []
+    # Items blocked for one reason (the configuration, no run yet) are
+    # one line: the reason, and the items it holds up.
+    blocked: Dict[str, List[Result]] = {}
+    for r in results:
+        if r.effective == "blocked":
+            blocked.setdefault(" ".join((r.detail or "").split()),
+                               []).append(r)
+    for r in results:
+        eff = r.effective
+        if eff not in ("attention", "blocked"):
+            continue
+        it = its[r.id]
+        cmd = it.cmds[0].command if it.cmds else ""
+        group = blocked.get(" ".join((r.detail or "").split()), [])
+        if eff == "blocked" and len(group) > 1:
+            if group[0] is not r:
+                continue
+            ids = [f"{num[g.id]} {g.id}" for g in group]
+            acts.append(_act_line(
+                f"{len(group)} blocked ({', '.join(ids[:2])}"
+                + (f" +{len(ids) - 2} more" if len(ids) > 2 else "") + ")",
+                r.detail, ""))
+            continue
+        acts.append(_act_line(f"{num[r.id]} {r.id}"
+                              + (" (blocked)" if eff == "blocked" else ""),
+                              r.detail or it.title, cmd))
+    if acts:
+        d.blank()
+        for ln in acts:
+            d.line(ln)
+    d.blank()
+    d.line("More: tjs checklist --all (every item, its commands and why); "
+           "tjs checklist --walk (one at a time)")
+    nxt = next_result(results)
+    if nxt is not None:
+        d.para(f"Next (step {num[nxt.id]}, {nxt.id}): "
+               f"{_do(its[nxt.id], nxt)}")
+    elif all(r.passed for r in results):
+        d.para("Nothing left to do now: the READ items are yours to run "
                "and read.")
     elif quick:
         d.para("Nothing to do now: run without --quick to check the rest.")

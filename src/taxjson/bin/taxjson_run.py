@@ -16399,16 +16399,25 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             _die(str(e))
         return
 
+    # The default view is the essentials (docs/output-style.md):
+    # --all (or --details) is the full list, every item's commands and
+    # why; --only ID shows that item in full.
+    full = bool(args.all or _details(args) or only)
     try:
         results = cl.evaluate(ctx, only=only, quick=args.quick,
-                              progress=cl.stderr_progress)
+                              progress=(cl.stderr_progress
+                                        if full or args.json
+                                        else cl.once_progress()))
     except cl.StateFileError as e:
         _die(str(e))
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
-    else:
+    elif full:
         print(cl.render(results, year, country, quick=args.quick,
-                        show_all=args.all))
+                        show_all=bool(args.all or _details(args))))
+    else:
+        print(cl.render_summary(results, year, country,
+                                quick=args.quick))
     if not all(r.passed for r in results):
         sys.exit(1)
 
@@ -16561,7 +16570,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     print(f"\n{seen} open step(s) visited. Summary "
           f"(`taxjson checklist` re-checks everything):\n")
     results = cl.evaluate(ctx, only=only, quick=True)
-    print(cl.render(results, ctx.year, country, quick=True))
+    print(cl.render_summary(results, ctx.year, country, quick=True))
     if quit_early or left_open:
         # Open steps remain (the one quit on, the ones passed over).
         sys.exit(1)
@@ -25298,8 +25307,10 @@ def _build_parser(prog: str = "taxjson"
              "taxjson.toml here, or -C DIR) each step is checked — by "
              "running the command that proves it, or from the project's "
              "files — and marked done, needs attention, to do, blocked, "
-             "to confirm, yours to run and read or n/a; the last line "
-             "names the next step and its command. --done/--skip/--undo "
+             "to confirm, yours to run and read or n/a. The default "
+             "view is the counts per section, one `!` line per step "
+             "needing attention and, last, the next step and its "
+             "command; --all lists every step. --done/--skip/--undo "
              "record the steps no command can prove; --walk steps "
              "through the open ones. Exit 1 while anything is open. "
              "Outside a project it prints the steps as a guide (exit 0).")
@@ -25321,8 +25332,9 @@ def _build_parser(prog: str = "taxjson"
     p_ck.add_argument("--show", action="store_true",
                       help="With --done/--skip/--undo: also print the checklist")
     p_ck.add_argument("--all", action="store_true",
-                      help="Show every step's commands and why, also "
-                           "the done ones")
+                      help="The full list: every step with its state, "
+                           "commands and why, also the done ones (the same "
+                           "as --details)")
     p_ck.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text (a stable schema, "
                            "schema_version 2: docs/settings.md)")

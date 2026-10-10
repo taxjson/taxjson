@@ -198,7 +198,7 @@ class _Base:
             self.assertEqual((item["election"], item["flags"],
                               item["new_cost"]),
                              ("sheltered_default", [], 0.0))
-            ck = cli(root, "checklist")
+            ck = cli(root, "checklist", "--all")    # the full list
             self.assertIn("No unresolved merger or spin-off election",
                           _flat(ck))
 

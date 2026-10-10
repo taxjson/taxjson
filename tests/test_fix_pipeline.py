@@ -127,7 +127,10 @@ class TestAccountTypeCheckedEverywhere(unittest.TestCase):
         cls._td.cleanup()
 
     def _refused(self, *args):
-        r = _run_cli(self.root, *args)
+        # The checklist's full list (--all) holds the configure item's
+        # whole finding; the default view's `! ` line is cut to 100.
+        r = _run_cli(self.root, *args,
+                     *(("--all",) if args[0] == "checklist" else ()))
         self.assertNotEqual(r.returncode, 0, (args, r.stdout))
         # The checklist shows it as its configure item (the checks
         # blocked, exit 1) instead of only an error.
