@@ -36,9 +36,10 @@ class TestEstimate(unittest.TestCase):
                 self.assertIn("ESTIMATED TAX ON INVESTMENT INCOME: ",
                               r.stdout)
                 self.assertIn("tjs sum", r.stdout)
-                # (stderr: the summary's own warnings, `sum`'s budget.)
-                assert_concise(self, r.stdout, budget=4,
+                # The summary's warnings are its `! ` lines, copied over.
+                assert_concise(self, r.stdout, r.stderr, budget=6,
                                legend="ESTIMATE ONLY, not filing numbers")
+                self.assertIn("! 2 sales with no purchase", r.stdout)
                 self.assertNotIn("Assumes:", r.stdout)
 
     def test_details_keeps_the_summary_and_the_assumptions(self):

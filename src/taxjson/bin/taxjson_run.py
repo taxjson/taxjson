@@ -14647,11 +14647,16 @@ def cmd_estimate(args: argparse.Namespace) -> None:
     text = buf.getvalue()
     at = text.find("TAX ESTIMATE —")
     head, block = (text[:at], text[at:]) if at >= 0 else ("", text)
-    for ln in block.rstrip("\n").split("\n"):
-        print(ln)
-    for ln in head.split("\n"):
-        if ln.startswith(_out.ACT):
+    lines = block.rstrip("\n").split("\n")
+    more = [ln for ln in lines if ln.startswith("More: ")]
+    for ln in lines:
+        if not ln.startswith("More: "):
             print(ln)
+    # The act-on lines first, then the pointers to the long form.
+    for ln in [x for x in head.split("\n") if x.startswith(_out.ACT)]:
+        print(ln)
+    for ln in more:
+        print(ln)
     print("Gains by account and the lines for the return: tjs sum")
 
 

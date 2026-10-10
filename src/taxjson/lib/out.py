@@ -959,8 +959,8 @@ def details_hint(cmd: str, what: str = "notes") -> str:
     return f"More: {cmd} ({what})" if what else f"More: {cmd}"
 
 
-_UPPER_HEAD_RE = re.compile(r"^(?:\d+\.\s+)?[A-Z0-9][A-Z0-9 &/().,'+#-]*[A-Z)]"
-                            r"(?:\s+[—-]\s+.*)?$")
+_UPPER_HEAD_RE = re.compile(r"^(?:\d+\.\s+)?[A-Z0-9][A-Z0-9 &/().,'+#-]*"
+                            r"[A-Z0-9)](?:\s+[—-]\s+.*)?$")
 _KV_FIGURE_RE = re.compile(r"^\s*[^:]{1,48}:\s+[-+(]?[$€£]?\(?[\d.,]+")
 _KV_ALIGNED_RE = re.compile(r"^\s*[^:\s][^:]{0,46}:\s{2,}\S")
 _LABEL_START_RE = re.compile(r"^(?:Info|Warning|Error): |^! ")
@@ -1011,14 +1011,15 @@ def classify(text: str) -> List[Tuple[str, str]]:
         if kind is None:
             if t.startswith("==> "):
                 kind = "step"
-            elif _LABEL_START_RE.match(ln.lstrip()) or ln.startswith(" "):
-                kind = "prose" if not _LOOKS_TABLE(t) else "table"
+            elif _LABEL_START_RE.match(ln.lstrip()):
+                kind = "prose"
             elif (len(t) <= 110 and _UPPER_HEAD_RE.match(t)
                     and sum(c.isalpha() for c in t.split(" — ")[0]) >= 3):
                 kind = "heading"
             elif first and " — " in t and t.split(" — ")[0].isupper():
                 kind = "heading"
-            elif _KV_ALIGNED_RE.match(ln) or _KV_FIGURE_RE.match(ln):
+            elif ((_KV_ALIGNED_RE.match(ln) or _KV_FIGURE_RE.match(ln))
+                    and not t.startswith(("- ", "* "))):
                 kind = "figure"
             elif _LOOKS_TABLE(t):
                 kind = "table"
