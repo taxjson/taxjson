@@ -976,7 +976,7 @@ def classify(text: str) -> List[Tuple[str, str]]:
     The budget counts the prose lines."""
     lines = [ln.rstrip() for ln in text.split("\n")]
     gap = re.compile(r"\S {2,}(?=\S)")
-    rule = re.compile(r"[-=─━_+|\s]{3,}")
+    rule = re.compile(r"[-=─━═_+|\s]{3,}")
     # Blocks of consecutive non-blank lines: a block with a rule line or
     # two or more lines with column gaps is a table; its gapped lines
     # (and the line above a rule) are table lines.
