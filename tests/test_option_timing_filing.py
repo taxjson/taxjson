@@ -193,6 +193,11 @@ class TestBoundaryAttention(unittest.TestCase):
             self.assertEqual(doc["attention"], 1)
             self.assertFalse(doc["since_explicit"])
             t = _cli(root, "option-boundary")
+            self.assertIn("review it — tjs option-boundary --details",
+                          t.stdout)
+            self.assertNotIn("No amended return is required", t.stdout)
+            # (the count sentence: --details, docs/output-style.md)
+            t = _cli(root, "option-boundary", "--details")
             self.assertIn("1 item(s) need ATTENTION", t.stdout)
             self.assertNotIn("No amended return is required", t.stdout)
             (root / "work" / "margin_base.json").unlink()

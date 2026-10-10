@@ -159,8 +159,9 @@ class TestShortsScopedToTheYear(unittest.TestCase):
                                             "rrsp.sum").read_text())
 
         # find-missing-history agrees: the summarised ones are its NOT
-        # relevant rows, a still-short one says so.
-        r = _tj(root, "find-missing-history")
+        # relevant rows, a still-short one says so (each row's why is
+        # behind --details: docs/output-style.md, Essentials first).
+        r = _tj(root, "find-missing-history", "--details")
         nr = r.stdout.split("NOT relevant to 2025", 1)[1]
         for s in ("QPAS", "QOPN", "QRGL"):
             self.assertIn(f"{s}{sx}", nr)
@@ -354,7 +355,8 @@ class TestYearScopeLib(unittest.TestCase):
                                    r"QPAS\.TO \(margin\)")
         self.assertIn("Info: 2 positions went short before 2025",
                       r.stdout)
-        r = _tj(root, "find-missing-history")
+        # (each row's why: --details, docs/output-style.md)
+        r = _tj(root, "find-missing-history", "--details")
         aff = r.stdout.split("AFFECTS 2025", 1)[1].split("\n\n", 1)[0]
         self.assertIn("QPAS.TO", aff)
         self.assertIn("one ACB pool", " ".join(aff.split()))

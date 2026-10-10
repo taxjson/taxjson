@@ -131,6 +131,9 @@ class TestCommand(unittest.TestCase):
             self.assertEqual(text.count("TOBASE SAMPQ.TO SAMPR.TO"), 1)
             r = _tjs(root, "ticker-map", "--suggest")
             self.assertIn("— 0 from the last run", r.stdout)
+            self.assertIn("Already answered by ticker.map (1)", r.stdout)
+            # Each answered line and why: --details (docs/output-style.md)
+            r = _tjs(root, "ticker-map", "--suggest", "--details")
             self.assertIn("already in ticker.map", r.stdout)
 
     def test_needs_suggest(self):

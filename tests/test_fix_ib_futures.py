@@ -214,7 +214,8 @@ class TestFindMissingHistoryCli(unittest.TestCase):
             env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / 'src'))
             r = subprocess.run(
                 [sys.executable, '-m', 'taxjson.bin.taxjson_missing_history',
-                 '--year', '2025', str(p)],
+                 # each row's why: --details (docs/output-style.md)
+                 '--year', '2025', '--details', str(p)],
                 capture_output=True, text=True, env=env)
         return r.stdout
 

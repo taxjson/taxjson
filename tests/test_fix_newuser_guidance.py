@@ -686,7 +686,8 @@ class TestMessages(unittest.TestCase):
             r = cli(root, "sanity", f"margin={root / 'h.toml'}")
             self.assertEqual(r.returncode, 1, r.stderr)
             self.assertIn("usually means missing history", r.stdout)
-            self.assertIn("taxjson find-missing-history", r.stdout)
+            # (the `! ` line names the command: docs/output-style.md)
+            self.assertIn("tjs find-missing-history", r.stdout)
 
 
 if __name__ == "__main__":

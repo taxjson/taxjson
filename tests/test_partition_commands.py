@@ -310,7 +310,9 @@ class TestEdgeCases(unittest.TestCase):
             for c in COUNTRIES:
                 (p[c] / "work" / "margin_gains_wash.json").write_text(
                     _gains_doc(g[c]))
-            r = cli_both(p, "edge-cases")
+            # Every section and the rules: --details (docs/output-
+            # style.md, Essentials first).
+            r = cli_both(p, "edge-cases", "--details")
             for c in COUNTRIES:
                 self.assertEqual(r[c].returncode, 0, r[c].stderr)
                 out[c] = r[c].stdout
