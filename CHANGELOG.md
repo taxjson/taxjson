@@ -40,12 +40,6 @@
   free text to read (each file's counts with `--details`). `taxjson
   format`, `taxjson migrate` and `taxjson crypto-sends`: one-line notes
   and legends.
-
-## v0.27.2 (2026-10-10)
-
-### Fixed
-
-- Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
 - Essentials first for the summaries: `taxjson estimate`, `amt`,
   `instalments`, `carryover`, `t1135`, `fx-cash`, `form-export` and
   `reconcile-slips` print a short legend above each table, the figures
@@ -57,6 +51,13 @@
   front); `reconcile-slips` lists one row per symbol with the first
   clause of its finding. The standalone stage tools keep their full
   reports (`--brief` gives the short one); `--json` is unchanged.
+
+## v0.27.2 (2026-10-10)
+
+### Fixed
+
+- Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
+
 
 ## v0.27.1 (2026-10-10)
 
