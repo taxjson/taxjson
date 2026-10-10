@@ -178,5 +178,51 @@ class TestChainNamesLikeCommands(unittest.TestCase):
         self.assertFalse((top / "2024").exists())
 
 
+class TestInitThroughLinkOutside(unittest.TestCase):
+    """#45: init checks the write boundary before writing anything."""
+
+    def test_inputs_link_outside_is_refused(self):
+        top = _tmp(self)
+        proj, outside = top / "proj", top / "outside"
+        proj.mkdir()
+        outside.mkdir()
+        (proj / "inputs").symlink_to(outside, target_is_directory=True)
+        r = _cli("init", "--country", "canada", "--year", "2024",
+                 str(proj))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("inputs/", r.stderr)
+        self.assertIn("outside", " ".join(r.stderr.split()))
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(sorted(p.name for p in proj.iterdir()), ["inputs"])
+
+    def test_single_and_year_folder_links_are_refused(self):
+        top = _tmp(self)
+        outside = top / "outside"
+        outside.mkdir()
+        proj = top / "single"
+        proj.mkdir()
+        (proj / "inputs").symlink_to(outside, target_is_directory=True)
+        r = _cli("init", "--single", "--country", "canada", "--year",
+                 "2024", str(proj))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse((proj / "taxjson.toml").exists())
+        proj = top / "years"
+        proj.mkdir()
+        (proj / "2024").symlink_to(outside, target_is_directory=True)
+        r = _cli("init", "--country", "canada", "--year", "2024",
+                 str(proj))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_link_inside_the_project_is_kept(self):
+        proj = _tmp(self) / "proj"
+        (proj / "data" / "inputs").mkdir(parents=True)
+        (proj / "inputs").symlink_to("data/inputs", target_is_directory=True)
+        r = _cli("init", "--country", "canada", "--year", "2024",
+                 str(proj))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(any((proj / "data" / "inputs").iterdir()))
+
+
 if __name__ == "__main__":
     unittest.main()

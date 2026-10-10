@@ -24435,20 +24435,9 @@ def cmd_init(args: argparse.Namespace) -> None:
              "of exports for every year; `taxjson init --single --force` "
              "re-templates it.")
     root = top / str(first_year) if years else top
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        # An existing FILE, a path under a file, or an unwritable
-        # parent tracebacked (R1-263).
-        _die(f"cannot create the project directory {root}: "
-             + ("a file of that name exists"
-                if isinstance(e, FileExistsError) or root.is_file()
-                else (e.strerror or str(e))))
     cfg = root / "taxjson.toml"
     if cfg.exists() and not args.force:
         _die(f"{cfg} already exists (use --force to overwrite)")
-
-    written: List[str] = []
 
     # The config is (re)written — the guard above already enforces --force.
     config_text, account_names = _render_init_config(
@@ -24460,6 +24449,25 @@ def cmd_init(args: argparse.Namespace) -> None:
              if country == "canada" else {})} if years else None),
         grant_since=(_sibling_grant_since(top, first_year)
                      if years and country == "canada" else None))
+    # The write boundary BEFORE anything is created (#45): a folder the
+    # scaffold writes into that is a link leaving the project (inputs/
+    # -> a sibling folder) put the account folders and READMEs there,
+    # as _refuse_outside_dir_links refuses for every other command.
+    _yd = f"{first_year}/" if years else ""
+    _init_refuse_outside_links(top, [
+        f"{_yd}{_PL.HOLDINGS}" if years else "", _PL.INPUTS,
+        *(f"{_PL.INPUTS}/{a}" for a in account_names)])
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # An existing FILE, a path under a file, or an unwritable
+        # parent tracebacked (R1-263).
+        _die(f"cannot create the project directory {root}: "
+             + ("a file of that name exists"
+                if isinstance(e, FileExistsError) or root.is_file()
+                else (e.strerror or str(e))))
+
+    written: List[str] = []
     # The tree is checked BEFORE anything is written: inputs/ existing
     # as a file was a NotADirectoryError traceback after taxjson.toml
     # and ticker.map were already in place (re-audit A2-0781).
@@ -24621,6 +24629,29 @@ def cmd_init(args: argparse.Namespace) -> None:
     _init_filing_hint(_year, first_year, country, years, top)
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
+
+
+def _init_refuse_outside_links(top: Path, rels: List[str]) -> None:
+    """Die (exit 2, nothing written) when a folder `taxjson init` would
+    write into — each of `rels` and every folder above it, under `top` —
+    is a symlink leaving `top` (#45). A link inside `top` is kept."""
+    from taxjson.lib.safe_write import link_outside
+    bad: List[str] = []
+    for rel in rels:
+        p = top
+        for part in Path(rel).parts:
+            p = p / part
+            target = link_outside(p, top)
+            shown = f"{p.relative_to(top).as_posix()}/ -> {target}"
+            if target is not None and shown not in bad:
+                bad.append(shown)
+    if bad:
+        _die_input("folder(s) that are symlinks to outside the project — "
+                   "init writes there; nothing was written:\n    "
+                   + "\n    ".join(bad),
+                   "Replace each link with a real folder (move its "
+                   "contents in), or run init in the folder the link "
+                   "points into.")
 
 
 def _init_filing_hint(year_given: Optional[int], first_year: int,

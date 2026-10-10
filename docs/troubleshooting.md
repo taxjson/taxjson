@@ -376,6 +376,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_split_command_segments`, `_chain_accounts`, `_CHAIN_ACCOUNT_DESTS`
 
+### `tjs init`: "Error: folder(s) that are symlinks to outside the project — init writes there; nothing was written: inputs/ -> ../shared"; or, on an older release, init put the account folders and their README.txt files in the folder `inputs/` links to
+- **Check:** `ls -ld inputs 2024` in the folder you ran init in shows a link (`->`) to a folder outside it.
+- **Cause:** init created the account folders under `inputs/` (and the year's folder, `holdings/`) through such a link, outside the project, and every later command then refused the project for that link. It now checks every folder it would write into first, as every other command does.
+- **Fix:** replace the link with a real folder (move its contents in), or run init in the folder the link points into. A link to a folder inside the project is fine.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_init`, `_init_refuse_outside_links`; `src/taxjson/lib/safe_write.py` — `link_outside`
+
 ### "Warning: the project folder, inputs/ can be read by other users: `chmod -R go-rwx` it"
 - **Check:** `tjs run --details` says it in full: "the project folder, inputs/ can be read by other users of this computer (made by an older taxjson or another program; new files are owner-only)" and "Tighten it once: chmod -R go-rwx <project>". `ls -ld . inputs reports` in the project: a mode other than `drwx------` (for example `drwxrwxr-x`) on any of them. The warning shows once per `tjs run`.
 - **Cause:** taxjson creates every folder and file owner-only (0700 / 0600), but folders made by an older release, by `mkdir`, `git clone` or a copy keep your shell's permissions, and other accounts on the machine can then list or read your statements and books.
