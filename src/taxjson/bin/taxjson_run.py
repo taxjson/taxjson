@@ -15546,6 +15546,10 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
     # by hand, never written (lib/map_hygiene).
     from taxjson.lib import map_hygiene as MH
     unused, unread = MH.unused_rules(root)
+    # The user's own ticker.map lines tobase.map states identically
+    # (Canada): listed ("delete?"); on a terminal --write asks for each
+    # (keep is the default), --all never deletes one.
+    tob_covered = _tobase_covered(root)
     interactive = (bool(getattr(args, "write", False)) and not args.all
                    and sys.stdin.isatty())
     as_json = bool(getattr(args, "json", False))
@@ -15586,11 +15590,14 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                        "suggestion" if TS.covered_by_suggestion(w)
                        else "ticker.map")) for s, w in skipped],
                    "unused": [u.record() for u in unused],
+                   "covered": [{"line": c.rule, "lineno": c.lineno,
+                                "tobase": c.where} for c in tob_covered],
                    "unused_unread": list(unread),
                    "map_gap_unread": list(gap_unread)})
         if not args.write:
             return
-    elif not args.write or not (offer or (verify and interactive)):
+    elif not args.write or not (offer or (verify and interactive)
+                                or (tob_covered and interactive)):
         d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run"
                 + (f", {len(verify)} to verify" if verify else ""))
         if offer:
@@ -15627,6 +15634,16 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             for u in unused:
                 d.line(u.line)
                 d.para(u.reason, indent="  ")
+        if tob_covered:
+            d.section(f"Covered by tobase.map (delete?) "
+                      f"({len(tob_covered)})")
+            for c in tob_covered:
+                d.item(f"{c.rule} (ticker.map:{c.lineno}): {c.where} "
+                       f"states the same pair", "  ")
+            d.para("Keeping them is harmless: your line holds even if "
+                   "the interlisted master later retracts the pair. "
+                   "`taxjson ticker-map --suggest --write` on a terminal "
+                   "asks for each (keep is the default).", indent="  ")
         if unread:
             d.blank()
             d.para(MH.first_unread(unread))
@@ -15639,7 +15656,8 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                if offer or verify else
                "Nothing to add; an unused rule is harmless — delete it by "
                "hand only if its symbol will not return." if unused else
-               "Nothing to add.")
+               "Nothing to add; a line tobase.map covers is harmless."
+               if tob_covered else "Nothing to add.")
         d.print()
         return
     chosen = []
@@ -15701,7 +15719,25 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             chosen.append(TS.Suggestion(
                 s.alternative, f"two securities (your answer): {why}",
                 s.source))
-    if not chosen:
+    # The lines tobase.map covers: asked one by one on a terminal (keep
+    # is the default); --all and a script never delete one.
+    drop: List[int] = []
+    if interactive and tob_covered and not stopped:
+        say(f"{len(tob_covered)} ticker.map line(s) tobase.map states "
+            f"identically (keeping one is harmless: it holds even if the "
+            f"master later retracts the pair):")
+        for c in tob_covered:
+            try:
+                ans = ask(f"{c.rule} (ticker.map:{c.lineno}; {c.where}): "
+                          f"[k]eep / [d]elete / [q]uit? [k] "
+                          ).strip().lower()
+            except EOFError:
+                ans = "q"
+            if ans.startswith("q"):
+                break
+            if ans.startswith("d"):
+                drop.append(c.lineno)
+    if not chosen and not drop:
         say("Nothing added to ticker.map.")
         return
     tm = _PL.ticker_map_path(root)
@@ -15715,7 +15751,10 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
                    "Add the lines to the file it points at, or replace the "
                    "link with a copy.")
     current = read_text_utf8(tm) if tm.is_file() else ""
-    text = TS.appended_text(current, chosen)
+    if drop:
+        from taxjson.lib.tobase_map import without_lines
+        current = without_lines(current, drop)
+    text = TS.appended_text(current, chosen) if chosen else current
     # The new map must be one `taxjson run` accepts (no contradiction).
     import tempfile as _tf
     with _tf.TemporaryDirectory() as _d:
@@ -15737,9 +15776,27 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
     except OSError as e:
         _die_input(f"ticker-map --write: cannot write ticker.map: "
                    f"{e.strerror or e}")
-    say(f"Added {len(chosen)} line(s) to ticker.map"
+    say((f"Added {len(chosen)} line(s) to ticker.map" if chosen else
+         "ticker.map")
+        + (f"; deleted {len(drop)} line(s) tobase.map covers" if drop
+           else "")
         + (f" (the old file is {bak.name})" if bak else "")
         + ". Run `taxjson run` to apply them.")
+
+
+def _tobase_covered(root: Path) -> List[Any]:
+    """The user's ticker.map lines the project's tobase.map states
+    identically (lib/tobase_map.covered_lines): Canada only, [] without
+    either file or when one cannot be read."""
+    from taxjson.lib import tobase_map as TB
+    tm = _PL.ticker_map_path(root)
+    if not tm.is_file() or TB.project_country(root) != "canada":
+        return []
+    try:
+        from taxjson.lib.cli_diag import read_text_utf8
+        return TB.covered_lines(read_text_utf8(tm), TB.read_tobase(root))
+    except (OSError, ValueError):
+        return []
 
 
 def _write_dated_events_state(root: Path, cfg: Dict[str, Any], cache: Path,
@@ -24921,10 +24978,14 @@ def _build_parser(prog: str = "taxjson"
              "Yahoo id — each with its reason; the listing pairs that "
              "share their letters with no TOBASE or DISTINCT line (to "
              "verify); the rules no symbol of the books reaches (unused, "
-             "never written). --write appends the chosen ones (asked one "
-             "by one on a terminal; --all: every line the run's evidence "
-             "names, never a pair to verify), with a comment, never one "
-             "the map already answers, keeping a backup of the old file.")
+             "never written); in Canada, your TOBASE / DISTINCT lines "
+             "tobase.map states identically (covered: delete?). --write "
+             "appends the chosen ones (asked one by one on a terminal; "
+             "--all: every line the run's evidence names, never a pair to "
+             "verify, never a covered line deleted), with a comment, "
+             "never one the map already answers, keeping a backup of the "
+             "old file; on a terminal it also asks keep / delete for each "
+             "covered line (keep is the default).")
     p_tm.add_argument("--suggest", action="store_true",
                       help="List the suggested lines (required)")
     p_tm.add_argument("--write", action="store_true",

@@ -118,7 +118,7 @@ class TestConditionalHint(unittest.TestCase):
             self.assertEqual(js, {"suggestions": [], "verify": [],
                                   "skipped": [],
                               "unused": [], "unused_unread": [],
-                              "map_gap_unread": []})
+                              "covered": [], "map_gap_unread": []})
 
 
 class TestOtherConditionalSources(unittest.TestCase):

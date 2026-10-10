@@ -338,5 +338,39 @@ class TestEtfCurrencyLines(unittest.TestCase):
         self.assertEqual([(x.rule, x.section) for x in g],
                          [("TOBASE QZF.U.TO QZF.TO", TB.SECTION_CURRENCY)])
 
+# ------------------------------------------------------------ G2 covered
+
+class TestCovered(unittest.TestCase):
+
+    def test_covered_lines_listed_never_deleted_by_all(self):
+        tob = TB.parse_tobase(_line("TOBASE QZAB.US QZA.TO", F1) + "\n"
+                              + "DISTINCT QZD.US QZD.TO\n")
+        tm = ("TOBASE QZAB.US QZA.TO  # mine\n"
+              "TOBASE QZA.TO QZAB.US\n"
+              "DISTINCT QZD.TO QZD.US\n")
+        got = [(c.lineno, c.rule) for c in TB.covered_lines(tm, tob)]
+        self.assertEqual(got, [(1, "TOBASE QZAB.US QZA.TO"),
+                               (3, "DISTINCT QZD.TO QZD.US")])
+        files = {"inputs/margin/m.tt": (
+            "BUYSELL 2025-02-03 10:00:00 QZA.TO 10 CAD 5.00 50.00 0\n"),
+            "tobase.map": _line("TOBASE QZAB.US QZA.TO", F1) + "\n",
+            "ticker.map": "TOBASE QZAB.US QZA.TO\n"}
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(Path(td), accounts=_ACCTS,
+                                 files=files)["canada"]
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-1500:])
+            s = cli(root, "ticker-map", "--suggest")
+            self.assertIn("Covered by tobase.map (delete?) (1)", s.stdout)
+            self.assertIn("harmless", s.stdout)
+            j = json.loads(cli(root, "ticker-map", "--suggest",
+                               "--json").stdout)
+            self.assertEqual(j["covered"][0]["line"],
+                             "TOBASE QZAB.US QZA.TO")
+            cli(root, "ticker-map", "--suggest", "--write", "--all")
+            self.assertEqual((root / "ticker.map").read_text(),
+                             "TOBASE QZAB.US QZA.TO\n")
+
+
 if __name__ == "__main__":
     unittest.main()

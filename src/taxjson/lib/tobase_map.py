@@ -1160,3 +1160,51 @@ def books_changes(master: Master, books: Set[str], ticker_text: str
 def today() -> str:
     return _dt.date.today().isoformat()
 
+
+# ------------------------------------------------------------ ticker.map
+
+@dataclass
+class Covered:
+    """A ticker.map line tobase.map states identically."""
+    lineno: int           # ticker.map line number
+    line: str             # the ticker.map line as written
+    rule: str             # its rule (KEYWORD A B)
+    where: str            # tobase.map:N, the line that states it
+
+
+def covered_lines(ticker_text: str, tob: Optional[TobaseFile]
+                  ) -> List[Covered]:
+    """The user's own ticker.map TOBASE / DISTINCT lines that tobase.map
+    states identically: a TOBASE line with the same two listings in the
+    same direction, a DISTINCT line with the same pair (either order).
+    `taxjson ticker-map --suggest` lists them ("delete?"), never removes
+    one by itself: keeping it is harmless, and it holds even if the
+    master later retracts the pair."""
+    if tob is None:
+        return []
+    have: Dict[str, int] = {}
+    for ln in tob.lines:
+        key = ln.rule if ln.keyword == "TOBASE" else \
+            "DISTINCT " + " ".join(sorted((ln.a, ln.b)))
+        have.setdefault(key, ln.lineno)
+    out: List[Covered] = []
+    for n, raw in enumerate(str(ticker_text or "").splitlines(), 1):
+        parts = raw.split("#", 1)[0].split()
+        if len(parts) != 3 or parts[0].upper() not in ("TOBASE",
+                                                       "DISTINCT"):
+            continue
+        kw, a, b = parts[0].upper(), parts[1].upper(), parts[2].upper()
+        rule = f"{kw} {a} {b}"
+        key = rule if kw == "TOBASE" else \
+            "DISTINCT " + " ".join(sorted((a, b)))
+        if key in have:
+            out.append(Covered(n, raw.rstrip(), rule,
+                               f"{TOBASE_MAP}:{have[key]}"))
+    return out
+
+
+def without_lines(text: str, linenos: Iterable[int]) -> str:
+    """`text` without the lines numbered `linenos` (1-based)."""
+    drop = set(linenos)
+    lines = str(text or "").splitlines(keepends=True)
+    return "".join(ln for i, ln in enumerate(lines, 1) if i not in drop)
