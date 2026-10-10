@@ -17631,6 +17631,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                           if isinstance(meta, (dict, type(None)))
                           else path.stem)
             holdings = doc.get("holding") if isinstance(doc, dict) else None
+            from taxjson.lib.holdings_dir import empty_snapshot
+            if holdings is None and empty_snapshot(doc):
+                holdings = []       # the account holds nothing (#46)
             if not isinstance(holdings, list):
                 _die(f"{path.name} has no [[holding]] "
                          f"array (a holdings file has [[holding]] tables)")

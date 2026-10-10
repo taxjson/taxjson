@@ -772,8 +772,9 @@ It warns when the amount equals qty × price to the cent while the fee is not ze
 
 The broker's positions files for the tax year, as a download tool writes them (one `[[holding]]` TOML per broker account; see [Holdings TOML](#holdings-toml)). `taxjson sanity` with no arguments and the end of `taxjson run` compare the books with them, without a `holdings = [...]` setting; an account that has one keeps its own files (a file it lists is never another account's, nor named as unclaimed). Code: `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`, `listed_files`.
 
-- A file belongs to the account whose `account` or `broker_accounts` holds the file's `[meta] account`; else to the account its name starts with (`margin_holdings.toml`, `margin_ib_holdings.toml`). A file no account claims, or two do, is named in a note and not compared. Several files of one account are compared together.
+- A file belongs to the account whose `account` or `broker_accounts` holds the file's `[meta] broker_account` (the broker's id; `taxjson fetch --positions` writes the taxjson account's name in `[meta] account`, which a renamed account no longer matches), else its `[meta] account`; else to the account its name starts with (`margin_holdings.toml`, `margin_ib_holdings.toml`). A file no account claims, or two do, is named in a note and not compared. Several files of one account are compared together.
 - A snapshot is compared at its date: `[meta] as_of`, else the day of `[meta] generated_at`. One dated after the books' last day is compared with the latest books, with a note.
+- A snapshot with no `[[holding]]` table, only its `[meta]` (no `holdings_count` above 0), is an account that holds nothing: every position the books hold there is a difference.
 - Keep a snapshot taken at (or just after) the year end in that year's folder: it is the year's closing positions. A later download belongs in the later year's `holdings/`.
 
 ## Holdings TOML

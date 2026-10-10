@@ -7,9 +7,10 @@ per broker account, as a download tool writes it (taxjson-fetch
 `taxjson run` find them without any `holdings = [...]` setting:
 
 - each file belongs to the account whose broker account ids include the
-  file's `[meta] account` (`[accounts.NAME] account = "..."`, or
-  `broker_accounts = [...]` when one taxjson account spans several
-  broker accounts), else the account its name starts with
+  file's `[meta] broker_account`, else its `[meta] account`
+  (`[accounts.NAME] account = "..."`, or `broker_accounts = [...]` when
+  one taxjson account spans several broker accounts), else the account
+  its name starts with
   (`<account>_..._holdings.toml`, `<account>.toml`); several files of
   one account are compared together;
 - a snapshot is compared at its date (`[meta] as_of`, else the day of
@@ -38,8 +39,9 @@ per broker account (a download tool writes them; `taxjson fetch
 the year end. `taxjson sanity` and the end of `taxjson run` compare the
 books with them at each file's date ([meta] as_of, else [meta]
 generated_at), with no setting: a file belongs to the account whose
-broker account id is its [meta] account ([accounts.NAME] account or
-broker_accounts in taxjson.toml), else the account its name starts with
+broker account id is its [meta] broker_account (or [meta] account)
+([accounts.NAME] account or broker_accounts in taxjson.toml), else the
+account its name starts with
 (margin_holdings.toml, margin_ib_holdings.toml).
 """
 
@@ -78,6 +80,23 @@ def _meta(path: Path) -> Dict[str, Any]:
         return {}
     m = doc.get("meta") if isinstance(doc, dict) else None
     return m if isinstance(m, dict) else {}
+
+
+def empty_snapshot(doc: Any) -> bool:
+    """A snapshot of an account that holds nothing (#46): no
+    `[[holding]]` table, a `[meta]` table and nothing else (a
+    top-level `schema_version` aside), and no `holdings_count` above 0
+    — what taxjson-fetch --positions writes after every position is
+    closed. A `[[holdings]]` typo, another tool's file or a count with
+    no rows is not one."""
+    if not isinstance(doc, dict) or "holding" in doc:
+        return False
+    meta = doc.get("meta")
+    if not isinstance(meta, dict) or set(doc) - {"meta", "schema_version"}:
+        return False
+    count = meta.get("holdings_count", 0)
+    return (isinstance(count, int) and not isinstance(count, bool)
+            and count == 0)
 
 
 def snapshot_files(folder: Path) -> List[Path]:
@@ -142,15 +161,25 @@ def discover(folder: Path, accounts_cfg: Dict[str, Any],
         if _resolved(p) in listed:
             continue                # an account's holdings = [...] has it
         who = None
-        acc = _meta(p).get("account") or _meta(p).get("broker_account")
-        if acc:
-            hits = [n for n in accts if _norm(acc) in ids[n]]
-            if len(hits) > 1:
-                notes.append(f"{folder.name}/{mask(p.name)}: broker "
-                             f"account {mask(str(acc))} is declared by "
-                             f"{', '.join(hits)} — not compared")
-                continue
-            who = hits[0] if hits else None
+        meta = _meta(p)
+        # `broker_account` first: it is the broker's id whatever local
+        # alias `account` carries (taxjson-fetch writes the taxjson
+        # account's name there, which a renamed account no longer
+        # matches, #47); `account` holds the id in other tools' files.
+        hits: List[str] = []
+        acc = None
+        for key in ("broker_account", "account"):
+            acc = meta.get(key)
+            hits = ([n for n in accts if _norm(acc) in ids[n]]
+                    if acc else [])
+            if hits:
+                break
+        if len(hits) > 1:
+            notes.append(f"{folder.name}/{mask(p.name)}: broker "
+                         f"account {mask(str(acc))} is declared by "
+                         f"{', '.join(hits)} — not compared")
+            continue
+        who = hits[0] if hits else None
         if who is None:
             stem = p.stem.lower()
             who = next((n for n in by_len if stem == n.lower()

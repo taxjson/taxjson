@@ -593,7 +593,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no snapshot in the project's holdings/`
 
 ### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
-- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.
+- **Check:** the file's `[meta] broker_account` and `[meta] account` (masked here) are in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.
 - **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared. (Before the fix, a file an account lists in its own `holdings = [...]` was named here too, though that account compares it.)
 - **Fix:** add the id under its account (`broker_accounts = ["…"]`), rename the file `<account>_holdings.toml`, or list it in the account's `holdings = [...]`. An id two accounts declare is refused the same way.
 - **Fixed in:** `v0.26.0`
@@ -605,6 +605,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** `tjs find-missing-history` and `tjs transfers` for missing history; a `ticker.map` line for a spelling difference; re-export when the holdings file is newer than the activity.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_sanity_console`, `MISSING_IN_TAXJSON`; `src/taxjson/lib/positions_check.py`
+
+### `tjs sanity`: "Error: margin_live_holdings.toml has no [[holding]] array (a holdings file has [[holding]] tables)" for a snapshot of an account that holds nothing
+- **Check:** the file has a `[meta]` table and no `[[holding]]` table (`holdings_count = 0`): `taxjson fetch --positions` wrote it after every position of the account was closed.
+- **Cause:** sanity read a holdings file without `[[holding]]` tables as a broken file, so the positions check stopped for every account once one of them held nothing.
+- **Fix:** upgrade: a snapshot with only its `[meta]` (no `holdings_count` above 0, no other table) is an account that holds nothing, and any position the books still hold there is listed as a difference. A file with a `[[holdings]]` typo, another table or a `holdings_count` above 0 and no rows is still refused. On an older release, move the file out of `holdings/`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `empty_snapshot`; `src/taxjson/lib/positions_reports.py` — `_read_toml`; `src/taxjson/bin/taxjson_run.py` — `has no [[holding]]`
+
+### `tjs sanity`: "Info: holdings/download.toml: no account claims it — add its broker account id to the account" although the account declares the snapshot's broker id
+- **Check:** the file's `[meta] broker_account` is in the account's `account` or `broker_accounts`, and its `[meta] account` is another name (the taxjson account's name when the snapshot was fetched: the account was renamed since, or the file was).
+- **Cause:** the snapshot was matched by its `[meta] account` first, and `taxjson fetch --positions` writes the taxjson account's name there, not the broker's id; the broker id in `[meta] broker_account` was only read when `account` was missing.
+- **Fix:** upgrade: `[meta] broker_account` is matched first, then `[meta] account`, then the file name. On an older release, name the file `<account>_holdings.toml` or list it in the account's `holdings = [...]`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `broker_account`
 
 ## Corporate actions and income
 

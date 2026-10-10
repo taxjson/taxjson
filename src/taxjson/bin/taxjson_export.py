@@ -819,7 +819,8 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
         # its [meta] table; anything else (a [[holdings]] typo, another
         # tool's file) used to export NOTHING at exit 0 while `taxjson
         # sanity` refused the same file (audit S030-10).
-        if "meta" in doc and "schema_version" in doc:
+        from taxjson.lib.holdings_dir import empty_snapshot
+        if empty_snapshot(doc):
             holdings = []
         else:
             _die(f"{path}: no [[holding]] array (a taxjson holdings "

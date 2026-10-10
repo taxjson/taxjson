@@ -224,5 +224,75 @@ class TestInitThroughLinkOutside(unittest.TestCase):
         self.assertTrue(any((proj / "data" / "inputs").iterdir()))
 
 
+_EMPTY_FETCHED = (
+    '# Live Questrade holdings snapshot — taxjson fetch/verify.\n'
+    '[meta]\naccount = "margin"\nbroker_account = "99900001"\n'  # pii-ok
+    'source = "questrade-api"\ngenerated_at = "2024-12-31T20:00:00Z"\n'
+    'holdings_count = 0\n')
+
+
+class TestEmptySnapshot(unittest.TestCase):
+    """#46: a snapshot of an account that holds nothing."""
+
+    def test_sanity_accepts_an_empty_snapshot(self):
+        root = _project(_tmp(self) / "p", trades=(
+            "BUYSELL 2024-01-10 09:30:00 QZZQ.TO 10 CAD 10 100 0\n"
+            "BUYSELL 2024-05-10 09:30:00 QZZQ.TO -10 CAD 12 120 0\n"))
+        self.assertEqual(_cli("-C", str(root), "run", "--no-input")
+                         .returncode, 0)
+        (root / "holdings").mkdir()
+        (root / "holdings" / "margin_live_holdings.toml").write_text(
+            _EMPTY_FETCHED)
+        r = _cli("-C", str(root), "sanity", "--json")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("no [[holding]]", r.stderr)
+
+    def test_readers_accept_it_and_still_refuse_a_typo(self):
+        from taxjson.lib.holdings_dir import empty_snapshot
+        from taxjson.lib.positions_reports import (PositionsReportError,
+                                                   read_positions)
+        from taxjson.lib.tomlcompat import tomllib
+        d = _tmp(self)
+        good = d / "empty.toml"
+        good.write_text(_EMPTY_FETCHED)
+        self.assertTrue(empty_snapshot(tomllib.loads(_EMPTY_FETCHED)))
+        rep = read_positions(good)
+        self.assertEqual(len(rep.rows), 0)
+        for text in ('[meta]\naccount = "x"\n[[holdings]]\nsymbol = "Q"\n',
+                     '[meta]\naccount = "x"\nholdings_count = 2\n',
+                     'title = "not a snapshot"\n'):
+            self.assertFalse(empty_snapshot(tomllib.loads(text)), text)
+            bad = d / "bad.toml"
+            bad.write_text(text)
+            with self.assertRaises(PositionsReportError):
+                read_positions(bad)
+
+
+class TestSnapshotBrokerId(unittest.TestCase):
+    """#47: the snapshot's broker_account claims it, whatever local
+    alias its [meta] account carries."""
+
+    def test_broker_account_wins_over_the_alias(self):
+        from taxjson.lib import holdings_dir as HD
+        d = _tmp(self)
+        (d / "download.toml").write_text(
+            '[meta]\naccount = "old_name"\n'
+            'broker_account = "99900001"\n'  # pii-ok
+            '[[holding]]\nsymbol = "QZZQ.TO"\nquantity = 2\n')
+        found, notes = HD.discover(
+            d, {"new_name": {"account": "99900001"}})  # pii-ok
+        self.assertEqual(list(found), ["new_name"], notes)
+        self.assertEqual(notes, [])
+
+    def test_meta_account_id_still_claims(self):
+        from taxjson.lib import holdings_dir as HD
+        d = _tmp(self)
+        (d / "download.toml").write_text(
+            '[meta]\naccount = "U5550001"\n'  # pii-ok
+            '[[holding]]\nsymbol = "QZZQ.TO"\nquantity = 2\n')
+        found, _ = HD.discover(d, {"ib": {"account": "U5550001"}})  # pii-ok
+        self.assertEqual(list(found), ["ib"])
+
+
 if __name__ == "__main__":
     unittest.main()

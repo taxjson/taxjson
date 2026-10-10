@@ -2407,9 +2407,11 @@ could not check.
   check as a warning. An account without `holdings = [...]` is compared
   with its snapshots in the year's `holdings/` folder (`holdings_dir`):
   each file goes to the account whose `account` or `broker_accounts`
-  holds its `[meta] account`, else the account its name starts with,
-  compared at its `as_of` (else `generated_at`) date; a snapshot newer
-  than the books is compared with the latest books, with a note. An
+  holds its `[meta] broker_account` (else its `[meta] account`), else the
+  account its name starts with, compared at its `as_of` (else
+  `generated_at`) date; a snapshot newer than the books is compared with
+  the latest books, with a note; one with only its `[meta]` (no
+  `[[holding]]`) is an account that holds nothing. An
   account with open positions and no holdings at all is listed as
   `UNCHECKED` (the checklist's sanity step is then attention, not done).
 
