@@ -290,6 +290,7 @@ SETTING_COUNTRY: Dict[str, str] = {
     "exports_dir": BOTH,
     "local_timezone": BOTH,         # the zone crypto UTC stamps are dated in
     "leaps_months": BOTH,           # the LEAPS views' cut-off (no tax effect)
+    "requires_taxjson": BOTH,       # the oldest taxjson the project runs on
     # s.54 superficial loss in Canada, §1091 in the US: a sheltered
     # account's transfer is a custody move unless set (CA-SL-16/17,
     # US-WASH-23/24).

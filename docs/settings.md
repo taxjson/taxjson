@@ -86,6 +86,14 @@ The keys come in groups, in the order `taxjson init` writes them.
 - **Change it when:** each year's project lives in its own folder.
 - **Example:** `prior_year_record = "../2024/filed/2024.json"`
 
+#### `requires_taxjson`
+- **Meaning:** the oldest taxjson this project runs on, `">=X.Y.Z"`: the release that first reads the layout and files the project uses. Every command of an older taxjson stops before reading anything else, with one line: "this project needs taxjson X.Y.Z or newer (installed: A.B.C)" (exit 2; docs/troubleshooting.md). In the folder holding the year folders, and for `years`, `new-year`, `migrate`, `update-tobase-map` and `align`, every year folder's value counts. Releases before 0.28.2 do not read the key.
+- **Default:** none (any taxjson runs the project). `taxjson init` writes the release its layout needs: `">=0.27.1"` for a Canadian project of year folders (one shared tobase.map), `">=0.27.0"` otherwise (missing history as `.tt` `OPENING … cost=unknown` lines; tobase.map beside ticker.map).
+- **Country:** both.
+- **Change it when:** never by hand. `init`, `new-year` (last year's value, raised for its layout), `migrate` (the layout it migrated to: shared exports 0.26.0, `.tt` missing history 0.27.0, one shared tobase.map 0.27.1), `update-tobase-map --write`, `find-missing-history --write-missing-history` and `align --write` raise it; none lowers it. The release that reads each layout feature is listed once (`src/taxjson/lib/requires.py` — `FEATURES`, `raise_requirement`).
+- **Rules:** exactly `">=X.Y.Z"`; anything else stops every command, naming the key.
+- **Example:** `requires_taxjson = ">=0.27.1"`
+
 #### Folders
 
 Where the project reads its exports and positions and writes files for other tools. A relative path is read from the project folder; every one must stay inside the folder that holds the project (its parent) — a path or symlink leading further out is refused, naming it (`src/taxjson/lib/project_layout.py` — `folder_setting`, `setting_problems`).

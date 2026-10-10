@@ -213,6 +213,10 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "default: required with a crypto account."),
     Key("prior_year_record", '"../{prev_year}/filed/{prev_year}.json"',
         "Last year's close-year record (`taxjson handoff`). No default."),
+    Key("requires_taxjson", '">=0.27.1"',
+        "The oldest taxjson this project runs on: an older one refuses it. "
+        "Written by `taxjson init`, `new-year` and `migrate` for the "
+        "layout they make; never lower it."),
     Key("inputs_dir", '"../inputs"',
         "The folder of the broker exports (inputs/<account>/), when the "
         "years share one beside the year folders. Default: inputs/ here."),
@@ -341,7 +345,8 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
 # with no key the project's country owns is left out.
 SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Project", ("year", "country", "province", "tax_date",
-                 "local_timezone", "prior_year_record")),
+                 "local_timezone", "prior_year_record",
+                 "requires_taxjson")),
     ("Folders", ("inputs_dir", "holdings_dir", "exports_dir",
                  "tobase_map")),
     ("Currencies", ("base_currency", "source_currencies", "fx_cash_gains",

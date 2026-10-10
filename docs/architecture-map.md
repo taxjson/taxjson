@@ -463,6 +463,7 @@ files into ticker.map and taxjson.toml.
 - `src/taxjson/lib/migrate.py` — `plan`, `apply`, `Plan`, `legacy_files`, `LEGACY_FILES`, `MigrateError`: moving old files into the new places.
 - `src/taxjson/lib/safe_write.py` — `write_user_file`, `write_atomic`, `atomic_open`, `backup_copy`, `file_lock` (a link at the lock name replaced, `LockLinkError` when it cannot be), `OutsideLinkError`: writes that never follow a planted symlink, each through a temp file of its own (overlapping writers never share one), with a backup; `file_lock` serializes a read-modify-write. Generated state in `work/` goes through `write_atomic`; `tests/test_fix_issues_safe_writes.py` lists the reviewed direct writes left in the core.
 - `src/taxjson/lib/tomlcompat.py` — `tomllib`: the tomllib or tomli import.
+- `src/taxjson/lib/requires.py` — `FEATURES`, `INIT_FEATURES`, `problem`, `features_of`, `raised`, `raised_text`, `raise_requirement`, `lowers`; `src/taxjson/bin/taxjson_run.py` — `_refuse_newer_projects`, `_refuse_newer_config`, `_init_requires`, `_raise_requirements`, `_unknown_setting_warnings`: `[settings] requires_taxjson`, the oldest taxjson a project runs on — refused by every command of an older one before anything else; FEATURES lists the release that first reads each layout feature (one line per layout change), and init, new-year, migrate, update-tobase-map, find-missing-history and align raise the key for what they write, never lowering it. An unknown `[settings]` key is one warning line in every command.
 
 ## One folder of exports for every year
 
