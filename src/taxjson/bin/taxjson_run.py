@@ -4065,11 +4065,22 @@ def _migrate_missing_history(root: Path, mhm: Any,
         for d in mhm.stale:
             print(f"    - {d}")
     if mhm.nodate:
-        print(f"  Not written (no books for the account — run `taxjson "
-              f"run`): {', '.join(mhm.nodate)}")
+        print(f"  Cannot convert (no books for the account in a year "
+              f"folder listing it — run `taxjson run` there): "
+              f"{', '.join(mhm.nodate)}")
     if dry:
         print("\n  dry run: nothing was written")
         return
+    if mhm.nodate:
+        # Never archive a file whose entries were not all converted
+        # (issue #25): the user would lose the declaration.
+        _die(f"{len(mhm.nodate)} entr"
+             f"{'y' if len(mhm.nodate) == 1 else 'ies'} cannot be "
+             f"converted (listed above) — nothing was written or renamed",
+             "Kept: " + ", ".join(_PL.shown(p, root)
+                                  for p in sorted(mhm.unconverted))
+             + ". Run `taxjson run` in the year folder whose accounts "
+             "include the account, then `taxjson migrate` again.")
     if mhm.differ and not force:
         _die("the year folders' missing_history.json files disagree "
              "(listed above) — nothing was written for them",
@@ -5163,7 +5174,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # tainted sale as a realized gain (audit A2-0111 / A2-0305,
             # R1-275 / R1-322). A pair spelled with a TOBASE target the
             # native books do not use simply has no rows here.
-            _ph_raw = (["--incomplete-history", str(incomplete_history)]
+            # (--native-books: the lines' symbols mapped as these rows
+            # were — GLOBAL renames only, issue #23.)
+            _ph_raw = (["--incomplete-history", str(incomplete_history),
+                        "--native-books"]
                        if incomplete_history is not None else [])
             _ph_deps = ([incomplete_history]
                         if incomplete_history is not None else [])

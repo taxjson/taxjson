@@ -182,6 +182,17 @@ def _parse_args():
         ),
     )
     parser.add_argument(
+        "--native-books",
+        action="store_true",
+        help=(
+            "The input is a native-currency view (merged without "
+            "--to: ticker.map's TOBASE and JOURNAL renames not applied, "
+            "as `taxjson run`'s raw holdings books): the "
+            "--incomplete-history lines' symbols go through GLOBAL "
+            "renames only, as the rows did."
+        ),
+    )
+    parser.add_argument(
         "--suggest-missing-history",
         metavar="FILE",
         help=(
@@ -359,6 +370,7 @@ def _request(args) -> GainsRequest:
         taxable=args.taxable,
         tax_date=args.tax_date,
         incomplete_history=args.incomplete_history,
+        native_books=args.native_books,
         trace=bool(args.full_traces),
         no_wash=args.no_wash,
         per_account_basis=args.per_account_basis,

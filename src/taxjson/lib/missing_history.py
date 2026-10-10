@@ -33,7 +33,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -74,8 +74,32 @@ class MissingHistoryPairs(set):
         super().__init__(*args)
         self.quantities: Dict[Tuple[str, str], float] = {}
         # The dated openings of the accounts' .tt files (`OPENING <date>
-        # <SYMBOL> <qty> cost=unknown`, read_tt_openings).
+        # <SYMBOL> <qty> cost=unknown`, read_tt_openings), keyed on the
+        # symbol the books spell (load_missing_history maps the line's
+        # symbol through ticker.map / tobase.map, issue #23).
         self.fixed: Dict[Tuple[str, str], "TtOpening"] = {}
+        # Which books the symbols are spelled for: "base" (the base-
+        # currency books: GLOBAL, TOBASE and JOURNAL renames) or
+        # "native" (the native-currency views: GLOBAL renames only).
+        self.view: str = "base"
+        # The currency of an opening no row of the books prices (a
+        # holding kept with no row after the line's date, issue #24):
+        # the project's base currency in the base view.
+        self.base_currency: str = ""
+        # native view: {pair: the other listings of its security} (the
+        # TOBASE lines that join them): a line spelled with the base
+        # listing opens the listing the native books trade.
+        self.listings: Dict[Tuple[str, str], Tuple[str, ...]] = {}
+        # Lines whose symbol ticker.map DELETEs: [(pair, where)].
+        self.deleted: List[Tuple[Tuple[str, str], str]] = []
+        # {account: {old: [(new, date)]}}: the dated renames whose late
+        # rows the account folds into the new symbol (DeclarationMaps.
+        # folds): a line naming the old symbol after the date opens the
+        # new one, as its rows are booked.
+        self.folds: Dict[str, Dict[str, List[Tuple[str, str]]]] = {}
+        # Two lines one security after the map, on two dates: raised
+        # by synthesize_openings (TtOpeningError).
+        self.conflicts: List[str] = []
 
 
 # The entry key a converted missing_history.json entry recorded the
@@ -2098,7 +2122,20 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
                                []).append(e)
     complete: List[Tuple[str, str]] = []
     for (symbol, account), es in sorted(by_pair.items()):
-        if account not in accounts or any(e.get('inserted') for e in es):
+        if account not in accounts:
+            continue
+        _held = next((e for e in es if e.get('inserted')
+                      and e.get('held_without_rows')), None)
+        if _held is not None:
+            # Held as written (issue #24) — said, as a misspelled symbol
+            # would be held too.
+            emit_line(f"note: {_held.get('source') or file_name} opens "
+                      f"{symbol} / {account}, but no row in the data has "
+                      f"that symbol and account — its units are held as "
+                      f"written (a holding kept with no trade or income). "
+                      f"Check the spelling if it is not one.",
+                      file=sys.stderr)
+        if any(e.get('inserted') for e in es):
             continue
         notes = [str(e.get('note') or '') for e in es]
         if any(n.startswith('no opening needed') for n in notes):
@@ -2167,21 +2204,66 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
     return json.dumps(entries, indent=2) + "\n"
 
 
-def load_missing_history(path: Path) -> MissingHistoryPairs:
+def load_missing_history(path: Path, *, native: bool = False
+                         ) -> MissingHistoryPairs:
     """The missing history of project folder `path` (what a stage's
     --incomplete-history names): its accounts' .tt `OPENING <date>
     <SYMBOL> <qty> cost=unknown` lines (read_tt_openings), as pairs
-    carrying each line (`fixed`). A missing_history.json (or any .json
+    carrying each line (`fixed`), each symbol mapped as the books map
+    their rows (issue #23): through ticker.map and its tobase.map
+    (GLOBAL, TOBASE, JOURNAL renames) for the base-currency books, GLOBAL
+    renames only for the `native` views (and a crypto account's books);
+    a line whose symbol ticker.map DELETEs opens nothing (`deleted`). A missing_history.json (or any .json
     file) is refused: it is no longer read — `taxjson migrate` converts
     it (MissingHistoryNoLongerRead). Raises TtOpeningError on a line
     that cannot be used."""
     path = Path(path)
     if path.is_dir():
         out = MissingHistoryPairs()
-        for t in read_tt_openings(path):
-            pair = (t.symbol, t.account)
+        out.view = "native" if native else "base"
+        lines = read_tt_openings(path)
+        if not lines:
+            return out
+        maps = declaration_maps(path)
+        out.base_currency = maps.base_currency
+        for t in lines:
+            if t.symbol in maps.delete:
+                out.deleted.append(((t.symbol, t.account), t.where))
+                continue
+            crypto = t.account in maps.crypto_accounts
+            m = maps.native if (native or crypto) else maps.base
+            sym = map_symbol_through(t.symbol, m)
+            pair = (sym, t.account)
+            if sym != t.symbol:
+                t = replace(t, symbol=sym, declared=t.symbol)
+            prev = out.fixed.get(pair)
+            if prev is not None:
+                if prev.date != t.date:
+                    # Raised where the books are opened (synthesize_
+                    # openings): the run reads this before it writes the
+                    # map of this run (work/ticker.map.effective).
+                    out.conflicts.append(
+                        f"{t.where}: {t.declared or t.symbol} and "
+                        f"{prev.declared or prev.symbol} ({prev.where}) "
+                        f"are one security in account {t.account} after "
+                        f"ticker.map / tobase.map ({sym}), opened on two "
+                        f"dates ({prev.date}, {t.date}) — write one "
+                        f"OPENING cost=unknown line for the security "
+                        f"with all its units, or a DISTINCT line in "
+                        f"ticker.map if they are not one security.")
+                    continue
+                t = replace(prev, quantity=prev.quantity + t.quantity,
+                            where=f"{prev.where} + {t.where}")
             out.add(pair)
             out.fixed[pair] = t
+            if native and not crypto:
+                others = maps.listings_of(sym)
+                if others:
+                    out.listings[pair] = others
+            if maps.dated:
+                f = maps.folds(t.account, not (native or crypto))
+                if f:
+                    out.folds[t.account] = f
         return out
     if path.suffix.lower() == ".json" or path.name in MISSING_HISTORY_FILES:
         raise MissingHistoryNoLongerRead(
@@ -2258,11 +2340,112 @@ class TtOpening:
     where: str              # "inputs/<acct>/<file>.tt:<n>"
     reason: str = ''
     line: str = ''
+    # The symbol as the line writes it, when the books spell it another
+    # way (ticker.map / tobase.map: load_missing_history); '' otherwise.
+    declared: str = ''
 
 
 class TtOpeningError(ValueError):
     """A .tt OPENING cost=unknown line that cannot be used: str(e)
     names the line(s)."""
+
+
+@dataclass
+class DeclarationMaps:
+    """The renames the merge stages apply to a project's rows, for its
+    .tt OPENING cost=unknown lines (issue #23): `base` the base-currency
+    books' (GLOBAL + TOBASE + JOURNAL, to their fixed point), `native`
+    the native views' and a crypto account's (GLOBAL only), `delete` the
+    symbols ticker.map DELETEs."""
+    base: Dict[str, str] = field(default_factory=dict)
+    native: Dict[str, str] = field(default_factory=dict)
+    delete: frozenset = frozenset()
+    crypto_accounts: frozenset = frozenset()
+    base_currency: str = ''
+    # The dated renames (lib/renames.DatedRename: a .tt RENAME line, a
+    # legacy map line) the merge stages book.
+    dated: Tuple[Any, ...] = ()
+
+    def folds(self, account: str, to_base: bool
+              ) -> Dict[str, List[Tuple[str, str]]]:
+        """{old symbol: [(new symbol, date)]} of the dated renames whose
+        late rows `account` folds into the new symbol (`late=fold`),
+        spelled as the books spell them."""
+        m = self.base if to_base else self.native
+        out: Dict[str, List[Tuple[str, str]]] = {}
+        for dr in self.dated:
+            if dr.late_for(account) == "fold":
+                out.setdefault(map_symbol_through(dr.old, m), []).append(
+                    (map_symbol_through(dr.new, m), str(dr.date)))
+        return out
+
+    def listings_of(self, symbol: str) -> Tuple[str, ...]:
+        """The other symbols the base books pool with `symbol` (its
+        security's other listings) that the native views carry (a GLOBAL
+        rename's old symbol is in no book), sorted."""
+        target = map_symbol_through(symbol, self.base)
+        out = {k for k, v in self.base.items() if v == target}
+        out.add(target)
+        out.discard(symbol)
+        return tuple(sorted(k for k in out
+                            if map_symbol_through(k, self.native) == k))
+
+
+def map_symbol_through(symbol: str, mapping: Dict[str, str]) -> str:
+    """`symbol` as the merge stages spell it under `mapping`
+    (taxjson_ticker_map.map_symbol: an option through its underlying)."""
+    if not mapping:
+        return symbol
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+    return map_symbol(symbol, mapping)
+
+
+def declaration_maps(root: Any) -> DeclarationMaps:
+    """The DeclarationMaps of project folder `root`: its ticker.map read
+    as `taxjson run` reads it (with the tobase.map beside it). A map the
+    run refuses raises (the run names its problems first)."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.country import HOME_CURRENCY, CountryError, \
+        settings_country
+    root = Path(root)
+    out = DeclarationMaps()
+    try:
+        settings = _PL._settings(root) or {}
+    except Exception:                               # noqa: BLE001
+        settings = {}
+    cur = str(settings.get("base_currency") or "").strip().upper()
+    if not cur:
+        try:
+            cur = HOME_CURRENCY.get(settings_country(settings), '')
+        except CountryError:
+            cur = ''
+    out.base_currency = cur
+    try:
+        accts = (_PL.read_config_soft(root) or {}).get("accounts") or {}
+    except Exception:                               # noqa: BLE001
+        accts = {}
+    out.crypto_accounts = frozenset(
+        str(n) for n, c in accts.items()
+        if isinstance(c, dict) and c.get("crypto"))
+    # The map the merge stages read: the run's effective map when it
+    # wrote one (ticker.map with its tobase.map, the joins the transfer
+    # evidence proves, the .tt RENAME events — lib/cross_listings.
+    # effective_map_text), else the project's ticker.map.
+    from taxjson.lib.cross_listings import EFFECTIVE_MAP
+    tm = root / "work" / EFFECTIVE_MAP
+    if not tm.is_file():
+        tm = _PL.ticker_map_path(root)
+    if not tm.is_file():
+        return out
+    # (Parsed quietly: the merge stage says the map's problems.)
+    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                merge_renames)
+    tmap = _parse_map_file(tm)[0]
+    out.base = merge_renames(tmap, to_base=True)
+    out.native = merge_renames(tmap, to_base=False)
+    out.delete = frozenset(tmap.delete or ())
+    out.dated = tuple(tmap.dated or ())
+    return out
 
 
 def read_tt_openings(root: Any, accounts: Optional[Iterable[str]] = None
@@ -2451,16 +2634,29 @@ def plan_tt_write(root: Any, lines: Iterable[TtLine]) -> TtWritePlan:
     root = Path(root)
     plan = TtWritePlan(root)
     lines = list(lines)
-    have = {(t.account, t.symbol): t
-            for t in read_tt_openings(root, {ln.account for ln in lines}
-                                      | set(_project_accounts_of(root)))}
+    # A line already there opens the security when the books spell its
+    # symbol as this one (ticker.map / tobase.map, issue #23).
+    try:
+        maps = declaration_maps(root)
+    except Exception:                                   # noqa: BLE001
+        maps = DeclarationMaps()
+
+    def _books(acct: str, sym: str) -> str:
+        return map_symbol_through(sym, maps.native if acct in
+                                  maps.crypto_accounts else maps.base)
+    have: Dict[Tuple[str, str], TtOpening] = {}
+    for t in read_tt_openings(root, {ln.account for ln in lines}
+                              | set(_project_accounts_of(root))):
+        have[(t.account, t.symbol)] = t
+        have.setdefault((t.account, _books(t.account, t.symbol)), t)
     seen = set()
     for ln in sorted(lines, key=lambda x: (x.account, x.symbol)):
         key = (ln.account, ln.symbol)
         if key in seen:
             continue
         seen.add(key)
-        old = have.get(key)
+        old = have.get(key) or have.get(
+            (ln.account, _books(ln.account, ln.symbol)))
         if old is not None:
             if abs(float(old.quantity) - float(ln.quantity)) <= 1e-9 * max(
                     1.0, abs(float(ln.quantity))):
@@ -2694,6 +2890,9 @@ class MissingHistoryMigration:
     stale: List[str] = field(default_factory=list)
     plan: Optional[TtWritePlan] = None
     nodate: List[str] = field(default_factory=list)
+    # The files listing an entry that cannot be converted (`nodate`):
+    # never archived (issue #25).
+    unconverted: Set[Path] = field(default_factory=set)
 
 
 def migration_projects(root: Any) -> List[Path]:
@@ -2715,6 +2914,24 @@ def migration_projects(root: Any) -> List[Path]:
     return out or [root]
 
 
+def _view_parts(views: List[ProjectView], pair: Tuple[str, str]) -> str:
+    """How each project's view sizes `pair` ("2024: 5, 2025: opens
+    nothing (...)")."""
+    parts = []
+    for v in views:
+        x = v.view(pair)
+        if pair not in v.listed():
+            parts.append(f"{v.label}: not listed")
+        elif x is None:
+            parts.append(f"{v.label}: opens nothing "
+                         f"({v.stale.get(pair, '')})")
+        else:
+            parts.append(f"{v.label}: {x:g}"
+                         + (" (short only after its year)"
+                            if pair in v.later else ""))
+    return ", ".join(parts)
+
+
 def plan_missing_history_migration(root: Any) -> Optional[
         MissingHistoryMigration]:
     """The plan (None when no project has a missing_history.json)."""
@@ -2733,35 +2950,47 @@ def plan_missing_history_migration(root: Any) -> Optional[
         sym, acct = pair
         vals = [(v, v.view(pair)) for v in views if pair in v.listed()]
         sized = [(v, q) for v, q in vals if q is not None]
-        if not sized:
+        # The NEWEST view listing the entry decides (issue #28), an
+        # explicit "opens nothing" (its books never go short) included:
+        # an older year's opening is not reinstated over it. A view whose
+        # books have no row of the pair (`no rows`: the account or the
+        # symbol is not in that year's books) cannot size it, and does
+        # not decide — as a year that does not list it.
+        decisive = [(v, q) for v, q in vals
+                    if q is not None or not v.stale.get(pair, '')
+                    .startswith('no rows')]
+        if not sized or not decisive or decisive[-1][1] is None:
+            if sized:
+                src = decisive[-1][0]
+                m.differ.append(
+                    f"{sym} / {acct}: " + _view_parts(views, pair)
+                    + f" — written: nothing ({src.label}'s view: "
+                    f"{src.stale.get(pair, 'opens nothing')})")
+                continue
             why = "; ".join(f"{v.label}: {v.stale.get(pair, '')}"
                             for v, _q in vals) if multi else \
                 vals[0][0].stale.get(pair, '')
             m.stale.append(f"{sym} / {acct}: {why}")
             continue
-        src, q = sized[-1]
+        src, q = decisive[-1]
         agree = (len(sized) == len(views)
                  and all(abs(x - q) <= 1e-9 * max(1.0, q) for _v, x in sized))
         if agree:
             m.agreed.append(pair)
         else:
-            parts = []
-            for v in views:
-                x = v.view(pair)
-                if pair not in v.listed():
-                    parts.append(f"{v.label}: not listed")
-                elif x is None:
-                    parts.append(f"{v.label}: opens nothing "
-                                 f"({v.stale.get(pair, '')})")
-                else:
-                    parts.append(f"{v.label}: {x:g}"
-                                 + (" (short only after its year)"
-                                    if pair in v.later else ""))
-            m.differ.append(f"{sym} / {acct}: " + ", ".join(parts)
+            m.differ.append(f"{sym} / {acct}: " + _view_parts(views, pair)
                             + f" — written: {q:g} ({src.label}'s view)")
-        d = default_opening_date(newest.root / "work", acct)
+        # The date: the day before the account's first row in the books
+        # of the view that sized it (issue #25: an account only an older
+        # year's books carry), else of another view listing it.
+        d = None
+        for v in [src] + [w for w, _q in reversed(vals) if w is not src]:
+            d = default_opening_date(v.root / "work", acct)
+            if d is not None:
+                break
         if d is None:
             m.nodate.append(f"{sym} / {acct}")
+            m.unconverted.update(v.file for v, _q in vals)
             continue
         where = (f"{src.label}/{src.file.name}" if multi else src.file.name)
         m.lines.append(TtLine(acct, sym, q, d, f"migrated from {where}"))
@@ -2773,7 +3002,15 @@ def apply_missing_history_migration(m: MissingHistoryMigration
                                     ) -> Tuple[List[Path], List[Path]]:
     """Write the plan's lines, then rename each project's
     missing_history.json to <name>.migrated (never deleted). Returns
-    (the .tt files written, the files renamed)."""
+    (the .tt files written, the files renamed). A plan with an entry it
+    cannot convert (`nodate`) is refused, nothing written or renamed
+    (issue #25: a file is archived only once all of it is converted)."""
+    if m.nodate:
+        raise MigrationNeedsRun(
+            "cannot convert " + ", ".join(m.nodate) + " (no books for the "
+            "account in any year folder listing it) — nothing written, "
+            "nothing renamed: " + ", ".join(
+                str(p) for p in sorted(m.unconverted)))
     written = apply_tt_plan(m.plan) if m.plan is not None else []
     renamed = []
     for v in m.views:
@@ -2970,12 +3207,126 @@ def _symbol_on(symbol: str, account: str, day: str,
     return symbol
 
 
+def forward_dated(sorted_txs: Sequence[TaxTransaction]
+                  ) -> Dict[Tuple[str, str], List[Tuple[str, str]]]:
+    """{(old symbol, account): [(new symbol, date)]} of the rename SPLIT
+    rows, in date order."""
+    out: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    for tx in sorted_txs:
+        if tx.action == 'SPLIT':
+            new_sym = normalize_symbol_new(tx.symbol,
+                                           getattr(tx, 'symbol_new', ''))
+            if new_sym and new_sym != tx.symbol:
+                out.setdefault((tx.symbol, tx.account), []).append(
+                    (new_sym, str(tx.date)[:10]))
+    return out
+
+
+def _symbol_after(symbol: str, account: str, day: str,
+                  forward: Dict[Tuple[str, str], List[Tuple[str, str]]],
+                  folds: Dict[str, List[Tuple[str, str]]]) -> str:
+    """The symbol a line naming `symbol` on `day` opens: walked forward
+    through each rename out of it the books carry dated before `day`
+    whose late rows the account folds into the new symbol (`late=fold`,
+    `folds`) — as its own rows of the old symbol after the date are
+    booked. Without fold the old symbol after the date is not the new
+    one (renames are events): the line keeps it. A rename on the day
+    itself comes after the opening, which it carries."""
+    seen = {symbol}
+    while True:
+        fold = {new for new, _d in folds.get(symbol, ())}
+        out = [new for new, d in forward.get((symbol, account), ())
+               if d < day and new in fold]
+        if not out or out[0] in seen:
+            return symbol
+        symbol = out[0]
+        seen.add(symbol)
+
+
+def _book_fixed(sorted_txs: Sequence[TaxTransaction],
+                fixed: Dict[Tuple[str, str], Any], pairs_in: Any
+                ) -> Dict[Tuple[str, str], Any]:
+    """The .tt OPENING cost=unknown lines keyed on the symbol THESE books
+    carry the units under on each line's date (issue #23): in a native
+    view, a line spelled with its security's base listing that the
+    books never trade opens the one listing of the security they do
+    trade; a line naming a ticker a dated rename changed before its
+    date opens the new ticker when the account folds that rename's late
+    rows (`late=fold`). Two lines that land on one symbol of an
+    account on one date are one opening (their units added); on two
+    dates they cannot be told apart: TtOpeningError."""
+    held = {(tx.symbol, tx.account) for tx in sorted_txs}
+    forward = forward_dated(sorted_txs)
+    listings = getattr(pairs_in, "listings", None) or {}
+    out: Dict[Tuple[str, str], Any] = {}
+    for pair in sorted(fixed):
+        t = fixed[pair]
+        sym, acct = pair
+        others = listings.get(pair) or ()
+        if others and pair not in held:
+            traded = [o for o in others if (o, acct) in held]
+            if len(traded) == 1:
+                sym = traded[0]
+        sym = _symbol_after(sym, acct, str(t.date), forward,
+                            (getattr(pairs_in, "folds", None) or {})
+                            .get(acct, {}))
+        if sym != t.symbol:
+            t = replace(t, symbol=sym, declared=t.declared or t.symbol)
+        key = (sym, acct)
+        prev = out.get(key)
+        if prev is not None:
+            if prev.date != t.date:
+                raise TtOpeningError(
+                    f"{t.where}: {t.declared or t.symbol} and "
+                    f"{prev.declared or prev.symbol} ({prev.where}) are "
+                    f"the units of {sym} in account {acct}, opened on two "
+                    f"dates ({prev.date}, {t.date}) — write one OPENING "
+                    f"cost=unknown line for them with all their units.")
+            t = replace(prev, quantity=prev.quantity + t.quantity,
+                        where=f"{prev.where} + {t.where}")
+        out[key] = t
+    return out
+
+
+def _opening_currency(t: Any, symbol: str, account: str,
+                      member_rows: Sequence[TaxTransaction],
+                      sorted_txs: Sequence[TaxTransaction],
+                      pairs_in: Any) -> str:
+    """The currency of a .tt line's OPENING_BALANCE row: its security's
+    rows' (any row: a dividend-only holding too), else the books' —
+    the project's base currency in the base-currency books, the
+    listing's in a native view (its suffix: lib/markets), else the one
+    currency of the account's rows. None of them: TtOpeningError
+    naming the line (issue #24: never dropped in silence)."""
+    for tx in member_rows:
+        if tx.currency:
+            return tx.currency
+    view = getattr(pairs_in, "view", "base")
+    if view == "base" and getattr(pairs_in, "base_currency", ""):
+        return pairs_in.base_currency
+    if view == "native":
+        from taxjson.lib.markets import suffix_currency, suffix_of
+        cur = suffix_currency(suffix_of(symbol))
+        if cur:
+            return cur
+    curs = {tx.currency for tx in sorted_txs
+            if tx.account == account and tx.currency}
+    if len(curs) == 1:
+        return curs.pop()
+    raise TtOpeningError(
+        f"{t.where}: OPENING {t.declared or t.symbol} — no row of account "
+        f"{account} trades or pays {symbol}, and its currency cannot be "
+        f"told from the books or the symbol: write the symbol with its "
+        f"listing suffix (the exchange's, e.g. .TO or .US) or set "
+        f"base_currency in taxjson.toml.")
+
+
 def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                           fixed: Dict[Tuple[str, str], Any],
                           chains: Dict[Tuple[str, str], Set[Tuple[str, str]]],
                           renames: Dict[Tuple[str, str],
                                         List[Tuple[str, str]]],
-                          *, warn: bool = False
+                          *, warn: bool = False, pairs_in: Any = None
                           ) -> List[Tuple[Optional[TaxTransaction],
                                           Dict[str, Any]]]:
     """[(OPENING_BALANCE row or None, applied-log entry)] for the .tt
@@ -2984,8 +3335,12 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
     symbol, dated before the rename, opens the old one). The log entry
     says where the position goes short before the line's date
     (`short_before`) or again once its units are used up
-    (`short_again`)."""
+    (`short_again`). The units are held whether or not a later row
+    trades them (issue #24: a holding simply kept, or one that only
+    pays dividends); a line of an account these books do not carry
+    opens nothing here (every account's stage is handed every line)."""
     out: List[Tuple[Optional[TaxTransaction], Dict[str, Any]]] = []
+    book_accounts = {tx.account for tx in sorted_txs}
     for pair in sorted(fixed):
         t = fixed[pair]
         symbol, account = pair
@@ -2993,16 +3348,19 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
         entry: Dict[str, Any] = {
             'symbol': symbol, 'account': account, 'opening_qty': 0.0,
             'inserted': False, 'source': t.where, 'fixed': True}
+        if getattr(t, 'declared', ''):
+            entry['declared_symbol'] = t.declared
         day = str(t.date)
         running = 0.0
         factor = 1.0
         factor_at: Optional[float] = None
         path: List[Tuple[str, float, float]] = []
-        currency = ''
+        member_rows: List[TaxTransaction] = []
         seen = False
         for tx in sorted_txs:
             if (tx.symbol, tx.account) not in members:
                 continue
+            member_rows.append(tx)
             if tx.action not in ('BUYSELL', 'ASSIGN', 'TRANSFER', 'SPLIT'):
                 continue
             seen = True
@@ -3016,9 +3374,7 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                 continue
             running += tx.quantity / factor
             path.append((d, running, factor))
-            if tx.currency and not currency:
-                currency = tx.currency
-        if not seen:
+        if account not in book_accounts:
             entry['note'] = (f'no rows for this symbol/account in the data '
                              f'— check the spelling in {t.where}')
             if warn:
@@ -3028,6 +3384,22 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                           f"spelling.", file=sys.stderr)
             out.append((None, entry))
             continue
+        if not member_rows:
+            # Held with no row at all (issue #24): said once per run
+            # (report_missing_history_log), a misspelling being held too.
+            entry['note'] = (f'no rows for this symbol/account in the '
+                             f'data — the declared units are held (check '
+                             f'the spelling in {t.where})')
+            entry['held_without_rows'] = True
+            if warn:
+                emit_line(f"note: {t.where} opens {symbol} / {account}, "
+                          f"but no row in the data has that symbol and "
+                          f"account — its units are held as written.",
+                          file=sys.stderr)
+        elif not seen:
+            # Held, only its income in the data (issue #24).
+            entry['note'] = ('no trade of this symbol in the data — the '
+                             'declared units are held')
         if factor_at is None:
             factor_at = factor
         qty = float(t.quantity)
@@ -3040,6 +3412,8 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                     break
         _short_again(entry, [x for x in path if x[0] >= day], opening)
         sym_on = _symbol_on(symbol, account, day, renames)
+        currency = _opening_currency(t, sym_on, account, member_rows,
+                                     sorted_txs, pairs_in)
         row = TaxTransaction(
             action='OPENING_BALANCE', date=day, time='00:00:00',
             symbol=sym_on, quantity=qty, currency=currency, price=0.0,
@@ -3097,6 +3471,8 @@ def synthesize_openings(
     """
     if pairs is None:
         pairs = phantoms
+    if getattr(pairs, "conflicts", None):
+        raise TtOpeningError("\n".join(pairs.conflicts))
     if not pairs:
         return list(transactions), []
     label = _source_name(pairs)
@@ -3148,9 +3524,22 @@ def synthesize_openings(
     # The .tt OPENING cost=unknown lines (pairs.fixed): each applied as
     # written (its date, its quantity), never folded or sized. A file
     # entry whose rename chain meets a line's is that line's: dropped.
-    fixed: Dict[Tuple[str, str], Any] = {
+    fixed = _book_fixed(sorted_txs, {
         k: v for k, v in (getattr(pairs_in, "fixed", None) or {}).items()
-        if k in pairs}
+        if k in pairs}, pairs_in)
+    for fp in fixed:
+        if fp not in chains:
+            # Re-keyed on the symbol these books carry (_book_fixed).
+            stack, members = [fp], set()
+            while stack:
+                m = stack.pop()
+                if m not in members:
+                    members.add(m)
+                    stack.extend(reverse_renames.get(m, []))
+            chains[fp] = members
+    pairs = {p for p in pairs
+             if p not in (getattr(pairs_in, "fixed", None) or {})} \
+        | set(fixed)
     covered_by: Dict[Tuple[str, str], str] = {}
     for pair in sorted(pairs):
         if pair in fixed:
@@ -3242,8 +3631,15 @@ def synthesize_openings(
                         'opening_qty': 0.0, 'inserted': False,
                         'note': f'covered by the .tt line {where} — '
                                 f'that line\'s opening is used'})
+    for (symbol, account), where in getattr(pairs_in, "deleted", ()):
+        applied.append({'symbol': symbol, 'account': account,
+                        'opening_qty': 0.0, 'inserted': False,
+                        'source': where, 'fixed': True,
+                        'note': f'ticker.map DELETEs {symbol} — {where} '
+                                f'opens nothing'})
     fixed_rows = _apply_fixed_openings(sorted_txs, fixed, chains,
-                                       reverse_dated(sorted_txs), warn=warn)
+                                       reverse_dated(sorted_txs), warn=warn,
+                                       pairs_in=pairs_in)
     for row, entry in fixed_rows:
         if row is not None:
             out.append(row)

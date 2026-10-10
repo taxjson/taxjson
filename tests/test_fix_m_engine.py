@@ -1149,6 +1149,9 @@ class TestPhantomWalks(unittest.TestCase):
         by = {e['symbol']: e for e in log}
         self.assertTrue(by['XYZ.TO']['inserted'])
         self.assertIn('no rows', by['NOPE.TO']['note'])
+        # Held as written (issue #24: a holding kept with no row), and
+        # said, a misspelling being held too.
+        self.assertTrue(by['NOPE.TO']['inserted'])
         self.assertIn('NOPE.TO', err.getvalue())
 
     def test_opening_size_ignores_tie_order(self):
