@@ -15,6 +15,11 @@
   year), not from 2000: a recent project no longer fetches decades of
   Bank of Canada rates, nor Yahoo Finance for the years before the Bank's
   series.
+- A `.tt` line whose symbol has no market suffix (`AAPL` where the broker
+  rows hold `AAPL.US`) is a pool of its own: `taxjson run` now says so on
+  the console, naming the file:line and the listing the books hold (the
+  warning reached only the `.sum`, and not even that with exports shared
+  by every year).
 
 
 ## v0.27.2 (2026-10-10)

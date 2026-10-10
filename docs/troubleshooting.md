@@ -480,6 +480,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/tt_totals.py` — `read_diag`, `project_mismatches`, `tolerance`, `source_line`, `a .tt line's total`, `ACQUIRED has no fee column`; `src/taxjson/bin/taxjson_convert_tt.py` — `.tt line total`; `src/taxjson/bin/taxjson_run.py` — `_echo_tt_totals`; `src/taxjson/lib/checklist.py` — `d_run_clean`
 
+### "Warning: inputs/margin/extra.tt:2: QZA has no market suffix: a pool of its own, apart from QZA.US in the books"
+- **Check:** the `.tt` line names the share without its market suffix (`QZA`), while the broker's rows book it as `QZA.US` or `QZA.TO`; `tjs list` shows both, the broker's sale of the suffixed listing going short.
+- **Cause:** a share listing is spelled with its suffix in the books; a bare symbol is its own ACB pool (a coin's spelling). Before the fix the warning reached only the account's `.sum`, and with exports shared by every year (`inputs_dir`) not even that.
+- **Fix:** write the symbol as the warning names it (`QZA.US`) on that `.tt` line and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_echo_tt_bare_symbols`; `src/taxjson/bin/taxjson_convert_tt.py` — `_warn_bare_equity_symbol`, `--equity`
+
 ### Generic importer: "Error: generic_ws.csv: generic importer: no mapping for generic_ws.csv" or "Error: …: generic importer: generic_ws.csv: mapped column(s) not in the CSV header: action -> 'Transaction type'."
 - **Check:** a `generic_*.csv` (or a CSV with a `<file>.csv.toml` sidecar) is in `inputs/<account>/`. The second error lists the file's real header after `Header:`.
 - **Cause:** the generic importer reads only through a mapping: the CSV's own `<file>.csv.toml`, or the folder's shared `generic.toml` for `generic_*` files. Each `[columns]` value must be a header name exactly as the CSV spells it (case aside).

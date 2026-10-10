@@ -348,6 +348,50 @@ def _echo_tt_totals(account: str, tt: Path, out_path: Path,
              "warning above says how).")
 
 
+# convert-tt's warning for a bare symbol on an equity account's .tt line
+# (taxjson_convert_tt._warn_bare_equity_symbol), as its .diag keeps it.
+_TT_BARE_RE = re.compile(r"^warning: (?P<where>\S+:\d+): symbol (?P<sym>\S+) "
+                         r"has no market suffix")
+
+
+def _echo_tt_bare_symbols(account: str, tt_jsons: List[Path],
+                          parsed: List[Path]) -> None:
+    """A .tt line whose symbol has no market suffix (AAPL) while the
+    account's broker rows hold the suffixed listing (AAPL.US) opens a
+    separate pool: the broker's sale of AAPL.US then goes short. The
+    convert-tt warning reached only the .sum; the console gets one line
+    naming file:line and the listing the books hold. Read from the
+    persisted .diag on every run, cached or not."""
+    import json as _json
+    bare = []
+    for out in tt_jsons:
+        for line in _diag_lines(out):
+            m = _TT_BARE_RE.match(line)
+            if m:
+                bare.append((m["where"], m["sym"].upper()))
+    if not bare:
+        return
+    held: Dict[str, set] = {}
+    for p in parsed:
+        try:
+            rows = _json.loads(p.read_text(encoding="utf-8")).get(
+                "transactions") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        for t in rows:
+            sym = str((t or {}).get("symbol") or "").upper()
+            if "." in sym:
+                held.setdefault(sym.split(".", 1)[0], set()).add(sym)
+    for where, sym in bare:
+        listings = sorted(held.get(sym, ()))
+        if not listings:
+            continue
+        _say_once(("tt-bare", account, where), "warning",
+                  f"inputs/{account}/{where}: {sym} has no market suffix: "
+                  f"a pool of its own, apart from {' / '.join(listings)} "
+                  f"in the books", prog=_PROG)
+
+
 def _codes_note_head() -> str:
     from taxjson.lib.symbol_codes import NOTE_HEAD
     return NOTE_HEAD
@@ -4771,7 +4815,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # The name as the .tt warnings name it (_echo_tt_totals).
             from taxjson.lib.brokerages.base import shown_name as _shown
             _step(f"Reading {_shown(tt)}")
-            run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
+            run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name]
+                        + ([] if is_crypto else ["--equity"]) + [str(tt)],
                         out)
         # A line whose total is not its qty x price +/- fee: the total is
         # booked as written. Read from the persisted .diag on EVERY run,
@@ -4780,6 +4825,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # the .sum DIAGNOSTICS).
         _echo_tt_totals(name, tt, out, strict)
         tt_jsons.append(out)
+    _echo_tt_bare_symbols(name, tt_jsons, parsed)
 
     # Broker groups REMOVED from inputs/: their parsed JSON, .diag and
     # corp files would otherwise persist forever — stale .diag lines in

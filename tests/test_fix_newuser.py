@@ -123,6 +123,42 @@ class TestSameNumberAtTwoBrokers(unittest.TestCase):
         self.assertIn("feeds two taxjson accounts, qt and wb", r.stdout)
 
 
+# ------------------------------------- 3. a .tt symbol without its suffix
+class TestBareTtSymbolOnTheConsole(unittest.TestCase):
+    """`XEI` on a .tt line while the broker rows hold `XEI.TO` is a pool
+    of its own: the run's console names the file:line and the listing,
+    in a year folder (exports shared beside it) too."""
+
+    def _project(self, years):
+        top = _tmp(self)
+        root = top / "2025" if years else top
+        root.mkdir(exist_ok=True)
+        qt = top / "inputs" / "qt"
+        qt.mkdir(parents=True)
+        (qt / "questrade.csv").write_text(
+            _QH + "\n" + _qbuy("2025-03-03", "2025-03-04", "99900090")
+            + "\n")
+        (qt / "extra.tt").write_text(
+            "# bought before the download\n"
+            "BUYSELL 2025-02-03 09:30:00 XEI 10 CAD 25 -250.00 0.00\n")
+        (root / "taxjson.toml").write_text(
+            _TOML + ('inputs_dir = "../inputs"\n' if years else "")
+            + '\n[accounts.qt]\ntype = "taxable"\n')
+        return root
+
+    def test_console_names_file_line_and_listing(self):
+        for years in (False, True):
+            with self.subTest(years=years):
+                r = _cli("-C", str(self._project(years)), "run",
+                         "--no-input")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                # (captured: `taxjson: warning: ...` on stderr)
+                self.assertIn(
+                    "warning: inputs/qt/extra.tt:2: XEI has no market "
+                    "suffix: a pool of its own, apart from XEI.TO in the "
+                    "books\n", r.stderr)
+
+
 # ------------------------------------------------------ 8. the FX window
 class TestFxWindow(unittest.TestCase):
     """The rates stage asks only for the dates the project's files

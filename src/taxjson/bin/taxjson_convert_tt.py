@@ -26,6 +26,7 @@ import math
 import os
 import re
 import sys
+from typing import Optional
 from datetime import datetime
 from pathlib import Path
 
@@ -1345,10 +1346,15 @@ def _warn_bare_equity_symbol(tx: dict, line: str, source: str) -> None:
                   file=sys.stderr)
 
 
-def tt_to_json(input_path: Path, account_name: str) -> dict:
+def tt_to_json(input_path: Path, account_name: str,
+               equity: Optional[bool] = None) -> dict:
+    """`equity`: the account is not `crypto = true` (taxjson run says
+    so: with exports shared by every year the .tt is not under the
+    project's folder); None: read from the taxjson.toml above it."""
     from taxjson.lib.brokerages.base import shown_name, source_key
     transactions = []
-    equity = _equity_account(input_path, account_name)
+    if equity is None:
+        equity = _equity_account(input_path, account_name)
     # utf-8-sig: an editor's byte-order mark used to reach the first
     # action as '\ufeffBUYSELL' ("unknown .tt action", R1-133).
     from taxjson.lib.cli_diag import read_text_utf8
@@ -1559,6 +1565,14 @@ def _main():
         ),
     )
     parser.add_argument(
+        "--equity",
+        action="store_true",
+        help=("tt→json: the account is not a crypto account (taxjson run "
+              "passes it), so a symbol without a market suffix is "
+              "warned about; without it, read from the project's "
+              "taxjson.toml above the file."),
+    )
+    parser.add_argument(
         "--date-basis",
         choices=("settle", "trade"),
         default=None,
@@ -1620,7 +1634,8 @@ def _main():
             sys.stdout.write(text)
     else:
         # tt → JSON  (default, also handles unknown extensions)
-        result = tt_to_json(input_path, args.account_name)
+        result = tt_to_json(input_path, args.account_name,
+                            equity=True if args.equity else None)
         if args.output:
             _write_atomic(Path(args.output),
                           json.dumps(result, indent=2, sort_keys=True))
