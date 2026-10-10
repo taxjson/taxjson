@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.28.2 (2026-10-10)
+
 ### Added
 
 - A project records the oldest taxjson its layout needs, `[settings]

@@ -121,28 +121,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** look at how the table is written in taxjson.toml: an inline table (`settings = {country = "canada", year = 2024}`), dotted keys (`settings.year = 2024`), an array of tables (`[[distributions]]`), a year spelt `+2024` / `2_024`, or an account name with a dot (`[accounts."margin.one"]`). On an older release: after `new-year` the new folder still says `year = 2024` ("Error: [settings] year = 2024 but this folder is 2025") or has `prior_year_record` outside [settings]; after `migrate` (one shared tobase.map) "taxjson.toml is not valid TOML … Cannot declare ('settings',) twice"; after `align --write` a `[]` line, a distribution that stayed, an `[accounts.margin.one]` table, or ticker.map changed although the error said nothing was written.
 - **Cause:** these commands edited taxjson.toml line by line and knew only `[table]` headers with one key per line: other spellings TOML allows were missed or written at the wrong level, and nothing checked the result.
 - **Fix:** upgrade: every edit reads the keys as TOML does, writes inline tables, dotted keys and arrays of tables in place, and reads the result back — it must be the file with exactly that key changed, else the command stops and writes nothing (`align` checks every change before writing ticker.map or taxjson.toml; `migrate` before moving a tobase.map). With the new message, write the table out as `[settings]` with one key per line and run the command again. For a year made by an older release, fix `year`, `prior_year_record` and `[[distributions]]` by hand, or delete the new year folder and run `new-year` again.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/project_layout.py` — `set_key_text`, `_edit_text`, `new_year_text`, `flat_paths`; `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `cmd_new_year`, `_migrate_to_years`; `src/taxjson/lib/tobase_map.py` — `apply_shared`
 
 ### `tjs new-year 2025` stopped part-way ("Error: cannot create 2025/: …", or "2025/holdings exists and is not a folder"), and running it again says "Error: 2025/taxjson.toml already exists"
 - **Check:** `ls 2025/`: on an older release it holds a taxjson.toml but no holdings/ (or no ticker.map).
 - **Cause:** new-year wrote taxjson.toml first and the other files after it, so a failure later left a configuration that blocks the retry.
 - **Fix:** upgrade: the new year's files are made in a staging folder and moved into place only when complete (taxjson.toml last), so a failure leaves nothing to clean up — fix what the error names and run it again. For a folder left by an older release, delete `2025/taxjson.toml` (and anything else new-year wrote there) first.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_new_year`, `_new_year_publish`
 
 ### `tjs align --from 2024` or `tjs years --diff 2024 2025` says "the same ticker.map rules and settings" although 2024/taxjson.toml does not read, or the accounts are in another order
 - **Check:** `tjs -C 2024 run` (does its taxjson.toml read?); compare the order of the `[accounts.NAME]` tables in the two files.
 - **Cause:** a taxjson.toml (or ticker.map) that could not be read was compared as an empty one, and the accounts' order was not compared; the tables are processed in the order written, so trades at the same moment in two accounts can book differently.
 - **Fix:** upgrade: a file that cannot be read stops `align` / `years --diff` with an error naming it (`tjs years` lists it as the year's problem), and a different order is listed as `accounts (order)`. `align --write` never reorders the tables: move them by hand if this year should follow the other's order.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/project_layout.py` — `compare`, `account_order`, `map_rules`, `ACCOUNT_ORDER_KEY`; `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `cmd_years`
 
 ### After `tjs migrate --to-years`: "ticker.map is a symlink to maps/current.map, which does not exist (or loops)", or `tjs sanity` finds none of the positions snapshots in the folder `holdings_dir` names
 - **Check:** `ls -l 2024/ticker.map` (a link by a relative path, moved unchanged); `grep holdings_dir 2024/taxjson.toml` names a folder that is still at the top.
 - **Cause:** migrate moved a relative ticker.map link into the year folder without changing its target, and moved only `holdings/`, not a holdings folder named otherwise.
 - **Fix:** upgrade: a moved link by a relative path is made again from the year folder, naming the same file; a `holdings_dir` folder beside taxjson.toml moves with it (one further away is named from the year folder, `"../data/snaps"`). For a project migrated by an older release, `ln -sfn ../maps/current.map 2024/ticker.map`, and move the snapshots folder into 2024/ (or set `holdings_dir = "../snapshots"`).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_migrate_to_years`
 
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
@@ -212,7 +212,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs --version`, and `grep requires_taxjson taxjson.toml` (in the folder holding the year folders, each year's): the project records the oldest taxjson its layout runs on. Every command stops here, exit 2, before reading anything else. "Error: [settings] requires_taxjson must be ">=X.Y.Z", …" means the value itself is not that form.
 - **Cause:** the project was made or converted by a newer taxjson (`init`, `new-year`, `migrate`, `update-tobase-map --write`), and its layout needs that release: an older one ignored settings it did not know — a project with one shared tobase.map (`tobase_map = "../tobase.map"`, v0.27.1) run with v0.27.0 read no tobase.map at all and failed on an unrelated line, and could have computed other figures without a word.
 - **Fix:** upgrade: `tjs deploy` on a development checkout, otherwise re-run the installer. Do not lower the value by hand: the layout really needs that release. A malformed value: write it as `requires_taxjson = ">=0.27.1"` (`tjs migrate` writes the right one).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/requires.py` — `FEATURES`, `problem`, `raise_requirement`; `src/taxjson/bin/taxjson_run.py` — `_refuse_newer_projects`, `_refuse_newer_config`
 
 ### "Error: [settings] country is missing — set it to "canada" or "usa"", "Error: missing [settings] year in taxjson.toml" or "Error: [settings] year = 2204 is not a plausible tax year (expected 1900..2027)"
@@ -254,7 +254,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** taxjson.toml has two `[accounts.NAME]` tables whose names are the same apart from capitals.
 - **Cause:** an account's name is also its `inputs/` folder, its `work/` files and the name a `holdings/` snapshot is matched by, and those matches ignore letter case (on Windows and macOS the two folders are one). Such names were accepted, and both accounts' snapshots went to one of them while the other was not checked.
 - **Fix:** rename one account (its table and its `inputs/` folder), for example `margin` and `margin-2`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/config_check.py` — `account_pair_problems`, `differ only by letter case`
 
 ### "Error: account 'qt' has no crypto flag in taxjson.toml but its inputs contain coinbase files" (or "has crypto = true … contain questrade files")
@@ -408,21 +408,21 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the folder given to `-C` (or `--dir`) has the name of a taxjson command (`run`, `sum`, `events` ...); `tjs -C run checklist` with one command fails the same way, or `tjs -C run` alone stops with "the following arguments are required: COMMAND" instead of showing the help page.
 - **Cause:** command chaining looked for the first word that names a command, and took the folder after `-C` for it: the project folder was lost and the first command's name became the folder.
 - **Fix:** upgrade: the value of `-C` / `--dir` is always the folder. On an older release, write the folder another way (`tjs -C ./run run sum`, or an absolute path).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_command_index`, `_takes_separate_value`, `_split_command_segments`, `_no_command`
 
 ### `tjs events sum` prints the gains summary for an account named `sum` (or "note: 'sum' starts a new chained command; the previous command ('events') could also have taken it as an argument"), or `tjs init sum` initializes the current folder
 - **Check:** taxjson.toml has an `[accounts.NAME]` whose NAME is also a command (`sum`, `trades`, `run` ...), or the folder given to `init` is named like a command.
 - **Cause:** chaining (`tjs run sum`) started a new command at every command name after a complete command, so an optional account or folder named like a command ran that command instead, and `tjs events -- sum` chained too: no spelling addressed the account.
 - **Fix:** upgrade: a command name starts the next command only when the command before it cannot take the word, and an account of the project, a folder (`init`) or a symbol (`audit`) is the command's own (`tjs events sum` lists the events of account sum). To chain after such a command, separate the two with `--` (`tjs events -- sum`). On an older release, rename the account (its `inputs/` folder too), or give `init` the folder as `./sum`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_split_command_segments`, `_chain_accounts`, `_CHAIN_ACCOUNT_DESTS`
 
 ### `tjs init`: "Error: folder(s) that are symlinks to outside the project — init writes there; nothing was written: inputs/ -> ../shared"; or, on an older release, init put the account folders and their README.txt files in the folder `inputs/` links to
 - **Check:** `ls -ld inputs 2024` in the folder you ran init in shows a link (`->`) to a folder outside it.
 - **Cause:** init created the account folders under `inputs/` (and the year's folder, `holdings/`) through such a link, outside the project, and every later command then refused the project for that link. It now checks every folder it would write into first, as every other command does.
 - **Fix:** replace the link with a real folder (move its contents in), or run init in the folder the link points into. A link to a folder inside the project is fine.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_init`, `_init_refuse_outside_links`; `src/taxjson/lib/safe_write.py` — `link_outside`
 
 ### "Warning: the project folder, inputs/ can be read by other users: `chmod -R go-rwx` it"
@@ -638,7 +638,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs run --details` names the accounts ("… and no holdings file to check them against: margin (8), …"); `tjs sanity` lists a snapshot in `holdings/` for each of them (and `UNCHECKED:` names none of them).
 - **Cause:** the closing summary counted an account as checked only when taxjson.toml gave it `holdings = [...]`; a snapshot the holdings check finds in `holdings/` by its broker account id or its file name was compared but not counted.
 - **Fix:** upgrade: an account with a `holdings/` snapshot that `tjs sanity` claims for it counts as checked; one with none (a crypto account, say) is still listed. On an older release the line is harmless for such accounts.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`, `collect`; `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`
 
 ### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
@@ -659,14 +659,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the file has a `[meta]` table and no `[[holding]]` table (`holdings_count = 0`): `taxjson fetch --positions` wrote it after every position of the account was closed.
 - **Cause:** sanity read a holdings file without `[[holding]]` tables as a broken file, so the positions check stopped for every account once one of them held nothing.
 - **Fix:** upgrade: a snapshot with only its `[meta]` (no `holdings_count` above 0, no other table) is an account that holds nothing, and any position the books still hold there is listed as a difference. A file with a `[[holdings]]` typo, another table or a `holdings_count` above 0 and no rows is still refused. On an older release, move the file out of `holdings/`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/holdings_dir.py` — `empty_snapshot`; `src/taxjson/lib/positions_reports.py` — `_read_toml`; `src/taxjson/bin/taxjson_run.py` — `has no [[holding]]`
 
 ### `tjs sanity`: "Info: holdings/download.toml: no account claims it — add its broker account id to the account" although the account declares the snapshot's broker id
 - **Check:** the file's `[meta] broker_account` is in the account's `account` or `broker_accounts`, and its `[meta] account` is another name (the taxjson account's name when the snapshot was fetched: the account was renamed since, or the file was).
 - **Cause:** the snapshot was matched by its `[meta] account` first, and `taxjson fetch --positions` writes the taxjson account's name there, not the broker's id; the broker id in `[meta] broker_account` was only read when `account` was missing.
 - **Fix:** upgrade: `[meta] broker_account` is matched first, then `[meta] account`, then the file name. On an older release, name the file `<account>_holdings.toml` or list it in the account's `holdings = [...]`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `broker_account`
 
 ## Corporate actions and income
@@ -689,7 +689,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs spinoffs lira_spouse` shows the event; `tjs spinoffs lira` does not.
 - **Cause:** the election listing read the corporate-action files of every account whose name begins with the account's name and `_` (`work/lira_spouse_ib_corp.json` for `lira`), so a longer-named account's defaulted events were listed (and in `--json` counted) under the shorter one.
 - **Fix:** upgrade: the listing reads the account's own files only. Nothing in the books changed: each account's run booked its own events.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_defaulted_events`, `CORP_ACTION_BROKERS`
 
 ### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
@@ -1084,7 +1084,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `work/margin_base.json` is a JSON object without its `transactions` rows. On v0.28.1 and older the command stopped with an `AttributeError` traceback (issue #53).
 - **Cause:** an interrupted `tjs run`, a disk that filled up, or a hand-edited file.
 - **Fix:** `tjs run`, which rebuilds `work/`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_option_boundary`
 
 ## Before you file
@@ -1401,28 +1401,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs check-filed` lists the figure that moved; `tjs wash-sales --explain` shows the sale and, at the same date and time, a purchase or sale of the same security in another account (the generic importer and Webull print no clock time, so their rows of one day share one).
 - **Cause:** taxjson v0.28.1 and older took rows of two accounts at one moment in the order the accounts are listed in taxjson.toml, and reordering the file changed the gains without calling the books stale (issue #31). They now go in the accounts' name order, whatever the file's order (`CA-DATE-14` / `US-DATE-13` in `tjs tax-logic --ids`).
 - **Fix:** if you know which trade came first, give the rows their clock times (a `.tt` line in place of the broker row). Otherwise review the moved figure: amend the return, or refresh the lock with `tjs close-year --force` if the new figure is the one you filed.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/corporate_timeline.py` — `account_tie`, `event_sort_key`; `src/taxjson/lib/core.py` — `_by_account_name`
 
 ### US project: "inputs changed since the last full run (added: filed/ (locked years))" after `tjs close-year`, or after adding or removing a `filed/<year>.json`
 - **Check:** `tjs sum --details` or `tjs checklist` names `filed/ (locked years)` (`changed:` when the project already had a lock, `removed:` when its last lock was deleted). `ls filed/` (and `[settings] prior_year_record`) shows the locks.
 - **Cause:** a US gains run books a wash-sale basis add that reaches a sale in a filed year in the loss's year instead (`US-WASH-22`), so the set of locked years is an input of the books. On v0.28.1 and older a new lock left the books looking current although a run would change them (issue #32). A Canadian project's gains read no lock.
 - **Fix:** `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/checklist.py` — `LOCKED_YEARS_KEY`, `_locked_years_entry`, `input_fingerprint`; `src/taxjson/bin/taxjson_filed.py` — `locked_year_flags`
 
 ### `tjs years`: "lock damaged" and "! 2024: filed/2024.json is not a close-year lock (an array, not a JSON object)"
 - **Check:** open `filed/2024.json`: it is not the object `tjs close-year` writes (an array, a string, an `accounts` that is not a table of accounts, `totals` that are not a table, or a `year` other than the file's). `tjs check-filed` refuses the same file. On v0.28.1 and older `tjs years` showed such a year as filed with no problem (issue #49).
 - **Cause:** the lock was edited by hand, truncated, or replaced by another file.
 - **Fix:** restore it from git (`git log -- filed/2024.json`), or, after checking the year's figures against the return you filed, write it again with `tjs close-year --force` in that year's folder.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/bin/taxjson_filed.py` — `lock_shape_problem`; `src/taxjson/lib/project_layout.py` — `years_report`; `src/taxjson/bin/taxjson_run.py` — `_years_table`
 
 ### `tjs estimate`: "! Carryovers come from the 2024 lock, taken before 2024 ended: provisional"
 - **Check:** `tjs estimate --details` lists the note "The carried balances are provisional: the 2024 lock was taken on 2024-06-01, before the year ended (close-year --force) …"; `tjs years` marks the year `filed*`. On v0.28.1 and older the estimate used the balances without saying so (issue #55).
 - **Cause:** the net capital loss or minimum tax carried into this year comes from last year's lock, and that lock was written with `close-year --force` before last year ended: a snapshot, not the return you filed.
 - **Fix:** after filing last year, run `tjs close-year --force` in last year's project, or enter the figures from your notice of assessment (`[estimate]` `other_losses`, `amt_carryover`).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/carryforward.py` — `resolve_losses`, `resolve_amt`, `partial_lock`; `src/taxjson/bin/taxjson_filed.py` — `partial_year_note`; `src/taxjson/bin/taxjson_run.py` — `Carryovers come from the`
 
 ## Stand-alone tools and hand-written JSON books
@@ -1473,5 +1473,5 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the date given to `tjs wash-radar` (or `taxjson-safe-to-sell`) is within 60 days of the first or last date Python can hold. On v0.28.1 and older it stopped with "ValueError: year 10000 is out of range" (issue #54).
 - **Cause:** the radar looks 30 days either side of the date (more with settlement days), and those dates do not exist.
 - **Fix:** give the date you meant (`--date YYYY-MM-DD`), or leave it out for today.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.2`
 - **Code:** `src/taxjson/lib/dates.py` — `as_of_date_problem`; `src/taxjson/bin/taxjson_run.py` — `cmd_wash_radar`; `src/taxjson/bin/taxjson_wash_radar.py` — `main`; `src/taxjson/bin/taxjson_safe_to_sell.py` — `main`
