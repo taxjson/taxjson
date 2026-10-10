@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Rows of two accounts at the same moment follow the accounts' names, not their order in taxjson.toml: reordering the file changed gains without calling the books stale (CA-DATE-14 / US-DATE-13; a filed year with such a trade can show DRIFTED once) (#31).
+
 
 ## v0.28.1 (2026-10-10)
 

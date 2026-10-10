@@ -1299,6 +1299,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.25.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `_git_refusal`, `_GIT_COMMAND_KEYS`, `_git_status`, `d_inputs_committed`, `d_lock_committed`
 
+### "Warning: filed 2024 DRIFTED vs 2024.json" after an upgrade, for a sale with a trade of the same security in another account at the same moment
+- **Check:** `tjs check-filed` lists the figure that moved; `tjs wash-sales --explain` shows the sale and, at the same date and time, a purchase or sale of the same security in another account (the generic importer and Webull print no clock time, so their rows of one day share one).
+- **Cause:** taxjson v0.28.1 and older took rows of two accounts at one moment in the order the accounts are listed in taxjson.toml, and reordering the file changed the gains without calling the books stale (issue #31). They now go in the accounts' name order, whatever the file's order (`CA-DATE-14` / `US-DATE-13` in `tjs tax-logic --ids`).
+- **Fix:** if you know which trade came first, give the rows their clock times (a `.tt` line in place of the broker row). Otherwise review the moved figure: amend the return, or refresh the lock with `tjs close-year --force` if the new figure is the one you filed.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/corporate_timeline.py` — `account_tie`, `event_sort_key`; `src/taxjson/lib/core.py` — `_by_account_name`
+
 ## Stand-alone tools and hand-written JSON books
 
 ### `taxjson-gains book.json`: "impossible date='2025-02-30' (not a real calendar date written YYYY-MM-DD) — fix the input data", or a hand-written book whose gains change when a date is written `2025-2-01` instead of `2025-02-01`

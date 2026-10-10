@@ -659,9 +659,9 @@ class TestMergerCash(unittest.TestCase):
 
 # ------------------------------------------------------------ US wash
 class TestUsSameMomentReplacementOrder(unittest.TestCase):
-    """A2-0485: same-moment replacements go taxable first, then the
-    IRA, then by row order (accounts in taxjson.toml order) — never by
-    the account's label."""
+    """A2-0485, issue #31: same-moment replacements go taxable first,
+    then the IRA, then by the accounts' name order (one account's rows
+    in row order) — never by the order the books were merged in."""
 
     def _book(self, first, second):
         return [tx("BUYSELL", "2025-01-02", "XYZ.US", 100, 5000,
@@ -679,11 +679,15 @@ class TestUsSameMomentReplacementOrder(unittest.TestCase):
                 for i in res["inventory"]}
 
     @rule("US-WASH-20")
-    def test_row_order_not_label(self):
+    def test_name_order_not_merge_order(self):
+        # The account whose name sorts first takes the 1,000 deferral,
+        # whichever of the two sold and whichever was merged first.
         for first, second in (("z_first", "a_second"),
                               ("a_first", "z_second")):
             c = self._cost(_gains_one("usa", self._book(first, second)))
-            self.assertEqual((c[first], c[second]), (5000.0, 4000.0))
+            lead = min(first, second)
+            self.assertEqual(
+                (c[lead], c[max(first, second)]), (5000.0, 4000.0))
 
     @rule("US-WASH-20")
     def test_taxable_before_the_ira(self):

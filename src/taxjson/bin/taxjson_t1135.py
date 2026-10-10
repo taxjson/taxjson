@@ -401,7 +401,10 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     from taxjson.lib.corporate_timeline import split_seen
     seen_splits: set = set()
     last_date = ""
-    for tx in _place_after(sorted(transactions,
+    # Accounts in name order at one moment, as the engine takes them
+    # (core._by_account_name; issue #31), then the engine's ladder.
+    from taxjson.lib.corporate_timeline import account_tie
+    for tx in _place_after(sorted(sorted(transactions, key=account_tie),
                                   key=lambda t: _sort_key(t, tax_date))):
         date = _tx_date(tx, tax_date)
         if date > year_end:

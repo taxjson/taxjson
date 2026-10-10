@@ -523,9 +523,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "and a re-fetch merge keeps it too. A newest-first export "
                  "is read "
                  "bottom-up; rows of different accounts at one moment "
-                 "follow the accounts' order in taxjson.toml, in the run "
-                 "and in every recompute of the blended book (check-"
-                 "filed, audit, t1135, carryover, wash-sales --explain). "
+                 "follow the accounts' names in alphabetical order (not "
+                 "their order in taxjson.toml, which reordering the file "
+                 "would change), in the run and in every recompute of the "
+                 "blended book (check-filed, audit, t1135, carryover, "
+                 "wash-sales --explain). "
                  "Rows that "
                  "settle on the same day but traded on different days "
                  "(a Friday trade and the next trading day's trade both "
@@ -1525,7 +1527,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "after the sale first, then earlier ones, latest first. "
                  "Purchases at the same moment go to your taxable accounts "
                  "first, then sheltered, then affiliated, then in the "
-                 "export's row order (accounts in taxjson.toml order); a "
+                 "export's row order (accounts in name order); a "
                  "purchase listed after a sale at the same moment is a "
                  "purchase after it."),
             (Rule("CA-SL-12",
@@ -2471,7 +2473,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "it too. "
                  "A newest-first export is read bottom-up; rows of "
                  "different accounts at one moment follow the accounts' "
-                 "order in taxjson.toml, in the run and in every "
+                 "names in alphabetical order (not their order in "
+                 "taxjson.toml), in the run and in every "
                  "recompute of the blended book (check-filed, audit, "
                  "wash-sales --explain). Fixed places at one moment: an "
                  "opening "
@@ -3226,8 +3229,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "sold, so an earlier loss takes a shared replacement "
                  "first. Purchases at the same moment go to your taxable "
                  "accounts first, then IRAs, then affiliated accounts, "
-                 "then in the export's row order (accounts in "
-                 "taxjson.toml order), never by the account's name.",
+                 "then by the accounts' names in alphabetical order (one "
+                 "account's rows in the export's row order), never by the "
+                 "order of the accounts in taxjson.toml.",
                  cont=True),
             Rule("US-WASH-09",
                  "The disallowed loss is added to the replacement lot's "

@@ -1,5 +1,5 @@
 """Re-audit-2 tests-pins (G6a): taxjson_run.py wrapper wiring and the
-taxjson.toml account order (CA-DATE-14).
+account order at one moment (CA-DATE-14: by name, not taxjson.toml order).
 
 Each test pins a line the full suite let a mutant change: a wrapper that
 forwards a flag or file to its tool, or a recompute that merges the
@@ -115,11 +115,11 @@ def _flag_values(cmd, flag):
 
 
 # ----------------------------------------------- CA-DATE-14 account order
-# zeta sells its 100 XYZ.US at the same moment alpha buys 100. With zeta
-# listed first the sale comes first (gain 200, no denial, year-end cost
-# 2,000); with alpha first the sale is made from the blended pool of 200
-# (cost 1,500: a 300 superficial loss, added to the 100 still held ->
-# year-end cost 1,800).
+# zeta sells its 100 XYZ.US at the same moment alpha buys 100. By name
+# alpha's buy comes first in either taxjson.toml order: the sale is made
+# from the blended pool of 200 (cost 1,500: a 300 superficial loss, added
+# to the 100 still held -> year-end cost 1,800). Before issue #31 the toml
+# order decided (zeta first: gain 200, no denial, year-end cost 2,000).
 _ORDER_BOOKS = {
     "zeta": ("BUYSELL 2025-01-06 10:00:00 XYZ.US 100 CAD 10 1000 0\n"
              "BUYSELL 2025-03-03 10:00:00 XYZ.US -100 CAD 12 1200 0\n"),
@@ -157,12 +157,13 @@ def tearDownModule():
 
 
 @rule("CA-DATE-14")
-class TestAccountOrderFollowsToml(unittest.TestCase):
+class TestAccountOrderIsByName(unittest.TestCase):
     """Rows of different accounts at one moment follow the accounts'
-    order in taxjson.toml — in the run's blend (A2-0937) and in every
-    tool that recomputes the blended book: check-filed / the run's
-    filed-year drift check (A2-0512), t1135 (A2-1592), and its twins
-    carryover, audit and wash-sales --explain."""
+    names, whatever their order in taxjson.toml (issue #31) — in the
+    run's blend (A2-0937) and in every tool that recomputes the blended
+    book: check-filed / the run's filed-year drift check (A2-0512),
+    t1135 (A2-1592), and its twins carryover, audit and wash-sales
+    --explain."""
 
     @classmethod
     def setUpClass(cls):
@@ -174,19 +175,17 @@ class TestAccountOrderFollowsToml(unittest.TestCase):
                           "zeta_gains_wash.json").read_text())
         return doc["summary"]
 
-    def test_run_blend_follows_toml_order(self):
-        """A2-0937: stage_blended_wash_pass merges in toml order
-        (taxjson_run.py, `for n in names` in the taxjson-merge call)."""
-        s = self._summary("zeta_first")
-        self.assertAlmostEqual(s["total_gain"], 200.0, 2)
-        self.assertAlmostEqual(s["total_disallowed"], 0.0, 2)
-        s = self._summary("alpha_first")
-        self.assertAlmostEqual(s["total_gain"], 0.0, 2)
-        self.assertAlmostEqual(s["total_disallowed"], 300.0, 2)
+    def test_run_blend_is_the_same_in_either_toml_order(self):
+        """A2-0937, issue #31: the blend books alpha's buy first (by
+        name) in both toml orders."""
+        for key in ("zeta_first", "alpha_first"):
+            s = self._summary(key)
+            self.assertAlmostEqual(s["total_gain"], 0.0, 2, key)
+            self.assertAlmostEqual(s["total_disallowed"], 300.0, 2, key)
 
     def test_t1135_cost_matches_the_run(self):
         """A2-1592: cmd_t1135 fed the bases in sorted() order."""
-        for key, cost in (("zeta_first", 2000.0), ("alpha_first", 1800.0)):
+        for key, cost in (("zeta_first", 1800.0), ("alpha_first", 1800.0)):
             r = _cli(self.roots[key], "t1135", "--json")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             (p,) = [x for x in json.loads(r.stdout)["properties"]
@@ -195,7 +194,7 @@ class TestAccountOrderFollowsToml(unittest.TestCase):
 
     def test_carryover_net_gain_matches_the_run(self):
         """A2-1592 twin: cmd_carryover fed the bases in sorted() order."""
-        for key, gain in (("zeta_first", 200.0), ("alpha_first", 0.0)):
+        for key, gain in (("zeta_first", 0.0), ("alpha_first", 0.0)):
             r = _cli(self.roots[key], "carryover", "--json")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             (row,) = [x for x in json.loads(r.stdout)["rows"]
@@ -212,11 +211,10 @@ class TestAccountOrderFollowsToml(unittest.TestCase):
 
     def test_wash_sales_explain_traces_the_run_book(self):
         """A2-1592 twin: _explain_wash_sales merged sorted(_by_name)."""
-        r = _cli(self.roots["zeta_first"], "wash-sales", "--explain")
-        self.assertNotIn("  loss sale", r.stdout + r.stderr)
-        r = _cli(self.roots["alpha_first"], "wash-sales", "--explain")
-        # The window table's role label (report layout).
-        self.assertIn("  loss sale", r.stdout + r.stderr)
+        for key in ("zeta_first", "alpha_first"):
+            r = _cli(self.roots[key], "wash-sales", "--explain")
+            # The window table's role label (report layout).
+            self.assertIn("  loss sale", r.stdout + r.stderr, key)
 
     def test_check_filed_ok_right_after_close_year(self):
         """A2-0512: the drift check recomputed in the lock's alphabetical

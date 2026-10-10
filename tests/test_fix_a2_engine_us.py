@@ -228,9 +228,10 @@ class TestReplacementSubLots(unittest.TestCase):
 
 
 class TestSameMomentAccountOrder(unittest.TestCase):
-    """A2-0200 / A2-0208: same-moment replacement lots of different
-    accounts follow the merged book's order (taxjson.toml order), never
-    the account label."""
+    """A2-0200 / A2-0208, issue #31: same-moment replacement lots of
+    different accounts follow the accounts' NAME order (US-DATE-13),
+    whatever order the books were merged in (taxjson.toml order, which
+    a reordered file changed with no input changed)."""
 
     def _book(self, first, second):
         a = [_t('2025-01-06', 100, 20, acct='zeta'),
@@ -242,13 +243,14 @@ class TestSameMomentAccountOrder(unittest.TestCase):
         return _us(rows, per_account_basis=True)
 
     @rule("US-DATE-13")
-    def test_toml_order_not_label(self):
-        z = self._book('zeta', 'alpha')
-        late = [e for e in z['transactions'] if e['date'] == '2025-11-03']
-        self.assertAlmostEqual(late[0]['cost'], 1200.0)
-        a = self._book('alpha', 'zeta')
-        late = [e for e in a['transactions'] if e['date'] == '2025-11-03']
-        self.assertAlmostEqual(late[0]['cost'], 1000.0)
+    def test_name_order_not_merge_order(self):
+        # alpha's lot (the first name) takes the deferral in both merge
+        # orders: zeta's own rebuy keeps its 1,000 cost.
+        for first in ('zeta', 'alpha'):
+            r = self._book(first, None)
+            late = [e for e in r['transactions']
+                    if e['date'] == '2025-11-03']
+            self.assertAlmostEqual(late[0]['cost'], 1000.0, msg=first)
 
 
 class TestStockDividendAfterSale(unittest.TestCase):

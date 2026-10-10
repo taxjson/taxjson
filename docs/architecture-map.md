@@ -201,7 +201,7 @@ one shared timeline so their arithmetic is the same everywhere.
 - `src/taxjson/bin/taxjson_corp_actions.py` — `main`, `EXTRACTORS`, `extract_events`, `_prompt_election`, `_pending_doc`, `_emit_resolved`, `EXIT_ELECTIONS_REQUIRED`: the `taxjson-corp-actions` stage (`--sheltered-elections`: a sheltered account's events booked without asking).
 - `src/taxjson/lib/corp_actions.py` — `SHELTERED_DEFAULT`, `sheltered_elections_mode`, `sheltered_default_applies`, `sheltered_default_rows`, `sheltered_default_text`: a sheltered account's spin-off ($0 cost) or merger (cost carried) booked without asking, `[settings] sheltered_elections`.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_elect`, `_print_pending`, `_print_elections`, `_warn_zero_value_spinoffs`, `_note_sheltered_defaults`, `_sheltered_elections`, `_country_has_corp_rules`: `taxjson elect` and the run's election messages.
-- `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `cumulative_factor`, `split_event_key`, `split_seen`, `event_sort_key`, `radar_priority`: split and rename arithmetic and same-day event order.
+- `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `cumulative_factor`, `split_event_key`, `split_seen`, `event_sort_key`, `account_tie`, `radar_priority`: split and rename arithmetic and same-day event order (rows of two accounts at one moment in account-name order, CA-DATE-14 / US-DATE-13; the engines also take their input books in that order, `src/taxjson/lib/core.py` — `_by_account_name`).
 - `src/taxjson/lib/corp_views.py` — `spinoffs`, `splits`, `render_spinoffs`, `render_splits`, `wrong_country_elections`: `taxjson spinoffs` and `taxjson splits`.
 
 ## Currency conversion and FX rates
