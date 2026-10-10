@@ -66,7 +66,10 @@ class TestInitAndNewYear(unittest.TestCase):
             # 6, plus the two must-not-miss lines of a --force over
             # another country's project: the backup, the orphan folders.
             assert_concise(self, r.stdout, r.stderr, budget=8)
-            for ln in r.stdout.splitlines():
+            # The project's own path is the user's to choose and can be
+            # any length (a nested TMPDIR in the gate): measure the
+            # message around it.
+            for ln in r.stdout.replace(p, "DIR").splitlines():
                 self.assertLessEqual(len(ln), 100, ln)
 
     def test_new_year(self):
