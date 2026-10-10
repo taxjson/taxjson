@@ -18701,9 +18701,11 @@ def _taxable_gains_argv(root: Path, cache: Path, *,
     if exclude_crypto:
         crypto = sorted(n for n in taxable if accounts_cfg[n].get("crypto"))
         if crypto:
-            note(prog, f"crypto account(s) {', '.join(crypto)} excluded",
-                 details=["Exchanges issue no T5008/1099-B slips, so there "
-                          "is nothing to reconcile them against."])
+            note(prog, f"crypto account(s) {', '.join(crypto)} excluded "
+                       f"(exchanges issue no slips)",
+                 details=(["Exchanges issue no T5008/1099-B slips, so "
+                           "there is nothing to reconcile them against."]
+                          if _CURRENT_DETAILS else []))
             taxable = [n for n in taxable if n not in crypto]
         if not taxable:
             _die("every taxable account is crypto — nothing to reconcile",
@@ -18785,6 +18787,10 @@ def cmd_form_export(args: argparse.Namespace) -> None:
         argv += ["--csv", args.csv]
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     if form == "txf":
         argv += ["--box", args.box or "A"]
         if args.out:
@@ -20106,6 +20112,10 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         argv.append(f"--tolerance={args.tolerance!r}")
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_reconcile_slips.main(argv))
 
 

@@ -154,7 +154,11 @@ class TestOutputs(unittest.TestCase):
     @rule("CA-SL-18")
     def test_schedule3_all_formats(self):
         root = self.roots["canada"]
-        text = _flat(cli(root, "form-export").stdout)
+        # The default view names the position in one `! ` line; the row
+        # note and the NOTES are behind --details (Essentials first).
+        self.assertIn("! 1 row(s) carry a filing position (.tt ALLOWLOSS)",
+                      cli(root, "form-export").stdout)
+        text = _flat(cli(root, "form-export", "--details").stdout)
         self.assertIn("QZA.TO: filing position: ALLOWLOSS "
                       "inputs/margin/m.tt:4, the superficial-loss rule "
                       "would deny 1,000.00; the loss is claimed in full. "
@@ -179,7 +183,9 @@ class TestOutputs(unittest.TestCase):
     @rule("US-WASH-25")
     def test_form_8949_all_formats(self):
         root = self.roots["usa"]
-        text = _flat(cli(root, "form-export").stdout)
+        self.assertIn("! 1 row(s) carry a filing position (.tt ALLOWLOSS)",
+                      cli(root, "form-export").stdout)
+        text = _flat(cli(root, "form-export", "--details").stdout)
         self.assertIn("100 QZA.US sold 2025-12-01: filing position: "
                       "ALLOWLOSS inputs/margin/m.tt:4, the wash-sale rule "
                       "would disallow 1,000.00", text)

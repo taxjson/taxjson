@@ -118,7 +118,7 @@ class TestBothCountries(unittest.TestCase):
         self.assertNotIn("NOTE:", r.stdout)
 
     def test_form_export_row_notes_under_the_table(self):
-        out = project("canada").run("form-export").stdout
+        out = project("canada").run("form-export", "--details").stdout
         self.assertNotIn(" | ", out)
         self.assertIn("- NVDA.US: superficial loss", out)
         # The synthetic rates of tests/_hermetic (USD→CAD 1.35).
@@ -128,11 +128,15 @@ class TestBothCountries(unittest.TestCase):
         for country, slip in (("canada", "inputs/slips/t5008.csv"),
                               ("usa", "inputs/slips/1099b.csv")):
             with self.subTest(country=country):
-                r = project(country).run("reconcile-slips", slip)
+                r = project(country).run("reconcile-slips", slip,
+                                         "--details")
                 self.assertIn(r.returncode, (0, 1), r.stderr)
                 assert_styled(self, r.stdout)
                 assert_styled(self, r.stderr)
                 self.assertIn("\nNOTES\n- ", r.stdout)
+                b = project(country).run("reconcile-slips", slip)
+                assert_styled(self, b.stdout)
+                assert_styled(self, b.stderr)
 
     def test_close_year_check_filed_handoff(self):
         for country in ("canada", "usa"):
