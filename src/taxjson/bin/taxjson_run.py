@@ -3948,16 +3948,33 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     slips = root / "inputs" / "slips"
     if slips.is_dir():
         moves.append((slips, dest / "inputs" / "slips"))
+    # A holdings folder of another name (`holdings_dir = "snapshots"`)
+    # holds the year's positions snapshots like holdings/: it moves too,
+    # and the setting still names it (GitHub #43). One further away is
+    # named from the year folder below (_down).
+    hd = settings.get(_PL.HOLDINGS_KEY)
+    hd_own = False
+    if isinstance(hd, str) and hd.strip():
+        hn = _os.path.normpath(hd.strip())
+        hd_own = (not _os.path.isabs(hn) and len(Path(hn).parts) == 1
+                  and hn not in (_PL.INPUTS, _PL.EXPORTS, ".", "..")
+                  and not hn.startswith("~"))
+        if hd_own and hn not in _TO_YEARS_MOVED and (root / hn).is_dir() \
+                and not (root / hn).is_symlink():
+            moves.append((root / hn, dest / hn))
     text = _read_config_text(root / "taxjson.toml")
-    text = _PL.set_key_text(text, f"settings.{_PL.INPUTS_KEY}",
-                            f"../{_PL.INPUTS}")
-    text = _PL.set_key_text(text, f"settings.{_PL.EXPORTS_KEY}",
-                            f"../{_PL.EXPORTS}")
     _tob = (root / _PL.TOBASE_MAP).is_file()
-    if _tob:
-        # tobase.map stays at the top: the one file every year reads.
-        text = _PL.set_key_after(text, f"settings.{_PL.TOBASE_KEY}",
-                                 _PL.SHARED_TOBASE, _PL.EXPORTS_KEY)
+    try:
+        text = _PL.set_key_text(text, f"settings.{_PL.INPUTS_KEY}",
+                                f"../{_PL.INPUTS}")
+        text = _PL.set_key_text(text, f"settings.{_PL.EXPORTS_KEY}",
+                                f"../{_PL.EXPORTS}")
+        if _tob:
+            # tobase.map stays at the top: the one file every year reads.
+            text = _PL.set_key_after(text, f"settings.{_PL.TOBASE_KEY}",
+                                     _PL.SHARED_TOBASE, _PL.EXPORTS_KEY)
+    except _PL.LayoutError as e:
+        _die_input(f"taxjson.toml: {e}", "Nothing was moved.")
     fixed = []
     moved_rel = {_PL.shown(a, root) for a, _b in moves}
 
@@ -3974,24 +3991,49 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
                 return v
             return _os.path.join("..", v)
         return v
-    pyr = settings.get("prior_year_record")
-    if isinstance(pyr, str) and _down(pyr) != pyr:
-        text = _PL.set_key_text(text, "settings.prior_year_record",
-                                _down(pyr))
-        fixed.append(f"prior_year_record = \"{_down(pyr)}\"")
-    for n, a in (cfg.get("accounts") or {}).items():
-        h = a.get("holdings") if isinstance(a, dict) else None
-        if h is None:
-            continue
-        hv = [_down(x) for x in h] if isinstance(h, list) else _down(h)
-        if hv != h:
-            text = _PL.set_key_text(text, f"accounts.{n}.holdings", hv)
-            fixed.append(f"[accounts.{n}] holdings")
     try:
-        tomllib.loads(text)
-    except Exception as e:                              # noqa: BLE001
-        _die(f"the rewritten taxjson.toml would not read ({e}) — nothing "
-             f"was moved")
+        for key in ("prior_year_record",) + (
+                () if hd_own else (_PL.HOLDINGS_KEY,)):
+            v = settings.get(key)
+            if isinstance(v, str) and _down(v) != v:
+                text = _PL.set_key_text(text, ("settings", key), _down(v))
+                fixed.append(f"{key} = \"{_down(v)}\"")
+        for n, a in (cfg.get("accounts") or {}).items():
+            h = a.get("holdings") if isinstance(a, dict) else None
+            if h is None:
+                continue
+            hv = [_down(x) for x in h] if isinstance(h, list) else _down(h)
+            if hv != h:
+                text = _PL.set_key_text(text, ("accounts", n, "holdings"),
+                                        hv)
+                fixed.append(f"[accounts.{n}] holdings")
+        new_settings = _PL.parse_toml(text).get("settings") or {}
+    except _PL.LayoutError as e:
+        _die_input(f"taxjson.toml: {e}", "Nothing was moved.")
+    # The folders the moved taxjson.toml names must be usable from the
+    # year folder (a path that would leave the folder holding it ...).
+    bad = _PL.setting_problems(dest, new_settings)
+    if bad:
+        _die_input(f"{year}/taxjson.toml would name a folder it cannot "
+                   f"use:", *bad, "Nothing was moved.")
+    # A moved link to a file by a relative path (ticker.map ->
+    # maps/current.map) is made again from its new place, still naming
+    # the same file (GitHub #44).
+    relinks: Dict[Path, str] = {}
+    for a, b in moves:
+        if not a.is_symlink():
+            continue
+        tgt = _os.readlink(a)
+        if _os.path.isabs(tgt):
+            continue
+        real = Path(_os.path.normpath(a.parent / tgt))
+        for a2, b2 in moves:
+            try:
+                real = b2 / real.relative_to(a2)
+                break
+            except ValueError:
+                continue
+        relinks[a] = _os.path.relpath(real, b.parent)
     print(f"{'Would move' if dry_run else 'Moving'} into {year}/: "
           + ", ".join(_PL.shown(a, root) for a, _b in moves))
     print(f"{year}/taxjson.toml: [settings] {_PL.INPUTS_KEY} = "
@@ -4005,6 +4047,12 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     dest.mkdir(mode=0o700)
     for a, b in moves:
         b.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if a in relinks:
+            _os.symlink(relinks[a], b)
+            _os.unlink(a)
+            print(f"{_PL.shown(b, root)} links to {relinks[a]} (the same "
+                  f"file, from {year}/)")
+            continue
         _os.replace(a, b)
     write_atomic(dest / "taxjson.toml", text)
     gi = root / ".gitignore"
@@ -4015,6 +4063,13 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     # it (a note of the user's, a script, a stray export).
     _kept = {_PL.INPUTS, _PL.EXPORTS, str(year), ".git", ".gitignore",
              ".gitattributes", _PL.TOBASE_MAP}
+    for a, b in moves:
+        if b.is_symlink():
+            # (the folder a moved link names stays: a year reads it)
+            try:
+                _kept.add(b.resolve().relative_to(root).parts[0])
+            except (OSError, ValueError, IndexError):
+                pass
     try:
         left = sorted(e.name for e in root.iterdir()
                       if e.name not in _kept)

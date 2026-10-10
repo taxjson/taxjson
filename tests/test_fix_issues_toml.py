@@ -34,7 +34,7 @@ from unittest import mock
 from _style import CapturedWidth
 from _tmpfiles import private_dir
 from tax_rules import rule, rule_absent
-from test_fix_multi_year import run_ok, tjs
+from test_fix_multi_year import multi, run_ok, single, tjs
 
 from taxjson.lib import project_layout as PL
 from taxjson.lib.tomlcompat import tomllib
@@ -447,6 +447,54 @@ class TestNewYear(unittest.TestCase):
         self.assertEqual(r.returncode, 0, _out(r))
         self.assertNotIn("option_grant_timing_since",
                          _doc(top / "2025")["settings"])
+
+
+class TestMigrateToYears(unittest.TestCase):
+    def test_custom_holdings_dir(self):
+        """#43."""
+        s = single("canada", 2024)
+        (s / "snapshots").mkdir()
+        (s / "snapshots" / "margin.toml").write_text(
+            '[[holding]]\nsymbol = "QZQ.TO"\nquantity = 5\n')
+        p = s / "taxjson.toml"
+        p.write_text(p.read_text().replace(
+            "[settings]\n", '[settings]\nholdings_dir = "snapshots"\n'))
+        r = tjs("-C", str(s), "migrate", "--to-years")
+        self.assertEqual(r.returncode, 0, _out(r))
+        y = s / "2024"
+        self.assertEqual(PL.holdings_folder(y), (y / "snapshots").resolve())
+        self.assertTrue((y / "snapshots" / "margin.toml").is_file())
+        self.assertEqual(_doc(y)["settings"]["holdings_dir"], "snapshots")
+
+    def test_holdings_dir_further_away_is_named_from_the_year(self):
+        """#43: one not moved is named from the year folder."""
+        s = single("usa", 2025)
+        (s / "data" / "snaps").mkdir(parents=True)
+        p = s / "taxjson.toml"
+        p.write_text(p.read_text().replace(
+            "[settings]\n", '[settings]\nholdings_dir = "data/snaps"\n'))
+        r = tjs("-C", str(s), "migrate", "--to-years")
+        self.assertEqual(r.returncode, 0, _out(r))
+        y = s / "2025"
+        self.assertEqual(_doc(y)["settings"]["holdings_dir"],
+                         "../data/snaps")
+        self.assertEqual(PL.holdings_folder(y), (s / "data" / "snaps")
+                         .resolve())
+
+    def test_relative_ticker_map_link(self):
+        """#44."""
+        s = single("canada", 2024)
+        (s / "maps").mkdir()
+        (s / "maps" / "current.map").write_text("# mine\n")
+        (s / "ticker.map").symlink_to("maps/current.map")
+        r = tjs("-C", str(s), "migrate", "--to-years")
+        self.assertEqual(r.returncode, 0, _out(r))
+        link = s / "2024" / "ticker.map"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), "../maps/current.map")
+        self.assertEqual(link.read_text(), "# mine\n")
+        self.assertNotIn("Left at the top", r.stdout)
+        run_ok(self, s / "2024")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@
 - `new-year` makes the year's files in a staging folder and moves them into place only when complete: a failure no longer leaves a taxjson.toml that blocks running it again (#40).
 - `align` adds and removes an array of tables (`[[distributions]]`): adding one wrote an invalid `[]` line, removing one kept it (#41).
 - `align` and `years --diff` list the accounts' order when it differs (`accounts (order)`); align shows it and leaves the tables as they are (#42).
+- `migrate --to-years` moves a holdings folder named by `holdings_dir` with the year (or names one further away from the year folder) (#43), and makes a moved ticker.map link by a relative path again from the year folder (#44).
 - `align` and `years --diff` stop with an error naming a taxjson.toml or ticker.map that cannot be read, instead of reporting no differences; `years` lists it as that year's problem (#56).
 - `new-year` in Canada sets `option_grant_timing_since` to the previous year when that year left it unset (on grant timing), so a premium written then and closed in the new year is not taxed again (#57).
 

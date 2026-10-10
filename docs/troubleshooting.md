@@ -138,6 +138,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/project_layout.py` — `compare`, `account_order`, `map_rules`, `ACCOUNT_ORDER_KEY`; `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `cmd_years`
 
+### After `tjs migrate --to-years`: "ticker.map is a symlink to maps/current.map, which does not exist (or loops)", or `tjs sanity` finds none of the positions snapshots in the folder `holdings_dir` names
+- **Check:** `ls -l 2024/ticker.map` (a link by a relative path, moved unchanged); `grep holdings_dir 2024/taxjson.toml` names a folder that is still at the top.
+- **Cause:** migrate moved a relative ticker.map link into the year folder without changing its target, and moved only `holdings/`, not a holdings folder named otherwise.
+- **Fix:** upgrade: a moved link by a relative path is made again from the year folder, naming the same file; a `holdings_dir` folder beside taxjson.toml moves with it (one further away is named from the year folder, `"../data/snaps"`). For a project migrated by an older release, `ln -sfn ../maps/current.map 2024/ticker.map`, and move the snapshots folder into 2024/ (or set `holdings_dir = "../snapshots"`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_migrate_to_years`
+
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
 - **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.
