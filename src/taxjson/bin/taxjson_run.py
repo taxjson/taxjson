@@ -25926,7 +25926,32 @@ def _build_parser(prog: str = "taxjson"
         # Same width cap as the top-level parser — add_parser doesn't
         # inherit formatter_class, and 40 call-site edits would drift.
         _sp.formatter_class = _CappedHelpFormatter
+        if _act.dest in _DETAILS_CMDS:
+            # Essentials first (docs/output-style.md): the default view
+            # is the essentials; --details prints what it leaves out.
+            _sp.add_argument("--details", action="store_true",
+                             help="Also print the explanations, caveats "
+                                  "and notes the default view leaves out")
     return p, sub
+
+
+# The commands whose default view is the essentials and whose --details
+# prints the rest (docs/output-style.md, Essentials first).
+_DETAILS_CMDS = frozenset({
+    "run", "checklist", "sum", "estimate", "amt", "instalments",
+    "carryover", "t1135", "fx-cash", "form-export", "reconcile-slips",
+    "slip-audit", "wash-sales", "wash-radar", "sell-check", "buy-check",
+    "harvest", "tips", "sanity", "audit", "list", "check-dates",
+    "edge-cases", "find-missing-history", "ticker-map",
+    "update-tobase-map", "years", "close-year", "check-filed", "handoff",
+    "redact", "migrate", "new-year", "init", "elect", "journals",
+    "renames", "opening", "transfers", "format", "crypto-sends", "stats",
+    "fees-sum", "option-boundary", "spinoffs", "splits"})
+
+
+def _details(args: argparse.Namespace) -> bool:
+    """`--details` given (docs/output-style.md, Essentials first)."""
+    return bool(getattr(args, "details", False))
 
 
 def _main() -> None:

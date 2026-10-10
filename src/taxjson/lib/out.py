@@ -40,6 +40,7 @@ __all__ = [
     "printable", "shown", "label", "relabel", "labelled", "exit_text",
     "LABELS", "console_lint", "CONSOLE_LINE_RE", "show", "show_blocks",
     "join_blocks", "settle", "settling_streams", "real_stream",
+    "ACT", "act", "details_hint", "classify", "prose_lines", "act_lines",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test).
@@ -936,3 +937,107 @@ def console_lint(text: str, width_: int = WIDTH,
         if "(content: " in ln:
             probs.append(f"line {i}: detection detail shown: {ln[:60]}")
     return probs
+
+
+# ------------------------------------------------------- essentials first
+# docs/output-style.md, "Essentials first": a legend of one or two short
+# lines BEFORE the table it explains; after the data only what the reader
+# must act on (`! ` lines) or must not miss, each one line naming the
+# command with the detail; the explanations behind `--details`.
+ACT = "! "
+
+
+def act(text: str, cmd: Optional[str] = None) -> str:
+    """One act-on line: `! <text> — <cmd>` (cmd: the command that gives
+    the detail, `tjs ...`). Never wrapped: keep it short (the tests hold
+    it to 100 columns)."""
+    return ACT + printable(text) + (f" — {cmd}" if cmd else "")
+
+
+def details_hint(cmd: str, what: str = "notes") -> str:
+    """The closing pointer to the long form: `More: <cmd> (<what>)`."""
+    return f"More: {cmd} ({what})" if what else f"More: {cmd}"
+
+
+_UPPER_HEAD_RE = re.compile(r"^(?:\d+\.\s+)?[A-Z0-9][A-Z0-9 &/().,'+#-]*[A-Z)]"
+                            r"(?:\s+[—-]\s+.*)?$")
+_KV_FIGURE_RE = re.compile(r"^\s*[^:]{1,48}:\s+[-+(]?[$€£]?\(?[\d.,]+")
+_KV_ALIGNED_RE = re.compile(r"^\s*[^:\s][^:]{0,46}:\s{2,}\S")
+_LABEL_START_RE = re.compile(r"^(?:Info|Warning|Error): |^! ")
+
+
+def classify(text: str) -> List[Tuple[str, str]]:
+    """Each non-blank line of rendered output with its kind, for the
+    concise-output budget (docs/output-style.md, Essentials first):
+    "table" (a table's header, rule or row; a per-record block),
+    "heading" (the title, an upper-case section heading), "step" (`==> `),
+    "figure" (an aligned `label:  value` line, or `label: <number>`),
+    "prose" (everything else: a legend, a note, a message, an `! ` line).
+    The budget counts the prose lines."""
+    lines = [ln.rstrip() for ln in text.split("\n")]
+    gap = re.compile(r"\S {2,}(?=\S)")
+    rule = re.compile(r"[-=─━_+|\s]{3,}")
+    # Blocks of consecutive non-blank lines: a block with a rule line or
+    # two or more lines with column gaps is a table; its gapped lines
+    # (and the line above a rule) are table lines.
+    kinds: List[Optional[str]] = [None] * len(lines)
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip():
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and lines[j].strip():
+            j += 1
+        blk = range(i, j)
+        rules = [k for k in blk if rule.fullmatch(lines[k].strip())]
+        gapped = [k for k in blk if gap.search(lines[k].strip())
+                  and not _LABEL_START_RE.match(lines[k].lstrip())]
+        if rules or len(gapped) >= 2:
+            for k in rules:
+                kinds[k] = "table"
+                if k - 1 >= i:
+                    kinds[k - 1] = "table"
+            for k in gapped:
+                kinds[k] = "table"
+        i = j
+    out: List[Tuple[str, str]] = []
+    first = True
+    for k, ln in enumerate(lines):
+        t = ln.strip()
+        if not t:
+            continue
+        kind = kinds[k]
+        if kind is None:
+            if t.startswith("==> "):
+                kind = "step"
+            elif _LABEL_START_RE.match(ln.lstrip()) or ln.startswith(" "):
+                kind = "prose" if not _LOOKS_TABLE(t) else "table"
+            elif (len(t) <= 110 and _UPPER_HEAD_RE.match(t)
+                    and sum(c.isalpha() for c in t.split(" — ")[0]) >= 3):
+                kind = "heading"
+            elif first and " — " in t and t.split(" — ")[0].isupper():
+                kind = "heading"
+            elif _KV_ALIGNED_RE.match(ln) or _KV_FIGURE_RE.match(ln):
+                kind = "figure"
+            elif _LOOKS_TABLE(t):
+                kind = "table"
+            else:
+                kind = "prose"
+        first = False
+        out.append((kind, ln))
+    return out
+
+
+def _LOOKS_TABLE(t: str) -> bool:
+    return _looks_like_table_row(t)
+
+
+def prose_lines(text: str) -> List[str]:
+    """The lines the concise budget counts (classify(): "prose")."""
+    return [ln for kind, ln in classify(text) if kind == "prose"]
+
+
+def act_lines(text: str) -> List[str]:
+    """The act-on lines (`! ...`)."""
+    return [ln for ln in text.split("\n") if ln.startswith(ACT)]

@@ -4,6 +4,69 @@ How taxjson prints to people. One module implements it,
 `src/taxjson/lib/out.py`; a command's text output goes through it, and its
 tests check the result with `out.lint()`.
 
+## Essentials first
+
+A command's default output is the essential information, said
+concisely. It is not a place for every exception and caveat: a reader
+who wants the finer points asks for them (`--details`, the topic
+command, the docs). Every command follows these rules.
+
+1. **Legend before the data.** A table that needs explaining gets a
+   legend of **one or two short lines directly above it**: what the
+   columns mean, nothing else. No tax theory, no edge cases, no "how
+   we got here".
+
+   ```
+   REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+   ACCOUNT  NON-OPT  OPTION  REALIZED  ...
+   ```
+
+2. **After the data, only what the reader must act on or must not
+   miss**, each on **one line** naming the command that has the detail.
+   A line the reader must act on starts `! ` (`out.act(text, cmd)`); a
+   line they must not miss but need not act on has no prefix. Nothing
+   else after the data: no prose paragraph, no list of caveats. The last
+   line may point at the long form (`out.details_hint`):
+
+   ```
+   ! 2 sales with no purchase in your files are NOT in these totals — tjs find-missing-history
+   Not in the rows: capital gains on T3/T5 slips (lines 17600, 17400) — tjs slip-audit
+   More: tjs sum --details (notes)
+   ```
+
+   An `! ` line is never wrapped: keep it within 100 columns (name two
+   or three items and `+N more`, never the whole list).
+3. **The explanations move, they are not dropped.** Explanations,
+   edge-case caveats, rounding notes, legal citations and per-item
+   reasoning are printed with `--details` (every reworked command has
+   it, and it prints everything the default view leaves out), or live in
+   the per-topic command (`audit`, `wash-sales`, `fx-cash`, `form-export`,
+   `find-missing-history`, `slip-audit` ...) and the docs.
+4. **A budget.** The default output's non-table lines — every line that
+   is not a table row or rule, a title or section heading, a `==> `
+   step or a `label:  value` figure (`out.classify`; the budget counts
+   `out.prose_lines`) — are at most **6**, stdout and stderr together.
+   Where a command needs another budget it is listed here:
+
+   | command | budget |
+   | --- | --- |
+   | `run` | each message one line (its headline; the detail with `--details` and in work/*.diag); the closing block under `==> Before you trust these numbers` at most 6 lines; `==> ` steps are not counted |
+   | `checklist` | the next step, one `! ` line per item needing attention, one line per section with its counts (a table); at most 6 other lines. `--all` is the full list |
+   | `tax-logic`, `help`, `-h` | exempt: they are the reference text |
+   | `form-export --form txf`, `--json`, `events` `.tt` lines | exempt: machine output |
+
+5. **Numbers the reader files stay on the default view.** A total for
+   the return, a threshold result, an amount to enter: never behind
+   `--details`.
+6. **Every check that protects a filed figure stays**, as a one-line
+   `! ` pointing at its detail: never silently dropped. A warning on
+   stderr is its headline (one line) in the default view; its detail
+   lines come back with `--details`.
+
+`--json` is unchanged by all of this (its schema is stable), and so is
+the captured text other programs read (see "Never changed by a style
+pass").
+
 ## Width
 
 - On a terminal, prose wraps at the **terminal's full width, at most

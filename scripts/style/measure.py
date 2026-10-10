@@ -5,9 +5,40 @@ longest prose blob, headings, blank-line runs and the prefixes used; then
 one line per command, worst first. Writes OUTDIR/metrics.json.
 
     python3 scripts/style/measure.py OUTDIR
+    python3 scripts/style/measure.py --inventory OUTDIR [BEFORE_DIR]
 """
 import json, re, sys
 from pathlib import Path
+
+if len(sys.argv) > 2 and sys.argv[1] == "--inventory":
+    # The concise-output inventory (docs/output-style.md, Essentials
+    # first): per capture the lines the budget counts (lib/out.classify
+    # "prose": not a table row, heading, step or figure line) and their
+    # words, worst first. `--inventory OUTDIR [BEFORE_DIR]`.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+    from taxjson.lib import out as _o
+
+    def _inv(d):
+        res = {}
+        for f in sorted(Path(d).glob("*/*.txt")):
+            body = "\n".join(f.read_text(errors="replace").split("\n")[2:])
+            pl = _o.prose_lines(body)
+            res[f"{f.parent.name}/{f.stem}"] = (
+                len(pl), sum(len(x.split()) for x in pl),
+                len(_o.act_lines(body)),
+                sum(1 for k, _ in _o.classify(body) if k == "step"))
+        return res
+    now = _inv(sys.argv[2])
+    old = _inv(sys.argv[3]) if len(sys.argv) > 3 else {}
+    print(f"{'capture':34} {'prose':>5} {'words':>6} {'!':>3} {'steps':>5}"
+          + ("   before: prose  words" if old else ""))
+    for k, (n, w, a, st) in sorted(now.items(), key=lambda x: -x[1][0]):
+        b = old.get(k)
+        print(f"{k:34} {n:5} {w:6} {a:3} {st:5}"
+              + (f"   {b[0]:13} {b[1]:6}" if b else ""))
+    json.dump(now, open(Path(sys.argv[2]) / "inventory.json", "w"),
+              indent=1)
+    sys.exit(0)
 
 CAP = Path(sys.argv[1])
 

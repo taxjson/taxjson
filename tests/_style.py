@@ -236,3 +236,44 @@ def assert_labelled(tc, text: str) -> None:
     if bad:
         tc.fail("captured labels shown to a person:\n  "
                 + "\n  ".join(bad[:20]) + "\n--- output ---\n" + text[:4000])
+
+
+# Essentials first (docs/output-style.md): the default view's budget.
+CONCISE_WIDTH = 100
+
+
+def assert_concise(tc, *texts: str, budget: int = 6, legend=None,
+                   width: int = CONCISE_WIDTH) -> None:
+    """Fail `tc` unless the default view in `texts` (stdout, stderr: run
+    at TAXJSON_WIDTH=100) keeps the budget: at most `budget` lines that
+    are not a table row, heading, step or figure (out.prose_lines),
+    every `! ` line within `width` columns, and — `legend` given (a
+    phrase, or a list of phrases) — each legend line directly above a
+    table (out.classify: a table line within the next two lines)."""
+    from taxjson.lib import out
+    prose = [ln for t in texts for ln in out.prose_lines(t or "")]
+    if len(prose) > budget:
+        tc.fail(f"{len(prose)} non-table lines, budget {budget}:\n  "
+                + "\n  ".join(prose) + "\n--- output ---\n"
+                + "\n".join(t or "" for t in texts)[:4000])
+    for t in texts:
+        for ln in out.act_lines(t or ""):
+            if len(ln) > width:
+                tc.fail(f"! line over {width} columns ({len(ln)}): {ln}")
+    for phrase in ([legend] if isinstance(legend, str) else legend or ()):
+        assert_legend_first(tc, texts[0], phrase)
+
+
+def assert_legend_first(tc, text: str, phrase: str) -> None:
+    """Fail `tc` unless the line holding `phrase` comes before a table it
+    explains: a table line (out.classify) within the next three
+    non-blank lines, and no table line of that table above it."""
+    from taxjson.lib import out
+    cls = out.classify(text)
+    idx = next((i for i, (_k, ln) in enumerate(cls) if phrase in ln), None)
+    if idx is None:
+        tc.fail(f"legend {phrase!r} not in the output:\n{text[:3000]}")
+    nxt = [k for k, _ln in cls[idx + 1: idx + 4]]
+    if "table" not in nxt:
+        tc.fail(f"legend {phrase!r} is not directly above a table:\n"
+                + "\n".join(ln for _k, ln in cls[max(0, idx - 3):idx + 5]))

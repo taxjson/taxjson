@@ -59,9 +59,30 @@ COMMON = [
     ("renames", ["renames"]), ("spinoffs", ["spinoffs"]),
     ("splits", ["splits"]), ("amt", ["amt"]), ("t1135", ["t1135"]),
     ("option-boundary", ["option-boundary"]),
+    ("journals", ["journals"]), ("ticker-map", ["ticker-map", "--suggest"]),
+    ("years", ["years"]),
+    # --details: the long form the default view leaves out
+    # (docs/output-style.md, Essentials first).
+    ("sum_details", ["sum", "--details"]),
+    ("checklist_details", ["checklist", "--all"]),
+    ("t1135_details", ["t1135", "--details"]),
+    ("sanity_details", ["sanity", "margin=holdings.toml", "--details"]),
+    ("wash-sales_details", ["wash-sales", "--details"]),
+    ("find-missing-history_details", ["find-missing-history",
+                                      "--details"]),
+    ("carryover_details", ["carryover", "--details"]),
+    ("wash-radar_details", ["wash-radar", "--details"]),
+    ("form-export_details", ["form-export", "--details"]),
 ]
-PER_COUNTRY = {"canada": [("form-export_schedule3",
-                           ["form-export", "--form", "schedule3"])],
+PER_COUNTRY = {"canada": [("estimate_province",
+                           ["estimate", "--province", "ON"]),
+                          ("estimate_province_details",
+                           ["estimate", "--province", "ON", "--details"]),
+                          ("slip-audit_details", ["slip-audit", "--details"]),
+                          ("form-export_schedule3",
+                           ["form-export", "--form", "schedule3"]),
+                          ("slip-audit", ["slip-audit"]),
+                          ("update-tobase-map", ["update-tobase-map"])],
                "usa": [("form-export_txf", ["form-export", "--form", "txf"])]}
 NOCOUNTRY = [("help", ["help"]), ("help_all", ["help", "--all"]),
              ("help_wash-sales", ["help", "wash-sales"]),
@@ -101,7 +122,11 @@ def main(argv):
                          ("watch", ["watch", "--no-ibkr", "--state",
                                     str(w.root / "watch.json")]),
                          ("close-year", ["close-year", "--force"]),
-                         ("check-filed", ["check-filed"])):
+                         ("check-filed", ["check-filed"]),
+                         ("run_details", ["run", "--no-input", "--fast",
+                                          "--details"]),
+                         ("redact", ["redact"]),
+                         ("new-year", ["new-year", "2025"])):
             codes[f"{country}/{label}"] = _save(od, label, a, w.run(*a))
         pend = _style.project(country, pending=True)
         pw = _style.Project(Path(str(pend.root) + "_w"), country)
