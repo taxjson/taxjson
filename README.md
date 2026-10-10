@@ -2520,8 +2520,8 @@ defended in layers rather than by tests alone:
   broker's own export says you hold, account by account; `taxjson run`
   ends with it when `taxjson.toml` names the holdings files. Internal
   reports can all agree and still be wrong — this is the check that
-  found a stray 8.4-share residue and a split option class that every
-  other report had accepted.
+  finds a stray fractional residue or a split option class that every
+  other report accepted.
 - **The audit command is the authority.** `taxjson audit` recomputes
   every disposition from the parsed broker row through FX, ACB/FIFO
   and the wash determination, and ties each figure out against the

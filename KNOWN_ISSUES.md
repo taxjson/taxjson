@@ -89,7 +89,7 @@ The codebase has been through eight audit rounds and two full-coverage audits; e
 
 ### Kraken fees taken in the traded coin are not in the fee reports
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose ledger shows the fee taken in the base coin) and the ledger instant-trade path (a crypto leg's fee).
-- **Current behavior:** the fee coins are folded into the quantity (fewer coins received on a buy, more given on a sale) and the fill's `fee` field is 0, so cost basis and proceeds are right, but `fees.rpt`, `taxjson fees-sum` and the `.sum` FEES line leave these fees out (on real 2025 data more than half of the Kraken trading fees). The parse note says so.
+- **Current behavior:** the fee coins are folded into the quantity (fewer coins received on a buy, more given on a sale) and the fill's `fee` field is 0, so cost basis and proceeds are right, but `fees.rpt`, `taxjson fees-sum` and the `.sum` FEES line leave these fees out (they can be most of a Kraken account's trading fees). The parse note says so.
 - **Why deferred:** the `fee` field feeds the engine's per-row fee figures; recording a fee already inside the quantity there needs an informational-only fee field first.
 
 ### Questrade `commission` vs everyone else `fee`
@@ -111,7 +111,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Webull Trading Summary carries no income
 - **Where:** `src/taxjson/lib/brokerages/webull.py` — the Trading Summary holds BUY/SELL rows only.
-- **Current behavior:** Webull interest and dividends (T5 slips) are not in any Webull input, so the account's income summary leaves them out. A row with another action code (DIV, a transfer) that does appear in a Trading Summary is reported as `warning: UNBOOKED:` (echoed by `taxjson run` as `Warning: UNBOOKED:`, refused by `--strict`). Enter them by hand in a `.tt` file in the account's folder: `INTEREST 2025-12-31 16:00:00 USD 1149.27` (T5 box 13; a slip with a blank box 27 is CAD), `DIVIDEND ...` for dividends.
+- **Current behavior:** Webull interest and dividends (T5 slips) are not in any Webull input, so the account's income summary leaves them out. A row with another action code (DIV, a transfer) that does appear in a Trading Summary is reported as `warning: UNBOOKED:` (echoed by `taxjson run` as `Warning: UNBOOKED:`, refused by `--strict`). Enter them by hand in a `.tt` file in the account's folder: `INTEREST 2025-12-31 16:00:00 USD 12.34` (T5 box 13; a slip with a blank box 27 is CAD), `DIVIDEND ...` for dividends.
 - **Why:** Webull exports no income file the parser could read.
 
 ### Questrade dividends with tax withheld are booked at the net amount
