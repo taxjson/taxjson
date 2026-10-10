@@ -472,6 +472,9 @@ class TestBuild(unittest.TestCase):
             self.assertNotIn("BBG000000M01", sec)           # two classes
             self.assertEqual(rep["figi_requests"], 0)
             self.assertEqual(doc["distinct"]["BBG000000D01"]["us"], "QZD.US")
+            # The US ticker's own company, named apart from the receipt's.
+            self.assertEqual(doc["distinct"]["BBG000000D01"]["us_name"],
+                             "QZ CO")
             text = B.render(dict(doc, meta={"schema_version": 1,
                                              "generated": "2026-01-02",
                                              "sources": []}))
@@ -519,6 +522,73 @@ class TestBuild(unittest.TestCase):
             self.assertEqual(e["history"][0]["listing"], "QZE.US")
             self.assertEqual(rep["history_skipped_no_figi"],
                              ["QZF.TO / QZF.US"])
+
+    def test_a_bare_issuer_root_resolves_by_its_class_spelling(self):
+        # The TMX workbook names the issuer's root (QZK); its shares
+        # trade only as a class (QZK.B) or as trust units (QZR.UN).
+        with tempfile.TemporaryDirectory() as td:
+            B, cache = self._cache(td)
+            hdr = ["Co_ID", "Root Ticker", "Name", "SP_Type"]
+            _xlsx(cache / f"{B.TMX_XLSX_PREFIX}2026-01-01.xlsx", {
+                "TSX Issuers": [hdr, ["1", "QZA", "QZ Alpha", ""],
+                                ["4", "QZK", "QZ Kappa", ""],
+                                ["5", "QZR", "QZ REIT", "Income Trust"]],
+                "TSXV Issuers": [hdr]})
+            K = B.Figi.key
+            figi = json.loads((cache / B.FIGI_CACHE).read_text())
+            figi.update({
+                K(B.ticker_job("QZK", "CN")): [],
+                K(B.ticker_job("QZK/B", "CN")): [
+                    _eq("QZK/B", "CN", "BBG000000K01")],
+                K(B.class_job("BBG000000K01", "US")): [
+                    _eq("QZK", "US", "BBG000000K01")],
+                K(B.ticker_job("QZR", "CN")): [],
+                K(B.ticker_job("QZR-U", "CN")): [
+                    _eq("QZR-U", "CN", "BBG000000R01", typ="REIT")],
+                K(B.class_job("BBG000000R01", "US")): [
+                    _eq("QZRUF", "US", "BBG000000R01", typ="REIT")]})
+            (cache / B.NASDAQ).write_text(
+                "Symbol|Security Name|Market Category|Test Issue|Financial "
+                "Status|Round Lot Size|ETF|NextShares\n"
+                "QZK|QZ Kappa Class B|Q|N|N|100|N|N\n"
+                "File Creation Time: 0101202612:00|||||||\n")
+            (cache / B.FIGI_CACHE).write_text(json.dumps(figi))
+            doc, rep = B.build(cache, None, "2026-01-02",
+                               B.Figi(cache / B.FIGI_CACHE), [])
+            k = doc["security"]["BBG000000K01"]
+            self.assertEqual((k["ca"], k["us"]), (["QZK.B.TO"], ["QZK.US"]))
+            r = doc["security"]["BBG000000R01"]
+            self.assertEqual((r["ca"], r["kind"], r["us_otc"]),
+                             (["QZR.UN.TO"], "unit", ["QZRUF.US"]))
+            self.assertEqual(rep["roots_resolved_by_class_spelling"],
+                             ["QZK.B", "QZR.UN"])
+
+    def test_an_openfigi_error_is_not_cached_as_not_found(self):
+        with tempfile.TemporaryDirectory() as td:
+            B = _build_module()
+            fig = B.Figi(Path(td) / "c.json", online=True)
+            fig.PAUSE = 0
+            fig._post = lambda jobs: [{"error": "Invalid idValue."},
+                                      {"warning": "No identifier found."}]
+            jobs = [B.ticker_job("QZE", "CN"), B.ticker_job("QZN", "CN")]
+            self.assertEqual(fig.map(jobs), [None, []])
+            self.assertEqual(fig.errors, 1)
+            self.assertNotIn(B.Figi.key(jobs[0]), fig.cache)
+
+    def test_history_date_replaces_an_earlier_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            B, cache = self._cache(td)
+            hist = [{"name": "QZ ENDED", "share_class_figi": "BBG000000E01",
+                     "ca": ["QZE.TO"], "us": ["QZE.US"]}]
+            fig = B.Figi(cache / B.FIGI_CACHE)
+            prev, _ = B.build(cache, None, "2026-01-02", fig, hist)
+            hist[0]["until"] = "2025-10-22"
+            doc, _ = B.build(cache, prev, "2026-02-01", fig, hist)
+            e = doc["security"]["BBG000000E01"]
+            self.assertEqual(e["until"], "2025-10-22")
+            self.assertEqual(e["history"], [{"listing": "QZE.US",
+                                             "kind": "us",
+                                             "until": "2025-10-22"}])
 
     def test_an_unchanged_rebuild_keeps_its_date(self):
         with tempfile.TemporaryDirectory() as td:

@@ -27,6 +27,16 @@
 - `scripts/build_interlisted.py` rebuilds the master: an offline,
   append-only build from a cache outside the repository; the network
   fetch is a maintainer step.
+  It also resolves a TMX issuer root whose shares trade only as a class
+  or as trust units (the class B line, the `.UN` units), records the US
+  ticker's own company beside each depositary-receipt DISTINCT pair, never
+  caches an OpenFIGI error as "not found", and lets the maintainer's end
+  date for an ended pair replace an earlier `until=unknown`.
+- The interlisted master's first refresh: more Canadian lines (share
+  classes and trust units the issuer list names by their bare root), the
+  Canadian depositary receipts whose root is a US ticker as DISTINCT pairs
+  (two securities), the issuer's country for more exchange-listed pairs,
+  and the ended pairs' dates where known.
 
 ### Changed
 

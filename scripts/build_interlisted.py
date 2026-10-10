@@ -90,6 +90,11 @@ OTHER_EXCH = {"N": "NYSE", "A": "NYSE American", "P": "NYSE Arca",
 RECEIPT_TYPES = ("ADR", "Canadian DR", "NY Reg Shrs", "GDR", "EDR")
 FUND_TYPES = ("Closed-End Fund", "ETP", "Open-End Fund", "Mutual Fund")
 UNIT_TYPES = ("REIT", "Unit", "Ltd Part", "MLP", "Royalty Trst")
+# OpenFIGI CN spellings tried for a TMX workbook root that resolves to
+# nothing: the workbook names the issuer's root, and an issuer whose
+# shares trade only as a class or as trust units is listed under it
+# (TECK -> TECK/B, HR -> HR-U for HR.UN, ACO -> ACO/X).
+CLASS_SPELLINGS = ("-U", "/A", "/B", "/X", "/Y")
 
 
 # ------------------------------------------------------------ spellings
@@ -278,6 +283,7 @@ class Figi:
             self.cache = json.loads(path.read_text(encoding="utf-8"))
         self.requests = 0
         self.missing = 0
+        self.errors = 0
 
     @staticmethod
     def key(job: Dict[str, str]) -> str:
@@ -321,6 +327,10 @@ class Figi:
             for i in range(0, len(todo), self.BATCH):
                 chunk = todo[i:i + self.BATCH]
                 for j, r in zip(chunk, self._post(chunk)):
+                    if "error" in r:
+                        # Not "not found": asked again by the next fetch.
+                        self.errors += 1
+                        continue
                     self.cache[self.key(j)] = r.get("data", []) or []
                 self._save()
                 time.sleep(self.PAUSE)
@@ -434,8 +444,24 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             root_rows[c] = equity(rows)
         else:
             unresolved += 1
+    # A bare issuer root with no share class: its class and unit lines.
+    alt = [(c, c + sfx) for c, rows in zip(roots, res)
+           if not share_classes(rows) and re.fullmatch(r"[A-Z0-9]+", c)
+           for sfx in CLASS_SPELLINGS]
+    by_class_spelling = []
+    for (c, t), rows in zip(alt, figi.map([ticker_job(t, "CN")
+                                            for _c, t in alt])):
+        scs1 = share_classes(rows)
+        ca = bbg_to_tsx(t)
+        if len(scs1) == 1 and ca not in root_sc:
+            cand.setdefault(ca, {"us_hint": set()})
+            root_sc[ca] = scs1.pop()
+            root_rows[ca] = equity(rows)
+            by_class_spelling.append(ca)
+    roots = sorted(cand)
     report["roots_asked"] = len(roots)
     report["roots_resolved"] = len(root_sc)
+    report["roots_resolved_by_class_spelling"] = sorted(by_class_spelling)
     # The hint's US symbol, resolved on its own (it must be the same class).
     hint_syms = sorted({u for c in cand.values() for u in c["us_hint"] if u})
     hres = dict(zip(hint_syms, figi.map([ticker_job(us_to_bbg(u), "US")
@@ -493,9 +519,13 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
         a, b = share_classes(cn), share_classes(us)
         if len(a) == 1 and b and not (a & b):
             sc = next(iter(a))
+            # us_name: the US ticker's own company, which may be another
+            # than the receipt's (a look-alike root: still two securities).
             distinct[sc] = {"name": (equity(cn)[0].get("name") or "").strip(),
                             "kind": "cdr", "ca": book_ca(r),
-                            "us": book_us(r), "us_figi": sorted(b)[0]}
+                            "us": book_us(r), "us_figi": sorted(b)[0],
+                            "us_name": (equity(us)[0].get("name")
+                                        or "").strip()}
     report["cdr_hints"] = len(cdr_roots)
     report["cdr_verified"] = len(distinct)
 
@@ -565,6 +595,7 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
     report["counts"] = dict(counts)
     report["excluded"] = excluded
     report["figi_requests"] = figi.requests
+    report["figi_errors_not_cached"] = figi.errors
     report["figi_not_in_cache"] = figi.missing
     report["unresolved_roots"] = unresolved
     fetched = {}
@@ -639,9 +670,15 @@ def merge_previous(entries: Dict[str, Dict[str, Any]],
                     hist.append({"listing": lst, "kind": field,
                                  "until": today})
         for h in new.get("_ended") or []:
-            if not any(x.get("listing") == h["listing"] for x in hist):
+            old_h = [x for x in hist if x.get("listing") == h["listing"]]
+            if not old_h:
                 hist.append({"listing": h["listing"], "kind": "us",
                              "until": h["until"]})
+            elif h["until"] != "unknown":
+                # The maintainer's date replaces an earlier "unknown".
+                for x in old_h:
+                    if str(x.get("until") or "unknown") == "unknown":
+                        x["until"] = h["until"]
         # A listing back again is current: its history line goes.
         hist = [h for h in hist if h.get("listing") not in cur]
         rec["history"] = hist
