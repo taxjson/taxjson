@@ -20,8 +20,8 @@ are in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md); problems with a known fix are in
 - **Estimate scope.** Canada: federal plus Ontario, British Columbia or Alberta (other provinces, Quebec
   included, are refused). US: single filer, standard deduction, no state tax.
 - **Runs locally; no web UI, no cloud.** Your files stay on your computer. `tjs run` reaches the network
-  only for FX rates (Bank of Canada, Yahoo Finance) and missing crypto prices (Yahoo Finance) on a cache
-  miss; the commands that quote today's prices (`tjs harvest`, `tjs tips --online`) ask Yahoo Finance
+  only for FX rates (Bank of Canada, Yahoo Finance), missing crypto prices and crypto-send values, and
+  the closing price of an in-kind move with no value of its own (Yahoo Finance), each on a cache miss; the commands that quote today's prices (`tjs harvest`, `tjs tips --online`) ask Yahoo Finance
   too. `TAXJSON_OFFLINE=1` forbids all of it. Broker download (`tjs fetch`) is the separate taxjson-fetch
   plugin (Questrade and IBKR Flex). SECURITY.md lists every network call.
 - **Only the listed brokers.** Interactive Brokers, Questrade, RBC Direct Investing, Webull, Kraken and
@@ -44,6 +44,7 @@ are in [KNOWN_ISSUES.md](../KNOWN_ISSUES.md); problems with a known fix are in
 - **Pre-1.0.** The pipeline is stable, but command flags, file layouts and JSON field names can still
   change between releases. Breaking changes, and what to do about each, are listed in
   [docs/upgrading.md](upgrading.md).
+
 ## Limitations by design
 
 Each entry says what taxjson does not do and what to do instead. These are choices, missing data in the
