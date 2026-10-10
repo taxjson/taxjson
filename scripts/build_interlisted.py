@@ -12,7 +12,17 @@ Canada, an ADR / ADS in the US) has a share-class FIGI of its own, so it
 is never paired; a CDR whose root is a US ticker is listed apart, as a
 DISTINCT pair. The master holds no ISIN or CUSIP; an entry's `domicile`
 is the country code of its share class's ISINs (OpenFIGI ISIN lookups in
-the cache), when known.
+the cache), when known. A
+FINRA temporary OTC symbol (fifth letter D) is never shipped: its
+permanent spelling (fifth letter F) when OpenFIGI gives it the same
+class. Coverage: TSX and TSX Venture (not Cboe Canada, not the CSE).
+
+Corrections (the maintainer's history file, load_history): a listing
+shipped in error is retracted (`retracted`, never re-added); an ended US
+ticker that names another security today refuses the build unless the
+entry records `reused_by` (check_reused). Each entry keeps `first_seen`
+and, for a listing added later, `added` (`since`): `taxjson
+update-tobase-map` tells a new line from one the user deleted by them.
 
 The TMX lists (interlisted companies, the TSX / TSXV issuer workbook) are
 HINTS only: they say which roots to ask OpenFIGI about. Nothing from them
@@ -370,25 +380,63 @@ def load_toml(path: Path) -> Dict[str, Any]:
 
 
 def load_history(path: Optional[Path]) -> List[Dict[str, Any]]:
-    """The maintainer's ended interlistings (CACHE/interlisted_history.
-    toml, `[[ended]]` tables: name, kind, share_class_figi, ca, us,
-    until): pairs that no longer trade, so OpenFIGI cannot pair them now.
-    Each names its share-class FIGI (looked up on OpenFIGI); one without
-    is skipped and reported. Once built in, the previous master carries
-    them (append-only)."""
+    """The maintainer's ended interlistings and corrections (CACHE/
+    interlisted_history.toml).
+
+    `[[ended]]`: name, kind, share_class_figi, ca, us (exchange) and/or
+    us_otc listings, until, and optionally `reused_by` (the security the
+    ended US ticker names today: required when it names another one —
+    check_reused — and then taxjson warns on every row of it) and
+    `retracted`. Pairs that no longer trade, so OpenFIGI cannot pair
+    them now (or a stale ticker OpenFIGI still names: the maintainer's
+    end wins). Each names its share-class FIGI (looked up on OpenFIGI);
+    one without is skipped and reported. Once built in, the previous
+    master carries them (append-only).
+
+    `[[correction]]`: share_class_figi and `retracted = [{listing,
+    reason, since}]`: a listing the master shipped wrongly leaves the
+    entry for good (merge_previous)."""
     if path is None or not Path(path).is_file():
         return []
     doc = load_toml(Path(path))
-    out = doc.get("ended") or []
-    return [e for e in out if isinstance(e, dict)]
+    out = [e for e in doc.get("ended") or [] if isinstance(e, dict)]
+    # `[[correction]]`: a current entry's retracted listings only (no
+    # ended pair): `share_class_figi` and `retracted`.
+    out += [dict(e, _correction=True) for e in doc.get("correction") or []
+            if isinstance(e, dict)]
+    return out
+
+
+def retractions(h: Dict[str, Any], today: str) -> List[Dict[str, str]]:
+    """A history table's `retracted = [{listing, reason, since}]`: the
+    listings a correction takes out of the master (never re-added, and
+    `taxjson update-tobase-map` removes an unedited line naming them)."""
+    out = []
+    for r in h.get("retracted") or []:
+        if isinstance(r, dict) and r.get("listing"):
+            out.append({"listing": str(r["listing"]).upper(),
+                        "reason": str(r.get("reason") or "a correction"),
+                        "since": str(r.get("since") or today)})
+    return out
+
+
+# FINRA's fifth-letter identifier D: a new issue or a reverse split, a
+# temporary symbol (about 20 business days) — never the listing to book.
+_TEMP_OTC = re.compile(r"[A-Z]{4}D")
+TEMP_OTC_REASON = ("a FINRA temporary symbol (fifth letter D: a new issue "
+                   "or a reverse split), not the permanent OTC symbol")
 
 
 # ------------------------------------------------------------ build
 
 def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
-          figi: Figi, history: List[Dict[str, Any]]
+          figi: Figi, history: List[Dict[str, Any]],
+          stamp: Optional[str] = None
           ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """(master document, report). Offline unless `figi.online`."""
+    """(master document, report). Offline unless `figi.online`. `stamp`:
+    the master's `generated` value (next_stamp; default `today`), also
+    each new entry's `first_seen` and each new listing's `since`."""
+    stamp = stamp or today
     report: Dict[str, Any] = collections.OrderedDict()
     usdir, us_stamp = load_us_directory(cache)
     tmx_txt = cache / TMX_TXT
@@ -427,6 +475,8 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             continue
         cand.setdefault(root, {"us_hint": set()})
     for h in history:
+        if h.get("_correction"):
+            continue
         for c in h.get("ca") or []:
             if c.endswith(".TO"):
                 cand.setdefault(c[:-3], {"us_hint": set()})
@@ -472,6 +522,16 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
     us_res = dict(zip(scs, figi.map([class_job(s, "US") for s in scs])))
     cn_res = dict(zip(scs, figi.map([class_job(s, "CN") for s in scs])))
 
+    # A temporary OTC symbol (FINRA's fifth letter D): the permanent
+    # spelling (the fifth letter F) when OpenFIGI gives it the same class.
+    temp = sorted({(sc, bbg_to_us(d.get("ticker") or ""))
+                   for sc in scs for d in equity(us_res.get(sc))
+                   if _TEMP_OTC.fullmatch(bbg_to_us(d.get("ticker") or ""))
+                   and not listed(bbg_to_us(d.get("ticker") or ""))})
+    perm = dict(zip(temp, figi.map([ticker_job(t[:-1] + "F", "US")
+                                    for _sc, t in temp])))
+    temp_otc: Dict[str, List[str]] = collections.defaultdict(list)
+    report["otc_temporary_symbols"] = []
     by_sc: Dict[str, Dict[str, Any]] = {}
     adr_like = 0
     for c in roots:
@@ -491,17 +551,28 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             t = bbg_to_us(d.get("ticker") or "")
             if not t:
                 continue
+            if (sc, t) in perm:
+                f = t[:-1] + "F"
+                if sc in share_classes(perm[(sc, t)]):
+                    t = f
+                else:
+                    if book_us(t) not in temp_otc[sc]:
+                        temp_otc[sc].append(book_us(t))
+                        report["otc_temporary_symbols"].append(
+                            {"listing": book_us(t), "share_class_figi": sc,
+                             "permanent": None})
+                    continue
             (us_ex if listed(t) else us_otc).add(t)
         for u in cand[c]["us_hint"]:
             if u and listed(u) and sc in share_classes(hres.get(u)):
                 us_ex.add(u)
-        if not us_ex and not us_otc:
-            continue
         ca_all = {c}
         for d in equity(cn_res.get(sc)):
             t = bbg_to_tsx(d.get("ticker") or "")
             if t and not re.search(r"\.WT(\.|$)|\.PR\.", t):
                 ca_all.add(t)
+        if not us_ex and not us_otc:
+            continue
         e = by_sc.setdefault(sc, {"ca": set(), "us": set(), "us_otc": set(),
                                   "rows": rows})
         e["ca"] |= ca_all
@@ -558,29 +629,53 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             rec["domicile"] = dom[sc]
             report["domicile_known"] += 1
         entries[sc] = rec
-    # Maintainer-entered ended pairs.
+    # Maintainer-entered ended pairs and corrections.
     hist_skipped = []
+    retract: Dict[str, List[Dict[str, str]]] = collections.defaultdict(list)
+    for sc, lst in temp_otc.items():
+        for u in lst:
+            retract[sc].append({"listing": u, "reason": TEMP_OTC_REASON,
+                                "since": today, "_auto": "1"})
     for h in history:
         sc = str(h.get("share_class_figi") or "")
         if not re.fullmatch(r"BBG[0-9A-Z]{9}", sc):
             hist_skipped.append(", ".join(h.get("ca") or []) + " / "
                                 + ", ".join(h.get("us") or []))
             continue
+        retract[sc] += retractions(h, today)
+        if h.get("_correction"):
+            continue
         rec = entries.setdefault(sc, {
             "name": str(h.get("name") or ""), "kind": str(h.get("kind")
                                                           or "share"),
             "share_class_figi": sc, "ca": list(h.get("ca") or []),
             "us": [], "us_exchange": [], "us_otc": []})
-        for u in h.get("us") or []:
-            if u not in rec["us"]:
-                rec.setdefault("_ended", []).append(
-                    {"listing": u, "until": str(h.get("until") or "unknown")})
+        until = str(h.get("until") or "unknown")
+        reused = str(h.get("reused_by") or "")
+        for field in ("us", "us_otc"):
+            for u in h.get(field) or []:
+                u = str(u).upper()
+                # The maintainer's end wins over a listing OpenFIGI still
+                # names (a stale ticker of a former name).
+                if u in rec[field]:
+                    rec[field] = [x for x in rec[field] if x != u]
+                    if field == "us":
+                        rec["us_exchange"] = sorted(
+                            {usdir[x[:-3]]["exchange"] for x in rec["us"]
+                             if x[:-3] in usdir})
+                e = {"listing": u, "kind": field, "until": until}
+                if reused:
+                    e["reused_by"] = reused
+                rec.setdefault("_ended", []).append(e)
         if not rec["us"] and not rec["us_otc"]:
-            rec["_until"] = str(h.get("until") or "unknown")
+            rec["_until"] = until
     report["history_skipped_no_figi"] = hist_skipped
 
     # 7. Merge with the previous master: append-only.
-    doc = merge_previous(entries, distinct, previous, today)
+    doc = merge_previous(entries, distinct, previous, today, retract, stamp)
+    # 8. An ended US listing whose ticker names another security today
+    #    (a reused ticker): refused unless the maintainer recorded it.
+    report["reused_tickers"] = check_reused(doc, figi, usdir)
     counts = collections.Counter()
     for e in doc["security"].values():
         counts["securities"] += 1
@@ -604,7 +699,7 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
         fetched = json.loads(fp.read_text(encoding="utf-8"))
     doc["meta"] = {
         "schema_version": SCHEMA_VERSION,
-        "generated": today,
+        "generated": stamp,
         "sources": [
             {"name": "OpenFIGI v3 mapping API (share-class FIGIs)",
              "as_of": str(fetched.get("openfigi") or today)},
@@ -638,59 +733,135 @@ def issuer_countries(figi: Figi) -> Dict[str, str]:
             if len(c) == 1 and re.fullmatch(r"[A-Z]{2}", next(iter(c)))}
 
 
+def _listings(rec: Dict[str, Any]) -> set:
+    out = {str(x).upper() for k in ("ca", "us", "us_otc")
+           for x in rec.get(k) or []}
+    out |= {str(h.get("listing") or "").upper()
+            for h in rec.get("history") or [] if isinstance(h, dict)}
+    out.discard("")
+    return out
+
+
+def _retract(rec: Dict[str, Any], gone: set) -> None:
+    """Take the retracted listings out of every field of `rec`."""
+    for k in ("ca", "us", "us_otc"):
+        if k in rec:
+            rec[k] = [x for x in rec[k] if str(x).upper() not in gone]
+    if "history" in rec:
+        rec["history"] = [h for h in rec["history"]
+                          if str(h.get("listing") or "").upper() not in gone]
+    if "added" in rec:
+        rec["added"] = [a for a in rec["added"]
+                        if str(a.get("listing") or "").upper() not in gone]
+
+
+def next_stamp(previous: Optional[Dict[str, Any]], today: str) -> str:
+    """The new master's `generated` value: the build date, or on a
+    second changed build the same day `DATE.N` (N = 2, 3, ...): a
+    project's tobase.map stamp then tells the two apart (a stamp is
+    compared as text: "2026-01-02" < "2026-01-02.2" < "2026-01-03")."""
+    prev = str(((previous or {}).get("meta") or {}).get("generated") or "")
+    day, _, n = prev.partition(".")
+    if day != today:
+        return today
+    return f"{today}.{int(n) + 1 if n.isdigit() else 2}"
+
+
 def merge_previous(entries: Dict[str, Dict[str, Any]],
                    distinct: Dict[str, Dict[str, Any]],
-                   previous: Optional[Dict[str, Any]], today: str
-                   ) -> Dict[str, Any]:
+                   previous: Optional[Dict[str, Any]], today: str,
+                   retract: Optional[Dict[str, List[Dict[str, str]]]] = None,
+                   stamp: Optional[str] = None) -> Dict[str, Any]:
     """The new master from this build's entries and the previous master:
     first_seen kept; a listing gone since gets `until` in `history`; a
     whole entry gone keeps every listing and gets `until`; an entry or
-    listing that returns is current again (its history kept)."""
+    listing that returns is current again (its history kept). A listing
+    new to an entry the previous master had is recorded in `added` with
+    the build date (`taxjson update-tobase-map` tells a new line from
+    one the user deleted by it). `retract` ({FIGI: [{listing, reason,
+    since}]}, the maintainer's corrections and the temporary OTC
+    symbols): each listing leaves the entry for good and is recorded in
+    its `retracted` list (carried by every later build, so never
+    re-added); an automatic one (`_auto`) only when the previous master
+    shipped it."""
     prev = (previous or {}).get("security") or {}
+    retract = retract or {}
+    stamp = stamp or today
     out: Dict[str, Dict[str, Any]] = {}
     for sc in sorted(set(prev) | set(entries)):
         old = prev.get(sc) or {}
         new = entries.get(sc)
         hist = [dict(h) for h in (old.get("history") or [])]
+        rlist = [dict(r) for r in (old.get("retracted") or [])]
+        had = _listings(old) | {str(a.get("listing") or "").upper()
+                                for a in old.get("added") or []}
+        for r in retract.get(sc) or []:
+            if r.get("_auto") and r["listing"] not in had:
+                continue
+            if not any(x.get("listing") == r["listing"] for x in rlist):
+                rlist.append({k: v for k, v in r.items()
+                              if not k.startswith("_")})
+        gone = {str(r.get("listing") or "").upper() for r in rlist}
         if new is None:
             rec = {k: v for k, v in old.items()}
-            rec.setdefault("until", today)
             rec["history"] = hist
+            _retract(rec, gone)
+            if _listings(rec) - set(rec.get("ca") or []) or not gone:
+                rec.setdefault("until", today)
+            rec["retracted"] = rlist
             out[sc] = _clean(rec)
             continue
         rec = {k: v for k, v in new.items() if not k.startswith("_")}
         if not rec.get("domicile") and old.get("domicile"):
             rec["domicile"] = old["domicile"]
-        rec["first_seen"] = str(old.get("first_seen") or today)
+        rec["first_seen"] = str(old.get("first_seen") or stamp)
+        _retract(rec, gone)
         cur = set(rec["us"]) | set(rec["us_otc"]) | set(rec["ca"])
+        for h in new.get("_ended") or []:
+            if h["listing"] in gone:
+                continue
+            old_h = [x for x in hist if x.get("listing") == h["listing"]]
+            if not old_h:
+                e = {"listing": h["listing"], "kind": h.get("kind", "us"),
+                     "until": h["until"]}
+                if h.get("reused_by"):
+                    e["reused_by"] = h["reused_by"]
+                hist.append(e)
+                continue
+            for x in old_h:
+                if h["until"] != "unknown" and \
+                        str(x.get("until") or "unknown") == "unknown":
+                    # The maintainer's date replaces an earlier "unknown".
+                    x["until"] = h["until"]
+                if h.get("reused_by"):
+                    x["reused_by"] = h["reused_by"]
         for field in ("us", "us_otc", "ca"):
             for lst in old.get(field) or []:
-                if lst not in cur and not any(
+                if lst not in cur and lst not in gone and not any(
                         h.get("listing") == lst for h in hist):
                     hist.append({"listing": lst, "kind": field,
                                  "until": today})
-        for h in new.get("_ended") or []:
-            old_h = [x for x in hist if x.get("listing") == h["listing"]]
-            if not old_h:
-                hist.append({"listing": h["listing"], "kind": "us",
-                             "until": h["until"]})
-            elif h["until"] != "unknown":
-                # The maintainer's date replaces an earlier "unknown".
-                for x in old_h:
-                    if str(x.get("until") or "unknown") == "unknown":
-                        x["until"] = h["until"]
         # A listing back again is current: its history line goes.
-        hist = [h for h in hist if h.get("listing") not in cur]
+        hist = [h for h in hist if h.get("listing") not in cur
+                and h.get("listing") not in gone]
         rec["history"] = hist
         if new.get("_until"):
             rec["until"] = new["_until"]
-            rec["first_seen"] = str(old.get("first_seen") or "unknown")
+            rec["first_seen"] = str(old.get("first_seen") or stamp)
+        added = [dict(a) for a in old.get("added") or []
+                 if str(a.get("listing") or "").upper() not in gone]
+        if old:
+            for lst in sorted(_listings(rec) - had):
+                added.append({"listing": lst, "since": stamp})
+        rec["added"] = added
+        rec["retracted"] = rlist
         out[sc] = _clean(rec)
     pd = (previous or {}).get("distinct") or {}
     dout = {}
     for sc in sorted(set(pd) | set(distinct)):
         rec = dict(distinct.get(sc) or pd[sc])
-        rec["first_seen"] = str((pd.get(sc) or {}).get("first_seen") or today)
+        rec["first_seen"] = str((pd.get(sc) or {}).get("first_seen")
+                                or stamp)
         if sc not in distinct:
             rec.setdefault("until", today)
         dout[sc] = rec
@@ -699,12 +870,45 @@ def merge_previous(entries: Dict[str, Dict[str, Any]],
 
 def _clean(rec: Dict[str, Any]) -> Dict[str, Any]:
     order = ("name", "kind", "share_class_figi", "domicile", "ca", "us",
-             "us_exchange", "us_otc", "first_seen", "until", "history")
+             "us_exchange", "us_otc", "first_seen", "until", "history",
+             "added", "retracted")
     out = {k: rec[k] for k in order if k in rec and rec[k] not in (None,)}
-    if not out.get("us_otc"):
-        out.pop("us_otc", None)
-    if not out.get("history"):
-        out.pop("history", None)
+    for k in ("us_otc", "history", "added", "retracted"):
+        if not out.get(k):
+            out.pop(k, None)
+    return out
+
+
+def check_reused(doc: Dict[str, Any], figi: Figi,
+                 usdir: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every ended US listing of the master (an entry's `history`) whose
+    ticker today names another security: OpenFIGI's US ticker lookup
+    gives other share classes only, or the Nasdaq Trader directory lists
+    it and OpenFIGI does not give the entry's class. Each record says
+    whether the maintainer recorded it (`reused_by`); an unrecorded one
+    refuses the build (main). A lookup the cache lacks is not verified
+    (counted in figi_not_in_cache: `--fetch` asks for it)."""
+    items = []
+    for sc, e in doc["security"].items():
+        for h in e.get("history") or []:
+            lst = str(h.get("listing") or "").upper()
+            if h.get("kind") in ("us", "us_otc") and lst.endswith(".US"):
+                items.append((sc, e, h, lst[:-3]))
+    res = figi.map([ticker_job(us_to_bbg(t), "US") for _sc, _e, _h, t
+                    in items])
+    out = []
+    for (sc, e, h, t), rows in zip(items, res):
+        scs = share_classes(rows)
+        other = ""
+        if scs and sc not in scs:
+            other = "; ".join(sorted({(d.get("name") or "").strip()
+                                      for d in equity(rows)}))
+        elif t in usdir and not usdir[t]["test"] and sc not in scs:
+            other = f"the Nasdaq Trader directory lists {t}"
+        if other:
+            out.append({"listing": h["listing"], "share_class_figi": sc,
+                        "name": e.get("name"), "today": other,
+                        "recorded": bool(h.get("reused_by"))})
     return out
 
 
@@ -819,7 +1023,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     previous = load_toml(prev_path) if prev_path.is_file() else None
     figi = Figi(a.cache / FIGI_CACHE, online=a.fetch)
     doc, report = build(a.cache, previous, today, figi,
-                        load_history(a.history or a.cache / HISTORY))
+                        load_history(a.history or a.cache / HISTORY),
+                        stamp=next_stamp(previous, today))
+    unrec = [r for r in report["reused_tickers"] if not r["recorded"]]
+    if unrec:
+        for r in unrec:
+            print(f"build_interlisted: {r['listing']} (an ended listing of "
+                  f"{r['name']}, {r['share_class_figi']}) names another "
+                  f"security today: {r['today']} — fix the pair in "
+                  f"interlisted_history.toml (`retracted` if it was "
+                  f"wrong) or record the reuse (`reused_by = \"<name>\"`)",
+                  file=sys.stderr)
+        print("build_interlisted: refused: the master is not written",
+              file=sys.stderr)
+        if a.report:
+            a.report.write_text(json.dumps(report, indent=1, default=list)
+                                + "\n", encoding="utf-8")
+        return 3
     if previous and previous.get("security") == doc["security"] and \
             (previous.get("distinct") or {}) == doc["distinct"]:
         # Nothing changed: the master keeps its date and sources (a
@@ -838,6 +1058,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                       "figi_not_in_cache", "roots_asked",
                                       "roots_resolved", "cdr_hints",
                                       "cdr_verified")}
+    summary["otc_temporary_symbols"] = len(report["otc_temporary_symbols"])
+    summary["reused_tickers_recorded"] = len(report["reused_tickers"])
     print(json.dumps(summary, indent=1), file=sys.stderr)
     if report["figi_not_in_cache"] and not a.fetch:
         print(f"build_interlisted: {report['figi_not_in_cache']} OpenFIGI "

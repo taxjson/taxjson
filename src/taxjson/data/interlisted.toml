@@ -9,7 +9,7 @@
 
 [meta]
 schema_version = 1
-generated = "2026-10-09"
+generated = "2026-10-09.2"
 sources = [
   { name = "OpenFIGI v3 mapping API (share-class FIGIs)", as_of = "2026-10-09" },
   { name = "Nasdaq Trader symbol directory (US exchange listings)", as_of = "2026-10-09" },
@@ -1582,8 +1582,8 @@ share_class_figi = "BBG001S5ZM08"
 ca = ["SKP.TO"]
 us = []
 us_exchange = []
-us_otc = ["STKXD.US"]
 first_seen = "2026-10-09"
+retracted = [{ listing = "STKXD.US", reason = "a FINRA temporary symbol (fifth letter D: a new issue or a reverse split), not the permanent OTC symbol", since = "2026-10-09" }]
 
 [security.BBG001S5ZMW3]
 name = "MONUMENT MINING LTD"
@@ -2405,8 +2405,8 @@ share_class_figi = "BBG001S64437"
 ca = ["PPM.TO"]
 us = []
 us_exchange = []
-us_otc = ["PCIMD.US"]
 first_seen = "2026-10-09"
+retracted = [{ listing = "PCIMD.US", reason = "a FINRA temporary symbol (fifth letter D: a new issue or a reverse split), not the permanent OTC symbol", since = "2026-10-09" }]
 
 [security.BBG001S645M3]
 name = "FUTURE FUELS INC"
@@ -4288,8 +4288,9 @@ share_class_figi = "BBG001S879H4"
 ca = ["OBUL.TO"]
 us = []
 us_exchange = []
-us_otc = ["IGPFF.US", "OBULF.US"]
+us_otc = ["OBULF.US"]
 first_seen = "2026-10-09"
+history = [{ listing = "IGPFF.US", kind = "us_otc", until = "unknown" }]
 
 [security.BBG001S87M94]
 name = "DIAMCOR MINING INC"
@@ -4734,8 +4735,8 @@ share_class_figi = "BBG001S911N8"
 ca = ["VLI.TO"]
 us = []
 us_exchange = []
-us_otc = ["ABEPD.US"]
 first_seen = "2026-10-09"
+retracted = [{ listing = "ABEPD.US", reason = "a FINRA temporary symbol (fifth letter D: a new issue or a reverse split), not the permanent OTC symbol", since = "2026-10-09" }]
 
 [security.BBG001S91BF5]
 name = "MIDLAND EXPLORATION INC"
@@ -5001,6 +5002,17 @@ us = []
 us_exchange = []
 us_otc = ["LIFZF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG001S9CTR1]
+name = "EMX ROYALTY CORP"
+kind = "share"
+share_class_figi = "BBG001S9CTR1"
+ca = ["EMX.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.2"
+until = "unknown"
+history = [{ listing = "EMX.US", kind = "us", until = "unknown" }]
 
 [security.BBG001S9CXM7]
 name = "CELESTICA INC"
@@ -7042,8 +7054,8 @@ share_class_figi = "BBG001SF9J02"
 ca = ["FEX.TO"]
 us = []
 us_exchange = []
-us_otc = ["FEXXD.US"]
 first_seen = "2026-10-09"
+retracted = [{ listing = "FEXXD.US", reason = "a FINRA temporary symbol (fifth letter D: a new issue or a reverse split), not the permanent OTC symbol", since = "2026-10-09" }]
 
 [security.BBG001SF9ML2]
 name = "SANTACRUZ SILVER MINING LTD"
@@ -8746,6 +8758,17 @@ us = ["ITRG.US"]
 us_exchange = ["NYSE American"]
 first_seen = "2026-10-09"
 
+[security.BBG001SLX655]
+name = "GRANITE REAL ESTATE INVESTME"
+kind = "unit"
+share_class_figi = "BBG001SLX655"
+ca = ["GRT.UN.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.2"
+until = "unknown"
+history = [{ listing = "GRP.U.US", kind = "us", until = "unknown" }]
+
 [security.BBG001SLXYL6]
 name = "SUPREMEX INC"
 kind = "share"
@@ -10130,7 +10153,9 @@ us = []
 us_exchange = []
 first_seen = "unknown"
 until = "2025-10-22"
-history = [{ listing = "SSL.US", kind = "us", until = "2025-10-22" }]
+history = [{ listing = "SAND.US", kind = "us", until = "2025-10-22" }]
+added = [{ listing = "SAND.US", since = "2026-10-09.2" }]
+retracted = [{ listing = "SSL.US", reason = "SSL on the NYSE is Sasol Ltd's ADR, not Sandstorm Gold (its NYSE ticker was SAND)", since = "2026-10-09" }]
 
 [security.BBG001SSSS94]
 name = "PINNACLE SILVER AND GOLD COR"
@@ -13569,6 +13594,8 @@ ca = ["DOO.TO"]
 us = ["DOO.US"]
 us_exchange = ["Nasdaq"]
 first_seen = "2026-10-09"
+history = [{ listing = "DOOO.US", kind = "us", until = "unknown" }]
+added = [{ listing = "DOOO.US", since = "2026-10-09.2" }]
 
 [security.BBG004MB7QR8]
 name = "DREAM UNLIMITED-CL A SUB VOT"
@@ -17042,8 +17069,8 @@ share_class_figi = "BBG01249R4X6"
 ca = ["CUEX.TO"]
 us = []
 us_exchange = []
-us_otc = ["CUEXD.US"]
 first_seen = "2026-10-09"
+retracted = [{ listing = "CUEXD.US", reason = "a FINRA temporary symbol (fifth letter D: a new issue or a reverse split), not the permanent OTC symbol", since = "2026-10-09" }]
 
 [security.BBG0127R5RS2]
 name = "GRAPHANO ENERGY LTD"
@@ -18239,7 +18266,7 @@ us = []
 us_exchange = []
 us_otc = ["GRTUF.US"]
 first_seen = "2026-10-09"
-history = [{ listing = "GRP.U.US", kind = "us", until = "unknown" }]
+retracted = [{ listing = "GRP.U.US", reason = "GRP.U is the US ticker of Granite's earlier stapled units, another share class (entered under it)", since = "2026-10-09" }]
 
 [security.BBG01Q54KQG0]
 name = "LITHIUM AFRICA CORP"
