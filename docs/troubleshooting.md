@@ -208,6 +208,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `d_inputs_committed`, `project's git repository`
 
+### "Error: this project needs taxjson 0.27.1 or newer (installed: 0.27.0) — upgrade: `tjs deploy` or re-run the installer" (or "2026/ needs taxjson …")
+- **Check:** `tjs --version`, and `grep requires_taxjson taxjson.toml` (in the folder holding the year folders, each year's): the project records the oldest taxjson its layout runs on. Every command stops here, exit 2, before reading anything else. "Error: [settings] requires_taxjson must be ">=X.Y.Z", …" means the value itself is not that form.
+- **Cause:** the project was made or converted by a newer taxjson (`init`, `new-year`, `migrate`, `update-tobase-map --write`), and its layout needs that release: an older one ignored settings it did not know — a project with one shared tobase.map (`tobase_map = "../tobase.map"`, v0.27.1) run with v0.27.0 read no tobase.map at all and failed on an unrelated line, and could have computed other figures without a word.
+- **Fix:** upgrade: `tjs deploy` on a development checkout, otherwise re-run the installer. Do not lower the value by hand: the layout really needs that release. A malformed value: write it as `requires_taxjson = ">=0.27.1"` (`tjs migrate` writes the right one).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/requires.py` — `FEATURES`, `problem`, `raise_requirement`; `src/taxjson/bin/taxjson_run.py` — `_refuse_newer_projects`, `_refuse_newer_config`
+
 ### "Error: [settings] country is missing — set it to "canada" or "usa"", "Error: missing [settings] year in taxjson.toml" or "Error: [settings] year = 2204 is not a plausible tax year (expected 1900..2027)"
 - **Check:** every command stops at "Checking the project" (exit 1). An invalid country reads "[settings] country must be canada, ca, usa or us, got 'Ontario'".
 - **Cause:** `country` and `year` are required and never guessed. The country decides every tax rule, the base currency and which settings are valid; the year must be a whole number from 1900 to next year (a typo such as 2204 would build empty books).
@@ -224,10 +231,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### "Warning: taxjson.toml: unknown [settings] key 'taxdate' is ignored (did you mean 'tax_date'?)"
 - **Check:** the same form names other places: "unknown top-level table [estimates] is ignored (did you mean 'estimate'?)", "unknown [accounts.qt] key 'transfer' is ignored (did you mean 'transfers'?)". `tjs format` lists the keys the template does not know.
-- **Cause:** a misspelled key or table is not read, so its default applies (an `[estimates]` table means 0 other income in `tjs estimate`).
-- **Fix:** correct the spelling as suggested. `tjs format` shows every key the country's projects read, with its description and default.
+- **Cause:** a misspelled key or table is not read, so its default applies (an `[estimates]` table means 0 other income in `tjs estimate`). An unknown `[settings]` key is said by every command (from v0.28.2; before, by `tjs run` only), once: it may also be a setting of a newer taxjson than the one installed (`tjs --version`).
+- **Fix:** correct the spelling as suggested. `tjs format` shows every key the country's projects read, with its description and default. A key a newer release added: upgrade.
 - **Fixed in:** —
-- **Code:** `src/taxjson/bin/taxjson_run.py` — `validate_config`, `_config_table_warnings`, `unknown top-level`
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `validate_config`, `_config_table_warnings`, `_unknown_setting_warnings`, `unknown top-level`
 
 ### "Error: [settings] ric_january_dividends is United States-only (…); this project is country = "canada" — remove it"
 - **Check:** every command stops at "Checking the project" (exit 1). The reverse happens for a Canada-only key such as `province`, `option_premium_timing` or `corporate_distributions` in a US project, and for a `base_currency` that is not the country's.

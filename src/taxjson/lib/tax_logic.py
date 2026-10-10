@@ -100,6 +100,8 @@ NON_RULE_SETTINGS: Dict[str, str] = {
     "source_currencies": "which FX rate series are fetched",
     "cross_asset": "retired; warned about and ignored",
     "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
+    "requires_taxjson": "the oldest taxjson that runs the project; an "
+                        "older one refuses it (no tax figure reads it)",
 }
 
 

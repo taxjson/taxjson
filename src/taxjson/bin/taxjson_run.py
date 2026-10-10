@@ -983,6 +983,9 @@ def load_config(root: Path) -> Dict[str, Any]:
     path = root / "taxjson.toml"
     if not path.exists():
         _die(f"no taxjson.toml in {root}. Run `taxjson init` first.")
+    # First: a project made for a newer taxjson is refused before any
+    # other check reads it with this version's rules (lib/requires).
+    _refuse_newer_config(path)
     _refuse_unreadable_project_inputs(root)
     text = _read_config_text(path)
     try:
@@ -1030,6 +1033,51 @@ def load_config(root: Path) -> Dict[str, Any]:
     # folder above the inputs (lib/project_layout.project_of_input).
     _os.environ[_PL.ENV_PROJECT_ROOT] = str(Path(root).resolve())
     return cfg
+
+
+def _refuse_newer_config(path: Path, where: str = "this project"
+                         ) -> Optional[Dict[str, Any]]:
+    """Exit 2 when taxjson.toml at `path` records a requires_taxjson
+    newer than this taxjson (or one that is not ">=X.Y.Z"):
+    lib/requires. The parsed file; None when it cannot be read or
+    parsed (left to the reader, which says why)."""
+    from taxjson.lib import requires as _REQ
+    try:
+        cfg = tomllib.loads(path.read_bytes().decode("utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return None
+    why = _REQ.problem(cfg.get("settings"), where)
+    if why:
+        _die_input(why)
+    return cfg
+
+
+def _refuse_newer_projects(args: argparse.Namespace) -> None:
+    """Every command, before anything else: the project in -C (and, for
+    the commands that work on the folder holding the years, or from a
+    folder with no taxjson.toml, every year folder beside it) must not
+    need a newer taxjson (lib/requires)."""
+    if args.cmd in ("help", "tax-logic") + _RELEASE_CMDS:
+        return
+    root = Path((getattr(args, "path", None) if args.cmd == "init"
+                 else None) or args.dir)
+    if not root.is_dir():
+        return
+    own = root / _PL.CONFIG
+    cfg = _refuse_newer_config(own) if own.is_file() else None
+    if cfg is not None and args.cmd not in ("run", "init"):
+        # A key this taxjson does not read is ignored: said, one line
+        # each (`run` says it with its other config warnings).
+        for _msg in _unknown_setting_warnings(cfg):
+            _warn_config_once(_msg)
+    if own.is_file() and args.cmd not in _YEARS_ROOT_CMDS | {"align"}:
+        return
+    top = _PL.multi_root(root)
+    if top is None:
+        return
+    for y, d in _PL.year_dirs(top):
+        if d.resolve() != root.resolve():
+            _refuse_newer_config(d / _PL.CONFIG, f"{y}/")
 
 
 def _refuse_folder_settings(root: Path, cfg: Dict[str, Any]) -> None:
@@ -1187,6 +1235,26 @@ def _config_table_warnings(cfg: Dict[str, Any]) -> List[str]:
 
 
 _CONFIG_WARNED: set = set()
+
+
+def _unknown_setting_warnings(cfg: Dict[str, Any]) -> List[str]:
+    """One warning per [settings] key this taxjson does not read."""
+    settings = cfg.get("settings")
+    if not isinstance(settings, dict):
+        return []
+    return [f"unknown [settings] key {key!r} is ignored"
+            f"{_did_you_mean(key, _SETTINGS_KEYS)}"
+            for key in settings if key not in _SETTINGS_KEYS]
+
+
+def _warn_config_once(msg: str) -> None:
+    """`taxjson <cmd>: warning: taxjson.toml: <msg>` on stderr, once per
+    process."""
+    if msg in _CONFIG_WARNED:
+        return
+    _CONFIG_WARNED.add(msg)
+    emit_line(f"{_cmd_prog()}: warning: taxjson.toml: {msg}",
+              file=sys.stderr)
 
 
 def _warn_config_tables(root: Path) -> None:
@@ -1755,6 +1823,8 @@ def validate_config(cfg: Dict[str, Any],
         if key not in _SETTINGS_KEYS:
             warnings.append(f"unknown [settings] key {key!r} is ignored"
                             f"{_suggest(key, _SETTINGS_KEYS)}")
+    # Said here: a command chained after the run does not repeat it.
+    _CONFIG_WARNED.update(_unknown_setting_warnings(cfg))
 
     year = settings.get("year")
     if year is not None and not isinstance(year, int):
@@ -4090,6 +4160,57 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
 
 
 def cmd_migrate(args: argparse.Namespace) -> None:
+    """`taxjson migrate`: _migrate_steps, then each project it covers
+    records the oldest taxjson its layout now needs (`[settings]
+    requires_taxjson`, lib/requires; never lowered)."""
+    _migrate_steps(args)
+    if not getattr(args, "dry_run", False):
+        _raise_requirements(Path(args.dir).resolve(),
+                            ("missing_history_tt",), all_years=True)
+
+
+def _raise_requirements(root: Path, features: Tuple[str, ...] = (),
+                        all_years: bool = False,
+                        dirs: Optional[List[Path]] = None,
+                        quiet: bool = False) -> None:
+    """Raise requires_taxjson (lib/requires.raise_requirement) in project
+    `root` — with `all_years` in every year folder of its multi-year
+    project, or in each of `dirs` — and say what was set in one line
+    (not with `quiet`: --json)."""
+    from taxjson.lib import requires as _REQ
+    from taxjson.lib.missing_history import MISSING_HISTORY_FILES
+    top = _PL.multi_root(root) if all_years or dirs else None
+    if dirs is None:
+        dirs = ([d for _y, d in _PL.year_dirs(top)] if all_years
+                and top is not None else
+                [root] if _PL.has_config(root) else [])
+    base = top or root
+    done: Dict[str, List[str]] = {}
+    for d in dirs:
+        feats = tuple(f for f in features
+                      if f != "missing_history_tt"
+                      or not any(_os_lexists(d / n)
+                                 for n in MISSING_HISTORY_FILES))
+        try:
+            new = _REQ.raise_requirement(d, feats)
+        except (OSError, ValueError) as e:
+            _die_input(f"cannot record the taxjson version "
+                       f"{_PL.shown(d / _PL.CONFIG, base)} needs: {e}")
+        if new is not None:
+            done.setdefault(new, []).append(
+                _PL.shown(d / _PL.CONFIG, base))
+    for new, where in sorted(done.items()):
+        if not quiet:
+            print(f"[settings] {_REQ.KEY} = \"{new}\" (the oldest "
+                  f"taxjson this layout runs on) in {', '.join(where)}")
+
+
+def _os_lexists(p: Path) -> bool:
+    import os as _os
+    return _os.path.lexists(p)
+
+
+def _migrate_steps(args: argparse.Namespace) -> None:
     """`taxjson migrate [--dry-run]`: move an old project's per-purpose
     files into ticker.map (QUOTE / CRYPTO / EXTRACT / T1135 lines) and
     taxjson.toml ([estimate] amt_carryover, [carryover] claimed,
@@ -23737,6 +23858,10 @@ def _write_missing_history_tt(root: Path, cache: Path,
         _die_input(f"{flag}: {e}")
     except OSError as e:
         _die_input(f"{flag}: cannot write: {e}")
+    # OPENING cost=unknown lines: read from v0.27.0 (lib/requires); with
+    # shared exports by every year.
+    _raise_requirements(root, ("missing_history_tt",),
+                        all_years=_PL.shared_inputs(root), quiet=True)
     for p in written:
         acct = p.parent.name
         print(f"Wrote {len(plan.add[acct])} OPENING cost=unknown line(s) to "
@@ -24522,13 +24647,15 @@ def cmd_init(args: argparse.Namespace) -> None:
         _die(f"{cfg} already exists (use --force to overwrite)")
 
     # The config is (re)written — the guard above already enforces --force.
+    _layout = ({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
+                _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
+                # Canada: the interlisted pairs, one file every year reads.
+                **({_PL.TOBASE_KEY: _PL.SHARED_TOBASE}
+                   if country == "canada" else {})} if years else {})
     config_text, account_names = _render_init_config(
         country, getattr(args, "year", None),
-        ({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
-          _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
-          # Canada: the interlisted pairs, one file every year reads.
-          **({_PL.TOBASE_KEY: _PL.SHARED_TOBASE}
-             if country == "canada" else {})} if years else None),
+        {**_layout, _REQ_KEY: _init_requires(cfg, country, _layout,
+                                             own_tobase=not years)},
         grant_since=(_sibling_grant_since(top, first_year)
                      if years and country == "canada" else None))
     # The write boundary BEFORE anything is created (#45): a folder the
@@ -24750,6 +24877,30 @@ def _init_filing_hint(year_given: Optional[int], first_year: int,
               + " for its folder.")
 
 
+_REQ_KEY = "requires_taxjson"         # lib/requires.KEY
+
+
+def _init_requires(cfg: Path, country: str, layout: Dict[str, Any],
+                   own_tobase: bool) -> str:
+    """The requires_taxjson `taxjson init` writes: the release that
+    reads the layout it makes (lib/requires.FEATURES) — the previous
+    config's value when `--force` re-templates one that asks for more
+    (never lowered)."""
+    from taxjson.lib import requires as _REQ
+    old = None
+    if cfg.is_file():
+        try:
+            old = (tomllib.loads(_read_config_text(cfg)).get("settings")
+                   or {}).get(_REQ.KEY)
+            _REQ.parse_spec(old)
+        except Exception:                               # noqa: BLE001
+            old = None
+    feats = (_REQ.features_of({"country": country, **layout},
+                              own_tobase=own_tobase)
+             | set(_REQ.INIT_FEATURES))
+    return _REQ.raised(old, feats) or old
+
+
 def _init_demo(args: argparse.Namespace) -> None:
     """`taxjson init --demo [DIR]`: the demo project (lib/demo) — DIR
     (new or empty) holding inputs/ with the made-up exports, tobase.map
@@ -24789,6 +24940,8 @@ def _init_demo(args: argparse.Namespace) -> None:
     doc["settings"].update({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
                             _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
                             _PL.TOBASE_KEY: _PL.SHARED_TOBASE})
+    doc["settings"][_REQ_KEY] = _init_requires(
+        root / _PL.CONFIG, DM.COUNTRY, doc["settings"], own_tobase=False)
     doc["accounts"] = {n: dict(c) for n, c in DM.ACCOUNTS}
     (root / _PL.HOLDINGS).mkdir(parents=True, exist_ok=True, mode=0o700)
     write_atomic(root / "taxjson.toml",
@@ -25199,6 +25352,17 @@ def cmd_new_year(args: argparse.Namespace) -> None:
               if (prev / n).is_file()
               and not _os_path_lexists(folder / n)]
     try:
+        # The oldest taxjson the copy runs on: last year's, raised for
+        # its own layout (lib/requires) — computed here, so the copy is
+        # published complete (_new_year_publish).
+        from taxjson.lib.requires import raised_text as _req_raised
+        new_text = _req_raised(
+            new_text, own_tobase=(_legacy_tobase or (
+                folder / _PL.TOBASE_MAP).is_file()))
+    except (_PL.LayoutError, ValueError) as e:
+        _die_input(f"{prev_year}/taxjson.toml cannot be copied: {e}",
+                   "Nothing was created.")
+    try:
         hold = _PL.folder_setting(folder, _PL.HOLDINGS_KEY, new_settings)
     except _PL.LayoutError:
         hold = None                 # said by the new year's run
@@ -25417,6 +25581,7 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                   + (f"in each year that reads it ({_yrs_text}) "
                      if shared else "")
                   + "to rebuild the books with it.")
+        _raise_requirements(root, dirs=readers, quiet=args.json)
         return
     plan = TB.plan_update(master, tob, books, ticker_text, shared=shared)
     in_books = [g for g in plan.added
@@ -25589,6 +25754,7 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
               + (f"in each year that reads it ({_yrs_text}) "
                  if shared else "")
               + "to rebuild the books with it.")
+    _raise_requirements(root, dirs=readers, quiet=args.json)
 
 
 def _tobase_root_year(top: Path, as_json: bool) -> Path:
@@ -25718,9 +25884,12 @@ def cmd_align(args: argparse.Namespace) -> None:
         return ans.startswith("y")
     lines = [r for r in c["map_only_there"]
              if _ask(f"add to ticker.map: {r}")]
-    # The accounts' order (GitHub #42) is shown, never rewritten.
+    # The accounts' order (GitHub #42) is shown, never rewritten;
+    # requires_taxjson is never lowered or removed (lib/requires).
+    from taxjson.lib import requires as _REQ
     order = next((k for k in c["keys"] if k.get("order")), None)
     keys = [k for k in c["keys"] if not k.get("order")
+            and not _REQ.lowers(k["key"], k["here"], k["there"])
             and _ask(f"set {k['key']} = {_setting_text(k['there'])}")]
     done = []
     skipped: List[Tuple[str, List[str]]] = []
@@ -25761,13 +25930,17 @@ def cmd_align(args: argparse.Namespace) -> None:
     cfg = root / "taxjson.toml"
     cfg_text: Optional[str] = None
     if keys:
-        text = _read_config_text(cfg)
+        text = _before = _read_config_text(cfg)
         try:
             for k in keys:
                 # (set_key_text reads the result back: it must be this
                 # file with exactly that key changed.)
                 text = _PL.set_key_text(text, tuple(k["path"]), k["there"])
-        except _PL.LayoutError as e:
+            # A setting brought over may need a newer taxjson: raised
+            # for the layout features the keys added (never lowered).
+            text = _REQ.raised_text(text, since=_before, own_tobase=(
+                root / _PL.TOBASE_MAP).is_file())
+        except (_PL.LayoutError, ValueError) as e:
             _die_input(f"{cfg.name}: {e}", "Nothing was written (neither "
                        "ticker.map nor taxjson.toml).")
         cfg_text = text
@@ -27680,6 +27853,8 @@ def _main() -> None:
             # `taxjson run` first)" — send the user to the real problem.
             _die_input(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
+        # A project that needs a newer taxjson: before any other check.
+        _refuse_newer_projects(args)
         _refuse_years_root(args)
         if args.cmd not in ("init", "help", "migrate", "checklist") \
                 + _RELEASE_CMDS:

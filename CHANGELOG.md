@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added
+
+- A project records the oldest taxjson its layout needs, `[settings]
+  requires_taxjson = ">=X.Y.Z"`, and every command of an older taxjson
+  stops before reading anything else with one line: "this project needs
+  taxjson X.Y.Z or newer (installed: A.B.C)" (exit 2). An older release
+  ignored a setting it did not know: a project with one shared
+  tobase.map (`tobase_map`, v0.27.1) run with v0.27.0 read no tobase.map
+  and failed on an unrelated line. `taxjson init` writes the release its
+  layout needs (0.27.1 for a Canadian project of year folders, else
+  0.27.0); `new-year`, `migrate` (the layout it migrated to),
+  `update-tobase-map --write`, `find-missing-history
+  --write-missing-history` and `align --write` raise it; none lowers it.
+  A value that is not `">=X.Y.Z"` stops every command, naming the key.
+- Every command, not only `taxjson run`, warns in one line about a
+  `[settings]` key it does not read (a misspelling, or a setting of a
+  newer taxjson).
+
 ### Fixed
 
 - Every edit of taxjson.toml by `align`, `migrate` and `new-year` now reads the keys as TOML does and reads the result back: it must be the file with exactly that key changed, or the command stops and writes nothing (it never writes a file that reads differently).
@@ -29,6 +47,7 @@
 - Two account names that differ only by letter case (`Margin` and `margin`) are refused with a message naming both: their folders and holdings snapshots could not be told apart, and one account received the other's positions (#48).
 - `tjs elect ACCOUNT` (and `--json`) no longer lists the sheltered-default events of a longer-named account whose name starts with ACCOUNT and `_` (#50).
 - The run's closing "accounts with positions not checked against the broker's holdings" line no longer counts an account whose `holdings/` snapshot the positions check found (by broker account id or file name) and compared; an account with no snapshot is still listed. `tjs sanity`'s `UNCHECKED:` line now says a holdings/ snapshot also counts.
+
 ### Security
 
 - The pre-push hook scans every merge commit's own patch too (#33): a

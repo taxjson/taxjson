@@ -176,7 +176,9 @@ class TestSharedTobaseMigration(unittest.TestCase):
         st = _doc(top / "2024")["settings"]
         self.assertEqual(st, {"country": "canada", "year": 2024,
                               "inputs_dir": "../inputs",
-                              "tobase_map": "../tobase.map"})
+                              "tobase_map": "../tobase.map",
+                              # the layout migrated to (lib/requires)
+                              "requires_taxjson": ">=0.27.1"})
         self.assertTrue((top / "tobase.map").is_file())
         self.assertFalse((top / "2024" / "tobase.map").exists())
 
@@ -356,7 +358,9 @@ class TestNewYear(unittest.TestCase):
         self.assertEqual(_doc(top / "2025"), {"settings": {
             "country": "canada", "year": 2025, "inputs_dir": "../inputs",
             "option_grant_timing_since": 2023,
-            "prior_year_record": "../2024/filed/2024.json"}})
+            "prior_year_record": "../2024/filed/2024.json",
+            # shared exports (inputs_dir): lib/requires
+            "requires_taxjson": ">=0.26.0"}})
 
     def test_dotted_settings(self):
         """#39."""
