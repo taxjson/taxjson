@@ -197,6 +197,11 @@ _ROLLUPS = {
              "For a mini or an adjusted series add `MULT <ROOT> N` to "
              "ticker.map."),
 }
+# kind -> one-line form for a few labels.
+_ROLLUP_LINE = {
+    "mult": (lambda names: f"{names}: 100 shares per option contract "
+             f"ASSUMED — `MULT <ROOT> N` in ticker.map if not"),
+}
 _ROLLED: Dict[str, list] = {}
 # flush_notes is registered with atexit once per process.
 _AT_EXIT = False
@@ -217,6 +222,10 @@ def flush_notes(file=None) -> None:
     from taxjson.lib import out
     for kind in sorted(_ROLLED):
         labels = sorted(set(_ROLLED[kind]))
+        if kind in _ROLLUP_LINE and len(labels) <= 3:
+            # One line (docs/output-style.md, Essentials first).
+            out.note(_ROLLUP_LINE[kind](", ".join(labels)), file=file)
+            continue
         head, advice = _ROLLUPS[kind]
         out.note(head(len(labels)), details=[", ".join(labels) + ".",
                                              advice],

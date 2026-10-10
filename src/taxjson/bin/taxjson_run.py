@@ -18188,6 +18188,8 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     rows.sort(key=lambda r: (r[0], r[1], str(r[2].get("symbol") or "")))
 
     from taxjson.lib.out import Doc
+    from taxjson.lib.out import act as _out_act
+    from taxjson.lib.out import details_hint as _out_details_hint
 
     # The user's filing positions against the rule (.tt ALLOWLOSS): the
     # loss is allowed, so the table never shows it (CA-SL-18 /
@@ -18200,7 +18202,24 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     _positions = [p for p in _LO.positions(_lo_items, year, _lo_basis)
                   if p["in_year"]]
 
+    _det = _details(args)
+    _ws_cmd = "tjs wash-sales --details"
+
     def _flags_section(doc):
+        if not _det:
+            # Essentials first (docs/output-style.md): one act-on line
+            # each; --details lists them.
+            if _positions or flags:
+                doc.blank()
+            if _positions:
+                doc.line(_out_act(
+                    f"FILING POSITIONS: {len(_positions)} loss(es) "
+                    f"claimed against the rule (.tt ALLOWLOSS)", _ws_cmd))
+            if flags:
+                doc.line(_out_act(
+                    f"MANUAL CHECK: {len(flags)} warn-only flag(s) to "
+                    f"decide by hand", _ws_cmd))
+            return
         if _positions:
             doc.section(f"FILING POSITIONS — {len(_positions)} loss(es) "
                         f"claimed against the rule (.tt ALLOWLOSS)")
@@ -18276,10 +18295,17 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     base = _base_currency(root)
     doc = Doc(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — {base}, "
               f"tax year {year}, basis: {gains_basis_label(resolved)}")
-    doc.para("Losses denied under "
-             + ("the wash-sale rule, §1091." if _usa
-                else "the superficial-loss rule, s.54."))
-    doc.blank()
+    if _det:
+        doc.para("Losses denied under "
+                 + ("the wash-sale rule, §1091." if _usa
+                    else "the superficial-loss rule, s.54."))
+        doc.blank()
+    else:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("DENIED: the loss "
+                 + ("the wash-sale rule (§1091) disallows" if _usa
+                    else "the superficial-loss rule (s.54) denies")
+                 + "; ALLOWED: the loss you claim.")
     # Too wide (a long option symbol): COST, then PROCEEDS, go first —
     # GAIN is their difference.
     doc.table(header, body, drop=(5, 4), key=(2, 1, 0))
@@ -18292,6 +18318,13 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     if embedded > 0.005:
         doc.para(f"Currently embedded in OPEN positions: {money(embedded)} "
                  f"{base} of deferred losses (`taxjson list`, DEFERRED).")
+    if not _det:
+        _flags_section(doc)
+        doc.para(_out_details_hint(
+            _ws_cmd + " (what DENIED means); --explain: each denial's "
+                      "trace", ""))
+        doc.print()
+        return
     doc.section("WHAT DENIED MEANS")
     if _usa:
         doc.item("DENIED is added to the cost basis of the repurchased "
@@ -20504,6 +20537,10 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         cmd += ["--all"]
     if getattr(args, "json", False):
         cmd += ["--json"]
+    elif not _details(args):
+        # Essentials first (docs/output-style.md): the stage's full
+        # report (reports/wash_radar_*.rpt) is the --details view.
+        cmd += ["--brief"]
     _exec_tool(cmd)
 
 

@@ -360,7 +360,8 @@ class TestWashSalesNamesTheRule(unittest.TestCase):
             for c, root in p.items():
                 r = cli(root, "run", "--no-input")
                 self.assertEqual(r.returncode, 0, (c, r.stderr[-2000:]))
-            w = cli_both(p, "wash-sales")
+            # --details: the notes on what DENIED means (Essentials first).
+            w = cli_both(p, "wash-sales", "--details")
             x = cli_both(p, "wash-sales", "--explain")
             one = cli_both(p, "run", "--no-input", "--account", "margin")
             empty = projects_both(Path(td) / "e", files={

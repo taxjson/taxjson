@@ -39,7 +39,8 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
 from taxjson.lib.price_chain import is_crypto_symbol
 from taxjson.lib.ticker_map import is_option_ticker
 from taxjson.lib import out as _out
-from taxjson.lib.wash_scope import (advisory_lines, scope_lines,
+from taxjson.lib.wash_scope import (advisory_lines, advisory_parts,
+                                    scope_lines,
                                     scope_note)
 
 # UTC-noon epoch helpers: shared home in lib/dates (the DST rationale
@@ -348,6 +349,12 @@ def main():
                              "acquisitions/disposals for the superficial-loss / wash-sale "
                              "window (strict; [settings] transfers_as_acquisitions = true). "
                              "Default: a custody move, held but never a purchase.")
+    parser.add_argument("--brief", action="store_true",
+                        help="The essentials (docs/output-style.md): one "
+                             "STATUS table of the positions with an "
+                             "advisory, a one-line action per status; no "
+                             "definitions (`taxjson wash-radar` passes "
+                             "it unless --details)")
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Canada: [settings] "
                              "option_buyback_loss_superficial = true — a "
@@ -2154,8 +2161,11 @@ def main():
     # glance rather than silently absent. Any extra category (e.g. OTHER
     # from --all) follows.
     extras = [c for c in by_cat if c not in _order]
-    report = _render_text(_order + extras, by_cat, args.country,
-                          _today_iso, bool(args.all))
+    report = (_render_brief(_order + extras, by_cat, args.country,
+                            _today_iso, bool(args.all))
+              if args.brief else
+              _render_text(_order + extras, by_cat, args.country,
+                           _today_iso, bool(args.all)))
 
     if args.json_out or args.json:
         # Structured sidecar: same rows/grouping as the printed .rpt, plus
@@ -2274,6 +2284,86 @@ _CA_DEFINITIONS = (
     "CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 "
     "days).",
 )
+
+
+# The one-line action a status asks for (the brief view; --details
+# defines every status). A status not here asks for nothing.
+_ACTIONS = {
+    "canada": {
+        "VIOLATION": "sell all of {t} by its CLEARS date to keep the loss",
+        "BLOCKED": "do not buy {t} before its CLEARS date",
+        "LOCKED": "do not sell {t} at a loss before its CLEARS date",
+        "EXITABLE": "sell all of {t} or none at a loss",
+        "RISK": "{t}: no sheltered buy (DRIP) 30 days after a loss sale",
+    },
+    "usa": {
+        "WASHED": "{t}: the loss is disallowed; no sale undoes it",
+        "BLOCKED": "do not buy {t} before its CLEARS date",
+        "LOCKED": "do not sell {t} at a loss (an IRA bought it)",
+        "EXITABLE": "sell all of {t} or none at a loss",
+        "RISK": "{t}: no IRA buy for 30 days after a loss sale",
+    },
+}
+
+
+def _few(names, n: int = 3) -> str:
+    names = list(names)
+    return ", ".join(names[:n]) + (f" +{len(names) - n} more"
+                                   if len(names) > n else "")
+
+
+def _render_brief(sections, by_cat, country: str, as_of: str,
+                  include_all: bool) -> "_out.Doc":
+    """The radar's essentials (docs/output-style.md, Essentials first):
+    a legend, ONE table of the positions with an advisory (its STATUS
+    first, in the fixed order), then one `! ` line per status that asks
+    for an action and a pointer to --details (the advisories, the
+    definitions, the scope). The rows are _render_text's."""
+    us = country == "usa"
+    doc = _out.Doc(
+        "WASH RADAR — "
+        + ("wash sales (§1091, trade dates)" if us
+           else "superficial losses (s.54, settlement dates)")
+        + f", as of {as_of}")
+    body = [[cat or "OTHER", *r[:4]] for cat in sections
+            for r in by_cat.get(cat, [])]
+    if body:
+        doc.para("STATUS: what a loss sale or a buy does today; CLEARS: "
+                 "the day its window closes.")
+        doc.table(["STATUS", "TICKER", "TAXABLE", "SHELTERED", "CLEARS"],
+                  body, aligns=["<", "<", ">", ">", "<"], per_record=False)
+    else:
+        doc.para("No position with an advisory.")
+    acts = []
+    n_notes = 0
+    for cat in sections:
+        rows_c = by_cat.get(cat, [])
+        n_notes += sum(len(advisory_parts(str(r[4] or ""))[1])
+                       for r in rows_c)
+        what = _ACTIONS["usa" if us else "canada"].get(cat)
+        if rows_c and what:
+            for n in (3, 2, 1, 0):
+                line = f"{cat}: " + what.format(
+                    t=_few([r[0] for r in rows_c], n) if n else
+                    f"{len(rows_c)} position(s)")
+                if cat != "WASHED":
+                    line = _out.act(line, "tjs wash-radar --details")
+                if len(line) <= 100:
+                    break
+            acts.append(line)
+    if n_notes:
+        acts.append(_out.act(f"{n_notes} warn-only note(s) to check by "
+                             f"hand", "tjs wash-radar --details"))
+    if acts:
+        doc.blank()
+        for a in acts:
+            doc.line(a)
+    if not acts:
+        doc.blank()
+    doc.para(_out.details_hint(
+        "tjs wash-radar --details",
+        "each verdict; accounts outside the project are not checked"))
+    return doc
 
 
 def _render_text(sections, by_cat, country: str, as_of: str,

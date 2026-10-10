@@ -88,6 +88,8 @@ class TestManualCheckFlagsKeepWashReviewOpen(unittest.TestCase):
                 p = cli(root, "wash-sales")
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertIn("MANUAL CHECK", p.stdout)
+                # The flags themselves: --details (Essentials first).
+                p = cli(root, "wash-sales", "--details")
                 self.assertIn("[right_vs_share_loss]", p.stdout)
                 j = json.loads(cli(root, "wash-sales", "--json").stdout)
                 self.assertEqual(len(j["manual_check_flags"]), 1)

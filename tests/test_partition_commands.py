@@ -403,7 +403,8 @@ class TestWording(unittest.TestCase):
             for c in COUNTRIES:
                 (p[c] / "work" / "margin_gains_wash.json").write_text(
                     _gains_doc(g[c]))
-            ws = cli_both(p, "wash-sales")
+            # --details: the notes name the IRA (Essentials first).
+            ws = cli_both(p, "wash-sales", "--details")
             rad = cli_both(p, "wash-radar", "--date", "2025-03-25")
         self.assertIn("superficial-loss rule", ws["canada"].stdout)
         self.assertIn("§1091", ws["usa"].stdout)
