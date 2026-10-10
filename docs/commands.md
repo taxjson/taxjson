@@ -166,18 +166,19 @@ incomplete. It is silent when there is nothing:
 
 ```
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 1 position sold in 2025 with no purchase in your files, not in missing_history.tt: SAMPA.TO (margin). Those
-sales are NOT in `taxjson sum`; run `taxjson find-missing-history`.
-
-Warning: 1 position at a $0 cost (1 still held): SAMPQ.TO (margin). Run `taxjson find-missing-history`.
-Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
-Info: 1 account with open positions and no holdings file to check them against: margin (12). Run `taxjson sanity` with
-the broker's positions.
-
-Info: Then run `taxjson checklist`: it checks every step and names the next one.
+Warning: NOT in the totals: 1 sale with no purchase (SAMPA.TO) — `taxjson find-missing-history`
+Warning: 1 position at a $0 cost (SAMPQ.TO) — `taxjson find-missing-history`
+Warning: 1 transfer-in kept out with no cost (SAMPK.TO) — `taxjson transfers`
+Info: 1 account with positions not checked against the broker's holdings — `taxjson sanity`
+Info: Then run `taxjson checklist` (the next step); each message's detail: `taxjson run --details`
 ```
 
-The same counts are written to `reports/run_summary.json`. A taxable
+One line per finding (at most six under the heading), each naming the
+command with the detail; `taxjson run --details` words each in full
+("1 position sold in 2025 with no purchase in your files, not in
+missing_history.tt: SAMPA.TO (margin). Those sales are NOT in `taxjson
+sum`; run `taxjson find-missing-history`."). The same counts are written
+to `reports/run_summary.json`. A taxable
 account's positions that go short (sales with no purchase in the files)
 are also named on the console as the run builds that account.
 
@@ -205,6 +206,13 @@ One section per group of the help page, in its order. The report and
 query commands read what the last `taxjson run` wrote to `work/` (no
 recompute); every command takes `--help`.
 
+A command prints the essentials first ([output-style.md](output-style.md)):
+a one- or two-line legend above each table, the figures, then one line
+per thing to act on (starting `! `, naming the command with the detail).
+A command that leaves something out ends by naming `--details`, which
+prints it all: the explanations, notes, caveats and citations, nothing
+dropped. `--json` is the same either way.
+
 ### Set up
 
 #### taxjson checklist
@@ -229,12 +237,17 @@ Inside a project (a `taxjson.toml` here, or `-C DIR`) each step is
 checked: a check runs the command that proves it (sanity,
 find-missing-history, elect, audit, option-boundary, handoff,
 reconcile-slips, form-export, t1135, carryover, fx-cash, amt,
-check-filed, git status) or reads the project's files. Each step shows
-done `[x]`, needs attention `[!]`, to do `[ ]`, blocked `[b]` (usually:
-run `taxjson run` first), to confirm `[m]`, yours to run and read `[?]`,
-n/a `[-]` or skipped `[~]`. The first step to do or needing attention is
-marked `[>]`, and the last line names it with its command. A done step
-shows one line (`--all`: every step's commands and why).
+check-filed, git status) or reads the project's files. The default view
+is the essentials: the done count, one row per section with its counts
+(done, attention, blocked, to do, to confirm, to read), one `! ` line per
+step needing attention or blocked (`! 10 missing-history: … — tjs
+find-missing-history`; steps blocked for one reason share a line), and
+the next step last. `--all` (or `--details`) is the full list: each step
+shows done `[x]`, needs attention `[!]`, to do `[ ]`, blocked `[b]`
+(usually: run `taxjson run` first), to confirm `[m]`, yours to run and
+read `[?]`, n/a `[-]` or skipped `[~]`, with its commands and why; the
+first step to do or needing attention is marked `[>]`, and the last line
+names it with its command.
 
 Nothing in the project is written but `checklist.json` (the marks;
 commit it). The steps no command can prove are confirmed with `--done
@@ -780,8 +793,9 @@ carryover rules:
 
 `taxjson estimate [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--verbose] [--json]`
 
-The realized-gains summary table followed by a marginal tax
-**estimate** for the year's investment income, computed incrementally:
+A marginal tax **estimate** for the year's investment income
+(`--details` puts the realized-gains summary table of `taxjson sum` in
+front of it), computed incrementally:
 tax(other income + investment income) − tax(other income), so the
 investment income is bracketed on top of what you already earn. Taxable
 accounts only. With no flags it uses the `[estimate]` block of
@@ -794,20 +808,26 @@ shown binding or not, with the top-up and the 7-year carryforward when
 it binds. Planning numbers, never filing numbers.
 
 <pre>
-TAX ESTIMATE — canada/ON, rates vintage 2026 (ESTIMATE ONLY, not filing numbers; taxable accounts only)
+TAX ESTIMATE — canada/ON, rates vintage 2026
+ESTIMATE ONLY, not filing numbers: taxable accounts only; [ ] says how an amount was built.
+  Other income                      200,000.00 <!-- pii-ok -->
+  Capital gains (taxable)            15,000.00  [30,000.00 realized - 0.00 other losses, x50%] <!-- pii-ok -->
+  Eligible dividends (grossed)        1,380.00  [1,000.00 x1.38] <!-- pii-ok -->
+  Foreign dividends                     500.00  [FTC 75.00, from the TAX rows]
+  Payments in lieu                        0.00
 
-  Other income                     200,000.00 <!-- pii-ok -->
-  Capital gains (taxable)           15,000.00  [30,000.00 realized - 0.00 other losses, x50%] <!-- pii-ok -->
-  Eligible dividends (grossed)       1,380.00  [1,000.00 x1.38, Canadian issuers, trust distributions included] <!-- pii-ok -->
-  Foreign dividends                    500.00  [FTC 75.00 — actual TAX rows (capped at 15% of foreign divs)]
-  Payments in lieu                       0.00
-
-  Tax with investments: 72,598.76 (federal 44,729.50 + ON 27,869.26) <!-- pii-ok -->
-  Tax on other income alone: 64,721.98 <!-- pii-ok -->
+  Tax with investments:  72,598.76  (federal 44,729.50 + ON 27,869.26) <!-- pii-ok -->
+  Tax on other income alone:  64,721.98 <!-- pii-ok -->
   => ESTIMATED TAX ON INVESTMENT INCOME: 7,876.78 CAD  (25.0% of 31,500.00) <!-- pii-ok -->
+...
+More: tjs estimate --details (assumptions, 3 note(s))
+Gains by account and the lines for the return: tjs sum
 </pre>
 
-The block ends with NOTE lines naming what the provincial figure
+The AMT check and the `! ` lines (sales with no purchase, FX on foreign
+cash) follow the estimate. `--details` writes each bracket in full
+("[1,000.00 x1.38, Canadian issuers, trust distributions included]"), <!-- pii-ok -->
+the assumptions, and note lines naming what the provincial figure
 included (ON: the surtax and the Ontario Health Premium, base vs with
 investments), the phased federal BPA when it applies, the provincial AMT
 arithmetic when AMT binds, and, when the project year has no built-in
@@ -976,19 +996,22 @@ DIVIDEND column is staking rewards. `--json` carries a per-account
 
 ```
 $ taxjson sum
+REALIZED-GAINS SUMMARY — CAD, tax year 2025, basis: wash-adjusted
+REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+
 TAXABLE ACCOUNTS
-ACCOUNT    NON-OPT      OPTION       REALIZED     DIVIDEND    PIL        FEES       TOTAL
-------------------------------------------------------------------------------------------
-margin     900.00       -100.00      800.00       80.00       0.00       15.00      880.00
+ACCOUNT  NON-OPT   OPTION  REALIZED  DIVIDEND   PIL   FEES   TOTAL
+------------------------------------------------------------------
+margin    900.00  -100.00    800.00     80.00  0.00  15.00  880.00
 ...
-SUBTOTAL   ...
+SUBTOTAL  ...
 
 SHELTERED ACCOUNTS — not taxable
 ...
 
-ALL ACCOUNTS
+ALL ACCOUNTS — sheltered included
 ...
-TOTAL      950.00       -200.00      750.00       120.00      0.00       25.00      870.00
+TOTAL     950.00  -200.00    750.00    120.00  0.00  25.00  870.00
 ```
 
 The summary ends with a **FOR THE RETURN** block over the taxable
@@ -1011,13 +1034,14 @@ accounts:
 
 The rows equal `form-export`'s line totals, each row rounded to the
 cent, as filed. When that differs from the gains files' unrounded total
-gain or denied amount (US: the (g) adjustment) by a cent or more, the
-block says so, and `--json` carries `engine_gain_unrounded` and
+gain or denied amount (US: the (g) adjustment) by a cent or more,
+`taxjson sum --details` says so under the block, and `--json` carries `engine_gain_unrounded` and
 `engine_denied_unrounded`; `--json` adds the per-account split. Before
 the tax year has ended the figures are year-to-date, and the block says
 so.
 
-`sum` warns about what its totals leave out: dispositions with an
+`sum` warns, one `! ` line each after the block (each warning in full
+with `--details`), about what its totals leave out: dispositions with an
 unknown cost that missing history (`OPENING ... cost=unknown` lines)
 routed to manual reporting, and, whatever the broker, the tax year's
 sales with no purchase in your files that no `OPENING ... cost=unknown`
@@ -1086,8 +1110,7 @@ ends with the command that records the second kind as openings
 ```
 $ taxjson list
 OPEN POSITIONS — CAD, as of the latest data in the books (2026-09-21)
-COST is book cost after ticker.map and the base-currency conversion, basis: wash-adjusted.
-
+COST: book cost in CAD after ticker.map, basis: wash-adjusted; DEFERRED: denied losses in it.
 ACCOUNT  SYMBOL     QTY    COST  COST/SH  DEFERRED  SINCE
 ------------------------------------------------------------
 lira     XEQT.TO     10  420.00    42.00         -  2024-11-03
@@ -1095,6 +1118,8 @@ margin   SAMPLG.US   30  300.00    10.00    150.00  2025-01-15
 margin   SAMPNG.TO    4  240.00    60.00         -  2025-02-01
 
 3 position(s), total book cost 960.00 CAD
+DEFERRED: 150.00 CAD of the book cost is denied superficial losses (s.54).
+More: tjs list --details (notes)
 ```
 
 #### taxjson shares
@@ -1379,10 +1404,27 @@ for the structured document with absolute `clears_at` dates. The same
 reports are written to `reports/wash_radar_<account>.rpt` during
 `taxjson run`.
 
-Sections group by advisory in a fixed order: VIOLATION, BLOCKED, LOCKED,
-EXITABLE (a loss is OK only with a FULL exit), CAUTION (the sheltered
-leg exited, so a loss sale of any size stands unless re-bought within 30
-days), COOLING, RISK, CLEAR.
+The default view is one STATUS table, one row per position (the most
+urgent status first), then one `! ` line per status that asks something
+of you and the scope in a few words:
+
+```
+WASH RADAR — superficial losses (s.54, settlement dates), as of 2026-10-10
+STATUS: what a loss sale or a buy does today; CLEARS: the day its window closes.
+STATUS  TICKER                 TAXABLE  SHELTERED  CLEARS
+---------------------------------------------------------
+RISK    QZQ.US                     100         50  -
+CLEAR   SAMPA.TO                   100          0  -
+
+! RISK: QZQ.US: no sheltered buy (DRIP) 30 days after a loss sale — tjs wash-radar --details
+More: tjs wash-radar --details; not checked: affiliated persons' buys (ITA s.251.1)
+```
+
+`--details` groups the positions by advisory in a fixed order, each
+section with its definition and per-row advisories: VIOLATION, BLOCKED,
+LOCKED, EXITABLE (a loss is OK only with a FULL exit), CAUTION (the
+sheltered leg exited, so a loss sale of any size stands unless re-bought
+within 30 days), COOLING, RISK, CLEAR.
 
 A trade is counted from its **trade date** (a sale made today settles
 tomorrow but is already in the books), while the ±30-day windows run on
@@ -1472,7 +1514,8 @@ at risk (the line says how many; the rest of the loss stands);
 **ACTION** when a violation can be rescued by selling the taxable
 replacement before the deadline (Canada only: a US wash sale cannot be
 rescued, and a WASHED row is SAFE\* with the reason); **SAFE\*** /
-**SAFE** with the applicable caveats. Whether it *is* a loss at today's
+**SAFE** with the applicable caveats (the window caveat in full with
+`--details`). Whether it *is* a loss at today's
 price is `harvest`'s job. `--json` for machines; exit 1 on UNSAFE or
 PARTIAL.
 
@@ -1497,8 +1540,7 @@ taxjson harvest --json          # machine-readable
 
 ```
 HARVEST — unrealized open positions, CAD, basis: wash-adjusted
-Losses first. PRICE marks its source: ^ IBKR, + yfinance, * cache. ADVISORY is the wash radar's.
-
+Losses first. PRICE: ^ IBKR, + yfinance, * cache. ADVISORY: the wash radar's.
 ACCOUNT  SYMBOL  TX_QTY  SH_QTY      PRICE  UNREALIZED     PCT  VERDICT
                                        CAD         CAD
 -----------------------------------------------------------------------
@@ -1519,6 +1561,8 @@ margin   AAA.TO   12.4000  12.6480CAD
 margin   BBB.US  109.1000           -
 
 HARVESTABLE LOSSES (CAD, cumulative): now 0.00 | <=7d 0.00 | <=14d 0.00 | <=30d 155.00
+
+More: tjs harvest --details; not checked: affiliated persons' buys (ITA s.251.1)
 ```
 
 A table wider than the output width (the terminal's, or 120 columns off
@@ -1818,16 +1862,28 @@ machine-readable output.
 
 <pre>
 $ taxjson t1135
-Filing requirement (total-cost test, ITA 233.3):
-  Maximum total cost of specified foreign property during 2025: 262,500.00 CAD on 2025-06-16 <!-- pii-ok -->
-  => T1135 FILING REQUIRED (exceeds 100,000.00 CAD) <!-- pii-ok -->
-  => Detailed method (Part B) required (reached 250,000.00 CAD) <!-- pii-ok -->
+T1135 — Foreign Income Verification Statement helper, tax year 2025, CAD
 
-SYMBOL  | COUNTRY | MAX COST IN YR | COST AT DEC 31 | INCOME | GAIN(LOSS) | NOTES
---------+---------+----------------+----------------+--------+------------+------
-SAMPLG.US | USA     |         980.00 |         490.00 | 132.00 |     120.00 |
+FILING REQUIREMENT — total-cost test, ITA 233.3
+Maximum total cost in 2025: 262,500.00 CAD on 2025-06-16 <!-- pii-ok -->
 ...
+
+PER PROPERTY — taxable accounts only
+Amounts are cost (ACB), not market value; MAX COST IN YR: the most held at once.
+SYMBOL     COUNTRY  MAX COST IN YR  COST AT DEC 31  INCOME  GAIN(LOSS)
+----------------------------------------------------------------------
+SAMPLG.US  USA              980.00          490.00  132.00      120.00
+...
+
+PER COUNTRY — upper-bound aggregates
+...
+Not counted: foreign property outside these books (bank accounts, cash) — tjs t1135 --details
 </pre>
+
+The verdict lines under FILING REQUIREMENT say whether a filing is
+required and whether the detailed method (Part B) applies; a `! ` line
+names a row to check by hand (crypto: where it is held), and
+`--details` adds the notes behind each.
 
 Domicile is classified by market suffix (`.US` → USA, `.L` → GBR, `.AX`
 → AUS; `.TO` / `.V` / `.CN` / `.NE` → Canadian, i.e. not foreign
@@ -2191,20 +2247,19 @@ backward-looking record; for what you may sell or buy now, use
 ```
 $ taxjson wash-sales
 SUPERFICIAL LOSSES — CAD, tax year 2025, basis: wash-adjusted
-Losses denied under the superficial-loss rule, s.54.
-
+DENIED: the loss the superficial-loss rule (s.54) denies; ALLOWED: the loss you claim.
 ACCOUNT  DATE        SYMBOL  QTY  PROCEEDS    COST     GAIN  DENIED  ALLOWED
 -----------------------------------------------------------------------------
 margin   2025-10-08  ZZA.US   10    820.00  860.00   -40.00   30.00   -10.00
 margin   2025-10-17  ZZB.US    5    630.00  740.00  -110.00  110.00     0.00
 
 2 superficial loss(es); 140.00 CAD of losses denied.
-
-WHAT DENIED MEANS
-- DENIED is added to the ACB of the substituted property (s.53(1)(f)): you
-  recover it on a later sale.
-...
+More: tjs wash-sales --details (what DENIED means); --explain: each denial's trace
 ```
+
+`--details` adds WHAT DENIED MEANS, the filing positions and the
+manual-check flags in full; a line under the total says how much of the
+denied loss sits in open positions (`taxjson list`, DEFERRED).
 
 A DENIED loss is added to the ACB of the substituted property
 (s.53(1)(f); recovered on a later sale), except any amount permanently

@@ -124,7 +124,7 @@ switched off (`# province = "ON"`): delete the `# ` to switch it on.
 Put each account's files in its own folder, `inputs/<account>/` (beside
 the year folders: one folder per account for every year). Any file
 name works: taxjson recognises each broker's export by its header, and
-`taxjson run` prints which broker it read each file as. Several files for
+`taxjson run --details` prints which broker it read each file as. Several files for
 one account are fine; overlapping rows are read once.
 
 Download **all the history the broker will give you**, not just the tax
@@ -188,34 +188,37 @@ to check next, each with the command that shows it:
 
 ```
 ==> margin  (taxable)
-Info: File inputs/margin/activity.csv → identified as Questrade
 ==> Reading 1 file
-Info: activity.csv: 6 tax objects
+Info: activity.csv: 4 tax objects
 ==> Processing corporate actions
+Warning: Transfer-in: margin: 1 booked at the broker's stated cost (SAMPJ.TO): check it — `taxjson transfers`
+Warning: Transfer-in: margin: 1 with NO cost, kept out of the books (SAMPK.TO) — `taxjson transfers`
 ==> Sorting, de-duplicating, mapping tickers, converting currency
 ==> Calculating capital gains
 ==> Writing holdings reports/margin_holdings.toml
 ==> Writing summary reports/margin.sum
+==> Checking for missing purchase history
+Info: 2 position(s) go short in margin's data (SAMPA.TO, SAMPK.TO) — `taxjson find-missing-history`
 ...
 ==> Done. Reports are in reports/
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.tt: SAMPA.TO (margin),
-SAMPK.TO (margin). Those sales are NOT in `taxjson sum`; run `taxjson find-missing-history`.
-
-Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
-Info: 1 account with open positions and no holdings file to check them against: margin (4). Run `taxjson sanity` with
-the broker's positions.
-
-Info: Then run `taxjson checklist`: it checks every step and names the next one.
+Warning: NOT in the totals: 2 sales with no purchase (SAMPA.TO, SAMPK.TO) — `taxjson find-missing-history`
+Warning: 1 transfer-in kept out with no cost (SAMPK.TO) — `taxjson transfers`
+Info: 1 account with positions not checked against the broker's holdings — `taxjson sanity`
+Info: Then run `taxjson checklist` (the next step); each message's detail: `taxjson run --details`
 ```
 
 Every line starts with `==> ` (a step the run is doing), `Info:`,
-`Warning:` or `Error:`, or continues the message above it. A message
-that takes more than one line is followed by one blank line.
+`Warning:` or `Error:`. Each message is one line that names the command
+with the detail (an error keeps its fix lines); a narrow terminal cuts a
+long one at its width. `tjs run --details` prints every message in full,
+with its explanation, and which broker each file was read as
+(`Info: File inputs/margin/activity.csv → identified as Questrade`).
 
 The list can also name positions at a $0 cost (sold this year or still
 held) and stocks that paid you income the books do not hold. A run with
-nothing to report ends at `Done.`; the same counts are always written to
+nothing to report has no list after `Done.` (at most the line naming
+`tjs checklist`); the same counts are always written to
 `reports/run_summary.json`.
 
 Read every line that starts with `Warning:` and every `Info:` line. A warning that an account folder is
@@ -263,11 +266,15 @@ MISSING COST BASIS — tax year 2025
 TRUNCATED HISTORY — positions go short (missing a buy): 2 pair(s)
 2 affect tax year 2025; 0 are in registered accounts; 0 do not.
 
+PeakShort: the deepest short; FirstNeg: the day it went short; InYr: this year's sales from it.
+
 AFFECTS 2025 - missing basis distorts this year's gain; fix before filing:
 Symbol    Account  Cur  PeakShort  FirstNeg    InYrSales  InYrProceeds
 ----------------------------------------------------------------------
 SAMPA.TO  margin   CAD   -20.0000  2025-03-10          1        795.05
 SAMPK.TO  margin   CAD   -10.0000  2025-05-12          1        115.05
+
+! Add each AFFECTS row's purchase before filing — tjs find-missing-history --details
 ```
 
 Every row marked **AFFECTS 2025** is a sale that is not in `tjs sum` yet
@@ -281,13 +288,15 @@ not missing history.
 sale with no purchase in your files)**, apart from real shorts (the plain
 `tjs list` marks them `missing history?`). `tjs run` names them after the
 accounts' books (`==> Checking for missing purchase history`) and in its
-closing list, and `tjs sum` warns:
+closing list, and `tjs sum` says under its FOR THE RETURN block:
 
 ```
-Warning: 2 position(s) sold in 2025 with no purchase in your files: their gain is NOT in these totals
-No .tt OPENING cost=unknown line: SAMPA.TO (margin), SAMPK.TO (margin).
-`taxjson find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).
+! 2 sales with no purchase NOT in these totals (SAMPA.TO, SAMPK.TO) — tjs find-missing-history
 ```
+
+(`tjs sum --details` says it in full: "Warning: 2 position(s) sold in
+2025 with no purchase in your files: their gain is NOT in these
+totals".)
 
 A position that went short in an earlier year and has nothing in 2025 (no
 trade, transfer or income; in Canada, no other taxable account trading it)
@@ -304,7 +313,14 @@ It adds only those positions as `OPENING ... cost=unknown` lines to
 below); 2025's numbers do not change.
 
 The command ends with what to do next, in the order of 5b below. For an Interactive
-Brokers sale, the row also prints IB's own cost for it:
+Brokers sale whose cost IB states, the first of those lines is:
+
+```
+! IB states the cost of 1 sale(s): draft the purchase — tjs find-missing-history --write-purchases
+```
+
+and `tjs find-missing-history --details` prints IB's own cost under the
+row:
 
 ```
 SAMPG.US  margin   CAD   -20.0000  2025-03-18          1        714.87
@@ -337,6 +353,7 @@ tjs sanity margin=margin_positions.toml
 ```
 
 ```
+ISSUE: MISSING_IN_HOLDINGS = not in the broker's file; MISSING_IN_TAXJSON = not in the books.
 ACCOUNTS  SYMBOL    ISSUE                TAXJSON  HOLDINGS  DIFF
 ----------------------------------------------------------------
 margin    SAMPA.TO  MISSING_IN_HOLDINGS      -20         0   -20
@@ -345,11 +362,10 @@ margin    SAMPC.TO  QTY_MISMATCH               5        15   -10
 margin    SAMPD.TO  MISSING_IN_TAXJSON         0        10   -10
 margin    SAMPK.TO  QTY_MISMATCH             -10        30   -40
 
-5 discrepancy(ies).
-Fewer shares in taxjson than at the broker usually means missing history: purchases from before your
-download starts, or shares transferred in. See `taxjson find-missing-history`, `taxjson transfers`
-and docs/getting-started.md step 5. A trade after your last export is the other usual cause.
+! 5 differ; fewer shares in the books usually means missing history — tjs find-missing-history
 ```
+
+(`tjs sanity --details` adds what each kind of difference usually means.)
 
 `SAMPA.TO` is the sale with no purchase from check 1, and `SAMPK.TO`
 arrived by transfer with no cost (check 3). The others are new:
@@ -380,10 +396,15 @@ tjs transfers
 ```
 
 ```
-DATE         ACCOUNT   SYMBOL     QTY   TYPE                        VALUE   FEE   CUR   WHERE     IN_BOOKS
-------------------------------------------------------------------------------------------------------------
-2024-06-03   margin    SAMPJ.TO    20   SAMPLE_J_CORP_TRANSFE...   600.00     -   CAD   sidecar   book_value
-2024-06-03   margin    SAMPK.TO    40   SAMPLE_K_CORP_TRANSFER       0.00     -   CAD   sidecar   NO_COST
+CUSTODY TRANSFERS — evidence, not tax events
+WHERE: sidecar = kept out of the books, book = kept in; IN_BOOKS: how a transfer-in is booked.
+DATE        ACCOUNT  SYMBOL    QTY  TYPE                       VALUE  FEE  CUR  WHERE    IN_BOOKS
+---------------------------------------------------------------------------------------------------
+2024-06-03  margin   SAMPJ.TO   20  SAMPLE_J_CORP_TRANSFE...  600.00    -  CAD  sidecar  book_value
+2024-06-03  margin   SAMPK.TO   40  SAMPLE_K_CORP_TRANSFER      0.00    -  CAD  sidecar  NO_COST
+
+2 transfer row(s).
+! 1 transfer-in(s) with no cost (SAMPK.TO): add the purchase to a .tt file — tjs transfers --details
 ```
 
 In a taxable account the transfer rows themselves stay out of the books
@@ -398,15 +419,23 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
   that value on the transfer date, and every run says so:
 
   ```
-  Warning: Transfer-in: margin: 1 transfer-in(s) from outside your books booked at the ACB the broker states on the row (Questrade: 20 SAMPJ.TO (2024-06-03)). A broker's book value is its own record, not always your ACB: check it. To use your own figure instead, add the original purchase as a .tt BUYSELL line dated on or before the transfer: the book value is then no longer used and this line stops.
+  Warning: Transfer-in: margin: 1 booked at the broker's stated cost (SAMPJ.TO): check it — `taxjson transfers`
   ```
+
+  (`tjs run --details`: "1 transfer-in(s) from outside your books booked
+  at the ACB the broker states on the row (Questrade: 20 SAMPJ.TO
+  (2024-06-03)). A broker's book value is its own record, not always
+  your ACB: check it. To use your own figure instead, add the original
+  purchase as a .tt BUYSELL line dated on or before the transfer: the
+  book value is then no longer used and this line stops.")
 
   (US projects: the line adds that the lot's holding period starts on
   the transfer date.)
 - `NO_COST`: no book value on the row. `VALUE` is then IB's **market
   value** on the transfer day (never your cost) or RBC's 0. The shares
-  stay out of the books, the run prints `ATTENTION: transfer-in: ... have
-  NO cost in the books`, and its closing list counts them. Add the
+  stay out of the books, the run prints `Warning: Transfer-in: margin: 1
+  with NO cost, kept out of the books (SAMPK.TO)`, and its closing list
+  counts them. Add the
   purchase (5c below).
 - `.tt_covers`: your `.tt` purchase covers the row (5c). Nothing more is
   said.
@@ -435,17 +464,25 @@ free is a corporate action or a transfer with no cost. Once such shares
 are sold, `find-missing-history` lists them in its own section:
 
 ```
-## $0-cost corp-action shares that were later sold (inflated gain): 1 pair(s)
-...
-SAMPQ.TO                 margin     CAD      2.0000 2024-09-16            1         545.05 $0 cost
-    └ SAMPLE Q CORP STK DIV ON 20 SHS
+$0-COST CORP-ACTION SHARES LATER SOLD — inflated gain: 1 pair(s)
+1 affect tax year 2025; 0 are in registered accounts; 0 do not.
+
+AFFECTS 2025 - sold this year against a $0 basis; the gain is overstated by the missing basis:
+Symbol    Account  Cur  ZeroQty  AcqDate     InYrSales  InYrProceeds  Why
+-----------------------------------------------------------------------------
+SAMPQ.TO  margin   CAD   2.0000  2024-09-16          1        545.05  $0 cost
+
+! Give the $0-cost shares their ACB — tjs find-missing-history --details
 ```
+
+(`--details` adds each row's broker description, `└ SAMPLE Q CORP STK
+DIV ON 20 SHS`.)
 
 While you still hold them, `find-missing-history` lists them under
 **HELD** and the run's closing list counts them:
 
 ```
-## $0-cost shares still held (their sale will overstate the gain): 1 pair(s)
+$0-COST SHARES STILL HELD — their sale will overstate the gain: 1 pair(s)
 HELD - no gain yet; give them their ACB before they are sold:
 ...
 ```
@@ -561,11 +598,12 @@ OPENING 2023-12-29 SAMPD.TO 10 CAD 504.95
 After `tjs run` the positions appear and the sale's cost is right:
 
 ```
-ACCOUNT   SYMBOL     QTY     COST   COST/SH   DEFERRED   SINCE
--------------------------------------------------------------------
-margin    SAMPB.TO    20   204.95     10.25          -   2023-12-29
-margin    SAMPC.TO    15   457.43     30.50          -   2023-12-29
-margin    SAMPD.TO    10   504.85     50.48      99.90   2023-12-29
+COST: book cost in CAD after ticker.map, basis: wash-adjusted; DEFERRED: denied losses in it.
+ACCOUNT  SYMBOL    QTY    COST  COST/SH  DEFERRED  SINCE
+-------------------------------------------------------------
+margin   SAMPB.TO   20  204.95    10.25         -  2023-12-29
+margin   SAMPC.TO   15  457.43    30.50         -  2023-12-29
+margin   SAMPD.TO   10  504.85    50.48     99.90  2023-12-29
 ```
 
 (`SAMPD.TO` shows why partial history matters. The download held a buy at
@@ -652,24 +690,29 @@ project root: it is no longer read — every command stops until `tjs
 migrate` converts it; docs/troubleshooting.md, "Error: missing_history.json
 is no longer read".)
 
-```
-Warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these totals EXCLUDE them (`taxjson form-export` lists them in its MANUAL REPORTING section; report them by hand).
-```
-
-The sale stays out of the totals, and `tjs form-export` lists it for
-you:
+`tjs sum` then says, under its FOR THE RETURN block:
 
 ```
-MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files (unknown cost, .tt OPENING cost=unknown), proceeds 795.05 CAD: NOT in the rows or totals above. Report each by hand once its cost is known (`taxjson find-missing-history`).
-SYMBOL   | DATE       | UNITS | PROCEEDS | ACCOUNT
----------+------------+-------+----------+--------
-SAMPA.TO | 2025-03-10 |    20 |   795.05 | margin
+! 1 sale with an unknown cost NOT in these totals: report them by hand — tjs form-export
+```
+
+(`tjs sum --details`: "Warning: 1 disposition(s) with an unknown cost
+(no purchase in your files) were routed to manual reporting — these
+totals EXCLUDE them".) The sale stays out of the totals, and
+`tjs form-export` lists it for you:
+
+```
+MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files
+! Not in the rows or totals above: report each by hand — tjs find-missing-history
+SYMBOL    DATE        UNITS  PROCEEDS  ACCOUNT
+----------------------------------------------
+SAMPA.TO  2025-03-10     20    795.05  margin
 ```
 
 You still have to report that sale on your return, with the best cost
 you can support. If you later find the purchase and add it, the line
-does nothing any more: the run says `ATTENTION: inputs/margin/missing_history.tt:N
-lists ... but its rows never go short any more` and
+does nothing any more: the run says `Warning: missing_history.tt lists
+SAMPA.TO / margin, but its rows never go short any more` and
 `find-missing-history` lists it under `STALE`. Delete it.
 
 ### 5c. Transfers in
@@ -688,7 +731,7 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
 
 - Once the account's `.tt` purchases of the stock, dated on or before
   the transfer, cover the transferred quantity, the transfer's
-  `ATTENTION` line stops and `tjs transfers` shows `.tt_covers`.
+  `Warning: Transfer-in:` line stops and `tjs transfers` shows `.tt_covers`.
 - The same line overrides a broker's book value (`book_value`): the
   book value is then no longer used. Add it when the broker's figure is
   not your cost; otherwise the book value is a reasonable start.
@@ -707,19 +750,21 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
 - For a sheltered account (`transfers = true`) the transfer is booked
   as a purchase at the broker's value. That is fine there: no tax is
   computed on it. For the superficial-loss / wash-sale rule it is a move
-  between accounts, not a purchase; the run prints one warning listing
-  each transfer-in inside a taxable loss's 30-day window.
+  between accounts, not a purchase; the run prints one warning for the
+  transfer-ins inside a taxable loss's 30-day window (`tjs run --details`
+  lists each).
 - **Shares moved between a taxable account and a registered one** (an
   in-kind contribution to your RRSP or TFSA, or a withdrawal in kind) are
   not a move of your own: ownership changes. The run pairs the taxable
   account's transfer row with the registered account's row of the same
   stock and quantity (within 10 days, across brokers) and books the move
   in the taxable account at the shares' **fair market value** on the
-  transfer date. One warning per run lists each move, its value, where
-  the value came from, and the gain or the denied loss:
+  transfer date. One warning per run says so; `tjs run --details` lists
+  under it each move, its value, where the value came from, and the gain
+  or the denied loss:
   - Canada, a contribution is a sale at that value. A gain is taxed; a
-    loss is **denied for good** (s.40(2)(g)(iv)) — `tjs sum` shows it on
-    its own line ("Denied: contribution to a registered plan"), never
+    loss is **denied for good** (s.40(2)(g)(iv)) — `tjs sum --details`
+    shows it on its own line ("Denied: contribution to a registered plan"), never
     added to an ACB. The plan's purchase counts for the superficial-loss
     rule: a loss on the same stock in a taxable account within 30 days
     is lost for good.
@@ -751,7 +796,8 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
   Moves between two of your taxable accounts (or two registered ones)
   pair first and stay moves of your own. When a transfer row could pair
   with more than one account's row, the run does not guess: the warning
-  lists the move as ambiguous and NOT booked, with the candidates. Answer
+  lists the move as ambiguous and NOT booked (the candidates with
+  `tjs run --details`). Answer
   with the `INKIND` line (it books the move; `plan=` picks the plan), or
   `INKIND 2024-06-03 SAMPK.TO -100 plan=own` for a move of your own. A
   transfer-out the plan received in parts is warned about the same way.
@@ -803,15 +849,24 @@ tjs list                      # no negative quantities, no surprise 0.00
 ```
 
 With a book cost on each holding, `sanity` then compares costs. The
-quantities agree, and one cost differs, with its reason:
+quantities agree, and one cost differs:
 
 ```
 OK: tickers and quantities agree in every group.
 
-COST — books vs the reports' cost: 3 compared, 2 within tolerance, 1 differ (informational: a broker's book value is not your ACB/basis; never changes the exit code).
-ACCOUNTS   SYMBOL     QTY   CUR   BROKER    BOOKS     DIFF   REASON
------------------------------------------------------------------------------
-margin     SAMPD.TO    10     -   404.95   504.85   +99.90   superficial-loss
+COST: 1 of 3 differ from the broker's book value (informational) — tjs sanity --details
+```
+
+`tjs sanity --details` lists each difference with its reason:
+
+```
+COST — books vs the reports' cost: 3 compared, 2 within tolerance, 1 differ (informational: a broker's book value is not
+  your ACB/basis; never changes the exit code).
+
+ACCOUNTS  SYMBOL    QTY  CUR  BROKER   BOOKS    DIFF  REASON
+----------------------------------------------------------------------
+margin    SAMPD.TO   10  CAD  404.95  504.85  +99.90  superficial-loss
+
 Reasons:
   superficial-loss: the books' ACB carries denied superficial losses (s.53(1)(f)); a broker's book value does not
 ```
@@ -892,13 +947,23 @@ T3's return of capital).
 tjs checklist
 ```
 
-It runs the checks above and the rest of the filing steps, and marks
-each one `[x]` done, `[!]` needs attention, `[ ]` to do or `[m]` for you
-to confirm. A missing purchase that affects the year shows as:
+It runs the checks above and the rest of the filing steps: a table of
+the sections with their counts, then one `! ` line per step that needs
+attention, with the command to run, and the next step last. A missing
+purchase that affects the year shows as:
 
 ```
-  [!] missing-history   No position with missing cost basis affects the year
-      1 position(s) with missing basis affect 2025: SAMPA.TO (margin)
+! 10 missing-history: 1 position(s) with missing basis affect 2025... — tjs find-missing-history
+```
+
+`tjs checklist --all` lists every step, each marked `[x]` done, `[!]`
+needs attention, `[ ]` to do or `[m]` for you to confirm, with its whole
+finding:
+
+```
+  [!] 10. missing-history   No position with missing cost basis affects the year
+                            1 position(s) with missing basis affect 2025: SAMPA.TO (margin)
+                            tjs find-missing-history
 ```
 
 Work through it until every step is done or marked. Each step is
