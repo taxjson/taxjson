@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.28.1 (2026-10-10)
+
 ### Fixed
 
 - Tests: every test process runs with full-length messages (`TAXJSON_WIDTH=0` unless a test sets its own), as the local gate does, so GitHub CI and `scripts/ci.sh` agree again.
