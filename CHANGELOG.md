@@ -14,6 +14,11 @@
   a pull request's merge commits (patch, message, identities) the same
   way; `scripts/release.sh` and `scripts/promote.sh` run the hook, so
   they get it too.
+- `scripts/check-pii.sh --diff` (the pre-push hook, the `pr-commits`
+  CI job) scans an added line whose text begins with `++ `: in a diff
+  it reads `+++ …`, and it was taken for a file header and skipped by
+  every pattern. Only a `+++ ` line in a file's header block, before its
+  first hunk, is a header now.
 
 
 ## v0.28.1 (2026-10-10)

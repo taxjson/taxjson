@@ -933,6 +933,47 @@ class TestMergeResolutionScanned(_Sandbox):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("private denylist match", r.stdout)
 
+    def test_added_line_starting_with_plus_plus_is_scanned(self):
+        # A line whose TEXT begins "++ " is "+++ …" in a diff: it used to
+        # be taken for a file header and skipped by the patterns. Only a
+        # "+++ " in a header block (before the first @@) is a header.
+        base = self._remote_with_base()
+        for path, text, needle in (
+                ("notes.txt", f"++ {self._KEY}\n", "credential"),
+                ("notes.txt", f"x\n++ acct {_ACCT}\n", "denylist"),
+                ("CHANGELOG.md", f"++ total {self._AMT}\n", "money amount"),
+                ("CHANGELOG.md", f"++ x\nlater {self._AMT}\n", "money amount")):
+            with self.subTest(path=path, text=text):
+                self.git("reset", "-q", "--hard", base)
+                diff = self._diff_one(path, text)
+                self.assertIn("\n+++ ", diff.split("@@", 1)[1])
+                r = self.scan("--diff", stdin=diff)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(needle, r.stdout.lower())
+                self.assertNotIn(self._KEY, r.stdout)
+                self.assertNotIn(_ACCT, r.stdout)
+                self.assertNotIn(self._AMT, r.stdout)
+                # through the hook, added and removed again
+                tip = self._commit(path, "clean\n", "clean")
+                r = self._pre_push(tip, base)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        # a "++ " line with nothing to find stays clean, and the real
+        # file header after it still names the next file
+        self.git("reset", "-q", "--hard", base)
+        r = self.scan("--diff", stdin=self._diff_one("notes.txt", "++ fine\n"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        (self.repo / "zz.md").write_text(f"total {self._AMT}\n")
+        diff = self._diff_one("notes.txt", "++ b/zz.txt\n")
+        self.assertLess(diff.index("+++ b/zz.txt"), diff.index("+++ b/zz.md"))
+        r = self.scan("--diff", stdin=diff)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("money amount", r.stdout)
+
+    def _diff_one(self, path, text):
+        head = self.git("rev-parse", "HEAD").strip()
+        self._commit(path, text, "add")
+        return self.git("diff", head, "HEAD")
+
     def test_many_merges_stay_fast(self):
         import time
         base = self._remote_with_base()
