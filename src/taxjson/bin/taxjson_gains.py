@@ -316,9 +316,12 @@ def _suggest_missing_history_and_exit(args, transactions,
                                            flag_stale=False, until=_until)
         _qty = {(e['symbol'], e['account']): e['opening_qty']
                 for e in _applied if e.get('inserted')}
+        _all = {(e['symbol'], e['account']): e['opening_all_rows']
+                for e in _applied if e.get('opening_all_rows')}
     except Exception:                                   # noqa: BLE001
-        _qty = {}
-    write_text_atomic(_out, format_suggestions(candidates, _qty, _until))
+        _qty, _all = {}, {}
+    write_text_atomic(_out, format_suggestions(candidates, _qty, _until,
+                                               all_rows=_all))
     n_reg = sum(1 for c in candidates if c.registered)
     print(
         f"Wrote {len(candidates)} candidate(s) to {args.suggest_missing_history} "

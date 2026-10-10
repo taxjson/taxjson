@@ -40,6 +40,23 @@
 
 ### Changed
 
+- Missing history is a dated event in the account's inputs: a `.tt` line
+  `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` opens that
+  many units at an unknown cost on that date, the opening a
+  `missing_history.json` entry gives (sales drawing on it are reported by
+  hand), with the quantity and date fixed: no sizing from the rows, no
+  year window. With one folder of exports for every year the line is one
+  record for every year. Both countries (tax-logic CA-ACB-11 /
+  US-BASIS-04). `taxjson find-missing-history --write-missing-history`
+  writes these lines into `inputs/<account>/missing_history.tt`, merged
+  with the lines there (never twice; another quantity is a Warning and
+  your line is kept); with a FILE it still writes the JSON for review.
+  `missing_history.json` is still read (a symbol a line also opens is the
+  line's, with an Info line), and the run says once that `taxjson
+  migrate` converts it: each entry sized as that project's run sizes it;
+  in the shared layout the year folders' files are merged — entries the
+  years disagree on are listed, and written only with `migrate --write`
+  (the newest year's view); entries that open nothing are dropped.
 - In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
   TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), the
   one the books carry: the two are one listing.

@@ -448,8 +448,12 @@ class TestL4OutsideYearWrites(unittest.TestCase):
         return root
 
     def _outside(self, root):
+        # (with FILE: the JSON form, for review; without it the lines
+        # go to the accounts' .tt files — test_fix_missing_history_tt)
         return self.M._tj(root, "find-missing-history",
-                          "--write-missing-history", "--outside-year")
+                          "--write-missing-history",
+                          str(root / "missing_history.json"),
+                          "--outside-year")
 
     def test_counts_only_this_runs_entries(self):
         root = self._copy()

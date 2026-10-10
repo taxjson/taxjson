@@ -3865,11 +3865,25 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         pl = M.plan(root)
     except M.MigrateError as e:
         _die_input(str(e), "Nothing was changed.")
-    if not pl.names:
+    from taxjson.lib import missing_history as MH
+    try:
+        mhm = MH.plan_missing_history_migration(root)
+    except MH.MissingHistoryFileConflict as e:
+        _die_input(str(e), "Nothing was changed.")
+    except MH.TtOpeningError as e:
+        _die_input("an OPENING cost=unknown line cannot be read — fix it "
+                   "first:", *str(e).splitlines(), "Nothing was changed.")
+    except (OSError, ValueError) as e:
+        _die_input(str(e), "Nothing was changed.")
+    if not pl.names and mhm is None:
         print("taxjson migrate: nothing to migrate in this project")
-        for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} is "
+        for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} "
+                             f"or {MH.MISSING_HISTORY_FILE} is "
                              f"here.", indent="  "):
             print(_ln)
+        return
+    if not pl.names:
+        _migrate_missing_history(root, mhm, args)
         return
     dry = bool(getattr(args, "dry_run", False))
     print(f"taxjson migrate{' --dry-run' if dry else ''}: {root}")
@@ -3891,6 +3905,8 @@ def cmd_migrate(args: argparse.Namespace) -> None:
                     n=1):
                 print(f"    {ln}")
         print("\n  dry run: nothing was written")
+        if mhm is not None:
+            _migrate_missing_history(root, mhm, args)
         return
     try:
         M.apply(pl)
@@ -3902,6 +3918,82 @@ def cmd_migrate(args: argparse.Namespace) -> None:
             "repository, `git rm` the old files too); delete the "
             "*.migrated files once you are satisfied; run `taxjson run` to "
             "rebuild.", indent="  "):
+        print(_ln)
+    if mhm is not None:
+        _migrate_missing_history(root, mhm, args)
+
+
+def _migrate_missing_history(root: Path, mhm: Any,
+                             args: argparse.Namespace) -> None:
+    """`taxjson migrate`, missing_history.json: each entry becomes a
+    dated line `OPENING <date> <SYMBOL> <qty> cost=unknown` in
+    inputs/<account>/missing_history.tt, its quantity what the project's
+    run opens for it (lib/missing_history.plan_missing_history_
+    migration); with exports shared by every year the year folders'
+    files are merged into one record. Projects that disagree (another
+    quantity, an entry only some list) are listed and nothing is written
+    unless --write (each entry as the newest project listing it sizes
+    it); entries that open nothing anywhere are dropped, said. Then each
+    missing_history.json is renamed <name>.migrated."""
+    from taxjson.lib import missing_history as MH
+    dry = bool(getattr(args, "dry_run", False))
+    force = bool(getattr(args, "write", False))
+    plan = mhm.plan
+    names = ", ".join(_PL.shown(v.file, root) for v in mhm.views)
+    print(f"\n{MH.MISSING_HISTORY_FILE} -> dated .tt lines "
+          f"(OPENING <date> <SYMBOL> <qty> cost=unknown): {names}")
+    shared = _PL.shared_inputs(root)
+    for acct in sorted(plan.add):
+        print(f"  {'would write' if dry else 'write'} "
+              f"{_PL.shown(plan.files[acct], root)}"
+              + (" (shared by every year)" if shared else "") + ":")
+        for ln in plan.add[acct]:
+            print(f"    {ln.symbol} {ln.quantity:g}  (dated {ln.date}, the "
+                  f"day before the account's first row)")
+    if mhm.agreed and len(mhm.views) > 1:
+        print(f"  {len(mhm.agreed)} entr"
+              f"{'y' if len(mhm.agreed) == 1 else 'ies'} every year lists "
+              f"the same: one line each")
+    for ln, old in plan.same:
+        print(f"  {ln.account} {ln.symbol}: already opened by {old.where} "
+              f"with the same quantity — not written again")
+    _diff_tt = MH.tt_differ_lines(plan)
+    if mhm.differ or _diff_tt:
+        print("  The projects disagree on (for you to decide):")
+        for d in mhm.differ:
+            print(f"    - {d}")
+        for d in _diff_tt:
+            print(f"    - {d}")
+    if mhm.stale:
+        print("  Dropped (opens nothing: no rows, or the rows never go "
+              "short):")
+        for d in mhm.stale:
+            print(f"    - {d}")
+    if mhm.nodate:
+        print(f"  Not written (no books for the account — run `taxjson "
+              f"run`): {', '.join(mhm.nodate)}")
+    if dry:
+        print("\n  dry run: nothing was written")
+        return
+    if mhm.differ and not force:
+        _die("the year folders' missing_history.json files disagree "
+             "(listed above) — nothing was written for them",
+             "Decide each, or pass --write to take, for each entry, the "
+             "newest year's view (the list above says which).")
+    try:
+        written, renamed = MH.apply_missing_history_migration(mhm)
+    except OSError as e:
+        _die_input(f"could not write the migration: {e}")
+    for p in renamed:
+        print(f"  renamed {_PL.shown(p.with_name(p.name.split('.migrated')[0]), root)}"
+              f" -> {p.name}")
+    print("\nDone.")
+    for _ln in _out_wrap(
+            "Review the .tt lines (the date and quantity of each are "
+            "yours to correct) and commit them; delete the *.migrated "
+            "files once you are satisfied; run `taxjson run`"
+            + (" in each year folder" if shared else "") + ".",
+            indent="  "):
         print(_ln)
 
 
@@ -6975,6 +7067,22 @@ def _missing_history_path(root: Path) -> Path:
         raise                                   # (unreachable)
 
 
+def _missing_history_arg(root: Path) -> Optional[Path]:
+    """What a stage's --incomplete-history gets: the project's
+    missing-history file when it exists or when an account's .tt files
+    open units at unknown cost (`OPENING ... cost=unknown`: the stages
+    read those lines through this path — lib/missing_history.
+    load_missing_history); None without either. Dies (exit 2) when
+    both missing_history.json and phantoms.json exist."""
+    from taxjson.lib.missing_history import (MissingHistoryFileConflict,
+                                              missing_history_arg)
+    try:
+        return missing_history_arg(root)
+    except MissingHistoryFileConflict as e:
+        _die_input(str(e))
+        raise                                   # (unreachable)
+
+
 def _refuse_unknown_missing_history_accounts(mh_file: Path,
                                              accounts: Dict[str, Any]
                                              ) -> None:
@@ -6984,9 +7092,13 @@ def _refuse_unknown_missing_history_accounts(mh_file: Path,
     (audit S021-05: a pure relabel moved a book by tens of thousands).
     Refuse the run and name each stale label with a suggestion."""
     import difflib
-    from taxjson.lib.missing_history import load_missing_history
+    from taxjson.lib.missing_history import (TtOpeningError,
+                                              load_missing_history)
     try:
         pairs = load_missing_history(mh_file)
+    except TtOpeningError as e:
+        _die_input("an OPENING cost=unknown line cannot be used — fix it; "
+                   "nothing was run:", *str(e).splitlines())
     except (OSError, ValueError) as e:
         _die(f"{mh_file.name}: {e}")
     stale: Dict[str, List[str]] = {}
@@ -7306,8 +7418,10 @@ def cmd_run(args: argparse.Namespace) -> None:
     # old name phantoms.json is still read, with a rename NOTE.
     # Auto-detected at the root like ticker.map; when present it feeds
     # every account's gains run via --incomplete-history.
+    # The accounts' .tt `OPENING <date> <SYMBOL> <qty> cost=unknown` lines
+    # are the dated form of its entries: read through the same path.
     mh_file = _missing_history_path(root)
-    mh_arg = mh_file if mh_file.exists() else None
+    mh_arg = _missing_history_arg(root)
     if mh_arg:
         _refuse_unknown_missing_history_accounts(mh_arg, accounts)
     # Deletion detection: needs_rebuild compares mtimes of EXISTING inputs,
@@ -7318,8 +7432,25 @@ def cmd_run(args: argparse.Namespace) -> None:
     _ph_marker = cache / ".missing_history_applied"
     _ph_marker_old = cache / ".phantoms_applied"
     if mh_arg:
-        _step(f"Reading {mh_file.name} (openings for sales with no "
+        from taxjson.lib.missing_history import read_tt_openings as _rtt
+        try:
+            _n_tt = len(_rtt(root, accounts))
+        except ValueError:
+            _n_tt = 0
+        _what = " and ".join(x for x in (
+            mh_file.name if mh_file.exists() else "",
+            (f"{_n_tt} .tt OPENING cost=unknown line"
+             f"{'' if _n_tt == 1 else 's'}") if _n_tt else "") if x)
+        _step(f"Reading {_what} (openings for sales with no "
               f"purchase in the files)")
+        if mh_file.exists():
+            _say("note", f"{mh_file.name}: its entries can move into the "
+                 f"accounts' .tt files as dated lines (OPENING <date> "
+                 f"<SYMBOL> <qty> cost=unknown) with their quantities "
+                 f"fixed" + (", one record for every year"
+                             if _PL.shared_inputs(root) else ""),
+                 "`taxjson migrate` converts them (docs/troubleshooting.md: "
+                 "moving from missing_history.json).", indent="  ")
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         _write_atomic(_ph_marker, str(mh_file))
         _ph_marker_old.unlink(missing_ok=True)
@@ -8488,9 +8619,11 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
     except OSError:
         pass
     from taxjson.lib.out import show_blocks
-    show_blocks(FR.render_blocks(doc, mh_name=(mh_file.name if mh_file
-                                               else "missing_history.json")),
-                sys.stdout)
+    # (a project with only .tt OPENING cost=unknown lines: named so)
+    show_blocks(FR.render_blocks(doc, mh_name=(
+        mh_file.name if mh_file and mh_file.exists()
+        else "missing_history.tt" if mh_file
+        else "missing_history.json")), sys.stdout)
 
 
 # The taxjson.toml template — every key, documented, per country — and
@@ -15962,8 +16095,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     books = 0
     missing = []
     _mh_pairs = None
-    _mh = _missing_history_path(root)
-    if _mh.exists():
+    _mh = _missing_history_arg(root)
+    if _mh is not None:
         from taxjson.lib.missing_history import load_missing_history
         try:
             _mh_pairs = load_missing_history(_mh) or None
@@ -17543,7 +17676,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
         files = {}
         tmp_docs = {}
         _no_input = _accounts_skipped_for_no_inputs(root)
-        _mh_file = _missing_history_path(root)
+        _mh_file = _missing_history_arg(root)
         for n in names:
             b = cache / f"{n}_base.json"
             if not b.exists():
@@ -17578,7 +17711,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
             # The same missing-history openings every other recompute
             # applies: without them each such position showed as a
             # large short (R1-187).
-            if _mh_file.exists():
+            if _mh_file is not None:
                 cmd += ["--incomplete-history", str(_mh_file)]
             res = _run_cmd(cmd + [str(b)], capture_output=True)
             if res.returncode != 0:
@@ -18171,8 +18304,8 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     # The same missing-history openings the gains stage applies (R1-321):
     # without them a position bought before the data read as a short that
     # later real buys covered at zero cost.
-    mh_file = _missing_history_path(root)
-    if mh_file.exists():
+    mh_file = _missing_history_arg(root)
+    if mh_file is not None:
         argv += ["--incomplete-history", str(mh_file)]
     # The full-history superficial-loss pass (S008-07) sees what the
     # pipeline's wash pass sees: the registered accounts as context and
@@ -18287,8 +18420,8 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
-    mh_file = _missing_history_path(root)
-    if mh_file.exists():
+    mh_file = _missing_history_arg(root)
+    if mh_file is not None:
         argv += ["--incomplete-history", str(mh_file)]
     # [carryover] claimed (taxjson.toml): the losses actually applied
     # on filed returns (checked with the rest of the config).
@@ -19278,7 +19411,7 @@ def cmd_handoff(args: argparse.Namespace) -> None:
     try:
         opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
                                     _filed_run_gains, _hflags,
-                                    _missing_history_path(root))
+                                    _missing_history_arg(root))
         rep = _handoff.check(root, cfg, record, opening)
     except _handoff.BooksError as e:
         # Not a fabricated "a lot or a sale is missing" (A2-1137).
@@ -20065,8 +20198,8 @@ def _explain_wash_sales(root: Path, cache: Path,
         common += ["--sheltered", str(sheltered_base)]
     # Same missing-history openings as the pipeline, so traces match the
     # books.
-    mh_file = _missing_history_path(root)
-    if mh_file.exists():
+    mh_file = _missing_history_arg(root)
+    if mh_file is not None:
         common += ["--incomplete-history", str(mh_file)]
     common += option_timing_flags(settings)
     common += income_dating_flags(settings)
@@ -20322,6 +20455,11 @@ def _radar_taxable_bases(root: Path, cache: Path,
     return bases
 
 
+def _has_tt_openings(root: Path) -> bool:
+    from taxjson.lib.missing_history import has_tt_openings
+    return has_tt_openings(root)
+
+
 def _radar_engine_args(bases: List[Path],
                        missing_history: Optional[Path],
                        country: str) -> List[str]:
@@ -20345,7 +20483,11 @@ def _radar_engine_args(bases: List[Path],
         g = found.get(name)
         if g is not None:
             out += ["--gains", str(g)]
-    if missing_history is not None and Path(missing_history).exists():
+    if missing_history is not None and (
+            Path(missing_history).exists()
+            or _has_tt_openings(Path(missing_history).parent)):
+        # (the accounts' .tt OPENING cost=unknown lines are read
+        # through the project's missing-history path)
         out += ["--incomplete-history", str(missing_history)]
     if missing_history is not None:
         # The project's transfer policy, as the engine passes read it
@@ -22029,7 +22171,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             crypto = []
 
     sheltered_base = cache / "sheltered_base.json"
-    mh_file = _missing_history_path(root)
+    mh_file = _missing_history_arg(root)
     rates = cache / "to_base.csv"
     tmap = _PL.ticker_map_path(root)
 
@@ -22096,7 +22238,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl += ["--rates", str(rates)]
         if tmap.exists():
             fl += ["--map", str(tmap)]
-        if mh_file.exists():
+        if mh_file is not None:
             fl += ["--incomplete-history", str(mh_file)]
         fl += _timing_flags
         # The project's income-dating overrides, as the run applied
@@ -22445,6 +22587,86 @@ def _outside_year_rows(root: Path, files: List[Path], year: Any,
     return existing + added, len(added)
 
 
+def _write_missing_history_tt(root: Path, cache: Path,
+                              rows: List[Dict[str, Any]], year: Any,
+                              outside: bool, files: List[Path],
+                              flag: str) -> None:
+    """`find-missing-history --write-missing-history` (no FILE): one
+    `OPENING <date> <SYMBOL> <qty> cost=unknown` line per suggested pair
+    in inputs/<account>/missing_history.tt, dated the day before the
+    account's first row, its quantity the units the run opens for it
+    (the deepest shortage of the rows through the tax year's end; for a
+    pair short only after it, of every row). Merged with the lines the
+    account's .tt files have: never written twice; a symbol opened with
+    another quantity is listed and left as it is."""
+    from taxjson.lib import missing_history as MH
+    prog = f"{_PROG} find-missing-history"
+    if outside:
+        rows_by = _year_short_rows(root, files, year)
+        rows = [e for e in rows
+                if (r := rows_by.get((e.get("symbol"), e.get("account"))))
+                is not None and not r.year_listed]
+    lines: List[Any] = []
+    unsized: List[str] = []
+    nodate: List[str] = []
+    for e in sorted(rows, key=lambda e: (str(e.get("account")),
+                                         str(e.get("symbol")))):
+        sym = str(e.get("symbol") or "").upper()
+        acct = str(e.get("account") or "")
+        q = e.get(MH.QUANTITY_KEY)
+        how = (f"the shortage of the rows through {e.get('_sized_through')}"
+               if q and e.get("_sized_through") else "")
+        if not q:
+            q = e.get("_quantity_all_rows")
+            how = "the shortage of every row"
+        if not q or not sym or not acct:
+            unsized.append(f"{sym} / {acct}")
+            continue
+        d = MH.default_opening_date(cache, acct)
+        if d is None:
+            nodate.append(f"{sym} / {acct}")
+            continue
+        lines.append(MH.TtLine(acct, sym, float(q), d,
+                               f"find-missing-history: {how}"))
+    try:
+        plan = MH.plan_tt_write(root, lines)
+    except MH.TtOpeningError as e:
+        _die_input(f"{flag}: the accounts' OPENING cost=unknown lines "
+                   f"cannot be read — fix them first; nothing was written:",
+                   *str(e).splitlines())
+    for ln in MH.tt_differ_lines(plan):
+        _say("warning", f"{flag}: {ln}", prog=prog)
+    if unsized or nodate:
+        _say("note", f"{flag}: not written: "
+             + ", ".join(unsized + nodate),
+             "No shortage to size (the rows never go short), or no books "
+             "for the account (run `taxjson run`).", prog=prog)
+    if not plan.n_add:
+        _say("note", f"nothing to add: "
+             + (f"{len(plan.same)} line(s) already there"
+                if plan.same else "no sale with no purchase in your files"),
+             prog=prog)
+        return
+    from taxjson.lib.safe_write import OutsideLinkError
+    try:
+        written = MH.apply_tt_plan(plan)
+    except OutsideLinkError as e:
+        _die_input(f"{flag}: {e}")
+    except OSError as e:
+        _die_input(f"{flag}: cannot write: {e}")
+    for p in written:
+        acct = p.parent.name
+        print(f"Wrote {len(plan.add[acct])} OPENING cost=unknown line(s) to "
+              f"{_PL.shown(p, root)} (sales with no purchase in your "
+              f"files)", file=sys.stderr)
+    print(("These inputs are shared by every year's project: the lines "
+           "apply to every year. " if _PL.shared_inputs(root) else "")
+          + "Review each line: remove any that is a real short position, "
+          "and give the units held before your data and the date "
+          "(before the first sale they cover). `taxjson run` reads them.",
+          file=sys.stderr)
+
+
 def cmd_find_missing_history(args: argparse.Namespace) -> None:
     """Convenience wrapper over `taxjson-missing-history`: resolve the account
     base file(s) from the project and default the year from taxjson.toml."""
@@ -22512,6 +22734,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
 
         _flag = ("--write-missing-history --outside-year" if outside
                  else "--write-missing-history")
+        # Without FILE: dated lines in the accounts' .tt files
+        # (inputs/<account>/missing_history.tt, OPENING <date> <SYMBOL>
+        # <qty> cost=unknown — lib/missing_history); with FILE: the
+        # candidate JSON, for review.
+        tt_mode = not args.write_missing_history
         out = (Path(args.write_missing_history)
                if args.write_missing_history else _PL.data_file(root, MISSING_HISTORY_FILE))
         if outside and not year:
@@ -22519,7 +22746,7 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                        f"taxjson.toml or pass --year.")
         # Writing missing_history.json next to the old phantoms.json would
         # leave the project with both names, which every command refuses.
-        if (out.resolve() == (_PL.data_file(root, MISSING_HISTORY_FILE)).resolve()
+        if not tt_mode and (out.resolve() == (_PL.data_file(root, MISSING_HISTORY_FILE)).resolve()
                 and (_PL.data_file(root, LEGACY_MISSING_HISTORY_FILE)).exists()):
             _die_input(f"{_flag}: {_PL.data_file(root, LEGACY_MISSING_HISTORY_FILE)} is "
                        f"the old name of {MISSING_HISTORY_FILE} — rename it "
@@ -22532,7 +22759,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         # back and dropped the hand-added pairs, silently (audit A2-0312).
         # Refused up front — before the per-account work — unless
         # --force, which keeps a .bak like `init --force`.
-        if out.exists() and not out.is_dir() and not outside:
+        if out.exists() and not out.is_dir() and not outside \
+                and not tt_mode:
             # (--outside-year only ADDS pairs the file does not list:
             # every entry already in it is kept as it is.)
             if not getattr(args, "force", False):
@@ -22633,6 +22861,10 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
 
         rows = list(merged.values())
         _n_new = 0
+        if tt_mode:
+            _write_missing_history_tt(root, cache, rows, year, outside,
+                                      all_files or files, _flag)
+            return
         if outside:
             _got = _outside_year_rows(root, all_files or files, year, rows,
                                       out, mh_file)
@@ -22731,8 +22963,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         cmd += ["--year", str(year)]
     if args.include_options:
         cmd += ["--include-options"]
-    if mh_file.exists():
-        cmd += ["--missing-history", str(mh_file)]
+    _mh_arg = _missing_history_arg(root)
+    if _mh_arg is not None:
+        cmd += ["--missing-history", str(_mh_arg)]
     if (_PL.ticker_map_path(root)).exists():
         # Name the broker's ticker of a renamed symbol (S049-01).
         cmd += ["--ticker-map", str(_PL.ticker_map_path(root))]
@@ -24053,6 +24286,10 @@ def _build_parser(prog: str = "taxjson"
     p_mig.add_argument("--dry-run", action="store_true",
                        help="Show what would be appended and moved; "
                             "write nothing")
+    p_mig.add_argument("--write", action="store_true",
+                       help="missing_history.json of year folders that "
+                            "disagree: write anyway, each entry as the "
+                            "newest year listing it sizes it")
     p_mig.add_argument("--to-years", action="store_true",
                        help="Turn this single-folder project into one "
                             "folder of exports for every year: inputs/ "
@@ -25437,10 +25674,11 @@ def _build_parser(prog: str = "taxjson"
                        nargs="?", const="", default=None,
                        help="Instead of the report, write the sales with "
                             "no purchase in your files (truncated-history "
-                            "rows) to FILE for review (default: the "
-                            "project's missing_history.json). `taxjson run` "
-                            "applies missing_history.json at the project "
-                            "root via --incomplete-history")
+                            "rows) as dated lines `OPENING <date> <SYMBOL> "
+                            "<qty> cost=unknown` in inputs/<account>/"
+                            "missing_history.tt (merged with the lines "
+                            "there; `taxjson run` reads them), or with FILE "
+                            "as JSON to FILE for review")
     # The flag's old name, hidden; it prints a note and still works.
     p_fmh.add_argument("--gen-phantoms", metavar="FILE",
                        help=argparse.SUPPRESS)

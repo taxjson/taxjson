@@ -483,9 +483,9 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     # close-year snapshot WITH the missing-history openings and
     # check-filed recompute WITHOUT them: a guaranteed false DRIFT on
     # every such project (2026-09 audit).
-    from taxjson.lib.missing_history import missing_history_path
-    mh_file = missing_history_path(cache.parent)
-    if mh_file.exists():
+    from taxjson.lib.missing_history import missing_history_arg
+    mh_file = missing_history_arg(cache.parent)
+    if mh_file is not None:
         cmd += ["--incomplete-history", str(mh_file)]
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / "combined_base.json"
@@ -536,9 +536,9 @@ def recompute_year(cache: Path, account: str, year: int,
     cmd += _lo_flags(cache)
     # missing_history.json (or its old name) lives at the PROJECT ROOT
     # (see _recompute_blended above).
-    from taxjson.lib.missing_history import missing_history_path
-    mh_file = missing_history_path(cache.parent)
-    if mh_file.exists():
+    from taxjson.lib.missing_history import missing_history_arg
+    mh_file = missing_history_arg(cache.parent)
+    if mh_file is not None:
         cmd += ["--incomplete-history", str(mh_file)]
     cmd.append(str(base))
     with tempfile.TemporaryDirectory() as td:

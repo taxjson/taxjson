@@ -28,7 +28,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -70,6 +70,13 @@ class MissingHistoryPairs(set):
         # The last date whose rows size an opening ('YYYY-12-31', the
         # project's year end: _size_until_for), None for every row.
         self.size_until: Optional[str] = None
+        # The dated openings of the accounts' .tt files (`OPENING <date>
+        # <SYMBOL> <qty> cost=unknown`, read_tt_openings): their date
+        # and quantity are the user's, never sized from the rows.
+        self.fixed: Dict[Tuple[str, str], "TtOpening"] = {}
+        # missing_history.json entries a .tt line replaces: [(pair,
+        # the line's place)] (said once as an Info line).
+        self.overridden: List[Tuple[Tuple[str, str], str]] = []
 
 
 # The entry key that records how many shares (units) an opening fills:
@@ -2163,7 +2170,10 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
         if any(n.startswith('no opening needed') for n in notes):
             complete.append((symbol, account))
         elif notes and all(n.startswith('no rows') for n in notes):
-            emit_line(f"warning: {file_name} lists {symbol} / {account}, but "
+            _src = next((e.get('source') for e in es if e.get('source')),
+                        None)
+            emit_line(f"warning: {_src or file_name} "
+                      f"{'opens' if _src else 'lists'} {symbol} / {account}, but "
                       f"no row in the data has that symbol and account — "
                       f"nothing was applied. Check the spelling.",
                       file=sys.stderr)
@@ -2177,12 +2187,16 @@ def report_missing_history_log(logs: List[List[Dict[str, Any]]],
 
 def format_suggestions(candidates: List[MissingHistoryCandidate],
                        quantities: Optional[Dict[Tuple[str, str], float]]
-                       = None, sized_through: Optional[str] = None) -> str:
+                       = None, sized_through: Optional[str] = None, *,
+                       all_rows: Optional[Dict[Tuple[str, str], float]]
+                       = None) -> str:
     """Write the candidate JSON to a string. Underscore-prefixed fields are
     notes for human review; the loader ignores them. `quantities`: the
     units each entry's opening fills, as the run sizes it
     (synthesize_openings: the rows through `sized_through`, the tax
-    year's end), recorded as `quantity` with `_sized_through`."""
+    year's end), recorded as `quantity` with `_sized_through`;
+    `all_rows`: the deepest shortage of every row (`_quantity_all_rows`:
+    what a .tt line opens for a pair short only after the year end)."""
     entries = []
     for c in candidates:
         note = (
@@ -2199,12 +2213,15 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
                     + (f" (IB Basis {c.broker_basis})"
                        if c.broker_basis else ""))
         _q = (quantities or {}).get((c.symbol, c.account))
+        _qa = (all_rows or {}).get((c.symbol, c.account))
         entries.append({
             "symbol": c.symbol,
             "account": c.account,
             **({QUANTITY_KEY: round(_q, 10)} if _q else {}),
             **({"_sized_through": sized_through}
                if _q and sized_through else {}),
+            **({"_quantity_all_rows": round(_qa, 10)}
+               if _qa else {}),
             "_note": note,
             "_first_negative": c.first_negative_date,
             # Full precision (audit S074-22: a 3e-05 BTC short read
@@ -2223,15 +2240,37 @@ def load_missing_history(path: Path) -> MissingHistoryPairs:
     `quantity` and, for the project's own file, its year end
     (size_until). Underscore-prefixed metadata fields are ignored. A leading BOM
     (an editor's UTF-8 save) is dropped, as for every other user-edited
-    file (re-audit A2-1453)."""
+    file (re-audit A2-1453).
+
+    The project's own file (missing_history.json at the root of a
+    project: a folder with taxjson.toml) also carries the accounts'
+    `.tt` OPENING cost=unknown lines (read_tt_openings, in `fixed`):
+    a pair both list is the .tt line's (one Info line per run); the
+    file may then be absent (only .tt lines)."""
+    path = Path(path)
+    tts = _project_tt_openings(path)
+    if tts and not path.is_file():
+        data: Any = []
+    else:
+        data = _read_json_entries(path)
+    out = _pairs_from_entries(path, data)
+    if tts:
+        _merge_tt(out, tts)
+    return out
+
+
+def _read_json_entries(path: Path) -> Any:
     with open(path, 'r', encoding='utf-8-sig') as f:
         try:
-            data = json.load(f)
+            return json.load(f)
         except json.JSONDecodeError as e:
             # Name the file: it is hand-edited, and the bare decoder
             # message gave no hint which input was bad (audit S076-01).
             raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc,
                                        e.pos) from None
+
+
+def _pairs_from_entries(path: Path, data: Any) -> MissingHistoryPairs:
     if not isinstance(data, list):
         raise ValueError(f"{path}: expected a JSON array of missing-history "
                          f"entries")
@@ -2264,6 +2303,573 @@ def load_missing_history(path: Path) -> MissingHistoryPairs:
     return out
 
 
+# --------------------------------------------------------------------
+# Dated openings in the accounts' .tt files.
+#
+# `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` in any .tt
+# file of inputs/<account>/ (taxjson_convert_tt.parse_unknown_opening_
+# line): <qty> units of SYMBOL held on <date>, bought before the data at
+# a cost the files do not give. The same opening a missing_history.json
+# entry gets (an OPENING_BALANCE row: sales drawing on it go to manual
+# reporting, CA-ACB-11 / US-BASIS-04) with its date and quantity the
+# user's: never sized from the rows, no tax-year window. With exports
+# shared by every year (`inputs_dir`) the lines are shared too: one
+# record for every year. `find-missing-history --write-missing-history`
+# writes them into inputs/<account>/MISSING_HISTORY_TT; `taxjson
+# migrate` converts a missing_history.json (merging the year folders').
+
+MISSING_HISTORY_TT = "missing_history.tt"
+# Set once the "a .tt line replaces the entry" Info line was printed
+# (child processes inherit it: one per `taxjson run`).
+_TT_WINS_ENV = "TAXJSON_MISSING_HISTORY_TT_NOTED"
+
+
+@dataclass
+class TtOpening:
+    """One `OPENING <date> <SYMBOL> <qty> cost=unknown` line."""
+    account: str
+    date: str
+    symbol: str
+    quantity: float
+    where: str              # "inputs/<acct>/<file>.tt:<n>"
+    reason: str = ''
+    line: str = ''
+
+
+class TtOpeningError(ValueError):
+    """A .tt OPENING cost=unknown line that cannot be used: str(e)
+    names the line(s)."""
+
+
+def read_tt_openings(root: Any, accounts: Optional[Iterable[str]] = None
+                     ) -> List[TtOpening]:
+    """Every `OPENING ... cost=unknown` line of the project's accounts'
+    .tt files (inputs/<account>/, the shared folder with `inputs_dir`),
+    sorted by account, symbol. `accounts` defaults to taxjson.toml's.
+    Raises TtOpeningError listing each malformed line and each symbol
+    opened twice in one account (which line is the truth cannot be
+    guessed)."""
+    from taxjson.bin.taxjson_convert_tt import parse_unknown_opening_line
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.cli_diag import read_text_utf8
+    from taxjson.lib.dated_events import _project_accounts, _where, tt_files
+    root = Path(root)
+    if accounts is None:
+        accounts = list(_project_accounts(root))
+    out: List[TtOpening] = []
+    problems: List[str] = []
+    seen: Dict[Tuple[str, str], TtOpening] = {}
+    for acct in sorted(str(a) for a in accounts):
+        for tt in tt_files(_PL.inputs_dir(root) / acct):
+            try:
+                text = read_text_utf8(tt)
+            except (OSError, ValueError):
+                continue        # the .tt stage names an unreadable file
+            for n, raw in enumerate(text.splitlines(), 1):
+                if "OPENING" not in raw or "cost=" not in raw.lower():
+                    continue
+                where = _where(acct, tt, n)
+                try:
+                    o = parse_unknown_opening_line(raw, where)
+                except ValueError as e:
+                    problems.append(str(e))
+                    continue
+                if o is None:
+                    continue
+                t = TtOpening(acct, o['date'], o['symbol'], o['quantity'],
+                              where, o['reason'], o['line'])
+                prev = seen.get((acct, t.symbol))
+                if prev is not None:
+                    problems.append(
+                        f"{where}: {t.symbol} is already opened at unknown "
+                        f"cost in account {acct} by {prev.where} — one "
+                        f"OPENING cost=unknown line per symbol per account "
+                        f"(the units held before the data, all of them): "
+                        f"keep one line.")
+                    continue
+                seen[(acct, t.symbol)] = t
+                out.append(t)
+    if problems:
+        raise TtOpeningError("\n".join(problems))
+    out.sort(key=lambda t: (t.account, t.symbol))
+    return out
+
+
+def _is_project_file(path: Path) -> bool:
+    """`path` is a project's own missing-history file name at the root
+    of a project (a folder with taxjson.toml)."""
+    return (path.name in (MISSING_HISTORY_FILE, LEGACY_MISSING_HISTORY_FILE)
+            and (path.parent / "taxjson.toml").is_file())
+
+
+def _project_tt_openings(path: Path) -> List[TtOpening]:
+    """The .tt openings of the project whose missing-history file
+    `path` is ([] for any other file)."""
+    if not _is_project_file(path):
+        return []
+    return read_tt_openings(path.parent)
+
+
+def _merge_tt(out: MissingHistoryPairs, tts: Sequence[TtOpening]) -> None:
+    """Add the .tt openings to the pairs a missing-history file listed:
+    a pair both list is the .tt line's (Info once per run)."""
+    for t in tts:
+        pair = (t.symbol, t.account)
+        if pair in out and pair not in out.fixed:
+            out.overridden.append((pair, t.where))
+        out.quantities.pop(pair, None)
+        out.add(pair)
+        out.fixed[pair] = t
+    if not out.quantities and len(out.fixed) == len(out):
+        out.source_name = MISSING_HISTORY_TT
+    if out.overridden and not os.environ.get(_TT_WINS_ENV):
+        os.environ[_TT_WINS_ENV] = "1"
+        shown = ", ".join(f"{s} / {a} ({w})" for (s, a), w
+                          in out.overridden[:4]) + (
+            f" +{len(out.overridden) - 4} more"
+            if len(out.overridden) > 4 else "")
+        emit_line(f"NOTE: {_source_name(out)} and a .tt OPENING cost=unknown "
+                  f"line both open {shown} — the .tt line is used (its "
+                  f"date and quantity); remove the entr"
+                  f"{'y' if len(out.overridden) == 1 else 'ies'} from "
+                  f"{_source_name(out)} (`taxjson migrate` moves them all).",
+                  file=sys.stderr)
+
+
+def has_tt_openings(root: Any) -> bool:
+    """The project's accounts have an `OPENING ... cost=unknown` .tt
+    line (a malformed one counts: the run names it)."""
+    try:
+        return bool(read_tt_openings(root))
+    except TtOpeningError:
+        return True
+
+
+def missing_history_arg(root: Any, *, note: bool = True
+                        ) -> Optional[Path]:
+    """The path a stage's --incomplete-history gets for project `root`:
+    its missing_history.json (or the legacy phantoms.json) when it
+    exists or when the accounts' .tt files open units at unknown cost
+    (load_missing_history reads both through it); None without either.
+    Raises MissingHistoryFileConflict as project_missing_history_file."""
+    p = project_missing_history_file(root, note=note)
+    if p is not None:
+        return p
+    if has_tt_openings(root):
+        return Path(root) / MISSING_HISTORY_FILE
+    return None
+
+
+def project_missing_history(root: Any, *, note: bool = True
+                            ) -> Optional[MissingHistoryPairs]:
+    """The project's missing history — missing_history.json and the
+    accounts' .tt OPENING cost=unknown lines — or None without either.
+    Raises what load_missing_history raises."""
+    p = missing_history_arg(root, note=note)
+    return load_missing_history(p) if p is not None else None
+
+
+def openings_from_log(doc: Dict[str, Any], account: str
+                      ) -> List[Dict[str, Any]]:
+    """The missing-history openings a gains file's run booked for
+    `account` (its `missing_history_log`; `phantom_application_log` in
+    a file an older taxjson wrote), as OPENING_BALANCE row dicts: the
+    units the books hold that no row of work/<acct>_base.json carries.
+    Every positions view adds them (lib/positions_check.book_rows)."""
+    log = doc.get("missing_history_log")
+    if log is None:
+        log = doc.get("phantom_application_log")
+    out = []
+    for e in log or []:
+        if not isinstance(e, dict):
+            continue
+        if (e.get("account") == account and e.get("inserted")
+                and float(e.get("opening_qty") or 0.0) > 0):
+            d = e.get("anchor_date") or "1970-01-01"
+            out.append({"action": "OPENING_BALANCE", "date": d,
+                        "date_settle": d, "time": "00:00:00",
+                        "symbol": e.get("anchor_symbol") or e.get("symbol"),
+                        "quantity": float(e["opening_qty"]),
+                        "net_amount": 0.0, "account": account})
+    return out
+
+
+def first_row_date(cache: Path, account: str) -> Optional[str]:
+    """The date of the first row of `account`'s merged books
+    (work/<account>_base.json), None when it cannot be read."""
+    try:
+        doc = json.loads((Path(cache) / f"{account}_base.json")
+                         .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rows = doc.get("transactions") if isinstance(doc, dict) else doc
+    days = [str(r.get("date") or "")[:10] for r in rows or []
+            if isinstance(r, dict) and r.get("date")]
+    days = [d for d in days if re.match(r"^\d{4}-\d{2}-\d{2}$", d)]
+    return min(days) if days else None
+
+
+def day_before(day: str) -> str:
+    return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+
+
+def default_opening_date(cache: Path, account: str) -> Optional[str]:
+    """The date a written OPENING cost=unknown line gets: the day before
+    the first row of the account's history (before every sale that can
+    draw on it). None when the account has no books."""
+    first = first_row_date(cache, account)
+    return day_before(first) if first else None
+
+
+@dataclass
+class TtLine:
+    """One OPENING cost=unknown line to write."""
+    account: str
+    symbol: str
+    quantity: float
+    date: str
+    reason: str = ''
+
+
+@dataclass
+class TtWritePlan:
+    """What writing OPENING cost=unknown lines does, per account file:
+    `add` the new lines, `same` the symbols a line already opens with
+    the same quantity (never duplicated), `differ` [(TtLine, the line
+    there, its quantity)] the symbols a line already opens with another
+    quantity (flagged, never replaced)."""
+    root: Path
+    files: Dict[str, Path] = field(default_factory=dict)
+    add: Dict[str, List[TtLine]] = field(default_factory=dict)
+    same: List[Tuple[TtLine, TtOpening]] = field(default_factory=list)
+    differ: List[Tuple[TtLine, TtOpening]] = field(default_factory=list)
+
+    @property
+    def n_add(self) -> int:
+        return sum(len(v) for v in self.add.values())
+
+
+# The header of a new inputs/<account>/missing_history.tt.
+def _tt_header(shared: bool) -> List[str]:
+    out = [
+        "# Units held before the data starts, at a cost the files do not",
+        "# give (written by `taxjson find-missing-history",
+        "# --write-missing-history` or `taxjson migrate`; edit freely):",
+        "#   OPENING <date> <SYMBOL> <qty> cost=unknown [reason=\"...\"]",
+        "# Sales that draw on these units are listed for manual reporting",
+        "# and left out of the totals (`taxjson tax-logic`: CA-ACB-11 /",
+        "# US-BASIS-04). Date a line before the first sale it covers.",
+    ]
+    if shared:
+        out += ["# This folder holds the exports every year's project reads:",
+                "# these lines apply to every year."]
+    return out + [""]
+
+
+def plan_tt_write(root: Any, lines: Iterable[TtLine]) -> TtWritePlan:
+    """Merge `lines` into the accounts' existing OPENING cost=unknown
+    lines (every .tt file of the account): a symbol already opened with
+    the same quantity is not written again; one opened with another
+    quantity is flagged in `differ` and left as it is. New lines go to
+    inputs/<account>/MISSING_HISTORY_TT. Raises TtOpeningError when the
+    existing lines cannot be read."""
+    from taxjson.lib import project_layout as _PL
+    root = Path(root)
+    plan = TtWritePlan(root)
+    lines = list(lines)
+    have = {(t.account, t.symbol): t
+            for t in read_tt_openings(root, {ln.account for ln in lines}
+                                      | set(_project_accounts_of(root)))}
+    seen = set()
+    for ln in sorted(lines, key=lambda x: (x.account, x.symbol)):
+        key = (ln.account, ln.symbol)
+        if key in seen:
+            continue
+        seen.add(key)
+        old = have.get(key)
+        if old is not None:
+            if abs(float(old.quantity) - float(ln.quantity)) <= 1e-9 * max(
+                    1.0, abs(float(ln.quantity))):
+                plan.same.append((ln, old))
+            else:
+                plan.differ.append((ln, old))
+            continue
+        plan.files.setdefault(ln.account, _PL.inputs_dir(root) / ln.account
+                              / MISSING_HISTORY_TT)
+        plan.add.setdefault(ln.account, []).append(ln)
+    return plan
+
+
+def _project_accounts_of(root: Path) -> List[str]:
+    from taxjson.lib.dated_events import _project_accounts
+    return list(_project_accounts(root))
+
+
+def tt_plan_text(plan: TtWritePlan, account: str) -> str:
+    """The new contents of `account`'s MISSING_HISTORY_TT: the file as
+    it is (a new one gets the header), then the plan's new lines."""
+    from taxjson.bin.taxjson_convert_tt import unknown_opening_text
+    from taxjson.lib import project_layout as _PL
+    path = plan.files[account]
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        text = "\n".join(_tt_header(_PL.shared_inputs(plan.root)))
+    if text and not text.endswith("\n"):
+        text += "\n"
+    for ln in plan.add.get(account, []):
+        text += unknown_opening_text(ln.date, ln.symbol, ln.quantity,
+                                     ln.reason) + "\n"
+    return text
+
+
+def apply_tt_plan(plan: TtWritePlan) -> List[Path]:
+    """Write the plan's new lines (the user-file guard: a symlink that
+    leaves the project's folder is refused, the previous file kept as a
+    .bak). Returns the files written."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.safe_write import write_user_file
+    out = []
+    for acct in sorted(plan.add):
+        path = plan.files[acct]
+        text = tt_plan_text(plan, acct)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # (appended to: the lines already there are kept as they are)
+        write_user_file(path, text, _PL.write_boundary(plan.root),
+                        backup=False)
+        out.append(path)
+    return out
+
+
+def tt_differ_lines(plan: TtWritePlan) -> List[str]:
+    """One line per symbol already opened with another quantity."""
+    return [f"{ln.account} {ln.symbol}: {old.where} opens "
+            f"{float(old.quantity):g}, the books size {float(ln.quantity):g}"
+            f" — left as it is (edit the line to change it)"
+            for ln, old in plan.differ]
+
+
+# --------------------------------------------------------------------
+# `taxjson migrate`: missing_history.json -> the .tt form.
+
+MIGRATED_SUFFIX = ".migrated"
+
+
+@dataclass
+class ProjectView:
+    """What one project's missing_history.json opens, sized as its run
+    sizes it (the rows through its tax year's end; a recorded
+    `quantity` as it is): `sized` {pair: units}, `later` {pair: units}
+    for an entry short only after the year end (the deepest shortage of
+    every row), `anchor` {pair: the symbol the opening is booked on},
+    `stale` {pair: why it opens nothing}."""
+    root: Path
+    year: Optional[int]
+    file: Path
+    sized: Dict[Tuple[str, str], float] = field(default_factory=dict)
+    later: Dict[Tuple[str, str], float] = field(default_factory=dict)
+    stale: Dict[Tuple[str, str], str] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        return str(self.year) if self.year else self.root.name
+
+    def view(self, pair: Tuple[str, str]) -> Optional[float]:
+        if pair in self.sized:
+            return self.sized[pair]
+        return self.later.get(pair)
+
+    def listed(self) -> Set[Tuple[str, str]]:
+        return set(self.sized) | set(self.later) | set(self.stale)
+
+
+class MigrationNeedsRun(ValueError):
+    """A project whose books are not built: its entries cannot be
+    sized (run `taxjson run` there first)."""
+
+
+def _project_year(root: Path) -> Optional[int]:
+    from taxjson.lib import project_layout as _PL
+    st = (_PL.read_config_soft(root).get("settings") or {})
+    y = st.get("year")
+    return y if isinstance(y, int) and not isinstance(y, bool) else None
+
+
+def _log_of(cache: Path, account: str, mh_file: Path
+            ) -> Optional[List[Dict[str, Any]]]:
+    """The account's applied missing-history log from its last run
+    (work/<acct>_gains.json), None when there is none or it is older
+    than `mh_file` (the run did not apply this file)."""
+    g = Path(cache) / f"{account}_gains.json"
+    try:
+        if g.stat().st_mtime < mh_file.stat().st_mtime:
+            return None
+        doc = json.loads(g.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    log = doc.get("missing_history_log") if isinstance(doc, dict) else None
+    return log if isinstance(log, list) else None
+
+
+def project_view(root: Any) -> Optional[ProjectView]:
+    """The ProjectView of project `root`'s missing_history.json (None
+    without one). Each entry is sized as the project's run sized it: its
+    last run's applied log (work/<acct>_gains.json) when that run read
+    this file, else the same synthesize_openings call on the account's
+    merged books. Raises MigrationNeedsRun when an account's books are
+    not built; what load_missing_history raises."""
+    from taxjson.lib.core import load_transactions
+    root = Path(root)
+    mh = project_missing_history_file(root, note=False)
+    if mh is None:
+        return None
+    pairs = MissingHistoryPairs()
+    data = _read_json_entries(mh)
+    pairs = _pairs_from_entries(mh, data)
+    year = _project_year(root)
+    until = sizing_until(year)
+    v = ProjectView(root, year, mh)
+    cache = root / "work"
+    for acct in sorted({a for _s, a in pairs}):
+        mine = MissingHistoryPairs({p for p in pairs if p[1] == acct})
+        mine.quantities = {k: q for k, q in pairs.quantities.items()
+                           if k[1] == acct}
+        log = _log_of(cache, acct, mh)
+        if log is None:
+            base = cache / f"{acct}_base.json"
+            if not base.is_file():
+                raise MigrationNeedsRun(
+                    f"{root}: no work/{acct}_base.json — run `taxjson run` "
+                    f"there first (its {mh.name} entries are sized from "
+                    f"its books)")
+            txs = load_transactions(base)
+            _o, log = synthesize_openings(txs, mine, flag_stale=False,
+                                          until=until)
+        for e in log:
+            pair = (str(e.get('symbol') or ''), str(e.get('account') or ''))
+            if pair not in mine:
+                continue
+            if e.get('inserted'):
+                v.sized[pair] = float(e.get('opening_qty') or 0.0)
+            elif float(e.get('opening_all_rows') or 0.0) > 0:
+                v.later[pair] = float(e['opening_all_rows'])
+            else:
+                v.stale[pair] = str(e.get('note') or 'opens nothing')
+        for pair in mine:
+            if pair not in v.listed():
+                v.stale[pair] = 'opens nothing'
+    return v
+
+
+@dataclass
+class MissingHistoryMigration:
+    """`taxjson migrate`'s plan for missing_history.json: the views of
+    every project that has one (the year folders sharing the exports),
+    the merged lines (each entry as the NEWEST project listing it sizes
+    it), `agreed` (every project listing it the same), `differ` (lines
+    saying how the projects disagree: another quantity, or not listed
+    in some), `stale` (opens nothing in any project: dropped) and the
+    write plan."""
+    views: List[ProjectView]
+    lines: List[TtLine] = field(default_factory=list)
+    agreed: List[Tuple[str, str]] = field(default_factory=list)
+    differ: List[str] = field(default_factory=list)
+    stale: List[str] = field(default_factory=list)
+    plan: Optional[TtWritePlan] = None
+    nodate: List[str] = field(default_factory=list)
+
+
+def migration_projects(root: Any) -> List[Path]:
+    """The projects whose missing_history.json `taxjson migrate` merges:
+    with exports shared by every year (`inputs_dir`), every year folder
+    beside `root` reading the same folder; else `root` alone."""
+    from taxjson.lib import project_layout as _PL
+    root = Path(root).resolve()
+    if not _PL.shared_inputs(root):
+        return [root]
+    mine = _PL.inputs_dir(root).resolve()
+    out = []
+    for _y, d in _PL.year_dirs(root.parent):
+        try:
+            if _PL.inputs_dir(d).resolve() == mine:
+                out.append(d.resolve())
+        except OSError:
+            continue
+    return out or [root]
+
+
+def plan_missing_history_migration(root: Any) -> Optional[
+        MissingHistoryMigration]:
+    """The plan (None when no project has a missing_history.json)."""
+    projects = migration_projects(root)
+    views = [v for v in (project_view(p) for p in projects) if v is not None]
+    if not views:
+        return None
+    views.sort(key=lambda v: (v.year or 0, str(v.root)))
+    m = MissingHistoryMigration(views)
+    newest = views[-1]
+    pairs = set()
+    for v in views:
+        pairs |= v.listed()
+    multi = len(views) > 1
+    for pair in sorted(pairs, key=lambda p: (p[1], p[0])):
+        sym, acct = pair
+        vals = [(v, v.view(pair)) for v in views if pair in v.listed()]
+        sized = [(v, q) for v, q in vals if q is not None]
+        if not sized:
+            why = "; ".join(f"{v.label}: {v.stale.get(pair, '')}"
+                            for v, _q in vals) if multi else \
+                vals[0][0].stale.get(pair, '')
+            m.stale.append(f"{sym} / {acct}: {why}")
+            continue
+        src, q = sized[-1]
+        agree = (len(sized) == len(views)
+                 and all(abs(x - q) <= 1e-9 * max(1.0, q) for _v, x in sized))
+        if agree:
+            m.agreed.append(pair)
+        else:
+            parts = []
+            for v in views:
+                x = v.view(pair)
+                if pair not in v.listed():
+                    parts.append(f"{v.label}: not listed")
+                elif x is None:
+                    parts.append(f"{v.label}: opens nothing "
+                                 f"({v.stale.get(pair, '')})")
+                else:
+                    parts.append(f"{v.label}: {x:g}"
+                                 + (" (short only after its year)"
+                                    if pair in v.later else ""))
+            m.differ.append(f"{sym} / {acct}: " + ", ".join(parts)
+                            + f" — written: {q:g} ({src.label}'s view)")
+        d = default_opening_date(newest.root / "work", acct)
+        if d is None:
+            m.nodate.append(f"{sym} / {acct}")
+            continue
+        where = (f"{src.label}/{src.file.name}" if multi else src.file.name)
+        m.lines.append(TtLine(acct, sym, q, d, f"migrated from {where}"))
+    m.plan = plan_tt_write(newest.root, m.lines)
+    return m
+
+
+def apply_missing_history_migration(m: MissingHistoryMigration
+                                    ) -> Tuple[List[Path], List[Path]]:
+    """Write the plan's lines, then rename each project's
+    missing_history.json to <name>.migrated (never deleted). Returns
+    (the .tt files written, the files renamed)."""
+    written = apply_tt_plan(m.plan) if m.plan is not None else []
+    renamed = []
+    for v in m.views:
+        dst = v.file.with_name(v.file.name + MIGRATED_SUFFIX)
+        n = 1
+        while dst.exists() or dst.is_symlink():
+            n += 1
+            dst = v.file.with_name(f"{v.file.name}{MIGRATED_SUFFIX}{n}")
+        os.replace(v.file, dst)
+        renamed.append(dst)
+    return written, renamed
+
+
 def window_sized_entries(logs: Iterable[Iterable[Dict[str, Any]]]
                          ) -> List[Dict[str, Any]]:
     """The applied-log entries (synthesize_openings) whose size the tax
@@ -2287,8 +2893,24 @@ def short_again_message(entry: Dict[str, Any],
     """One ATTENTION line for a listed position that goes short again
     once its opening is used up (synthesize_openings `short_again`)."""
     sym, acct = entry.get('symbol'), entry.get('account')
-    sa = entry['short_again']
     q = float(entry.get('opening_qty') or 0.0)
+    if entry.get('fixed'):
+        where = entry.get('source') or file_name
+        sb = entry.get('short_before')
+        if sb:
+            return (f"{where} opens {q:g} {sym} / {acct} on "
+                    f"{entry.get('anchor_date')}, but the position is "
+                    f"already short on {sb['date']} ({sb['qty']:g} units) — "
+                    f"those sales have no purchase and no opening. Date the "
+                    f"line before them (the day before the account's first "
+                    f"row is always early enough).")
+        sa = entry['short_again']
+        return (f"{where} opens {q:g} {sym} / {acct}: the position goes "
+                f"short again on {sa['date']} ({sa['qty']:g} units) after "
+                f"those units are used up — those sales have no purchase "
+                f"and no opening. Raise the quantity on that line to the "
+                f"units held before the data, or add the missing purchase.")
+    sa = entry['short_again']
     until = entry.get('sized_through')
     head = (f"{file_name} lists {sym} / {acct}: the position goes short "
             f"again on {sa['date']} ({sa['qty']:g} units)")
@@ -2417,6 +3039,121 @@ def _short_again(entry: Dict[str, Any],
             return
 
 
+def reverse_dated(sorted_txs: Sequence[TaxTransaction]
+                  ) -> Dict[Tuple[str, str], List[Tuple[str, str]]]:
+    """{(new symbol, account): [(old symbol, date)]} of the rename SPLIT
+    rows (a ticker change carries the position from old to new)."""
+    out: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    for tx in sorted_txs:
+        if tx.action == 'SPLIT':
+            new_sym = normalize_symbol_new(tx.symbol,
+                                           getattr(tx, 'symbol_new', ''))
+            if new_sym:
+                out.setdefault((new_sym, tx.account), []).append(
+                    (tx.symbol, str(tx.date)[:10]))
+    return out
+
+
+def _symbol_on(symbol: str, account: str, day: str,
+               renames: Dict[Tuple[str, str], List[Tuple[str, str]]]
+               ) -> str:
+    """The symbol the units of `symbol` carried on `day`: walked back
+    through each rename into it dated on or after `day` (an opening is
+    booked first on its day, before a same-day rename)."""
+    seen = {symbol}
+    for _ in range(len(renames) + 1):
+        back = [old for old, d in renames.get((symbol, account), ())
+                if d >= day]
+        if not back or back[0] in seen:
+            return symbol
+        symbol = back[0]
+        seen.add(symbol)
+    return symbol
+
+
+def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
+                          fixed: Dict[Tuple[str, str], Any],
+                          chains: Dict[Tuple[str, str], Set[Tuple[str, str]]],
+                          renames: Dict[Tuple[str, str],
+                                        List[Tuple[str, str]]],
+                          *, warn: bool = False
+                          ) -> List[Tuple[Optional[TaxTransaction],
+                                          Dict[str, Any]]]:
+    """[(OPENING_BALANCE row or None, applied-log entry)] for the .tt
+    OPENING cost=unknown lines: `quantity` units dated `date`, on the
+    symbol the units carried that day (a line naming a rename's new
+    symbol, dated before the rename, opens the old one). The log entry
+    says where the position goes short before the line's date
+    (`short_before`) or again once its units are used up
+    (`short_again`)."""
+    out: List[Tuple[Optional[TaxTransaction], Dict[str, Any]]] = []
+    for pair in sorted(fixed):
+        t = fixed[pair]
+        symbol, account = pair
+        members = chains.get(pair) or {pair}
+        entry: Dict[str, Any] = {
+            'symbol': symbol, 'account': account, 'opening_qty': 0.0,
+            'inserted': False, 'source': t.where, 'fixed': True}
+        day = str(t.date)
+        running = 0.0
+        factor = 1.0
+        factor_at: Optional[float] = None
+        path: List[Tuple[str, float, float]] = []
+        currency = ''
+        seen = False
+        for tx in sorted_txs:
+            if (tx.symbol, tx.account) not in members:
+                continue
+            if tx.action not in ('BUYSELL', 'ASSIGN', 'TRANSFER', 'SPLIT'):
+                continue
+            seen = True
+            d = str(tx.date)[:10]
+            if factor_at is None and d >= day:
+                factor_at = factor
+            if tx.action == 'SPLIT':
+                ratio = tx.quantity
+                if ratio and abs(ratio) > 1e-12:
+                    factor *= ratio
+                continue
+            running += tx.quantity / factor
+            path.append((d, running, factor))
+            if tx.currency and not currency:
+                currency = tx.currency
+        if not seen:
+            entry['note'] = (f'no rows for this symbol/account in the data '
+                             f'— check the spelling in {t.where}')
+            if warn:
+                emit_line(f"warning: {t.where} opens {symbol} / {account}, "
+                          f"but no row in the data has that symbol and "
+                          f"account — nothing was applied. Check the "
+                          f"spelling.", file=sys.stderr)
+            out.append((None, entry))
+            continue
+        if factor_at is None:
+            factor_at = factor
+        qty = float(t.quantity)
+        opening = qty / factor_at if factor_at else qty
+        for d, run, f in path:
+            if d < day:
+                if run < -1e-6 * max(1.0, abs(run)) - 1e-9:
+                    entry['short_before'] = {
+                        'date': d, 'qty': round(abs(run) * f, 10)}
+                    break
+        _short_again(entry, [x for x in path if x[0] >= day], opening)
+        sym_on = _symbol_on(symbol, account, day, renames)
+        row = TaxTransaction(
+            action='OPENING_BALANCE', date=day, time='00:00:00',
+            symbol=sym_on, quantity=qty, currency=currency, price=0.0,
+            net_amount=0.0, account=account,
+            description=(f'MISSING-HISTORY opening ({t.where}) — bought '
+                         f'before the data, cost unknown (qty={qty:g})'))
+        entry.update({'opening_qty': qty, 'inserted': True,
+                      'recorded_quantity': qty, 'anchor_date': day,
+                      'anchor_symbol': sym_on})
+        out.append((row, entry))
+    return out
+
+
 def synthesize_openings(
     transactions: List[TaxTransaction],
     pairs: Optional[Set[Tuple[str, str]]] = None,
@@ -2510,6 +3247,21 @@ def synthesize_openings(
             seen_members.add(m)
             stack.extend(reverse_renames.get(m, []))
         chains[pair] = seen_members
+    # The .tt OPENING cost=unknown lines (pairs.fixed): each applied as
+    # written (its date, its quantity), never folded or sized. A file
+    # entry whose rename chain meets a line's is that line's: dropped.
+    fixed: Dict[Tuple[str, str], Any] = {
+        k: v for k, v in (getattr(pairs_in, "fixed", None) or {}).items()
+        if k in pairs}
+    covered_by: Dict[Tuple[str, str], str] = {}
+    for pair in sorted(pairs):
+        if pair in fixed:
+            continue
+        for fp in sorted(fixed):
+            if chains[pair] & chains[fp]:
+                covered_by[pair] = fixed[fp].where
+                break
+    pairs = {p for p in pairs if p not in fixed and p not in covered_by}
     folded_into: Dict[Tuple[str, str], Tuple[str, str]] = {}
     for pair in sorted(pairs):
         owners = [q for q in sorted(pairs)
@@ -2587,6 +3339,17 @@ def synthesize_openings(
 
     out = list(transactions)
     applied: List[Dict[str, Any]] = []
+    for (symbol, account), where in sorted(covered_by.items()):
+        applied.append({'symbol': symbol, 'account': account,
+                        'opening_qty': 0.0, 'inserted': False,
+                        'note': f'covered by the .tt line {where} — '
+                                f'that line\'s opening is used'})
+    fixed_rows = _apply_fixed_openings(sorted_txs, fixed, chains,
+                                       reverse_dated(sorted_txs), warn=warn)
+    for row, entry in fixed_rows:
+        if row is not None:
+            out.append(row)
+        applied.append(entry)
     for (symbol, account), owner in sorted(folded_into.items()):
         applied.append({'symbol': symbol, 'account': account,
                         'opening_qty': 0.0, 'inserted': False,
@@ -2679,7 +3442,7 @@ def synthesize_openings(
 
     if flag_stale:
         for entry in applied:
-            if entry.get('short_again'):
+            if entry.get('short_again') or entry.get('short_before'):
                 emit_line("warning: ATTENTION: "
                           + short_again_message(entry, label),
                           file=sys.stderr)
@@ -2687,9 +3450,16 @@ def synthesize_openings(
     inserted = {(e['symbol'], e['account']) for e in applied
                 if e.get('inserted')}
     if inserted:
+        _members = set(member_to_pair)
+        for fp in fixed:
+            _members |= chains[fp]
         stale = stale_missing_history_entries(
-            [t for t in sorted_txs if (t.symbol, t.account) in member_to_pair],
+            [t for t in sorted_txs if (t.symbol, t.account) in _members],
             inserted, file_name=label)
+        for e in stale:
+            _fx = fixed.get((e.symbol.upper(), e.account))
+            if _fx is not None:
+                e.file_name = _fx.where
         by_pair = {(e.symbol.upper(), e.account): e for e in stale}
         for entry in applied:
             st = by_pair.get((entry['symbol'], entry['account']))

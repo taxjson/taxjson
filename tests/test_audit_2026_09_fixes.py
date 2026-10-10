@@ -538,7 +538,7 @@ class TestFullAuditRound2Fixes(unittest.TestCase):
                ).read_text(encoding="utf-8")
         self.assertNotIn('cache / "missing_history.json"', src)
         self.assertNotIn('missing_history_path(cache)', src)
-        self.assertIn('missing_history_path(cache.parent)', src)
+        self.assertIn('missing_history_arg(cache.parent)', src)
 
     def test_ambiguous_error_handled_by_explain(self):
         src = (REPO_ROOT / "src/taxjson/bin/taxjson_explain.py"

@@ -172,16 +172,22 @@ class TestShortsScopedToTheYear(unittest.TestCase):
         r = _tj(root, "find-missing-history", "--write-missing-history",
                 "--outside-year")
         self.assertEqual(r.returncode, 0, r.stderr)
-        doc = json.loads((root / "missing_history.json").read_text())
-        self.assertEqual(sorted((e["symbol"], e["account"]) for e in doc),
+        # (dated .tt lines in the accounts' inputs: OPENING ...
+        # cost=unknown — lib/missing_history)
+        got = []
+        for acct in ("margin", "rrsp"):
+            f = root / "inputs" / acct / "missing_history.tt"
+            got += [(ln.split()[2], acct) for ln in
+                    (f.read_text().splitlines() if f.exists() else [])
+                    if ln.startswith("OPENING ")]
+        self.assertEqual(sorted(got),
                          [(f"QOPN{sx}", "margin"), (f"QPAS{sx}", "margin"),
                           (f"QRGL{sx}", "rrsp")])
-        self.assertTrue(all(e["_outside_year"] == 2025 for e in doc))
-        # A second call adds nothing and keeps the file (no --force).
+        # A second call adds nothing (never a line twice).
         r = _tj(root, "find-missing-history", "--write-missing-history",
                 "--outside-year")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("nothing to add to missing_history.json",
+        self.assertIn("nothing to add",
                       " ".join(r.stderr.split()).lower())
         r = _tj(root, "run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
@@ -199,7 +205,7 @@ class TestShortsScopedToTheYear(unittest.TestCase):
                  "_note": "added by hand"}]
         (root / "missing_history.json").write_text(json.dumps(mine))
         r = _tj(root, "find-missing-history", "--write-missing-history",
-                "--outside-year")
+                str(root / "missing_history.json"), "--outside-year")
         self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads((root / "missing_history.json").read_text())
         self.assertEqual(doc[0], mine[0])

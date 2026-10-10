@@ -68,20 +68,17 @@ def load_books(cache: Path) -> Tuple[List[TaxTransaction], List[str]]:
 
 
 def read_missing_history_pairs(path: Optional[Path]) -> Set[Tuple[str, str]]:
-    """{(SYMBOL, account)} the project's missing_history.json lists
-    (empty when there is none or it cannot be read)."""
-    if not path or not Path(path).is_file():
+    """{(SYMBOL, account)} the project's missing_history.json lists,
+    with the accounts' .tt OPENING cost=unknown lines when `path` is the
+    project's own file (lib/missing_history.load_missing_history; empty
+    when there is none or it cannot be read)."""
+    if not path:
         return set()
+    from taxjson.lib.missing_history import load_missing_history
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        return set(load_missing_history(Path(path)))
     except (OSError, ValueError):
         return set()
-    out = set()
-    for e in doc if isinstance(doc, list) else []:
-        if isinstance(e, dict) and e.get("symbol") and e.get("account"):
-            out.add((str(e["symbol"]).strip().upper(),
-                     str(e["account"]).strip()))
-    return out
 
 
 def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,

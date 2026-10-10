@@ -121,6 +121,34 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `short_again_message`, `_short_again`
 
+### "Info: missing_history.json: its entries can move into the accounts' .tt files as dated lines (OPENING <date> <SYMBOL> <qty> cost=unknown) with their quantities fixed" — moving from missing_history.json to .tt lines
+- **Check:** the project (or a year folder) has `missing_history.json`; `tjs migrate --dry-run` shows the lines it would write, each projects' disagreements and the entries it drops.
+- **Cause:** missing history is now a dated event in the account's inputs: `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` in `inputs/<account>/missing_history.tt`, its quantity and date fixed (no year window). With one folder of exports for every year the line is shared, so the years no longer each keep a list of their own. `missing_history.json` is still read.
+- **Fix:** `tjs migrate` (in a year folder: it merges every year folder's file). Each entry becomes a line with the units that project's run opens for it, dated the day before the account's first row; each `missing_history.json` is renamed `missing_history.json.migrated`. Entries every year sizes the same are one line; entries that open nothing in any year (no rows, never short) are dropped and listed. When the years disagree (another quantity, an entry only some years list) migrate lists them and writes nothing for them; decide each (edit the year files) or `tjs migrate --write` takes, for each entry, the newest year's view listing it. Then `tjs run` in each year and compare `tjs sum` with before. Review the dates and quantities: they are yours to correct.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`, `project_view`, `apply_missing_history_migration`, `read_tt_openings`; `src/taxjson/bin/taxjson_run.py` — `_migrate_missing_history`, `cmd_migrate`
+
+### "Error: the year folders' missing_history.json files disagree (listed above) — nothing was written for them"
+- **Check:** `tjs migrate` lists "The projects disagree on" with each year's quantity (`2024: 10, 2025: not listed`).
+- **Cause:** the year folders' `missing_history.json` files, sized as each year's run sizes them, open different quantities of a symbol, or list it in some years only; one shared `.tt` line cannot be both.
+- **Fix:** decide each: the units you held before the data. Edit the year files to agree and run `tjs migrate` again, or `tjs migrate --write` (each entry as the newest year listing it sizes it), then edit the written line. A year whose totals change was relying on a different opening; `tjs sum` before and after shows it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_migrate_missing_history`; `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`
+
+### "Info: missing_history.json and a .tt OPENING cost=unknown line both open QZQ.US / margin (inputs/margin/missing_history.tt:3) — the .tt line is used"
+- **Check:** `grep QZQ missing_history.json inputs/margin/*.tt`.
+- **Cause:** the same symbol has an entry in `missing_history.json` and a dated `.tt` line (written by `find-missing-history --write-missing-history`, or by hand). The line wins: its date and quantity; an entry naming another symbol of the same ticker change is covered by the line too.
+- **Fix:** delete the entry (or run `tjs migrate`, which moves every entry).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `_merge_tt`, `synthesize_openings`
+
+### "Warning: ATTENTION: inputs/margin/missing_history.tt:3 opens 10 QZQ.US / margin: the position goes short again on 2025-11-03 (40 units) after those units are used up" (or "… on 2024-03-01, but the position is already short on 2024-02-01 (60 units)")
+- **Check:** `tjs find-missing-history` shows "the run opens the 10 units its line states" under the position.
+- **Cause:** a `.tt` `OPENING ... cost=unknown` line opens its quantity on its date, exactly: the account sells more than that and its purchases in the files, or sells before the line's date.
+- **Fix:** raise the quantity to the units held before the data (or add the missing purchase); date the line before the first sale it covers — the day before the account's first row is always early enough. A real short sale needs nothing.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `short_again_message`, `_apply_fixed_openings`
+
 ### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
 - **Check:** `git -C 2025 rev-parse --show-toplevel` and `git -C inputs rev-parse --show-toplevel` name different folders (or the second fails).
 - **Cause:** the year folder is its own repository, so the shared `inputs/` beside it is committed nowhere the checklist can see.
@@ -394,7 +422,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.json" (or "Info: 1 position(s) go short in margin's data (QZQ.TO)")
 - **Check:** `tjs find-missing-history` lists each pair under "AFFECTS 2025" with its first negative date and the sales it touches.
 - **Cause:** the exports start after the shares were bought (or the shares were transferred in), so the sale has nothing to close. It is booked as a short and its gain is in no total.
-- **Fix:** in this order: add an older export that holds the purchase to `inputs/<account>/`; or enter the purchase as a `.tt` BUYSELL line with its real date and cost (`tjs find-missing-history --write-purchases` drafts these from IB's Basis or a transfer's stated book value); only when the history cannot be recovered, `tjs find-missing-history --write-missing-history` writes missing_history.json, and those sales must then be reported by hand. docs/getting-started.md step 5 walks through it.
+- **Fix:** in this order: add an older export that holds the purchase to `inputs/<account>/`; or enter the purchase as a `.tt` BUYSELL line with its real date and cost (`tjs find-missing-history --write-purchases` drafts these from IB's Basis or a transfer's stated book value); only when the history cannot be recovered, `tjs find-missing-history --write-missing-history` writes `OPENING <date> <SYMBOL> <qty> cost=unknown` lines into `inputs/<account>/missing_history.tt`, and those sales must then be reported by hand. docs/getting-started.md step 5 walks through it.
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `render`, `with no purchase in your files, not in `; `src/taxjson/bin/taxjson_run.py` — `_short_positions_note`; `src/taxjson/lib/missing_history.py` — `detect_missing_history`
 

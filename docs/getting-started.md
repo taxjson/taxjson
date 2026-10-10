@@ -246,8 +246,9 @@ run listing them without hunting the history down:
 tjs find-missing-history --write-missing-history --outside-year
 ```
 
-It adds only those positions to missing_history.json (keeping what is
-there); 2025's numbers do not change.
+It adds only those positions as `OPENING ... cost=unknown` lines to
+`inputs/<account>/missing_history.tt` (keeping what is there; see (4)
+below); 2025's numbers do not change.
 
 The command ends with what to do next, in the order of 5b below. For an Interactive
 Brokers sale, the row also prints IB's own cost for it:
@@ -414,7 +415,7 @@ Is the purchase in an older export you can still download?
    └─ no
       Do you have the trade confirmations?
       ├─ yes → (3) one line per purchase, from the confirmations
-      └─ no  → (4) missing_history.json, and report the sale by hand
+      └─ no  → (4) an OPENING ... cost=unknown line, and report the sale by hand
 ```
 
 **(1) Older exports.** The best fix: the books then hold the real
@@ -567,15 +568,33 @@ figure is only a start: once you keep a line, the cost is yours. A
 second `--write-purchases` keeps your draft unless you pass `--force`.
 
 **(4) What you cannot recover.** If a sale's purchase cannot be found
-at all, list it in `missing_history.json` so it is reported apart instead
-of being guessed. The command writes the file; open it and delete any
-entry that is a real short sale before you run again:
+at all, say how many units you held before your download starts, at an
+unknown cost, so the sale is reported apart instead of being guessed. It
+is a dated line in the account's `.tt` files:
+
+```
+OPENING 2024-12-31 SAMPA.TO 20 cost=unknown reason="bought at my old broker"
+```
+
+The command writes these lines for you into
+`inputs/<account>/missing_history.tt`, dated the day before the
+account's first row, with the units the books lack; open the file,
+delete any line that is a real short sale and correct a quantity or
+date you know better, then run again:
 
 ```bash
 tjs find-missing-history --write-missing-history
 tjs run
 tjs sum
 ```
+
+Running it again never writes a line twice; a symbol a line already
+opens with another quantity is a Warning, and your line stays as it is.
+With one folder of exports for every year the file is in the shared
+`inputs/<account>/`, so one line serves every year. (Older projects
+list these in `missing_history.json` at the project root: it is still
+read, and `tjs migrate` converts it — docs/troubleshooting.md, "Moving
+from missing_history.json to .tt lines".)
 
 ```
 Warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these totals EXCLUDE them (`taxjson form-export` lists them in its MANUAL REPORTING section; report them by hand).
@@ -592,8 +611,8 @@ SAMPA.TO | 2025-03-10 |    20 |   795.05 | margin
 ```
 
 You still have to report that sale on your return, with the best cost
-you can support. If you later find the purchase and add it, the entry
-does nothing any more: the run says `ATTENTION: missing_history.json
+you can support. If you later find the purchase and add it, the line
+does nothing any more: the run says `ATTENTION: inputs/margin/missing_history.tt:N
 lists ... but its rows never go short any more` and
 `find-missing-history` lists it under `STALE`. Delete it.
 
@@ -621,11 +640,12 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
   the run stops with `TRANSFER is not allowed in taxable accounts`.
 - Do not use IB's transfer `VALUE`: it is the market value, not your
   cost.
-- A transfer-in that `missing_history.json` covers (`missing_history`
-  in `tjs transfers`): `tjs find-missing-history --write-purchases`
+- A transfer-in that missing history covers (`missing_history`
+  in `tjs transfers`: an `OPENING ... cost=unknown` line or a
+  `missing_history.json` entry): `tjs find-missing-history --write-purchases`
   drafts its purchase line from the broker's book value (Questrade,
   RBC), with the purchase date left for you to fill in (see (3) above).
-  Once you add it, remove the entry from `missing_history.json`.
+  Once you add it, remove the opening line (or entry).
 - If you held the same stock at both brokers, both purchases go into one
   ACB.
 - For a sheltered account (`transfers = true`) the transfer is booked
@@ -852,8 +872,9 @@ and a complete project per tax year beside them.
   (your crypto-send decisions). A run never writes there: only a
   decision you make — `tjs elect … --set`, `tjs crypto-sends … --set`,
   or an answer at the run's prompt — is saved there, and it applies to
-  every year. The year's own, in its folder: `taxjson.toml`,
-  `ticker.map`, `missing_history.json`, `inputs/slips/`, `holdings/`,
+  every year — and so do the `OPENING ... cost=unknown` lines of
+  missing history (step 5). The year's own, in its folder: `taxjson.toml`,
+  `ticker.map`, `missing_history.json` (older projects), `inputs/slips/`, `holdings/`,
   `checklist.json`, `work/` (where it generates its `crypto_sends.tt`
   from `sends.json` and its own map), `reports/` and `filed/`.
 - **Downloads go into `inputs/<account>/`**, all years together (file
@@ -869,10 +890,12 @@ and a complete project per tax year beside them.
   set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's
   `[estimate]` and `[instalments]` commented out for reference, and each
   account's `holdings` list commented out: those are 2025's snapshots),
-  `ticker.map`, `tobase.map` and `missing_history.json` copied, and an
-  empty `holdings/`. An entry of `missing_history.json` without a `quantity` is
-  sized from the rows through each year's own December 31, so a later
-  year's short never changes an earlier year.
+  `ticker.map`, `tobase.map` and `missing_history.json` (if any) copied,
+  and an empty `holdings/`. An entry of `missing_history.json` without a
+  `quantity` is sized from the rows through each year's own December 31,
+  so a later year's short never changes an earlier year; a `.tt` line's
+  quantity is fixed, the same in every year (`tjs migrate` merges the
+  year folders' files into those lines).
 - **Keeping the years aligned:** a map line or setting added in one year
   is not in the others. `tjs years` lists each year with its state (filed
   or open, last run, whether its inputs changed since) and says when its

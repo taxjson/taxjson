@@ -1329,8 +1329,25 @@ def d_missing_history(ctx: Ctx) -> Result:
         shown = ", ".join(syms[:4]) + (" ..." if len(syms) > 4 else "")
         return Result("missing-history", "attention",
                       f"{len(syms)} position(s) with missing basis affect "
-                      f"{ctx.year}: {shown}")
-    return Result("missing-history", "done", "nothing affects the year")
+                      f"{ctx.year}: {shown}" + _mh_migrate_hint(ctx))
+    return Result("missing-history", "done",
+                  "nothing affects the year" + _mh_migrate_hint(ctx))
+
+
+def _mh_migrate_hint(ctx) -> str:
+    """The step's note while the project keeps a missing_history.json:
+    `taxjson migrate` moves it into dated .tt lines (OPENING ...
+    cost=unknown; lib/missing_history)."""
+    from taxjson.lib.missing_history import project_missing_history_file
+    root = getattr(ctx, "root", None)
+    try:
+        p = project_missing_history_file(root, note=False) if root else None
+    except ValueError:
+        p = None
+    if p is None:
+        return ""
+    return (f"; {p.name} can move into dated .tt lines (OPENING <date> "
+            f"<SYMBOL> <qty> cost=unknown): `taxjson migrate`")
 
 
 def _zero_value_elections(ctx: Ctx) -> int:

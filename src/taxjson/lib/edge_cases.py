@@ -229,8 +229,8 @@ class Book:
         phantoms.json's), as every twin view applies them (A2-1208);
         None without the file. Both names present: ValueError."""
         from taxjson.lib.missing_history import (load_missing_history,
-                                                  project_missing_history_file)
-        p = project_missing_history_file(self.root)
+                                                  missing_history_arg)
+        p = missing_history_arg(self.root)
         if p is None:
             return None
         try:

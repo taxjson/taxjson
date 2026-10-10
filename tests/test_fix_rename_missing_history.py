@@ -255,7 +255,9 @@ class TestWriteMissingHistory(unittest.TestCase):
     """find-missing-history --write-missing-history [FILE] (formerly
     --gen-phantoms FILE)."""
 
-    def test_default_file_is_the_project_missing_history_json(self):
+    def test_default_is_the_accounts_tt_lines(self):
+        # (owner decision v0.27.0: dated OPENING ... cost=unknown lines
+        # in inputs/<account>/missing_history.tt; FILE keeps the JSON)
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
@@ -263,10 +265,12 @@ class TestWriteMissingHistory(unittest.TestCase):
             r = _run_cli(root, "find-missing-history",
                          "--write-missing-history")
             self.assertEqual(r.returncode, 0, r.stderr)
-            out = root / "missing_history.json"
-            self.assertEqual([e["symbol"] for e in
-                              json.loads(out.read_text())], ["ZZZ.TO"])
-            self.assertIn("`taxjson run` auto-detects it", r.stderr)
+            self.assertFalse((root / "missing_history.json").exists())
+            out = root / "inputs" / "margin" / "missing_history.tt"
+            self.assertEqual([ln.split()[2] for ln in
+                              out.read_text().splitlines()
+                              if ln.startswith("OPENING ")], ["ZZZ.TO"])
+            self.assertIn("`taxjson run` reads them", r.stderr)
             self.assertIn("no purchase in your", r.stderr)
             self.assertNotIn("phantom", r.stderr.lower())
 
@@ -276,7 +280,8 @@ class TestWriteMissingHistory(unittest.TestCase):
             self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
                              0)
             r = _run_cli(root, "find-missing-history",
-                         "--write-missing-history")
+                         "--write-missing-history",
+                         str(root / "missing_history.json"))
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn(RENAME_NOTE, r.stderr)
             self.assertFalse((root / "missing_history.json").exists())

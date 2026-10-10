@@ -609,11 +609,8 @@ def project_question_rows(root, cfg: Dict[str, Any],
         years, timing = set(), {}
     mh_pairs = None
     try:
-        from taxjson.lib.missing_history import (load_missing_history,
-                                                 project_missing_history_file)
-        mh = project_missing_history_file(root, note=False)
-        if mh is not None:
-            mh_pairs = load_missing_history(mh) or None
+        from taxjson.lib.missing_history import project_missing_history
+        mh_pairs = project_missing_history(root, note=False) or None
     except Exception:                                   # noqa: BLE001
         mh_pairs = None
     fields = TaxTransaction.__dataclass_fields__
