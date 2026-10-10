@@ -7,6 +7,9 @@
 - `taxjson run` no longer says "the same broker account feeds two taxjson
   accounts" for two different brokers' exports that print the same
   account number: the check keys on the broker and the number.
+- The broker demo exports (`examples/*_demo.csv`) each carry their own
+  synthetic account id; the Webull demo no longer settles on a Sunday and
+  the Questrade demo no longer trades on an NYSE holiday.
 
 
 ## v0.27.2 (2026-10-10)
