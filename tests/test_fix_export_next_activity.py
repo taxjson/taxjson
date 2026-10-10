@@ -30,7 +30,9 @@ class TestNextActivity(unittest.TestCase):
             "margin/webull_2025.csv": webull("September 30 2025",
                                              WB_OPEN_CALLS),
             "margin/wb_2026_manual.tt": _TT})
-        cls.r = tj(cls.root, "run", "--no-input")
+        # --details: the run's Warning with its symbols and detail lines
+        # (the default console is its one-line headline).
+        cls.r = tj(cls.root, "run", "--no-input", "--details")
 
     @classmethod
     def tearDownClass(cls):

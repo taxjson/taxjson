@@ -2525,9 +2525,11 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             return 2
 
     def step(text: str) -> None:
-        from taxjson.lib.out import wrap
-        for ln in wrap("==> " + text, None, "", "  ", stream=sys.stdout):
-            print(ln)
+        # A step that wraps continues flush-left, a blank line after it
+        # (docs/output-style.md, The run's console).
+        from taxjson.lib.out import show, wrap
+        show(wrap("==> " + text, None, "", "", stream=sys.stdout),
+             sys.stdout)
     if check_only:
         step("Checking inputs/ (nothing is written)")
     else:

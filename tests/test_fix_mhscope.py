@@ -144,8 +144,10 @@ class TestShortsScopedToTheYear(unittest.TestCase):
         self.assertEqual(flat.count("went short before 2025"), 1, text)
         self.assertIn("Info: 3 positions went short before 2025 with "
                       "missing history; no effect on 2025's numbers", flat)
-        self.assertIn("`taxjson find-missing-history --write-missing-"
-                      "history --outside-year`", flat)
+        # The one-line form names the command; its flags
+        # (--write-missing-history --outside-year) are in the detail
+        # (`run --details`; docs/output-style.md, Essentials first).
+        self.assertIn("find-missing-history`", flat)
         # Under its own step, after every account's books.
         steps = re.findall(r"(?m)^==> (.*)$", r.stdout)
         i = steps.index("Checking for missing purchase history")

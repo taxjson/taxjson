@@ -226,7 +226,8 @@ class TestSumReturnBlock(unittest.TestCase):
                 self.assertAlmostEqual(
                     ln["proceeds"] - ln["acb"] - ln["outlays"], ln["gain"],
                     places=2)
-            t = _cli(root, "sum")
+            # --details: the notes under the RETURN row (docs/output-style.md)
+            t = _cli(root, "sum", "--details")
             self.assertEqual(t.returncode, 0, t.stderr)
             self.assertIn("Line 4 shares & fund units (13199/13200)", t.stdout)
             self.assertIn("Line 6 options & other properties (15199/15300)",
@@ -261,7 +262,8 @@ class TestSumReturnBlock(unittest.TestCase):
             self.assertEqual(f["totals"]["permanently_denied"], 0.0)
             self.assertEqual(f["totals"]["section_1256_gain"], 0.0)
             self.assertEqual(f["parts_8949"], filing_parts_8949(us))
-            t = _cli(root, "sum")
+            # --details: the notes under the RETURN row (docs/output-style.md)
+            t = _cli(root, "sum", "--details")
             self.assertIn("(g) ADJUSTMENT", t.stdout)
             self.assertIn("250.00", t.stdout.split("FOR THE RETURN")[1])
             self.assertIn("(d) − (e) + (g) = (h)", t.stdout)

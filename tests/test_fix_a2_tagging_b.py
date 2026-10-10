@@ -191,7 +191,10 @@ class TestEdgeCasesCountryGates(unittest.TestCase):
                                 "plan": {"type": "sheltered"}}}
             with contextlib.redirect_stderr(io.StringIO()):
                 doc = analyze(root, cfg)
-            cls.out[c] = "\n".join(render_text(doc, verbose=True))
+            # --details: the rule notes and each row's why (the default
+            # view leaves them out; docs/output-style.md).
+            cls.out[c] = "\n".join(render_text(doc, verbose=True,
+                                               details=True))
 
     @classmethod
     def tearDownClass(cls):

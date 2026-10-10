@@ -328,7 +328,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Writing holdings reports/tfsa_holdings.toml` | equity accounts (the native-currency holdings stages are not shown) |
 | `==> Writing summary reports/tfsa.sum` | every account |
 | `==> Combining sheltered accounts` | registered accounts, for the loss checks |
-| `==> Checking for missing purchase history` | a position goes short with no purchase in the files: after every account's books, each one that bears on the tax year as a `Warning:` (or one `Info:` per taxable account), the rest in ONE `Info:` line naming `find-missing-history --write-missing-history --outside-year` |
+| `==> Checking for missing purchase history` | a position goes short with no purchase in the files: after every account's books, each one that bears on the tax year as a `Warning:` (or one `Info:` per taxable account), the rest in ONE `Info:` line naming `find-missing-history` (`--write-missing-history --outside-year` in its detail, `run --details`) |
 | `==> Checking crypto for superficial losses with the sheltered accounts` | one crypto account (US: wash sales) |
 | `==> Pooling cost and checking superficial losses across taxable accounts (margin, qt)` | Canada's blended pass (US: `Checking wash sales across ...`; crypto: `... crypto accounts`) |
 | `==> Writing summary reports/margin_wash.sum` | the filing-basis summary |
