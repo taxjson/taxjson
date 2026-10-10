@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `taxjson init --demo [DIR]`: a project of made-up exports to try first
+  (Canada, tax year 2024: two IB accounts, Questrade, Webull, a TFSA at
+  RBC, Kraken and Coinbase), ready to run offline once the rates are
+  cached, with the commands to try (`run`, `sum`, `checklist`). It holds
+  the getting-started scenarios: a sale with no purchase, a spin-off
+  with its election saved, a superficial loss and a written option open
+  at the year end. `--country` is no longer required with `--demo`.
+
 ### Changed
 
 - `taxjson help` lists the maintainer's release commands (`channels`,

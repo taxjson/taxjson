@@ -23646,6 +23646,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     shared by the year projects, and the year's folder (YYYY/), a
     complete project whose taxjson.toml names the shared folders
     (lib/project_layout); `--single`: one folder for one year."""
+    if getattr(args, "demo", False):
+        _init_demo(args)
+        return
+    if not args.country:
+        _die_input("--country is required (canada | ca | usa | us)",
+                   f"`{_PROG} init --demo` makes a project of made-up "
+                   f"data to try first.")
     country = _normalize_country(args.country)
     if country not in ("canada", "usa"):
         _die(f"unknown country {args.country!r} (expected canada | ca | "
@@ -23832,6 +23839,84 @@ def cmd_init(args: argparse.Namespace) -> None:
               + " for its folder.")
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
+
+
+def _init_demo(args: argparse.Namespace) -> None:
+    """`taxjson init --demo [DIR]`: the demo project (lib/demo) — DIR
+    (new or empty) holding inputs/ with the made-up exports, tobase.map
+    and 2024/, a ready taxjson.toml — and the commands to try."""
+    import shlex as _shlex
+    import shutil
+    from taxjson.lib import config_template as CT
+    from taxjson.lib import demo as DM
+    from taxjson.lib import tobase_map as _TB
+    from taxjson.lib.safe_write import write_atomic
+    from taxjson.lib.ticker_map_format import init_template
+    if args.country and _normalize_country(args.country) != DM.COUNTRY:
+        _die_input("the demo is a Canadian project: leave out --country "
+                   "(or pass --country canada)")
+    if getattr(args, "year", None) not in (None, DM.YEAR):
+        _die_input(f"the demo's tax year is {DM.YEAR}: leave out --year")
+    if getattr(args, "single", False):
+        _die_input("the demo is one folder of exports for every year: "
+                   "leave out --single")
+    top = Path(getattr(args, "path", None) or args.dir).resolve()
+    _refuse_init_in_year_folder(top, DM.COUNTRY, DM.YEAR)
+    try:
+        busy = top.exists() and (not top.is_dir() or any(top.iterdir()))
+    except OSError as e:
+        _die_input(f"cannot read {top}: {e.strerror or e}")
+    if busy:
+        _die_input(f"{top} is not empty: the demo goes in a new folder",
+                   f"`{_PROG} init --demo ~/taxjson-demo` makes one. "
+                   f"Nothing was written.")
+    try:
+        top.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as e:
+        _die_input(f"cannot create {top}: {e.strerror or e}")
+    root = top / str(DM.YEAR)
+    doc = CT.scaffold_document(DM.COUNTRY, DM.YEAR)
+    doc["settings"].update(DM.settings())
+    doc["settings"].update({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
+                            _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
+                            _PL.TOBASE_KEY: _PL.SHARED_TOBASE})
+    doc["accounts"] = {n: dict(c) for n, c in DM.ACCOUNTS}
+    (root / _PL.HOLDINGS).mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_atomic(root / "taxjson.toml",
+                 CT.render_document(doc, DM.COUNTRY, DM.YEAR))
+    write_atomic(root / "ticker.map", init_template())
+    from taxjson.lib.holdings_dir import README as _HREADME
+    write_atomic(root / _PL.HOLDINGS / "README.txt", _HREADME)
+    write_atomic(top / _TB.TOBASE_MAP,
+                 _TB.render(_TB.load_master(), shared=True))
+    write_atomic(top / ".gitignore", _TEMPLATE_GITIGNORE
+                 + "# The newest year's positions and wash radar, for "
+                   "other tools (`taxjson run`).\nexports/\n")
+    for name, cfg in DM.ACCOUNTS:
+        d = top / _PL.INPUTS / name
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        kind = ("crypto" if cfg.get("crypto") else str(cfg["type"]))
+        write_atomic(d / "README.txt", CT.input_readme(
+            DM.COUNTRY, name, "YYYY/inputs/slips/", kind=kind))
+    for name, src in DM.files():
+        dst = top / _PL.INPUTS / name / src.name
+        shutil.copyfile(src, dst)
+        dst.chmod(0o600)
+    from taxjson.lib import out as _out
+    yd = _shlex.quote(str(root))
+    print(_out.fill(f"Made the taxjson demo in {top}: tax year {DM.YEAR}, "
+                    f"made-up exports of six accounts in inputs/ (two at "
+                    f"IB, Questrade, Webull, a TFSA at RBC, crypto at "
+                    f"Kraken and Coinbase) and the year's project in "
+                    f"{DM.YEAR}/."))
+    print("\nTry:")
+    print(f"  cd {yd}")
+    print(f"  {_PROG} run          # build the books")
+    print(f"  {_PROG} sum          # the year's gains, as on the return")
+    print(f"  {_PROG} checklist    # every step to filing, checked")
+    print("\nIt holds, to explore:")
+    for what, cmd in DM.SCENARIOS:
+        print(f"  {what}: `{_PROG} {cmd}`")
 
 
 def _refuse_init_in_year_folder(top: Path, country: str,
@@ -24769,11 +24854,16 @@ def _build_parser(prog: str = "taxjson"
                     "existing taxjson.toml is kept unless --force (then it "
                     "is backed up first).")
     p_init.add_argument("path", nargs="?", help="Directory to initialize (default: cwd)")
-    p_init.add_argument("--country", required=True,
+    p_init.add_argument("--country",
                         choices=["canada", "ca", "usa", "us"],
                         help="Jurisdiction to scaffold for (required; shapes "
                              "the config's currencies, tax-date basis, and "
                              "account folders)")
+    p_init.add_argument("--demo", action="store_true",
+                        help="Make a project of made-up exports to try "
+                             "first (Canada, tax year 2024) in DIR, a new "
+                             "or empty folder, and print the commands to "
+                             "try")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing")
     p_init.add_argument("--year", type=int,
                         help="Tax year for the generated config "

@@ -1285,15 +1285,18 @@ _CRYPTO_EXPORTS = (
 
 
 def input_readme(country: str, name: str,
-                 slips: str = "inputs/slips/") -> str:
+                 slips: str = "inputs/slips/",
+                 kind: Optional[str] = None) -> str:
     """The README.txt `taxjson init` writes in inputs/<name>/: which
     export to download from each broker (all the history there is, plus
     a positions report), for the scaffold account `name`. `slips`: where
     the year's slips go (`YYYY/inputs/slips/` in a year folder: slips
-    belong to one year)."""
+    belong to one year). `kind`: taxable | sheltered | crypto (default:
+    from the scaffold name)."""
     country = C.canonical_country(country)
-    crypto = name == "crypto"
-    sheltered = name not in ("margin", "crypto")
+    crypto = kind == "crypto" if kind else name == "crypto"
+    sheltered = (kind == "sheltered" if kind
+                 else name not in ("margin", "crypto"))
     slip = "T5008" if country == C.CANADA else "1099-B"
     loss_rule = ("superficial-loss" if country == C.CANADA
                  else "wash-sale")

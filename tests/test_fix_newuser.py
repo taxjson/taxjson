@@ -268,6 +268,143 @@ class TestCloseYearWithAttentionItems(unittest.TestCase):
                                  locked, err.getvalue())
 
 
+# ------------------------------------------------ 5. demos and init --demo
+class TestDemoExports(unittest.TestCase):
+
+    def test_each_broker_demo_has_its_own_account_id(self):
+        import re
+        ids = {}
+        for p in sorted(EXAMPLES.glob("*_demo.csv")):
+            text = p.read_text()
+            m = (re.search(r"Account Number: (\d+)", text)
+                 or re.search(r",(\d{8}),Margin", text)
+                 or re.search(r"Account,(U\d+)", text))
+            if m:
+                ids.setdefault(m[1], []).append(p.name)
+        self.assertEqual(len(ids), 4, ids)
+        self.assertTrue(all(len(v) == 1 for v in ids.values()), ids)
+
+    def test_no_weekend_settle_no_holiday_trade(self):
+        q = (EXAMPLES / "questrade_demo.csv").read_text()
+        self.assertNotIn("2024-01-15", q)
+        w = (EXAMPLES / "webull_demo.csv").read_text()
+        self.assertNotIn("15-12-2024", w)
+        from taxjson.lib.market_calendar import is_trading_day
+        for line in w.splitlines():
+            if line.startswith(("USD,", "CAD,")):
+                d = line.split(",")[1]
+                day = date(int(d[6:]), int(d[3:5]), int(d[:2]))
+                self.assertLess(day.weekday(), 5, line)
+        for line in q.splitlines()[1:]:
+            cur = line.split(",")[10]
+            self.assertTrue(is_trading_day(date.fromisoformat(line[:10]),
+                                           cur), line)
+
+    def test_packaged_demo_matches_the_examples(self):
+        """The `init --demo` exports are the examples' (the IB ones add a
+        Cash Report, so their money reconciles)."""
+        from taxjson.lib import demo as DM
+        for acct, p in DM.files():
+            ex = EXAMPLES / p.name
+            if not ex.exists():
+                continue
+            if p.name == "ib_demo.csv":
+                self.assertTrue(p.read_text().startswith(ex.read_text()))
+                self.assertIn("Cash Report,Header", p.read_text())
+            else:
+                self.assertEqual(p.read_bytes(), ex.read_bytes(), p.name)
+        self.assertEqual({a for a, _p in DM.files()},
+                         {n for n, _c in DM.ACCOUNTS})
+
+
+class TestInitDemo(unittest.TestCase):
+    """`tjs init --demo` makes a project that runs clean in a fresh
+    HOME (no config, no caches but the rates), offline."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.td = tempfile.mkdtemp()
+        home = Path(cls.td) / "home"
+        home.mkdir()
+        # Only the rates (the hermetic synthetic cache): a demo needs
+        # the day's USD rate like any project.
+        shutil.copy(Path(os.environ["HOME"]) / ".currency_price_cache.json",
+                    home / ".currency_price_cache.json")
+        cls.env = _env(HOME=str(home), XDG_CACHE_HOME=str(home / ".cache"),
+                       XDG_CONFIG_HOME=str(home / ".config"),
+                       XDG_DATA_HOME=str(home / ".local" / "share"))
+        cls.env.pop("TAXJSON_TEST_HOME", None)
+        cls.top = Path(cls.td) / "taxjson-demo"
+        cls.init = _cli("init", "--demo", str(cls.top), env=cls.env)
+        cls.year = cls.top / "2024"
+        cls.ran = _cli("run", "--no-input", cwd=cls.year, env=cls.env)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td, True)
+
+    def test_init_prints_the_three_commands(self):
+        self.assertEqual(self.init.returncode, 0, self.init.stderr)
+        out = self.init.stdout
+        self.assertIn(f"cd {self.year}\n", out)
+        for cmd in ("run", "sum", "checklist"):
+            self.assertRegex(out, rf"(?m)^  taxjson {cmd} +# ")
+        for cmd in ("find-missing-history", "spinoffs", "wash-sales",
+                    "option-boundary"):
+            self.assertIn(f"`taxjson {cmd}`", out)
+
+    def test_run_is_clean(self):
+        r = self.ran
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = r.stdout + r.stderr
+        self.assertNotIn("rror", text)
+        self.assertNotIn("pending", text)
+        self.assertNotIn("feeds two taxjson accounts", text)
+        self.assertNotIn("no Cash Report", text)
+        self.assertNotIn("option_grant_timing_since", text)
+        # The only warnings: the missing-history scenario's.
+        import re
+        warned = [ln for ln in text.splitlines()
+                  if re.match(r"(?i)^(taxjson: )?warning:", ln)]
+        self.assertTrue(warned)
+        for ln in warned:
+            self.assertIn("SAMPG.US", ln, warned)
+
+    def test_dates_and_scenarios(self):
+        env = self.env
+        d = _cli("check-dates", cwd=self.year, env=env)
+        self.assertIn("No impossible dates", d.stdout + d.stderr)
+        self.assertNotIn("WARNINGS", d.stdout)
+        s = _cli("sum", cwd=self.year, env=env)
+        self.assertEqual(s.returncode, 0, s.stderr)
+        self.assertIn("FOR THE RETURN", s.stdout)
+        c = _cli("checklist", cwd=self.year, env=env)
+        self.assertIn("CHECKLIST — tax year 2024 (canada)", c.stdout)
+        self.assertIn("missing-history", c.stdout)
+        self.assertIn("SAMPG.US", _cli("find-missing-history", cwd=self.year,
+                                       env=env).stdout)
+        sp = _cli("spinoffs", cwd=self.year, env=env).stdout
+        self.assertIn("PARNT.US -> SPNCO.US", sp)
+        self.assertIn("taxable_deemed_dividend", sp)
+        self.assertIn("NVDA.US", _cli("wash-sales", cwd=self.year,
+                                      env=env).stdout)
+        self.assertIn("SAMPW250117C00030000.US",
+                      _cli("option-boundary", cwd=self.year,
+                           env=env).stdout)
+
+    def test_refusals(self):
+        r = _cli("init", "--demo", str(self.top), env=self.env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("is not empty", r.stderr)
+        r = _cli("init", "--demo", "--country", "usa",
+                 str(_tmp(self) / "x"), env=self.env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("the demo is a Canadian project", r.stderr)
+        r = _cli("init", str(_tmp(self)), env=self.env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--country is required", r.stderr)
+
+
 # ------------------------------------------------ 4. one number, two brokers
 class TestSameNumberAtTwoBrokers(unittest.TestCase):
     """A Questrade and a Webull export that print the same account
