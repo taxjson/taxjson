@@ -150,6 +150,9 @@
   real defaults of `--other-income` and `--other-losses` (the
   `[estimate]` keys, then the latest close-year lock); `init -h` says
   `--country` is not needed with `--demo`.
+- `taxjson wash-sales --explain` no longer says "no matching gains
+  found" under a traced denial when another book (a crypto account's)
+  has none; the note appears once, only when no book has a denial.
 
 ### Docs
 

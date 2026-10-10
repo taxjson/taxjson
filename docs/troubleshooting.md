@@ -1068,6 +1068,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_wash_sales`; `src/taxjson/lib/core.py`
 
+### `tjs wash-sales --explain` traces a denial and still says "Info: no matching gains found"
+- **Check:** the trace above the line shows the superficial loss (US: the wash sale); the project has a crypto account (or, in the US, more than one), whose book is traced on its own.
+- **Cause:** each book was explained by its own call, and a book with no denial (the crypto one) printed the note under the other book's real trace.
+- **Fix:** nothing to do: the trace is right. The note now appears once, only when no book has a denial.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_explain_wash_sales`; `src/taxjson/bin/taxjson_explain.py` — `main`
+
 ### A superficial loss (US: a wash sale) taxjson denies that I want to claim: a replacement inside day 30 counted from the settlement date, outside it from the trade date
 - **Check:** `tjs wash-sales` lists the denial and its replacement; `tjs edge-cases` marks a replacement a few days from day 30 THE DATE BASIS DECIDES THIS ONE. In Canada the window is counted on settle dates whatever `tax_date` says (CA-SL-01); in the US on trade dates (US-WASH-01).
 - **Cause:** the engines apply the rule as the law's mechanical test, black and white. Taking a position against one denial is a filing decision only you (and your adviser) can make; taxjson never infers it.

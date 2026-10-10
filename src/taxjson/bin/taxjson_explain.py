@@ -159,6 +159,11 @@ def parse_args():
              "REGISTERED (sheltered) account's book: `taxjson run` "
              "computes those with the rule off, and without this flag "
              "explain applies it as if the book were taxable.")
+    # Internal (`taxjson wash-sales --explain`, one call per book):
+    # nothing matched exits with this status and no note, so the caller
+    # says "no matching gains" once, only when no book matched.
+    parser.add_argument("--no-match-status", type=int, default=None,
+                        help=argparse.SUPPRESS)
     parser.add_argument("--color", action="store_true",
                         help="Enable ANSI color output (off by default).")
     parser.add_argument(
@@ -383,6 +388,8 @@ def main():
     if not matches:
         # "No data" is a success (exit 0) — consistent with gains/fees/
         # list/wash-sales; the note keeps stdout clean for report content.
+        if args.no_match_status is not None:
+            raise SystemExit(args.no_match_status)
         emit_line("taxjson-explain: note: no matching gains found", file=sys.stderr)
         return
 

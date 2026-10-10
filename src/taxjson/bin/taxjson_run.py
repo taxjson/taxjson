@@ -21263,6 +21263,12 @@ def _explain_wash_sales(root: Path, cache: Path,
     print()
     sys.stdout.flush()
     rc = 0
+    # Each book's explain exits _NO_MATCH (silently) when it has no
+    # denial; the note is said once, only when no book had one — a
+    # crypto book with none printed "no matching gains found" under
+    # the equity book's real denial.
+    _NO_MATCH = 3
+    matched = False
     for grp in groups:
         target, tmp = grp[0], None
         if len(grp) > 1:
@@ -21284,11 +21290,18 @@ def _explain_wash_sales(root: Path, cache: Path,
             # Each trace block self-identifies its account, so no
             # per-file header is needed.
             proc = _run_cmd(_cmd("taxjson-explain") + common
-                            + [str(target)])
+                            + ["--no-match-status", str(_NO_MATCH),
+                               str(target)])
+            if proc.returncode == _NO_MATCH:
+                continue
+            matched = True
             rc = proc.returncode or rc
         finally:
             if tmp is not None:
                 tmp.unlink(missing_ok=True)
+    if not matched:
+        emit_line("taxjson wash-sales: note: no matching gains found",
+                  file=sys.stderr)
     raise SystemExit(rc)
 
 
