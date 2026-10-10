@@ -840,7 +840,8 @@ def render_reconciliation(events: List[Dict[str, Any]],
                           check_labels: List[str],
                           checks_supplied: bool,
                           use_color: bool = False,
-                          country: Optional[str] = None) -> List[str]:
+                          country: Optional[str] = None,
+                          brief: bool = False) -> List[str]:
     from taxjson.lib.out import wrap as _wrap
     W = 86
     paint = _mk_paint(use_color)
@@ -906,8 +907,10 @@ def render_reconciliation(events: List[Dict[str, Any]],
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
             "dim"))
-    out.extend(paint(ln, "dim")
-               for ln in _wrap(totals_note(country), None, "  ", "  "))
+    if not brief:
+        # The rounding note: --details (docs/output-style.md).
+        out.extend(paint(ln, "dim")
+                   for ln in _wrap(totals_note(country), None, "  ", "  "))
     out.append(paint("\u2550" * W, "dim"))
     return out
 
@@ -1026,6 +1029,9 @@ def parse_args(argv=None):
                         "NO_COLOR is honored).")
     p.add_argument("--json", action="store_true",
                    help="Emit the full audit as JSON.")
+    p.add_argument("--brief", action="store_true",
+                   help="Leave out the notes (`taxjson audit` passes it "
+                        "unless --details; docs/output-style.md)")
     return p.parse_args(argv)
 
 
@@ -1410,7 +1416,8 @@ def main(argv=None) -> int:
     for ln in render_reconciliation(events, check_labels,
                                     bool(args.check),
                                     use_color=use_color,
-                                    country=country):
+                                    country=country,
+                                    brief=args.brief):
         print(ln)
     from taxjson.lib.out import wrap as _wrap
     for f in reconciliation_failures:

@@ -77,6 +77,32 @@ class TestWashRadar(_Base):
                       _flat(r["canada"].stdout))
 
 
+def _no_box_rules(text):
+    # The audit's ══ / ── rules are rules (lib/out.classify counts only
+    # ASCII rules as such).
+    return "\n".join(ln for ln in (text or "").split("\n")
+                     if not (ln.strip() and set(ln.strip()) <= set("═─")))
+
+
+class TestAudit(_Base):
+    def test_summary_is_concise(self):
+        for c, r in self.run_both("audit", "--summary").items():
+            with self.subTest(country=c):
+                assert_concise(self, _no_box_rules(r.stdout), r.stderr)
+                self.assertIn("pipeline tie-out", r.stdout)
+                self.assertNotIn("Totals are unrounded", r.stdout)
+                self.assertIn("tjs audit --details", r.stdout)
+
+    def test_details_keep_the_rounding_note(self):
+        for args in (("audit", "--summary"),
+                     ("audit", "QZQ.US", "--no-color")):
+            r = self.run_both(*args, details=True)
+            self.assertIn("Schedule 3 rows (form-export",
+                          _flat(r["canada"].stdout))
+            self.assertIn("Form 8949 rows (form-export",
+                          _flat(r["usa"].stdout))
+
+
 class TestHarvest(_Base):
     def _runs(self, *args):
         import shutil

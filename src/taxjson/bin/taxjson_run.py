@@ -22392,6 +22392,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl.append("--no-trace")
         if getattr(args, "no_color", False):
             fl.append("--no-color")
+        if not _details(args):
+            # Essentials first (docs/output-style.md): the rounding
+            # note is the --details view.
+            fl.append("--brief")
         # "Nothing matched" is decided across ALL invocations below.
         fl += ["--no-match-rc", "3"]
         return fl
@@ -22550,6 +22554,11 @@ def cmd_audit(args: argparse.Namespace) -> None:
         raise SystemExit(2)
     if getattr(args, "json", False):
         _json_out(_merge_audit_json(json_docs, base_currency, country))
+    elif not _details(args) and rc != 1:
+        from taxjson.lib.out import details_hint as _dh
+        print(_dh("tjs audit --details",
+                  "why the totals can differ from the return's rows by "
+                  "cents"))
     if _uncovered and not _acct:
         # One line (the checklist shows a failed command's last line).
         from taxjson.lib.out import warn as _warn

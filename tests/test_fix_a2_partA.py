@@ -277,8 +277,9 @@ class TestEndToEndWording(unittest.TestCase):
         self.assertIn("for Schedule 3 proceeds and ACB", ca)
 
     def test_audit_totals_note(self):
-        us = self._out(USA, "audit")
-        ca = self._out(CANADA, "audit")
+        # The rounding note: --details (Essentials first).
+        us = self._out(USA, "audit", "--details")
+        ca = self._out(CANADA, "audit", "--details")
         self.assertIn("Form 8949 rows (form-export", us)
         self.assertNotIn("Schedule 3", us)
         self.assertIn("Schedule 3 rows (form-export", ca)
