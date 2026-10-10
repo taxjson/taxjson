@@ -595,9 +595,16 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Info: 5 accounts with positions not checked against the broker's holdings — `taxjson sanity`" (`--details`: "5 accounts with open positions and no holdings file to check them against"; or `tjs sanity`: "Error: no arguments, no snapshot in the project's holdings/ folder, and no account in taxjson.toml declares `holdings = [...]`")
 - **Check:** `tjs checklist --all` shows step `sanity` as `[m]` (the default view counts it under CONFIRM); `ls holdings/` is empty.
 - **Cause:** nothing compares the books' positions with the broker's own positions report yet.
-- **Fix:** save the broker's positions snapshot (a `[[holding]]` TOML, as a download tool writes it) in the year's `holdings/` folder, named for the account (`margin_holdings.toml`) or carrying its broker account id in `[meta] account`; or add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`. Then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
+- **Fix:** save the broker's positions snapshot (a `[[holding]]` TOML, as a download tool writes it) in the year's `holdings/` folder, named for the account (`margin_holdings.toml`) or carrying its broker account id in `[meta] broker_account` (or `[meta] account`); or add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`. Then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no snapshot in the project's holdings/`
+
+### `tjs run` ends with "Info: 3 accounts with positions not checked against the broker's holdings — `taxjson sanity`" although the run's positions check just compared their holdings/ snapshots
+- **Check:** `tjs run --details` names the accounts ("… and no holdings file to check them against: margin (8), …"); `tjs sanity` lists a snapshot in `holdings/` for each of them (and `UNCHECKED:` names none of them).
+- **Cause:** the closing summary counted an account as checked only when taxjson.toml gave it `holdings = [...]`; a snapshot the holdings check finds in `holdings/` by its broker account id or its file name was compared but not counted.
+- **Fix:** upgrade: an account with a `holdings/` snapshot that `tjs sanity` claims for it counts as checked; one with none (a crypto account, say) is still listed. On an older release the line is harmless for such accounts.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`, `collect`; `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`
 
 ### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
 - **Check:** the file's `[meta] broker_account` and `[meta] account` (masked here) are in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.

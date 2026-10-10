@@ -340,5 +340,51 @@ class TestDefaultedEventsExactAccount(unittest.TestCase):
                          ["synthetic-child-event"])
 
 
+
+class TestRunSummaryCountsDiscoveredSnapshots(unittest.TestCase):
+    """The run's closing "N accounts with positions not checked against
+    the broker's holdings" line counts a holdings/ snapshot that sanity
+    compares (found by broker id or file name), not only `holdings =
+    [...]` in taxjson.toml."""
+
+    _BUY = "BUYSELL 2024-01-10 09:30:00 QZZQ.TO 10 CAD 10 100 0\n"
+
+    def _run(self, snapshots):
+        root = _project(_tmp(self) / "p", accounts=("margin", "tfsa"),
+                        trades=self._BUY)
+        cfg = root / "taxjson.toml"
+        cfg.write_text(cfg.read_text().replace(
+            '[accounts.margin]\ntype = "taxable"\n',
+            '[accounts.margin]\ntype = "taxable"\n'
+            'account = "99900001"\n'))  # pii-ok
+        (root / "inputs" / "tfsa").mkdir(parents=True)
+        (root / "inputs" / "tfsa" / "t.tt").write_text(
+            self._BUY.replace("QZZQ", "QZZR"))
+        if snapshots:
+            (root / "holdings").mkdir()
+            (root / "holdings" / "download.toml").write_text(
+                '[meta]\nbroker_account = "99900001"\n'  # pii-ok
+                '[[holding]]\nsymbol = "QZZQ.TO"\nquantity = 10\n')
+        r = _cli("-C", str(root), "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads((root / "reports" / "run_summary.json")
+                         .read_text())
+        return ([u["account"] for u in doc["unchecked_accounts"]],
+                " ".join((r.stdout + r.stderr).split()))
+
+    def test_discovered_snapshot_is_checked(self):
+        unchecked, out = self._run(snapshots=True)
+        self.assertEqual(unchecked, ["tfsa"])
+        self.assertIn("1 account with open positions and no holdings file "
+                      "to check them against: tfsa (1)", out)
+
+    def test_no_snapshot_is_listed(self):
+        unchecked, out = self._run(snapshots=False)
+        self.assertEqual(unchecked, ["margin", "tfsa"])
+        self.assertIn("2 accounts with open positions and no holdings "
+                      "file to check them against: margin (1), tfsa (1)",
+                      out)
+
+
 if __name__ == "__main__":
     unittest.main()

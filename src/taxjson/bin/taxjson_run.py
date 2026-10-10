@@ -18029,8 +18029,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         for ln in _wrap(
                 f"UNCHECKED: account(s) "
                 f"{', '.join(f'{a} ({len(tax[a])} position(s))' for a in uncovered)}"
-                f" have open positions but no `holdings` file in "
-                f"taxjson.toml — not compared with the broker.",
+                f" have open positions but no holdings file (a "
+                f"holdings/ snapshot, or `holdings` in taxjson.toml) — "
+                f"not compared with the broker.",
                 None, "", "  "):
             print(ln)
     if config_notes:

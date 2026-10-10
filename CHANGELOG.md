@@ -11,6 +11,7 @@
 - A holdings/ snapshot is matched to its account by `[meta] broker_account` before `[meta] account`, so a fetched snapshot whose `account` still names a renamed account is claimed by the account declaring its broker id (#47).
 - Two account names that differ only by letter case (`Margin` and `margin`) are refused with a message naming both: their folders and holdings snapshots could not be told apart, and one account received the other's positions (#48).
 - `tjs elect ACCOUNT` (and `--json`) no longer lists the sheltered-default events of a longer-named account whose name starts with ACCOUNT and `_` (#50).
+- The run's closing "accounts with positions not checked against the broker's holdings" line no longer counts an account whose `holdings/` snapshot the positions check found (by broker account id or file name) and compared; an account with no snapshot is still listed. `tjs sanity`'s `UNCHECKED:` line now says a holdings/ snapshot also counts.
 
 
 ## v0.28.1 (2026-10-10)
