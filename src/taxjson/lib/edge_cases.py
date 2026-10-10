@@ -1046,12 +1046,15 @@ def _money(x: Optional[float]) -> str:
 
 
 def render_text(doc: Dict[str, Any], verbose: bool = False,
-                width_: Optional[int] = None) -> List[str]:
+                width_: Optional[int] = None,
+                details: bool = False) -> List[str]:
     """The report in the house layout (docs/output-style.md): a title,
     one section per kind of edge — a short upper-case heading with its
-    count, the rule it turns on as a wrapped line, then a table that fits
-    the width with each row's why indented under it — and the counting
-    notes at the end."""
+    count, then a table that fits the width. The default view is the
+    essentials (Essentials first): the sections with rows, a window
+    edge's verdict and a late rename's resolution under its row, and one
+    line naming the edges with none. `details` adds every section, the
+    rule each turns on, each row's why and the counting notes."""
     from taxjson.lib.out import Doc, fit_table, wrap
     y, basis = doc["year"], doc["basis"]
     usa = doc.get("country") == "usa"
@@ -1076,15 +1079,28 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
                               if t.startswith("- ") else "    "):
                     d.line(x)
 
+    _all = details
+    _none: List[str] = []
+
     def section(title, rows, headers, cells, empty="None.", note=None,
-                details=lambda r: [r["why"]] if r.get("why") else []):
+                details=lambda r: [r["why"]] if r.get("why") else [],
+                essential=None, legend=None):
+        """`essential`: the detail lines the default view keeps under a
+        row; `legend`: the line the default view puts above the
+        table."""
+        if not rows and not _all:
+            _none.append(title[:1].lower() + title[1:])
+            return
         d.section(f"{title.upper()} ({len(rows)})")
-        if note:
+        if note and _all:
             d.para(note, "  ")
         if not rows:
             d.para(empty, "  ")
             return
-        table(headers, rows, cells, details)
+        if legend and not _all:
+            d.para(legend, "  ")
+        table(headers, rows, cells,
+              details if _all else (essential or (lambda r: [])))
 
     section("Trades that settle in a different year than they trade",
             yb["straddles"],
@@ -1117,7 +1133,9 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
             yb["deferred_at_year_end"],
             ["ACCOUNT", "SYMBOL", "UNITS", "DEFERRED"],
             lambda r: (r["account"], r["symbol"], f"{r['qty']:g}",
-                       _money(r["deferred"])))
+                       _money(r["deferred"])),
+            legend="DEFERRED: denied losses in the cost of units still "
+                   "held; they lower the gain when sold.")
     section("Income paid around New Year", yb["income"],
             ["ACCOUNT", "SYMBOL", "ACTION", "DATE", "AMOUNT", "LANDS IN"],
             lambda r: (r["account"], str(r["symbol"]), r["action"],
@@ -1143,7 +1161,8 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
     we = doc["window_edges"]
     section(f"{rule} window edges", we, loss_headers, loss_cells,
             note=(f"{y} losses with activity within {doc['margin']} days "
-                  f"of day 30."), details=items)
+                  f"of day 30."), details=items,
+            essential=lambda r: [f"verdict: {r['verdict']}"])
     cw = doc.get("calls_in_windows") or []
     section("Long calls bought inside a share loss's window", cw,
             loss_headers[:5],
@@ -1154,7 +1173,8 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
                   "loss on it; check these by hand." if usa else
                   "A call is a right to acquire the shares (s.54), so one "
                   "still held on day 30 is replacement property."),
-            details=items)
+            details=items,
+            essential=lambda r: [f"verdict: {r['verdict']}"])
     rl = doc.get("renamed_late") or []
     section("Trades in an old ticker after its rename", rl,
             ["ACCOUNT", "SYMBOL", "QTY", "DATE", "RENAMED TO", "ON"],
@@ -1162,7 +1182,18 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
                        r["date"], r["renamed_to"], r["rename_date"]),
             note=("A separate security unless ticker.map folds them "
                   "(`taxjson renames`)."),
-            details=lambda r: [str(r["resolution"])])
+            details=lambda r: [str(r["resolution"])],
+            essential=lambda r: [str(r["resolution"])])
+    if not _all:
+        d.blank()
+        if doc.get("missing_books"):
+            d.para(f"No work files for: {', '.join(doc['missing_books'])} "
+                   f"(run `taxjson run`).")
+        d.line(f"None on the other {len(_none)} edges checked; the rules and "
+               f"each row's why: tjs edge-cases --details"
+               if _none else
+               "The rules and each row's why: tjs edge-cases --details")
+        return d.lines()
     d.section("HOW THE WINDOW IS COUNTED")
     if usa:
         d.para("Window day counts are on TRADE dates, as the engine "

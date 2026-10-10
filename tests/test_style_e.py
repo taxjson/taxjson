@@ -44,8 +44,13 @@ class TestStyledNonZeroExits(unittest.TestCase):
                 self.assertNotIn("-> ", r.stdout.split("\n", 3)[2])
                 self.assertRegex(r.stdout, r"\n  file: +holdings\.toml\n")
                 # Captured (the checklist shows the last line): the
-                # last paragraph whole on one line.
+                # `! ` line by default; with --details (what the
+                # checklist runs) the last paragraph whole on one line.
                 c = p.run("sanity", "margin=holdings.toml",
+                          TAXJSON_WIDTH="0")
+                self.assertTrue(c.stdout.splitlines()[-1].startswith(
+                    "! "), c.stdout)
+                c = p.run("sanity", "margin=holdings.toml", "--details",
                           TAXJSON_WIDTH="0")
                 last = c.stdout.splitlines()[-1]
                 self.assertEqual(last, {
@@ -142,7 +147,8 @@ class TestRenderers(unittest.TestCase):
                          len(render("canada", {}, width=0).split("\n")))
 
     def test_missing_history_to_fix_is_a_numbered_list(self):
-        r = project("usa").run("find-missing-history")
+        # The fix steps: --details (docs/output-style.md).
+        r = project("usa").run("find-missing-history", "--details")
         self.assertIn("\nTo fix a sale with no purchase in your files, in "
                       "this order:\n  1. Add an older export", r.stdout)
         self.assertIn("\n  3. Only when it cannot be recovered:", r.stdout)
@@ -154,7 +160,8 @@ class TestRenderers(unittest.TestCase):
                                 ["OLDCO.US", "margin"]])
 
     def test_edge_cases_headings_are_short(self):
-        r = project("usa").run("edge-cases")
+        # Every section, the empty ones too: --details.
+        r = project("usa").run("edge-cases", "--details")
         heads = [ln for ln in r.stdout.splitlines()
                  if ln and ln == ln.upper() and ln[0].isalpha()]
         self.assertIn("LONG CALLS BOUGHT INSIDE A SHARE LOSS'S WINDOW (0)",

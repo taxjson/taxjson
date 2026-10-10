@@ -2170,26 +2170,40 @@ def _m(v: Any) -> str:
     return "" if v is None else fmt_money(v)
 
 
-def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
-    """The report in the house style (lib/out.Doc)."""
-    from taxjson.lib.out import Doc
+def render(rep: Dict[str, Any], width_: Optional[int] = None,
+           details: bool = False) -> List[str]:
+    """The report in the house style (lib/out.Doc). The default view is
+    the essentials (docs/output-style.md): the slips read, the tables,
+    the findings and the lines to add, each said in one line; `details`
+    adds the annual-average rates, the per-payment notes, each
+    suggestion's reason and the Notes section."""
+    from taxjson.lib.out import Doc, act
     d = Doc(f"SLIP AUDIT — tax year {rep['year']}, CAD, tolerance "
             f"{rep['tolerance']:.2f}", width_=width_)
-    d.section("Slips")
+    d.section("SLIPS")
     if not rep["sources"]:
-        d.para("No slips in inputs/slips/: type them into inputs/slips/"
-               f"{SLIPS_FILE} (`taxjson slip-audit --template` prints one "
-               "to fill in), or add IB's dividends report "
-               "(U*.YYYY.dividends.csv).")
+        if details:
+            d.para("No slips in inputs/slips/: type them into inputs/slips/"
+                   f"{SLIPS_FILE} (`taxjson slip-audit --template` prints "
+                   "one to fill in), or add IB's dividends report "
+                   "(U*.YYYY.dividends.csv).")
+        else:
+            d.line(act("No slips in inputs/slips/: type them into "
+                       f"{SLIPS_FILE}", "tjs slip-audit --template"))
     for s in rep["sources"]:
         if s["kind"] == "slips.toml":
             d.item(f"{s['file']}: {s['slips']} slip(s)")
-        else:
+        elif details:
             d.item(f"{s['file']}: IB's dividends report for "
                    f"{s['broker_account']}, read as account "
                    f"{s['account']}'s T5 and T3 slips ({s['payments']} "
                    f"payments, amounts at IB's rate)")
+        else:
+            d.item(f"{s['file']}: IB's dividends report, account "
+                   f"{s['account']} ({s['payments']} payments)")
     for cur, a in sorted((rep.get("annual_average") or {}).items()):
+        if not details:
+            break
         if a:
             d.item(f"Annual average {cur}/CAD {a['rate']:.4f}: "
                    f"{a['source']}")
@@ -2197,6 +2211,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
             d.item(f"Annual average {cur}/CAD: none (no {rep['year']} "
                    f"Bank of Canada rates in the FX cache; `taxjson run` "
                    f"fetches them)")
+    legend = True
     for acc in rep["accounts"]:
         for g in acc["groups"]:
             head = acc["account"].upper() + (
@@ -2204,6 +2219,12 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
             d.section(head)
             for b in g["buckets"]:
                 d.para(f"{b['currency']}: {', '.join(b['slips'])}")
+                if legend:
+                    # The legend, before the first table (Essentials
+                    # first).
+                    d.line("SLIP: the slip's boxes; BOOKS: the books' "
+                           "income; DIFF = BOOKS − SLIP.")
+                    legend = False
                 if b["currency"] == "CAD":
                     hdr = ["ITEM", "BOXES", "SLIP", "BOOKS", "DIFF",
                            "STATUS", "AT AVERAGE", "CLOSER TO"]
@@ -2225,7 +2246,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
                              _m(ln.get("slip_cad_annual_average"))]
                             for ln in b["lines"]]
                     d.table(hdr, body, drop=(1, 7, 6))
-                if b["split_by_t3"]:
+                if b["split_by_t3"] and details:
                     d.para("The books' income of "
                            + ", ".join(b["split_by_t3"])
                            + " is split as its T3 splits it.")
@@ -2246,9 +2267,9 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
                              f"{e['currency']}")
             for e in p["other_year"]:
                 items.append(f"Another year: {e['symbol']} {e['date']} "
-                             f"{_m(e['amount'])} {e['currency']} — "
-                             f"{e['note']}")
-            if p.get("matched") or items:
+                             f"{_m(e['amount'])} {e['currency']}"
+                             + (f" — {e['note']}" if details else ""))
+            if (p.get("matched") and details) or items:
                 d.para(f"Payments on IB's report: {p.get('matched', 0)} "
                        f"matched to the books' rows"
                        + (":" if items else "."))
@@ -2257,27 +2278,35 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
                   f"{e['paid']} (record date, CA-INC-DATE-TRUST; a slip "
                   f"dated by the pay date counts it in {e['paid'][:4]})"
                   for e in g["record_year"]]
-            if ry:
+            if ry and details:
                 d.para("Dated by the record date:")
                 d.items(ry)
     cov = rep["coverage"]
     if cov["no_slip"] or cov["slips_without_books"]:
-        d.section("Coverage")
+        d.section("COVERAGE")
         for e in cov["no_slip"]:
             what = ", ".join(e["sources"])
             amt = _fmt_amounts(e["income"])
             if e.get("small_interest_only"):
-                d.item(f"{e['account']}: only {amt} (from {what}) — no T5 "
-                       f"is issued below {INTEREST_SLIP_MIN:.0f} of "
-                       f"interest; it is still income")
-            else:
+                if details:
+                    d.item(f"{e['account']}: only {amt} (from {what}) — no "
+                           f"T5 is issued below {INTEREST_SLIP_MIN:.0f} of "
+                           f"interest; it is still income")
+                else:
+                    d.item(f"{e['account']}: only {amt}, below the T5 "
+                           f"minimum; still income")
+            elif details:
                 d.item(f"{e['account']}: {amt} from {what} is on no slip")
+            else:
+                d.item(f"{e['account']}: {amt} is on no slip")
         for e in cov["slips_without_books"]:
             d.item(f"{e['account']}: {e['slip']} ({e['where']}) has no "
                    f"income in the books")
     if rep.get("t5008"):
         d.section("T5008 (aggregated slips; `taxjson reconcile-slips` "
                   "reconciles per security)")
+        if any(t["at_annual_average"] for t in rep["t5008"]):
+            d.line("*: converted at the annual average.")
         hdr = ["ACCOUNT", "CLASS", "CODES", "SLIP PROCEEDS",
                "BOOKS PROCEEDS", "SLIP COST", "BOOKS COST"]
         body = [[t["account"], t["class"], "/".join(t["codes"]),
@@ -2286,14 +2315,13 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
                  _m(t["books_proceeds"]), _m(t["slip_cost"]),
                  _m(t["books_cost"])] for t in rep["t5008"]]
         d.table(hdr, body, drop=(2, 5, 6))
-        if any(t["at_annual_average"] for t in rep["t5008"]):
-            d.para("* converted at the annual average.")
     sg = rep["suggestions"]
     if sg["capital_gains_dividends"] or sg["tt_lines"]:
-        d.section("Suggestions")
+        d.section("SUGGESTIONS")
         if sg["capital_gains_dividends"]:
             d.para("Add to taxjson.toml (T5 box 18 is a capital gain, "
-                   "CA-INC-06; `taxjson divs-sum` then shows it apart):")
+                   "CA-INC-06; `taxjson divs-sum` then shows it apart):"
+                   if details else "Add to taxjson.toml (T5 box 18):")
             for e in sg["capital_gains_dividends"]:
                 d.blank()
                 for ln in e["toml"].splitlines():
@@ -2303,16 +2331,17 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
             d.para(f"Add to {e['file']} (return of capital lowers the "
                    f"ACB, T3 box 42; a DIVIDEND line with a negative "
                    f"amount takes it out of the dividend income; "
-                   f"`taxjson roc-sum` then shows it):")
+                   f"`taxjson roc-sum` then shows it):" if details else
+                   f"Add to {e['file']} (T3 box 42, return of capital):")
             for ln in e["lines"]:
                 d.line("  " + ln)
             d.blank()
-    if sg["notes"]:
-        d.section("Notes")
+    if sg["notes"] and details:
+        d.section("NOTES")
         for n in sg["notes"]:
             d.item(n)
     if rep.get("problems"):
-        d.section("Not compared")
+        d.section("NOT COMPARED")
         d.items(rep["problems"])
     d.blank()
     issues = rep.get("issues") or []
@@ -2320,12 +2349,25 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None) -> List[str]:
         by: Dict[str, int] = {}
         for i in issues:
             by[i["account"]] = by.get(i["account"], 0) + 1
-        d.para(f"{len(issues)} finding(s) ("
-               + ", ".join(f"{a} {n}" for a, n in sorted(by.items()))
-               + "): apply the suggestions, or explain each difference "
-               "and mark the checklist's t5-t3 step done.")
+        if details:
+            d.para(f"{len(issues)} finding(s) ("
+                   + ", ".join(f"{a} {n}" for a, n in sorted(by.items()))
+                   + "): apply the suggestions, or explain each difference "
+                   "and mark the checklist's t5-t3 step done.")
+        else:
+            if sg["notes"]:
+                d.line(f"{len(sg['notes'])} note(s) on these findings — "
+                       f"tjs slip-audit --details")
+            _by = ", ".join(f"{a} {n}" for a, n in sorted(by.items())[:3])
+            d.line(act(f"{len(issues)} finding(s) ({_by}"
+                       + (" ..." if len(by) > 3 else "")
+                       + "): apply the suggestions or explain each",
+                       "tjs slip-audit --details"))
     elif not rep["sources"]:
-        d.para("No slips to compare yet.")
+        if details:
+            d.para("No slips to compare yet.")
     else:
+        if sg["notes"] and not details:
+            d.line(f"{len(sg['notes'])} note(s) — tjs slip-audit --details")
         d.para("Every slip agrees with the books within the tolerance.")
     return d.lines()

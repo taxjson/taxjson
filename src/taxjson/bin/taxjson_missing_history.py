@@ -104,6 +104,10 @@ class _Printer:
 
 _P = _Printer()
 
+# --details (docs/output-style.md, Essentials first): the per-row reasoning,
+# the fix steps and the walk-through; the default view says each in a line.
+DETAILS = False
+
 
 def _table(headers, rows, details=()):
     """A report table that fits the width (lib/out.fit_table): header,
@@ -119,6 +123,11 @@ def _table(headers, rows, details=()):
         _P.line(ln)
         for d in (details[i] if i < len(details) else None) or ():
             _P.para(d, "  ", "  ")
+
+
+def _act(text, cmd):
+    from taxjson.lib.out import act
+    return act(text, cmd)
 
 
 def _load_all(paths):
@@ -201,7 +210,7 @@ def _print_section(title, rows, *, show_year_cols, year=None, sizes=None):
             d.append(f"still short at the start of {year}, with no {year} "
                      f"activity: no {year} gain depends on it; the "
                      f"purchase matters when the position next trades.")
-        details.append(d)
+        details.append(d if DETAILS else [])
     _table(hdr, body, details)
 
 
@@ -262,7 +271,8 @@ def _print_zero_section(title, rows):
                      f"{r.zero_cost_qty:.4f}", r.acquisition_date,
                      str(r.in_year_dispositions),
                      _money(r.in_year_proceeds), why])
-        details.append([f"└ {r.description}"] if r.description else [])
+        details.append([f"└ {r.description}"]
+                       if r.description and DETAILS else [])
     _table(["Symbol", "Account", "Cur", "ZeroQty", "AcqDate", "InYrSales",
             "InYrProceeds", "Why"], body, details)
 
@@ -613,13 +623,17 @@ def main(argv=None):
                     help="with --write-purchases: replace an existing "
                          "draft (kept as <file>.bak, or the next free "
                          "<file>.bakN)")
+    ap.add_argument("--details", action="store_true",
+                    help="also print each row's reasoning, the fix steps "
+                         "and the walk-through (docs/output-style.md)")
     ap.add_argument("--country", choices=("canada", "usa"),
                     help="with --write-purchases outside a project: the "
                          "country whose rules the draft's notes follow "
                          "(a project's taxjson.toml decides otherwise)")
     args = ap.parse_args(argv)
-    global _P
+    global _P, DETAILS
     _P = _Printer()
+    DETAILS = bool(args.details)
     if args.phantoms_old and not args.missing_history:
         args.missing_history = args.phantoms_old
     # What the report names the lines by.
@@ -845,7 +859,8 @@ def main(argv=None):
                 "move a real gain or loss off the totals:")
         for e in stale:
             _P.line(f"{e.symbol} {e.account}")
-            _P.para(stale_entry_message(e), "    ", "    ")
+            if DETAILS:
+                _P.para(stale_entry_message(e), "    ", "    ")
 
     if complete:
         _P.heading(f"PURCHASE NOW IN THE BOOKS — {mh_name} entries that do "
@@ -865,7 +880,10 @@ def main(argv=None):
                 ((f"AFFECTS {yr_c} - covering the short is the disposition; "
                   f"its gain or loss is missing (the books carry the buy "
                   f"as a new long). Add the short sale that opened it "
-                  f"(date, proceeds) to a .tt file in this account:")
+                  f"(date, proceeds) to a .tt file in this account:"
+                  if DETAILS else
+                  f"AFFECTS {yr_c} - a cover's gain is missing; add the "
+                  f"short sale that opened it as a .tt line:")
                  if yr_c else
                  "Broker-marked covers with no short in the data:", aff),
                 (f"NOT relevant to {yr_c} - covers in other years:", oth)):
@@ -914,7 +932,12 @@ def main(argv=None):
 
     if not short_rows and not zero_rows and not links:
         scope = f" (account {args.account})" if args.account else ""
-        if zero_held:
+        if zero_held and not DETAILS:
+            _P.gap()
+            _P.line(_act(f"Give the $0-cost shares their {_cost} before "
+                         f"they are sold",
+                         "tjs find-missing-history --details"))
+        elif zero_held:
             _print_zero_fix(country, _cost)
             _P.gap()
             _P.para(_WALK_THROUGH)
@@ -956,13 +979,18 @@ def main(argv=None):
             _P.para(f"- {l.date} [{l.account}]  {l.old_symbol} "
                     f"({l.old_company or '?'}) to {l.new_symbol} "
                     f"({l.new_company or '?'}){ratio}", "", "  ")
-            _P.para(f"{l.old_qty:g} {l.old_symbol} removed; "
-                    f"{l.new_qty:g} {l.new_symbol} received at $0 basis. "
-                    f"The old shares' {_cost} is missing (their purchase "
-                    f"isn't in your data). Supply it so {l.new_symbol} "
-                    f"carries the correct basis - otherwise "
-                    f"{l.new_symbol}'s sale gain is overstated by that "
-                    f"amount.", "  ", "  ")
+            if DETAILS:
+                _P.para(f"{l.old_qty:g} {l.old_symbol} removed; "
+                        f"{l.new_qty:g} {l.new_symbol} received at $0 "
+                        f"basis. The old shares' {_cost} is missing (their "
+                        f"purchase isn't in your data). Supply it so "
+                        f"{l.new_symbol} carries the correct basis - "
+                        f"otherwise {l.new_symbol}'s sale gain is "
+                        f"overstated by that amount.", "  ", "  ")
+        if not DETAILS:
+            _P.line(_act(f"Supply the old shares' {_cost}: the new shares "
+                         f"carry it at $0 now",
+                         "tjs find-missing-history --details"))
     # === Section 1: truncated history ===
     # The opening the run applies for each pair the file lists, said
     # under its row in whichever section it is (CA-ACB-11 / US-BASIS-04).
@@ -999,6 +1027,10 @@ def main(argv=None):
                        f"sale drawing on the missing basis; "
                        if active else "")
                     + f"{len(ignorable)} do not.")
+            if affects or covered or sheltered or active or ignorable:
+                # The legend, before the tables (Essentials first).
+                _P.line("PeakShort: the deepest short; FirstNeg: the day "
+                        "it went short; InYr: this year's sales from it.")
             _print_section(f"AFFECTS {yr} - missing basis distorts this year's "
                            "gain; fix before filing:", affects, show_year_cols=True,
                            year=yr, sizes=_sizes)
@@ -1006,7 +1038,9 @@ def main(argv=None):
             # applies them) are not work still to do (R1-339).
             _print_section(f"COVERED by {mh_name} - the run applies these "
                            f"openings; nothing more to do unless `taxjson "
-                           f"sum` lists the sale under manual reporting:",
+                           f"sum` lists the sale under manual reporting:"
+                           if DETAILS else
+                           f"COVERED by {mh_name} - the run applies these:",
                            covered, show_year_cols=True, sizes=_sizes)
             # A registered account has no reportable gain: listing its
             # rows under "distorts this year's gain" (and counting them
@@ -1018,13 +1052,18 @@ def main(argv=None):
             _print_section(f"ACTIVE IN {yr} - no {yr} sale draws on the "
                            f"missing basis, but the position trades, moves "
                            f"or pays income in {yr} (`taxjson run` lists "
-                           f"these):", active, show_year_cols=True,
+                           f"these):" if DETAILS else
+                           f"ACTIVE IN {yr} - traded, but no {yr} sale "
+                           f"draws on it:", active, show_year_cols=True,
                            year=yr, sizes=_sizes)
             _print_section(f"NOT relevant to {yr} - short only from other-year "
                            f"sales (or since drained), no {yr} activity; "
                            f"safe to ignore (`taxjson find-missing-history "
                            f"--write-missing-history --outside-year` records "
-                           f"them so the run stops listing them):",
+                           f"them so the run stops listing them):"
+                           if DETAILS else
+                           f"NOT relevant to {yr} - no {yr} activity; safe "
+                           f"to ignore:",
                            ignorable, show_year_cols=True, year=yr,
                            sizes=_sizes)
         else:
@@ -1064,7 +1103,14 @@ def main(argv=None):
     _renamed = _rename_sources(args.ticker_map,
                                {r.candidate.symbol for r in short_rows}
                                | {r.symbol for r in zero_rows})
-    if _renamed:
+    if _renamed and not DETAILS:
+        _P.gap()
+        _pairs = [f"{t} <- {', '.join(srcs)}"
+                  for t, srcs in sorted(_renamed.items())]
+        _P.line("Enter a missing buy under the broker's symbol: "
+                + "; ".join(_pairs[:2])
+                + (f" +{len(_pairs) - 2} more" if len(_pairs) > 2 else ""))
+    elif _renamed:
         _P.gap()
         _P.para("These symbols are ticker.map's consolidated names "
                 "(amounts in the base currency); the broker booked them "
@@ -1082,6 +1128,25 @@ def main(argv=None):
                           and not _covered(r) for r in short_rows)
         _zero_open = (any(r.affects_year for r in zero_rows)
                       or bool(zero_held))
+        if not DETAILS:
+            _P.gap()
+            _ib = [r for r in short_rows
+                   if (r.affects_year or r.pooled_with) and not _covered(r)
+                   and getattr(r.candidate, 'broker_basis', None)
+                   and not str(r.candidate.symbol).startswith(
+                       ('F:', '/', '\\'))]
+            if _ib:
+                _P.line(_act(f"IB states the cost of {len(_ib)} sale(s): "
+                             f"draft the purchase",
+                             "tjs find-missing-history --write-purchases"))
+            if _short_open:
+                _P.line(_act("Add each AFFECTS row's purchase before "
+                             "filing",
+                             "tjs find-missing-history --details"))
+            if _zero_open:
+                _P.line(_act(f"Give the $0-cost shares their {_cost}",
+                             "tjs find-missing-history --details"))
+            return _incomplete(0)
         if _short_open:
             _P.gap()
             _P.line("To fix a sale with no purchase in your files, in this "

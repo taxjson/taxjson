@@ -16081,7 +16081,7 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out(doc)
         return
-    for line in render_text(doc):
+    for line in render_text(doc, details=_details(args)):
         print(line)
 
 
@@ -17214,6 +17214,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         raise SystemExit(0 if not all_rows else 1)
 
     from taxjson.lib.out import kv_lines as _kv, wrap as _wrap
+    from taxjson.lib.out import act as _act
+    # Essentials first (docs/output-style.md): --details adds the
+    # explanations, the cost/income tables and the not-compared list.
+    _det = _details(args)
     for n in config_notes:
         _sanity_note(n)
     multi = len(ordered) > 1 or any(g["paired"] for g in ordered)
@@ -17235,7 +17239,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             pairs.append(("as of", f"{grp['as_of']} — the report's date; "
                                    f"the books' positions on that day "
                                    f"(rebuilt from "
-                                   f"work/<account>_base.json)"))
+                                   f"work/<account>_base.json)" if _det
+                          else f"{grp['as_of']} (the report's date)"))
         # One line per file, PATH first: the label alone (the file's
         # meta.account, else its stem) didn't say which export was
         # actually read — a stale or wrong path is the first thing to
@@ -17266,11 +17271,18 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                                     if grp["rows"] else "OK"))
         for ln in _kv(pairs, "  "):
             print(ln)
-    if uncovered:
+    if uncovered and _det:
         print()
         for a in uncovered:
             print(f"  - account {a} not included "
                   f"({len(tax[a])} position(s) unchecked)")
+    elif uncovered and items:
+        # (with no items the UNCHECKED line below names them)
+        print()
+        _unc = [f"{a} ({len(tax[a])})" for a in uncovered]
+        print("Not compared (no holdings file given): "
+              + ", ".join(_unc[:4])
+              + (f" +{len(_unc) - 4} more" if len(_unc) > 4 else ""))
     print()
     if uncovered and not items:
         # The checklist's sanity step reads this line: "done" while
@@ -17301,6 +17313,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     else:
         if (uncovered and not items) or config_notes:
             print()
+        # The legend, before the table (Essentials first).
+        print("ISSUE: MISSING_IN_HOLDINGS = not in the broker's file; "
+              "MISSING_IN_TAXJSON = not in the books.")
         out_lines = [("ACCOUNTS SYMBOL ISSUE TAXJSON HOLDINGS DIFF"
                       if multi else
                       "SYMBOL ISSUE TAXJSON HOLDINGS DIFF")]
@@ -17313,8 +17328,19 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             out_lines.append(" ".join(cells))
         _print_report_table(out_lines, fit=True, key=(0, 1) if multi
                             else 0)
-        print(f"\n{len(all_rows)} discrepancy(ies).")
-        if any(r["holdings_qty"] - r["taxjson_qty"] > 0 for r in all_rows):
+        _fewer = any(r["holdings_qty"] - r["taxjson_qty"] > 0
+                     for r in all_rows)
+        if not _det:
+            print()
+            print(_act(f"{len(all_rows)} differ; fewer shares in the books "
+                       f"usually means missing history",
+                       "tjs find-missing-history") if _fewer else
+                  _act(f"{len(all_rows)} differ: a trade after your last "
+                       f"export, or a booking problem",
+                       "tjs audit SYMBOL"))
+        else:
+            print(f"\n{len(all_rows)} discrepancy(ies).")
+        if _fewer and _det:
             # Fewer shares in the books than at the broker: on a first
             # project that is history the download does not reach
             # (new-user study), not a booking bug.
@@ -17328,7 +17354,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 print(ln)
     _sanity_print_extras(ordered, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
-                         brief=getattr(args, "brief_extras", False))
+                         brief=getattr(args, "brief_extras", False),
+                         concise=not _det)
     raise SystemExit(0 if not all_rows else 1)
 
 
@@ -17596,7 +17623,8 @@ def cmd_opening(args: argparse.Namespace) -> None:
 
 def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
-                         brief: bool = False) -> None:
+                         brief: bool = False,
+                         concise: bool = False) -> None:
     """The COST and INCOME sections of `taxjson sanity` (after the
     quantity check, never changing its exit code). `brief` (the check
     `taxjson run` ends with): one line each, the tables are
@@ -17621,6 +17649,19 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
             _p(f"INCOME: {len(income_all)} dividend row(s) state a "
                f"share count the books did not hold — `taxjson "
                f"sanity` lists them.")
+        return
+    if concise:
+        # The default view (Essentials first): one line each,
+        # informational; --details has the tables and the reasons.
+        if cost_diffs:
+            print()
+            print(f"COST: {len(cost_diffs)} of {compared} differ from the "
+                  f"broker's book value (informational) — tjs sanity "
+                  f"--details")
+        if income_all:
+            print()
+            print(f"INCOME: {len(income_all)} dividend row(s) state shares "
+                  f"the books did not hold — tjs sanity --details")
         return
     if compared or cost_na:
         print()
@@ -19199,7 +19240,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                if isinstance(_old_lock.get("filed_totals"), dict)
                else "")
             + " — pass --filed-dispositions to replace them."))
-    _cf = _carryforwards_for_lock(root, cfg)
+    _cf = _carryforwards_for_lock(root, cfg, _details(args))
     if _cf is not None:
         extra["carryforwards"] = _cf
     if _fx_cash_ledger_choice(settings) == "v2":
@@ -19257,15 +19298,20 @@ def cmd_close_year(args: argparse.Namespace) -> None:
              ("Income", f"{tot['income']:,.2f}")]
     _mw = max(len(v) for _, v in _rows)
     _kv = [(k, _out.Verbatim(f"{v:>{_mw}}")) for k, v in _rows]
+    # Essentials first (docs/output-style.md): --details adds the why.
+    _det = _details(args)
     _kv.append(("Lock", f"{_out.relpath(path, root)} — commit it with "
                         f"your records; `taxjson check-filed` now guards "
-                        f"it"))
+                        f"it" if _det else
+                        f"{_out.relpath(path, root)} — commit it with "
+                        f"your records"))
     _ft = extra.get("filed_totals")
     if _ft:
         _kv.append(("As filed", f"{_ft['source']}: {_ft['dispositions']} "
-                                f"dispositions, gain {_ft['gain']:,.2f} — "
-                                f"the {int(year) + 1} project's `taxjson "
-                                f"handoff` checks against these"))
+                                f"dispositions, gain {_ft['gain']:,.2f}"
+                                + (f" — the {int(year) + 1} project's "
+                                   f"`taxjson handoff` checks against "
+                                   f"these" if _det else "")))
     _ye = extra.get("year_end") or {}
     _kv.append(("Year-end positions",
                 (", ".join(f"{g} {len(v)}" for g, v in _ye.items())
@@ -19275,11 +19321,12 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     for _ln in _out.kv_lines(_kv, indent="  "):
         print(_ln)
     if _cf is not None:
-        for _ln in _carryforwards_summary(_cf, int(year)):
+        for _ln in _carryforwards_summary(_cf, int(year), _det):
             print(_ln)
 
 
-def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
+def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
+                            details: bool = True
                             ) -> Optional[Dict[str, Any]]:
     """The `carryforwards` block close-year writes (lib/carryforward):
     the year's net capital loss (Canada) or ST/LT capital loss
@@ -19310,8 +19357,10 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
         _show(_fill(_label("note", stream=sys.stdout)
                     + (f"province {prov} is not modelled" if prov else
                        "no [settings] province")
-                    + " — the carry-forwards are computed federal-only "
-                    "(no provincial tax or minimum-tax recovery).",
+                    + (" — the carry-forwards are computed federal-only "
+                       "(no provincial tax or minimum-tax recovery)."
+                       if details else
+                       " — the carry-forwards are federal-only."),
                     hang="  " if _ow(sys.stdout) <= 0 else "").split("\n"),
               sys.stdout)
     res = _run(argv, capture_output=True)
@@ -19333,8 +19382,10 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     return block
 
 
-def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
-    """close-year's lines on what the lock carries into year + 1."""
+def _carryforwards_summary(cf: Dict[str, Any], year: int,
+                           details: bool = True) -> List[str]:
+    """close-year's lines on what the lock carries into year + 1
+    (`details`: the notes in full and what reads them)."""
     from taxjson.lib.out import kv_lines, labelled, wrap
     kv: List[Tuple[str, str]] = []
     notes: List[str] = []
@@ -19355,20 +19406,24 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
                    f"recovered {mt['recovered_federal']:,.2f}, created "
                    f"{mt['created']:,.2f}, carried into {year + 1}: "
                    f"{mt['closing']:,.2f}"))
-        if not mt.get("other_income_entered"):
+        if not mt.get("other_income_entered") and details:
             notes.append("note: the minimum tax was computed with no "
                          "[estimate] other_income — compare it with the "
                          "T691 you filed; the next project's [estimate] "
                          "amt_carryover (from your notice of assessment) "
                          "wins over this record.")
+        elif not mt.get("other_income_entered"):
+            notes.append("note: no [estimate] other_income — compare the "
+                         "minimum tax with the T691 you filed.")
     if not kv:
         return []
     out = ["", f"CARRIED INTO {year + 1}"] + kv_lines(kv, indent="  ")
     for n in notes:
         out += wrap(labelled(n), None, "  ", "    ")
-    out += wrap(f"The {year + 1} project's estimate, carryover and amt "
-                f"read these; its handoff checks its inputs against "
-                f"them.", None, "  ", "  ")
+    if details:
+        out += wrap(f"The {year + 1} project's estimate, carryover and "
+                    f"amt read these; its handoff checks its inputs "
+                    f"against them.", None, "  ", "  ")
     return out
 
 
@@ -20235,7 +20290,7 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
     if args.json:
         _json_out(rep)
     else:
-        for ln in SA.render(rep):
+        for ln in SA.render(rep, details=_details(args)):
             print(ln)
     if rep["issues"]:
         raise SystemExit(1)
@@ -22908,6 +22963,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     if (_PL.ticker_map_path(root)).exists():
         # Name the broker's ticker of a renamed symbol (S049-01).
         cmd += ["--ticker-map", str(_PL.ticker_map_path(root))]
+    if _details(args) and getattr(args, "write_purchases", None) is None:
+        cmd += ["--details"]
     _exec_tool(cmd)
 
 

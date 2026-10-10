@@ -235,7 +235,9 @@ class TestSanity(unittest.TestCase):
             self.assertRegex(text.stdout, rf"file: +{rel}/acct{n}_holdings"
                                           rf"\.toml")
         self.assertIn("ACCOUNTS", text.stdout)
-        self.assertIn("2 discrepancy(ies).", text.stdout)
+        # The count is the `! ` line (docs/output-style.md, Essentials
+        # first).
+        self.assertIn("! 2 differ;", text.stdout)
 
     def test_many_accounts_to_one_file(self):
         # One broker export covering two taxjson accounts: `a+b=FILE`.

@@ -384,6 +384,10 @@ class TestSanityCostCanada(unittest.TestCase):
             self.assertTrue(by["SAMPD.TO"]["explained"])
             t = cli(root, "sanity", f"margin={pos}")
             self.assertEqual(t.returncode, 0)
+            self.assertIn("COST: 2 of 3 differ", t.stdout)
+            # The cost table and its reasons: --details (docs/output-
+            # style.md, Essentials first).
+            t = cli(root, "sanity", f"margin={pos}", "--details")
             self.assertIn("OK: tickers and quantities agree", t.stdout)
             self.assertIn("COST — books vs the reports' cost: 3 compared",
                           t.stdout)
@@ -563,6 +567,9 @@ class TestIncomeShareCount(unittest.TestCase):
                 {"symbol": "SAMPB.TO", "quantity": 400}])
             r = cli(root, "sanity", f"margin={pos}")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("INCOME: 1 dividend row(s)", r.stdout)
+            # The table: --details (docs/output-style.md).
+            r = cli(root, "sanity", f"margin={pos}", "--details")
             self.assertIn("INCOME ON SHARES THE BOOKS DO NOT HOLD — 1",
                           r.stdout)
             doc = json.loads(cli(root, "sanity", f"margin={pos}",

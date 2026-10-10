@@ -562,7 +562,8 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
         self.assertEqual(acct["dispositions"], 1)
         self.assertAlmostEqual(acct["proceeds"], 499.00, places=2)
         # find-missing-history reports the size the run applies.
-        r = tjs("-C", str(d), "find-missing-history")
+        # (each row's detail: --details, docs/output-style.md)
+        r = tjs("-C", str(d), "find-missing-history", "--details")
         self.assertIn("the run opens the 10 units its line states",
                       r.stdout)
 
