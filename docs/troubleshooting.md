@@ -243,6 +243,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `validate_config`, `contains data but has`
 
+### "Error: [accounts.Margin] and [accounts.margin] differ only by letter case — an account's name is also its inputs/ folder and its holdings file's name, which letter case does not tell apart"
+- **Check:** taxjson.toml has two `[accounts.NAME]` tables whose names are the same apart from capitals.
+- **Cause:** an account's name is also its `inputs/` folder, its `work/` files and the name a `holdings/` snapshot is matched by, and those matches ignore letter case (on Windows and macOS the two folders are one). Such names were accepted, and both accounts' snapshots went to one of them while the other was not checked.
+- **Fix:** rename one account (its table and its `inputs/` folder), for example `margin` and `margin-2`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/config_check.py` — `account_pair_problems`, `differ only by letter case`
+
 ### "Error: account 'qt' has no crypto flag in taxjson.toml but its inputs contain coinbase files" (or "has crypto = true … contain questrade files")
 - **Check:** the next line names each file and how it was detected, e.g. `inputs/qt/coinbase_demo.csv (coinbase: content: columns Timestamp,Transaction Type,Asset…)`.
 - **Cause:** crypto exchange exports (Coinbase, Kraken) go through the crypto pipeline (price lookups, coin pools) and equity exports through the securities pipeline, chosen by the account's `crypto` flag. A file in an account of the other kind would be booked wrongly, so the run stops.
@@ -389,6 +396,27 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** replace the link with a real folder: `rm work && mkdir work` (copy the contents in first if you need them; `work/` is rebuilt by `tjs run`), or run taxjson in the folder the link points into.
 - **Fixed in:** `v0.25.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_outside_dir_links`, `_WRITTEN_DIRS`, `load_config`; `src/taxjson/lib/safe_write.py` — `link_outside`
+
+### "Error: '-C sum' is not a valid command in this chain — nothing was executed." from `tjs -C run run sum`
+- **Check:** the folder given to `-C` (or `--dir`) has the name of a taxjson command (`run`, `sum`, `events` ...); `tjs -C run checklist` with one command fails the same way, or `tjs -C run` alone stops with "the following arguments are required: COMMAND" instead of showing the help page.
+- **Cause:** command chaining looked for the first word that names a command, and took the folder after `-C` for it: the project folder was lost and the first command's name became the folder.
+- **Fix:** upgrade: the value of `-C` / `--dir` is always the folder. On an older release, write the folder another way (`tjs -C ./run run sum`, or an absolute path).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_command_index`, `_takes_separate_value`, `_split_command_segments`, `_no_command`
+
+### `tjs events sum` prints the gains summary for an account named `sum` (or "note: 'sum' starts a new chained command; the previous command ('events') could also have taken it as an argument"), or `tjs init sum` initializes the current folder
+- **Check:** taxjson.toml has an `[accounts.NAME]` whose NAME is also a command (`sum`, `trades`, `run` ...), or the folder given to `init` is named like a command.
+- **Cause:** chaining (`tjs run sum`) started a new command at every command name after a complete command, so an optional account or folder named like a command ran that command instead, and `tjs events -- sum` chained too: no spelling addressed the account.
+- **Fix:** upgrade: a command name starts the next command only when the command before it cannot take the word, and an account of the project, a folder (`init`) or a symbol (`audit`) is the command's own (`tjs events sum` lists the events of account sum). To chain after such a command, separate the two with `--` (`tjs events -- sum`). On an older release, rename the account (its `inputs/` folder too), or give `init` the folder as `./sum`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_split_command_segments`, `_chain_accounts`, `_CHAIN_ACCOUNT_DESTS`
+
+### `tjs init`: "Error: folder(s) that are symlinks to outside the project — init writes there; nothing was written: inputs/ -> ../shared"; or, on an older release, init put the account folders and their README.txt files in the folder `inputs/` links to
+- **Check:** `ls -ld inputs 2024` in the folder you ran init in shows a link (`->`) to a folder outside it.
+- **Cause:** init created the account folders under `inputs/` (and the year's folder, `holdings/`) through such a link, outside the project, and every later command then refused the project for that link. It now checks every folder it would write into first, as every other command does.
+- **Fix:** replace the link with a real folder (move its contents in), or run init in the folder the link points into. A link to a folder inside the project is fine.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_init`, `_init_refuse_outside_links`; `src/taxjson/lib/safe_write.py` — `link_outside`
 
 ### "Warning: the project folder, inputs/ can be read by other users: `chmod -R go-rwx` it"
 - **Check:** `tjs run --details` says it in full: "the project folder, inputs/ can be read by other users of this computer (made by an older taxjson or another program; new files are owner-only)" and "Tighten it once: chmod -R go-rwx <project>". `ls -ld . inputs reports` in the project: a mode other than `drwx------` (for example `drwxrwxr-x`) on any of them. The warning shows once per `tjs run`.
@@ -595,12 +623,19 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Info: 5 accounts with positions not checked against the broker's holdings — `taxjson sanity`" (`--details`: "5 accounts with open positions and no holdings file to check them against"; or `tjs sanity`: "Error: no arguments, no snapshot in the project's holdings/ folder, and no account in taxjson.toml declares `holdings = [...]`")
 - **Check:** `tjs checklist --all` shows step `sanity` as `[m]` (the default view counts it under CONFIRM); `ls holdings/` is empty.
 - **Cause:** nothing compares the books' positions with the broker's own positions report yet.
-- **Fix:** save the broker's positions snapshot (a `[[holding]]` TOML, as a download tool writes it) in the year's `holdings/` folder, named for the account (`margin_holdings.toml`) or carrying its broker account id in `[meta] account`; or add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`. Then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
+- **Fix:** save the broker's positions snapshot (a `[[holding]]` TOML, as a download tool writes it) in the year's `holdings/` folder, named for the account (`margin_holdings.toml`) or carrying its broker account id in `[meta] broker_account` (or `[meta] account`); or add `holdings = ["~/holdings/margin.toml"]` under `[accounts.margin]`. Then `tjs sanity` and `tjs run` check it every time. One-off: `tjs sanity margin=/full/path/positions.toml`.
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `no snapshot in the project's holdings/`
 
+### `tjs run` ends with "Info: 3 accounts with positions not checked against the broker's holdings — `taxjson sanity`" although the run's positions check just compared their holdings/ snapshots
+- **Check:** `tjs run --details` names the accounts ("… and no holdings file to check them against: margin (8), …"); `tjs sanity` lists a snapshot in `holdings/` for each of them (and `UNCHECKED:` names none of them).
+- **Cause:** the closing summary counted an account as checked only when taxjson.toml gave it `holdings = [...]`; a snapshot the holdings check finds in `holdings/` by its broker account id or its file name was compared but not counted.
+- **Fix:** upgrade: an account with a `holdings/` snapshot that `tjs sanity` claims for it counts as checked; one with none (a crypto account, say) is still listed. On an older release the line is harmless for such accounts.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/first_run.py` — `unchecked_accounts`, `collect`; `src/taxjson/lib/holdings_dir.py` — `discover`, `folder_for`
+
 ### `tjs sanity`: "Info: holdings/U1***_positions.toml: no account claims it — add its broker account id to the account"
-- **Check:** the file's `[meta] account` (masked here) is in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.
+- **Check:** the file's `[meta] broker_account` and `[meta] account` (masked here) are in no account's `account` or `broker_accounts`, its name does not start with an account name, and no account's `holdings = [...]` lists it.
 - **Cause:** a snapshot in `holdings/` is matched to its account by the broker account id it states, else by its file name; this one matches neither, so it is not compared. (Before the fix, a file an account lists in its own `holdings = [...]` was named here too, though that account compares it.)
 - **Fix:** add the id under its account (`broker_accounts = ["…"]`), rename the file `<account>_holdings.toml`, or list it in the account's `holdings = [...]`. An id two accounts declare is refused the same way.
 - **Fixed in:** `v0.26.0`
@@ -612,6 +647,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** `tjs find-missing-history` and `tjs transfers` for missing history; a `ticker.map` line for a spelling difference; re-export when the holdings file is newer than the activity.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_sanity_console`, `MISSING_IN_TAXJSON`; `src/taxjson/lib/positions_check.py`
+
+### `tjs sanity`: "Error: margin_live_holdings.toml has no [[holding]] array (a holdings file has [[holding]] tables)" for a snapshot of an account that holds nothing
+- **Check:** the file has a `[meta]` table and no `[[holding]]` table (`holdings_count = 0`): `taxjson fetch --positions` wrote it after every position of the account was closed.
+- **Cause:** sanity read a holdings file without `[[holding]]` tables as a broken file, so the positions check stopped for every account once one of them held nothing.
+- **Fix:** upgrade: a snapshot with only its `[meta]` (no `holdings_count` above 0, no other table) is an account that holds nothing, and any position the books still hold there is listed as a difference. A file with a `[[holdings]]` typo, another table or a `holdings_count` above 0 and no rows is still refused. On an older release, move the file out of `holdings/`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `empty_snapshot`; `src/taxjson/lib/positions_reports.py` — `_read_toml`; `src/taxjson/bin/taxjson_run.py` — `has no [[holding]]`
+
+### `tjs sanity`: "Info: holdings/download.toml: no account claims it — add its broker account id to the account" although the account declares the snapshot's broker id
+- **Check:** the file's `[meta] broker_account` is in the account's `account` or `broker_accounts`, and its `[meta] account` is another name (the taxjson account's name when the snapshot was fetched: the account was renamed since, or the file was).
+- **Cause:** the snapshot was matched by its `[meta] account` first, and `taxjson fetch --positions` writes the taxjson account's name there, not the broker's id; the broker id in `[meta] broker_account` was only read when `account` was missing.
+- **Fix:** upgrade: `[meta] broker_account` is matched first, then `[meta] account`, then the file name. On an older release, name the file `<account>_holdings.toml` or list it in the account's `holdings = [...]`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `broker_account`
 
 ## Corporate actions and income
 
@@ -628,6 +677,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** nothing to do. For a real cost in the holdings view, `tjs elect lira --set EVENT_ID=ELECTION` (the saved election wins); `sheltered_elections = "ask"` in `[settings]` asks for every such event again.
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_note_sheltered_defaults`, `_sheltered_elections`; `src/taxjson/lib/corp_actions.py` — `sheltered_default_rows`, `sheltered_default_text`; `src/taxjson/bin/taxjson_corp_actions.py` — `--sheltered-elections`
+
+### `tjs elect lira` lists a "sheltered default ($0 cost for the distributed shares)" event of another account, one whose name starts with `lira_` (`lira_spouse`)
+- **Check:** `tjs spinoffs lira_spouse` shows the event; `tjs spinoffs lira` does not.
+- **Cause:** the election listing read the corporate-action files of every account whose name begins with the account's name and `_` (`work/lira_spouse_ib_corp.json` for `lira`), so a longer-named account's defaulted events were listed (and in `--json` counted) under the shorter one.
+- **Fix:** upgrade: the listing reads the account's own files only. Nothing in the books changed: each account's run booked its own events.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_defaulted_events`, `CORP_ACTION_BROKERS`
 
 ### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
 - **Check:** `tjs spinoffs` shows the election, the value used and the cost booked.

@@ -156,20 +156,17 @@ class TestChainPreValidation(unittest.TestCase):
         self.assertFalse((Path(tmp) / "work").exists(),
                          "the first command must not have run")
 
-    def test_ambiguous_boundary_gets_a_note(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp)
-            r = _cli(root, "run", "--no-input", "sum")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        # `sum` could have been run's account value? No — run takes no
-        # positional, so no note there. Use `events trades`: trades is
-        # both a command and a plausible account arg.
+    def test_command_name_no_account_takes_chains_quietly(self):
+        # #52: `events trades` is `events` then `trades` when the project
+        # has no account named trades (the word cannot be events'
+        # argument), with no note; an account of that name would be the
+        # argument (test_fix_issues_cli).
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             _cli(root, "run", "--no-input")
             r = _cli(root, "events", "trades")
-        self.assertIn("note:", r.stderr)
-        self.assertIn("'trades'", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("note:", r.stderr)
 
 
 if __name__ == "__main__":

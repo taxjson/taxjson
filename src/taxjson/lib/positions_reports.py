@@ -596,6 +596,9 @@ def _read_toml(path: Path) -> PositionsReport:
     except (OSError, ValueError, UnicodeDecodeError) as e:
         raise PositionsReportError(f"{name}: cannot parse it: {e}") from e
     holdings = doc.get('holding') if isinstance(doc, dict) else None
+    from taxjson.lib.holdings_dir import empty_snapshot
+    if holdings is None and empty_snapshot(doc):
+        holdings = []               # the account holds nothing (#46)
     if not isinstance(holdings, list):
         raise PositionsReportError(
             f"{name} has no [[holding]] array (a holdings file has "

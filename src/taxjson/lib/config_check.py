@@ -105,9 +105,23 @@ ARTIFACT_NAMESPACES = ("tt", "questrade", "ib", "webull", "rbc_direct",
 
 def account_pair_problems(names) -> List[str]:
     """One message per account whose name sits in another account's
-    artifact namespace (`<other>_<namespace>...`)."""
+    artifact namespace (`<other>_<namespace>...`), and one per group of
+    names that differ only by letter case (#48)."""
     out: List[str] = []
     names = [str(n) for n in names]
+    by_fold: Dict[str, List[str]] = {}
+    for n in names:
+        by_fold.setdefault(n.casefold(), []).append(n)
+    for same in by_fold.values():
+        if len(same) > 1:
+            # One folder and one holdings file on Windows and macOS;
+            # holdings/ discovery and file names match case-blind too.
+            out.append(
+                f"{' and '.join(f'[accounts.{n}]' for n in same)} differ "
+                f"only by letter case — an account's name is also its "
+                f"inputs/ folder and its holdings file's name, which "
+                f"letter case does not tell apart. Rename one (and its "
+                f"inputs/ folder).")
     for long in names:
         for short in names:
             if long == short or not long.lower().startswith(

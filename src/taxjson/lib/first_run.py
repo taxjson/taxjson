@@ -352,20 +352,34 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
     return sorted(hits.values(), key=lambda h: (h["account"], h["symbol"]))
 
 
-def unchecked_accounts(cache: Path, accounts: Dict[str, Any]
+def unchecked_accounts(cache: Path, accounts: Dict[str, Any],
+                       root: Optional[Path] = None
                        ) -> List[Tuple[str, int]]:
     """[(account, open positions)] of configured accounts with open
-    positions in their books and no `holdings` file in taxjson.toml —
-    the UNCHECKED line of `taxjson sanity`."""
+    positions in their books and no holdings to compare them with:
+    neither a `holdings` file in taxjson.toml nor a snapshot of the
+    project's holdings/ folder that `taxjson sanity` claims for it (by
+    broker account id or file name, lib/holdings_dir — `root`: the
+    project, default the folder holding `cache`)."""
     from taxjson.lib.report_model import resolve_gains_files
     try:
         resolved = resolve_gains_files(cache)
     except Exception:                               # noqa: BLE001
         return []
+    from taxjson.lib import holdings_dir as _HD
+    root = Path(root) if root is not None else Path(cache).parent
+    snapshots: Dict[str, List[str]] = {}
+    try:
+        folder, _note = _HD.folder_for(root)
+        if folder is not None:
+            snapshots, _notes = _HD.discover(folder, accounts, root)
+    except Exception:                               # noqa: BLE001
+        snapshots = {}
     out = []
     for acct, f in sorted(resolved.items()):
         cfg = accounts.get(acct)
-        if not isinstance(cfg, dict) or cfg.get("holdings"):
+        if (not isinstance(cfg, dict) or cfg.get("holdings")
+                or snapshots.get(acct)):
             continue
         try:
             data = json.loads(Path(f).read_text(encoding="utf-8"))
@@ -452,8 +466,8 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                                     "quantity": a.quantity}
                                    for a in book_value],
         "unchecked_accounts": [{"account": a, "positions": n}
-                               for a, n in unchecked_accounts(cache,
-                                                              accounts)],
+                               for a, n in unchecked_accounts(
+                                   cache, accounts, root)],
         "income_not_held": income,
         "books_not_read": failed,
     }

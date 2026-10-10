@@ -1463,7 +1463,9 @@ def _no_command(argv: List[str], commands) -> bool:
             i += 1
             continue
         return False
-    return not any(t in commands for t in argv)
+    # Only -C/--dir options: their values are folders, even one named
+    # like a command (`taxjson -C run`, #51).
+    return True
 
 
 def _child_error(stderr: Optional[str], limit: int = 400) -> str:
@@ -9016,9 +9018,13 @@ def _hint_text(hints: Dict[str, Any]) -> str:
 def _defaulted_events(cache: Path, name: str
                       ) -> Dict[str, Dict[str, str]]:
     """The account's events booked by the sheltered default, from its
-    corp stage files in work/ ({} before a run)."""
+    corp stage files in work/ ({} before a run): exactly
+    `<name>_<broker>_corp.json` for the brokers whose corporate actions
+    are staged — a `<name>_*` pattern also read a longer-named sibling's
+    (`a_more_ib_corp.json` for account `a`, #50)."""
     return _sheltered_default_events(sorted(
-        p for p in Path(cache).glob(f"{name}_*_corp.json") if p.is_file()))
+        p for p in (Path(cache) / f"{name}_{b}_corp.json"
+                    for b in CORP_ACTION_BROKERS) if p.is_file()))
 
 
 def _default_label(kind: str) -> str:
@@ -17703,6 +17709,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                           if isinstance(meta, (dict, type(None)))
                           else path.stem)
             holdings = doc.get("holding") if isinstance(doc, dict) else None
+            from taxjson.lib.holdings_dir import empty_snapshot
+            if holdings is None and empty_snapshot(doc):
+                holdings = []       # the account holds nothing (#46)
             if not isinstance(holdings, list):
                 _die(f"{path.name} has no [[holding]] "
                          f"array (a holdings file has [[holding]] tables)")
@@ -18094,8 +18103,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         for ln in _wrap(
                 f"UNCHECKED: account(s) "
                 f"{', '.join(f'{a} ({len(tax[a])} position(s))' for a in uncovered)}"
-                f" have open positions but no `holdings` file in "
-                f"taxjson.toml — not compared with the broker.",
+                f" have open positions but no holdings file (a "
+                f"holdings/ snapshot, or `holdings` in taxjson.toml) — "
+                f"not compared with the broker.",
                 None, "", "  "):
             print(ln)
     if config_notes:
@@ -24507,20 +24517,9 @@ def cmd_init(args: argparse.Namespace) -> None:
              "of exports for every year; `taxjson init --single --force` "
              "re-templates it.")
     root = top / str(first_year) if years else top
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        # An existing FILE, a path under a file, or an unwritable
-        # parent tracebacked (R1-263).
-        _die(f"cannot create the project directory {root}: "
-             + ("a file of that name exists"
-                if isinstance(e, FileExistsError) or root.is_file()
-                else (e.strerror or str(e))))
     cfg = root / "taxjson.toml"
     if cfg.exists() and not args.force:
         _die(f"{cfg} already exists (use --force to overwrite)")
-
-    written: List[str] = []
 
     # The config is (re)written — the guard above already enforces --force.
     config_text, account_names = _render_init_config(
@@ -24532,6 +24531,25 @@ def cmd_init(args: argparse.Namespace) -> None:
              if country == "canada" else {})} if years else None),
         grant_since=(_sibling_grant_since(top, first_year)
                      if years and country == "canada" else None))
+    # The write boundary BEFORE anything is created (#45): a folder the
+    # scaffold writes into that is a link leaving the project (inputs/
+    # -> a sibling folder) put the account folders and READMEs there,
+    # as _refuse_outside_dir_links refuses for every other command.
+    _yd = f"{first_year}/" if years else ""
+    _init_refuse_outside_links(top, [
+        f"{_yd}{_PL.HOLDINGS}" if years else "", _PL.INPUTS,
+        *(f"{_PL.INPUTS}/{a}" for a in account_names)])
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # An existing FILE, a path under a file, or an unwritable
+        # parent tracebacked (R1-263).
+        _die(f"cannot create the project directory {root}: "
+             + ("a file of that name exists"
+                if isinstance(e, FileExistsError) or root.is_file()
+                else (e.strerror or str(e))))
+
+    written: List[str] = []
     # The tree is checked BEFORE anything is written: inputs/ existing
     # as a file was a NotADirectoryError traceback after taxjson.toml
     # and ticker.map were already in place (re-audit A2-0781).
@@ -24693,6 +24711,29 @@ def cmd_init(args: argparse.Namespace) -> None:
     _init_filing_hint(_year, first_year, country, years, top)
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
+
+
+def _init_refuse_outside_links(top: Path, rels: List[str]) -> None:
+    """Die (exit 2, nothing written) when a folder `taxjson init` would
+    write into — each of `rels` and every folder above it, under `top` —
+    is a symlink leaving `top` (#45). A link inside `top` is kept."""
+    from taxjson.lib.safe_write import link_outside
+    bad: List[str] = []
+    for rel in rels:
+        p = top
+        for part in Path(rel).parts:
+            p = p / part
+            target = link_outside(p, top)
+            shown = f"{p.relative_to(top).as_posix()}/ -> {target}"
+            if target is not None and shown not in bad:
+                bad.append(shown)
+    if bad:
+        _die_input("folder(s) that are symlinks to outside the project — "
+                   "init writes there; nothing was written:\n    "
+                   + "\n    ".join(bad),
+                   "Replace each link with a real folder (move its "
+                   "contents in), or run init in the folder the link "
+                   "points into.")
 
 
 def _init_filing_hint(year_given: Optional[int], first_year: int,
@@ -27601,7 +27642,7 @@ def _main() -> None:
         # (they belong to the absent plugin, so argparse would only
         # call them unrecognized). Before any segment runs.
         for seg in segments:
-            if (next((t for t in seg if t in commands), None) == "fetch"
+            if (_command_of(p, seg, commands) == "fetch"
                     and not {"-h", "--help", "--list"} & set(seg)):
                 from taxjson.lib.fetchers import installed as _fetchers
                 if not _fetchers():
@@ -27612,29 +27653,18 @@ def _main() -> None:
         # command) previously half-ran the chain, executing `events`
         # and then dying rc 2.
         for seg in segments:
-            first = next((t for t in seg if t in commands), None)
+            first = _command_of(p, seg, commands)
             if first is None or not _parses_ok(p, seg):
                 bad = " ".join(seg)
                 _die(f"{bad!r} is not a valid command in "
                          f"this chain — nothing was executed. (A "
                          f"literal `--` separates chained commands; "
                          f"the token after it must start a command.)")
-        # Self-diagnosing ambiguity note: a boundary token that the
-        # PREVIOUS segment could also have consumed as a positional.
-        for a, b in zip(segments, segments[1:]):
-            boundary = next((t for t in b if t in commands), None)
-            if boundary and _parses_ok(p, a + [boundary]):
-                emit_line(f"taxjson: note: {boundary!r} starts a new "
-                          f"chained command; the previous command "
-                          f"({next(t for t in a if t in commands)!r}) "
-                          f"could also have taken it as an argument — "
-                          f"run the commands separately if that was the "
-                          f"intent.", file=sys.stderr)
     global _CURRENT_CMD, _CURRENT_DETAILS
     from taxjson.lib.corp_actions import ManifestError
     for seg in segments:
         args = p.parse_args(seg)
-        _CURRENT_CMD = next((t for t in seg if t in commands), "")
+        _CURRENT_CMD = args.cmd or ""
         _CURRENT_DETAILS = _details(args)
         if args.cmd == "run":
             # The run's console: whole lines in order whatever reads
@@ -28030,6 +28060,100 @@ def _parses_ok(parser: argparse.ArgumentParser, seg: List[str]) -> bool:
         return False
 
 
+def _takes_separate_value(parser: argparse.ArgumentParser,
+                          tok: str) -> bool:
+    """Is `tok` one of `parser`'s own options whose value is the NEXT
+    token (`-C DIR`, `--dir DIR`, an unambiguous `--di DIR`)? Not for
+    `--dir=DIR` / `-CDIR` (one token) or a flag (`--version`)."""
+    acts = parser._option_string_actions
+    act = acts.get(tok)
+    if act is None and tok.startswith("--") and "=" not in tok:
+        hits = {id(a): a for s, a in acts.items()
+                if s.startswith("--") and s.startswith(tok)}
+        act = next(iter(hits.values())) if len(hits) == 1 else None
+    return act is not None and act.nargs != 0
+
+
+def _command_index(parser: argparse.ArgumentParser, argv: List[str],
+                   commands: set) -> int:
+    """Where the command starts in `argv` (len(argv): no command). The
+    tokens before it are the global options, a value of theirs skipped
+    even when it is named like a command: `-C run run sum` is the
+    project folder run, then `run` (#51)."""
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in commands:
+            return i
+        i += 2 if _takes_separate_value(parser, tok) else 1
+    return len(argv)
+
+
+def _command_of(parser: argparse.ArgumentParser, seg: List[str],
+                commands: set) -> Optional[str]:
+    i = _command_index(parser, seg, commands)
+    return seg[i] if i < len(seg) else None
+
+
+def _trial_parse(parser: argparse.ArgumentParser, seg: List[str]
+                 ) -> Optional[argparse.Namespace]:
+    """`seg` parsed as one complete command, or None (argparse would
+    refuse it). Output suppressed, as in _parses_ok."""
+    import contextlib
+    import io
+    try:
+        with contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return parser.parse_args(seg)
+    except SystemExit:
+        return None
+
+
+# Positionals naming one of the project's accounts (PERIOD too: a lone
+# word that is no period is read as the account — `events margin`). A
+# command name there is the account only when the project has one of
+# that name; otherwise it starts the next command (`fetch run`).
+_CHAIN_ACCOUNT_DESTS = frozenset({"account", "period", "items"})
+# Positionals a command name can never be (a date).
+_CHAIN_NEVER_DESTS = frozenset({"when"})
+
+
+def _chain_accounts(prefix: List[str]) -> set:
+    """The account names of the project the global prefix names (-C,
+    else the current folder), soft-read: an empty set when there is no
+    readable taxjson.toml (the command itself says why)."""
+    d = "."
+    i = 0
+    while i < len(prefix):
+        tok = prefix[i]
+        if tok in ("-C", "--dir") and i + 1 < len(prefix):
+            d = prefix[i + 1]
+            i += 2
+            continue
+        if tok.startswith("--dir="):
+            d = tok[len("--dir="):]
+        elif tok.startswith("-C") and len(tok) > 2:
+            d = tok[2:]
+        i += 1
+    try:
+        doc = tomllib.loads((Path(d) / "taxjson.toml").read_bytes()
+                            .decode("utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return set()
+    accounts = doc.get("accounts") if isinstance(doc, dict) else None
+    return set(accounts) if isinstance(accounts, dict) else set()
+
+
+def _argument_taking(before: argparse.Namespace,
+                     after: argparse.Namespace) -> Optional[str]:
+    """The destination whose value changed between two trial parses of
+    one command (the one a further token was given to)."""
+    for k, v in vars(after).items():
+        if getattr(before, k, None) != v:
+            return k
+    return None
+
+
 def _split_command_segments(parser: argparse.ArgumentParser,
                             argv: List[str],
                             commands: set) -> List[List[str]]:
@@ -28038,24 +28162,25 @@ def _split_command_segments(parser: argparse.ArgumentParser,
     order.
 
     Everything before the FIRST command token is a global prefix
-    (`-C DIR`), re-applied to every segment. After that, a token
-    matching a command name is a boundary only if the segment built so
-    far is itself a COMPLETE valid command (trial-parsed) — so
-    `run --fast | sum` splits (run --fast parses) while
-    `run --account sum` does not (`--account` still needs its value)
-    and `show sum` keeps `sum` as the account name. A literal `--`
-    forces a boundary for the rare ambiguous spelling.
+    (`-C DIR`, a value named like a command included), re-applied to
+    every segment. After that, a literal `--` ends a complete command
+    and the next one starts (the explicit separator). A bare command
+    name starts the next command only when the segment built so far is
+    a COMPLETE valid command that cannot take the word as an argument:
+    `run --fast sum` splits (run takes no positional), `run --account
+    sum` does not (the option's value), and neither does `events sum`
+    when the project has an account named sum, `init sum` (the folder)
+    or `audit sum` (a symbol) — a valid single command is never split
+    (#52). `events sum` with no such account is `events`, then `sum`.
     """
-    prefix: List[str] = []
-    i = 0
-    while i < len(argv) and argv[i] not in commands:
-        prefix.append(argv[i])
-        i += 1
-    if i == len(argv):                  # no command at all — let
+    start = _command_index(parser, argv, commands)
+    if start == len(argv):              # no command at all — let
         return [argv]                   # argparse print its usual error
+    prefix: List[str] = argv[:start]
+    accounts: Optional[set] = None
     segments: List[List[str]] = []
-    cur: List[str] = [argv[i]]
-    i += 1
+    cur: List[str] = [argv[start]]
+    i = start + 1
     while i < len(argv):
         tok = argv[i]
         if cur and cur[0] == "redact":
@@ -28069,18 +28194,33 @@ def _split_command_segments(parser: argparse.ArgumentParser,
             cur = []
         elif (tok in commands
                 and cur                 # empty right after a `--`
-                and cur[0] != "help"    # `taxjson help divs` — help's
+                and cur[0] != "help"):  # `taxjson help divs` — help's
                                         # argument IS a command name
-                and _parses_ok(parser, prefix + cur)):
-            segments.append(cur)
-            cur = [tok]
+            now = _trial_parse(parser, prefix + cur)
+            more = (_trial_parse(parser, prefix + cur + [tok])
+                    if now is not None else None)
+            dest = _argument_taking(now, more) if more is not None else None
+            if now is None:
+                split = False           # incomplete: tok is its argument
+            elif more is None or dest in _CHAIN_NEVER_DESTS:
+                split = True            # it cannot take tok
+            elif dest in _CHAIN_ACCOUNT_DESTS:
+                if accounts is None:
+                    accounts = _chain_accounts(prefix)
+                split = tok not in accounts
+            else:
+                split = False           # a folder, a symbol, a value
+            if split:
+                segments.append(cur)
+                cur = [tok]
+            else:
+                cur.append(tok)
         else:
             cur.append(tok)
         i += 1
     if cur:
         segments.append(cur)
     return [prefix + s for s in segments if s]
-
 
 if __name__ == "__main__":
     main()

@@ -68,6 +68,14 @@ needed nothing.
   same-moment trade of the same security in another account can move:
   a filed year then shows `filed <year> DRIFTED vs <year>.json` on the
   next `tjs run` ([troubleshooting.md](troubleshooting.md)).
+- **Chained commands:** a command name after a command that can take it
+  as its own argument is now that argument when it names one of the
+  project's accounts (`tjs events sum` with an `[accounts.sum]`), a folder
+  (`tjs init sum`) or a symbol (`tjs audit sum`); it chained before. To
+  chain after such a command, write `--` between the two: `tjs events --
+  sum`. `tjs run sum`, `tjs fetch run` and every chain whose word is no
+  account of the project work as before. The value of `-C` is always the
+  project folder, even one named like a command (`tjs -C run run sum`).
 
 ### v0.28.0
 
