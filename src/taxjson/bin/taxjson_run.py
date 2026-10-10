@@ -1127,6 +1127,10 @@ def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
 # The command currently executing (set by main's dispatch loop) so
 # shared helpers' errors can say WHICH command in a chain failed.
 _CURRENT_CMD = ""
+# --details on the command currently executing (docs/output-style.md,
+# Essentials first): shared helpers print a warning's detail lines only
+# then; the default view shows its headline.
+_CURRENT_DETAILS = False
 
 
 class _CappedHelpFormatter(argparse.HelpFormatter):
@@ -26005,11 +26009,12 @@ def _main() -> None:
                           f"could also have taken it as an argument — "
                           f"run the commands separately if that was the "
                           f"intent.", file=sys.stderr)
-    global _CURRENT_CMD
+    global _CURRENT_CMD, _CURRENT_DETAILS
     from taxjson.lib.corp_actions import ManifestError
     for seg in segments:
         args = p.parse_args(seg)
         _CURRENT_CMD = next((t for t in seg if t in commands), "")
+        _CURRENT_DETAILS = _details(args)
         if args.cmd == "run":
             # The run's console: whole lines in order whatever reads
             # them (a pipe, `| tee`), and every line under a step —
