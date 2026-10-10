@@ -170,13 +170,18 @@ class TestBothCountries(unittest.TestCase):
                 lock.write_text(json.dumps(doc))
                 d = p.run("check-filed")
                 self.assertEqual(d.returncode, 1)
-                first = d.stderr.splitlines()[0]
+                # (A US project's books are stale once its year is
+                # locked — the lock is a gains input, issue #32 — and
+                # that warning comes first: find the drift message.)
+                first = [ln for ln in d.stderr.splitlines()
+                         if "filed 2024" in ln][0]
                 self.assertEqual(first, "Warning: "
                                         "filed 2024 DRIFTED vs 2024.json")
                 assert_styled(self, d.stderr)
                 # As the checklist reads it (width 0): the GNU bytes.
                 d = p.run("check-filed", TAXJSON_WIDTH=0)
-                self.assertEqual(d.stderr.splitlines()[0],
+                self.assertEqual([ln for ln in d.stderr.splitlines()
+                                  if "filed 2024" in ln][0],
                                  "taxjson check-filed: warning: "
                                  "filed 2024 DRIFTED vs 2024.json")
 

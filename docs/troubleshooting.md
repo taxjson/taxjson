@@ -1306,6 +1306,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/corporate_timeline.py` — `account_tie`, `event_sort_key`; `src/taxjson/lib/core.py` — `_by_account_name`
 
+### US project: "inputs changed since the last full run (added: filed/ (locked years))" after `tjs close-year`, or after adding or removing a `filed/<year>.json`
+- **Check:** `tjs sum --details` or `tjs checklist` names `filed/ (locked years)` (`changed:` when the project already had a lock, `removed:` when its last lock was deleted). `ls filed/` (and `[settings] prior_year_record`) shows the locks.
+- **Cause:** a US gains run books a wash-sale basis add that reaches a sale in a filed year in the loss's year instead (`US-WASH-22`), so the set of locked years is an input of the books. On v0.28.1 and older a new lock left the books looking current although a run would change them (issue #32). A Canadian project's gains read no lock.
+- **Fix:** `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/checklist.py` — `LOCKED_YEARS_KEY`, `_locked_years_entry`, `input_fingerprint`; `src/taxjson/bin/taxjson_filed.py` — `locked_year_flags`
+
 ## Stand-alone tools and hand-written JSON books
 
 ### `taxjson-gains book.json`: "impossible date='2025-02-30' (not a real calendar date written YYYY-MM-DD) — fix the input data", or a hand-written book whose gains change when a date is written `2025-2-01` instead of `2025-02-01`

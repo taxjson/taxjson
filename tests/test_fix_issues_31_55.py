@@ -145,5 +145,56 @@ class TestAccountOrderIsNotAnInput(unittest.TestCase):
         self.assertEqual([t.quantity for t in out[1:]], [-1.0, 1.0])
 
 
+# ------------------------------------------------------------------ #32
+class TestLocksInTheFingerprint(unittest.TestCase):
+    """#32: a new or removed filed-year lock of a US project makes the
+    books stale; a Canadian project's gains read no lock."""
+
+    def _lock(self, root, year, country):
+        (root / "filed").mkdir(exist_ok=True)
+        (root / "filed" / f"{year}.json").write_text(json.dumps({
+            "schema_version": 1, "year": year, "country": country,
+            "accounts": {}, "totals": {},
+            "closed_at": f"{year + 1}-03-01T12:00:00"}))
+
+    def test_canada_lock_is_not_a_run_input(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(Path(td) / "p", 2025, ["margin"], {
+                "margin": "BUYSELL 2025-01-02 09:30:00 QZZQ.TO 1 CAD 1 1 0\n"})
+            cfg = PL.read_config(root)
+            before = CL.input_fingerprint(root, cfg)
+            self._lock(root, 2024, "canada")
+            self.assertEqual(CL.input_fingerprint(root, cfg), before)
+
+    @rule("US-WASH-22")
+    def test_us_lock_makes_the_books_stale(self):
+        # margin's 2026-01-05 loss is washed by b's 2025-12-15 buy, whose
+        # sale on 12-17 is in 2025: with 2025 locked, the basis add is
+        # booked in the loss's year instead (b's 2025 gain moves).
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(Path(td) / "p", 2026, ["margin", "b"], {
+                "margin": ("BUYSELL 2025-01-02 09:30:00 QZZQ.US 10 USD 50 "
+                           "500 0\n"
+                           "BUYSELL 2026-01-05 09:30:00 QZZQ.US -10 USD 30 "
+                           "300 0\n"),
+                "b": ("BUYSELL 2025-12-15 09:30:00 QZZQ.US 10 USD 30 300 0\n"
+                      "BUYSELL 2025-12-17 09:30:00 QZZQ.US -10 USD 31 310 "
+                      "0\n")}, country="usa")
+            r = _cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            before = _gain(root, "b")
+            self._lock(root, 2025, "usa")
+            why = CL.inputs_changed(root, PL.read_config(root))
+            self.assertIn(CL.LOCKED_YEARS_KEY, why or "")
+            r = _cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotAlmostEqual(_gain(root, "b"), before, places=2)
+            self.assertEqual(
+                CL.inputs_changed(root, PL.read_config(root)), "")
+            (root / "filed" / "2025.json").unlink()
+            self.assertIn(CL.LOCKED_YEARS_KEY, CL.inputs_changed(
+                root, PL.read_config(root)) or "")
+
+
 if __name__ == "__main__":
     unittest.main()
