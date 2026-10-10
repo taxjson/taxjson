@@ -74,13 +74,17 @@ APART = ("receipt", "different")
 
 
 def pair_verdict(us: str, ca: str, names: Dict[str, set],
-                 shown: Dict[tuple, str]) -> Tuple[str, str]:
+                 shown: Dict[tuple, str],
+                 receipts: Optional[Dict[frozenset, str]] = None
+                 ) -> Tuple[str, str]:
     """What the exports say about a US and a Canadian listing that share
     a root: (kind, text). A shared root is a candidate (many interlisted
     shares keep their letters) unless something shows the two apart:
     "receipt" — the Canadian line is a depositary receipt (a receipt
     word of markets.toml [lists] receipt_words in its name, or a listing
-    on a receipt venue); "different" — the names name different
+    on a receipt venue; or, given `receipts` — a Canadian project's
+    lib/tobase_map.receipt_pairs — a CDR the interlisted master knows);
+    "different" — the names name different
     companies (no leading company word in common): cross_listings.
     shown_apart. Otherwise "same" (equal names under the cross-listing
     join's rule, _names_verdict over symbol_codes.exact_name; text: the
@@ -88,7 +92,7 @@ def pair_verdict(us: str, ca: str, names: Dict[str, set],
     text: why) or "unknown" (no name for a side; text: which)."""
     from taxjson.lib import cross_listings as XL
     nu, nc = names.get(us, set()), names.get(ca, set())
-    apart = XL.shown_apart(us, ca, names)
+    apart = XL.shown_apart(us, ca, names, receipts)
     if apart:
         return ("different" if apart == XL.DIFFERENT else "receipt"), apart
     why = XL._names_verdict(nu, nc, shown)
@@ -265,6 +269,14 @@ def map_gaps(root: Path) -> Tuple[List[MapGap], List[str]]:
     seen = sightings(list(syms) + list(own) + list(own.values()))
     ca_sufs = canadian_suffixes()
     names: Optional[Tuple[Dict[str, set], Dict[tuple, str]]] = None
+    # A CDR and its US share (the interlisted master, Canada): apart.
+    from taxjson.lib.country import CountryError, settings_country
+    from taxjson.lib.tobase_map import receipt_pairs
+    try:
+        _canada = settings_country(cfg.get("settings") or {}) == "canada"
+    except CountryError:
+        _canada = False
+    receipts = receipt_pairs(_canada)
     out: List[MapGap] = []
     for rt in sorted(seen):
         sufs = seen[rt]
@@ -278,7 +290,8 @@ def map_gaps(root: Path) -> Tuple[List[MapGap], List[str]]:
                 continue
             if names is None:
                 names = listing_names(root / "work", equity, glob)
-            verdict, what = pair_verdict(us, ca, names[0], names[1])
+            verdict, what = pair_verdict(us, ca, names[0], names[1],
+                                         receipts)
             if verdict in APART:
                 continue
             frm, to = tobase_direction(us, ca, base_ccy)

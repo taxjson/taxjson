@@ -754,6 +754,10 @@ def listing_root(symbol: str) -> str:
 # Why a .tt JOURNAL line's two listings are not joined: nothing shows
 # they are one security (analyze's `refused` reason, "unproven").
 UNPROVEN = "unproven"
+# analyze's `refused` reason for a pair the interlisted master knows is
+# a Canadian depositary receipt and its US share (lib/tobase_map.
+# receipt_pairs, Canada): two securities, never joined from a journal.
+RECEIPT = "receipt"
 
 
 def receipt_why(symbol: str, names: Iterable[Tuple[str, ...]] = (),
@@ -820,15 +824,22 @@ def _receipt_between(a: str, na: Iterable[Tuple[str, ...]], wa: str,
 
 
 def shown_apart(a: str, b: str,
-                names: Dict[str, Set[Tuple[str, ...]]]) -> str:
+                names: Dict[str, Set[Tuple[str, ...]]],
+                receipts: Optional[Dict[frozenset, str]] = None) -> str:
     """Why the exports show two listings are NOT one security, else "":
     a Canadian listing of the two is a depositary receipt (receipt_why:
-    a receipt word in its name, or a receipt venue), or the names name
-    different companies (companies_differ for every pair of names).
+    a receipt word in its name, or a receipt venue; or, given
+    `receipts` — lib/tobase_map.receipt_pairs, a Canadian project —
+    the interlisted master knows the pair as a CDR and its US share),
+    or the names name different companies (companies_differ for every
+    pair of names).
     Shared letters are a candidate, never proof either way: this is
     only the evidence AGAINST (`taxjson tips` MAP-GAP / US-LISTING,
     `ticker-map --suggest`'s conditional hints)."""
     from taxjson.lib.markets import is_canadian_listing
+    why = (receipts or {}).get(frozenset((a, b)))
+    if why:
+        return why
     na, nb = names.get(a, set()), names.get(b, set())
     for sym, ns, other, ons in ((a, na, b, nb), (b, nb, a, na)):
         if is_canadian_listing(sym):
@@ -950,7 +961,8 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             currency_journals: bool = False,
             declared: Iterable[Any] = (),
             refused: Optional[List[Pair]] = None,
-            map_renames: Optional[Dict[str, str]] = None
+            map_renames: Optional[Dict[str, str]] = None,
+            receipts: Optional[Dict[frozenset, str]] = None
             ) -> Dict[str, List[Pair]]:
     """{"joined": [...], "suggested": [...]}: the cross-listing journals
     the legs show (module docstring). A pair whose names name different
@@ -974,6 +986,14 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     legs it found; the user's ticker.map still wins (a refusal, "map" or
     "distinct", recorded like the others).
 
+    `receipts` (lib/tobase_map.receipt_pairs, a Canadian project): the
+    pairs the interlisted master knows are a depositary receipt and its
+    US share — two securities with no line saying so. A journal's legs
+    between them are never joined: refused as RECEIPT (a .tt JOURNAL
+    line as UNPROVEN: the run stops, a deliberate join being a
+    ticker.map TOBASE line); the user's map, naming either, decides
+    first.
+
     `map_renames`: the map's renames as the base-currency books apply
     them (GLOBAL / TOBASE / JOURNAL, chains followed). A pair the map
     decides is read through them: when the map books the out-leg as the
@@ -990,6 +1010,7 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
     def _booked(sym: str) -> str:
         return renames.get(sym, sym)
     apart = {frozenset(x.upper() for x in pair) for pair in map_distinct}
+    receipt_of = dict(receipts or {})
     joined: List[Pair] = []
     suggested: List[Pair] = []
 
@@ -1031,6 +1052,10 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
         written = (_w[2], _w[3]) if len(_w) >= 4 else ("", "")
         verdict = declared_verdict(o.symbol, i.symbol, names, shown,
                                    written)
+        _rw = receipt_of.get(frozenset((o.symbol, i.symbol)))
+        if _rw:
+            verdict = (f"nothing shows {o.symbol} and {i.symbol} are one "
+                       f"security: {_rw}")
         if verdict:
             if refused is not None:
                 nx = names.get(o.symbol, set())
@@ -1075,6 +1100,13 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                 _refuse(Pair(o[0], i[0], o[0].symbol, i[0].symbol,
                              kind="JOURNAL", journal=o[0].broker),
                         *_map_reason(o[0].symbol, i[0].symbol))
+                continue
+            _rw = receipt_of.get(frozenset((o[0].symbol, i[0].symbol)))
+            if _rw:
+                # A depositary receipt and its US share: two securities.
+                _refuse(Pair(o[0], i[0], o[0].symbol, i[0].symbol,
+                             kind="JOURNAL", journal=o[0].broker),
+                        RECEIPT, _rw)
                 continue
             # The line in the other currency maps onto the base one
             # (the legs' own currencies; an EXTRACT symbol may not spell
@@ -1235,6 +1267,15 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
                              names=(o.raw_name, i.raw_name),
                              extra={"verdict": verdict}),
                         *_map_reason(o.symbol, i.symbol))
+            continue
+        _rw = receipt_of.get(frozenset((o.symbol, i.symbol)))
+        if _rw:
+            # A depositary receipt and its US share (the interlisted
+            # master): two securities, whatever the legs' names say.
+            if not ambiguous:
+                _refuse(Pair(o, i, frm, to, journal=journal,
+                             names=(o.raw_name, i.raw_name)),
+                        RECEIPT, _rw)
             continue
         if verdict == DIFFERENT:
             # Two companies: no TOBASE line.

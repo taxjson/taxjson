@@ -2098,6 +2098,12 @@ def _project_tree(root: Path, inputs: Path
         hidden += h
     for name in _PROJECT_FILES:
         q = root / name
+        if name == _PL.TOBASE_MAP and _PL.shared_tobase(root):
+            # The tobase.map every year shares: the copy's own.
+            q = _PL.tobase_map_path(root)
+            if q.is_file():
+                files.append(_TreeFile(Path(name), q))
+            continue
         if q.is_file() and not q.is_symlink():
             files.append(_TreeFile(Path(name), q))
     return dirs, files, hidden
@@ -2206,7 +2212,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             continue
         if shared and f.rel == Path(_PL.CONFIG):
             # The redacted project reads its own inputs/ and holdings/.
-            for _k in _PL.FOLDER_KEYS:
+            for _k in _PL.FOLDER_KEYS + (_PL.TOBASE_KEY,):
                 text = _PL.set_key_text(text, f"settings.{_k}", None)
         if shared and str(f.rel) in _PROJECT_FILES:
             # Settings and symbol rules, not an export: only the ids

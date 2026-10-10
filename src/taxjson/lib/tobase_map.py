@@ -5,13 +5,25 @@ States under the same share class (src/taxjson/data/interlisted.toml,
 built by scripts/build_interlisted.py from OpenFIGI share-class FIGIs and
 the Nasdaq Trader symbol directory; keyed by share-class FIGI). A
 Canadian project carries its pairs as a file of its own, tobase.map,
-beside ticker.map: one `TOBASE US CA` line per US listing (exchange
-first, then the OTC listings of the same shares in a section of their
-own) and per extra Canadian line (a fund's US-dollar units), each
-marked `# master:<FIGI>`, plus `DISTINCT` lines for a Canadian
-depositary receipt (CDR) the books hold whose root is a US ticker.
-`taxjson init --country canada` writes it, `taxjson new-year` copies it,
-`taxjson update-tobase-map` keeps it in step with the installed master.
+beside ticker.map — or, in a multi-year project, one file at the folder
+holding the year folders that every year reads (`[settings] tobase_map
+= "../tobase.map"`, lib/project_layout.tobase_map_path): one `TOBASE US
+CA` line per US listing (exchange first, then the OTC listings of the
+same shares in a section of their own) and per extra Canadian line (a
+fund's US-dollar units), each marked `# master:<FIGI>`.
+`taxjson init --country canada` writes it, `taxjson new-year` keeps the
+setting, `taxjson update-tobase-map` keeps it in step with the
+installed master.
+
+No `DISTINCT` line is written (since v0.27.1): taxjson never joins two
+listings because their letters match (only a broker's journal evidence
+or a TOBASE line joins), so look-alike listings need no line to stay
+apart. The master still knows each Canadian depositary receipt (CDR)
+whose root is a US ticker (`receipt_pairs`): a journal-evidence join,
+a `ticker-map --suggest` pair, a MAP-GAP and the cross-listing loss
+radar keep a CDR and its US share apart with it. `update-tobase-map`
+retracts the DISTINCT lines earlier versions wrote (unedited; an
+edited one is kept and flagged).
 
 How a run reads it (tax-logic CA-XLIST-06): with ticker.map, as if its
 lines were written there, except that ticker.map wins — a tobase.map
@@ -39,6 +51,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -54,13 +67,13 @@ SECTION_EXCHANGE = "## --- Exchange-listed pairs (one security, one ACB pool) --
 SECTION_CURRENCY = ("## --- US-dollar lines of the same TSX units (one "
                     "security) ---")
 SECTION_OTC = "## --- OTC listings of the same shares ---"
-SECTION_DISTINCT = ("## --- Depositary receipts the books hold (two "
-                    "securities) ---")
 SECTION_OWN = "## --- Your own lines (kept as written) ---"
 SECTION_REMOVED = ("## --- Master lines you removed (kept out; delete a "
                    "`# removed:` line to have it back) ---")
-SECTIONS = (SECTION_EXCHANGE, SECTION_CURRENCY, SECTION_OTC,
-            SECTION_DISTINCT)
+SECTIONS = (SECTION_EXCHANGE, SECTION_CURRENCY, SECTION_OTC)
+# Why `update-tobase-map` retracts the DISTINCT lines earlier versions
+# wrote for a depositary receipt the books held.
+DISTINCT_NOT_NEEDED = "not needed: look-alike listings are never joined"
 # The marker: `# master:<FIGI>:<h>`, <h> the short hash of the line's
 # rule as generated (line_hash): a marked line whose rule no longer
 # matches its hash is the user's edit. A marker without <h> (written
@@ -213,13 +226,12 @@ def retracted_listings(e: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return out
 
 
-def master_lines(master: Master, books: Optional[Set[str]] = None
-                 ) -> List[GenLine]:
+def master_lines(master: Master) -> List[GenLine]:
     """Every line the master gives a project: the TOBASE pairs of each
     security (current listings and the ended ones, kept for the years
-    they traded; never a retracted listing) and, when `books` (the
-    symbols the books name) is given, a DISTINCT line for each
-    depositary receipt the books hold."""
+    they traded; never a retracted listing). Never a DISTINCT line: a
+    depositary receipt stays apart from its US share without one
+    (receipt_pairs)."""
     out: List[GenLine] = []
     for sc, e in master.security.items():
         ca = [str(x).upper() for x in e.get("ca") or []]
@@ -256,15 +268,50 @@ def master_lines(master: Master, books: Optional[Set[str]] = None
             add(str(h["listing"]), sec, until or hu,
                 "" if until else str(h["listing"]).upper(),
                 str(h.get("reused_by") or ""))
-    if books is not None:
-        for sc, d in master.distinct.items():
-            ca, us = str(d.get("ca") or "").upper(), \
-                str(d.get("us") or "").upper()
-            if ca and us and (_spellings(ca) & books):
-                out.append(GenLine("DISTINCT", us, ca, sc, SECTION_DISTINCT,
-                                   str(d.get("until") or "")))
     out.sort(key=lambda g: (SECTIONS.index(g.section), g.b, g.a))
     return out
+
+
+@lru_cache(maxsize=4)
+def _receipt_pairs(path: str, stamp: Tuple[int, int]
+                   ) -> Dict[frozenset, str]:
+    master = _load(path, stamp)
+    out: Dict[frozenset, str] = {}
+    for _sc, d in master.distinct.items():
+        ca = str(d.get("ca") or "").upper()
+        us = str(d.get("us") or "").upper()
+        if not ca or not us:
+            continue
+        name = " ".join(str(d.get("name") or "").split())
+        why = (f"the interlisted master knows {ca} is a depositary receipt"
+               + (f" ({name})" if name else "")
+               + f", its own security, not a listing of {us}'s shares")
+        for c in _spellings(ca):
+            out.setdefault(frozenset((c, us)), why)
+    return out
+
+
+def receipt_pairs(canada: bool = True, path: Optional[Path] = None
+                  ) -> Dict[frozenset, str]:
+    """{frozenset((CDR, US share)): why} for each Canadian depositary
+    receipt the installed master knows (a CDR's .V / .TO spellings
+    both), the evidence that keeps the two apart where the exports'
+    names do not say "receipt" (lib/cross_listings.shown_apart, analyze;
+    tax-logic CA-XLIST-06). {} outside Canada (a US project does not
+    read the master: US-XLIST-05) or without a readable master."""
+    if not canada:
+        return {}
+    p = Path(path) if path is not None else master_path()
+    try:
+        st = p.stat()
+        return _receipt_pairs(str(p), (st.st_mtime_ns, st.st_size))
+    except (OSError, ValueError):
+        return {}
+
+
+def receipt_pairs_for(root) -> Dict[frozenset, str]:
+    """receipt_pairs for the project at `root` (Canada only)."""
+    return receipt_pairs(project_country(root) == "canada")
 
 
 def _version() -> str:
@@ -275,9 +322,18 @@ def _version() -> str:
         return "unknown"
 
 
-def header(master: Master) -> List[str]:
-    return [
-        "# tobase.map: the interlisted master's pairs for this project",
+def header(master: Master, shared: bool = False) -> List[str]:
+    """The file's header; `shared`: the file every year of a multi-year
+    project reads (`[settings] tobase_map`), said."""
+    whose = ("every year of this project" if shared else "this project")
+    every = [
+        "# Shared by every year folder ([settings] tobase_map): a change",
+        "# applies to every year, the filed ones too (each filed year's",
+        "# `taxjson check-filed` shows whether it moved its figures).",
+        "# Each year's ticker.map still wins over it.",
+    ] if shared else []
+    return [f"# tobase.map: the interlisted master's pairs for {whose}"] \
+        + every + [
         "# (Canada). Each `TOBASE US CA` line makes two listings of one",
         "# company's same shares one security: one ACB pool, one security",
         "# for the superficial-loss rule (tax-logic CA-XLIST-06).",
@@ -288,17 +344,19 @@ def header(master: Master) -> List[str]:
         "# opt out of one, delete it (the update records it as `#",
         "# removed:` and never adds it back). `until=` marks an",
         "# interlisting that ended; `country=` the issuer's country when",
-        "# not Canada (its T1135 country).",
+        "# not Canada (its T1135 country). Look-alike listings need no",
+        "# line: taxjson never joins two listings because their letters",
+        "# match.",
         f"# Generated by taxjson {_version()} from interlisted.toml.",
         f"# Sources: {master.sources_text()}.",
         f"{STAMP} {master.generated}",
     ]
 
 
-def render(master: Master, books: Optional[Set[str]] = None) -> str:
+def render(master: Master, shared: bool = False) -> str:
     """A new tobase.map: the header, then each section's lines."""
-    lines = master_lines(master, books)
-    out = header(master)
+    lines = master_lines(master)
+    out = header(master, shared)
     for sec in SECTIONS:
         block = [g.text() for g in lines if g.section == sec]
         if block:
@@ -424,7 +482,10 @@ def parse_tobase(text: str, name: str = TOBASE_MAP) -> TobaseFile:
 
 
 def tobase_path(root) -> Path:
-    return Path(root) / TOBASE_MAP
+    """The tobase.map the project at `root` reads (its own, or the one
+    every year shares: lib/project_layout.tobase_map_path)."""
+    from taxjson.lib import project_layout as _PL
+    return _PL.tobase_map_path(root)
 
 
 def read_tobase(root) -> Optional[TobaseFile]:
@@ -965,9 +1026,12 @@ def _was_given(master: Master, g: GenLine, stamp: str) -> bool:
 
 
 def plan_update(master: Master, tob: Optional[TobaseFile],
-                books: Set[str], ticker_text: str) -> Plan:
+                books: Set[str], ticker_text: str,
+                shared: bool = False) -> Plan:
     """The changes that bring a tobase.map (None: none yet) in step with
-    `master`.
+    `master` (`books`: the symbols the books name, kept for callers — no
+    line depends on them since v0.27.1; `shared`: the file every year
+    reads, said in its header).
 
     - Added: the master's lines the file lacks — except one the user
       edited a marked line of (the same FIGI and the same FROM, or the
@@ -977,8 +1041,11 @@ def plan_update(master: Master, tob: Optional[TobaseFile],
       `# removed:` from now on: removed_now).
     - Ended: lines whose interlisting ended (annotated, kept).
     - Retracted: unedited marked lines naming a listing the master
-      retracted (with its reason) or a pair it no longer gives (removed);
-      an edited one is kept and flagged (retracted_edited).
+      retracted (with its reason) or a pair it no longer gives (removed),
+      and every marked DISTINCT line an earlier version wrote for a
+      depositary receipt (DISTINCT_NOT_NEEDED: look-alike listings are
+      never joined); an edited one is kept and flagged
+      (retracted_edited).
     - Edited: marked lines the user changed (is_edited: the marker's
       check; an older marker by could_generate) — kept as written, a
       reversed direction included.
@@ -987,13 +1054,15 @@ def plan_update(master: Master, tob: Optional[TobaseFile],
     - Conflicts: the pairs ticker.map decides otherwise (reported).
     The user's own lines, comment lines, trailing comments on marked
     lines and lines that are not TOBASE / DISTINCT are kept."""
-    want = master_lines(master, books)
+    want = master_lines(master)
     by_rule: Dict[Tuple[str, str], GenLine] = {(g.figi, g.rule): g
                                                for g in want}
     plan = Plan(old_stamp=tob.stamp if tob else "",
                 new_stamp=master.generated)
     flines = list(tob.lines) if tob else []
-    optouts = dict(tob.optouts) if tob else {}
+    # An opt-out of a receipt's DISTINCT line is moot: none is written.
+    optouts = {k: v for k, v in (tob.optouts if tob else {}).items()
+               if not k[1].startswith("DISTINCT ")}
     # Each kept file line -> its text in the new file ("" = regenerated
     # from the master's line).
     out_marked: Dict[int, str] = {}
@@ -1010,6 +1079,16 @@ def plan_update(master: Master, tob: Optional[TobaseFile],
             if x in rl:
                 rinfo = f"{x}: {rl[x]}"
                 break
+        if ln.keyword == "DISTINCT" and e is None:
+            # A receipt's line an earlier version wrote: no longer
+            # needed (module docstring).
+            if is_edited(ln, master):
+                plan.edited.append(ln)
+                plan.retracted_edited.append((ln, DISTINCT_NOT_NEEDED))
+                own.append(ln)
+            else:
+                plan.retracted.append((ln, DISTINCT_NOT_NEEDED))
+            continue
         if is_edited(ln, master):
             plan.edited.append(ln)
             if rinfo:
@@ -1028,16 +1107,10 @@ def plan_update(master: Master, tob: Optional[TobaseFile],
                 plan.ended.append((ln, g))
             out_marked[ln.lineno] = ""
             continue
-        if ln.keyword == "DISTINCT" and ln.figi in master.distinct and \
-                ln.rule in could_generate(master, ln.figi):
-            # The books no longer hold the receipt: kept (a past year's
-            # books may).
-            out_marked[ln.lineno] = ln.raw.rstrip()
-            continue
         if rinfo:
             plan.retracted.append((ln, f"retracted ({rinfo})"))
             continue
-        if e is None and ln.figi not in master.distinct:
+        if e is None:
             # A FIGI this master does not know (entries are never
             # deleted: a newer master's, or a typo): kept, reported.
             plan.unknown.append(ln)
@@ -1085,7 +1158,7 @@ def plan_update(master: Master, tob: Optional[TobaseFile],
     # written, the lines tobase.map cannot use, the opt-outs.
     by_key_file = {(ln.figi, ln.rule): ln for ln in flines
                    if ln.figi and ln.lineno in out_marked}
-    out = header(master)
+    out = header(master, shared)
     gone_keys = {(g.figi, g.rule) for g in plan.removed_now} | \
         set(optouts) | edited_keys
     for sec in SECTIONS:
@@ -1100,11 +1173,6 @@ def plan_update(master: Master, tob: Optional[TobaseFile],
                 block.append(g.text() + (f" {fl.note}" if fl.note else ""))
             else:
                 block.append(g.text())
-        if sec == SECTION_DISTINCT:
-            for ln in flines:
-                if ln.figi and out_marked.get(ln.lineno):
-                    block += ln.comments
-                    block.append(out_marked[ln.lineno])
         if block:
             out += ["", sec] + block
     tail = [c for ln in flines if ln.figi and ln.lineno not in out_marked
@@ -1136,7 +1204,7 @@ def books_changes(master: Master, books: Set[str], ticker_text: str
     """The master's pairs that would change these books, each with how:
     both listings held ("joins two pools") or one ("books X as Y"); a
     pair ticker.map already decides changes nothing here."""
-    want = [g for g in master_lines(master, books) if g.keyword == "TOBASE"]
+    want = [g for g in master_lines(master) if g.keyword == "TOBASE"]
     ov = compute_overlay(ticker_text, parse_tobase(
         "\n".join(g.rule for g in want)), True)
     applied = {tuple(x.split()[1:]) for x in ov.lines
@@ -1208,3 +1276,142 @@ def without_lines(text: str, linenos: Iterable[int]) -> str:
     drop = set(linenos)
     lines = str(text or "").splitlines(keepends=True)
     return "".join(ln for i, ln in enumerate(lines, 1) if i not in drop)
+
+
+# ------------------------------------------------------------ one file
+
+@dataclass
+class SharedPlan:
+    """What `taxjson migrate` does with a multi-year project's per-year
+    tobase.map copies (the layout before v0.27.1): one file at the
+    folder holding the year folders (`target`) that every year reads
+    (`[settings] tobase_map = "../tobase.map"`), the copies removed (each
+    kept as tobase.map.bak)."""
+    folder: Path
+    target: Path
+    copies: Dict[int, Path] = field(default_factory=dict)
+    # The years whose taxjson.toml gains the setting.
+    set_years: List[int] = field(default_factory=list)
+    # The years that read the target already (the setting).
+    sharing: List[int] = field(default_factory=list)
+    # Canadian years with no tobase.map at all (left as they are).
+    without: List[int] = field(default_factory=list)
+    identical: bool = True
+    source: str = ""              # whose text the shared file gets
+    text: bytes = b""
+    # {where: [rule]}: the lines of another copy that are the user's
+    # (an own line, an edited marked line) and the winner lacks.
+    user_lines: Dict[str, List[str]] = field(default_factory=dict)
+    # {where: n}: that copy's other lines the winner lacks (the master's
+    # lines of another master: `update-tobase-map` brings them in step).
+    other_lines: Dict[str, int] = field(default_factory=dict)
+    problems: List[str] = field(default_factory=list)
+
+    @property
+    def work(self) -> bool:
+        return bool(self.copies)
+
+
+def plan_shared(folder) -> SharedPlan:
+    """The plan for the multi-year folder `folder` (SharedPlan). The
+    newest year's file wins (a year's own copy, or the shared file the
+    newest year reads); `identical` when every copy (and an existing
+    shared file) holds the same bytes. A year whose setting names
+    another file than <folder>/tobase.map is a problem (nothing is
+    written)."""
+    from taxjson.lib import project_layout as _PL
+    folder = Path(folder).resolve()
+    plan = SharedPlan(folder, folder / TOBASE_MAP)
+    lay = _PL.tobase_layout(folder)
+    for y, why in sorted(lay["problems"].items()):
+        plan.problems.append(f"{y}/taxjson.toml: {why}")
+    for p, ys in lay["shared"].items():
+        if p != plan.target:
+            plan.problems.append(
+                f"{', '.join(str(y) for y in ys)}: [settings] "
+                f"{_PL.TOBASE_KEY} names {_PL.shown(p, folder)}, not "
+                f"{TOBASE_MAP} here — point it at \"{_PL.SHARED_TOBASE}\" "
+                f"first")
+        else:
+            plan.sharing += ys
+    plan.copies = dict(lay["own"])
+    if not plan.copies:
+        return plan
+    plan.set_years = sorted(y for y in plan.copies
+                            if y not in plan.sharing)
+    for y, d in _PL.year_dirs(folder):
+        if y not in plan.copies and y not in plan.sharing \
+                and project_country(d) == "canada":
+            plan.without.append(y)
+    # Each candidate: (year, label, bytes). The shared file counts as the
+    # newest year reading it.
+    cands: List[Tuple[int, str, bytes]] = []
+    for y, p in sorted(plan.copies.items()):
+        cands.append((y, f"{y}/{TOBASE_MAP}", p.read_bytes()))
+    if plan.target.is_file():
+        cands.append((max(plan.sharing) if plan.sharing else -1,
+                      f"{TOBASE_MAP} (shared)", plan.target.read_bytes()))
+    elif os.path.lexists(plan.target):
+        plan.problems.append(f"{TOBASE_MAP} here is not a regular file "
+                             f"(a folder, or a link to a missing file) — "
+                             f"move it away first")
+        return plan
+    cands.sort(key=lambda c: (c[0], c[1].endswith("(shared)")))
+    win = cands[-1]
+    plan.source, plan.text = win[1], win[2]
+    plan.identical = all(c[2] == win[2] for c in cands)
+    if plan.identical:
+        return plan
+    master = load_master()
+    try:
+        won = parse_tobase(win[2].decode("utf-8-sig"))
+    except UnicodeDecodeError:
+        won = parse_tobase("")
+    have = {ln.rule for ln in won.lines}
+    for _y, label, data in cands[:-1]:
+        if data == win[2]:
+            continue
+        try:
+            tf = parse_tobase(data.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            plan.problems.append(f"{label} is not UTF-8 text")
+            continue
+        mine = [ln.rule for ln in tf.lines if ln.rule not in have and (
+            not ln.figi or is_edited(ln, master))]
+        mine += [r.strip() for _n, r in tf.others]
+        rest = sum(1 for ln in tf.lines if ln.rule not in have
+                   and ln.figi and not is_edited(ln, master))
+        if mine:
+            plan.user_lines[label] = mine
+        if rest:
+            plan.other_lines[label] = rest
+    return plan
+
+
+def apply_shared(plan: SharedPlan) -> Tuple[List[int], List[Path]]:
+    """Write the plan: the shared file (the previous one kept as .bak
+    when it differs), the setting in each year of `set_years`
+    (taxjson.toml rewritten in place, comments kept), then each year's
+    copy removed — kept as tobase.map.bak beside it. Returns (the years
+    given the setting, the backups of the copies)."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.safe_write import (backup_copy, write_user_file)
+    cur = plan.target.read_bytes() if plan.target.is_file() else None
+    if cur != plan.text:
+        write_user_file(plan.target, plan.text, plan.folder,
+                        backup=cur is not None)
+    done: List[int] = []
+    for y in plan.set_years:
+        d = plan.folder / str(y)
+        cfg = d / _PL.CONFIG
+        text = cfg.read_text(encoding="utf-8-sig")
+        new = _PL.set_key_after(text, f"settings.{_PL.TOBASE_KEY}",
+                                _PL.SHARED_TOBASE, _PL.INPUTS_KEY)
+        if new != text:
+            write_user_file(cfg, new, d, backup=False)
+        done.append(y)
+    baks: List[Path] = []
+    for y, p in sorted(plan.copies.items()):
+        baks.append(backup_copy(p))
+        p.unlink()
+    return done, baks

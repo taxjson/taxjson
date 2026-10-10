@@ -110,14 +110,17 @@ class TestRender(unittest.TestCase):
                                rf"[0-9a-f]{{6}} until=2025-06-30\n")
         self.assertNotIn("DISTINCT", text.split(TB.STAMP)[1])
 
-    def test_receipt_distinct_only_when_the_books_hold_it(self):
+    @rule("CA-XLIST-06")
+    def test_no_distinct_line_for_a_receipt(self):
+        # v0.27.1: look-alike listings are never joined, so a receipt the
+        # books hold needs no DISTINCT line (the master keeps it apart:
+        # receipt_pairs).
         m = _master(SEC, {F4: {"name": "QZD CDR", "kind": "cdr",
                                "ca": "QZD.TO", "us": "QZD.US",
                                "us_figi": "BBG000000Q05"}})
-        self.assertNotIn("DISTINCT", TB.render(m, set()).split(TB.STAMP)[1])
-        text = TB.render(m, {"QZD.TO"})
-        self.assertIn(TB.SECTION_DISTINCT, text)
-        self.assertIn(f"DISTINCT QZD.US QZD.TO  # master:{F4}", text)
+        self.assertNotIn("DISTINCT", TB.render(m).split(TB.STAMP)[1])
+        self.assertFalse([g for g in TB.master_lines(m)
+                          if g.keyword == "DISTINCT"])
 
     def test_a_foreign_issuer_is_booked_under_its_us_listing(self):
         # A US company's TSX line joins its NYSE line (its dividends and
@@ -654,22 +657,31 @@ class TestOtcSpelling(unittest.TestCase):
 
 class TestCli(unittest.TestCase):
 
-    def test_init_writes_it_in_canada_only_and_new_year_copies(self):
+    def test_init_writes_it_in_canada_only_and_new_year_shares_it(self):
+        # v0.27.1: in the year layout one tobase.map at the top, every
+        # year reading it (`[settings] tobase_map`); no per-year copy.
+        from taxjson.lib import project_layout as _PL
         with tempfile.TemporaryDirectory() as td:
             for country in ("canada", "usa"):
                 top = Path(td) / country
                 r = cli(Path(td), "init", str(top), "--country", country,
                         "--year", "2025")
                 self.assertEqual(r.returncode, 0, r.stderr)
-                tb = top / "2025" / "tobase.map"
-                self.assertEqual(tb.is_file(), country == "canada")
-            text = (Path(td) / "canada" / "2025" / "tobase.map").read_text()
+                self.assertFalse((top / "2025" / "tobase.map").exists())
+                self.assertEqual((top / "tobase.map").is_file(),
+                                 country == "canada")
+                self.assertEqual(_PL.shared_tobase(top / "2025"),
+                                 country == "canada")
+            top = Path(td) / "canada"
+            text = (top / "tobase.map").read_text()
             self.assertIn("# master:BBG", text)
             self.assertIn(TB.STAMP, text)
-            r = cli(Path(td) / "canada" / "2025", "new-year", "2026")
+            self.assertIn("Shared by every year folder", text)
+            r = cli(top / "2025", "new-year", "2026")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertEqual((Path(td) / "canada" / "2026" / "tobase.map")
-                             .read_text(), text)
+            self.assertFalse((top / "2026" / "tobase.map").exists())
+            self.assertEqual(_PL.tobase_map_path(top / "2026"),
+                             (top / "tobase.map").resolve())
 
     @rule("US-XLIST-05")
     def test_update_refused_in_a_us_project(self):

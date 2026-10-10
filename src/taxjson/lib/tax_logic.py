@@ -95,6 +95,8 @@ NON_RULE_SETTINGS: Dict[str, str] = {
     "inputs_dir": "where the broker exports are read from (a folder path)",
     "holdings_dir": "where sanity finds the positions snapshots",
     "exports_dir": "where the newest year copies files for other tools",
+    "tobase_map": "where the tobase.map every year shares is (a file "
+                  "path; its pairs are CA-XLIST-06's)",
     "source_currencies": "which FX rate series are fetched",
     "cross_asset": "retired; warned about and ignored",
     "leaps_months": "the LEAPS views' cut-off; no tax figure reads it",
@@ -1284,7 +1286,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "of the SAME share class, checked against OpenFIGI's "
                  "share-class FIGI; a depositary receipt — a CDR, an ADR "
                  "— is never paired) gives each Canadian project a "
-                 "tobase.map beside ticker.map: one `TOBASE US CA` line "
+                 "tobase.map beside ticker.map (in a multi-year project "
+                 "one file beside the year folders that every year reads, "
+                 "`[settings] tobase_map`; each year's ticker.map still "
+                 "wins): one `TOBASE US CA` line "
                  "per pair, read as if written in ticker.map — one ACB "
                  "pool, one security for the superficial-loss rule "
                  "(identical property), booked under the issuer's home "
@@ -1313,7 +1318,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(booked under the TSX line) are not foreign property "
                  "and pay Canadian dividends. A TSX fund's US-dollar line "
                  "(X.U) of the same units is booked under its CAD line "
-                 "(X)."),
+                 "(X). Look-alike listings need no DISTINCT line: two "
+                 "listings are never joined because their letters match "
+                 "(only a broker's journal evidence or a TOBASE line "
+                 "joins). A depositary receipt the master knows (a CDR "
+                 "whose root is a US ticker) stays apart from its US "
+                 "share with no line: a journal between the two is never "
+                 "joined (a .tt JOURNAL line between them stops the run, "
+                 "a deliberate join being a ticker.map TOBASE line), and "
+                 "neither `ticker-map --suggest`, a MAP-GAP nor the "
+                 "cross-listing loss radar (CA-XLIST-05) pairs them. "
+                 "`taxjson update-tobase-map` retracts the DISTINCT lines "
+                 "earlier versions wrote for them (unless you edited "
+                 "one)."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) are opened at an unknown cost "

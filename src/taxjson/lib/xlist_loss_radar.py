@@ -39,7 +39,10 @@ run's work files (nothing is recomputed):
   trade in the US: missing_history.loss_window_date); in Canada the
   listing must also still be held at the end of day 30 (CA-SL-02 — the
   US rule has no such test);
-* no ticker.map DISTINCT line for the pair (the user ruled them apart).
+* no ticker.map DISTINCT line for the pair (the user ruled them apart),
+  and in Canada not a depositary receipt and its US share the
+  interlisted master knows (lib/tobase_map.receipt_pairs: two
+  securities, no line needed).
   A TOBASE (or GLOBAL) line, or the run's own join, makes them one
   symbol in the books, so the engine already applies the rule.
 
@@ -355,6 +358,11 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     if not taxable or not cache.is_dir():
         return []
     renames, distinct = _map_rules(root, cache)
+    # A Canadian depositary receipt and its US share (the interlisted
+    # master, lib/tobase_map.receipt_pairs): two securities with no
+    # DISTINCT line, never a pair to flag.
+    from taxjson.lib.tobase_map import receipt_pairs
+    distinct = set(distinct) | set(receipt_pairs(not is_usa(country)))
 
     # The tax year's share losses in the taxable accounts.
     losses: List[Tuple[str, Dict[str, Any]]] = []
