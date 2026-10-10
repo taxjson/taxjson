@@ -3894,9 +3894,10 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         return
     if not pl.names and mhm is None:
         print("taxjson migrate: nothing to migrate in this project")
-        for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} is "
-                             f"here.", indent="  "):
-            print(_ln)
+        if _details(args):
+            for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} "
+                                 f"is here.", indent="  "):
+                print(_ln)
         return
     if not pl.names:
         _migrate_missing_history(root, mhm, args)
@@ -3929,12 +3930,16 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     except OSError as e:
         _die_input(f"could not write the migration: {e}")
     print("\nDone.")
-    for _ln in _out_wrap(
-            "Review ticker.map and taxjson.toml and commit them (in a git "
-            "repository, `git rm` the old files too); delete the "
-            "*.migrated files once you are satisfied; run `taxjson run` to "
-            "rebuild.", indent="  "):
-        print(_ln)
+    if _details(args):
+        for _ln in _out_wrap(
+                "Review ticker.map and taxjson.toml and commit them (in a "
+                "git repository, `git rm` the old files too); delete the "
+                "*.migrated files once you are satisfied; run `taxjson run` "
+                "to rebuild.", indent="  "):
+            print(_ln)
+    else:
+        print("  Review and commit ticker.map and taxjson.toml, then "
+              "`taxjson run` (more: --details).")
     if mhm is not None:
         _migrate_missing_history(root, mhm, args)
 
@@ -8836,13 +8841,24 @@ def _wrong_country_section(doc, wrong: List[Dict[str, str]],
                indent="  ")
 
 
+def _option_brief(desc: str) -> str:
+    """An election option's description cut to its first clause (`elect
+    --pending`'s OPTION table; --details prints the whole text)."""
+    import re as _re
+    head = _re.split(r"(?<!\bs)\. |: | — |; ", (desc or "").strip(), 1)[0]
+    head = head.rstrip(".")
+    return head if len(head) <= 52 else head[:49].rstrip() + "..."
+
+
 def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                    agg: Dict[str, Any], wrong: List[Dict[str, str]],
-                   country: str) -> None:
+                   country: str, details: bool = False) -> None:
     """`taxjson elect --pending`: each deferred event with its options —
-    what each one books, the hints it needs and the ready `--set` line —
-    and a last line saying what to do (the checklist's elections step
-    shows that line)."""
+    a table of the options (first clause of what each books, the hint it
+    needs) and one `--set` line to copy; with `details`, each option's
+    whole description and its own ready `--set` line — and a last line
+    saying what to do (the checklist's elections step shows that
+    line)."""
     from taxjson.lib.corp_actions import Manifest
     from taxjson.lib.out import Doc, Verbatim
     events = [(acct, ev) for acct, adoc in
@@ -8874,6 +8890,18 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                      f"`taxjson run` to apply", indent="  ")
         else:
             open_n += 1
+        if not details:
+            opts = ev.get("options", [])
+            doc.table(["OPTION", "WHAT IT BOOKS", "HINT"],
+                      [[o["election"], _option_brief(o.get("description")),
+                        ", ".join(h["key"] for h in (o.get("hints") or []))]
+                       for o in opts], indent="  ", drop=(2,))
+            _hinted = any(o.get("hints") for o in opts)
+            doc.kv([("set", Verbatim(
+                f"taxjson elect {acct} --set {eid}=OPTION"
+                + (" [--hint KEY=VALUE]" if _hinted else "")))],
+                indent="  ")
+            continue
         for i, o in enumerate(ev.get("options", []), 1):
             hints = o.get("hints") or []
             doc.blank().line(f"  {i}. {o['election']}")
@@ -8888,6 +8916,9 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                 f"{hint_args}")))
             doc.kv(pairs, indent="     ")
     doc.blank()
+    if open_n and not details:
+        doc.line("What each option books, and its hints: "
+                 "taxjson elect --pending --details")
     if open_n:
         # ONE short line: `taxjson checklist` shows it as the step's
         # detail.
@@ -9004,7 +9035,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
                           | ({"wrong_country": _wrong} if _wrong else {}))
                 return
             if _wrong:
-                _print_pending(root, inputs_dir, cache, {}, _wrong, country)
+                _print_pending(root, inputs_dir, cache, {}, _wrong, country,
+                               _details(args))
                 return
             print("No pending elections (no --no-input run has deferred "
                   "any, or they've been resolved).")
@@ -9022,7 +9054,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
                 doc = dict(doc, wrong_country=_wrong)
             print(_json.dumps(doc, indent=2, sort_keys=True))
             return
-        _print_pending(root, inputs_dir, cache, doc, _wrong, country)
+        _print_pending(root, inputs_dir, cache, doc, _wrong, country,
+                       _details(args))
         return
 
     # No account → list every account's elections (read-only).
@@ -10453,10 +10486,11 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if args.json:
         _json_out(report)
         return
-    _print_crypto_sends(root, report)
+    _print_crypto_sends(root, report, _details(args))
 
 
-def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
+def _print_crypto_sends(root: Path, report: Dict[str, Any],
+                        details: bool = False) -> None:
     """The crypto-sends listing in the house layout (docs/output-style.md):
     a title, one section per crypto account, each send's id and decision
     with its facts aligned under it (the ready .tt line never wrapped),
@@ -10472,18 +10506,24 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         # over the basis); `gift` is refused (COMMAND_COUNTRY).
         doc.para("A move to your own wallet is not a sale (self); a "
                  "payment is a sale at fair market value. A gift is not a "
-                 "sale for a US donor: record it as self.")
+                 "sale for a US donor: record it as self." if details else
+                 "self: a move to your own wallet (or a gift), no sale; "
+                 "payment: a sale at fair market value.")
     else:
         doc.para("A move to your own wallet is not a sale (self); a gift "
-                 "or a payment is a disposition at fair market value.")
+                 "or a payment is a disposition at fair market value."
+                 if details else
+                 "self: a move to your own wallet, no sale; gift or "
+                 "payment: a disposition at fair market value.")
     fx_by_year: Dict[str, float] = {}
     last = None
     for acct, adoc in report["accounts"].items():
         sends = adoc["sends"]
         doc.section(f"{acct} — {len(sends)} unmatched send(s), "
                     f"{adoc['undecided']} undecided")
-        doc.para(f"{adoc['matched']} matched to an arrival (self-custody "
-                 f"moves, `taxjson transfers`).", indent="  ")
+        if details or adoc["matched"]:
+            doc.para(f"{adoc['matched']} matched to an arrival (self-"
+                     f"custody moves, `taxjson transfers`).", indent="  ")
         _short = adoc.get("network_fees") or []
         if _short:
             # R1-26: the coins lost in transit paid the network fee — a
@@ -10591,9 +10631,10 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
             doc.message("warning", w)
         for sid in adoc["orphans"]:
             doc.message("note", f"sends.json has a decision for {sid}, "
-                        f"which is no longer a send in the exports",
-                        details=["Inputs or local_timezone changed? It "
-                                 "is ignored."])
+                        f"which is no longer a send in the exports"
+                        + ("" if details else ": it is ignored"),
+                        details=(["Inputs or local_timezone changed? It "
+                                  "is ignored."] if details else []))
         if adoc["undecided"]:
             last = (f"Decide: taxjson crypto-sends {acct} --set "
                     f"ID={'self|payment' if _usa else 'self|gift|payment'}"
@@ -10601,18 +10642,25 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
             doc.line(last)
     if fx_by_year:
         doc.section("STABLECOIN GIFTS AND PAYMENTS — currency gain")
+        if not details:
+            doc.line("Superficial losses are excluded.")
         doc.kv([(y, f"{g:+,.2f} {base}")
                 for y, g in sorted(fx_by_year.items())], indent="  ")
         # fx-cash has no input for it (re-audit A2-0591): the amount is
         # added by hand to the year's s.39(1.1) currency total.
-        doc.para("Superficial losses are excluded. Stablecoins are "
-                 "US-dollar cash in these books, so this is a "
-                 "foreign-currency gain: ITA s.39(1.1) taxes only the "
-                 "year's NET currency gain beyond $200. It is NOT in any "
-                 "taxjson figure (`taxjson fx-cash` does not read it): add "
-                 "it by hand to the year's net foreign-exchange gain or "
-                 "loss (the fx-cash net before the $200) and apply the "
-                 "$200 to the total.", indent="  ")
+        if not details:
+            from taxjson.lib.out import act as _act
+            doc.line(_act("add it by hand to the year's net FX gain (not "
+                          "in fx-cash)", "tjs crypto-sends --details"))
+        else:
+            doc.para("Superficial losses are excluded. Stablecoins are "
+                     "US-dollar cash in these books, so this is a "
+                     "foreign-currency gain: ITA s.39(1.1) taxes only the "
+                     "year's NET currency gain beyond $200. It is NOT in "
+                     "any taxjson figure (`taxjson fx-cash` does not read "
+                     "it): add it by hand to the year's net foreign-"
+                     "exchange gain or loss (the fx-cash net before the "
+                     "$200) and apply the $200 to the total.", indent="  ")
     pool = report.get("pool")
     if pool and pool.get("overdrafts"):
         doc.blank()
@@ -15534,6 +15582,8 @@ def cmd_redact(args: argparse.Namespace) -> None:
         argv.append("--force")
     if args.check:
         argv.append("--check")
+    if _details(args):
+        argv.append("--details")
     argv += ["--", *args.files]          # a file named `--check` stays a file
     raise SystemExit(redact_main(argv))
 
@@ -23166,9 +23216,12 @@ def cmd_format(args: argparse.Namespace) -> None:
              f"{', '.join(res.unrecognised)}", prog=f"{_PROG} format")
     if res.notes_lines:
         _say("note", f"{res.notes_lines} comment line(s) could not be "
-             f"attached to a setting",
-             "They are kept in the \"Your notes\" block at the end of the "
-             "file.", prog=f"{_PROG} format")
+             f"attached to a setting"
+             + ("" if _details(args) else
+                ": kept in the \"Your notes\" block at the end"),
+             *(["They are kept in the \"Your notes\" block at the end of "
+                "the file."] if _details(args) else []),
+             prog=f"{_PROG} format")
     if not res.changed:
         print("taxjson.toml is already formatted.")
         return
@@ -23182,9 +23235,15 @@ def cmd_format(args: argparse.Namespace) -> None:
             text.splitlines(keepends=True),
             res.text.splitlines(keepends=True),
             fromfile="taxjson.toml", tofile="taxjson.toml (formatted)"))
-        _say("note", "dry run: nothing written",
-             "`taxjson format --write` applies this; your configuration "
-             "loads the same either way.", prog=f"{_PROG} format")
+        if _details(args):
+            _say("note", "dry run: nothing written",
+                 "`taxjson format --write` applies this; your "
+                 "configuration loads the same either way.",
+                 prog=f"{_PROG} format")
+        else:
+            _say("note", "dry run: nothing written — `taxjson format "
+                 "--write` applies it (your settings load the same)",
+                 prog=f"{_PROG} format")
         return
     from taxjson.lib.safe_write import link_outside, write_atomic
     target = link_outside(cfg, root)
@@ -23666,11 +23725,19 @@ def cmd_init(args: argparse.Namespace) -> None:
         # It says what to download from each broker (new-user study).
         _stub(f"inputs/{acct}/README.txt", _readme(country, acct))
 
+    # Essentials first (docs/output-style.md): the project made and the
+    # next steps, one line each; the files written, the layout and the
+    # next-year hint with --details.
+    _det = _details(args)
     print(f"Initialized taxjson project at {root}"
           + (f" (the {first_year} folder of {top}: one folder of exports "
-             f"for every year)" if years else ""))
-    for rel in written:
-        print(f"  wrote {rel}")
+             f"for every year)" if years and _det else ""))
+    if _det:
+        for rel in written:
+            print(f"  wrote {rel}")
+    elif cfg.with_name(bak_name).exists() and any(
+            w.endswith("(your previous config)") for w in written):
+        print(f"  wrote {_yrel}{bak_name} (your previous config)")
     # Folders a previous scaffold (e.g. --force from canada to usa)
     # left under inputs/ that the new config has no section for.
     _inputs = top / "inputs"
@@ -23679,17 +23746,41 @@ def cmd_init(args: argparse.Namespace) -> None:
                       and d.name != "slips") if _inputs.is_dir() else []
     if _orphans:
         from taxjson.lib.out import labelled as _labelled
-        for _ln in _out_wrap(_labelled(
-                f"note: inputs/ has folder(s) with no [accounts.*] "
-                f"section in the new config: {', '.join(_orphans)}"),
-                indent="  ", hang="    "):
-            print(_ln)
-        for _ln in _out_wrap(f"Re-add their sections (see {bak_name}) or "
-                             f"remove the folders.", indent="    "):
-            print(_ln)
+        if _det:
+            for _ln in _out_wrap(_labelled(
+                    f"note: inputs/ has folder(s) with no [accounts.*] "
+                    f"section in the new config: {', '.join(_orphans)}"),
+                    indent="  ", hang="    "):
+                print(_ln)
+            for _ln in _out_wrap(f"Re-add their sections (see {bak_name}) "
+                                 f"or remove the folders.", indent="    "):
+                print(_ln)
+        else:
+            _shown_o = ", ".join(_orphans[:3]) + (
+                f" +{len(_orphans) - 3} more" if len(_orphans) > 3 else "")
+            print(_labelled(f"note: inputs/ {_shown_o}: no [accounts.*] "
+                            f"section — re-add (see {bak_name}) or "
+                            f"remove them"))
     import shlex as _shlex
-    print("\nNext:")
     from taxjson.lib.config_template import system_timezone as _systz
+    if not _det:
+        print("\nNEXT STEPS")
+        print(f"  1. Edit {_yrel}taxjson.toml: "
+              + ("your accounts" if years else "the year, your accounts")
+              + " and currencies"
+              + (", and [settings] local_timezone" if _systz() is None
+                 else "") + ".")
+        print("  2. Save the broker exports in inputs/<account>/"
+              + (f" (every year), positions snapshots in {_yrel}holdings/."
+                 if years else "."))
+        # Commands to copy: their own lines, never wrapped.
+        print(f"  3. taxjson -C {_shlex.quote(str(root))} run")
+        print(f"  4. taxjson -C {_shlex.quote(str(root))} checklist")
+        if country == "usa":
+            _say("note", f"{_US_EXPERIMENTAL_NOTE[0]}: treat the output "
+                 f"as a draft", prog=f"{_PROG} init")
+        return
+    print("\nNext:")
     _step1 = (f"1. Edit {_yrel}taxjson.toml: set the accounts and source "
               f"currencies" if years else
               "1. Edit taxjson.toml: set the year, accounts, and source "
@@ -23879,6 +23970,30 @@ def cmd_new_year(args: argparse.Namespace) -> None:
             hold.mkdir(exist_ok=True, mode=0o700)
     except OSError as e:
         _die_input(f"cannot create {year}/: {e.strerror or e}")
+    _yd = _shlex.quote(str(folder))
+    shared = _PL.shared_inputs(folder)
+    if not _details(args):
+        # Essentials first (docs/output-style.md): what was made and the
+        # next steps, one line each; the long form with --details.
+        print(f"Created {year}/ from {prev_year}/: taxjson.toml (year "
+              f"{year}), " + "".join(f"{n}, " for n in copied)
+              + "holdings/")
+        if _legacy_tobase:
+            _say("note", f"{year}/ got its own copy of {prev_year}'s "
+                 f"tobase.map — `taxjson migrate` makes it one file",
+                 prog=_PROG)
+        print("\nNEXT STEPS")
+        print(f"  1. Save the {year} exports in "
+              + (f"{_PL.shown(_PL.inputs_dir(folder), top)}/<account>/"
+                 if shared else f"{year}/inputs/<account>/")
+              + f", positions snapshots in {year}/holdings/.")
+        print(f"  2. taxjson -C {_yd} run")
+        print(f"  3. taxjson -C {_yd} checklist")
+        print(f"  4. Later, in {year}/: taxjson align --from {prev_year}")
+        if not (prev / "filed" / f"{prev_year}.json").is_file():
+            _say("note", f"{prev_year} is not locked yet: `taxjson "
+                 f"close-year` in {prev_year}/ after filing it")
+        return
     for _ln in _out_wrap(
             f"Created {year}/ from {prev_year}/: taxjson.toml (year {year}, "
             f"prior_year_record ../{prev_year}/filed/{prev_year}.json, the "

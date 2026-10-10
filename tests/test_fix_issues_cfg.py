@@ -65,7 +65,9 @@ class TestRedactProjectFiles(unittest.TestCase):
     def test_config_only_ids(self):
         y = _year(f'account = "{IB}"\nbroker_accounts = ["{BROKER}"]\n'
                   f'query_id = "{QUERY}"\n')
-        r = tjs("-C", str(y), "redact", "--check")
+        # Each file's counts: --details (docs/output-style.md, Essentials
+        # first; the default view has the totals).
+        r = tjs("-C", str(y), "redact", "--check", "--details")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertNotIn("Nothing to redact", r.stdout)
         self.assertIn("taxjson.toml: 3 account ids", r.stdout)
@@ -102,7 +104,7 @@ class TestRedactProjectFiles(unittest.TestCase):
         (y / "ticker.map").write_text(
             "# Synthetic Secret Marker\nGLOBAL QZA.TO QZB.TO\n")
         (y / "tobase.map").write_text("# Synthetic Secret Marker\n")
-        r = tjs("-C", str(y), "redact", "--check", "--also",
+        r = tjs("-C", str(y), "redact", "--check", "--details", "--also",
                 "Synthetic Secret Marker")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("taxjson.toml: 1 denylist / --also match", r.stdout)

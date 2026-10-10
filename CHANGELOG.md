@@ -34,6 +34,18 @@
 ### Fixed
 
 - Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
+- Set-up commands print the essentials (docs/output-style.md, "Essentials
+  first"); `--details` brings back everything they leave out.
+  `taxjson init` and `taxjson new-year`: the project made and four next
+  steps, one line each (the files written and the next-year hint with
+  `--details`). `taxjson elect --pending`: a table of each event's options
+  with the first clause of what each books and the hint it needs, and one
+  `--set` line to copy (each option's full text and its own `--set` line
+  with `--details`; the last line the checklist reads is unchanged).
+  `taxjson redact` (no file): one line of totals and one line naming the
+  free text to read (each file's counts with `--details`). `taxjson
+  format`, `taxjson migrate` and `taxjson crypto-sends`: one-line notes
+  and legends.
 
 
 ## v0.27.1 (2026-10-10)
