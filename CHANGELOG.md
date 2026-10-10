@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.27.2 (2026-10-10)
+
 ### Fixed
 
 - Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
