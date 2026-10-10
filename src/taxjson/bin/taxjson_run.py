@@ -12898,7 +12898,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
     a .TO line whose exchange name says CDR (Canadian Depositary Receipt
     — SAMPLR.TO over SAMPLR.US): the SAME issuer but NOT a listing
     equivalent (fractional, CAD-hedged, floating ratio) — never map it;
-    `DISTINCT SAMPLR.US SAMPLR.TO` records the ruling.
+    nothing to do: look-alike listings are never joined.
 
     The map's own hygiene is `taxjson ticker-map --suggest`: a loss on
     one listing with the other bought in its window (lib/
@@ -13253,8 +13253,8 @@ def cmd_tips(args: argparse.Namespace) -> None:
                         f"ticker.map pairs a CDR with its underlying "
                         f"({na!r} vs {nb!r}) — a CDR is a fractional "
                         f"CAD-hedged receipt whose ratio floats; "
-                        f"remove the entry and declare "
-                        f"`DISTINCT {old_} {new}` instead."))
+                        f"remove the entry (look-alike listings are "
+                        f"never joined: no DISTINCT line is needed)."))
                 elif na and nb and not _issuer_names_match(na, nb):
                     findings.append((
                         "MAP-BAD?", "-", f"{old_}->{new}",
@@ -13296,10 +13296,9 @@ def cmd_tips(args: argparse.Namespace) -> None:
                                 f"{names.get(c) or names.get(u)!r} "
                                 f"is a CDR over {u} — a fractional "
                                 f"CAD-hedged receipt, not a listing "
-                                f"equivalent; do NOT map them. Add "
-                                f"`DISTINCT {u} {c}` to ticker.map "
-                                f"to record this and silence the "
-                                f"pair."))
+                                f"equivalent; nothing to do: "
+                                f"look-alike listings are never "
+                                f"joined."))
                             continue
                         findings.append((
                             "MAP-GAP?", "-", f"{u}/{c}",
@@ -23635,7 +23634,9 @@ def cmd_init(args: argparse.Namespace) -> None:
     for acct in account_names:
         # The README also keeps the empty input dir present under git.
         # It says what to download from each broker (new-user study).
-        _stub(f"inputs/{acct}/README.txt", _readme(country, acct))
+        _stub(f"inputs/{acct}/README.txt", _readme(
+            country, acct, "YYYY/inputs/slips/"
+            if years else "inputs/slips/"))
 
     print(f"Initialized taxjson project at {root}"
           + (f" (the {first_year} folder of {top}: one folder of exports "
@@ -23691,9 +23692,11 @@ def cmd_init(args: argparse.Namespace) -> None:
         for _ln in _out_wrap(f"Next year: `taxjson -C "
                              f"{_shlex.quote(str(top))} new-year "
                              f"{first_year + 1}` copies this year's "
-                             f"taxjson.toml, ticker.map and tobase.map into "
-                             f"{first_year + 1}/.", indent="  ",
-                             hang="  "):
+                             f"taxjson.toml and ticker.map into "
+                             f"{first_year + 1}/"
+                             + (" (tobase.map is one file every year "
+                                "reads)" if country == "canada" else "")
+                             + ".", indent="  ", hang="  "):
             print(_ln)
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
@@ -24422,14 +24425,16 @@ def _build_parser(prog: str = "taxjson"
         "run",
         help="Build the books and every report from inputs/",
         description="Run the full pipeline: parse every broker file in "
-                    "inputs/, convert to the base currency, apply "
+                    "the accounts' folders (inputs/, or [settings] "
+                    "inputs_dir), convert to the base currency, apply "
                     "ticker.map, corporate actions and your elections, "
                     "compute the gains with the superficial-loss / "
                     "wash-sale pass across all your accounts, and write "
                     "reports/. Every stage is rebuilt by default; --fast "
                     "skips the stages whose inputs, config and code are "
                     "unchanged. The run ends with the broker positions "
-                    "cross-check when taxjson.toml names holdings files. "
+                    "cross-check when there are positions snapshots "
+                    "(holdings/, found without a setting). "
                     "Commands chain: `taxjson run sum`.")
     p_run.add_argument("--account", help="Process only one account")
     p_run.add_argument("--fast", action="store_true",
@@ -24574,9 +24579,10 @@ def _build_parser(prog: str = "taxjson"
                     "taxjson.toml (country, base currency, the usual "
                     "accounts for that country, inputs_dir = \"../inputs\" "
                     "and exports_dir = \"../exports\"), a commented "
-                    "ticker.map (in Canada also tobase.map, the "
-                    "interlisted pairs) and holdings/ for the broker's positions "
-                    "snapshots. Every other command runs in the year "
+                    "ticker.map and holdings/ for the broker's positions "
+                    "snapshots; in Canada also tobase.map (the interlisted "
+                    "pairs) beside the year folders, one file every year "
+                    "reads. Every other command runs in the year "
                     "folder (`taxjson -C DIR/YYYY run`); `taxjson new-year` "
                     "adds the next year's. --single scaffolds one folder "
                     "for one tax year instead (taxjson.toml, ticker.map "
@@ -24626,9 +24632,9 @@ def _build_parser(prog: str = "taxjson"
         description="Create the folder YYYY beside the other year folders "
                     "with the previous year's taxjson.toml (year set, "
                     "prior_year_record pointed at its lock, its [estimate] "
-                    "and [instalments] commented out), ticker.map and "
-                    "tobase.map, and an empty holdings/, and print the "
-                    "next steps.")
+                    "and [instalments] commented out) and ticker.map (the "
+                    "shared tobase.map is read, not copied), and an empty "
+                    "holdings/, and print the next steps.")
     p_ny.add_argument("year", type=int, help="The tax year (YYYY)")
     p_ny.set_defaults(func=cmd_new_year)
 

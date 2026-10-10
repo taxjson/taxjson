@@ -331,6 +331,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `DISTINCT_NOT_NEEDED`, `receipt_pairs`; `src/taxjson/lib/cross_listings.py` — `shown_apart`, `RECEIPT`; `src/taxjson/lib/checklist.py` — `s_tobase_map`
 
+### `tjs tips --online`: "CDR-PAIR … is a CDR over QZD.US … Add `DISTINCT QZD.US QZD.TO` to ticker.map to record this and silence the pair"
+- **Check:** `tjs --version`; the pair is a Canadian depositary receipt and the US share it is over.
+- **Cause:** the advice predates v0.27.1, which stopped joining listings because their letters match: a `DISTINCT` line for a receipt says nothing. `taxjson init` and `new-year` help and output also still said tobase.map is copied into each year folder (it is one file beside them), `run -h` said the holdings cross-check needs `holdings = [...]` (holdings/ is found without a setting), and the account folders' README put the slips in `inputs/slips/` (a year folder's own `YYYY/inputs/slips/`).
+- **Fix:** upgrade; nothing to do for the pair: look-alike listings are never joined. A `DISTINCT` line already written is harmless.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_tips`, `look-alike listings are never`; `src/taxjson/lib/config_template.py` — `input_readme`
+
 ### "Error: two tobase.map files for this year: [settings] tobase_map = '../tobase.map' names ../tobase.map (shared by every year), and this folder holds a tobase.map of its own"
 - **Check:** `ls 2025/tobase.map ../tobase.map` and `grep -n tobase_map 2025/taxjson.toml` (each year folder); `tjs years` (run in the folder holding the years) names the shared file and any year that keeps a copy.
 - **Cause:** since v0.27.1 the years of a multi-year project read one `tobase.map` beside the year folders (`[settings] tobase_map`). A year folder that has the setting and still holds a copy of its own would leave one of the two silently unread, so every command refuses it (a copy restored from git, or a setting copied with `tjs align` into a year that kept its copy).

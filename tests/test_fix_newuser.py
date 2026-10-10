@@ -159,6 +159,58 @@ class TestBareTtSymbolOnTheConsole(unittest.TestCase):
                     "books\n", r.stderr)
 
 
+# ---------------------------------- 9. text that contradicted v0.27.x
+class TestProductText(unittest.TestCase):
+
+    def test_help_pages(self):
+        init = " ".join(_cli("init", "-h").stdout.split())
+        self.assertIn("in Canada also tobase.map (the interlisted pairs) "
+                      "beside the year folders, one file every year reads",
+                      init)
+        ny = " ".join(_cli("new-year", "-h").stdout.split())
+        self.assertIn("ticker.map (the shared tobase.map is read, not "
+                      "copied)", ny)
+        run = " ".join(_cli("run", "-h").stdout.split())
+        self.assertIn("(inputs/, or [settings] inputs_dir)", run)
+        self.assertNotIn("names holdings files", run)
+
+    def test_init_next_steps_and_readme(self):
+        for country, tobase in (("canada", True), ("usa", False)):
+            with self.subTest(country=country):
+                top = _tmp(self)
+                r = _cli("init", "--country", country, "--year", "2025",
+                         str(top))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                flat = " ".join(r.stdout.split())
+                self.assertIn("copies this year's taxjson.toml and "
+                              "ticker.map into 2026/", flat)
+                self.assertEqual("tobase.map is one file every year reads"
+                                 in flat, tobase)
+                self.assertNotIn("ticker.map and tobase.map", flat)
+                readme = " ".join((top / "inputs" / "margin" /
+                                   "README.txt").read_text().split())
+                self.assertIn("keep each year's in YYYY/inputs/slips/",
+                              readme)
+                self.assertIn("Kraken", (top / "inputs" / "crypto" /
+                                         "README.txt").read_text())
+                self.assertIn("Coinbase", (top / "inputs" / "crypto" /
+                                           "README.txt").read_text())
+        single = _tmp(self)
+        _cli("init", "--single", "--country", "canada", str(single))
+        self.assertIn("keep each year's in inputs/slips/", " ".join(
+            (single / "inputs" / "margin" / "README.txt").read_text()
+            .split()))
+
+    def test_cdr_pair_advice_says_nothing_to_do(self):
+        import inspect
+        from taxjson.bin import taxjson_run as R
+        src = inspect.getsource(R.cmd_tips)
+        self.assertIn("nothing to do: \"\n", src.replace("f\"", "\""))
+        self.assertIn("look-alike listings are never", src)
+        self.assertNotIn("to record this and silence", src)
+        self.assertNotIn("declare \"\n", src.replace("f\"", "\""))
+
+
 # ------------------------------------------------------ 8. the FX window
 class TestFxWindow(unittest.TestCase):
     """The rates stage asks only for the dates the project's files

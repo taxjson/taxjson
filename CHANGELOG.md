@@ -20,6 +20,13 @@
   the console, naming the file:line and the listing the books hold (the
   warning reached only the `.sum`, and not even that with exports shared
   by every year).
+- Text that contradicted v0.27.x: `tips --online` no longer advises a
+  `DISTINCT` line for a depositary receipt (look-alike listings are never
+  joined); `init` and `new-year` (help and output) say tobase.map is one
+  file beside the year folders, not copied per year (and a US project's
+  `init` no longer mentions it); `run -h` names `inputs_dir` and the
+  holdings/ snapshots found without a setting; the account folders'
+  README says each year's slips go in `YYYY/inputs/slips/`.
 
 
 ## v0.27.2 (2026-10-10)
