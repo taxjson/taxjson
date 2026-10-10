@@ -71,7 +71,7 @@ parser by its content (header signature), then by its name prefix, never by
 guessing. A file that matches two parsers or none stops the run with a
 message naming the file.
 
-- `src/taxjson/bin/taxjson_run.py` — `input_files`, `group_inputs_detailed`, `detect_broker`, `_report_detection`, `spreadsheet_inputs`, `_duplicate_input_files`, `_sweep_retired_exports`, `_warn_shared_broker_accounts`: the folder scan, the one line per file saying how it was read, and checks on duplicate, retired or shared exports.
+- `src/taxjson/bin/taxjson_run.py` — `input_files`, `group_inputs_detailed`, `detect_broker`, `_report_detection`, `spreadsheet_inputs`, `_duplicate_input_files`, `_sweep_retired_exports`, `_warn_shared_broker_accounts`, `_source_brokerages`: the folder scan, the one line per file saying how it was read, and checks on duplicate, retired or shared exports.
 - `src/taxjson/lib/brokerages/detect.py` — `detect`, `detect_broker`, `DETECTORS`, `Detection`, `AmbiguousBroker`, `content_matches`, `name_hint`, `looks_like_ib_text`, `same_broker_siblings`: content-first detection (each parser's header signature is in `DETECTORS`), then the file-name hint; IB statement sniffing and sibling files.
 - `src/taxjson/bin/taxjson_detect_brokerage.py` — `detect_brokerage`, `cannot_detect_message`, `main`: the `taxjson-detect-brokerage` tool, the same decision for one file.
 - `src/taxjson/bin/xlsx_to_csv.py` — `convert_xlsx_to_csv`, `read_sheet`, `_clean_numeric_commas`: turns an .xlsx export into CSV before parsing.

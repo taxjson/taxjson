@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- `taxjson run` no longer says "the same broker account feeds two taxjson
+  accounts" for two different brokers' exports that print the same
+  account number: the check keys on the broker and the number.
+
 
 ## v0.27.2 (2026-10-10)
 

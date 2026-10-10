@@ -501,6 +501,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.17.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_shared_broker_accounts`, `_duplicate_input_files`, `the same export file sits in two accounts`
 
+### "Warning: the same broker account (#ab12cd) feeds two taxjson accounts, qt and wb (0 identical row(s))" for exports of two DIFFERENT brokers
+- **Check:** the two folders hold different brokers' exports (`tjs run` names the broker of each file) that print the same account number.
+- **Cause:** the check compared the account number alone; a Questrade, an RBC and a Webull account can carry the same 8-digit number.
+- **Fix:** upgrade: the check keys on the broker and the account number. Nothing to change in the inputs.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_shared_broker_accounts`, `_source_brokerages`
+
 ### "Warning: Duplicates: a.csv and b.csv both hold 1 identical row(s)" … "Booked ONCE (read as the same row exported twice)", or "Warning: Duplicates: margin_extra.tt line (…) repeats the exported row in ib_2025.csv" … "so BOTH are booked"
 - **Check:** the warning names both files and the row; `tjs trades` for that day shows what was booked.
 - **Cause:** exports carry no row id. An identical row in two overlapping exports of one account is read as the same trade exported twice, and the run says so when the files' overlap cannot prove it (they share only that row). A hand-kept `.tt` line that repeats an exported trade has no matching id, so both are booked.

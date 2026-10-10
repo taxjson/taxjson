@@ -6971,24 +6971,47 @@ def _duplicate_crypto_exports(cache: Path, names: List[str]) -> List[str]:
     return out
 
 
+def _source_brokerages(doc: Dict[str, Any]) -> Dict[str, str]:
+    """{input file name: brokerage} of a merged book, from the merge's
+    metadata (sources[].original_metadata: input_files and
+    source_brokerage); a row's `source` is that file name."""
+    out: Dict[str, str] = {}
+    meta = doc.get("metadata") if isinstance(doc, dict) else None
+    for src in (meta or {}).get("sources") or ():
+        om = (src or {}).get("original_metadata") or {}
+        broker = str(om.get("source_brokerage") or "")
+        for f in om.get("input_files") or ():
+            out[Path(str(f)).name] = broker
+        for f in (om.get("source_accounts") or {}):
+            out.setdefault(Path(str(f)).name, broker)
+    return out
+
+
 def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
     """One broker account's export in TWO taxjson accounts books every
     row twice (audit A2-0293, A2-0630). The rows carry their broker
     account (hashed, `source_account`); name each pair of taxjson
-    accounts that share one, with the count of identical rows."""
+    accounts that share one, with the count of identical rows. The key
+    is (brokerage, account id): two brokers' accounts may carry the same
+    number (Questrade's, RBC's and Webull's 8-digit ids), and are two
+    accounts."""
     import json
-    seen: Dict[str, Dict[str, set]] = {}
+    seen: Dict[Tuple[str, str], Dict[str, set]] = {}
     for name, base in bases:
         try:
-            rows = json.loads(Path(base).read_text()).get("transactions")
+            doc = json.loads(Path(base).read_text())
+            rows = doc.get("transactions")
         except (OSError, ValueError, AttributeError):
             continue
-        per: Dict[str, set] = {}
+        brokers = _source_brokerages(doc)
+        per: Dict[Tuple[str, str], set] = {}
         for t in rows or ():
             if isinstance(t, dict) and t.get("source_account"):
                 # The id hashes the taxjson account label: compare the
                 # row's content instead.
-                per.setdefault(t["source_account"], set()).add(
+                key = (brokers.get(Path(str(t.get("source") or "")).name,
+                                   ""), str(t["source_account"]))
+                per.setdefault(key, set()).add(
                     (t.get("date"), t.get("action"), t.get("symbol"),
                      t.get("quantity"), t.get("net_amount")))
         seen[name] = per
@@ -6996,9 +7019,9 @@ def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
     shared = 0
     for i, a in enumerate(names):
         for b in names[i + 1:]:
-            for h in sorted(set(seen[a]) & set(seen[b])):
+            for _broker, h in sorted(set(seen[a]) & set(seen[b])):
                 shared += 1
-                same = len(seen[a][h] & seen[b][h])
+                same = len(seen[a][(_broker, h)] & seen[b][(_broker, h)])
                 _say("attention", f"the same broker account (#{h[:6]}) "
                      f"feeds two taxjson accounts, {a} and {b} ({same} "
                      f"identical row(s))",
