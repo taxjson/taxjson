@@ -18,15 +18,29 @@ To try taxjson on a whole project instead, `tjs init --demo ~/taxjson-demo` make
 
 `generic_wealthsimple.toml` is a starting mapping for the generic column-mapped
 importer (brokers without a dedicated parser). Copy it next to your export as
-`inputs/<account>/generic_<name>.csv.toml` (sidecar) or
-`inputs/<account>/generic.toml` (whole folder) and adjust the header names and
-action values to match your CSV. See "Any other broker" in the top-level README.
+`inputs/<account>/<file>.csv.toml` (a sidecar for that one file, any file name)
+or as `inputs/<account>/generic.toml` (shared by every `generic_*.csv` in the
+folder) and adjust the header names and action values to match your CSV. See
+[docs/brokers.md, "Any other broker"](../docs/brokers.md#any-other-broker-generic-importer)
+and the mapping reference in
+[docs/settings.md](../docs/settings.md#generic-importer-mapping).
+
+## Try them in a project
+
+The quickest way to see taxjson work is a project: `tjs init`, copy a demo CSV
+into an account folder of `inputs/`, then `tjs run` and `tjs sum` in the year
+folder ([docs/getting-started.md](../docs/getting-started.md)).
 
 ## Manual pipeline (stage by stage)
+
+The stage tools run one file at a time, without a project — useful to see what
+a parser makes of a file. Run them from the repository root:
 
 ```bash
 BROKER=questrade        # ib | rbc_direct | webull | kraken | coinbase | questrade
 COUNTRY=ca              # ca | us
+export TAXJSON_LOCAL_TZ=America/Toronto   # Kraken / Coinbase: UTC times are dated in this zone (required)
+export TAXJSON_OFFLINE=1                  # optional: no network (the demos need none)
 
 # 1. Parse to normalized JSON
 taxjson-brokerage --brokerage $BROKER --account demo --country $COUNTRY \
@@ -39,7 +53,9 @@ taxjson-merge2 --dedup --validate /tmp/${BROKER}.json > /tmp/${BROKER}_merged.js
 
 # 3. Compute gains for the tax year. --taxable turns on the superficial-
 #    loss (ca) / wash-sale (us) rules — leave it out only for a registered
-#    account, where they do not apply the same way.
+#    account, where they do not apply the same way. Under --country ca the
+#    engine notes that it uses close timing for written options unless
+#    --option-premium-timing grant is given (a project uses grant timing).
 taxjson-gains --country $COUNTRY --year 2024 --taxable \
     /tmp/${BROKER}_merged.json > /tmp/${BROKER}_gains.json
 
@@ -70,12 +86,18 @@ AAPL position built in two lots (100 @ 185, 50 @ 170), partial sell (75 @ 200), 
 
 ## Expected output
 
-Spot-checking the Questrade fixture under `--country ca`:
+Spot-checking the Questrade fixture under `--country ca` (the end of
+`taxjson-sum-gains`; the demo's amounts are made up):
 
 ```
-TOTAL REALIZED STOCK GAIN:           1,480.20 USD
-TOTAL REALIZED DIVIDENDS:               18.00 USD
-GRAND TOTAL REALIZED GAIN:           1,498.20 USD
+TOTAL REALIZED GAIN:                 1,480.20 USD   # pii-ok (synthetic demo)
+TOTAL DIVIDENDS / STAKING:              18.00 USD
+GRAND TOTAL (GAIN+DIV+PIL):          1,498.20 USD   # pii-ok (synthetic demo)
+TOTAL TRADING FEES PAID:                19.80 USD
 ```
 
-Other fixtures produce comparable summaries — run the pipeline above and read the `taxjson-sum-gains` line for the total. The same dataset under `--country us` may produce different realized-loss figures when the disposition pattern overlaps a wash-sale window (§1091) versus a Canadian superficial-loss window (s.40(2)(g)).
+Other fixtures produce comparable summaries — run the pipeline above and read
+the `TOTAL REALIZED GAIN` line. The same dataset under `--country us` may
+produce different realized-loss figures when the disposition pattern overlaps a
+wash-sale window (§1091) versus a Canadian superficial-loss window (s.54,
+s.40(2)(g)).

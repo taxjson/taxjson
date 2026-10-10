@@ -780,7 +780,7 @@ class KrakenBrokerage(BaseBrokerage):
                     # in the book; FX cash gains are not modeled here
                     # (KNOWN_ISSUES) — count it and move on.
                     self.count_nonevent(f"forex conversion {pair} "
-                                        f"(not modeled — KNOWN_ISSUES)")
+                                        f"(not modeled — docs/limits.md)")
                     continue
 
                 if base == quote:
@@ -1990,7 +1990,7 @@ class KrakenBrokerage(BaseBrokerage):
             self.count_nonevent(
                 f"forex conversion {_rs}->{_rr} "
                 f"(instant trade / dust sweep, not modeled — "
-                f"KNOWN_ISSUES)")
+                f"docs/limits.md)")
             return []
 
         if spend['asset'] in self._fiat:

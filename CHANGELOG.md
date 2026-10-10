@@ -144,6 +144,43 @@
   holdings/ snapshots found without a setting; the account folders'
   README says each year's slips go in `YYYY/inputs/slips/`.
 
+### Docs
+
+- README.md is a front page (what taxjson is, status, install, a
+  five-minute start, brokers, what it does and does not do, privacy,
+  getting help, a docs index and a one-line-per-command index). Its
+  reference material moved to its canonical page: new docs/commands.md
+  (every command in detail), new docs/brokers.md (each broker's downloads
+  with the brokers' help pages cited, broker detection, the generic
+  importer, the fetch plugin, tax slips), docs/settings.md and
+  docs/tax-rules.md (configuration, project files and rule explanations),
+  docs/getting-started.md (missing history), SECURITY.md (egress) and
+  CONTRIBUTING.md (development setup, running the stages by hand).
+- New docs/upgrading.md (channels, what to do after an upgrade, every
+  change that asks something of you by release, and the problems an
+  upgrade alone fixes), docs/limits.md (what taxjson does not do; Canada
+  supported, US experimental) and docs/glossary.md. The knowledge-pack
+  test checks the new pages' paths, symbols and commands.
+- The first-run recipe in the deck matches the folder `tjs init` makes
+  (one folder of exports, the year's folder inside it).
+- SECURITY.md lists every network call with what it sends, including the
+  Yahoo Finance closes for in-kind moves between taxable and registered
+  accounts and for crypto-send values.
+- CONTRIBUTING.md: setup with `scripts/dev-setup.sh`, the pull-request
+  checklist reads `scripts/ci.sh`'s PASS line, and the fetcher contract
+  names `FetchRequest.inputs` / `holdings`.
+- The README, CONTRIBUTING.md, SECURITY.md and the bug-report template
+  say the same about sharing a file: never a raw export; a made-up
+  reproduction first; a `taxjson redact` copy only after reading all of it.
+- docs/troubleshooting.md keeps the problems you can still meet; the
+  ones an upgrade alone fixes are listed by release in docs/upgrading.md.
+  KNOWN_ISSUES.md lists open bugs only; limitations moved to
+  docs/limits.md.
+- examples/README.md: the stage-by-stage run sets `TAXJSON_LOCAL_TZ` for
+  the crypto demos and shows the current summary labels.
+- The 2026-07 audit reports at the repository root are removed (their
+  findings are fixed and recorded in this changelog).
+
 
 ## v0.27.2 (2026-10-10)
 

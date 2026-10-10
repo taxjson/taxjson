@@ -34,42 +34,47 @@ Out of scope:
 ## Network access and data egress
 
 The core taxjson package holds no broker API client and never reads a
-broker credential. Its pipeline reaches the network in exactly two
-places, both during `taxjson run`, and only when a cache miss requires
-it:
+broker credential. Parsing, the books, the superficial-loss / wash-sale
+pass and every report run on your machine. Below is every place taxjson
+reaches the network, what it sends, and how to turn it off. Every lookup
+is cached under the project's `work/`, so a repeat run sends nothing new.
 
-- **FX rates** — `taxjson-to-base-curr` downloads the base-currency
-  pairs listed under `source_currencies` into `work/to_base.csv`: from
-  the Bank of Canada Valet API (www.bankofcanada.ca) for a CAD base
-  (its daily rate from 2017-03-01, its legacy noon rate from 2007-05-01
-  to 2017-02-28), and from Yahoo Finance for dates before 2007-05-01,
-  currencies the Bank does not publish, and non-CAD bases. Only currency-pair symbols
-  and date ranges are sent.
-- **Crypto prices** — `taxjson-fill-crypto` looks up any crypto row
-  that carries no price (Kraken staking rewards) from Yahoo Finance:
-  the symbol and trade date are sent, nothing else.
+| When | Where | What is sent |
+| --- | --- | --- |
+| `taxjson run`, FX stage (`taxjson-to-base-curr`), on a cache miss | Bank of Canada Valet API (www.bankofcanada.ca) for a CAD base: the daily rate from 2017-03-01, the legacy noon rate from 2007-05-01 to 2017-02-28 | currency-pair series names and a date range |
+| the same stage, on a cache miss | Yahoo Finance (the `[fx]` extra, yfinance): rates before 2007-05-01, currencies the Bank of Canada does not publish, and every rate for a non-CAD base | the pair symbol (e.g. `EURCAD=X`) and a date range |
+| `taxjson run`, crypto stage (`taxjson-fill-crypto`): a crypto row the export left unpriced (staking rewards, for example) | Yahoo Finance chart API | the coin's Yahoo id (`<COIN>-USD`) and the day |
+| `taxjson crypto-sends` and `taxjson run`: a send you marked `gift` or `payment` whose row carries no price of its own | Yahoo Finance chart API (the same lookup as above) | the coin's Yahoo id and the day of the send |
+| `taxjson run`: an in-kind move between a taxable and a registered account with no `INKIND` line and no market value on the broker's row | Yahoo Finance (yfinance): the security's close on the transfer date, marked ESTIMATED | the symbol's Yahoo spelling and the date |
+| `taxjson harvest`, `taxjson watch --harvest` | first a running IB TWS / IB Gateway on this machine (127.0.0.1, the `[ibkr]` extra; it asks Interactive Brokers with your own session), then Yahoo Finance | the symbols you hold |
+| `taxjson tips --online` | Yahoo Finance | the symbols it probes for a cross-listed twin |
+| `taxjson channels`; on a development machine `promote` and `deploy` | `git fetch` against the taxjson checkout's own remote (GitHub for an installed copy) | nothing about your books |
+| `taxjson fetch` (only with the taxjson-fetch plugin, below) | your broker's API | your credentials and the account and date range to download |
+| `taxjson-generate-parser` (a developer tool, opt-in) | the LLM API you choose (Anthropic or Google, with your API key) | the first `--sample-lines` lines (default 30) of the sample CSV you give it |
+| the installer | taxjson.com (the script), github.com (the release), PyPI (the dependencies pip installs, never taxjson itself) | an ordinary download |
 
-Set `TAXJSON_OFFLINE=1` (or `true`/`yes`/`on`; `0`/`false`/`no`/`off`
-leave it off) to forbid both. A crypto-price cache miss then fails the
-stage with a message naming what it needed; the FX stage serves cached
-rates only, and a transaction whose date has no cached rate is a
-validation error at the conversion stage. The same switch covers the
-current-price chain behind `harvest` and `watch --harvest` (IBKR
-gateway / Yahoo Finance): they serve
-`work/.price_cache.json` only and refuse the lookup on a miss, and
-`tips --online` skips its Yahoo Finance name probe with a note (the
-offline checks still run). `taxjson fetch` refuses outright (one line,
-before any fetcher plugin runs; `--list` still works). The release commands (`taxjson channels`,
-and on a development machine `promote` / `deploy`) run `git fetch` in a
-taxjson checkout against that checkout's own remote (GitHub for an
-installed copy) — it sends nothing about your books; `TAXJSON_OFFLINE=1`
-or `channels --offline` skips it. Everything else that touches the
-network is opt-in by command: `taxjson-generate-parser`, which sends the first `--sample-lines`
-(default 30) lines of the sample CSV you hand it to an LLM API. Those
-lines are where broker exports keep the holder's name, account number
-and address, so it scans them first and refuses to send a sample that
-still carries an identity shape (`--allow-unredacted` overrides) — run
-`taxjson redact` on the sample first.
+**Turning it off.** Set `TAXJSON_OFFLINE=1` (or `true`/`yes`/`on`;
+`0`/`false`/`no`/`off` leave it off) to forbid every lookup in the
+first seven rows. Each then serves its cache only:
+
+- FX: a transaction whose date has no cached rate is a validation error
+  at the conversion stage.
+- Crypto prices: a cache miss fails the stage with a message naming what
+  it needed; an unpriced crypto send is listed as having no fair value.
+- In-kind moves: the run stops and prints the `INKIND` line to add (the
+  value from your own records).
+- `harvest` / `watch --harvest` serve `work/.price_cache.json` and refuse
+  the lookup on a miss; `tips --online` skips its probe with a note (the
+  offline checks still run).
+- `taxjson fetch` refuses outright (one line, before any fetcher plugin
+  runs; `--list` still works); `taxjson channels` skips its `git fetch`
+  (as does `channels --offline`).
+
+`taxjson-generate-parser` sends only when you run it. Its sample lines are
+where broker exports keep the holder's name, account number and address,
+so it scans them first and refuses a sample that still carries an
+identity shape (`--allow-unredacted` overrides): run `taxjson redact` on
+the sample first.
 
 **Broker fetch is a separate package.** `taxjson fetch` in the core is
 a dispatcher over installed fetcher plugins (entry-point group
@@ -102,11 +107,12 @@ before `pip install --no-deps -e packages/taxjson-fetch`, so the plugin's
 (the installer and `scripts/dev-setup.sh` pass `--no-deps` too).
 
 **What Yahoo Finance learns.** Every Yahoo lookup (FX fallback, crypto
-prices, `harvest` / `watch --harvest` current prices, `tips --online`)
-is a plain request from your IP address naming a symbol and a date
-range — so Yahoo can see which tickers you hold or trade and roughly
-when, though never quantities, prices paid or account numbers. Use
-`TAXJSON_OFFLINE=1` (with a populated cache) if that matters to you.
+prices, crypto-send values, in-kind move closes, `harvest` / `watch
+--harvest` current prices, `tips --online`) is a plain request from your
+IP address naming a symbol and a date or date range — so Yahoo can see
+which tickers you hold or trade and roughly when, though never
+quantities, prices paid or account numbers. Use `TAXJSON_OFFLINE=1`
+(with a populated cache) if that matters to you.
 
 Credentials (taxjson-fetch only — the core reads none):
 `~/.questrade_token` is written 0600 and rotated
@@ -202,10 +208,18 @@ scan to what GitHub serves beside the code (release notes, issues, pull
 requests and comments), read-only; `scripts/promote.sh` runs it before
 moving a channel forward.
 
-`taxjson redact` strips the account numbers, names and contact details
-it recognises from an export so it can be shared as a parser sample —
-it is pattern-based, so review the output (the report lists the lines
-to read) before attaching it anywhere.
+**Sharing a file with the project.** Never attach a raw broker export
+or anything copied from one. The first choice is a synthetic
+reproduction: copy the broker's `examples/*_demo.csv`, edit its rows to
+the same shape as the ones that fail (same columns, actions and wording;
+made-up symbols, ids and amounts) and confirm it fails the same way —
+its amounts are made up, so they are fine to share. When that is not
+possible, `taxjson redact` copies an export (or the project's whole
+`inputs/` to `inputs_redact/`) and strips the account numbers, names
+and contact details it recognises. It is pattern-based and keeps
+amounts, prices, quantities, dates and symbols, so read the whole copy
+(the report lists the lines to check) and attach it only after that
+review. The bug-report template, README and CONTRIBUTING.md say the same.
 
 ## Release integrity
 

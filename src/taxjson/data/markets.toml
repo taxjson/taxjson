@@ -7,7 +7,7 @@
 # taxjson/lib/markets.py; no other code carries a copy.
 #
 # These lists go stale. Your project's ticker.map extends or overrides
-# them, one line per symbol (README "ticker.map"):
+# them, one line per symbol (docs/settings.md, "ticker.map"):
 #
 #   STABLE      SYMBOL USD|NO     a US-dollar stablecoin (or: not one)
 #   SPLITSHARE  ROOT [NO]         a Canadian split-share corporation

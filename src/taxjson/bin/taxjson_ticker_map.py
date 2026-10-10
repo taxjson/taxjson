@@ -17,8 +17,8 @@ JOURNAL, DELETE, DISTINCT, RENAME. Lookups that change no symbol (read by
 other tools; this one skips them): QUOTE SYMBOL YAHOO_SYMBOL [RATIO],
 CRYPTO SYMBOL YAHOO_ID, EXTRACT description words | CURRENCY | SYMBOL,
 T1135 SYMBOL COUNTRY.
-A TRADINGVIEW line (the removed TradingView export) is ignored. See the
-README's ticker.map section.
+A TRADINGVIEW line (the removed TradingView export) is ignored. See
+docs/settings.md, "ticker.map".
 """
 
 from taxjson.lib.stage_msg import emit_line

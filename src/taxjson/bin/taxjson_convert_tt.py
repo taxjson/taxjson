@@ -12,8 +12,8 @@ Usage:
 
 Direction is inferred from the input file extension. The `.tt` format
 is a single space-separated line per transaction; the field order of
-each action is in parse_tt_line / tx_to_tt_line below (and the README's
-`.tt` field table, under "find-missing-history").
+each action is in parse_tt_line / tx_to_tt_line below (and
+docs/settings.md, ".tt files").
 """
 
 from taxjson.lib.stage_msg import emit_line

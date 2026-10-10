@@ -2913,16 +2913,17 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                   "to copy from"),),
              how="A purchase from before your downloads, a dividend from "
                  "a slip (Webull), a return of capital (ADJUST): a line "
-                 "in a .tt file in inputs/<account>/ (README, "
-                 "\"Importing manual cost basis\"). Non-cash fund "
+                 "in a .tt file in inputs/<account>/ "
+                 "(docs/settings.md, \".tt files\"). Non-cash fund "
                  "distributions go in [[distributions]] in "
                  "taxjson.toml."),
         _check("roc-entered",
                cmds=(Cmd("tjs roc-sum", "the year's return of capital "
                          "per security, as the books hold it"),),
                how="An ADJUST line in a .tt file, or [[distributions]] in "
-                   "taxjson.toml, per fund that published one (README, "
-                   "\"Non-cash distributions\"); then confirm with `tjs "
+                   "taxjson.toml, per fund that published one "
+                   "(docs/tax-rules.md, \"Non-cash and reinvested "
+                   "distributions\"); then confirm with `tjs "
                    "checklist --done roc-entered`."),
         # ------------------------------------------------ tidy the config
         Item("format", "Tidy the config", "Lay out the config files",

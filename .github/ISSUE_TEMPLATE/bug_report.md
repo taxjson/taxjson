@@ -40,5 +40,8 @@ with figures removed.
 Start from the demo CSV for your broker in `examples/` (`*_demo.csv`) and
 edit its rows to the same shape as the rows that fail: the same columns,
 actions and wording pattern, with made-up values, symbols and ids. Run
-taxjson on it, confirm it fails the same way, and attach that file.
-`tjs redact` output is a fallback only, after you have read all of it.
+taxjson on it, confirm it fails the same way, and attach that file (its
+amounts are made up, so they are fine). Never attach a raw export. Only if
+the problem cannot be reproduced that way: `tjs redact` a copy, read all of
+it (it keeps amounts, prices, dates and symbols), and attach it only after
+that review.

@@ -20,8 +20,9 @@ so this test fails when:
   scripts/check-pii.sh refuses (its private denylist and figure list apply
   when the maintainer has them).
 
-The two docs another change may not have added yet (tax-rules, settings) are
-checked when present.
+The docs another change may not have added yet (OPTIONAL: tax-rules,
+settings and the user pages brokers, commands, glossary, limits, upgrading)
+are checked when present.
 """
 import datetime
 import re
@@ -33,7 +34,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 REQUIRED = ("AGENTS.md", "docs/troubleshooting.md", "docs/architecture-map.md")
-OPTIONAL = ("docs/tax-rules.md", "docs/settings.md")
+OPTIONAL = ("docs/tax-rules.md", "docs/settings.md",
+            # The user pages (v0.28.0 docs rework): checked like the pack.
+            "docs/brokers.md", "docs/commands.md", "docs/glossary.md",
+            "docs/limits.md", "docs/upgrading.md")
 
 # A repository path: relative, no spaces or placeholders, a file with an
 # extension or a directory ending in '/'.

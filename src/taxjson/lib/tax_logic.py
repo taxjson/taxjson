@@ -37,7 +37,7 @@ a value the engine reads differently or refuses (partition SPEC-12). An
 unknown country raises (lib/country.canonical_country) — it is never
 rendered as Canada.
 
-Keep it short: this is the summary, the README and REFERENCES.md carry
+Keep it short: this is the summary, docs/tax-rules.md and REFERENCES.md carry
 the detail.
 """
 from __future__ import annotations
@@ -3875,7 +3875,7 @@ def render(country: str, settings: Dict[str, Any],
         d.section(title.upper())
         d.items(rules, indent="  ")
     d.blank()
-    d.para("Detail and sources: README.md and REFERENCES.md. taxjson "
+    d.para("Detail and sources: docs/tax-rules.md and REFERENCES.md. taxjson "
            "computes; it does not give tax advice.")
     return d.text()
 
