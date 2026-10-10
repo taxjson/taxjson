@@ -1,4 +1,4 @@
-"""Missing-history issues #23, #24 (synthetic data only).
+"""Missing-history issues #23, #24, #25, #28 (synthetic data only).
 
 #23: an `OPENING ... cost=unknown` line's symbol goes through ticker.map
      and tobase.map as the rows do — the base-currency books pool it with
@@ -7,12 +7,19 @@
      trades never become short covers.
 #24: a dated line's units are held even when no later row trades them
      (a holding simply kept, or one that only pays dividends).
+#25: `taxjson migrate` dates each entry from the books of the year that
+     sized it, and never archives a missing_history.json whose entries
+     were not all converted.
+#28: the newest year listing an entry decides it, an explicit "opens
+     nothing" included; a year whose books cannot size it does not.
 """
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -273,6 +280,116 @@ class TestHeldWithoutLaterRows(unittest.TestCase):
         with self.assertRaises(TtOpeningError) as cm:
             synthesize_openings(txs, pairs)
         self.assertIn("inputs/margin/a.tt:4", str(cm.exception))
+
+
+def _years(accounts, logs):
+    """2024/ and 2025/ sharing ../inputs, each with a taxable account
+    (accounts[year]), a missing_history.json listing SYNTH.TO in it, its
+    books (one sale) and a gains file whose log sizes the entry
+    (logs[year]: the log entry's fields)."""
+    top = Path(private_dir()) / "p"
+    (top / "inputs").mkdir(parents=True)
+    for y in (2024, 2025):
+        acct = accounts[y]
+        d = top / str(y)
+        (d / "work").mkdir(parents=True)
+        (top / "inputs" / acct).mkdir(exist_ok=True)
+        (d / "taxjson.toml").write_text(
+            f'[settings]\nyear = {y}\ncountry = "canada"\n'
+            'base_currency = "CAD"\ninputs_dir = "../inputs"\n\n'
+            f'[accounts.{acct}]\ntype = "taxable"\n')
+        (d / "missing_history.json").write_text(json.dumps(
+            [{"symbol": "SYNTH.TO", "account": acct}]))
+        (d / "work" / f"{acct}_base.json").write_text(json.dumps(
+            {"transactions": [{
+                "action": "BUYSELL", "date": "2024-02-01",
+                "time": "10:00:00", "symbol": "SYNTH.TO", "quantity": -5,
+                "price": 10, "net_amount": 49, "currency": "CAD",
+                "account": acct}]}))
+    time.sleep(0.05)
+    for y in (2024, 2025):
+        acct = accounts[y]
+        g = top / str(y) / "work" / f"{acct}_gains.json"
+        g.write_text(json.dumps({"missing_history_log": [dict(
+            {"account": acct, "symbol": "SYNTH.TO"}, **logs[y])]}))
+        later = os.stat(top / str(y) / "missing_history.json").st_mtime + 2
+        os.utime(g, (later, later))
+    return top
+
+
+_OPENS_5 = {"inserted": True, "opening_qty": 5, "anchor_date": "2024-01-31",
+            "anchor_symbol": "SYNTH.TO"}
+
+
+class TestMigrateDatesEachYearsBooks(unittest.TestCase):
+    """#25: an account only an older year's books carry."""
+
+    def test_older_years_account_converted(self):
+        top = _years({2024: "margin", 2025: "newmargin"},
+                     {2024: _OPENS_5, 2025: _OPENS_5})
+        r = _ok(self, tjs("-C", str(top / "2025"), "migrate", "--write"))
+        for acct in ("margin", "newmargin"):
+            tt = (top / "inputs" / acct / "missing_history.tt").read_text()
+            self.assertIn("OPENING 2024-01-31 SYNTH.TO 5 cost=unknown", tt)
+        for y in (2024, 2025):
+            self.assertFalse((top / str(y) / "missing_history.json")
+                             .exists(), r.stdout)
+
+    def test_an_entry_not_converted_keeps_its_file(self):
+        top = _years({2024: "margin", 2025: "newmargin"},
+                     {2024: _OPENS_5, 2025: _OPENS_5})
+        (top / "2024" / "work" / "margin_base.json").unlink()
+        r = tjs("-C", str(top / "2025"), "migrate", "--write")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("SYNTH.TO / margin", r.stdout + r.stderr)
+        self.assertIn("2024/missing_history.json", r.stdout + r.stderr)
+        for y in (2024, 2025):
+            self.assertTrue((top / str(y) / "missing_history.json")
+                            .exists())
+        self.assertFalse((top / "inputs" / "newmargin" /
+                          "missing_history.tt").exists())
+
+
+class TestMigrateNewestListedDecides(unittest.TestCase):
+    """#28: an explicit "opens nothing" in the newest year wins; a year
+    that does not list the entry does not decide."""
+
+    def test_explicit_zero_in_the_newest_year(self):
+        top = _years({2024: "margin", 2025: "margin"},
+                     {2024: _OPENS_5,
+                      2025: {"inserted": False, "opening_qty": 0,
+                             "note": "no opening needed"}})
+        r = tjs("-C", str(top / "2025"), "migrate")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("2024: 5, 2025: opens nothing (no opening needed) — "
+                      "written: nothing (2025's view", r.stdout)
+        r = _ok(self, tjs("-C", str(top / "2025"), "migrate", "--write"))
+        self.assertFalse((top / "inputs" / "margin" /
+                          "missing_history.tt").exists())
+        self.assertFalse((top / "2024" / "missing_history.json").exists())
+
+    def test_absent_from_the_newest_year(self):
+        top = _years({2024: "margin", 2025: "margin"},
+                     {2024: _OPENS_5, 2025: _OPENS_5})
+        (top / "2025" / "missing_history.json").write_text("[]")
+        g = top / "2025" / "work" / "margin_gains.json"
+        later = os.stat(top / "2025" / "missing_history.json").st_mtime + 2
+        g.write_text(json.dumps({"missing_history_log": []}))
+        os.utime(g, (later, later))
+        r = tjs("-C", str(top / "2025"), "migrate")
+        self.assertIn("2024: 5, 2025: not listed — written: 5 (2024's "
+                      "view)", r.stdout)
+        _ok(self, tjs("-C", str(top / "2025"), "migrate", "--write"))
+        tt = (top / "inputs" / "margin" / "missing_history.tt").read_text()
+        self.assertIn("OPENING 2024-01-31 SYNTH.TO 5 cost=unknown", tt)
+
+    def test_no_rows_in_the_newest_year_does_not_decide(self):
+        top = _years({2024: "margin", 2025: "margin"},
+                     {2024: _OPENS_5,
+                      2025: {"inserted": False, "opening_qty": 0,
+                             "note": "no rows for this symbol/account"}})
+        r = tjs("-C", str(top / "2025"), "migrate")
+        self.assertIn("written: 5 (2024's view)", r.stdout)
 
 
 if __name__ == "__main__":

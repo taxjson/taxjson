@@ -2850,6 +2850,9 @@ class MissingHistoryMigration:
     stale: List[str] = field(default_factory=list)
     plan: Optional[TtWritePlan] = None
     nodate: List[str] = field(default_factory=list)
+    # The files listing an entry that cannot be converted (`nodate`):
+    # never archived (issue #25).
+    unconverted: Set[Path] = field(default_factory=set)
 
 
 def migration_projects(root: Any) -> List[Path]:
@@ -2871,6 +2874,24 @@ def migration_projects(root: Any) -> List[Path]:
     return out or [root]
 
 
+def _view_parts(views: List[ProjectView], pair: Tuple[str, str]) -> str:
+    """How each project's view sizes `pair` ("2024: 5, 2025: opens
+    nothing (...)")."""
+    parts = []
+    for v in views:
+        x = v.view(pair)
+        if pair not in v.listed():
+            parts.append(f"{v.label}: not listed")
+        elif x is None:
+            parts.append(f"{v.label}: opens nothing "
+                         f"({v.stale.get(pair, '')})")
+        else:
+            parts.append(f"{v.label}: {x:g}"
+                         + (" (short only after its year)"
+                            if pair in v.later else ""))
+    return ", ".join(parts)
+
+
 def plan_missing_history_migration(root: Any) -> Optional[
         MissingHistoryMigration]:
     """The plan (None when no project has a missing_history.json)."""
@@ -2889,35 +2910,47 @@ def plan_missing_history_migration(root: Any) -> Optional[
         sym, acct = pair
         vals = [(v, v.view(pair)) for v in views if pair in v.listed()]
         sized = [(v, q) for v, q in vals if q is not None]
-        if not sized:
+        # The NEWEST view listing the entry decides (issue #28), an
+        # explicit "opens nothing" (its books never go short) included:
+        # an older year's opening is not reinstated over it. A view whose
+        # books have no row of the pair (`no rows`: the account or the
+        # symbol is not in that year's books) cannot size it, and does
+        # not decide — as a year that does not list it.
+        decisive = [(v, q) for v, q in vals
+                    if q is not None or not v.stale.get(pair, '')
+                    .startswith('no rows')]
+        if not sized or not decisive or decisive[-1][1] is None:
+            if sized:
+                src = decisive[-1][0]
+                m.differ.append(
+                    f"{sym} / {acct}: " + _view_parts(views, pair)
+                    + f" — written: nothing ({src.label}'s view: "
+                    f"{src.stale.get(pair, 'opens nothing')})")
+                continue
             why = "; ".join(f"{v.label}: {v.stale.get(pair, '')}"
                             for v, _q in vals) if multi else \
                 vals[0][0].stale.get(pair, '')
             m.stale.append(f"{sym} / {acct}: {why}")
             continue
-        src, q = sized[-1]
+        src, q = decisive[-1]
         agree = (len(sized) == len(views)
                  and all(abs(x - q) <= 1e-9 * max(1.0, q) for _v, x in sized))
         if agree:
             m.agreed.append(pair)
         else:
-            parts = []
-            for v in views:
-                x = v.view(pair)
-                if pair not in v.listed():
-                    parts.append(f"{v.label}: not listed")
-                elif x is None:
-                    parts.append(f"{v.label}: opens nothing "
-                                 f"({v.stale.get(pair, '')})")
-                else:
-                    parts.append(f"{v.label}: {x:g}"
-                                 + (" (short only after its year)"
-                                    if pair in v.later else ""))
-            m.differ.append(f"{sym} / {acct}: " + ", ".join(parts)
+            m.differ.append(f"{sym} / {acct}: " + _view_parts(views, pair)
                             + f" — written: {q:g} ({src.label}'s view)")
-        d = default_opening_date(newest.root / "work", acct)
+        # The date: the day before the account's first row in the books
+        # of the view that sized it (issue #25: an account only an older
+        # year's books carry), else of another view listing it.
+        d = None
+        for v in [src] + [w for w, _q in reversed(vals) if w is not src]:
+            d = default_opening_date(v.root / "work", acct)
+            if d is not None:
+                break
         if d is None:
             m.nodate.append(f"{sym} / {acct}")
+            m.unconverted.update(v.file for v, _q in vals)
             continue
         where = (f"{src.label}/{src.file.name}" if multi else src.file.name)
         m.lines.append(TtLine(acct, sym, q, d, f"migrated from {where}"))
@@ -2929,7 +2962,15 @@ def apply_missing_history_migration(m: MissingHistoryMigration
                                     ) -> Tuple[List[Path], List[Path]]:
     """Write the plan's lines, then rename each project's
     missing_history.json to <name>.migrated (never deleted). Returns
-    (the .tt files written, the files renamed)."""
+    (the .tt files written, the files renamed). A plan with an entry it
+    cannot convert (`nodate`) is refused, nothing written or renamed
+    (issue #25: a file is archived only once all of it is converted)."""
+    if m.nodate:
+        raise MigrationNeedsRun(
+            "cannot convert " + ", ".join(m.nodate) + " (no books for the "
+            "account in any year folder listing it) — nothing written, "
+            "nothing renamed: " + ", ".join(
+                str(p) for p in sorted(m.unconverted)))
     written = apply_tt_plan(m.plan) if m.plan is not None else []
     renamed = []
     for v in m.views:

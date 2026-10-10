@@ -13,6 +13,14 @@
   later row trades them (a holding kept, or one that only pays
   dividends): in the gains inventory, the holdings report, `sanity` and
   `t1135` (#24).
+- `taxjson migrate` dates each entry from the books of the year folder
+  that sized it (an account only an older year has), and renames no
+  `missing_history.json` while an entry cannot be converted: it stops
+  naming them (#25).
+- `taxjson migrate` lets the newest year listing an entry decide it: an
+  explicit "opens nothing" there is no longer replaced by an older year's
+  opening; a year that does not list it does not decide (#28).
+
 
 ## v0.27.0 (2026-10-09)
 

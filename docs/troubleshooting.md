@@ -142,6 +142,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/missing_history.py` — `_apply_fixed_openings`, `_opening_currency`, `report_missing_history_log`
 
+### "Error: 1 entry cannot be converted (listed above) — nothing was written or renamed" from `tjs migrate`
+- **Check:** `tjs migrate` lists "Cannot convert (no books for the account in a year folder listing it …)"; the account is configured only in an older year folder.
+- **Cause:** a line is dated the day before the account's first row in the books (`work/<account>_base.json`) of the year that sized the entry; no year folder listing the entry has books for the account. Before the fix (0.27.0) the date was looked up in the newest year only, the entry was skipped and every `missing_history.json` was renamed `.migrated` anyway, losing it.
+- **Fix:** (issue #25) `tjs run` in the year folder whose `taxjson.toml` has the account, then `tjs migrate` again. The files are renamed only once every entry is converted.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`, `apply_missing_history_migration`; `src/taxjson/bin/taxjson_run.py` — `_migrate_missing_history`
+
+### `tjs migrate` lists "2024: 5, 2025: opens nothing (no opening needed) — written: nothing (2025's view …)"
+- **Check:** the newest year's last run found the entry's rows never go short (its books are complete), an older year's opened units.
+- **Cause:** the newest year listing an entry decides it, an explicit "opens nothing" included; 0.27.0 skipped it and wrote the older year's opening, putting unknown-cost units back into books that no longer need them. A year that does not list the entry, or whose books have no row of it, does not decide.
+- **Fix:** (issue #28) nothing to do if the newer books are right: `tjs migrate --write` writes no line for it. If the older opening is right, write the `OPENING … cost=unknown` line yourself.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`, `_view_parts`
+
 ### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
 - **Check:** `git -C 2025 rev-parse --show-toplevel` and `git -C inputs rev-parse --show-toplevel` name different folders (or the second fails).
 - **Cause:** the year folder is its own repository, so the shared `inputs/` beside it is committed nowhere the checklist can see.
