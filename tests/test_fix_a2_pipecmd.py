@@ -147,7 +147,7 @@ class TestConflictingSplitsAreErrors(unittest.TestCase):
             out = r.stdout + r.stderr
             self.assertIn("validation ERROR", out)
             self.assertIn("conflicting split", out)
-            import tomllib
+            from taxjson.lib.tomlcompat import tomllib
             from taxjson.lib import checklist as cl
             cfg = tomllib.loads((root / "taxjson.toml").read_text())
             ctx = cl.Ctx(root=root, cfg=cfg, year=2026, today=date.today(),

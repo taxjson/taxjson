@@ -389,10 +389,9 @@ class TestInventoryCurrencyReachesHoldingsToml(unittest.TestCase):
     currency and base_* fields."""
 
     def test_usd_holding_with_cad_base(self):
-        try:
-            import tomllib
-        except ModuleNotFoundError:          # pragma: no cover
-            self.skipTest("no tomllib")
+        from taxjson.lib.tomlcompat import tomllib
+        if tomllib is None:                  # pragma: no cover
+            self.skipTest("no tomllib / tomli")
         native = run([U('BUYSELL', '2025-01-06', 'XYZ.US', 100, 1000)], 2025)
         base = run([T('BUYSELL', '2025-01-06', 'XYZ.US', 100, 1350)], 2025)
         self.assertEqual(native['inventory'][0]['currency'], 'USD')

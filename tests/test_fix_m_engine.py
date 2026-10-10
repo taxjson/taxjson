@@ -1254,7 +1254,10 @@ class TestPriceChain(unittest.TestCase):
         # S077-04: a Yahoo 'GBp' quote comes back in pounds.
         import sys
         import types
-        import pandas as pd
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not installed (the [fx] extra)")
         from taxjson.lib import price_chain as pc
 
         class _T:

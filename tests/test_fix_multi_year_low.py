@@ -23,10 +23,22 @@ import types
 import unittest
 from pathlib import Path
 
+from _style import CapturedWidth
 from _tmpfiles import private_dir
 from test_fix_multi_year import multi, run_ok, tjs
 
 from taxjson.lib import project_layout as PL
+
+# The assertions read captured output, unwrapped: TAXJSON_WIDTH=0.
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
 
 
 class TestFiledYearHint(unittest.TestCase):

@@ -35,7 +35,10 @@ class TestChildPythonNeverImportsFromCwd(unittest.TestCase):
 
     def test_python_module_argv_both_forms(self):
         from taxjson.lib.dispatch import python_module_argv
-        for legacy in (False, True):
+        # -P exists from Python 3.11; older interpreters only run the
+        # bootstrap form (python_module_argv's default there).
+        forms = (False, True) if sys.version_info >= (3, 11) else (True,)
+        for legacy in forms:
             with self.subTest(legacy=legacy), \
                     tempfile.TemporaryDirectory() as tmp:
                 marker = _plant(Path(tmp))

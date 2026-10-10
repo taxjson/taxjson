@@ -240,7 +240,7 @@ class TestHoldingsTomlAppliesPhantoms(unittest.TestCase):
           "BUYSELL 2024-04-10 10:00:00 XEI.TO 10 CAD 10.00 -100.00 0.00\n")
 
     def test_no_negative_phantom_row(self):
-        import tomllib
+        from taxjson.lib.tomlcompat import tomllib
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, [("margin", "taxable")], {"margin": self.TT})
             (root / "missing_history.json").write_text(json.dumps(

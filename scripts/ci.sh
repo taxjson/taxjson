@@ -4,15 +4,28 @@
 # hosted runner) and suite stages for pull requests on the public repo.
 #
 #   scripts/ci.sh            lint + full suite (core and the packages/
-#                            fetch plugin) + fuzzers at CI depth
+#                            fetch plugin; an empty HOME, offline) + the
+#                            extras-sensitive tests with no extras
+#                            + fuzzers at CI depth
 #   scripts/ci.sh --nightly  ...fuzzers at nightly depth (minutes)
 #   scripts/ci.sh --mutation ...plus the mutation harness (an hour+;
 #                            mutates engine files in place — run it
 #                            alone, never alongside edits)
-#   scripts/ci.sh --quick    lint + suite only
+#   scripts/ci.sh --quick    lint + suite (and no-extras) only
+#   scripts/ci.sh --release-edits
+#                            consistency + the tests that read the lines
+#                            release.sh rewrites (versions, CHANGELOG,
+#                            playbook tags) — what release.sh runs when it
+#                            reuses a PASS record (seconds)
+#   scripts/ci.sh --serial   ...the suite in one process (the fallback;
+#                            default: scripts/run_tests_parallel.py on
+#                            min(CPUs, 16) processes, TAXJSON_TEST_JOBS=N
+#                            to choose)
 #
 # Exit 0 only when every stage passes. A one-line result is appended
-# to .ci/history.log (gitignored) so the last green commit is on record.
+# to .ci/history.log (gitignored) so the last green commit is on record,
+# and a full PASS from a clean tree is recorded by its tree hash outside
+# the repo (scripts/gate-record.sh), which release.sh can reuse.
 set -u
 cd "$(dirname "$0")/.."
 # Never a TTY: CLI tests spawn `taxjson run` as subprocesses that inherit
@@ -32,15 +45,19 @@ trap 'exit 143' TERM
 export TMPDIR="$CI_TMP"
 PY="${PYTHON:-$PWD/venv/bin/python3}"
 MODE=default
+SERIAL=""
 for a in "$@"; do case "$a" in
   --nightly) MODE=nightly ;; --mutation) MODE=mutation ;; --quick) MODE=quick ;;
-  -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+  --release-edits) MODE=release-edits ;;
+  --serial) SERIAL=--serial ;;
+  -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
   *) echo "unknown flag: $a" >&2; exit 2 ;;
 esac; done
 
 mkdir -p .ci
 SHA=$(git rev-parse --short HEAD 2>/dev/null || echo nogit)
 DIRTY=$([ -n "$(git status --porcelain 2>/dev/null)" ] && echo "+dirty" || echo "")
+TREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo "")
 START=$(date +%s)
 FAILED=()
 stage() {   # stage NAME cmd...
@@ -48,6 +65,50 @@ stage() {   # stage NAME cmd...
   printf '\n== %s ==\n' "$name"
   if "$@"; then printf '   %s: ok\n' "$name"; else printf '   %s: FAILED\n' "$name"; FAILED+=("$name"); fi
 }
+finish() {  # the result line, the history log, the PASS record; exits
+  ELAPSED=$(( $(date +%s) - START ))
+  if [ ${#FAILED[@]} -eq 0 ]; then RESULT=PASS; else RESULT="FAIL(${FAILED[*]})"; fi
+  LINE="$(date -u +%Y-%m-%dT%H:%M:%SZ) $SHA$DIRTY $MODE $RESULT ${ELAPSED}s"
+  echo "$LINE" >> .ci/history.log
+  printf '\n%s\n' "$LINE"
+  # The PASS record release.sh may reuse: a full gate, from a clean tree
+  # that is still the same tree, of this tree's own code (not a taxjson
+  # that PYTHONPATH or another install put first).
+  if [ "$RESULT" = PASS ] && [ -z "$DIRTY" ] && [ -n "$TREE" ] \
+     && [ "$MODE" != quick ] && [ "$MODE" != release-edits ]; then
+    PKG=$("$PY" -c 'import os, taxjson; print(os.path.realpath(os.path.dirname(taxjson.__file__)))' 2>/dev/null || true)
+    if [ "$PKG" = "$(realpath src/taxjson)" ]; then
+      PYVER=$("$PY" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || true)
+      bash scripts/gate-record.sh write "$TREE" "$MODE" "$PYVER" "$ELAPSED"
+    else
+      echo "   gate record: not written (the gate imported taxjson from ${PKG:-nowhere}, not this tree's src/)"
+    fi
+  fi
+  [ "$RESULT" = PASS ] && exit 0
+  exit 1
+}
+
+# An empty HOME and cache folder, as on a GitHub runner: the suite never
+# reads the developer's rate cache (tests/_hermetic also gives every test
+# process a synthetic HOME with made-up rates, offline). The suite used
+# to pass here and fail on every hosted run because it did.
+mkdir -p "$CI_TMP/home/.cache"
+SUITE_ENV=(env HOME="$CI_TMP/home" XDG_CACHE_HOME="$CI_TMP/home/.cache"
+           XDG_CONFIG_HOME="$CI_TMP/home/.config" TAXJSON_OFFLINE=1)
+
+# release.sh, reusing a PASS of the tree before its edits: the edits
+# are only version, tag and date lines (release.sh proves it), so what
+# can change is what reads those lines — the consistency check and the
+# tests that read CHANGELOG.md, docs/troubleshooting.md, a pyproject.toml
+# or the installed version. Never a full-gate record.
+if [ "$MODE" = release-edits ]; then
+  stage consistency bash scripts/check-consistency.sh
+  # shellcheck disable=SC2046
+  stage release-edit-tests "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
+    $(grep -lE 'CHANGELOG|troubleshooting\.md|pyproject|__version__|--version|importlib\.metadata|_version\(' tests/test_*.py \
+      | sed 's#^tests/##; s#\.py$##')
+  finish
+fi
 
 # 1. Lint, critical tier only (syntax errors, undefined names,
 #    misused comparisons) — the class of defect audits kept finding.
@@ -72,11 +133,22 @@ stage pii bash scripts/check-pii.sh
 # Unwrapped (docs/output-style.md): a phrase a test looks for never
 # depends on where a temp path made a message wrap. The style tests set
 # their own width (tests/_style.py, tests/test_output_style.py).
-stage suite env TAXJSON_WIDTH=0 "$PY" -m unittest discover -s tests -p "test_*.py" -q
+# In parallel (scripts/run_tests_parallel.py): a process per module, each
+# with its own TMPDIR and synthetic HOME, longest first by the times the
+# last run recorded (.ci/test-durations.json); the tests run must add up
+# to the serial discovery's count. --serial: one process, as before.
+SUITE_ARGS=()
+if [ -n "$SERIAL" ]; then SUITE_ARGS=(--serial)
+elif [ -n "${TAXJSON_TEST_JOBS:-}" ]; then SUITE_ARGS=(--jobs "$TAXJSON_TEST_JOBS"); fi
+stage suite "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
+  ${SUITE_ARGS[@]+"${SUITE_ARGS[@]}"}
+# The tests that touch an optional extra, with every extra hidden, as
+# GitHub's matrix jobs install taxjson (seconds; scripts/ci_no_extras.sh).
+stage no-extras bash scripts/ci_no_extras.sh "$PY"
 # The broker-fetch plugin (packages/taxjson-fetch): its own tests, run
 # from the checkout whether or not it is pip-installed here (its
 # tests/_support.py registers the entry point when it is not).
-stage fetch-plugin env PYTHONPATH="$PWD/packages/taxjson-fetch/src${PYTHONPATH:+:$PYTHONPATH}" \
+stage fetch-plugin "${SUITE_ENV[@]}" PYTHONPATH="$PWD/packages/taxjson-fetch/src${PYTHONPATH:+:$PYTHONPATH}" \
   "$PY" -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" -q
 
 # 3. Property fuzzers at depth. The suite already runs them at the
@@ -98,9 +170,4 @@ if [ "$MODE" = mutation ]; then
   else stage mutation "$PY" scripts/mutation_audit.py --yes; fi
 fi
 
-ELAPSED=$(( $(date +%s) - START ))
-if [ ${#FAILED[@]} -eq 0 ]; then RESULT=PASS; else RESULT="FAIL(${FAILED[*]})"; fi
-LINE="$(date -u +%Y-%m-%dT%H:%M:%SZ) $SHA$DIRTY $MODE $RESULT ${ELAPSED}s"
-echo "$LINE" >> .ci/history.log
-printf '\n%s\n' "$LINE"
-[ "$RESULT" = PASS ]
+finish

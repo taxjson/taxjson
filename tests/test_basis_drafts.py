@@ -21,9 +21,23 @@ from taxjson.lib.missing_history import (DATE_PLACEHOLDER, DRAFT_NAME,
                                           format_purchase_drafts,
                                           parse_broker_lots)
 
+from _style import CapturedWidth
 from tax_rules import rule, rule_absent
 from tax_rules.dual import cli, projects_both
 from test_fix_ibparse import HEAD, TRADES_H, _parse_ib
+
+# Captured output, unwrapped (TAXJSON_WIDTH=0): a message naming a long
+# temp path must not wrap inside a phrase a test looks for.
+_WIDTH = CapturedWidth()
+
+
+def setUpModule():
+    _WIDTH.start()
+
+
+def tearDownModule():
+    _WIDTH.stop()
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

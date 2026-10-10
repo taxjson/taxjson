@@ -56,11 +56,11 @@ IRS guidance and a tax professional.
 
 - **Set up:** `scripts/dev-setup.sh` (venv, editable install, ruff, the
   pre-push hook), then `source setup.sh`.
-- **The gate:** `scripts/ci.sh` (lint, consistency, tax-rules, PII scan,
-  suite, fuzzers); `scripts/ci.sh --quick` skips the fuzzers. Read its last
-  line for PASS: a pipe (`| tail`) hides a failing exit status. One module:
-  `cd tests && TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing,
-  run the gate once in a fresh `git clone` (it catches untracked files).
+- **The gate:** `scripts/ci.sh` (lint, consistency, tax-rules, PII, suite
+  in parallel, no-extras, fuzzers; `--quick` skips the fuzzers).
+  Read its last line for PASS: a pipe hides the exit status. One module: `cd
+  tests && TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing, run
+  the gate once in a fresh `git clone` (it catches untracked files).
 - **Releasing:** `scripts/release.sh vX.Y.Z [--notes FILE]` (gate, tag, push,
   GitHub release with scanned notes; never `git push --tags`), then
   `scripts/promote.sh vX.Y.Z beta` / `vX.Y.Z` (stable; needs green GitHub

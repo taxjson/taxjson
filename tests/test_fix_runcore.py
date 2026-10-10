@@ -817,7 +817,7 @@ class TestUnblendedBooksAreNotRunClean(unittest.TestCase):
     def test_per_account_runs_leave_run_clean_attention(self):
         from datetime import date
         from taxjson.lib.checklist import Ctx, d_run_clean
-        import tomllib
+        from taxjson.lib.tomlcompat import tomllib
         cfg_text = _CONFIG + "\n[accounts.cash]\ntype = \"taxable\"\n"
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, cfg_text)
@@ -924,7 +924,7 @@ class TestHoldingsTomlStatesItsCostBasis(unittest.TestCase):
     so."""
 
     def test_meta_names_the_basis(self):
-        import tomllib
+        from taxjson.lib.tomlcompat import tomllib
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, csv=_QT_HEADER + _MARGIN_CSV.splitlines(
                 True)[1])

@@ -116,8 +116,11 @@ class TestBankOfCanadaPrimary(_CacheCase):
 
     def test_output_format_and_source_column(self):
         out, err = io.StringIO(), io.StringIO()
+        # yfinance stands in present (a core install has none): the
+        # Yahoo fallback is the stub, never the library.
         with mock.patch.object(T, "fetch_boc", self.boc), \
                 mock.patch.object(T, "fetch_yahoo", self.yahoo), \
+                mock.patch.object(T, "yf", mock.MagicMock()), \
                 mock.patch.object(T, "fetch_boc_noon",
                                   lambda *_a: {}), \
                 mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": ""}), \
@@ -315,11 +318,34 @@ class TestNoPandasAtImport(unittest.TestCase):
         # Without yfinance the BoC path still works; a non-CAD target
         # refuses cleanly instead of a ModuleNotFoundError traceback.
         err = io.StringIO()
-        with mock.patch.object(T, "yf", None), redirect_stderr(err):
+        with mock.patch.object(T, "yf", None), redirect_stderr(err), \
+                mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": ""}):
             rc = T.main(["CAD", "USD"])
         self.assertEqual(rc, 1)
         self.assertIn("[fx] extra", err.getvalue())
         self.assertIn("pip install -e '.[fx]'", err.getvalue())
+
+    def test_offline_non_cad_target_reads_the_cache_without_yfinance(self):
+        # TAXJSON_OFFLINE serves the cache only, so no Yahoo library is
+        # needed: a USD-base project without the [fx] extra used to stop
+        # at "needs the [fx] extra" with every rate it needed cached.
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td) / "fx.json"
+            cache.write_text(json.dumps({
+                "CADUSD-2025-01-02": 0.7, "CADUSD-2025-01-03": 0.7,
+                "_coverage": {"yahoo:CADUSD": [["2025-01-02",
+                                                "2025-01-03"]]}}))
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(T, "yf", None), \
+                    mock.patch.object(T, "CACHE_FILE", str(cache)), \
+                    mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "1"}), \
+                    redirect_stdout(out), redirect_stderr(err):
+                rc = T.main(["CAD", "USD", "--start", "2025-01-02",
+                             "--end", "2025-01-03"])
+        self.assertEqual(rc, 0, err.getvalue())
+        self.assertNotIn("[fx] extra", err.getvalue())
+        self.assertIn("2025-01-03 12:00:00 CAD USD 0.7 yahoo",
+                      out.getvalue().splitlines())
 
 
 def _write(path, rows):

@@ -509,7 +509,7 @@ a channel's release; `release.sh` cuts a tag after the full gate;
 
 - `install.sh` — `main`, `newest`, `named`, `vernewer`, `--channel`: the one-line installer.
 - `channels.json` — `stable`, `beta`: where each channel points.
-- `scripts/release.sh` — `## Unreleased`, `CHANGELOG.md`, `scripts/ci.sh`, `scan_notes`, `gh release create`: cuts a release (CHANGELOG heading, version bump in both packages, full gate, tag, push, the GitHub release with scanned notes).
+- `scripts/release.sh` — `## Unreleased`, `CHANGELOG.md`, `scripts/ci.sh`, `scan_notes`, `gh release create`, `release_edits_only`, `--fresh-gate`, `--gate-max-age`: cuts a release (CHANGELOG heading, version bump in both packages, full gate — or a reused PASS of the same tree plus `ci.sh --release-edits` — tag, push, the GitHub release with scanned notes).
 - `scripts/promote.sh` — `die`, `channels.json`, `ci_gate`, `public_gate`, `undo_promote`: points a channel at a release (main = origin/main, the tag on origin/main, green CI forward).
 - `scripts/channels.sh` — `taxjson channels`: the channel page from a checkout.
 - `src/taxjson/lib/channels.py` — `read_channels`, `parse_channels`, `release_tags`, `status`, `render`, `dev_checkout`, `check_deployed`: `taxjson channels`, the checkout `promote` and `deploy` use, and deploy's version check.
@@ -519,10 +519,17 @@ a channel's release; `release.sh` cuts a tag after the full gate;
 ## The CI gate and repository checks
 
 `scripts/ci.sh` is the gate: lint, consistency, tax-rules, PII scan, the full
-suite (core and the fetch plugin) and the fuzzers. A push must see its result
-line PASS. The pre-push hook scans what a push would publish.
+suite (core and the fetch plugin, in an empty HOME, offline; the core suite
+in parallel), the extras-sensitive tests with the extras hidden, and the
+fuzzers. A push must see its result line PASS; a full PASS from a clean tree
+is recorded by tree hash for release.sh to reuse. The pre-push hook scans
+what a push would publish.
 
-- `scripts/ci.sh` — `stage`, `fuzz_run`, `--nightly`: the gate's stages.
+- `scripts/ci.sh` — `stage`, `finish`, `fuzz_run`, `--nightly`, `--serial`, `--release-edits`, `SUITE_ENV`, `stage no-extras`: the gate's stages.
+- `scripts/run_tests_parallel.py` — `discover_modules`, `plan`, `child_env`, `parse_result`, `_COLLECT`, `DURATIONS`, `SPLIT_OVER`: the suite on N processes (a process per module, its own TMPDIR and HOME, longest first, the count checked against discovery).
+- `scripts/gate-record.sh` — `gate_dir`, `write`, `find`, `FULL_MODES`: the PASS records by tree hash (`~/.cache/taxjson-gate`).
+- `scripts/ci_no_extras.sh` — `hide_extras`, `EXTRAS_TESTS`, `NONET`, `env -i`: the tests that touch an optional extra, run as a core install (no extras, empty HOME, no network).
+- `tests/_hermetic/__init__.py` — `install`, `rate_cache`, `SYNTHETIC_RATES`: the synthetic HOME (offline, made-up exchange rates) every test process runs in.
 - `scripts/check-consistency.sh` — `CHANGELOG`, `channels.json`: versions, CHANGELOG heading and channels agree.
 - `scripts/check-pii.sh` — `main`, `report`, `amount_filter`, `sin_filter`, `entropy_filter`, `CRED_RE`, `--diff`: the personal-data and secret scan (tree, diff, messages).
 - `scripts/check-public.sh` — `SPLIT_PY`, `gh api --paginate`, `check-pii.sh`: scans release notes, issues, pull requests and comments on GitHub (read-only).
@@ -555,4 +562,5 @@ Style tests build small synthetic projects and check every line printed.
 - `tests/test_output_style.py` — `TestWidth`, `TestWrapAndMessages`: the output style.
 - `tests/test_check_pii.py` — `TestTreeScan`, `TestDiffAndPush`: the PII scanner.
 - `tests/test_knowledge_pack.py` — `TestArchitectureMap`, `TestReferences`: every path and symbol this map names still exists.
+- `tests/test_fast_gate.py` — `TestPlan`, `TestRunner`, `TestGateRecord`, `TestReleaseReusesAPass`: the parallel runner, the PASS records and their reuse by release.sh.
 - `run_tests.sh` — `unittest`: runs the suite with the project venv.

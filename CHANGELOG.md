@@ -50,6 +50,40 @@
   option follows the pooled listing and is not specified foreign
   property, since a right to acquire shares of a Canadian-resident
   corporation is not; CRA's guidance does not address listed options.
+- Developers: the gate's test suite runs in parallel
+  (`scripts/run_tests_parallel.py`, standard library only): a process per
+  test module, each with its own temp folder and synthetic HOME, longest
+  first, `--jobs N` at a time (default: the CPU count, at most 16). It
+  fails unless every module passes and the tests run add up to the serial
+  discovery's count; nothing is retried. On a 20-core machine the suite
+  went from about 18 minutes to under 2. `scripts/ci.sh --serial` keeps
+  the one-process run.
+- Developers: `scripts/release.sh` reuses a full-gate PASS of the exact
+  tree it releases (recorded by `scripts/ci.sh` from a clean tree, same
+  Python, at most 7 days old — `--gate-max-age DAYS`) instead of running
+  the gate again, after proving its own edits changed only the version,
+  tag and date lines, and runs the checks that read those lines
+  (`scripts/ci.sh --release-edits`). `--fresh-gate` always runs the gate.
+
+## v0.26.1 (2026-10-09)
+
+### Fixed
+
+- tests: CI is hermetic again. GitHub's `tests` workflow failed on every
+  push while the local gate passed, because the suite read the
+  developer's own exchange-rate cache, network and optional extras. Every
+  test process now runs in a synthetic HOME with made-up exchange rates,
+  offline; the style projects' build cleans up after a failure instead of
+  hiding it behind "File exists"; tests that need pandas skip without it;
+  tests run on Python 3.9 and 3.10 again (the `tomli` fallback, argparse's
+  older "optional arguments:" heading, no `-P`); and the gate runs the
+  suite in an empty HOME and the extras-sensitive tests with every extra
+  hidden (`scripts/ci_no_extras.sh`), so it can no longer pass while CI
+  fails.
+- Offline (`TAXJSON_OFFLINE=1`), a USD-base project installed without the
+  `[fx]` extra stopped at "taxjson-to-base-curr needs the [fx] extra for
+  a USD target" even with every rate it needed cached; offline the rates
+  now come from the cache without it.
 
 ## v0.26.0 (2026-10-09)
 

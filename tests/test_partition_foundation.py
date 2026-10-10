@@ -222,7 +222,7 @@ class TestSettingOwnership(unittest.TestCase):
                                  r["canada"].stderr)
                 self.assertNotIn("Canada-only", r["canada"].stderr)
                 # validate_config (taxjson run) says the same.
-                import tomllib
+                from taxjson.lib.tomlcompat import tomllib
                 cfg = tomllib.loads((p["usa"] / "taxjson.toml").read_text())
                 with self.assertRaises(SystemExit) as cm:
                     validate_config(cfg)

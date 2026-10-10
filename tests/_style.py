@@ -31,6 +31,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import _hermetic  # noqa: F401  (a synthetic HOME, offline: tests/_hermetic)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "style"
@@ -45,6 +47,7 @@ _PRICES = {"QZQ": 22.0, "SAMPA": 31.0, "SAMPB": 10.0, "NVDA": 120.0,
 _CRYPTO = {"BTC": 90000.0, "ETH": 3000.0}
 
 _built = {}
+_failed = {}            # (country, pending) -> the build's error
 _tmp = None
 
 
@@ -136,6 +139,10 @@ def _build(country: str, pending: bool) -> Project:
         _tmp = tempfile.mkdtemp(prefix="taxjson_style_")
         atexit.register(shutil.rmtree, _tmp, True)
     root = Path(_tmp) / f"{country}{'_pending' if pending else ''}"
+    # A build that failed half-way (project() re-raises its error for
+    # every later test) must not leave a folder that turns the next
+    # attempt into a FileExistsError hiding the real failure.
+    shutil.rmtree(root, ignore_errors=True)
     shutil.copytree(FIXTURES / country, root)
     p = Project(root, country)
     _check(p.run("run", "--no-input"), "run (pending)")
@@ -167,8 +174,16 @@ def project(country: str = "canada", pending: bool = False) -> Project:
     """The built synthetic project (built once per process; treat it as
     read-only, or copy p.root first for a command that writes)."""
     key = (country, pending)
+    if key in _failed:
+        raise RuntimeError(f"style project {country}"
+                           f"{' (pending)' if pending else ''} failed to "
+                           f"build earlier in this process:\n{_failed[key]}")
     if key not in _built:
-        _built[key] = _build(country, pending)
+        try:
+            _built[key] = _build(country, pending)
+        except Exception as exc:
+            _failed[key] = f"{type(exc).__name__}: {exc}"
+            raise
     return _built[key]
 
 

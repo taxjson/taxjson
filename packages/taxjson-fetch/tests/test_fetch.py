@@ -200,10 +200,20 @@ class TestFlex(unittest.TestCase):
             "ClientAccountID,CurrencyPrimary\nU1,USD\n"))
 
 
+def _online_env(**drop):
+    """os.environ without TAXJSON_OFFLINE (the core's test helpers set
+    it for every test: tests/_hermetic), so `taxjson fetch` reaches the
+    argument and token checks these tests are about; none of them gets
+    as far as a download."""
+    return {k: v for k, v in os.environ.items()
+            if k != "TAXJSON_OFFLINE" and k not in drop}
+
+
 def _cli(root, *args):
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
-         *args], cwd=REPO_ROOT, capture_output=True, text=True)
+         *args], cwd=REPO_ROOT, capture_output=True, text=True,
+        env=_online_env())
 
 
 class TestFetchCli(unittest.TestCase):
@@ -232,9 +242,7 @@ class TestFetchCli(unittest.TestCase):
         self.assertIn("no [accounts.ghost]", r.stderr)
 
     def test_missing_token_is_a_clean_error(self):
-        import os
-        env = {k: v for k, v in os.environ.items()
-               if k != "QUESTRADE_REFRESH_TOKEN"}
+        env = _online_env(QUESTRADE_REFRESH_TOKEN=None)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             # Hermetic token resolution: without this, a developer's
