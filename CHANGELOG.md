@@ -29,6 +29,13 @@
   full list with every step's state, commands and why. One progress line
   instead of one per check.
 
+## v0.27.2 (2026-10-10)
+
+### Fixed
+
+- Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
+
+
 ## v0.27.1 (2026-10-10)
 
 ### Changed
