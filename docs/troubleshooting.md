@@ -561,6 +561,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `listed_files`, `claims it`
 
+### `tjs sanity`: "VQQ.US MISSING_IN_HOLDINGS -500 0" for a position whose shares bought before the data were sold (covered by missing history)
+- **Check:** `tjs find-missing-history` lists the symbol as covered (a `missing_history.json` entry or a `.tt` `OPENING ... cost=unknown` line); the holdings snapshot is dated before the books' last row (sanity compares the books' positions on its date); the dividend check may also list a dividend "on a share count the books did not hold".
+- **Cause:** sanity rebuilt the books' positions on the snapshot's date from the merged rows only (work/<account>_base.json), without the missing-history openings the gains run adds, so the sale of those units read as a short.
+- **Fix:** upgrade: every positions view uses the books' own positions, the missing-history units included (`taxjson sanity`, the end-of-run holdings check, the dividend share-count check). A sale with no purchase that missing history does not cover is still flagged.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/positions_check.py` — `book_rows`; `src/taxjson/lib/missing_history.py` — `openings_from_log`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`
+
 ### `tjs sanity`: "QZD.U.TO MISSING_IN_TAXJSON" (or `QTY_MISMATCH` on QZD.TO) for a listing the run joined by its transfer journal
 - **Check:** the run's console said "joined as one security by their transfer journal: QZD.U.TO ↔ QZD.TO …" and `work/ticker.map.effective` has the `TOBASE` / `JOURNAL` line; `ticker.map` itself has no line for the pair. The books hold the position under one symbol, the broker lists it under both.
 - **Cause:** `tjs sanity` folded the broker's symbols with `ticker.map` only, not with the listings the run joined itself, so the broker's other-listing position was compared on its own.

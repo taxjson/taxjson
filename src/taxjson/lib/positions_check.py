@@ -66,6 +66,27 @@ def load_base_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
     return [r for r in (rows or []) if isinstance(r, dict)]
 
 
+def book_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
+    """The rows the account's books hold positions from: its merged rows
+    (load_base_rows) plus the missing-history openings its gains run
+    booked (missing_history.json entries and .tt OPENING cost=unknown
+    lines: units bought before the data, which no row of the merged
+    books carries — lib/missing_history.openings_from_log). Every view
+    of the books' positions on a date reads these, so it holds the
+    same units the books do."""
+    from taxjson.lib.missing_history import openings_from_log
+    rows = load_base_rows(cache, account)
+    for name in (f"{account}_gains.json", f"{account}_gains_wash.json"):
+        p = Path(cache) / name
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            return rows + openings_from_log(doc, account)
+    return rows
+
+
 def load_inventory(path: Path) -> Dict[str, Dict[str, Any]]:
     """{symbol: inventory entry} of a gains file (summed per symbol)."""
     try:

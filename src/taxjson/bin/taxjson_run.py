@@ -16901,7 +16901,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
 
     def _rows_of(acct: str) -> List[Dict[str, Any]]:
         if acct not in base_rows:
-            base_rows[acct] = PC.load_base_rows(cache, acct)
+            # (with the missing-history openings the books hold:
+            # units bought before the data — PC.book_rows)
+            base_rows[acct] = PC.book_rows(cache, acct)
         return base_rows[acct]
 
     for grp in ordered:

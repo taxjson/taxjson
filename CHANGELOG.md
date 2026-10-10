@@ -57,6 +57,12 @@
   in the shared layout the year folders' files are merged — entries the
   years disagree on are listed, and written only with `migrate --write`
   (the newest year's view); entries that open nothing are dropped.
+- Every positions view holds the units bought before the data: `taxjson
+  sanity` (and the run's holdings check, and its dividend share-count
+  check) compared the broker's snapshot with positions rebuilt without the
+  missing-history openings, so the sale of those units read as a short
+  (`MISSING_IN_HOLDINGS` with a negative quantity). An uncovered sale is
+  still flagged.
 - In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
   TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), the
   one the books carry: the two are one listing.

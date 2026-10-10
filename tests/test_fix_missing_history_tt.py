@@ -15,6 +15,10 @@ A. `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` in an
    folders' files (agreeing entries one line; disagreeing ones listed,
    written with --write as the newest year sizes them; entries that open
    nothing dropped) — and the books stay the same.
+B. `taxjson sanity` compares the broker's positions with the books'
+   positions INCLUDING the missing-history units (lib/positions_check.
+   book_rows): a pre-history sale covered by missing history is no
+   longer a false MISSING_IN_HOLDINGS; an uncovered one still is.
 """
 import contextlib
 import io
@@ -360,6 +364,48 @@ class TestMigrate(unittest.TestCase):
         # holds unknown-cost units through both): the books are the same.
         for y in (2024, 2025):
             self.assertEqual(_filing(top / str(y)), before[y])
+
+
+class TestSanityHoldsTheUnits(unittest.TestCase):
+    """B: the books' positions on a snapshot's date include the units
+    bought before the data (owner: pre-history shares sold, broker 0)."""
+
+    _TT = ("BUYSELL 2025-01-10 10:00:00 ZZB.US 10 USD 10.00 101.00 1.00\n"
+           "BUYSELL 2025-02-01 10:00:00 QZQ.US -60 USD 20.00 1199.00 1.00\n"
+           "BUYSELL 2025-06-01 10:00:00 ZZB.US 5 USD 10.00 51.00 1.00\n")
+
+    def _proj(self, covered):
+        d = Path(private_dir()) / "p"
+        (d / "inputs" / "margin").mkdir(parents=True)
+        (d / "inputs" / "margin" / "t.tt").write_text(self._TT)
+        if covered:
+            (d / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2025-01-09 QZQ.US 60 cost=unknown\n")
+        (d / "taxjson.toml").write_text(
+            _toml("usa", 2025).replace("2024", "2025"))
+        (d / "holdings").mkdir()
+        # The broker's snapshot of March 31: QZQ sold out, ZZB 10.
+        (d / "holdings" / "margin_holdings.toml").write_text(
+            '[meta]\naccount = "margin"\nas_of = "2025-03-31"\n\n'
+            '[[holding]]\nsymbol = "ZZB.US"\nquantity = 10\n')
+        _ok(self, tjs("-C", str(d), "run", "--no-input"))
+        return d
+
+    @rule("US-BASIS-04")
+    def test_covered_sale_is_no_difference(self):
+        d = self._proj(covered=True)
+        r = tjs("-C", str(d), "sanity", "--json")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout).get("discrepancies"), [])
+
+    def test_uncovered_sale_is_still_flagged(self):
+        d = self._proj(covered=False)
+        r = tjs("-C", str(d), "sanity", "--json")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        rows = json.loads(r.stdout)["discrepancies"]
+        self.assertEqual([(x["symbol"], x["issue"], x["taxjson_qty"])
+                          for x in rows],
+                         [("QZQ.US", "MISSING_IN_HOLDINGS", -60.0)])
 
 
 if __name__ == "__main__":
