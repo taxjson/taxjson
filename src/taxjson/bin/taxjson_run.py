@@ -21291,7 +21291,8 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                    "pools_year_end": ledger.get("pools_year_end") or {},
                    "currency": base, "year": year})
         return
-    print(FX.render_report(ledger, base, year, country, verdict))
+    print((FX.render_report if _details(args) else FX.render_brief)(
+        ledger, base, year, country, verdict))
     if getattr(args, "events", False) and ledger["events"]:
         print()
         print("EVENTS")

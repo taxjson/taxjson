@@ -689,6 +689,7 @@ class TestViews(unittest.TestCase):
             "import taxjson.bin.taxjson_run as R\n"
             "import taxjson.bin.taxjson_fx_cash as FX\n"
             "FX.render_report = lambda *a, **k: 'REPORT'\n"
+            "FX.render_brief = lambda *a, **k: 'REPORT'\n"
             "R._fx_cash_doc = lambda root, cache: ({'events': [{"
             "'date': '2025-03-03', 'account': 'margin', 'currency': 'USD',"
             " 'units': 61234.57, 'rate': 1.3579, 'gain': 456.7,"
