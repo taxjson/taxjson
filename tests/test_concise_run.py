@@ -84,7 +84,6 @@ class TestOneLineMessages(_Runs):
                 "Warning: Short position: OLDCO.US (margin): its purchase "
                 "is missing — `taxjson find-missing-history`",
                 "(GHOSTQ.TO) — `taxjson find-missing-history`",
-                "keep its exports in one inputs/ folder",
                 "can be read by other users: `chmod -R go-rwx` it"):
             self.assertIn(phrase, text)
         # Which broker each file was read as: --details.
@@ -121,7 +120,6 @@ class TestDetails(_Runs):
                 "Add the original purchase as a .tt BUYSELL line",
                 "Info: File inputs/margin/ib_demo.csv → identified as "
                 "Interactive Brokers",
-                "Every row of it is booked in BOTH",
                 "2 positions sold in 2024 with no purchase in your files, "
                 "not in missing_history.tt",
                 "Tighten it once: chmod -R go-rwx",

@@ -65,8 +65,13 @@ class TestFiledYearLock(unittest.TestCase):
                                           "17.00,1700.00,0.00,1700.00"))
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-            # The full run auto-detects the drift (warn-only).
+            # The full run auto-detects the drift (warn-only): one line
+            # naming the command; the figures with --details
+            # (docs/output-style.md, "Essentials first").
             self.assertIn("DRIFTED", r.stderr)
+            self.assertIn("close-year --force", r.stderr)
+            r = _run_cli(root, "run", "--no-input", "--details")
+            self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("+200.00", r.stderr)
             # Explicit check exits 1.
             r = _run_cli(root, "check-filed")

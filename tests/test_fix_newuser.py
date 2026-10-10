@@ -538,8 +538,10 @@ class TestProductText(unittest.TestCase):
         for country, tobase in (("canada", True), ("usa", False)):
             with self.subTest(country=country):
                 top = _tmp(self)
-                r = _cli("init", "--country", country, "--year", "2025",
-                         str(top))
+                # The next-year line is a --details line (essentials
+                # first, docs/output-style.md).
+                r = _cli("init", "--details", "--country", country,
+                         "--year", "2025", str(top))
                 self.assertEqual(r.returncode, 0, r.stderr)
                 flat = " ".join(r.stdout.split())
                 self.assertIn("copies this year's taxjson.toml and "

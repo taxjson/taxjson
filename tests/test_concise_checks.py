@@ -113,12 +113,12 @@ class TestCloseYear(unittest.TestCase):
         for country in ("canada", "usa"):
             with self.subTest(country=country):
                 w = self._copy(country)
-                r = w.run("close-year", "--force", **W)
+                r = w.run("close-year", "--yes", "--force", **W)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_concise(self, r.stdout, r.stderr)
                 self.assertIn("Realized:", r.stdout)
                 self.assertNotIn("check-filed` now guards", r.stdout)
-                d = w.run("close-year", "--force", "--details", **W)
+                d = w.run("close-year", "--yes", "--force", "--details", **W)
                 self.assertEqual(d.returncode, 0, d.stderr)
                 self.assertIn("`taxjson check-filed` now guards it",
                               _flat(d.stdout))
@@ -165,7 +165,7 @@ class TestYears(unittest.TestCase):
         top = M.multi("canada", years=(2024, 2025))
         for y in (2024, 2025):
             M.run_ok(self, top / str(y))
-        r = M.tjs("-C", str(top / "2024"), "close-year", "--force")
+        r = M.tjs("-C", str(top / "2024"), "close-year", "--yes", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         (top / "2024" / "ticker.map").write_text("GLOBAL ABCX.US ABCX.TO\n")
         import subprocess

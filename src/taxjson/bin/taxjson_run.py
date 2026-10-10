@@ -24555,6 +24555,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         # Commands to copy: their own lines, never wrapped.
         print(f"  3. taxjson -C {_shlex.quote(str(root))} run")
         print(f"  4. taxjson -C {_shlex.quote(str(root))} checklist")
+        _init_filing_hint(_year, first_year, country, years, top)
         if country == "usa":
             _say("note", f"{_US_EXPERIMENTAL_NOTE[0]}: treat the output "
                  f"as a draft", prog=f"{_PROG} init")
@@ -24596,15 +24597,23 @@ def cmd_init(args: argparse.Namespace) -> None:
                                 "reads)" if country == "canada" else "")
                              + ".", indent="  ", hang="  "):
             print(_ln)
-    if _year is None and date_cls.today().month <= 4:
-        # January to April: most people file the year that just ended
-        # (owner: the default stays the calendar year).
+    _init_filing_hint(_year, first_year, country, years, top)
+    if country == "usa":
+        _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
+
+
+def _init_filing_hint(year_given: Optional[int], first_year: int,
+                      country: str, years: bool, top: Path) -> None:
+    """January to April, with no --year: one line naming the init
+    command for last year's folder — most people file the year that just
+    ended (owner: the default stays the calendar year). Printed in the
+    default view and with --details."""
+    import shlex as _shlex
+    if year_given is None and date_cls.today().month <= 4:
         print(f"  Filing {first_year - 1} now? Run `{_PROG} init --country "
               f"{country} --year {first_year - 1}`"
               + (f" in {_shlex.quote(str(top))}" if years else "")
               + " for its folder.")
-    if country == "usa":
-        _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
 
 
 def _init_demo(args: argparse.Namespace) -> None:
