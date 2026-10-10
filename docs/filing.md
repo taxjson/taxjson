@@ -21,7 +21,9 @@ steps one at a time; `--quick` skips the slow detectors.
 ## 1. Freeze the inputs
 
 - [ ] **Full-year broker activity plus January of the next year** in
-      every `inputs/<account>/` folder — `taxjson fetch` (the
+      every account's folder of exports (`inputs/<account>/`; with one
+      folder of exports for every year, `../inputs/<account>/` beside the
+      year folders) — `taxjson fetch` (the
       taxjson-fetch plugin) where an account is configured for it,
       exports for the rest. December trades settle
       in January and option closes after year end change the year's
@@ -77,9 +79,13 @@ steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson crypto-sends` — every crypto send that did not arrive in
       another of your crypto accounts is decided: `self` (your own wallet),
       `gift` or `payment` (a disposition at fair value). `taxjson run`
-      asks at a terminal; headless, `--set ID=...`. The gifts and
-      payments are written to `inputs/<account>/crypto_sends.tt` (`--write`,
-      or the next run); commit it with `sends.json`. Stablecoin gifts
+      asks at a terminal; headless, `--set ID=...`. Your decisions are
+      kept in `inputs/<account>/sends.json` — commit it. The gifts and
+      payments become sales in a generated `crypto_sends.tt` (`--write`,
+      or the next run): in `inputs/<account>/` of a single-folder project,
+      in the year's `work/crypto_sends/<account>/` when the year folder
+      shares one folder of exports (a run never writes the shared
+      folder); never edit it. Stablecoin gifts
       show a currency gain instead of a sale — add it to the `fx-cash`
       figure.
 - [ ] `taxjson audit` — every disposition traced and tied, zero mismatched.
@@ -108,7 +114,10 @@ steps one at a time; `--quick` skips the slow detectors.
 
 ## 3. Reconcile to what the CRA already has
 
-- [ ] **T5008 slips** from every broker, as CSVs in `inputs/slips/`:
+- [ ] **T5008 slips** from every broker, as CSVs in the year's own
+      `inputs/slips/` (in a year folder: `2025/inputs/slips/`, not the
+      shared exports folder — slips belong to one tax year; how to get
+      them: [brokers.md, "Tax slips"](brokers.md#tax-slips)):
       `taxjson reconcile-slips inputs/slips/*.csv` (all brokers' slips
       together) exits clean. The CRA matches Schedule 3 proceeds against
       these; this is the step that prevents a review letter.
