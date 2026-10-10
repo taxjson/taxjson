@@ -76,7 +76,7 @@ class TestDistinctBareUsTicker(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = f3_project(td, "p", country=country,
                               ticker_map="DISTINCT ZZX ZZX.TO\n")
-            r = tj(root, "run", "--no-input", "--strict")
+            r = tj(root, "run", "--no-input", "--details", "--strict")
             text = _flat(console(r))
             self.assertNotIn(f"possible {kind} across listings", text)
             self.assertIn("ticker.map:1: `DISTINCT ZZX ZZX.TO` is read as "
@@ -101,7 +101,7 @@ class TestDistinctBareUsTicker(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = f3_project(td, "p", country=country,
                               ticker_map="TOBASE ZZX ZZX.TO\n")
-            r = tj(root, "run", "--no-input")
+            r = tj(root, "run", "--no-input", "--details")
             text = _flat(console(r))
             self.assertIn("Warning: ticker.map:1: `TOBASE ZZX ZZX.TO` "
                           "names ZZX, a symbol the books do not hold", text)
@@ -180,7 +180,7 @@ class TestCdrIsItsOwnRoot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = projects_both(td, files=files,
                                  usa={"source_currencies": ["CAD"]})[country]
-            r = cli(root, "run", "--no-input")
+            r = cli(root, "run", "--no-input", "--details")
             out = _flat(r.stdout + r.stderr)
             self.assertNotEqual(r.returncode, 0, out[-2000:])
             self.assertIn("join two listings that nothing shows are one "
@@ -250,7 +250,7 @@ class TestSeparateJournalLine(unittest.TestCase):
             root = projects_both(td, files=files,
                                  usa={"source_currencies": ["CAD"]}
                                  )[country]
-            r = cli(root, "run", "--no-input")
+            r = cli(root, "run", "--no-input", "--details")
             out = _flat(r.stdout + r.stderr)
             self.assertEqual(r.returncode, 0, out[-3000:])
             rec = DE.read_state(root / "work" / DE.STATE)["journals"]
@@ -415,7 +415,7 @@ class TestFormatMapKeepsEveryLate(unittest.TestCase):
                            for a in accts)
         root = projects_both(td, accounts=accounts,
                              files=self._files(x, cur, accts))[country]
-        r = cli(root, "run", "--no-input", "--strict")
+        r = cli(root, "run", "--no-input", "--details", "--strict")
         self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr)[-3000:])
         return root, x
 
@@ -436,7 +436,7 @@ class TestFormatMapKeepsEveryLate(unittest.TestCase):
                           _flat(w.stdout + w.stderr))
             for a in ("dd", "ee", "aa"):
                 self.assertFalse((root / f"inputs/{a}/renames.tt").exists())
-            r = cli(root, "run", "--no-input", "--strict")
+            r = cli(root, "run", "--no-input", "--details", "--strict")
             self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr))
             self.assertEqual(self._sum(root), before)
 
@@ -463,11 +463,11 @@ class TestFormatMapKeepsEveryLate(unittest.TestCase):
             # Adding the line it names to that account settles it.
             acct = "cc" if "add `" + line + "` to inputs/cc" in out else "bb"
             (root / f"inputs/{acct}/own.tt").write_text(line + "\n")
-            r = cli(root, "run", "--no-input", "--strict")
+            r = cli(root, "run", "--no-input", "--details", "--strict")
             self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr))
             w = cli(root, "format-map", "--write", "--no-backup")
             self.assertEqual(w.returncode, 0, _flat(w.stdout + w.stderr))
-            r = cli(root, "run", "--no-input", "--strict")
+            r = cli(root, "run", "--no-input", "--details", "--strict")
             self.assertEqual(r.returncode, 0, _flat(r.stdout + r.stderr))
             self.assertEqual(self._sum(root), before)
 
@@ -503,7 +503,7 @@ class TestDripPricedInTheOtherCurrency(unittest.TestCase):
                 td, year=2026, files={"inputs/margin/q.csv": csv},
                 canada={"source_currencies": ["USD"]},
                 usa={"source_currencies": ["CAD"]})[country]
-            r = cli(root, "run", "--no-input")
+            r = cli(root, "run", "--no-input", "--details")
             out = _flat(r.stdout + r.stderr)
             self.assertEqual(r.returncode, 0, out[-3000:])
             rows = []
@@ -573,7 +573,7 @@ class TestReinvestmentBooksTheHeldListing(unittest.TestCase):
                 '"sheltered"\n', files={"inputs/lira/q.csv": _ISSUE3},
                 canada={"source_currencies": ["USD"]},
                 usa={"source_currencies": ["CAD"]})[country]
-            r = cli(root, "run", "--no-input")
+            r = cli(root, "run", "--no-input", "--details")
             out = _flat(r.stdout + r.stderr)
             self.assertEqual(r.returncode, 0, out[-3000:])
             self.assertNotIn("Short position", out)

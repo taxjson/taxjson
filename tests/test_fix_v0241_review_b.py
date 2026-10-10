@@ -109,7 +109,7 @@ class TestIdNamedExports(unittest.TestCase):
             for name in ("activity.csv", "U5550001_2026.csv"):  # pii-ok
                 root = make(tmp, name.split(".")[0], 2026,
                             {f"margin/{name}": ib_statement()})
-                text = flat(console(tj(root, "run", "--no-input")))
+                text = flat(console(tj(root, "run", "--no-input", "--details")))
                 self.assertIn("Warning: Interactive Brokers exports for "
                               "margin end 2026-06-30 with open positions "
                               "(QZN.US 250)", text, name)
@@ -125,7 +125,7 @@ class TestIdNamedExports(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = make(tmp, "qt", 2025, {"margin/55500001.csv":  # pii-ok
                                           QT_HEAD + rows})
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("Questrade exports for margin end 2025-06-02 with "
                           "open positions (ZZD.TO 100, ZZE.TO 10)", text)
 
@@ -139,7 +139,7 @@ class TestIdNamedExports(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = make(tmp, "side", 2025, {"margin/55500001.csv":  # pii-ok
                                             QT_HEAD + rows})
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertNotIn("exports for margin end", text)
             self.assertEqual(gaps(root, date(2026, 3, 1)), [])
 
@@ -173,7 +173,7 @@ class TestTobaseTransferPair(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             TB._project(root, "canada", "taxable", TB._Run.MAP, True)
-            r = TB._run(root, "run", "--no-input")
+            r = TB._run(root, "run", "--no-input", "--details")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             self.assertNotIn("Questrade exports for",
                              flat(r.stdout + r.stderr))
@@ -189,7 +189,7 @@ class TestNorbertsGambitAside(unittest.TestCase):
     def test_journal_legs_meet_the_joined_listing(self):
         with tempfile.TemporaryDirectory() as td:
             root = JB._qt_project(td, None)          # transfers kept aside
-            r = JB._run(root, "run", "--no-input")
+            r = JB._run(root, "run", "--no-input", "--details")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             self.assertNotIn("exports for margin end",
                              flat(r.stdout + r.stderr))
@@ -212,7 +212,7 @@ class TestWebullSummaryBesideAnUnreadableEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = make(tmp, "wb", 2025, {"margin/wb_2024.csv": summary,
                                           "margin/wb_2025.csv": current})
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertNotIn("Webull exports for margin end 2024-12-31",
                              text)
             self.assertEqual(gaps(root, date(2026, 3, 1)), [])
@@ -231,7 +231,7 @@ class TestBrokersOwnPositions(unittest.TestCase):
             "margin/rbc.csv": rbc_export("Apr 28, 2026", RBC_ROWS),
             "margin/margin_start.tt": OPENING_TT,
             "margin/ib_2026.csv": ib_statement("December 31, 2026")})
-        cls.r = tj(cls.root, "run", "--no-input")
+        cls.r = tj(cls.root, "run", "--no-input", "--details")
         cls.text = flat(console(cls.r))
 
     @classmethod
@@ -255,7 +255,7 @@ class TestBrokersOwnPositions(unittest.TestCase):
         shutil.copytree(self.root, d)
         (d / "inputs" / "margin" / "rbc.csv").write_text(rbc_export(
             "Apr 28, 2026", RBC_ROWS.split("\n", 1)[1]))
-        text = flat(console(tj(d, "run", "--no-input")))
+        text = flat(console(tj(d, "run", "--no-input", "--details")))
         self.assertNotIn("RBC Direct Investing exports", text)
         self.assertEqual(gaps(d, date(2026, 10, 8)), [])
 
@@ -319,7 +319,7 @@ class TestExportCoverageMarkPerGap(unittest.TestCase):
             root = make(tmp, "mark", 2026, {
                 "margin/rbc.csv": rbc_export("Apr 28, 2026", RBC_ROWS),
                 "margin/margin_start.tt": OPENING_TT})
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("No RBC Direct Investing activity in margin after "
                           "2026-04-28? Mark `taxjson checklist --done "
                           "export-coverage`", text)
@@ -336,14 +336,14 @@ class TestExportCoverageMarkPerGap(unittest.TestCase):
                              ["margin|rbc_direct|2026-04-28"])
             res, = cl.evaluate(ctx, only=["export-coverage"])
             self.assertEqual(res.effective, "done")
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertNotIn("Warning: RBC Direct Investing exports", text)
             self.assertIn("marked done in checklist.json (export-coverage)",
                           text)
             # A later export, still short: a new end, a new question.
             (root / "inputs" / "margin" / "rbc.csv").write_text(rbc_export(
                 "Jun 30, 2026", RBC_ROWS))
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("Warning: RBC Direct Investing exports for margin "
                           "end 2026-06-30", text)
             res, = cl.evaluate(ctx, only=["export-coverage"])
@@ -373,7 +373,7 @@ class TestOptionMarkPerContract(unittest.TestCase):
     def test_a_new_contract_is_asked_again(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make(tmp, "opt", 2026, {"margin/book.tt": WRITE_BUYBACK})
-            tj(root, "run", "--no-input")
+            tj(root, "run", "--no-input", "--details")
             tj(root, "checklist", "--done", "option-boundary", check=False)
             ctx = ctx_of(root, 2026, date(2026, 10, 1))
             res, = cl.evaluate(ctx, only=["option-boundary"])
@@ -382,7 +382,7 @@ class TestOptionMarkPerContract(unittest.TestCase):
             other = WRITE_BUYBACK.replace("ZZQ261218C00050000",
                                           "ZZR261218C00060000")
             (root / "inputs" / "margin" / "more.tt").write_text(other)
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("Warning: 1 option contract you wrote in 2025 and "
                           "closed in 2026 is on transition close timing",
                           text)
@@ -530,7 +530,7 @@ class TestListPositionalDate(unittest.TestCase):
             "margin/book.tt":
                 "BUYSELL 2026-01-05 10:00:00 ZZA.TO 10 CAD 20 200\n"
                 "BUYSELL 2026-03-02 10:00:00 ZZA.TO -4 CAD 25 100\n"})
-        tj(cls.root, "run", "--no-input")
+        tj(cls.root, "run", "--no-input", "--details")
 
     @classmethod
     def tearDownClass(cls):

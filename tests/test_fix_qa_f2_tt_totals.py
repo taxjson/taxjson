@@ -23,7 +23,7 @@ class TestF2TtTotals(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = project(cls.tmp.name, "f2", {"margin/book.tt": F2_BOOK})
-        cls.r = tj(cls.root, "run", "--no-input")
+        cls.r = tj(cls.root, "run", "--no-input", "--details")
 
     @classmethod
     def tearDownClass(cls):
@@ -50,13 +50,13 @@ class TestF2TtTotals(unittest.TestCase):
     def test_cached_run_still_warns(self):
         # Read from the .diag on every run, the .tt converted again or
         # not.
-        r = tj(self.root, "run", "--no-input")
+        r = tj(self.root, "run", "--no-input", "--details")
         self.assertIn("book.tt:1: a .tt line's total 1100.00", console(r))
 
     def test_strict_stops(self):
         d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
         shutil.copytree(self.root, d)
-        r = tj(d, "run", "--no-input", "--strict", check=False)
+        r = tj(d, "run", "--no-input", "--details", "--strict", check=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("--strict: margin: inputs/margin/book.tt has 1 "
                       "line(s) whose total is not qty x price +/- fee",
@@ -85,7 +85,7 @@ class TestF2Thresholds(unittest.TestCase):
     def _run(self, book):
         with tempfile.TemporaryDirectory() as tmp:
             root = project(tmp, "p", {"margin/book.tt": book})
-            r = tj(root, "run", "--no-input")
+            r = tj(root, "run", "--no-input", "--details")
             return console(r)
 
     def test_five_times_total(self):

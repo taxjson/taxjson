@@ -30,8 +30,13 @@ class TestF4ShortClosedInYear(unittest.TestCase):
                       "booked as short sales closed by a later purchase",
                       text)
         self.assertNotIn("in no total", text)
-        self.assertIn("Their gain is in the totals", text)
         self.assertEqual(out.lint(r.stdout), [])
+        # The note's detail: with --details (the default console shows
+        # each message as one line, Essentials first).
+        rd = tj(root, "run", "--no-input", "--details")
+        self.assertIn("Their gain is in the totals", rd.stdout)
+        self.assertNotIn("in no total", rd.stdout)
+        self.assertEqual(out.lint(rd.stdout), [])
         fm = tj(root, "find-missing-history", check=False).stdout
         row = [ln for ln in fm.splitlines() if ln.startswith("ZZN.TO")]
         self.assertTrue(row, fm)
@@ -51,7 +56,7 @@ class TestF4ShortClosedInYear(unittest.TestCase):
     def test_open_short_keeps_in_no_total(self):
         root = project(self.tmp.name, "open", {"margin/book.tt": F4_BOOK.split(
             "\n")[0] + "\n"})
-        r = tj(root, "run", "--no-input")
+        r = tj(root, "run", "--no-input", "--details")
         self.assertIn("their gain is in no total",
                       " ".join(r.stdout.split()))
 

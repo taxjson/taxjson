@@ -425,6 +425,31 @@ def _echo_captured(line: str, indent: str = "  ", file=None,
             _ECHO_SKIP[0] = False
     if _w(file) > 0:
         indent, source = "", False
+    if _run_concise(file):
+        # One line per message (Essentials first): the continuation
+        # lines and the detail wait for `taxjson run --details` — an
+        # error keeps its detail (the fix).
+        from taxjson.lib.out import relabel as _relabel
+        if is_continuation(line):
+            if _ECHO_LAST_ERROR[0]:
+                show(console_lines(line, indent, stream=file,
+                                   source=source), file, cont=True)
+            else:
+                _DETAILS_HIDDEN[0] = True
+            return
+        _ECHO_LAST_ERROR[0] = _relabel(line.strip()).startswith("Error:")
+        if _ECHO_LAST_ERROR[0]:
+            show(console_lines(line, indent, stream=file, source=source),
+                 file)
+            return
+        lines = console_lines(line, indent, stream=file, source=source,
+                              concise=True)
+        full = console_lines(line, indent, stream=file, source=source)
+        if lines != full:
+            _DETAILS_HIDDEN[0] = True
+        if lines:
+            show(lines, file)
+        return
     show(console_lines(line, indent, stream=file, source=source), file,
          cont=is_continuation(line))
 
@@ -485,19 +510,56 @@ def _wrote(path: Path, root: Path, what: str = "summary") -> None:
     _step(f"Writing {what} {shown}{'/' if path.is_dir() else ''}")
 
 
+def _run_concise(file=None) -> bool:
+    """True on `taxjson run`'s console shown to a person without
+    --details: each message is one line (docs/output-style.md,
+    Essentials first); captured output (width 0) keeps every byte."""
+    from taxjson.lib.out import width as _w
+    return (_CURRENT_CMD == "run" and not _CURRENT_DETAILS
+            and _w(sys.stdout if file is None else file) > 0)
+
+
+# Set when the run's console left a message's detail out (_run_concise):
+# the closing lines then name `taxjson run --details`.
+_DETAILS_HIDDEN = [False]
+# The last message _echo_captured showed was an error (its continuation
+# lines are shown whole).
+_ECHO_LAST_ERROR = [False]
+
+
 def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
-         indent: str = "", file=None) -> None:
+         indent: str = "", file=None, short: Optional[str] = None,
+         cmd: Optional[str] = None) -> None:
     """A run-console message in the house style: `[<prog>: ]<kind>:
     <headline>` and indented `details` (stderr by default). kind: note |
     warning | attention | error. `indent` nests the captured form
     (width 0) only: shown to a person the label starts the line, its
     continuations are flush-left and a message of more than one line is
-    followed by one blank line (The run's console)."""
-    from taxjson.lib.stage_msg import message_lines
-    from taxjson.lib.out import show, width as _w
+    followed by one blank line (The run's console). On the run's
+    console without --details (_run_concise) a note or warning is one
+    line: `short` when given, else its headline and the command its
+    detail names, or `cmd` (lib/stage_msg.concise_line); an error keeps
+    its detail (the fix)."""
+    from taxjson.lib.stage_msg import concise_line, message_lines
+    from taxjson.lib.out import label, show, width as _w, wrap
     file = sys.stderr if file is None else file
     if _w(file) > 0:
         indent = ""
+    if kind != "error" and _run_concise(file):
+        lab = label("warning" if kind == "attention" else kind,
+                    stream=file)
+        w = _w(file)
+        if kind == "attention":
+            from taxjson.lib.out import shown_topic
+            text = shown_topic(text)
+        from taxjson.lib.stage_msg import shorten_commands
+        one = shorten_commands(f"{lab}{short}" if short else
+                               concise_line(f"{lab}{text}", details, w,
+                                            cmd=cmd), w)
+        if details or short or len(one) < len(lab) + len(text):
+            _DETAILS_HIDDEN[0] = True
+        show(wrap(one, w, "", ""), file)
+        return
     show(message_lines(kind, text, details, prog=prog, indent=indent,
                        stream=file), file)
 
@@ -2792,6 +2854,12 @@ def _report_detection(name: str, found, cache: Path) -> None:
                         f"activity: skipped (`taxjson sanity` and "
                         f"`taxjson opening` read it)")
             elif det.broker:
+                if _run_concise():
+                    # The broker each file was read as: --details (and
+                    # work/<acct>_detect.diag); the default console
+                    # keeps the per-file counts (Essentials first).
+                    _DETAILS_HIDDEN[0] = True
+                    continue
                 text = f"Info: File {where} → identified as {det.display}"
             else:
                 text = (f"Warning: File {where} → not identified"
@@ -5074,7 +5142,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   "wash-sale rule NOT applied to crypto",
                   "The IRS treats crypto as property, not a security "
                   "(§1091 does not reach it); losses are allowed in full.",
-                  indent="  ", file=sys.stdout)
+                  indent="  ", file=sys.stdout,
+                  short="wash-sale rule NOT applied to crypto (property, "
+                        "not a security): losses allowed in full")
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(cache.parent, settings)
@@ -6295,7 +6365,8 @@ def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
     for f in found[:XR.RADAR_SHOWN]:
         head, details = XR.message(f.record(), country)
         _say_once(("xlist-loss", f.loss_symbol, f.other_symbol), "warning",
-                  head, *details, indent="  ", file=sys.stdout)
+                  head, *details, indent="  ", file=sys.stdout,
+                  cmd="taxjson ticker-map --suggest")
     if len(found) > XR.RADAR_SHOWN:
         # The rest counted in one line (third pre-release review,
         # finding 9: one Warning per pair flooded the console).
@@ -6371,18 +6442,25 @@ def _say_option_transition(root: Path, cfg: Dict[str, Any]) -> None:
     asked = [r for r in rows if r not in done]
     if done:
         head, _details = OB.question_message(done, int(year), since)
+        _ans = (f"answered in checklist.json (option-boundary marked "
+                f"{mark[0]}{': ' + mark[1] if mark[1] else ''})")
         _say_once(("option-transition", "answered"), "note",
-                  f"{head} — answered in checklist.json (option-boundary "
-                  f"marked {mark[0]}{': ' + mark[1] if mark[1] else ''})",
-                  indent="  ", file=sys.stdout)
+                  f"{head} — {_ans}", indent="  ", file=sys.stdout,
+                  short=f"{len(done)} option contract(s) on transition "
+                        f"close timing: {_ans}")
     if asked:
         head, details = OB.question_message(asked, int(year), since)
         if done:
             details = details + [
                 "checklist.json's option-boundary mark answered other "
                 "contracts; mark it done again once these are answered."]
+        _tot = sum(float(r.get("premium") or 0.0) for r in asked)
+        _wys = "/".join(sorted({str(r["write_year"]) for r in asked}))
         _say_once(("option-transition",), "warning", head, *details,
-                  indent="  ", file=sys.stdout)
+                  indent="  ", file=sys.stdout,
+                  short=f"{len(asked)} option contract(s) written in "
+                        f"{_wys}: is {_tot:,.2f} of premium taxed in "
+                        f"{year} right? — `taxjson checklist`")
 
 
 def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
@@ -6403,23 +6481,32 @@ def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
     mark = _checklist_answered(root, year, EC.STEP)
     for g in gaps:
         key = ("export-coverage", g.account, g.broker)
+        _where = (f"{EC.broker_name(g.broker)} exports for {g.account} "
+                  f"end {g.end}")
         if g.info:
             # Every position open at the end was closed by .tt lines.
             _say_once(key, "note", EC.info_message(g), indent="  ",
-                      file=sys.stdout)
+                      file=sys.stdout,
+                      short=f"{_where}: the positions then open were "
+                            f"closed by .tt lines")
             continue
         head, details = EC.message(g, int(year))
+        _n_open = len(g.positions or ()) + len(g.expired or ())
         # A DONE mark answers the gaps it recorded (account, broker,
         # end — the user knows the broker had no later activity there);
         # a new gap or a later end asks again. A skip accepts them all.
         if _mark_answers(mark, g.key):
-            _say_once(key, "note", f"{head} — marked {mark[0]} in "
-                      f"checklist.json ({EC.STEP}"
-                      f"{': ' + mark[1] if mark[1] else ''})", indent="  ",
-                      file=sys.stdout)
+            _marked = (f"marked {mark[0]} in checklist.json ({EC.STEP}"
+                       f"{': ' + mark[1] if mark[1] else ''})")
+            _say_once(key, "note", f"{head} — {_marked}", indent="  ",
+                      file=sys.stdout, short=f"{_where}: {_marked}")
             continue
+        from taxjson.lib.out import width as _ow
         _say_once(key, "warning", head, *details, indent="  ",
-                  file=sys.stdout)
+                  file=sys.stdout,
+                  short=(head if len("Warning: " + head) <= _ow(sys.stdout)
+                         else f"{_where} with {_n_open} position(s) open: "
+                              f"download the rest of {year}"))
 
 
 def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
@@ -7013,7 +7100,9 @@ def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
                      f"identical row(s))",
                      "Every row of it is booked in BOTH. Put each broker "
                      "account's exports under ONE inputs/<account>/ "
-                     "folder.", indent="  ", file=sys.stdout)
+                     "folder.", indent="  ", file=sys.stdout,
+                     short=f"broker account #{h[:6]} is in both {a} and "
+                           f"{b}: keep its exports in one inputs/ folder")
     return shared
 
 
@@ -7284,6 +7373,27 @@ def _acquire_run_lock(cache: Path) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    """`taxjson run` (_cmd_run). On a person's console without --details
+    each message is one line (Essentials first, docs/output-style.md):
+    said to the stages too (lib/stage_msg.CONCISE_ENV, whose own messages
+    reach the console), and taken back when the run ends."""
+    import os
+    from taxjson.lib.stage_msg import CONCISE_ENV
+    old = os.environ.get(CONCISE_ENV)
+    if _run_concise():
+        os.environ[CONCISE_ENV] = "1"
+    else:
+        os.environ.pop(CONCISE_ENV, None)
+    try:
+        _cmd_run(args)
+    finally:
+        if old is None:
+            os.environ.pop(CONCISE_ENV, None)
+        else:
+            os.environ[CONCISE_ENV] = old
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
     # Full rebuild is the DEFAULT: stale cached artifacts must never
     # feed a filing decision. `--fast` opts back into the mtime cache.
     args.force = not getattr(args, "fast", False)
@@ -7296,6 +7406,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     _DATED_SETTLED.clear()
     _IN_KIND_THIS_RUN.clear()
     _SHORT_SOURCES.clear()
+    _DETAILS_HIDDEN[0] = _ECHO_LAST_ERROR[0] = False
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     # Register the config path globally so every `needs_rebuild` call
@@ -7307,7 +7418,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     settings = cfg.get("settings", {})
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
-        _say("note", *_US_EXPERIMENTAL_NOTE)
+        _say("note", *_US_EXPERIMENTAL_NOTE,
+             short="the US engine is EXPERIMENTAL: treat the output as a "
+                   "draft")
     _loose = _loose_project_dirs(root)
     if _loose:
         _say_once("loose-permissions", "warning",
@@ -7315,7 +7428,9 @@ def cmd_run(args: argparse.Namespace) -> None:
                   f"this computer (made by an older taxjson or another "
                   f"program; new files are owner-only)",
                   f"Tighten it once: chmod -R go-rwx {_shell_quote(root)}",
-                  prog=_PROG)
+                  prog=_PROG,
+                  short=f"{', '.join(_loose)} can be read by other users: "
+                        f"`chmod -R go-rwx` it")
     _since_warn = _grant_since_warning(settings, root, accounts)
     if _since_warn:
         # (a crypto-only project writes no options — nothing to warn about)
@@ -8637,7 +8752,9 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
         pass
     from taxjson.lib.out import show_blocks
     # (a project with only .tt OPENING cost=unknown lines: named so)
-    show_blocks(FR.render_blocks(doc, mh_name="missing_history.tt"),
+    show_blocks(FR.render_blocks(doc, mh_name="missing_history.tt",
+                                 concise=_run_concise(sys.stdout),
+                                 details_hint=_DETAILS_HIDDEN[0]),
                 sys.stdout)
 
 
