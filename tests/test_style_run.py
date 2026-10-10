@@ -250,7 +250,10 @@ class TestRunStyle(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_styled(self, r.stdout, allow=("taxjson -C ",))
                 assert_styled(self, r.stderr)
-                self.assertIn("  3. Run:\n       taxjson -C ", r.stdout)
+                # The next steps, one line each (docs/output-style.md,
+                # Essentials first): the commands to copy.
+                self.assertIn("  3. taxjson -C ", r.stdout)
+                self.assertIn("  4. taxjson -C ", r.stdout)
                 if country == "usa":
                     self.assertTrue(r.stderr.lstrip().startswith(
                         "Info: the US engine is "

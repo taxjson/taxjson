@@ -672,7 +672,9 @@ class TestRunNoteWording(unittest.TestCase):
             r = subprocess.run(base + ['--country', 'ca', '--force'], **run)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('wrote taxjson.toml.bak1', r.stdout)
-        self.assertIn('re-add their sections (see taxjson.toml.bak1)',
+        # One line in the default view (docs/output-style.md, Essentials
+        # first).
+        self.assertIn('re-add (see taxjson.toml.bak1)',
                       " ".join(r.stdout.split()).lower())
 
 
