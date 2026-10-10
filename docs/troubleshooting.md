@@ -1327,6 +1327,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_filed.py` — `lock_shape_problem`; `src/taxjson/lib/project_layout.py` — `years_report`; `src/taxjson/bin/taxjson_run.py` — `_years_table`
 
+### `tjs estimate`: "! Carryovers come from the 2024 lock, taken before 2024 ended: provisional"
+- **Check:** `tjs estimate --details` lists the note "The carried balances are provisional: the 2024 lock was taken on 2024-06-01, before the year ended (close-year --force) …"; `tjs years` marks the year `filed*`. On v0.28.1 and older the estimate used the balances without saying so (issue #55).
+- **Cause:** the net capital loss or minimum tax carried into this year comes from last year's lock, and that lock was written with `close-year --force` before last year ended: a snapshot, not the return you filed.
+- **Fix:** after filing last year, run `tjs close-year --force` in last year's project, or enter the figures from your notice of assessment (`[estimate]` `other_losses`, `amt_carryover`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/carryforward.py` — `resolve_losses`, `resolve_amt`, `partial_lock`; `src/taxjson/bin/taxjson_filed.py` — `partial_year_note`; `src/taxjson/bin/taxjson_run.py` — `Carryovers come from the`
+
 ## Stand-alone tools and hand-written JSON books
 
 ### `taxjson-gains book.json`: "impossible date='2025-02-30' (not a real calendar date written YYYY-MM-DD) — fix the input data", or a hand-written book whose gains change when a date is written `2025-2-01` instead of `2025-02-01`

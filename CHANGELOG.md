@@ -9,6 +9,7 @@
 - `taxjson years` names a damaged `filed/<year>.json` ("lock damaged", with the problem) instead of showing the year as filed (#49).
 - `taxjson option-boundary` on a base book without its rows stops with one error naming the file, not a traceback (#53).
 - `taxjson wash-radar` and `taxjson-safe-to-sell` refuse a `--date` whose window leaves the calendar (9999-12-31) instead of a traceback (#54).
+- The estimate says when its carried losses or minimum tax come from a lock taken before its year ended (provisional): one `!` line, the note with `--details` (#55).
 
 
 ## v0.28.1 (2026-10-10)

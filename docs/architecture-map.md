@@ -424,7 +424,7 @@ with the books' income. `carryover` keeps the loss carry-forward ledger.
 - `src/taxjson/data/slip_issuers.toml` — `alias`, `broker`, `issuer`, `source`: the shipped issuers that are a broker's carrying dealer (CI Investment Services for Webull Canada), read only by `issuer_aliases`; an issuer carrying a broker's whole name needs no entry.
 - `src/taxjson/lib/ib_dividends.py` — `read_report`, `is_dividends_report`, `component_category`, `Payment`: IBKR's dividends report (U*.YYYY.dividends.csv), payment by payment with its T5/T3 split; the holder's name is never read.
 - `src/taxjson/bin/taxjson_carryover.py` — `build_canada_ledger`, `build_usa_ledger`, `load_claimed`, `lock_figure`, `render`, `render_brief`: the carryover ledger.
-- `src/taxjson/lib/carryforward.py` — `resolve_losses`, `resolve_amt`, `record_block`, `lock_block`, `handoff_issues`: carry-forwards from one year to the next.
+- `src/taxjson/lib/carryforward.py` — `resolve_losses`, `resolve_amt`, `record_block`, `lock_block`, `handoff_issues`, `partial_lock`: carry-forwards from one year to the next (from a lock taken before its year ended: said provisional).
 - `src/taxjson/bin/taxjson_run.py` — `cmd_form_export`, `cmd_t1135`, `cmd_reconcile_slips`, `cmd_slip_audit`, `cmd_carryover`, `_taxable_gains_argv`: the commands.
 
 ## Filed-year lock and year hand-off

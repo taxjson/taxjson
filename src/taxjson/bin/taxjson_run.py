@@ -1617,6 +1617,8 @@ def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
             ltl = float(lr.get("lt_losses") or 0.0)
             src["long_term_losses"] = lr["source"]
         src["notes"] += lr["notes"]
+        if lr.get("partial_lock"):
+            src["partial_lock"] = lr["partial_lock"]
     amt = None
     if country == "canada":
         try:
@@ -1625,6 +1627,8 @@ def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
             _die(str(e))
         amt = a["by_year"]
         src["amt_carryover"] = a["source"]
+        if a.get("partial_lock"):
+            src["partial_lock"] = a["partial_lock"]
         for n in a["notes"]:
             if n not in src["notes"]:
                 src["notes"].append(n)
@@ -15240,7 +15244,7 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
 def _carry_sources_doc(cs: Dict[str, Any]) -> Dict[str, Any]:
     """Where the estimate's carry-forward inputs came from (JSON)."""
     return {k: cs.get(k) for k in ("other_losses", "long_term_losses",
-                                   "amt_carryover")
+                                   "amt_carryover", "partial_lock")
             if k in cs}
 
 
@@ -15336,6 +15340,13 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         if year is not None and str(res.get("vintage")) != str(yr):
             print(_out.act(f"Tax year {yr} uses the {res.get('vintage')} "
                            f"rate tables", "tjs estimate --details"))
+        # Carryovers read from a lock taken before its year ended are
+        # provisional: one line, the note behind --details (issue #55).
+        _pl = (res.get("carry_sources") or {}).get("partial_lock")
+        if _pl:
+            print(_out.act(f"Carryovers come from the {_pl} lock, taken "
+                           f"before {_pl} ended: provisional",
+                           "tjs estimate --details"))
         n = len(res.get("notes") or [])
         print(assumes)
         print(_out.details_hint("tjs estimate --details",

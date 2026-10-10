@@ -249,6 +249,19 @@ def _from_lock(root: Path, settings: Dict[str, Any], section: str
         py = int(settings.get("year"))
     except (TypeError, ValueError):
         py = None
+    # A lock taken before its own year ended (`close-year --force` on an
+    # open year) is a snapshot: its balances are provisional, said as
+    # every other lock consumer says it (issue #55).
+    from taxjson.bin.taxjson_filed import partial_year_note
+    try:
+        _pn = partial_year_note(
+            json.loads(Path(lp).read_text(encoding="utf-8-sig")), ly)
+    except (OSError, ValueError):
+        _pn = None
+    if _pn:
+        out["partial_lock"] = ly
+        out["notes"].append(
+            f"The carried balances are provisional: {_pn} ({label}).")
     if py is not None and ly < py - 1:
         out["notes"].append(
             f"The latest close-year record is {ly}'s ({label}); "
@@ -274,12 +287,14 @@ def resolve_losses(root: Path, settings: Dict[str, Any], country: str,
     s = r.get("block")
     if not isinstance(s, dict):
         return {"source": None, "notes": []}
+    extra = ({"partial_lock": r["partial_lock"]}
+             if r.get("partial_lock") else {})
     if country == "canada":
         return {"other_losses": float(s.get("closing") or 0.0),
-                "source": r["source"], "notes": r["notes"]}
+                "source": r["source"], "notes": r["notes"], **extra}
     return {"other_losses": float(s.get("st_closing") or 0.0),
             "lt_losses": float(s.get("lt_closing") or 0.0),
-            "source": r["source"], "notes": r["notes"]}
+            "source": r["source"], "notes": r["notes"], **extra}
 
 
 # ---------------------------------------------------- the lock's block
