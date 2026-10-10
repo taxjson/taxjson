@@ -1,6 +1,6 @@
 """scripts/build_interlisted.py: the interlisted master's corrections
-(retracted listings, reused ended tickers, FINRA's temporary OTC
-symbols).
+(retracted listings, reused ended tickers, FINRA's temporary OTC symbols)
+and the TSX funds' US-dollar lines.
 
 Every fixture is SYNTHETIC: invented tickers (QZ*), invented FIGIs
 (BBG0000000xx), invented names.
@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib import tobase_map as TB
-from test_tobase_map import TestBuild, _eq
+from test_tobase_map import TestBuild, _eq, _xlsx
 
 
 class TestReusedTicker(unittest.TestCase):
@@ -112,6 +112,40 @@ class TestRetracted(unittest.TestCase):
                              ["QZVVF.US"])
 
 
+
+
+class TestEtfCurrencyLines(unittest.TestCase):
+
+    def test_usd_line_of_the_same_class_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            B, cache = TestBuild._cache(self, td)
+            hdr = ["Co_ID", "Root Ticker", "Name", "SP_Type"]
+            _xlsx(cache / f"{B.TMX_XLSX_PREFIX}2026-01-01.xlsx", {
+                "TSX Issuers": [hdr, ["1", "QZA", "QZ Alpha", ""],
+                                ["7", "QZF", "QZ Fund", "Exchange Traded "
+                                 "Funds"],
+                                ["8", "QZH", "QZ Hedged", "Exchange Traded "
+                                 "Funds"]],
+                "TSXV Issuers": [hdr]})
+            K = B.Figi.key
+            figi = json.loads((cache / B.FIGI_CACHE).read_text())
+            figi.update({
+                K(B.ticker_job("QZF", "CN")): [_eq("QZF", "CN",
+                                                   "BBG000000F01", "ETP")],
+                K(B.ticker_job("QZF/U", "CN")): [_eq("QZF/U", "CN",
+                                                     "BBG000000F01", "ETP")],
+                K(B.ticker_job("QZH", "CN")): [_eq("QZH", "CN",
+                                                   "BBG000000H01", "ETP")],
+                K(B.ticker_job("QZH/U", "CN")): [_eq("QZH/U", "CN",
+                                                     "BBG000000H02", "ETP")]})
+            (cache / B.FIGI_CACHE).write_text(json.dumps(figi))
+            doc, rep = B.build(cache, None, "2026-01-02",
+                               B.Figi(cache / B.FIGI_CACHE), [])
+            f = doc["security"]["BBG000000F01"]
+            self.assertEqual((f["kind"], f["ca"], f["us"]),
+                             ("fund", ["QZF.TO", "QZF.U.TO"], []))
+            self.assertNotIn("BBG000000H01", doc["security"])
+            self.assertEqual(rep["etf_usd_lines_other_class"], ["QZH.U"])
 
 
 if __name__ == "__main__":

@@ -12,7 +12,9 @@ Canada, an ADR / ADS in the US) has a share-class FIGI of its own, so it
 is never paired; a CDR whose root is a US ticker is listed apart, as a
 DISTINCT pair. The master holds no ISIN or CUSIP; an entry's `domicile`
 is the country code of its share class's ISINs (OpenFIGI ISIN lookups in
-the cache), when known. A
+the cache), when known. A TSX fund's US-dollar line `X.U` with the same
+share-class FIGI as its CAD line `X` is the same units (an entry with no
+US listing; a `.U` of another class is another series, left out). A
 FINRA temporary OTC symbol (fifth letter D) is never shipped: its
 permanent spelling (fifth letter F) when OpenFIGI gives it the same
 class. Coverage: TSX and TSX Venture (not Cboe Canada, not the CSE).
@@ -480,6 +482,8 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
         for c in h.get("ca") or []:
             if c.endswith(".TO"):
                 cand.setdefault(c[:-3], {"us_hint": set()})
+    etf_roots = sorted({root for (root, _v), d in issuers.items()
+                        if d.get("SP_Type", "") == "Exchange Traded Funds"})
 
     # 2. Canadian root -> one share-class FIGI.
     roots = sorted(cand)
@@ -516,6 +520,26 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
     hint_syms = sorted({u for c in cand.values() for u in c["us_hint"] if u})
     hres = dict(zip(hint_syms, figi.map([ticker_job(us_to_bbg(u), "US")
                                          for u in hint_syms])))
+
+    # 2b. TSX ETFs: a US-dollar line X.U of the CAD line X with the same
+    #     share-class FIGI is the same units (one security, booked
+    #     under the CAD line); a .U of another class is another series.
+    currency_lines: set = set()
+    etf_pairs: Dict[str, Tuple[str, List[Dict[str, Any]]]] = {}
+    report["etf_usd_lines_other_class"] = []
+    ejobs = [ticker_job(tsx_to_bbg(r), "CN") for r in etf_roots] + \
+        [ticker_job(tsx_to_bbg(r) + "/U", "CN") for r in etf_roots]
+    eres = figi.map(ejobs)
+    n = len(etf_roots)
+    for r, a, b in zip(etf_roots, eres[:n], eres[n:]):
+        sa, sb = share_classes(a), share_classes(b)
+        if not sb:
+            continue
+        if len(sa) == 1 and sa == sb:
+            etf_pairs[next(iter(sa))] = (r, equity(a))
+        else:
+            report["etf_usd_lines_other_class"].append(f"{r}.U")
+    report["etf_usd_lines"] = len(etf_pairs)
 
     # 3. Share class -> every US ticker and every CN ticker.
     scs = sorted(set(root_sc.values()))
@@ -572,7 +596,12 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             if t and not re.search(r"\.WT(\.|$)|\.PR\.", t):
                 ca_all.add(t)
         if not us_ex and not us_otc:
-            continue
+            # No US listing: kept only for a US-dollar line of the same
+            # units on the TSX (X.U beside X: one security).
+            if c + ".U" not in ca_all:
+                continue
+            ca_all = {c, c + ".U"}
+            currency_lines.add(sc)
         e = by_sc.setdefault(sc, {"ca": set(), "us": set(), "us_otc": set(),
                                   "rows": rows})
         e["ca"] |= ca_all
@@ -629,6 +658,20 @@ def build(cache: Path, previous: Optional[Dict[str, Any]], today: str,
             rec["domicile"] = dom[sc]
             report["domicile_known"] += 1
         entries[sc] = rec
+    # TSX ETFs' US-dollar lines (2b).
+    for sc, (r, rows) in sorted(etf_pairs.items()):
+        if sc in entries:
+            for x in (book_ca(r), book_ca(r + ".U")):
+                if x not in entries[sc]["ca"]:
+                    entries[sc]["ca"].append(x)
+            continue
+        entries[sc] = {"name": (rows[0].get("name") or "").strip(),
+                       "kind": "fund", "share_class_figi": sc,
+                       "ca": [book_ca(r), book_ca(r + ".U")],
+                       "us": [], "us_exchange": [], "us_otc": []}
+        if sc in dom:
+            entries[sc]["domicile"] = dom[sc]
+    report["currency_line_entries"] = len(currency_lines) + len(etf_pairs)
     # Maintainer-entered ended pairs and corrections.
     hist_skipped = []
     retract: Dict[str, List[Dict[str, str]]] = collections.defaultdict(list)
@@ -1057,7 +1100,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                       "figi_requests",
                                       "figi_not_in_cache", "roots_asked",
                                       "roots_resolved", "cdr_hints",
-                                      "cdr_verified")}
+                                      "cdr_verified", "etf_usd_lines",
+                                      "currency_line_entries")}
     summary["otc_temporary_symbols"] = len(report["otc_temporary_symbols"])
     summary["reused_tickers_recorded"] = len(report["reused_tickers"])
     print(json.dumps(summary, indent=1), file=sys.stderr)

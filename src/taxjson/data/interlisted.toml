@@ -9,7 +9,7 @@
 
 [meta]
 schema_version = 1
-generated = "2026-10-09.2"
+generated = "2026-10-09.3"
 sources = [
   { name = "OpenFIGI v3 mapping API (share-class FIGIs)", as_of = "2026-10-09" },
   { name = "Nasdaq Trader symbol directory (US exchange listings)", as_of = "2026-10-09" },
@@ -5858,6 +5858,15 @@ us = []
 us_exchange = []
 us_otc = ["TCYSF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG001SBYQ89]
+name = "BETAPRO NASDAQ-100 -2X DAILY"
+kind = "fund"
+share_class_figi = "BBG001SBYQ89"
+ca = ["QQD.TO", "QQD.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG001SC0XF1]
 name = "NVRO METALS LTD"
@@ -11832,6 +11841,15 @@ us_exchange = []
 us_otc = ["LOMEF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001TCBS23]
+name = "GLOBAL X S&P/TSX 60 INDEX CO"
+kind = "fund"
+share_class_figi = "BBG001TCBS23"
+ca = ["HXT.TO", "HXT.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG001TCDXD8]
 name = "SILVER TIGER METALS INC"
 kind = "share"
@@ -12074,6 +12092,15 @@ us_exchange = []
 us_otc = ["HRFEF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001TG4C36]
+name = "GLOBAL X S&P 500 INDEX CORPO"
+kind = "fund"
+share_class_figi = "BBG001TG4C36"
+ca = ["HXS.TO", "HXS.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG001TG5638]
 name = "ALTIPLANO METALS INC"
 kind = "share"
@@ -12305,6 +12332,15 @@ us = []
 us_exchange = []
 us_otc = ["AAGFF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG001V10349]
+name = "GLOBAL X US DOLLAR CURRENCY"
+kind = "fund"
+share_class_figi = "BBG001V10349"
+ca = ["DLR.TO", "DLR.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG001V10JD4]
 name = "TRANSITION METALS CORP"
@@ -12699,6 +12735,24 @@ us = []
 us_exchange = []
 us_otc = ["GIPIF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG0022FSXF0]
+name = "GLOBAL X S&P 500 COVERED CAL"
+kind = "fund"
+share_class_figi = "BBG0022FSXF0"
+ca = ["USCC.TO", "USCC.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG0022FT1X9]
+name = "GLOBAL X NASDAQ-100 COVERED"
+kind = "fund"
+share_class_figi = "BBG0022FT1X9"
+ca = ["QQCC.TO", "QQCC.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG00243PDL5]
 name = "VALHALLA METALS INC-SUBORD V"
@@ -14029,6 +14083,15 @@ us_exchange = []
 us_otc = ["DTEAF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG008G65871]
+name = "GLO X US 7-10YR TRES IND COR"
+kind = "fund"
+share_class_figi = "BBG008G65871"
+ca = ["HTB.TO", "HTB.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG008G831V7]
 name = "GLOBAL ENERGY METALS CORP"
 kind = "share"
@@ -14342,6 +14405,15 @@ us_exchange = []
 us_otc = ["BGFGF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00CR6XTW5]
+name = "GLOBAL X NASDAQ-100 INDE-CAD"
+kind = "fund"
+share_class_figi = "BBG00CR6XTW5"
+ca = ["HXQ.TO", "HXQ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00CTTX957]
 name = "BLUE ANT MEDIA CORP"
 kind = "share"
@@ -14607,6 +14679,15 @@ us_exchange = []
 us_otc = ["FWEDF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00GD4HST0]
+name = "GLOBAL X MARI LIFE SCI I ETF"
+kind = "fund"
+share_class_figi = "BBG00GD4HST0"
+ca = ["HMMJ.TO", "HMMJ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00GFCCJJ6]
 name = "NANALYSIS SCIENTIFIC CORP"
 kind = "share"
@@ -14850,6 +14931,15 @@ us_exchange = []
 us_otc = ["NRGYF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00HTL4QJ2]
+name = "GLB X IN D MK EQ IN CO C ETF"
+kind = "fund"
+share_class_figi = "BBG00HTL4QJ2"
+ca = ["HXDM.TO", "HXDM.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00HXKRPR7]
 name = "ROUTE 109 RESOURCES INC"
 kind = "share"
@@ -14930,6 +15020,15 @@ us = []
 us_exchange = []
 us_otc = ["GRLRF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG00JB9QCR2]
+name = "GLB X ROBOTICS &AI INDEX ETF"
+kind = "fund"
+share_class_figi = "BBG00JB9QCR2"
+ca = ["RBOT.TO", "RBOT.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG00JC94HG6]
 name = "CYGNUS METALS LTD"
@@ -15351,6 +15450,15 @@ us_exchange = []
 us_otc = ["ENSPF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00L17GRT8]
+name = "GLB X BIG DATA &HRWR IDX ETF"
+kind = "fund"
+share_class_figi = "BBG00L17GRT8"
+ca = ["HBGD.TO", "HBGD.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00L17M8W9]
 name = "CHURCHILL RESOURCES INC"
 kind = "share"
@@ -15641,6 +15749,24 @@ us_exchange = []
 us_otc = ["CMHSF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00LYN97D6]
+name = "FIDELITY US HIGH DIVIDEND ET"
+kind = "fund"
+share_class_figi = "BBG00LYN97D6"
+ca = ["FCUD.TO", "FCUD.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG00LYNB6M5]
+name = "FIDELITY US DIVIDEND FOR RIS"
+kind = "fund"
+share_class_figi = "BBG00LYNB6M5"
+ca = ["FCRR.TO", "FCRR.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00LZFKGH5]
 name = "COLLECTIVE MINING LTD"
 kind = "share"
@@ -15893,6 +16019,24 @@ us_exchange = []
 us_otc = ["SYNTF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00N2Y3VM6]
+name = "FIDELITY INTERNATIONAL HIGH"
+kind = "fund"
+share_class_figi = "BBG00N2Y3VM6"
+ca = ["FCIQ.TO", "FCIQ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG00N2Y4G20]
+name = "FIDELITY US HIGH QUALITY ETF"
+kind = "fund"
+share_class_figi = "BBG00N2Y4G20"
+ca = ["FCUQ.TO", "FCUQ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00N6WLPJ3]
 name = "HANSTONE GOLD CORP"
 kind = "share"
@@ -16053,6 +16197,15 @@ us = []
 us_exchange = []
 us_otc = ["SPRQF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG00P3CZNJ5]
+name = "ACCELERATE ABSOLUTE RET FUND"
+kind = "fund"
+share_class_figi = "BBG00P3CZNJ5"
+ca = ["HDGE.TO", "HDGE.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG00PBK26L8]
 name = "OVERACTIVE MEDIA CORP"
@@ -16255,6 +16408,15 @@ us_exchange = []
 us_otc = ["MRIVF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00R01YSR9]
+name = "BITCOIN FUND/THE"
+kind = "fund"
+share_class_figi = "BBG00R01YSR9"
+ca = ["QBTC.TO", "QBTC.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00R0DJZV9]
 name = "KING COPPER DISCOVERY CORP"
 kind = "share"
@@ -16284,6 +16446,15 @@ ca = ["OVV.TO"]
 us = ["OVV.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
+
+[security.BBG00RN4RMY1]
+name = "GLB X US LAR CAP IDX COR ETF"
+kind = "fund"
+share_class_figi = "BBG00RN4RMY1"
+ca = ["HULC.TO", "HULC.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG00S92WJ98]
 name = "FREQUENCY EXCHANGE CORP"
@@ -16324,6 +16495,15 @@ us = []
 us_exchange = []
 us_otc = ["AENRF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG00V3NFN28]
+name = "FIDELITY US VALUE ETF"
+kind = "fund"
+share_class_figi = "BBG00V3NFN28"
+ca = ["FCUV.TO", "FCUV.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG00VQS6TV7]
 name = "LNG ENERGY GROUP CORP"
@@ -16607,6 +16787,15 @@ us_exchange = []
 us_otc = ["HWAIF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00YRWFPJ3]
+name = "NINEPOINT CRYPTO AND AI LEAD"
+kind = "fund"
+share_class_figi = "BBG00YRWFPJ3"
+ca = ["TKN.TO", "TKN.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG00Z1JVF01]
 name = "TIERNAN GOLD CORP"
 kind = "share"
@@ -16780,6 +16969,24 @@ us_exchange = []
 us_otc = ["MEEEF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG010173X96]
+name = "3IQ BITCOIN ETF"
+kind = "fund"
+share_class_figi = "BBG010173X96"
+ca = ["BTCQ.TO", "BTCQ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG0101PR4C0]
+name = "BETAPRO INVERSE BITCOIN ETF"
+kind = "fund"
+share_class_figi = "BBG0101PR4C0"
+ca = ["BITI.TO", "BITI.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG010425PJ8]
 name = "SIERRA MADRE GOLD AND SILVER"
 kind = "share"
@@ -16789,6 +16996,15 @@ us = []
 us_exchange = []
 us_otc = ["SMDRF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG0106XZ251]
+name = "3IQ ETHER STAKING ETF"
+kind = "fund"
+share_class_figi = "BBG0106XZ251"
+ca = ["ETHQ.TO", "ETHQ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG010JMGKN2]
 name = "ELEVATE SERVICE GROUP INC"
@@ -16981,6 +17197,15 @@ us = []
 us_exchange = []
 us_otc = ["JTWOF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG011K4J745]
+name = "GLOBAL X ARTIFICIAL INTELLIG"
+kind = "fund"
+share_class_figi = "BBG011K4J745"
+ca = ["CHPS.TO", "CHPS.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG011Q5C066]
 name = "SPROTT PHYSICAL URANIUM TR"
@@ -17351,6 +17576,15 @@ us = []
 us_exchange = []
 us_otc = ["WFLDF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG013TT5966]
+name = "FIDELITY ADVANT BITCOIN ETF"
+kind = "fund"
+share_class_figi = "BBG013TT5966"
+ca = ["FBTC.TO", "FBTC.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG013VVRWR0]
 name = "EV NICKEL INC"
@@ -17755,6 +17989,15 @@ us_exchange = []
 us_otc = ["RGCCF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG019RLCKD1]
+name = "FIDELITY ADVANTAGE ETHER ETF"
+kind = "fund"
+share_class_figi = "BBG019RLCKD1"
+ca = ["FETH.TO", "FETH.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG019V0NJ43]
 name = "GREENLIGHT METALS INC"
 kind = "share"
@@ -17874,6 +18117,15 @@ us = []
 us_exchange = []
 us_otc = ["TBRDF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG01G6LW3K6]
+name = "GLOBAL X 0-3 MONTH T-BILL-A"
+kind = "fund"
+share_class_figi = "BBG01G6LW3K6"
+ca = ["CBIL.TO", "CBIL.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG01GHNJWF7]
 name = "AMERICAN TUNGSTEN CORP"
@@ -18076,6 +18328,33 @@ us_exchange = []
 us_otc = ["SRRCF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG01JMDDM83]
+name = "GLB X L TERM US TRY YLD ETF"
+kind = "fund"
+share_class_figi = "BBG01JMDDM83"
+ca = ["LPAY.TO", "LPAY.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG01JMDS2D5]
+name = "GLB X SH-T US TR PRM YLD ETF"
+kind = "fund"
+share_class_figi = "BBG01JMDS2D5"
+ca = ["SPAY.TO", "SPAY.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG01JMHDLX8]
+name = "GLOBAL X MID-TERM U.S. TREAS"
+kind = "fund"
+share_class_figi = "BBG01JMHDLX8"
+ca = ["MPAY.TO", "MPAY.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG01JYFMWG4]
 name = "SUCRO LTD"
 kind = "share"
@@ -18166,6 +18445,15 @@ us_exchange = []
 us_otc = ["SAGMF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG01MQQVK78]
+name = "FIDELITY GLBL EQ + FND ETF"
+kind = "fund"
+share_class_figi = "BBG01MQQVK78"
+ca = ["FGEP.TO", "FGEP.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG01MRH1GP9]
 name = "ONGOLD RESOURCES LTD"
 kind = "share"
@@ -18175,6 +18463,33 @@ us = []
 us_exchange = []
 us_otc = ["ONGRF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG01MS4VKM8]
+name = "GLOBAL X S&P 500 INDEX ETF"
+kind = "fund"
+share_class_figi = "BBG01MS4VKM8"
+ca = ["USSX.TO", "USSX.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG01MVHS6H6]
+name = "GLOBAL X NASDAQ-100 INDX ETF"
+kind = "fund"
+share_class_figi = "BBG01MVHS6H6"
+ca = ["QQQX.TO", "QQQX.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG01MVSSXH3]
+name = "ACCELERATE DIV CREDIT INC"
+kind = "fund"
+share_class_figi = "BBG01MVSSXH3"
+ca = ["INCM.TO", "INCM.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG01N46BDF3]
 name = "SPROTT PHYSICAL COPPER TRUST"
@@ -18389,6 +18704,33 @@ us = ["BIPC.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
 
+[security.BBG01RPZ0HH8]
+name = "FIDELITY CORE US BOND ETF"
+kind = "fund"
+share_class_figi = "BBG01RPZ0HH8"
+ca = ["FCUB.TO", "FCUB.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG01RPZ1PJ7]
+name = "FIDELITY ADV US EQ FUND ETF"
+kind = "fund"
+share_class_figi = "BBG01RPZ1PJ7"
+ca = ["FAUS.TO", "FAUS.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG01RPZ26S8]
+name = "FIDELITY ABSOLUTE ETF SERIES"
+kind = "fund"
+share_class_figi = "BBG01RPZ26S8"
+ca = ["FCAB.TO", "FCAB.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG01S68VR36]
 name = "LOTUS CREEK EXPLORATION INC"
 kind = "share"
@@ -18419,6 +18761,15 @@ us = []
 us_exchange = []
 us_otc = ["AXOCF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG01T5X6377]
+name = "3IQ SOLANA STAKING ETF"
+kind = "fund"
+share_class_figi = "BBG01T5X6377"
+ca = ["SOLQ.TO", "SOLQ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG01TYJHK30]
 name = "OROGEN ROYALTIES INC"
@@ -18460,6 +18811,15 @@ us = []
 us_exchange = []
 us_otc = ["PCUUF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG01VJFWWK8]
+name = "3IQ XRP ETF"
+kind = "fund"
+share_class_figi = "BBG01VJFWWK8"
+ca = ["XRPQ.TO", "XRPQ.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG01VL07YT3]
 name = "FINEX METALS LTD"
@@ -18541,6 +18901,15 @@ us = []
 us_exchange = []
 us_otc = ["ALZIF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG01YBH4YQ7]
+name = "TRUX EXOGENOUS RISK POOL"
+kind = "fund"
+share_class_figi = "BBG01YBH4YQ7"
+ca = ["TERP.TO", "TERP.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG01YVC8B46]
 name = "ERRINGTON METALS CORP"
@@ -18671,6 +19040,15 @@ us = ["BBUC.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
 
+[security.BBG02159Z957]
+name = "GLOBAL X NYSE 100 INDEX ETF"
+kind = "fund"
+share_class_figi = "BBG02159Z957"
+ca = ["NYSX.TO", "NYSX.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
 [security.BBG021C3P4Q1]
 name = "GOLDINXS MINING CORP"
 kind = "share"
@@ -18720,6 +19098,24 @@ us = []
 us_exchange = []
 us_otc = ["TMLEF.US"]
 first_seen = "2026-10-09"
+
+[security.BBG021YWKMK4]
+name = "GLOBAL X US INFR DEV IND ETF"
+kind = "fund"
+share_class_figi = "BBG021YWKMK4"
+ca = ["PAVE.TO", "PAVE.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
+
+[security.BBG021YWSP01]
+name = "GLOBAL X ACTIVE US DIV ETF"
+kind = "fund"
+share_class_figi = "BBG021YWSP01"
+ca = ["DIVY.TO", "DIVY.U.TO"]
+us = []
+us_exchange = []
+first_seen = "2026-10-09.3"
 
 [security.BBG022LGKGR7]
 name = "VALOR GOLD CORP"
