@@ -252,7 +252,18 @@ blank line, never two, never first or last. No indentation, no bare line
 `ATTENTION:` word, no stage program name (`taxjson-gains:` — the stage
 is an implementation detail; its captured line in work/ keeps it), no
 `(content: ...)` detection detail (work/`<acct>`_detect.diag keeps it).
-For example:
+Without `--details` every message is ONE line, its headline and the
+command with the detail (`stage_msg.concise_line`; Essentials first):
+
+```
+==> Reading 2 files
+Warning: ib_demo.csv: no Cash Report, so its cash is not reconciled: add it to the export
+Info: ib_demo.csv: 9 tax objects
+==> Processing corporate actions
+```
+
+`taxjson run --details` shows each message with its detail lines (the
+captured .diag always has them):
 
 ```
 ==> Reading 2 files
@@ -304,7 +315,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Downloading USD → CAD rates` | a rate refresh (`Loading cached USD → CAD rates` with TAXJSON_OFFLINE=1: the cache only) |
 | `==> margin  (taxable, first pass: transfers between your accounts)` | accounts read first so transfers (crypto: sends) pair across them — every equity account, sheltered too, when there are two or more (a transfer journal joins two listings in every account's books); the account's books later take this read (same command, same files), so its `Reading` step and messages are shown once, here |
 | `==> tfsa  (sheltered)` / `==> margin  (taxable)` / `==> crypto  (taxable, crypto)` | an account's books |
-| `Info: File inputs/tfsa/x.csv → identified as Interactive Brokers` | one per input file (a message, not a step) |
+| `Info: File inputs/tfsa/x.csv → identified as Interactive Brokers` | with `--details`: one per input file (a message, not a step; work/`<acct>`_detect.diag keeps it) |
 | `==> Reading 2 files` / `==> Reading 1 Kraken file` | the broker parse (the broker named when the account has several) |
 | `Info: x.csv: 384 tax objects` | one per file parsed |
 | `==> Processing corporate actions` | once per account |

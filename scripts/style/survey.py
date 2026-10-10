@@ -123,7 +123,7 @@ def main(argv):
                                     str(w.root / "watch.json")]),
                          ("close-year", ["close-year", "--force"]),
                          ("check-filed", ["check-filed"]),
-                         ("run_details", ["run", "--no-input", "--fast",
+                         ("run_details", ["run", "--no-input",
                                           "--details"]),
                          ("redact", ["redact"]),
                          ("new-year", ["new-year", "2025"])):
