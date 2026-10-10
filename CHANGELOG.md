@@ -143,6 +143,13 @@
   `init` no longer mentions it); `run -h` names `inputs_dir` and the
   holdings/ snapshots found without a setting; the account folders'
   README says each year's slips go in `YYYY/inputs/slips/`.
+- Help text that contradicted the program: `renames -h` names the `.tt`
+  line `RENAME YYYY-MM-DD OLD NEW late=fold|late=separate` (not the legacy
+  ticker.map form); `sanity -h` says that with no items it reads the
+  year's holdings/ snapshots without a setting; `estimate -h` gives the
+  real defaults of `--other-income` and `--other-losses` (the
+  `[estimate]` keys, then the latest close-year lock); `init -h` says
+  `--country` is not needed with `--demo`.
 
 ### Docs
 

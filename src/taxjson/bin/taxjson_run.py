@@ -16266,7 +16266,7 @@ def cmd_journals(args: argparse.Namespace) -> None:
 def cmd_renames(args: argparse.Namespace) -> None:
     """`taxjson renames`: every ticker change in the books as a dated
     event (date, source, position and book cost carried), every trade in
-    an old ticker after its rename with how ticker.map resolves it,
+    an old ticker after its rename with the .tt line that resolves it,
     the look-alike renames the exports show (suggested, with the `.tt`
     line `RENAME <date> OLD NEW` that books each) and the undated
     ticker.map renames (lib/renames), and each declared rename that
@@ -25774,9 +25774,10 @@ def _build_parser(prog: str = "taxjson"
     p_init.add_argument("path", nargs="?", help="Directory to initialize (default: cwd)")
     p_init.add_argument("--country",
                         choices=["canada", "ca", "usa", "us"],
-                        help="Jurisdiction to scaffold for (required; shapes "
-                             "the config's currencies, tax-date basis, and "
-                             "account folders)")
+                        help="Jurisdiction to scaffold for (required, "
+                             "except with --demo; shapes the config's "
+                             "currencies, tax-date basis, and account "
+                             "folders)")
     p_init.add_argument("--demo", action="store_true",
                         help="Make a project of made-up exports to try "
                              "first (Canada, tax year 2024) in DIR, a new "
@@ -26101,9 +26102,13 @@ def _build_parser(prog: str = "taxjson"
     p_est.add_argument("--other-income", type=float, default=None,
                        metavar="AMT",
                        help="Employment/other income the investment "
-                            "income stacks on top of (default: 0)")
+                            "income stacks on top of (default: "
+                            "[estimate] other_income, else 0)")
     p_est.add_argument("--other-losses", type=float, default=None,
-                       metavar="AMT", help=_OTHER_LOSSES_HELP)
+                       metavar="AMT", help=_OTHER_LOSSES_HELP
+                       + " (default: [estimate] other_losses, else the "
+                         "carry-forward of the latest close-year lock "
+                         "before the year, else 0)")
     _add_deduction_flags(p_est)
     p_est.add_argument("--province", default=None,
                        help="Canada: ON|BC|AB (default: `province` "
@@ -26556,9 +26561,10 @@ def _build_parser(prog: str = "taxjson"
         help="Ticker changes as dated events",
         description="Every ticker change as a dated event (where it came "
              "from, the position and cost it carried) and every trade "
-             "in an old ticker after its rename, with how ticker.map "
-             "resolves it (`RENAME OLD NEW YYYY-MM-DD late=fold|"
-             "separate`); exit 1 while one is not declared. Each dated "
+             "in an old ticker after its rename, with the `.tt` line "
+             "in the account's folder that resolves it (`RENAME "
+             "YYYY-MM-DD OLD NEW late=fold` or `late=separate`); exit 1 "
+             "while one is not declared. Each dated "
              "rename names its source (a broker row, an IB contract id, "
              "a .tt line, a ticker.map line); the look-alike renames "
              "the Questrade, RBC and Webull exports show are listed as "
@@ -26643,7 +26649,9 @@ def _build_parser(prog: str = "taxjson"
              "broker's holdings files (.toml, [[holding]] tables): bare "
              "items are summed together (aggregate), "
              "ACCOUNT[+ACCOUNT]=FILE[+FILE] items are checked as their "
-             "own paired group; with no items, each account's "
+             "own paired group; with no items, the year's holdings/ "
+             "snapshots (each matched to its account by the broker "
+             "account id or the file name) and any account's "
              "`holdings = [...]` in taxjson.toml. Exit 1 on any "
              "difference.")
     p_san.add_argument("items", nargs="*",
@@ -26655,9 +26663,11 @@ def _build_parser(prog: str = "taxjson"
                             "— many-to-many with '+', and a repeated "
                             "left-hand side merges (margin=ibkr.toml "
                             "margin=webull.toml). With NO items the "
-                            "pairings come from taxjson.toml: each "
-                            "account's `holdings = [...]` (paths of its "
-                            "broker positions files)")
+                            "pairings come from the year's holdings/ "
+                            "folder (matched by broker account id or "
+                            "file name) and each account's "
+                            "`holdings = [...]` in taxjson.toml (paths "
+                            "of its broker positions files)")
     p_san.add_argument("--tolerance", type=_nonneg_float_arg, default=1e-4,
                        help="Quantity tolerance (default: 0.0001)")
     p_san.add_argument("--cost-tolerance", type=_nonneg_float_arg,
