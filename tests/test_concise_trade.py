@@ -4,7 +4,6 @@ one-line `! ` actions, at most 6 other lines at width 100) and
 `--details` prints what the default view leaves out."""
 import unittest
 
-import _style
 from _style import assert_concise, project
 
 _W = {"TAXJSON_WIDTH": "100"}
