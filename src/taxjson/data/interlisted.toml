@@ -36,6 +36,17 @@ us = ["B.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
 
+[security.BBG001S5NBV1]
+name = "CORUS ENTERTAINMENT INC-B SH"
+kind = "share"
+share_class_figi = "BBG001S5NBV1"
+domicile = "CA"
+ca = ["CJR.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["CJREF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S5NM65]
 name = "DIAGNOS INC"
 kind = "share"
@@ -60,6 +71,7 @@ first_seen = "2026-10-09"
 name = "BROOKFIELD INFRASTRUCTURE PA"
 kind = "unit"
 share_class_figi = "BBG001S5P686"
+domicile = "BM"
 ca = ["BIP.UN.TO"]
 us = ["BIP.US"]
 us_exchange = ["NYSE"]
@@ -139,6 +151,7 @@ first_seen = "2026-10-09"
 name = "SOLITARIO RESOURCES CORP"
 kind = "share"
 share_class_figi = "BBG001S5QW79"
+domicile = "US"
 ca = ["SLR.TO"]
 us = ["XPL.US"]
 us_exchange = ["NYSE American"]
@@ -295,6 +308,16 @@ us = ["PDS.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
 
+[security.BBG001S5VCL1]
+name = "QUEBECOR INC-CL A"
+kind = "share"
+share_class_figi = "BBG001S5VCL1"
+ca = ["QBR.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["QBCAF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S5VTZ9]
 name = "COSIGO RESOURCES LTD"
 kind = "share"
@@ -436,6 +459,17 @@ us_exchange = []
 us_otc = ["ABNAF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S5XPT2]
+name = "ATCO LTD -CLASS I"
+kind = "share"
+share_class_figi = "BBG001S5XPT2"
+domicile = "CA"
+ca = ["ACO.X.TO"]
+us = []
+us_exchange = []
+us_otc = ["ACLLF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S5XRP2]
 name = "GENIX PHARMACEUTICALS CORP"
 kind = "share"
@@ -537,6 +571,37 @@ domicile = "CA"
 ca = ["ATS.TO"]
 us = ["ATS.US"]
 us_exchange = ["NYSE"]
+first_seen = "2026-10-09"
+
+[security.BBG001S5XZ29]
+name = "BOMBARDIER INC-A"
+kind = "share"
+share_class_figi = "BBG001S5XZ29"
+ca = ["BBD.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["BDRAF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S5XZ38]
+name = "BOMBARDIER INC-B"
+kind = "share"
+share_class_figi = "BBG001S5XZ38"
+domicile = "CA"
+ca = ["BBD.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["BDRBF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S5Y061]
+name = "BOARDWALK REAL ESTATE INVEST"
+kind = "unit"
+share_class_figi = "BBG001S5Y061"
+ca = ["BEI.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["BOWFF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S5Y098]
@@ -700,6 +765,26 @@ us = ["CCJ.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
 
+[security.BBG001S5Y640]
+name = "CORBY SPIRIT AND WINE LTD"
+kind = "share"
+share_class_figi = "BBG001S5Y640"
+ca = ["CSW.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["CBYDF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S5Y659]
+name = "CORBY SPIRIT AND WINE-CL B"
+kind = "share"
+share_class_figi = "BBG001S5Y659"
+ca = ["CSW.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["CRBBF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S5Y766]
 name = "CANFOR CORP"
 kind = "share"
@@ -856,6 +941,7 @@ first_seen = "2026-10-09"
 name = "GOLD STRATEGY INC"
 kind = "share"
 share_class_figi = "BBG001S5YGK0"
+domicile = "CA"
 ca = ["GST.TO"]
 us = []
 us_exchange = []
@@ -880,6 +966,16 @@ ca = ["EQ.TO"]
 us = []
 us_exchange = []
 us_otc = ["CYPXF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S5YJF0]
+name = "DREAM OFFICE REAL ESTATE INV"
+kind = "unit"
+share_class_figi = "BBG001S5YJF0"
+ca = ["D.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["DRETF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S5YM54]
@@ -921,6 +1017,17 @@ ca = ["ELF.TO"]
 us = []
 us_exchange = []
 us_otc = ["ELFIF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S5YQ37]
+name = "EMPIRE CO LTD 'A'"
+kind = "share"
+share_class_figi = "BBG001S5YQ37"
+domicile = "CA"
+ca = ["EMP.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["EMLAF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S5YQ46]
@@ -998,7 +1105,7 @@ name = "FAIRFAX FINANCIAL HLDGS LTD"
 kind = "share"
 share_class_figi = "BBG001S5YSP9"
 domicile = "CA"
-ca = ["FFH.TO"]
+ca = ["FFH.TO", "FFH.U.TO"]
 us = []
 us_exchange = []
 us_otc = ["FRFHF.US"]
@@ -1174,6 +1281,16 @@ us_exchange = []
 us_otc = ["ROIUF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S5Z0Q8]
+name = "TRANSCONTINENTAL INC-CL B"
+kind = "share"
+share_class_figi = "BBG001S5Z0Q8"
+ca = ["TCL.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["TCLCF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S5Z186]
 name = "GOSSAN RESOURCES"
 kind = "share"
@@ -1254,6 +1371,16 @@ us_exchange = []
 us_otc = ["HELOF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S5Z3L7]
+name = "HAMMOND MANUFACTURING -CL A"
+kind = "share"
+share_class_figi = "BBG001S5Z3L7"
+ca = ["HMM.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["HMFAF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S5Z603]
 name = "INTERFOR CORP"
 kind = "share"
@@ -1314,6 +1441,16 @@ ca = ["LAM.TO"]
 us = []
 us_exchange = []
 us_otc = ["LMRXF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S5ZDC5]
+name = "LASSONDE INDS INC-CLASS A"
+kind = "share"
+share_class_figi = "BBG001S5ZDC5"
+ca = ["LAS.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["LSDAF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S5ZDF2]
@@ -1494,6 +1631,7 @@ first_seen = "2026-10-09"
 name = "NEXMETALS MINING CORP"
 kind = "share"
 share_class_figi = "BBG001S5ZQG2"
+domicile = "CA"
 ca = ["NEXM.TO"]
 us = ["NEXM.US"]
 us_exchange = ["Nasdaq"]
@@ -1640,6 +1778,27 @@ domicile = "CA"
 ca = ["OBE.TO"]
 us = ["OBE.US"]
 us_exchange = ["NYSE American"]
+first_seen = "2026-10-09"
+
+[security.BBG001S603S6]
+name = "QUEBECOR INC  -CL B"
+kind = "share"
+share_class_figi = "BBG001S603S6"
+ca = ["QBR.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["QBCRF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S604R5]
+name = "ROGERS COMMUNICATION - A"
+kind = "share"
+share_class_figi = "BBG001S604R5"
+domicile = "CA"
+ca = ["RCI.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["RCIAF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S604S4]
@@ -1894,6 +2053,17 @@ us = ["TD.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
 
+[security.BBG001S60LG9]
+name = "TECK RESOURCES LTD-CLS A"
+kind = "share"
+share_class_figi = "BBG001S60LG9"
+domicile = "CA"
+ca = ["TECK.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["TCKRF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S60LH8]
 name = "TECK RESOURCES LTD-CLS B"
 kind = "share"
@@ -2060,6 +2230,7 @@ first_seen = "2026-10-09"
 name = "GOLDGROUP MINING INC"
 kind = "share"
 share_class_figi = "BBG001S60X37"
+domicile = "CA"
 ca = ["GORO.TO"]
 us = ["GORO.US"]
 us_exchange = ["NYSE American"]
@@ -2114,6 +2285,16 @@ ca = ["DAN.TO"]
 us = []
 us_exchange = []
 us_otc = ["DRRSF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S62322]
+name = "MACKENZIE MASTER LP"
+kind = "unit"
+share_class_figi = "BBG001S62322"
+ca = ["MKZ.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["MCKZF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S62439]
@@ -2812,6 +2993,7 @@ first_seen = "2026-10-09"
 name = "INTL TOWER HILL MINES LTD"
 kind = "share"
 share_class_figi = "BBG001S6QLK6"
+domicile = "CA"
 ca = ["ITH.TO"]
 us = ["THM.US"]
 us_exchange = ["NYSE American"]
@@ -2988,6 +3170,17 @@ us_exchange = []
 us_otc = ["RSGOF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S6W8X4]
+name = "DOREL INDUSTRIES-CL B"
+kind = "share"
+share_class_figi = "BBG001S6W8X4"
+domicile = "CA"
+ca = ["DII.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["DIIBF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S6X9N2]
 name = "SPARTAN DELTA CORP"
 kind = "share"
@@ -3006,6 +3199,16 @@ ca = ["REVX.TO"]
 us = []
 us_exchange = []
 us_otc = ["REVFF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S6XQ27]
+name = "DUNDEE CORP -CL A"
+kind = "share"
+share_class_figi = "BBG001S6XQ27"
+ca = ["DC.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["DDEJF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S6XZ90]
@@ -3137,6 +3340,16 @@ ca = ["ENGH.TO"]
 us = []
 us_exchange = []
 us_otc = ["EGHSF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S72VN5]
+name = "TRANSCONTINENTAL INC-CL A"
+kind = "share"
+share_class_figi = "BBG001S72VN5"
+ca = ["TCL.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["TCLAF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S73007]
@@ -3400,6 +3613,16 @@ us_exchange = []
 us_otc = ["ISRJF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S7B1Y9]
+name = "RAVENSOURCE FUND"
+kind = "fund"
+share_class_figi = "BBG001S7B1Y9"
+ca = ["RAV.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["RAVFF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S7BGH5]
 name = "UNISERVE COMMUNICATIONS CORP"
 kind = "share"
@@ -3661,6 +3884,27 @@ us_exchange = []
 us_otc = ["RYOOF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S7J3K2]
+name = "CAN APARTMENT PROP REAL ESTA"
+kind = "unit"
+share_class_figi = "BBG001S7J3K2"
+domicile = "CA"
+ca = ["CAR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CDPYF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S7JBC3]
+name = "AGF MANAGEMENT LTD-CLASS B"
+kind = "share"
+share_class_figi = "BBG001S7JBC3"
+ca = ["AGF.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["AGFMF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S7JCD0]
 name = "KOLIBRI GLOBAL ENERGY INC"
 kind = "share"
@@ -3701,6 +3945,16 @@ us_exchange = []
 us_otc = ["NWCCF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S7K3T1]
+name = "RJK EXPLORATIONS LTD-CL A"
+kind = "share"
+share_class_figi = "BBG001S7K3T1"
+ca = ["RJX.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["RJKAF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S7K614]
 name = "TRX GOLD CORP"
 kind = "share"
@@ -3709,6 +3963,17 @@ domicile = "CA"
 ca = ["TRX.TO"]
 us = ["TRX.US"]
 us_exchange = ["NYSE American"]
+first_seen = "2026-10-09"
+
+[security.BBG001S7KM55]
+name = "RIOCAN REAL ESTATE INVST TR"
+kind = "unit"
+share_class_figi = "BBG001S7KM55"
+domicile = "CA"
+ca = ["REI.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["RIOCF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S7KYC1]
@@ -3792,6 +4057,16 @@ ca = ["RPX.TO"]
 us = []
 us_exchange = []
 us_otc = ["RDEXF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001S7SC13]
+name = "TVA GROUP INC- B SHARES"
+kind = "share"
+share_class_figi = "BBG001S7SC13"
+ca = ["TVA.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["TVAGF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001S7VKJ2]
@@ -4149,10 +4424,21 @@ us_exchange = []
 us_otc = ["MKRIF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001S8G617]
+name = "SMARTCENTRES REAL ESTATE INV"
+kind = "unit"
+share_class_figi = "BBG001S8G617"
+ca = ["SRU.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CWYUF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001S8GC69]
 name = "GOLD FINDER RESOURCES LTD"
 kind = "share"
 share_class_figi = "BBG001S8GC69"
+domicile = "CA"
 ca = ["GLD.TO"]
 us = []
 us_exchange = []
@@ -5099,6 +5385,16 @@ us_exchange = []
 us_otc = ["APEUF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SB5N24]
+name = "CANOE EIT INCOME FUND"
+kind = "fund"
+share_class_figi = "BBG001SB5N24"
+ca = ["EIT.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["ENDTF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SB66L9]
 name = "GIGA METALS CORP"
 kind = "share"
@@ -5239,6 +5535,27 @@ us_exchange = []
 us_otc = ["GDSRF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SBFC54]
+name = "CCL INDUSTRIES - CL A"
+kind = "share"
+share_class_figi = "BBG001SBFC54"
+domicile = "CA"
+ca = ["CCL.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["CCLLF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SBFGZ2]
+name = "CCL INDUSTRIES INC - CL B"
+kind = "share"
+share_class_figi = "BBG001SBFGZ2"
+ca = ["CCL.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["CCDBF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SBGHX1]
 name = "PLAYGON GAMES INC"
 kind = "share"
@@ -5267,6 +5584,26 @@ ca = ["TRO.TO"]
 us = []
 us_exchange = []
 us_otc = ["TNREF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SBGST2]
+name = "H&R REAL ESTATE INV-REIT UTS"
+kind = "unit"
+share_class_figi = "BBG001SBGST2"
+ca = ["HR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["HRUFF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SBH511]
+name = "HAMMOND POWER SOLUTIONS INC"
+kind = "share"
+share_class_figi = "BBG001SBH511"
+ca = ["HPS.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["HMDPF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SBJ7J6]
@@ -5360,6 +5697,16 @@ us_exchange = []
 us_otc = ["NKLXF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SBRBM4]
+name = "MINT INCOME FUND-TR UTS"
+kind = "fund"
+share_class_figi = "BBG001SBRBM4"
+ca = ["MID.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["MICFF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SBRG07]
 name = "TRES-OR RESOURCES LTD"
 kind = "share"
@@ -5374,6 +5721,7 @@ first_seen = "2026-10-09"
 name = "NORTH AMERICAN CONSTRUCTION"
 kind = "share"
 share_class_figi = "BBG001SBRPM3"
+domicile = "CA"
 ca = ["NOA.TO"]
 us = ["NOA.US"]
 us_exchange = ["NYSE"]
@@ -5539,6 +5887,16 @@ us_exchange = []
 us_otc = ["GPIPF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SC47X4]
+name = "BLUE RIBBON INCOME FUND"
+kind = "fund"
+share_class_figi = "BBG001SC47X4"
+ca = ["RBN.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["BLUBF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SC4L63]
 name = "MEDX HEALTH CORP"
 kind = "share"
@@ -5700,6 +6058,16 @@ ca = ["BQE.TO"]
 us = []
 us_exchange = []
 us_otc = ["BTQNF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SCCVC5]
+name = "INCOME FINANCIAL TR-UTS"
+kind = "fund"
+share_class_figi = "BBG001SCCVC5"
+ca = ["INC.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["ICFNF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SCDSX8]
@@ -5912,6 +6280,16 @@ us = ["USAS.US"]
 us_exchange = ["NYSE American"]
 first_seen = "2026-10-09"
 
+[security.BBG001SCXBZ1]
+name = "BOSTON PIZZA ROYALTIES-UNITS"
+kind = "unit"
+share_class_figi = "BBG001SCXBZ1"
+ca = ["BPF.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["BPZZF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SCXLV3]
 name = "DPM METALS INC"
 kind = "share"
@@ -6012,6 +6390,16 @@ us_exchange = []
 us_otc = ["DBCCF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SD2666]
+name = "CHARTWELL RETIREMENT RESIDEN"
+kind = "unit"
+share_class_figi = "BBG001SD2666"
+ca = ["CSH.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CWSRF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SD2T57]
 name = "KIDOZ INC"
 kind = "share"
@@ -6030,6 +6418,16 @@ ca = ["DTWO.TO"]
 us = []
 us_exchange = []
 us_otc = ["DTWOF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SD36W6]
+name = "PLAZA RETAIL REIT"
+kind = "unit"
+share_class_figi = "BBG001SD36W6"
+ca = ["PLZ.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["PAZRF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SD3PG2]
@@ -6207,6 +6605,7 @@ first_seen = "2026-10-09"
 name = "BROOKFIELD RENEWABLE PARTNER"
 kind = "unit"
 share_class_figi = "BBG001SDHPH6"
+domicile = "BM"
 ca = ["BEP.UN.TO"]
 us = ["BEP.US"]
 us_exchange = ["NYSE"]
@@ -6475,6 +6874,17 @@ us_exchange = []
 us_otc = ["CLRMF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SF3C76]
+name = "ALLIED PROPERTIES REAL ESTAT"
+kind = "unit"
+share_class_figi = "BBG001SF3C76"
+domicile = "CA"
+ca = ["AP.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["APYRF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SF4L48]
 name = "KORYX COPPER SA"
 kind = "share"
@@ -6715,6 +7125,16 @@ us_exchange = []
 us_otc = ["NSFDF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SFHKW5]
+name = "ORCA ENERGY GROUP INC"
+kind = "share"
+share_class_figi = "BBG001SFHKW5"
+ca = ["ORC.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["ORXGF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SFJL33]
 name = "ELORO RESOURCES LTD"
 kind = "share"
@@ -6800,6 +7220,7 @@ first_seen = "2026-10-09"
 name = "GOLD SPRINGS RESOURCE CORP"
 kind = "share"
 share_class_figi = "BBG001SFRL43"
+domicile = "CA"
 ca = ["GRC.TO"]
 us = []
 us_exchange = []
@@ -7027,6 +7448,16 @@ us_exchange = []
 us_otc = ["SMOFF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SG4FW8]
+name = "JUNO INTERNATIONAL CORP"
+kind = "share"
+share_class_figi = "BBG001SG4FW8"
+ca = ["JUN.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["NHFLF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SG4FX7]
 name = "HOMELAND NICKEL INC"
 kind = "share"
@@ -7106,6 +7537,16 @@ ca = ["LA.TO"]
 us = []
 us_exchange = []
 us_otc = ["LSANF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SG6567]
+name = "MATACHEWAN CONS MINES LTD-A"
+kind = "share"
+share_class_figi = "BBG001SG6567"
+ca = ["MCM.A.TO"]
+us = []
+us_exchange = []
+us_otc = ["MWCAF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SG65Q5]
@@ -7268,6 +7709,16 @@ us_exchange = []
 us_otc = ["GRARF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SGQ2M4]
+name = "KILLAM APARTMENT REAL ESTATE"
+kind = "unit"
+share_class_figi = "BBG001SGQ2M4"
+ca = ["KMP.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["KMMPF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SGQWF6]
 name = "DYNACERT INC"
 kind = "share"
@@ -7276,6 +7727,17 @@ ca = ["DYA.TO"]
 us = []
 us_exchange = []
 us_otc = ["DYFSF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SGR6Q0]
+name = "FIRST CAPITAL REAL ESTATE IN"
+kind = "unit"
+share_class_figi = "BBG001SGR6Q0"
+domicile = "CA"
+ca = ["FCR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["FCXXF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SGTPK2]
@@ -7544,7 +8006,7 @@ first_seen = "2026-10-09"
 name = "INVESQUE INC"
 kind = "share"
 share_class_figi = "BBG001SJ43Y7"
-ca = ["IVQ.TO"]
+ca = ["IVQ.TO", "IVQ.U.TO"]
 us = []
 us_exchange = []
 us_otc = ["MHIVF.US"]
@@ -7570,6 +8032,16 @@ us_exchange = []
 us_otc = ["TBRIF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SJBV31]
+name = "CHEMTRADE LOGISTICS INCOM FD"
+kind = "unit"
+share_class_figi = "BBG001SJBV31"
+ca = ["CHE.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CGIFF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SJBXM6]
 name = "COPPER ROAD RESOURCES INC"
 kind = "share"
@@ -7578,6 +8050,16 @@ ca = ["CRD.TO"]
 us = []
 us_exchange = []
 us_otc = ["STGDF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SJCXR0]
+name = "MORGUARD REAL ESTATE-TR UTS"
+kind = "unit"
+share_class_figi = "BBG001SJCXR0"
+ca = ["MRT.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["MGRUF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SJD4S2]
@@ -7850,6 +8332,16 @@ ca = ["INFI.TO"]
 us = []
 us_exchange = []
 us_otc = ["INUMF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SKD3H3]
+name = "FIRM CAPITAL PROPERTY TRUST"
+kind = "unit"
+share_class_figi = "BBG001SKD3H3"
+ca = ["FCD.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["FRMUF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SKFW41]
@@ -8134,6 +8626,16 @@ us_exchange = []
 us_otc = ["TRYXF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SLJ624]
+name = "CITADEL INCOME FUND"
+kind = "fund"
+share_class_figi = "BBG001SLJ624"
+ca = ["CTF.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CTFUF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SLM3Z1]
 name = "SATURN OIL & GAS INC"
 kind = "share"
@@ -8397,6 +8899,16 @@ us = ["BCTX.US"]
 us_exchange = ["Nasdaq"]
 first_seen = "2026-10-09"
 
+[security.BBG001SMJ5Y9]
+name = "SIR ROYALTY INCOME FUND"
+kind = "unit"
+share_class_figi = "BBG001SMJ5Y9"
+ca = ["SRV.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["SIRZF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SMKND1]
 name = "HIGHLAND COPPER CO INC"
 kind = "share"
@@ -8539,6 +9051,16 @@ us_exchange = []
 us_otc = ["CESDF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SNQLH3]
+name = "MOLSON COORS CANADA INC -B"
+kind = "share"
+share_class_figi = "BBG001SNQLH3"
+ca = ["TPX.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["MXGBF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SNR391]
 name = "DEXTERRA GROUP INC"
 kind = "share"
@@ -8672,6 +9194,16 @@ us_exchange = []
 us_otc = ["CNDCF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001SP8DR5]
+name = "CROMBIE REAL ESTATE INVESTME"
+kind = "unit"
+share_class_figi = "BBG001SP8DR5"
+ca = ["CRR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CROMF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001SP9591]
 name = "ANDINA COPPER CORP"
 kind = "share"
@@ -8680,6 +9212,16 @@ ca = ["ANDC.TO"]
 us = []
 us_exchange = []
 us_otc = ["PMMCF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SP9TZ0]
+name = "ALARIS EQUITY PARTNERS INCOM"
+kind = "unit"
+share_class_figi = "BBG001SP9TZ0"
+ca = ["AD.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["ADLRF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SPBRV5]
@@ -8899,6 +9441,7 @@ first_seen = "2026-10-09"
 name = "MAKO MINING CORP"
 kind = "share"
 share_class_figi = "BBG001SQ4P90"
+domicile = "CA"
 ca = ["MKO.TO"]
 us = ["MAKO.US"]
 us_exchange = ["Nasdaq"]
@@ -8942,6 +9485,16 @@ ca = ["MAI.TO"]
 us = []
 us_exchange = []
 us_otc = ["MAIFF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SQ8Y15]
+name = "BTB REAL ESTATE INVESTMENT T"
+kind = "unit"
+share_class_figi = "BBG001SQ8Y15"
+ca = ["BTB.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["BTBIF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SQ9RJ0]
@@ -8992,6 +9545,16 @@ ca = ["XX.TO"]
 us = []
 us_exchange = []
 us_otc = ["ALXXF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SQCKV7]
+name = "FIRM CAPITAL APARTMENT REAL"
+kind = "unit"
+share_class_figi = "BBG001SQCKV7"
+ca = ["FCA.UN.TO", "FCA.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["FCAFF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SQDFG4]
@@ -9220,10 +9783,31 @@ first_seen = "2026-10-09"
 name = "BLUE SKY URANIUM CORP"
 kind = "share"
 share_class_figi = "BBG001SR4XP3"
+domicile = "CA"
 ca = ["BSK.TO"]
 us = []
 us_exchange = []
 us_otc = ["BKUCF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SR5XF3]
+name = "PRECIOUS METALS & MINING TRU"
+kind = "fund"
+share_class_figi = "BBG001SR5XF3"
+ca = ["MMP.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["PMMTF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001SR64K0]
+name = "CANADIAN NET REAL ESTATE INV"
+kind = "unit"
+share_class_figi = "BBG001SR64K0"
+ca = ["NET.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CNNRF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001SR9LP4]
@@ -9421,6 +10005,7 @@ first_seen = "2026-10-09"
 name = "GOLD X2 MINING INC"
 kind = "share"
 share_class_figi = "BBG001SRTS59"
+domicile = "CA"
 ca = ["AUXX.TO"]
 us = ["AUXX.US"]
 us_exchange = ["NYSE American"]
@@ -9480,6 +10065,7 @@ first_seen = "2026-10-09"
 name = "BLUE MOON METALS INC"
 kind = "share"
 share_class_figi = "BBG001SS0LD4"
+domicile = "CA"
 ca = ["MOON.TO"]
 us = ["BMM.US"]
 us_exchange = ["Nasdaq"]
@@ -9543,8 +10129,8 @@ ca = ["SSL.TO"]
 us = []
 us_exchange = []
 first_seen = "unknown"
-until = "unknown"
-history = [{ listing = "SSL.US", kind = "us", until = "unknown" }]
+until = "2025-10-22"
+history = [{ listing = "SSL.US", kind = "us", until = "2025-10-22" }]
 
 [security.BBG001SSSS94]
 name = "PINNACLE SILVER AND GOLD COR"
@@ -10238,6 +10824,7 @@ first_seen = "2026-10-09"
 name = "GOLD TERRA RESOURCE CORP"
 kind = "share"
 share_class_figi = "BBG001T2D9J7"
+domicile = "CA"
 ca = ["YGT.TO"]
 us = []
 us_exchange = []
@@ -10742,6 +11329,7 @@ first_seen = "2026-10-09"
 name = "BLUE STAR GOLD CORP"
 kind = "share"
 share_class_figi = "BBG001T6BJD4"
+domicile = "CA"
 ca = ["BAU.TO"]
 us = []
 us_exchange = []
@@ -10806,6 +11394,16 @@ ca = ["COR.TO"]
 us = []
 us_exchange = []
 us_otc = ["CAMZF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG001T6SFJ8]
+name = "VITAL INFRASTRUCTURE PROPERT"
+kind = "unit"
+share_class_figi = "BBG001T6SFJ8"
+ca = ["VITL.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["NWHUF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001T6TYJ6]
@@ -11525,7 +12123,7 @@ first_seen = "2026-10-09"
 name = "ROYAL CANADIAN MINT GOLD"
 kind = "fund"
 share_class_figi = "BBG001TXDLP5"
-ca = ["MNT.TO"]
+ca = ["MNT.TO", "MNT.U.TO"]
 us = []
 us_exchange = []
 us_otc = ["RMNTF.US"]
@@ -11708,6 +12306,7 @@ first_seen = "2026-10-09"
 name = "ANFIELD ENERGY INC"
 kind = "share"
 share_class_figi = "BBG001V114Z2"
+domicile = "CA"
 ca = ["AEC.TO"]
 us = ["AEC.US"]
 us_exchange = ["Nasdaq"]
@@ -11824,6 +12423,16 @@ us_exchange = []
 us_otc = ["KNXFF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG001V1BJ79]
+name = "PRO REAL ESTATE INVESTMENT T"
+kind = "unit"
+share_class_figi = "BBG001V1BJ79"
+ca = ["PRV.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["PRVFF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG001V1CFN8]
 name = "GLADIATOR METALS CORP"
 kind = "share"
@@ -11923,6 +12532,16 @@ domicile = "CA"
 ca = ["PPTA.TO"]
 us = ["PPTA.US"]
 us_exchange = ["Nasdaq"]
+first_seen = "2026-10-09"
+
+[security.BBG001V1SN36]
+name = "POSTMEDIA NETWORK CANADA COR"
+kind = "share"
+share_class_figi = "BBG001V1SN36"
+ca = ["PNC.B.TO"]
+us = []
+us_exchange = []
+us_otc = ["PCDAF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG001V2MQN1]
@@ -12418,6 +13037,16 @@ us_exchange = []
 us_otc = ["LVGLF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG002PV9429]
+name = "SLATE GROCERY REIT-CL U"
+kind = "unit"
+share_class_figi = "BBG002PV9429"
+ca = ["SGR.UN.TO", "SGR.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["SRRTF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG002Q5F598]
 name = "PRECIPITATE GOLD CORP"
 kind = "share"
@@ -12438,6 +13067,16 @@ us_exchange = []
 us_otc = ["ECORF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG002Q8RXR8]
+name = "MORGUARD NORTH AMERICAN RESI"
+kind = "unit"
+share_class_figi = "BBG002Q8RXR8"
+ca = ["MRG.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["MNARF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG002QTV767]
 name = "K2 GOLD CORP"
 kind = "share"
@@ -12456,6 +13095,16 @@ ca = ["WRR.TO"]
 us = []
 us_exchange = []
 us_otc = ["WRRZF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG002S9S255]
+name = "JFT STRATEGIES FUND"
+kind = "fund"
+share_class_figi = "BBG002S9S255"
+ca = ["JFS.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["JFTSF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG002VXMVQ7]
@@ -12579,6 +13228,16 @@ us_exchange = []
 us_otc = ["CVOSF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00384XV10]
+name = "TRUE NORTH COMMERCIAL REAL E"
+kind = "unit"
+share_class_figi = "BBG00384XV10"
+ca = ["TNT.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["TUERF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG003859B27]
 name = "CHAKANA COPPER CORP"
 kind = "share"
@@ -12617,6 +13276,16 @@ domicile = "US"
 ca = ["HUT.TO"]
 us = ["HUT.US"]
 us_exchange = ["Nasdaq"]
+first_seen = "2026-10-09"
+
+[security.BBG0039G72H8]
+name = "DREAM INDUSTRIAL REAL ESTATE"
+kind = "unit"
+share_class_figi = "BBG0039G72H8"
+ca = ["DIR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["DREUF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG003BW0K14]
@@ -12680,6 +13349,16 @@ us_exchange = []
 us_otc = ["TGSHF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG003FX9CS8]
+name = "NEXUS INDUSTRIAL REIT"
+kind = "unit"
+share_class_figi = "BBG003FX9CS8"
+ca = ["NXR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["EFRTF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG003H6NZS8]
 name = "FREDONIA MINING INC"
 kind = "share"
@@ -12714,7 +13393,7 @@ first_seen = "2026-10-09"
 name = "ROYAL CANADIAN MINT SILVER"
 kind = "fund"
 share_class_figi = "BBG003LYCNY4"
-ca = ["MNS.TO"]
+ca = ["MNS.TO", "MNS.U.TO"]
 us = []
 us_exchange = []
 us_otc = ["MNSXF.US"]
@@ -12811,6 +13490,16 @@ us_exchange = []
 us_otc = ["RLLMF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG003TTV2S9]
+name = "AMERICAN HOTEL INCOME PROPER"
+kind = "unit"
+share_class_figi = "BBG003TTV2S9"
+ca = ["HOT.UN.TO", "HOT.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["AHOTF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG0042GGP73]
 name = "TRINITY SILVER CORP"
 kind = "share"
@@ -12839,6 +13528,16 @@ ca = ["STUD.TO"]
 us = []
 us_exchange = []
 us_otc = ["STLNF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG0046J5JV2]
+name = "INOVALIS REAL ESTATE INVESTM"
+kind = "unit"
+share_class_figi = "BBG0046J5JV2"
+ca = ["INO.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["IVREF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG004D95VN8]
@@ -12891,6 +13590,17 @@ us_exchange = []
 us_otc = ["IMINF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG004P8YS89]
+name = "CHOICE PROPERTIES REIT"
+kind = "unit"
+share_class_figi = "BBG004P8YS89"
+domicile = "CA"
+ca = ["CHP.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["PPRQF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG004SNMZB6]
 name = "DECISIVE DIVIDEND CORP"
 kind = "share"
@@ -12929,6 +13639,16 @@ ca = ["FUU.TO"]
 us = []
 us_exchange = []
 us_otc = ["FUUFF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG00582TFF4]
+name = "CT REAL ESTATE INVESTMENT TR"
+kind = "unit"
+share_class_figi = "BBG00582TFF4"
+ca = ["CRT.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["CTRRF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG005CWZZ53]
@@ -12999,6 +13719,16 @@ ca = ["EVMT.TO"]
 us = []
 us_exchange = []
 us_otc = ["LNDZF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG005QNC7Z2]
+name = "R&R REAL ESTATE INVESTMENT T"
+kind = "unit"
+share_class_figi = "BBG005QNC7Z2"
+ca = ["RRR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["RRRUF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG0062S8DS5]
@@ -13112,6 +13842,16 @@ us = ["OR.US"]
 us_exchange = ["NYSE"]
 first_seen = "2026-10-09"
 
+[security.BBG006S1YW87]
+name = "DREAM IMPACT TRUST"
+kind = "unit"
+share_class_figi = "BBG006S1YW87"
+ca = ["MPCT.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["DDHRF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG006T7NB72]
 name = "AVIDIAN GOLD CORP"
 kind = "share"
@@ -13156,6 +13896,7 @@ first_seen = "2026-10-09"
 name = "PROFOUND MEDICAL CORP"
 kind = "share"
 share_class_figi = "BBG0076T0BS9"
+domicile = "CA"
 ca = ["PRN.TO"]
 us = ["PROF.US"]
 us_exchange = ["Nasdaq"]
@@ -13169,6 +13910,16 @@ domicile = "CA"
 ca = ["QSR.TO"]
 us = ["QSR.US"]
 us_exchange = ["NYSE"]
+first_seen = "2026-10-09"
+
+[security.BBG0076WG429]
+name = "RESTAURANT BRANDS-EXCH UNITS"
+kind = "unit"
+share_class_figi = "BBG0076WG429"
+ca = ["QSP.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["RSTRF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG007DGM3J3]
@@ -13340,6 +14091,16 @@ ca = ["IMI.TO"]
 us = []
 us_exchange = []
 us_otc = ["IMITF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG009CQCCJ9]
+name = "AUTOMOTIVE PROPERTIES REAL E"
+kind = "unit"
+share_class_figi = "BBG009CQCCJ9"
+ca = ["APR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["APPTF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG009DT66F6]
@@ -13676,6 +14437,17 @@ us_exchange = []
 us_otc = ["DMCUF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00FGY26J8]
+name = "ORLA MINING LTD"
+kind = "share"
+share_class_figi = "BBG00FGY26J8"
+ca = ["OLA.TO"]
+us = []
+us_exchange = []
+first_seen = "unknown"
+until = "unknown"
+history = [{ listing = "ORLA.US", kind = "us", until = "unknown" }]
+
 [security.BBG00FLS7Z24]
 name = "TRIFECTA GOLD LTD"
 kind = "share"
@@ -13760,6 +14532,7 @@ first_seen = "2026-10-09"
 name = "INTERNATIONAL PETROLEUM CORP"
 kind = "share"
 share_class_figi = "BBG00FZM95G1"
+domicile = "CA"
 ca = ["IPCO.TO"]
 us = []
 us_exchange = []
@@ -14448,6 +15221,16 @@ ca = ["EMN.TO"]
 us = []
 us_exchange = []
 us_otc = ["EUMNF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG00KKD5P49]
+name = "BSR REAL ESTATE INVESTMENT T"
+kind = "unit"
+share_class_figi = "BBG00KKD5P49"
+ca = ["HOM.UN.TO", "HOM.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["BSRTF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG00KP49991]
@@ -15495,6 +16278,16 @@ us_exchange = []
 us_otc = ["GPGCF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00TJZK363]
+name = "NORTHVIEW RESIDENTIAL REIT"
+kind = "unit"
+share_class_figi = "BBG00TJZK363"
+ca = ["NRR.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["NRRUF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG00V2M3C28]
 name = "AEONIAN RESOURCES CORP"
 kind = "share"
@@ -15626,6 +16419,16 @@ us_exchange = []
 us_otc = ["GMGMF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00X5FJ3X5]
+name = "FLAGSHIP COMMUNITIES REIT UT"
+kind = "unit"
+share_class_figi = "BBG00X5FJ3X5"
+ca = ["MHC.UN.TO", "MHC.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["MHCUF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG00X9DTJP9]
 name = "ELEMENT 29 RESOURCES INC"
 kind = "share"
@@ -15717,6 +16520,16 @@ us_exchange = []
 us_otc = ["HAPBF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG00Y1T9YX0]
+name = "ETHER FUND/THE"
+kind = "fund"
+share_class_figi = "BBG00Y1T9YX0"
+ca = ["QETH.UN.TO", "QETH.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["QETHF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG00Y2JJL40]
 name = "LITHIUMBANK RESOURCES CORP"
 kind = "share"
@@ -15795,6 +16608,16 @@ ca = ["LG.TO"]
 us = []
 us_exchange = []
 us_otc = ["LGCXF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG00Z3YGQP2]
+name = "DRI HEALTHCARE TRUST"
+kind = "unit"
+share_class_figi = "BBG00Z3YGQP2"
+ca = ["DHT.UN.TO", "DHT.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["DHTRF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG00Z4JGWK6]
@@ -16130,6 +16953,16 @@ ca = ["JTWO.TO"]
 us = []
 us_exchange = []
 us_otc = ["JTWOF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG011Q5C066]
+name = "SPROTT PHYSICAL URANIUM TR"
+kind = "fund"
+share_class_figi = "BBG011Q5C066"
+ca = ["U.UN.TO", "U.U.TO"]
+us = []
+us_exchange = []
+us_otc = ["SRUUF.US"]
 first_seen = "2026-10-09"
 
 [security.BBG011R6PQP1]
@@ -16512,6 +17345,27 @@ us_exchange = []
 us_otc = ["RMBUF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG01413Z1M7]
+name = "FOUNTAINHALL CAPITAL CORP"
+kind = "share"
+share_class_figi = "BBG01413Z1M7"
+ca = ["FUN.P.TO"]
+us = []
+us_exchange = []
+us_otc = ["FUNTF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG0142PQFS0]
+name = "PRIMARIS REIT"
+kind = "unit"
+share_class_figi = "BBG0142PQFS0"
+domicile = "CA"
+ca = ["PMZ.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["PMREF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG014GJMRM3]
 name = "COPPERCORP RESOURCES INC"
 kind = "share"
@@ -16686,7 +17540,7 @@ first_seen = "2026-10-09"
 name = "SALTIRE CAPITAL LTD"
 kind = "share"
 share_class_figi = "BBG016KLZ4K7"
-ca = ["SLT.TO"]
+ca = ["SLT.TO", "SLT.U.TO"]
 us = []
 us_exchange = []
 us_otc = ["SLTEF.US"]
@@ -17205,6 +18059,16 @@ us_exchange = []
 us_otc = ["SUGRF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG01KBDQ5Z5]
+name = "PARTNERS VALUE INVESTMENTS L"
+kind = "unit"
+share_class_figi = "BBG01KBDQ5Z5"
+ca = ["PVF.UN.TO"]
+us = []
+us_exchange = []
+us_otc = ["PVLUF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG01L3TW1R8]
 name = "PIVOTREE INC"
 kind = "share"
@@ -17283,6 +18147,16 @@ ca = ["ONAU.TO"]
 us = []
 us_exchange = []
 us_otc = ["ONGRF.US"]
+first_seen = "2026-10-09"
+
+[security.BBG01N46BDF3]
+name = "SPROTT PHYSICAL COPPER TRUST"
+kind = "fund"
+share_class_figi = "BBG01N46BDF3"
+domicile = "CA"
+ca = ["COP.UN.TO", "COP.U.TO"]
+us = ["SCOP.US"]
+us_exchange = ["NYSE Arca"]
 first_seen = "2026-10-09"
 
 [security.BBG01N6BVR30]
@@ -17502,6 +18376,7 @@ first_seen = "2026-10-09"
 name = "GOLD HART COPPER CORP"
 kind = "share"
 share_class_figi = "BBG01SXPKDP7"
+domicile = "CA"
 ca = ["HART.TO"]
 us = []
 us_exchange = []
@@ -17542,6 +18417,7 @@ first_seen = "2026-10-09"
 name = "BLUE JAY GOLD CORP"
 kind = "share"
 share_class_figi = "BBG01V5F52Q3"
+domicile = "CA"
 ca = ["JAY.TO"]
 us = []
 us_exchange = []
@@ -17719,6 +18595,16 @@ us_exchange = []
 us_otc = ["RAYGF.US"]
 first_seen = "2026-10-09"
 
+[security.BBG02096XXK3]
+name = "SCD CAPITAL CORP"
+kind = "share"
+share_class_figi = "BBG02096XXK3"
+ca = ["SMCD.P.TO"]
+us = []
+us_exchange = []
+us_otc = ["SMCDF.US"]
+first_seen = "2026-10-09"
+
 [security.BBG020DK8TX0]
 name = "AGT FOOD & INGREDIENTS INC"
 kind = "share"
@@ -17846,4 +18732,922 @@ ca = ["CADY.TO"]
 us = []
 us_exchange = []
 us_otc = ["CADYF.US"]
+first_seen = "2026-10-09"
+
+[distinct.BBG011XZ3ML7]
+name = "AMAZON.COM INC - CDR"
+kind = "cdr"
+ca = "AMZN.TO"
+us = "AMZN.US"
+us_figi = "BBG001S5PQL7"
+us_name = "AMAZON.COM INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG012313B73]
+name = "ALPHABET INC - CDR"
+kind = "cdr"
+ca = "GOOG.TO"
+us = "GOOG.US"
+us_figi = "BBG009S3NB21"
+us_name = "ALPHABET INC-CL C"
+first_seen = "2026-10-09"
+
+[distinct.BBG012313HQ9]
+name = "TESLA INC - CDR"
+kind = "cdr"
+ca = "TSLA.TO"
+us = "TSLA.US"
+us_figi = "BBG001SQKGD7"
+us_name = "TESLA INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01293F5Y3]
+name = "APPLE INC-CDR"
+kind = "cdr"
+ca = "AAPL.TO"
+us = "AAPL.US"
+us_figi = "BBG001S5N8V8"
+us_name = "APPLE INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01293FC05]
+name = "NETFLIX INC-CDR"
+kind = "cdr"
+ca = "NFLX.TO"
+us = "NFLX.US"
+us_figi = "BBG001SF6L46"
+us_name = "NETFLIX INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG012TB6KZ9]
+name = "META PLATFORMS INC-CDR"
+kind = "cdr"
+ca = "META.TO"
+us = "META.US"
+us_figi = "BBG001SQCQC5"
+us_name = "META PLATFORMS INC-CLASS A"
+first_seen = "2026-10-09"
+
+[distinct.BBG012TB8DW6]
+name = "MICROSOFT CORP-CDR"
+kind = "cdr"
+ca = "MSFT.TO"
+us = "MSFT.US"
+us_figi = "BBG001S5TD05"
+us_name = "MICROSOFT CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG012TB9NL5]
+name = "PAYPAL HOLDINGS INC-CDR"
+kind = "cdr"
+ca = "PYPL.TO"
+us = "PYPL.US"
+us_figi = "BBG0077VNXW5"
+us_name = "PAYPAL HOLDINGS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG012TBD8K4]
+name = "WALT DISNEY CO/THE-CDR"
+kind = "cdr"
+ca = "DIS.TO"
+us = "DIS.US"
+us_figi = "BBG001S5QHF3"
+us_name = "WALT DISNEY CO/THE"
+first_seen = "2026-10-09"
+
+[distinct.BBG013V1K5L8]
+name = "ADVANCED MICRO DEVICES CDR"
+kind = "cdr"
+ca = "AMD.TO"
+us = "AMD.US"
+us_figi = "BBG001S5NN36"
+us_name = "ADVANCED MICRO DEVICES"
+first_seen = "2026-10-09"
+
+[distinct.BBG013V1QYF6]
+name = "COSTCO WHOLESALE CORP-CDR"
+kind = "cdr"
+ca = "COST.TO"
+us = "COST.US"
+us_figi = "BBG001S9KRQ7"
+us_name = "COSTCO WHOLESALE CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG013V1WB50]
+name = "INTL BUSINESS MACHINES C-CDR"
+kind = "cdr"
+ca = "IBM.TO"
+us = "IBM.US"
+us_figi = "BBG001S5S399"
+us_name = "INTL BUSINESS MACHINES CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG013V206W4]
+name = "PFIZER INC-CDR"
+kind = "cdr"
+ca = "PFE.TO"
+us = "PFE.US"
+us_figi = "BBG001S5V466"
+us_name = "PFIZER INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG013V21QW9]
+name = "JPMORGAN CHASE & CO-CDR"
+kind = "cdr"
+ca = "JPM.TO"
+us = "JPM.US"
+us_figi = "BBG001S8CRC3"
+us_name = "JPMORGAN CHASE & CO"
+first_seen = "2026-10-09"
+
+[distinct.BBG013V236D2]
+name = "MASTERCARD-CDR"
+kind = "cdr"
+ca = "MA.TO"
+us = "MA.US"
+us_figi = "BBG001SKNNS6"
+us_name = "MASTERCARD INC - A"
+first_seen = "2026-10-09"
+
+[distinct.BBG013V24V55]
+name = "SALESFORCE.COM INC-CDR"
+kind = "cdr"
+ca = "CRM.TO"
+us = "CRM.US"
+us_figi = "BBG001SDLP09"
+us_name = "SALESFORCE INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG014T46CL4]
+name = "HOME DEPOT INC-CDR"
+kind = "cdr"
+ca = "HD.TO"
+us = "HD.US"
+us_figi = "BBG001S5RTW7"
+us_name = "HOME DEPOT INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG014T46P17]
+name = "NVIDIA CORP-CDR"
+kind = "cdr"
+ca = "NVDA.TO"
+us = "NVDA.US"
+us_figi = "BBG001S5TZJ6"
+us_name = "NVIDIA CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG014T46Y09]
+name = "GOLDMAN SACHS GROUP INC-CDR"
+kind = "cdr"
+ca = "GS.TO"
+us = "GS.US"
+us_figi = "BBG001SC07Z6"
+us_name = "GOLDMAN SACHS GROUP INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG014T47583]
+name = "WALMART INC-CDR"
+kind = "cdr"
+ca = "WMT.TO"
+us = "WMT.US"
+us_figi = "BBG001S5XH92"
+us_name = "WALMART INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG018Y8CMV0]
+name = "CISCO SYSTEMS INC - CDR"
+kind = "cdr"
+ca = "CSCO.TO"
+us = "CSCO.US"
+us_figi = "BBG001S6HC62"
+us_name = "CISCO SYSTEMS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG018Y8CXP3]
+name = "MCDONALD'S CORP - CDR"
+kind = "cdr"
+ca = "MCD.TO"
+us = "MCD.US"
+us_figi = "BBG001S5T110"
+us_name = "MCDONALD'S CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG018Y8DDV9]
+name = "STARBUCKS CORP - CDR"
+kind = "cdr"
+ca = "SBUX.TO"
+us = "SBUX.US"
+us_figi = "BBG001S72KH6"
+us_name = "STARBUCKS CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG018Y8DML0]
+name = "VERIZON COMMUNICATIONS I-CDR"
+kind = "cdr"
+ca = "VZ.TO"
+us = "VZ.US"
+us_figi = "BBG001S67QY1"
+us_name = "VERIZON COMMUNICATIONS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG018Y8DTD4]
+name = "NIKE INC - CDR"
+kind = "cdr"
+ca = "NKE.TO"
+us = "NKE.US"
+us_figi = "BBG001S6NTK2"
+us_name = "NIKE INC -CL B"
+first_seen = "2026-10-09"
+
+[distinct.BBG018Y8FYX9]
+name = "UNITEDHEALTH GROUP INC - CDR"
+kind = "cdr"
+ca = "UNH.TO"
+us = "UNH.US"
+us_figi = "BBG001S6WCJ1"
+us_name = "UNITEDHEALTH GROUP INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01BPHQSG2]
+name = "ABBVIE INC-CDR"
+kind = "cdr"
+ca = "ABBV.TO"
+us = "ABBV.US"
+us_figi = "BBG0025Y4RZ3"
+us_name = "ABBVIE INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01BPHR250]
+name = "CVS HEALTH CORP-CDR"
+kind = "cdr"
+ca = "CVS.TO"
+us = "CVS.US"
+us_figi = "BBG001S5QBD8"
+us_name = "CVS HEALTH CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01BPHVG54]
+name = "HONEYWELL INTERNATIONAL-CDR"
+kind = "cdr"
+ca = "HON.TO"
+us = "HON.US"
+us_figi = "BBG001S5X1N1"
+us_name = "HONEYWELL INTERNATIONAL INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01BPHW3R8]
+name = "PROCTER & GAMBLE CO/THE-CDR"
+kind = "cdr"
+ca = "PG.TO"
+us = "PG.US"
+us_figi = "BBG001S5V4L9"
+us_name = "PROCTER & GAMBLE CO/THE"
+first_seen = "2026-10-09"
+
+[distinct.BBG01BPHXWY5]
+name = "UNITED PARCEL SERVICE-CDR"
+kind = "cdr"
+ca = "UPS.TO"
+us = "UPS.US"
+us_figi = "BBG001SDGSH1"
+us_name = "UNITED PARCEL SERVICE-CL B"
+first_seen = "2026-10-09"
+
+[distinct.BBG01G268TY8]
+name = "BOEING CO/THE - CDR"
+kind = "cdr"
+ca = "BA.TO"
+us = "BA.US"
+us_figi = "BBG001S5P0V3"
+us_name = "BOEING CO/THE"
+first_seen = "2026-10-09"
+
+[distinct.BBG01G2692W8]
+name = "CHEVRON CORP - CDR"
+kind = "cdr"
+ca = "CVX.TO"
+us = "CVX.US"
+us_figi = "BBG001S67ZC5"
+us_name = "CHEVRON CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01G269XH7]
+name = "EXXON MOBIL CORP - CDR"
+kind = "cdr"
+ca = "XOM.TO"
+us = "XOM.US"
+us_figi = "BBG023CY9NL0"
+us_name = "EXXONMOBIL HOLDINGS CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01G26B6W6]
+name = "INTEL CORP - CDR"
+kind = "cdr"
+ca = "INTC.TO"
+us = "INTC.US"
+us_figi = "BBG001S5SF65"
+us_name = "INTEL CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01G26C0R4]
+name = "UBER TECHNOLOGIES INC - CDR"
+kind = "cdr"
+ca = "UBER.TO"
+us = "UBER.US"
+us_figi = "BBG002B04MW4"
+us_name = "UBER TECHNOLOGIES INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01JDLY1Y9]
+name = "ADOBE INC-CDR"
+kind = "cdr"
+ca = "ADBE.TO"
+us = "ADBE.US"
+us_figi = "BBG001S5NCQ5"
+us_name = "ADOBE INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01JDLY5B5]
+name = "BROADCOM INC-CDR"
+kind = "cdr"
+ca = "AVGO.TO"
+us = "AVGO.US"
+us_figi = "BBG00KHY5SY8"
+us_name = "BROADCOM INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01JDLZ5Z8]
+name = "ELI LILLY & CO-CDR"
+kind = "cdr"
+ca = "LLY.TO"
+us = "LLY.US"
+us_figi = "BBG001S5STL8"
+us_name = "ELI LILLY & CO"
+first_seen = "2026-10-09"
+
+[distinct.BBG01JDLZB49]
+name = "JOHNSON & JOHNSON-CDR"
+kind = "cdr"
+ca = "JNJ.TO"
+us = "JNJ.US"
+us_figi = "BBG001S5SHQ9"
+us_name = "JOHNSON & JOHNSON"
+first_seen = "2026-10-09"
+
+[distinct.BBG01JDM09J4]
+name = "RTX CORP-CDR"
+kind = "cdr"
+ca = "RTX.TO"
+us = "RTX.US"
+us_figi = "BBG001S5X5Q9"
+us_name = "RTX CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01LGQ0VV4]
+name = "LULULEMON ATHLETICA-CDR"
+kind = "cdr"
+ca = "LULU.TO"
+us = "LULU.US"
+us_figi = "BBG001STBM75"
+us_name = "LULULEMON ATHLETICA INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01LGQ17Z2]
+name = "PALO ALTO NETWORK-CDR"
+kind = "cdr"
+ca = "PANW.TO"
+us = "PANW.US"
+us_figi = "BBG001T9NWN5"
+us_name = "PALO ALTO NETWORKS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01LGWB7Z8]
+name = "BLACKROCK-CDR"
+kind = "cdr"
+ca = "BLK.TO"
+us = "BLK.US"
+us_figi = "BBG01PSW2WR0"
+us_name = "BLACKROCK INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01LGZJVB6]
+name = "THERMO FISHER SCIENTIFI-CDR"
+kind = "cdr"
+ca = "TMO.TO"
+us = "TMO.US"
+us_figi = "BBG001S5WS08"
+us_name = "THERMO FISHER SCIENTIFIC INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01LGZK4K4]
+name = "CONSTELLATION BRAN-CDR"
+kind = "cdr"
+ca = "STZ.TO"
+us = "STZ.US"
+us_figi = "BBG001SD31G5"
+us_name = "CONSTELLATION BRANDS INC-A"
+first_seen = "2026-10-09"
+
+[distinct.BBG01MFRY4L5]
+name = "SUPER MICRO COMPUTER INC-CDR"
+kind = "cdr"
+ca = "SMCI.TO"
+us = "SMCI.US"
+us_figi = "BBG001SQGH95"
+us_name = "SUPER MICRO COMPUTER INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW3YK2]
+name = "AMERICAN EXPRESS-CDR"
+kind = "cdr"
+ca = "AXP.TO"
+us = "AXP.US"
+us_figi = "BBG001S5P034"
+us_name = "AMERICAN EXPRESS CO"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW3ZQ3]
+name = "TEXAS INSTRUMENTS INC"
+kind = "cdr"
+ca = "TXN.TO"
+us = "TXN.US"
+us_figi = "BBG001S5WYZ7"
+us_name = "TEXAS INSTRUMENTS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW41C2]
+name = "QUALCOMM INC"
+kind = "cdr"
+ca = "QCOM.TO"
+us = "QCOM.US"
+us_figi = "BBG001S6VS70"
+us_name = "QUALCOMM INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW4301]
+name = "FORD MOTOR CO"
+kind = "cdr"
+ca = "F.TO"
+us = "F.US"
+us_figi = "BBG001S5TZ33"
+us_name = "FORD MOTOR CO"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW45S6]
+name = "BOOKING HOLDINGS INC-CDR"
+kind = "cdr"
+ca = "BKNG.TO"
+us = "BKNG.US"
+us_figi = "BBG001S89N72"
+us_name = "BOOKING HOLDINGS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW49P1]
+name = "GENERAL ELECTRIC"
+kind = "cdr"
+ca = "GE.TO"
+us = "GE.US"
+us_figi = "BBG001S5PVD5"
+us_name = "GENERAL ELECTRIC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW4DH1]
+name = "INTUITIVE SURGICAL INC"
+kind = "cdr"
+ca = "ISRG.TO"
+us = "ISRG.US"
+us_figi = "BBG001S7XR78"
+us_name = "INTUITIVE SURGICAL INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW4GL9]
+name = "MICRON TECHNOLOGY INC"
+kind = "cdr"
+ca = "MU.TO"
+us = "MU.US"
+us_figi = "BBG001S6P675"
+us_name = "MICRON TECHNOLOGY INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01PSW4MW4]
+name = "CROWDSTRIKE HOLDINGS INC-CDR"
+kind = "cdr"
+ca = "CRWD.TO"
+us = "CRWD.US"
+us_figi = "BBG00BLYKRZ7"
+us_name = "CROWDSTRIKE HOLDINGS INC - A"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S2TL597]
+name = "AIRBNB INC"
+kind = "cdr"
+ca = "ABNB.TO"
+us = "ABNB.US"
+us_figi = "BBG001Y2XS16"
+us_name = "AIRBNB INC-CLASS A"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S2TMJL2]
+name = "APPLIED MATERIALS INC"
+kind = "cdr"
+ca = "AMAT.TO"
+us = "AMAT.US"
+us_figi = "BBG001S5NMM7"
+us_name = "APPLIED MATERIALS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S2TNL54]
+name = "ARISTA NETWORKS INC"
+kind = "cdr"
+ca = "ANET.TO"
+us = "ANET.US"
+us_figi = "BBG001T51KQ0"
+us_name = "ARISTA NETWORKS INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S2TR7Q8]
+name = "OCCIDENTAL PETROLEUM CORP"
+kind = "cdr"
+ca = "OXY.TO"
+us = "OXY.US"
+us_figi = "BBG001S5TZG9"
+us_name = "OCCIDENTAL PETROLEUM CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S2TRJR1]
+name = "ORACLE CORP"
+kind = "cdr"
+ca = "ORAC.TO"
+us = "ORAC.US"
+us_figi = "BBG023110YJ2"
+us_name = "CORGI ORCL 2X DAILY ETF"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S2TT0J9]
+name = "PALANTIR TECHNOLOGIES INC"
+kind = "cdr"
+ca = "PLTR.TO"
+us = "PLTR.US"
+us_figi = "BBG001T53796"
+us_name = "PALANTIR TECHNOLOGIES INC-A"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S2V58Z5]
+name = "BLACKSTONE INC"
+kind = "cdr"
+ca = "BX.TO"
+us = "BX.US"
+us_figi = "BBG001S7H949"
+us_name = "BLACKSTONE INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S3PQ9Z2]
+name = "MERCK & CO INC"
+kind = "cdr"
+ca = "MRK.TO"
+us = "MRK.US"
+us_figi = "BBG001S5TC52"
+us_name = "MERCK & CO. INC."
+first_seen = "2026-10-09"
+
+[distinct.BBG01S8396F3]
+name = "ASML HOLDING NV"
+kind = "cdr"
+ca = "ASML.TO"
+us = "ASML.US"
+us_figi = "BBG001SCG0R3"
+us_name = "ASML HOLDING NV-NY REG SHS"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S83BQZ4]
+name = "ROCHE HOLDING AG"
+kind = "cdr"
+ca = "ROG.TO"
+us = "ROG.US"
+us_figi = "BBG001S5TTY3"
+us_name = "ROGERS CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01S83MD45]
+name = "NOVARTIS AG"
+kind = "cdr"
+ca = "NVS.TO"
+us = "NVS.US"
+us_figi = "BBG001SF5LW6"
+us_name = "NOVARTIS AG-SPONSORED ADR"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRMQ41]
+name = "UNION PACIFIC CORP-CDR"
+kind = "cdr"
+ca = "UNP.TO"
+us = "UNP.US"
+us_figi = "BBG001S5X2M0"
+us_name = "UNION PACIFIC CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRNFY1]
+name = "TJX COS INC/THE-CDR"
+kind = "cdr"
+ca = "TJX.TO"
+us = "TJX.US"
+us_figi = "BBG001S5WQ93"
+us_name = "TJX COMPANIES INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRPDB9]
+name = "S&P GLOBAL INC-CDR"
+kind = "cdr"
+ca = "SPGI.TO"
+us = "SPGI.US"
+us_figi = "BBG001S5T5M8"
+us_name = "S&P GLOBAL INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRPLC0]
+name = "KKR & CO INC-CDR"
+kind = "cdr"
+ca = "KKR.TO"
+us = "KKR.US"
+us_figi = "BBG001S6PW05"
+us_name = "KKR & CO INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRPWQ1]
+name = "GILEAD SCIENCES INC-CDR"
+kind = "cdr"
+ca = "GILD.TO"
+us = "GILD.US"
+us_figi = "BBG001S6Y1X7"
+us_name = "GILEAD SCIENCES INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRQ7X7]
+name = "GE VERNOVA INC-CDR"
+kind = "cdr"
+ca = "GEV.TO"
+us = "GEV.US"
+us_figi = "BBG013G17W77"
+us_name = "GE VERNOVA INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRQGZ5]
+name = "FISERV INC-CDR"
+kind = "cdr"
+ca = "FISV.TO"
+us = "FISV.US"
+us_figi = "BBG001S5R6Q4"
+us_name = "FISERV INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRQMY3]
+name = "CHARLES SCHWAB CORP/THE-CDR"
+kind = "cdr"
+ca = "SCHW.TO"
+us = "SCHW.US"
+us_figi = "BBG001S5VXD4"
+us_name = "SCHWAB (CHARLES) CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRQS61]
+name = "AUTOZONE INC-CDR"
+kind = "cdr"
+ca = "AZO.TO"
+us = "AZO.US"
+us_figi = "BBG001S6Q5D9"
+us_name = "AUTOZONE INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQRQWN3]
+name = "AMGEN INC-CDR"
+kind = "cdr"
+ca = "AMGN.TO"
+us = "AMGN.US"
+us_figi = "BBG001S5NNL6"
+us_name = "AMGEN INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQTKX80]
+name = "ABBOTT LABORATORIES-CDR"
+kind = "cdr"
+ca = "ABT.TO"
+us = "ABT.US"
+us_figi = "BBG001S5N9M6"
+us_name = "ABBOTT LABORATORIES"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQTMQ47]
+name = "MORGAN STANLEY"
+kind = "cdr"
+ca = "MS.TO"
+us = "MS.US"
+us_figi = "BBG001S9V5Z3"
+us_name = "MORGAN STANLEY"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQTN4S9]
+name = "NEXTERA ENERGY INC-CDR"
+kind = "cdr"
+ca = "NEE.TO"
+us = "NEE.US"
+us_figi = "BBG001S5RB29"
+us_name = "NEXTERA ENERGY INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01TQTNBS3]
+name = "PEPSICO INC-CDR"
+kind = "cdr"
+ca = "PEP.TO"
+us = "PEP.US"
+us_figi = "BBG001S695T1"
+us_name = "PEPSICO INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01WV6M5L1]
+name = "COINBASE GLOBAL INC-CDR"
+kind = "cdr"
+ca = "COIN.TO"
+us = "COIN.US"
+us_figi = "BBG00ZGF7799"
+us_name = "COINBASE GLOBAL INC -CLASS A"
+first_seen = "2026-10-09"
+
+[distinct.BBG01WV6MCT8]
+name = "LOCKHEED MARTIN CORP-CDR"
+kind = "cdr"
+ca = "LMT.TO"
+us = "LMT.US"
+us_figi = "BBG001S7PS57"
+us_name = "LOCKHEED MARTIN CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG01XVYXPG8]
+name = "APPLOVIN CORP"
+kind = "cdr"
+ca = "APPS.TO"
+us = "APPS.US"
+us_figi = "BBG001SPBG12"
+us_name = "DIGITAL TURBINE INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01XVYYGV0]
+name = "ROBINHOOD MARKETS INC"
+kind = "cdr"
+ca = "HOOD.TO"
+us = "HOOD.US"
+us_figi = "BBG008NMBXP6"
+us_name = "ROBINHOOD MARKETS INC - A"
+first_seen = "2026-10-09"
+
+[distinct.BBG01XVYYVD7]
+name = "STRATEGY INC"
+kind = "cdr"
+ca = "MSTR.TO"
+us = "MSTR.US"
+us_figi = "BBG001SC7PX1"
+us_name = "STRATEGY INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG01XVYZPM9]
+name = "REDDIT INC"
+kind = "cdr"
+ca = "RDDT.TO"
+us = "RDDT.US"
+us_figi = "BBG015RGX648"
+us_name = "REDDIT INC-CL A"
+first_seen = "2026-10-09"
+
+[distinct.BBG01YJL7CN8]
+name = "SANOFI SA"
+kind = "cdr"
+ca = "SNY.TO"
+us = "SNY.US"
+us_figi = "BBG001S5W768"
+us_name = "SANOFI-ADR"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222SWNZ5]
+name = "AMPHENOL CORP"
+kind = "cdr"
+ca = "APH.TO"
+us = "APH.US"
+us_figi = "BBG001S5NSK6"
+us_name = "AMPHENOL CORP-CL A"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222SXRG6]
+name = "COREWEAVE INC"
+kind = "cdr"
+ca = "CRWV.TO"
+us = "CRWV.US"
+us_figi = "BBG011ZTRJ49"
+us_name = "COREWEAVE INC-CL A"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222SY9R3]
+name = "DR HORTON INC"
+kind = "cdr"
+ca = "DHI.TO"
+us = "DHI.US"
+us_figi = "BBG001S8M692"
+us_name = "DR HORTON INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222SZMX6]
+name = "INTUIT INC"
+kind = "cdr"
+ca = "INTU.TO"
+us = "INTU.US"
+us_figi = "BBG001S6TWR2"
+us_name = "INTUIT INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222SZYQ8]
+name = "KLA CORP"
+kind = "cdr"
+ca = "KLAC.TO"
+us = "KLAC.US"
+us_figi = "BBG001S5SLM4"
+us_name = "KLA CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222T02T1]
+name = "LAM RESEARCH CORP"
+kind = "cdr"
+ca = "LRCX.TO"
+us = "LRCX.US"
+us_figi = "BBG001S5SW40"
+us_name = "LAM RESEARCH CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222T3LD3]
+name = "WESTERN DIGITAL CORP"
+kind = "cdr"
+ca = "WDC.TO"
+us = "WDC.US"
+us_figi = "BBG001S5XD28"
+us_name = "WESTERN DIGITAL CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222T3ZL3]
+name = "VERTIV HOLDINGS CO"
+kind = "cdr"
+ca = "VRT.TO"
+us = "VRT.US"
+us_figi = "BBG00L2B8LM7"
+us_name = "VERTIV HOLDINGS CO-A"
+first_seen = "2026-10-09"
+
+[distinct.BBG0222T4DY7]
+name = "T-MOBILE US INC"
+kind = "cdr"
+ca = "TMUS.TO"
+us = "TMUS.US"
+us_figi = "BBG001SKR9Y6"
+us_name = "T-MOBILE US INC"
+first_seen = "2026-10-09"
+
+[distinct.BBG02239YJ10]
+name = "NORTHROP GRUMMAN CORP"
+kind = "cdr"
+ca = "NOC.TO"
+us = "NOC.US"
+us_figi = "BBG001S5TP26"
+us_name = "NORTHROP GRUMMAN CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG0223B3BM3]
+name = "SANDISK CORP/DE"
+kind = "cdr"
+ca = "SNDK.TO"
+us = "SNDK.US"
+us_figi = "BBG01R388JK6"
+us_name = "SANDISK CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG0223B8X31]
+name = "STRYKER CORP"
+kind = "cdr"
+ca = "SYK.TO"
+us = "SYK.US"
+us_figi = "BBG001S8FR03"
+us_name = "STRYKER CORP"
+first_seen = "2026-10-09"
+
+[distinct.BBG022WN0QB7]
+name = "SPACE EXPLORATION TECH-CDR"
+kind = "cdr"
+ca = "SPCX.TO"
+us = "SPCX.US"
+us_figi = "BBG001SQPN65"
+us_name = "SPACE EXPLORATION TECHN-CL A"
+first_seen = "2026-10-09"
+
+[distinct.BBG0236XZHK4]
+name = "HONEYWELL AEROSPACE INC-CDR"
+kind = "cdr"
+ca = "HONA.TO"
+us = "HONA.US"
+us_figi = "BBG020QYV2Q7"
+us_name = "HONEYWELL AEROSPACE INC"
 first_seen = "2026-10-09"
