@@ -30,7 +30,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** you ran `tjs init` inside an empty folder named like a year (an older installer and README said `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init …`).
 - **Cause:** `init` makes the year's folder (`YYYY/`) inside the folder it runs in, beside the shared `inputs/`; run in `~/taxes/2026` it built `~/taxes/2026/2026/` without a word.
 - **Fix:** run it in the folder above, as the message says: `cd ~/taxes && tjs init --country canada && cd 2026`. A project already built nested works as it is; to tidy it, move `2026/2026/` up with its `inputs/` beside it. `tjs init --single` makes one folder for one year where you are.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_init_in_year_folder`, `cmd_init`
 
 ### "Error: `sum` works on one year's project, and this folder holds the year folders 2024, 2025 (with the exports they share)"
@@ -338,7 +338,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `grep -n option_grant_timing_since taxjson.toml`: usually `year` was lowered (filing an earlier year) and the key kept the value an earlier `taxjson init` wrote.
 - **Cause:** contracts written before `option_grant_timing_since` keep close timing, so every option written in the project year is taxed when it closes, not when written (ITA s.49(1)). A `taxjson init` before this release wrote the key set to the init year in every new project.
 - **Fix:** set it to the first year you file under grant timing (or delete the line for the project year); keep it unchanged in later years. When the year was filed on close timing (a reconstruction of a return filed that way), the value is right: nothing to do.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_after_year`, `_books_write_options`, `_grant_since_warning`; `src/taxjson/lib/config_template.py` — `scaffold_document`
 
 ### "Warning: no transaction in any account's books is dated 2021 (the books run 2025-01-10 to 2025-12-31)"
@@ -424,7 +424,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the `.tt` line names the share without its market suffix (`QZA`), while the broker's rows book it as `QZA.US` or `QZA.TO`; `tjs list` shows both, the broker's sale of the suffixed listing going short.
 - **Cause:** a share listing is spelled with its suffix in the books; a bare symbol is its own ACB pool (a coin's spelling). Before the fix the warning reached only the account's `.sum`, and with exports shared by every year (`inputs_dir`) not even that.
 - **Fix:** write the symbol as the warning names it (`QZA.US`) on that `.tt` line and `tjs run`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_echo_tt_bare_symbols`; `src/taxjson/bin/taxjson_convert_tt.py` — `_warn_bare_equity_symbol`, `--equity`
 
 ### Generic importer: "Error: generic_ws.csv: generic importer: no mapping for generic_ws.csv" or "Error: …: generic importer: generic_ws.csv: mapped column(s) not in the CSV header: action -> 'Transaction type'."
@@ -1072,14 +1072,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the trace above the line shows the superficial loss (US: the wash sale); the project has a crypto account (or, in the US, more than one), whose book is traced on its own.
 - **Cause:** each book was explained by its own call, and a book with no denial (the crypto one) printed the note under the other book's real trace.
 - **Fix:** nothing to do: the trace is right. The note now appears once, only when no book has a denial.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_explain_wash_sales`; `src/taxjson/bin/taxjson_explain.py` — `main`
 
 ### `tjs sum --other-income …` (or `tjs estimate`): the estimate's "[512.34 realized …]" is a cent off the RETURN row's GAIN (512.33)
 - **Check:** `tjs sum --details` says the rows are rounded to the cent and names the gains files' unrounded total, the figure the estimate showed.
 - **Cause:** the estimate summed the unrounded engine gains of the account tables; the RETURN row adds each disposition's cents, as filed.
 - **Fix:** nothing to file differently: file the RETURN row. The estimate now taxes the RETURN row's gain (Canada; the US estimate takes its short- and long-term figures from the account books).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_summary`, `_tax_estimate_result`
 
 ### A superficial loss (US: a wash sale) taxjson denies that I want to claim: a replacement inside day 30 counted from the settlement date, outside it from the trade date
@@ -1275,7 +1275,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs checklist` lists the same steps as `! ` lines (`--all`: `[!]`).
 - **Cause:** the lock records the filed year; a step before it that needs attention (inputs not committed, missing history, an undecided send …) usually means the books are not final. Earlier releases locked the year without a word.
 - **Fix:** fix the items (the checklist says how), mark one `--done` or `--skip` when it truly does not apply, then close. To lock anyway: on a terminal answer `y`; in a script pass `--yes`.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.28.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_close_year_attention`, `cmd_close_year`, `checklist item(s) before the lock need`
 
 ### `tjs handoff`: "Error: no prior-year record at filed/2024.json"

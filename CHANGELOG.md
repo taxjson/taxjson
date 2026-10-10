@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.28.0 (2026-10-10)
+
 ### Added
 
 - `taxjson init --demo [DIR]`: a project of made-up exports to try first
