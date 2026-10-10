@@ -196,5 +196,42 @@ class TestLocksInTheFingerprint(unittest.TestCase):
                 root, PL.read_config(root)) or "")
 
 
+# ------------------------------------------------------------------ #49
+class TestYearsNamesADamagedLock(unittest.TestCase):
+
+    def test_shapes(self):
+        from taxjson.bin.taxjson_filed import lock_shape_problem
+        good = {"year": 2024, "accounts": {"m": {}}, "totals": {}}
+        self.assertIsNone(lock_shape_problem(good, 2024))
+        self.assertIsNone(lock_shape_problem({}, 2024))
+        for bad in ([], None, "x", 3, {"accounts": []},
+                    {"accounts": {"m": 1}}, {"totals": []},
+                    {"year": 2023}, {"year": "soon"}):
+            self.assertTrue(lock_shape_problem(bad, 2024), bad)
+
+    def test_years_reports_the_problem(self):
+        with tempfile.TemporaryDirectory() as td:
+            top = Path(td)
+            for y, body in ((2024, "[]"), (2025, json.dumps(
+                    {"year": 2025, "accounts": {}, "totals": {},
+                     "closed_at": "2026-03-01T12:00:00"}))):
+                d = top / str(y)
+                d.mkdir()
+                (d / "taxjson.toml").write_text(_config(y, ["margin"]))
+                (d / "filed").mkdir()
+                (d / "filed" / f"{y}.json").write_text(body)
+            rep = {r["year"]: r for r in PL.years_report(top)["years"]}
+            self.assertIn("filed/2024.json is not a close-year lock",
+                          rep[2024]["problem"] or "")
+            self.assertIsNone(rep[2025]["problem"])
+            r = _cli(top, "years")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            row = [ln for ln in r.stdout.splitlines()
+                   if ln.startswith("2024")]
+            self.assertIn("lock damaged", row[0])
+            self.assertIn("! 2024: filed/2024.json is not a close-year",
+                          r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

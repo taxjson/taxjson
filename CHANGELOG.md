@@ -6,6 +6,7 @@
 
 - Rows of two accounts at the same moment follow the accounts' names, not their order in taxjson.toml: reordering the file changed gains without calling the books stale (CA-DATE-14 / US-DATE-13; a filed year with such a trade can show DRIFTED once) (#31).
 - US: adding or removing a filed-year lock makes the books stale (`filed/ (locked years)`), since the gains read the locked years (US-WASH-22) (#32).
+- `taxjson years` names a damaged `filed/<year>.json` ("lock damaged", with the problem) instead of showing the year as filed (#49).
 
 
 ## v0.28.1 (2026-10-10)

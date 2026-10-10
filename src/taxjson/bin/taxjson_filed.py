@@ -297,6 +297,36 @@ def lock_country_problem(lock: Dict[str, Any], settings: Dict[str, Any],
             f"would overwrite the filed {display_name(rcc)} record).")
 
 
+def lock_shape_problem(lock: Any, year) -> Optional[str]:
+    """Why a filed/<year>.json document is not a close-year lock — not
+    a JSON object, a per-account table that is not one, totals that are
+    not a table, a `year` other than the file's — else None. The
+    readers that summarise a lock (`taxjson years`) call a damaged one
+    a problem instead of a filed year (issue #49); check-filed refuses
+    the same shapes."""
+    if not isinstance(lock, dict):
+        what = ("null" if lock is None else "true/false"
+                if isinstance(lock, bool) else "an array"
+                if isinstance(lock, list) else "a string"
+                if isinstance(lock, str) else "a number")
+        return f"is not a close-year lock ({what}, not a JSON object)"
+    accts = lock.get("accounts", {})
+    if not isinstance(accts, dict) or not all(
+            isinstance(v, dict) for v in accts.values()):
+        return "is not a close-year lock (no per-account table)"
+    if "totals" in lock and not isinstance(lock.get("totals"), dict):
+        return "is not a close-year lock (totals is not a table)"
+    y = lock.get("year")
+    if y is not None:
+        try:
+            ok = (not isinstance(y, bool) and int(y) == int(year))
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            return f"says year {y!r}, not {year}"
+    return None
+
+
 def partial_year_note(lock: Dict[str, Any], year) -> Optional[str]:
     """When the lock was taken on or before Dec 31 of its own year
     (`close-year --force` on an open year): a sentence saying it is a

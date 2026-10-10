@@ -434,7 +434,7 @@ with the books' income. `carryover` keeps the loss carry-forward ledger.
 closed year carried forward and checks that the next year's project starts
 from exactly that.
 
-- `src/taxjson/bin/taxjson_filed.py` — `write_snapshot`, `recompute_year`, `diff_snapshot`, `project_locks`, `lock_for_year`, `aggregates_from_gains`: the filed-year lock.
+- `src/taxjson/bin/taxjson_filed.py` — `write_snapshot`, `recompute_year`, `diff_snapshot`, `project_locks`, `lock_for_year`, `aggregates_from_gains`, `lock_shape_problem`, `partial_year_note`: the filed-year lock.
 - `src/taxjson/bin/taxjson_run.py` — `cmd_close_year`, `_close_year_attention` (the checklist steps before the lock that need attention: asked on a terminal, refused without one unless `--yes`), `cmd_check_filed`, `_check_filed_years`, `_carryforwards_for_lock`, `_locked_year_flags`, `cmd_handoff`, `_prior_record_path`, `_handoff_gains_flags`: `close-year`, `check-filed` and `handoff`, and the drift check every run makes of each filed year.
 - `src/taxjson/lib/handoff.py` — `snapshot`, `check`, `render`, `validate_record`, `straddlers`, `load_filed_dispositions`: the year-to-year record and its check.
 

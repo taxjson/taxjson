@@ -24875,6 +24875,9 @@ def _years_table(top: Path, rep: Dict[str, Any]) -> None:
         state = (("filed " + (r["closed_at"][:10] if r["closed_at"] else "")
                   ).strip() + ("*" if r["partial_lock"] else "")
                  if r["filed"] else "open")
+        if r["filed"] and str(r["problem"] or "").startswith(
+                f"filed/{r['year']}.json"):
+            state = "lock damaged"          # issue #49
         t = r["totals"] or {}
         diff = r["differs_from_newest"] or {}
         vs = ", ".join(x for x in (
