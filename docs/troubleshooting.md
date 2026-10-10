@@ -1075,6 +1075,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_explain_wash_sales`; `src/taxjson/bin/taxjson_explain.py` — `main`
 
+### `tjs sum --other-income …` (or `tjs estimate`): the estimate's "[512.34 realized …]" is a cent off the RETURN row's GAIN (512.33)
+- **Check:** `tjs sum --details` says the rows are rounded to the cent and names the gains files' unrounded total, the figure the estimate showed.
+- **Cause:** the estimate summed the unrounded engine gains of the account tables; the RETURN row adds each disposition's cents, as filed.
+- **Fix:** nothing to file differently: file the RETURN row. The estimate now taxes the RETURN row's gain (Canada; the US estimate takes its short- and long-term figures from the account books).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_summary`, `_tax_estimate_result`
+
 ### A superficial loss (US: a wash sale) taxjson denies that I want to claim: a replacement inside day 30 counted from the settlement date, outside it from the trade date
 - **Check:** `tjs wash-sales` lists the denial and its replacement; `tjs edge-cases` marks a replacement a few days from day 30 THE DATE BASIS DECIDES THIS ONE. In Canada the window is counted on settle dates whatever `tax_date` says (CA-SL-01); in the US on trade dates (US-WASH-01).
 - **Cause:** the engines apply the rule as the law's mechanical test, black and white. Taking a position against one denial is a filing decision only you (and your adviser) can make; taxjson never infers it.

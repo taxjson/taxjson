@@ -2065,7 +2065,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-RPT-03",
                  "`taxjson estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "
-                 "only.", keys=("province",)),
+                 "only. Its realized capital gain is the RETURN row's "
+                 "gain (`taxjson sum`), the per-disposition cents you "
+                 "file.", keys=("province",)),
             Rule("CA-RPT-04",
                  "Canadian dividends (a Canadian issuer: its CA ISIN when "
                  "the export gives one, else a Canadian listing) are "

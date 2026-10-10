@@ -14085,6 +14085,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
                              for e in _ents_8949), 2)
     _round_gap = (round(filing_total.get("gain", 0.0) - _engine_gain, 2)
                   if filing_line_rows else 0.0)
+    if want_estimate and not _is_us and filing_line_rows:
+        # Canada: the estimate taxes the gain the user files — the
+        # RETURN row's per-row cents — not the unrounded engine total
+        # summed from the account tables, a cent or so off the RETURN
+        # row it printed under.
+        est["realized"] = filing_total["gain"]
     # The DENIED column (US: the code-W adjustment) has the same per-row
     # rounding gap; R1-166's headline mismatch was a denied total, and
     # form-export already names it (A2-0912).

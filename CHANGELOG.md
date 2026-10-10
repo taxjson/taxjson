@@ -153,6 +153,9 @@
 - `taxjson wash-sales --explain` no longer says "no matching gains
   found" under a traced denial when another book (a crypto account's)
   has none; the note appears once, only when no book has a denial.
+- The Canadian tax estimate (`taxjson sum --other-income`, `taxjson
+  estimate`) taxes the RETURN row's gain, the per-disposition cents you
+  file; it showed the unrounded engine total, a cent or so apart.
 
 ### Docs
 

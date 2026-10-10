@@ -4,10 +4,14 @@
   and still said "no matching gains found" on stderr: the crypto book
   (traced on its own) had none. The note is now said once, only when no
   book had a denial.
+* `taxjson sum --other-income ...`: the estimate's "[X realized ...]"
+  was the unrounded engine total, a cent off the RETURN row's gain (the
+  per-row cents the user files). It is now the RETURN figure.
 
-Synthetic data only (`taxjson init --demo`), the
+Synthetic data only (`taxjson init --demo`, tests/fixtures/style), the
 hermetic HOME's made-up rates; offline.
 """
+import re
 import shutil
 import subprocess
 import sys
@@ -15,7 +19,26 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from _style import env
+from _style import env, project
+from tax_rules import rule
+
+
+def _money(s: str) -> float:
+    return float(s.replace(",", ""))
+
+
+def _return_gain(stdout: str) -> float:
+    """The GAIN column of the Schedule 3 RETURN row."""
+    row = next(ln for ln in stdout.splitlines()
+               if ln.startswith("RETURN "))
+    # PROCEEDS COST(ACB) OUTLAYS GAIN DENIED
+    return _money(row.split()[4])
+
+
+def _estimate_realized(stdout: str) -> float:
+    m = re.search(r"\[(-?[\d,]+\.\d\d) realized", stdout)
+    assert m, stdout[-3000:]
+    return _money(m.group(1))
 
 
 class _Demo:
@@ -69,6 +92,26 @@ class TestWashExplainNoMatchNote(unittest.TestCase):
         self.assertNotIn("triggered by", r.stdout)
         self.assertEqual((r.stdout + r.stderr).count(
             "no matching gains found"), 1, r.stderr)
+
+
+class TestEstimateRealizedIsReturnGain(unittest.TestCase):
+    def _check(self, stdout: str):
+        self.assertEqual(_estimate_realized(stdout), _return_gain(stdout),
+                         stdout[-3000:])
+
+    @rule("CA-RPT-03")
+    def test_style_canada(self):
+        r = project("canada").run("sum", "--other-income", "50000",
+                                  "--province", "ON")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self._check(r.stdout)
+
+    @rule("CA-RPT-03")
+    def test_demo(self):
+        r = _Demo.cli(_Demo.get(), "sum", "--other-income", "50000",
+                      "--province", "ON")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self._check(r.stdout)
 
 
 if __name__ == "__main__":
