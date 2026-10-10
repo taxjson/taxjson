@@ -799,9 +799,11 @@ front of it), computed incrementally:
 tax(other income + investment income) − tax(other income), so the
 investment income is bracketed on top of what you already earn. Taxable
 accounts only. With no flags it uses the `[estimate]` block of
-`taxjson.toml` (or 0 for both amounts: pure investment-income
-bracketing), which `taxjson instalments` reads too. `taxjson sum
---other-income ...` shows the same estimate under the account table.
+`taxjson.toml`, which `taxjson instalments` reads too; without it, other
+income is 0 (pure investment-income bracketing) and the loss carryover
+is the latest close-year lock's carry-forward, else 0. `taxjson sum
+--other-income ...` shows the same estimate after the FOR THE RETURN
+block.
 Canada projects also get an **AMT check** (post-2024 rules: gains at
 100%, no DTC, 20.5% over the exemption plus the provincial piggyback),
 shown binding or not, with the top-up and the 7-year carryforward when
