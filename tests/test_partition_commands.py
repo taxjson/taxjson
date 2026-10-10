@@ -506,7 +506,9 @@ class TestUsEstimateAndCarryover(unittest.TestCase):
             p = projects_both(td, year=2025, canada={"province": "ON"},
                               files={"work/margin_gains.json":
                                      json.dumps(g)})
-            r = cli_both(p, "estimate", "--other-income", "300000")
+            # The assumptions in full: --details (Essentials first).
+            r = cli_both(p, "estimate", "--other-income", "300000",
+                         "--details")
         us, ca = r["usa"].stdout, r["canada"].stdout
         self.assertEqual(r["usa"].returncode, 0, r["usa"].stderr)
         self.assertIn("NIIT", us)

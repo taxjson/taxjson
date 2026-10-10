@@ -46,7 +46,17 @@
 ### Fixed
 
 - Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
-
+- Essentials first for the summaries: `taxjson estimate`, `amt`,
+  `instalments`, `carryover`, `t1135`, `fx-cash`, `form-export` and
+  `reconcile-slips` print a short legend above each table, the figures
+  for the return, and one line per thing to act on (`! ...`) naming the
+  command with the detail. The notes, caveats, citations and per-row
+  explanations they printed after the data moved behind `--details`
+  (nothing was dropped). `taxjson estimate` shows the estimate alone
+  (the gains table is `taxjson sum`; `--details` puts it back in
+  front); `reconcile-slips` lists one row per symbol with the first
+  clause of its finding. The standalone stage tools keep their full
+  reports (`--brief` gives the short one); `--json` is unchanged.
 
 ## v0.27.1 (2026-10-10)
 

@@ -505,6 +505,67 @@ def _wrap_line(text: str) -> str:
     return fill(text, indent="  ")
 
 
+def render_brief(doc: Dict[str, Any], base: str) -> str:
+    """The default view (docs/output-style.md, Essentials first): the
+    verdict, the schedule and the interest figures, one line to act on;
+    the explanations with --details (render)."""
+    from taxjson.lib.out import act
+    from taxjson.lib.report_model import fmt_money, render_table
+    basis = doc["basis"].replace("_", "-")
+    lines = [f"TAX INSTALMENTS — {doc['year']}, {base}",
+             f"ESTIMATE ONLY (CRA computes the real figures); basis: "
+             f"{basis}.", ""]
+    cmd = "tjs instalments --details"
+    if not doc["required_at_all"]:
+        if doc["current_net_tax"] <= THRESHOLD:
+            lines.append(f"Net tax owing {fmt_money(doc['current_net_tax'])}"
+                         f" is at or below {fmt_money(THRESHOLD)}: no "
+                         f"instalments required for {doc['year']}.")
+        else:
+            lines.append(f"No instalments required for {doc['year']}: "
+                         f"both prior years at or below "
+                         f"{fmt_money(THRESHOLD)}.")
+            lines.append(act("Check the prior years' figures are real, not "
+                             "placeholders", cmd))
+        return "\n".join(lines)
+    body = [[r["date"], fmt_money(r["amount"]),
+             fmt_money(r["cumulative_required"]),
+             fmt_money(r["cumulative_paid"]), r["status"].upper()]
+            for r in doc["required"]]
+    foot = [["TOTAL", fmt_money(doc["required_total"]), "",
+             fmt_money(doc["paid_total"]), ""]]
+    lines += [ln.rstrip() for ln in render_table(
+        ["DUE", "AMOUNT", "CUM. REQUIRED", "CUM. PAID", "STATUS"],
+        ["<", ">", ">", ">", "<"], body, foot)]
+    lines.append("")
+    lines.append(f"INTEREST — offset method, to {doc['as_of']}")
+    for label, key in (("Charge interest", "charge_interest"),
+                       ("Credit interest (offset)", "credit_interest"),
+                       ("Net instalment interest", "net_interest")):
+        lines.append(f"  {label:<30}{fmt_money(doc[key]):>14}")
+    if doc["penalty"] > 0.005:
+        lines.append(f"  {'s.163.1 PENALTY':<30}"
+                     f"{fmt_money(doc['penalty']):>14}")
+    lines.append("")
+    if doc["shortfall"] > 0.005:
+        if doc["remaining_dates"]:
+            lines.append(act(
+                f"Behind by {fmt_money(doc['shortfall'])}: pay "
+                f"{fmt_money(doc['per_remaining_date'])} on each of the "
+                f"{len(doc['remaining_dates'])} date(s) left", cmd))
+        else:
+            lines.append(act(
+                f"Behind by {fmt_money(doc['shortfall'])}: the balance is "
+                f"due {balance_due_label()}", cmd))
+    elif doc.get("remaining_total", 0.0) > 0.005:
+        lines.append(f"On schedule: {fmt_money(doc['per_remaining_date'])}"
+                     f" on each of the {len(doc['remaining_dates'])} "
+                     f"date(s) left")
+    else:
+        lines.append("Schedule is met — no shortfall.")
+    return "\n".join(lines)
+
+
 def render(doc: Dict[str, Any], base: str) -> str:
     """The report — house style (docs/output-style.md)."""
     from taxjson.lib.report_model import fmt_money, render_table

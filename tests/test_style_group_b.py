@@ -48,7 +48,8 @@ class TestCanadaOnlyViews(unittest.TestCase):
                 assert_styled(self, r.stderr)
 
     def test_t1135_lists_property_notes_under_the_table(self):
-        out = project("canada").run("t1135").stdout
+        # The property notes in full: --details (Essentials first).
+        out = project("canada").run("t1135", "--details").stdout
         self.assertNotIn(" | ", out)
         self.assertIn("- BTC, ETH: crypto — check where held", out)
         self.assertTrue(out.splitlines()[-1].startswith("- Not tax advice"))
@@ -65,9 +66,10 @@ class TestCanadaOnlyViews(unittest.TestCase):
             t = p.root / "taxjson.toml"
             t.write_text(re.sub(r'^(country\s*=.*)$', r'\1\nprovince = "ON"',
                                 t.read_text(), count=1, flags=re.M))
-        r = p.run("instalments")
+        r = p.run("instalments", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         assert_styled(self, r.stdout)
+        assert_styled(self, p.run("instalments").stdout)
         self.assertIn("Not modelled - CPP/EI payable", _flat(r.stdout))
         self.assertNotIn("NOTE:", r.stdout)
         a = p.run("amt")
@@ -87,7 +89,9 @@ class TestCanadaOnlyViews(unittest.TestCase):
 
 class TestBothCountries(unittest.TestCase):
     def test_estimate(self):
-        for country, args in (("canada", ("estimate", "--province", "ON")),
+        # The assumptions list: --details or --verbose (Essentials first).
+        for country, args in (("canada", ("estimate", "--province", "ON",
+                                          "--details")),
                               ("usa", ("estimate", "--verbose"))):
             with self.subTest(country=country):
                 r = project(country).run(*args)
@@ -119,7 +123,7 @@ class TestBothCountries(unittest.TestCase):
         self.assertNotIn("NOTE:", r.stdout)
 
     def test_form_export_row_notes_under_the_table(self):
-        out = project("canada").run("form-export").stdout
+        out = project("canada").run("form-export", "--details").stdout
         self.assertNotIn(" | ", out)
         self.assertIn("- NVDA.US: superficial loss", out)
         # The synthetic rates of tests/_hermetic (USD→CAD 1.35).
@@ -129,11 +133,15 @@ class TestBothCountries(unittest.TestCase):
         for country, slip in (("canada", "inputs/slips/t5008.csv"),
                               ("usa", "inputs/slips/1099b.csv")):
             with self.subTest(country=country):
-                r = project(country).run("reconcile-slips", slip)
+                r = project(country).run("reconcile-slips", slip,
+                                         "--details")
                 self.assertIn(r.returncode, (0, 1), r.stderr)
                 assert_styled(self, r.stdout)
                 assert_styled(self, r.stderr)
                 self.assertIn("\nNOTES\n- ", r.stdout)
+                b = project(country).run("reconcile-slips", slip)
+                assert_styled(self, b.stdout)
+                assert_styled(self, b.stderr)
 
     def test_close_year_check_filed_handoff(self):
         for country in ("canada", "usa"):

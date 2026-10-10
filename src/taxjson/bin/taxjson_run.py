@@ -14467,6 +14467,10 @@ def _relay_child_stderr(text: str) -> None:
     for ln in (text or "").splitlines():
         if not ln.strip():
             continue
+        if ln[:1].isspace() and not _CURRENT_DETAILS:
+            # Essentials first (docs/output-style.md): a message's
+            # detail lines with --details only; the headline always.
+            continue
         ln = labelled(ln, sys.stderr, source=True)
         lead = ln[:len(ln) - len(ln.lstrip())]
         for w in wrap(ln.strip(), None, lead, lead or "  ",
@@ -14569,6 +14573,20 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         _json_out(doc)
         return
     from taxjson.lib import out as _out
+    if not _details(args):
+        # Essentials first (docs/output-style.md): the explanations,
+        # the assumptions and what is not modelled with --details.
+        print(INST.render_brief(doc, base))
+        if _assumed:
+            print(_out.act("Assumed 0: " + ", ".join(
+                a.split(" (")[0].split(" is ")[0] for a in _assumed),
+                "tjs instalments --details"))
+        if doc["vintage_notes"]:
+            print(_out.act("Rate tables of another year used",
+                           "tjs instalments --details"))
+        print("Not modelled: self-employed CPP/EI, FX on cash, slip "
+              "gains — tjs instalments --details")
+        return
     print(INST.render(doc, base))
 
     def _items(texts) -> None:
@@ -14597,9 +14615,44 @@ def cmd_estimate(args: argparse.Namespace) -> None:
     disagree): tax(other income + investment income) minus
     tax(other income), on the filing (wash-adjusted) basis, FTC from
     the books' actual TAX rows. ESTIMATE ONLY — never filing
-    numbers."""
+    numbers.
+
+    Essentials first (docs/output-style.md): the default view is the
+    estimate block alone (the gains table is `taxjson sum`) with the
+    summary's act-on `! ` lines; --details and --json keep the summary
+    first."""
     args.estimate = True
-    cmd_summary(args)
+    if getattr(args, "json", False) or _details(args):
+        cmd_summary(args)
+        return
+    import contextlib as _ctx
+    import io as _io
+    import os as _os
+    from taxjson.lib import out as _out
+    buf = _io.StringIO()
+    # The captured text keeps the width the person's stdout has.
+    _old_w = _os.environ.get("TAXJSON_WIDTH")
+    _os.environ["TAXJSON_WIDTH"] = str(_out.width(sys.stdout))
+    try:
+        with _ctx.redirect_stdout(buf):
+            cmd_summary(args)
+    except SystemExit:
+        sys.stdout.write(buf.getvalue())
+        raise
+    finally:
+        if _old_w is None:
+            _os.environ.pop("TAXJSON_WIDTH", None)
+        else:
+            _os.environ["TAXJSON_WIDTH"] = _old_w
+    text = buf.getvalue()
+    at = text.find("TAX ESTIMATE —")
+    head, block = (text[:at], text[at:]) if at >= 0 else ("", text)
+    for ln in block.rstrip("\n").split("\n"):
+        print(ln)
+    for ln in head.split("\n"):
+        if ln.startswith(_out.ACT):
+            print(ln)
+    print("Gains by account and the lines for the return: tjs sum")
 
 
 def cmd_amt(args: argparse.Namespace) -> None:
@@ -14678,7 +14731,7 @@ def cmd_amt(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out(doc)
         return
-    for ln in AR.render(doc):
+    for ln in AR.render(doc, details=_details(args)):
         print(ln)
 
 
@@ -14906,8 +14959,21 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
     # for the project year — never the import-time module default.
     RATE_VINTAGE = r.get("vintage", "?")
     from taxjson.lib import out as _out
+    # Essentials first (docs/output-style.md): the figures and a legend;
+    # the notes, the assumptions and the AMT explanation with --details
+    # (the --verbose calculation trace is the most detailed view).
+    details = _CURRENT_DETAILS or verbose
+    # The default view's figure lines keep a column gap after the label
+    # and its sub-headings start the line, so they read as a block of
+    # figures (lib/out.classify); --details keeps the long layout.
+    _g = " " if details else "  "
+    _h = "  " if details else ""
 
-    def _est_row(label: str, amt: float, note: str = "") -> None:
+    def _est_row(label: str, amt: float, note: str = "",
+                 short: Optional[str] = None) -> None:
+        # The default view takes the row's `short` note (one line).
+        if not details and short is not None:
+            note = short
         # `  label  amount  [note]`: a long note wraps under itself.
         head = f"  {label:<30}{money(amt):>14}"
         if not note:
@@ -14935,6 +15001,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 continue
             cur += ch
         parts.append(cur.strip().rstrip("."))
+        if not details:
+            return
         print(indent + "Assumes:")
         for _p in parts:
             if _p:
@@ -14942,12 +15010,31 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                                      indent + "  "):
                     print(_ln)
 
+    def _est_tail(res: Dict[str, Any], yr, assumes: str) -> None:
+        # The default view's closing lines: a rate-table mismatch to act
+        # on, then the assumptions and notes behind --details.
+        if year is not None and str(res.get("vintage")) != str(yr):
+            print(_out.act(f"Tax year {yr} uses the {res.get('vintage')} "
+                           f"rate tables", "tjs estimate --details"))
+        n = len(res.get("notes") or [])
+        print(assumes)
+        print(_out.details_hint("tjs estimate --details",
+                                "assumptions" + (f", {n} note(s)"
+                                                 if n else "")))
+
     print()
     if r["country"] == "canada":
         print(f"TAX ESTIMATE — canada/{r['province']}, rates vintage "
               f"{RATE_VINTAGE}")
-        print("ESTIMATE ONLY, not filing numbers; taxable accounts only.")
-        print()
+        if not details:
+            # The legend, directly above the rows it explains.
+            print("ESTIMATE ONLY, not filing numbers: taxable accounts "
+                  "only; [ ] says how an amount was built.")
+        else:
+            print("ESTIMATE ONLY, not filing numbers; taxable accounts "
+                  "only.")
+            print()
+        _ftc_src = str(r.get("ftc_source") or "")
         rows = [
             ("Other income", other_income, ""),
             ("Capital gains (taxable)", r["taxable_gain"],
@@ -14958,41 +15045,50 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                f"x{_TE.fmt_pct(_TE.CA_INCLUSION)}]"),
         ] + ([("Capital-gains dividends", r["capital_gains_dividends"],
                "[T5 box 18, line 17400: in the gains above, not "
-               "grossed up]")]
+               "grossed up]", "[T5 box 18: in the gains above]")]
              if r.get("capital_gains_dividends") else []) + [
             ("Eligible dividends (grossed)", r["grossed_eligible"],
              f"[{money(est['div_ca'])} x{_TE.CA_ELIGIBLE_GROSSUP:g}, "
              f"Canadian issuers, "
-             f"trust distributions included]"),
+             f"trust distributions included]",
+             f"[{money(est['div_ca'])} x{_TE.CA_ELIGIBLE_GROSSUP:g}]"),
             ("Foreign dividends", est["div_foreign"],
              f"[FTC {money(r['ftc_assumed'])} — "
-             f"{r.get('ftc_source') or 'assumed ' + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING)}]"),
+             f"{r.get('ftc_source') or 'assumed ' + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING)}]",
+             f"[FTC {money(r['ftc_assumed'])}, "
+             + ("from the TAX rows]" if _ftc_src.startswith("actual")
+                else "assumed "
+                + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING) + "]")),
             ("Payments in lieu", est["pil"], ""),
         ] + ([("Crypto staking (ordinary)", r["staking"],
                "[no withholding, no FTC]")]
              if r.get("staking") else []) \
           + ([("Deductions", -r["deductions"],
-               "[lines 20700-23500, e.g. RRSP 20800; in full under AMT]")]
+               "[lines 20700-23500, e.g. RRSP 20800; in full under AMT]",
+               "[lines 20700-23500]")]
              if r.get("deductions") else []) \
           + ([("Carrying charges", -r["carrying_charges"],
                f"[line 22100; "
                f"{_TE.fmt_pct(_TE.CA_AMT_CARRYING_CHARGE_ALLOWANCE)} under "
                f"AMT]")]
              if r.get("carrying_charges") else [])
-        for label, amt, note in rows:
-            _est_row(label, amt, note)
+        for label, amt, note, *short in rows:
+            _est_row(label, amt, note, *short)
         print()
-        print(f"  Tax with investments: {money(r['tax_with']['total'])} "
-              f"(federal {money(r['tax_with']['federal'])} + "
+        print(f"  Tax with investments:{_g}{money(r['tax_with']['total'])}"
+              f"{_g}(federal {money(r['tax_with']['federal'])} + "
               f"{r['province']} {money(r['tax_with']['provincial'])})")
-        print(f"  Tax on other income alone: "
+        print(f"  Tax on other income alone:{_g}"
               f"{money(r['tax_base']['total'])}")
         print(f"  => ESTIMATED TAX ON INVESTMENT INCOME: "
               f"{money(r['estimated_tax'])} {base_cur}"
               + (f"  ({r['avg_rate_pct']:.1f}% of "
                  f"{money(r['investment_income'])})"
                  if r["avg_rate_pct"] is not None else ""))
-        if r["estimated_tax"] < -0.005:
+        if r["estimated_tax"] < -0.005 and not details:
+            print("  (negative: a saving — the dividend tax credit "
+                  "exceeds the tax on the grossed-up dividends)")
+        elif r["estimated_tax"] < -0.005:
             # Signed (R1-47): eligible dividends at a low bracket earn
             # more credit than the tax on their grossed-up amount.
             print(_wrap_note(
@@ -15001,16 +15097,16 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 f"{money(-r['estimated_tax'])} (the dividend tax credit "
                 f"exceeds the tax on the grossed-up dividends)."))
         if r["losses_unused"]:
-            print(f"  Unused capital losses: {money(r['losses_unused'])} "
-                  f"(carry forward)")
+            print(f"  Unused capital losses:{_g}{money(r['losses_unused'])}"
+                  f"{_g}(carry forward)")
         _ls = (r.get("carry_sources") or {}).get("other_losses")
         if _ls and other_losses:
-            print(f"  Net capital losses carried in: "
+            print(f"  Net capital losses carried in:{_g}"
                   f"{money(other_losses)} — from {_ls}")
         amt = r.get("amt")
         if amt:
             print()
-            print(f"  AMT CHECK — post-2024 minimum tax "
+            print(f"{_h}AMT CHECK — post-2024 minimum tax "
                   f"({amt['rate'] * 100:.1f}% over "
                   f"{money(amt['exemption'])} exemption)")
             print(f"  {'Adjusted taxable income':<30}"
@@ -15027,27 +15123,29 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 print(f"  {'=> TOTAL WITH AMT':<30}"
                       f"{money(r['estimated_tax'] + amt['topup']):>14} "
                       f"{base_cur}")
-                print(_wrap_note(
-                    f"AMT binds because capital gains enter at 100% "
-                    f"(vs {_TE.fmt_pct(_TE.CA_INCLUSION)}) and the "
-                    f"dividend tax credit is denied. "
-                    f"The federal excess ({money(amt['carryforward'])}) "
-                    f"is creditable against REGULAR tax for 7 years, "
-                    f"but recovery needs a future year where regular "
-                    f"tax exceeds the minimum — gains-heavy, "
-                    f"salary-light years keep hitting AMT instead."))
+                if details:
+                    print(_wrap_note(
+                        f"AMT binds because capital gains enter at 100% "
+                        f"(vs {_TE.fmt_pct(_TE.CA_INCLUSION)}) and the "
+                        f"dividend tax credit is denied. "
+                        f"The federal excess ({money(amt['carryforward'])}) "
+                        f"is creditable against REGULAR tax for 7 years, "
+                        f"but recovery needs a future year where regular "
+                        f"tax exceeds the minimum — gains-heavy, "
+                        f"salary-light years keep hitting AMT instead."))
             else:
                 print(f"  {'=> does not bind':<30}"
                       f"{money(amt['headroom']):>14}  [headroom]")
-                print(_wrap_note(
-                    f"AMT recomputes with capital gains at 100% (vs "
-                    f"{_TE.fmt_pct(_TE.CA_INCLUSION)}) and the dividend "
-                    f"tax credit denied; on "
-                    "these numbers regular tax still exceeds the "
-                    "minimum, so no top-up is owed."))
+                if details:
+                    print(_wrap_note(
+                        f"AMT recomputes with capital gains at 100% (vs "
+                        f"{_TE.fmt_pct(_TE.CA_INCLUSION)}) and the dividend "
+                        f"tax credit denied; on "
+                        "these numbers regular tax still exceeds the "
+                        "minimum, so no top-up is owed."))
             _cy = amt.get("carryover") or {}
             if _cy.get("entered") or _cy.get("created", 0.0) > 0.005:
-                print(f"  MINIMUM TAX CARRYOVER (s.120.2; line 40427)"
+                print(f"{_h}MINIMUM TAX CARRYOVER (s.120.2; line 40427)"
                       + (f" — from {_cy['source']}"
                          if _cy.get("source") else ""))
                 if _cy.get("entered"):
@@ -15059,8 +15157,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                           f"{money(_cy.get('recovered_federal', 0.0))}"
                           f" + {r['province']} "
                           f"{money(_cy.get('recovered_provincial', 0.0))}]")
-                    if abs(_cy.get("attributed", 0.0)
-                           - _cy.get("recovered", 0.0)) > 0.005:
+                    if details and abs(_cy.get("attributed", 0.0)
+                                       - _cy.get("recovered", 0.0)) > 0.005:
                         print(_wrap_note(
                             f"The other income alone would recover "
                             f"{money(_cy.get('base_recovered', 0.0))}, so "
@@ -15151,7 +15249,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             _idoc = _instalments_doc(root, r, year, _icfg)
             if _idoc and _idoc["required_at_all"]:
                 print()
-                print(f"  INSTALMENTS — {_idoc['basis'].replace('_', '-')} "
+                print(f"{_h}INSTALMENTS — {_idoc['basis'].replace('_', '-')} "
                       f"option (Mar/Jun/Sep/Dec 15)")
                 print(f"  {'Required this year':<30}"
                       f"{money(_idoc['required_total']):>14}")
@@ -15172,34 +15270,49 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                     print(f"  {'=> balance due ' + balance_due_label():<30}"
                           f"{money(_idoc['shortfall']):>14}"
                           f"  [taxjson instalments]")
-        print()
-        _est_notes("  ")
-        _assumes(r["assumptions"])
+        if details:
+            print()
+            _est_notes("  ")
+            _assumes(r["assumptions"])
+        else:
+            # The trust gross-up is stated on the default view too
+            # (owner decision A2-0828, CA-EST-TRUST).
+            _est_tail(r, year, "Assumes Canadian dividends (trusts' too) "
+                      "eligible; no interest, FX on cash or slip gains")
     else:
         st_in = r["st_input"]
         print(f"TAX ESTIMATE — usa (single, standard deduction), rates "
               f"vintage {RATE_VINTAGE}")
-        print("ESTIMATE ONLY, not filing numbers; taxable accounts only.")
-        print()
+        if not details:
+            print("ESTIMATE ONLY, not filing numbers: taxable accounts "
+                  "only; [ ] says how an amount was built.")
+        else:
+            print("ESTIMATE ONLY, not filing numbers; taxable accounts "
+                  "only.")
+            print()
         rows = [
             ("Other income", other_income, ""),
             ("Short-term gains (net)", r["st_net"],
              f"[{money(st_in)} before carryovers; short-term "
-             f"carryover {money(r.get('carryover_short_term', 0.0))}]"),
+             f"carryover {money(r.get('carryover_short_term', 0.0))}]",
+             f"[{money(st_in)} less carryover "
+             f"{money(r.get('carryover_short_term', 0.0))}]"),
             ("Long-term gains (net)", r["lt_net"],
              f"[{money(est['lt'])} before carryovers; long-term "
-             f"carryover {money(r.get('carryover_long_term', 0.0))}]"),
+             f"carryover {money(r.get('carryover_long_term', 0.0))}]",
+             f"[{money(est['lt'])} less carryover "
+             f"{money(r.get('carryover_long_term', 0.0))}]"),
             ("Qualified dividends",
              est["div_ca"] + est["div_foreign"], ""),
             ("Payments in lieu", est["pil"], "[ordinary]"),
         ] + ([("Crypto staking", est["staking"], "[ordinary]")]
              if est.get("staking") else [])
-        for label, amt, note in rows:
-            _est_row(label, amt, note)
+        for label, amt, note, *short in rows:
+            _est_row(label, amt, note, *short)
         print()
-        print(f"  Tax with investments: {money(r['tax_with']['total'])} "
-              f"+ NIIT {money(r['niit'])}")
-        print(f"  Tax on other income alone: "
+        print(f"  Tax with investments:{_g}{money(r['tax_with']['total'])}"
+              f" + NIIT {money(r['niit'])}")
+        print(f"  Tax on other income alone:{_g}"
               f"{money(r['tax_base']['total'])}")
         print(f"  => ESTIMATED TAX ON INVESTMENT INCOME: "
               f"{money(r['estimated_tax'])} {base_cur}"
@@ -15207,15 +15320,15 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                  f"{money(r['investment_income'])})"
                  if r["avg_rate_pct"] is not None else ""))
         if r["ordinary_offset"]:
-            print(f"  Ordinary income offset by losses: "
-                  f"{money(r['ordinary_offset'])} (max "
+            print(f"  Ordinary income offset by losses:{_g}"
+                  f"{money(r['ordinary_offset'])}{_g}(max "
                   f"{_TE.US_ORDINARY_LOSS_CAP:,.0f})")
         if r["losses_unused"]:
-            print(f"  Unused capital losses: {money(r['losses_unused'])} "
-                  f"(carry forward)")
+            print(f"  Unused capital losses:{_g}{money(r['losses_unused'])}"
+                  f"{_g}(carry forward)")
         _ls = (r.get("carry_sources") or {}).get("other_losses")
         if _ls and (other_losses or lt_losses):
-            print(f"  Capital loss carryovers in: short-term "
+            print(f"  Capital loss carryovers in:{_g}short-term "
                   f"{money(other_losses)}, long-term {money(lt_losses)}"
                   f" — from {_ls}")
         if verbose:
@@ -15260,6 +15373,10 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             print(f"    => WITH - BASE + NIIT = "
                   f"{money(r['estimated_tax'])} estimated tax on "
                   f"investment income")
+        if not details:
+            _est_tail(r, year, "Assumes single filer, standard deduction, "
+                      "qualified dividends; no state tax, no §988 FX")
+            return
         print()
         _est_notes("  ")
         _assumes("Assumes: single filer, standard deduction, all "
@@ -18582,6 +18699,10 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     argv += _loss_override_flags(cache)
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_t1135.main(argv))
 
 
@@ -18714,6 +18835,10 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     _warn_run_state(root, cfg)
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_carryover.main(argv))
 
 
@@ -18738,9 +18863,11 @@ def _taxable_gains_argv(root: Path, cache: Path, *,
     if exclude_crypto:
         crypto = sorted(n for n in taxable if accounts_cfg[n].get("crypto"))
         if crypto:
-            note(prog, f"crypto account(s) {', '.join(crypto)} excluded",
-                 details=["Exchanges issue no T5008/1099-B slips, so there "
-                          "is nothing to reconcile them against."])
+            note(prog, f"crypto account(s) {', '.join(crypto)} excluded "
+                       f"(exchanges issue no slips)",
+                 details=(["Exchanges issue no T5008/1099-B slips, so "
+                           "there is nothing to reconcile them against."]
+                          if _CURRENT_DETAILS else []))
             taxable = [n for n in taxable if n not in crypto]
         if not taxable:
             _die("every taxable account is crypto — nothing to reconcile",
@@ -18822,6 +18949,10 @@ def cmd_form_export(args: argparse.Namespace) -> None:
         argv += ["--csv", args.csv]
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     if form == "txf":
         argv += ["--box", args.box or "A"]
         if args.out:
@@ -20168,6 +20299,10 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         argv.append(f"--tolerance={args.tolerance!r}")
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_reconcile_slips.main(argv))
 
 
@@ -21343,7 +21478,8 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                    "pools_year_end": ledger.get("pools_year_end") or {},
                    "currency": base, "year": year})
         return
-    print(FX.render_report(ledger, base, year, country, verdict))
+    print((FX.render_report if _details(args) else FX.render_brief)(
+        ledger, base, year, country, verdict))
     if getattr(args, "events", False) and ledger["events"]:
         print()
         print("EVENTS")

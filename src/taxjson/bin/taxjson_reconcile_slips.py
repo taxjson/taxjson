@@ -763,6 +763,71 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
             "clean": not failing}
 
 
+def _short_detail(detail: str, cap: int = 56) -> str:
+    """A row's detail cut to its first clause (the default view's
+    column; --details prints it whole)."""
+    cut = len(detail)
+    for sep in (" (", " — ", ": ", "; "):
+        i = detail.find(sep)
+        if 0 < i < cut:
+            cut = i
+    d = detail[:cut]
+    return d if len(d) <= cap else d[:cap - 3].rstrip() + "..."
+
+
+def _counts_text(c: Dict[str, Any], tolerance: float) -> str:
+    return (f"{c['ok']} OK, {c['mismatch']} mismatch, "
+            f"{c['missing_from_computed']} missing from computed, "
+            f"{c['missing_from_slip']} missing from slip"
+            + (f", {c['ambiguous_listing']} ambiguous listing"
+               if c.get("ambiguous_listing") else "")
+            + (f", {c['no_slip_expected']} with no slip row "
+               f"expected (not a failure)"
+               if c.get("no_slip_expected") else "")
+            + f" (tolerance ±{tolerance:,.2f}).")
+
+
+def render_brief(rep: Dict[str, Any], tolerance: float,
+                 country: Optional[str] = None) -> str:
+    """The default view (docs/output-style.md, Essentials first): a
+    legend, one table row per symbol with its first clause, the counts,
+    and the lines to act on; the full details and the notes with
+    --details (render)."""
+    from taxjson.lib.out import act, fit_table
+    lines = ["SLIP RECONCILIATION — computed dispositions vs broker tax "
+             "slips", ""]
+    if not rep["rows"]:
+        lines.append("Nothing to reconcile (no symbols on either side).")
+        return "\n".join(lines)
+    slip = "1099-B" if country == "usa" else "T5008"
+    lines.append(f"MISMATCH fails the check; MISSING_FROM_SLIP: no {slip} "
+                 f"row, often a corporate action.")
+    lines.extend(fit_table(
+        ("SYMBOL", "STATUS", "DETAIL"),
+        [(r["symbol"], r["status"], _short_detail(r["detail"] or ""))
+         for r in rep["rows"]], aligns=["<", "<", "<"]))
+    c = rep["counts"]
+    lines.append("")
+    lines.append(f"{c['ok']} OK, {c['mismatch']} mismatch, "
+                 f"{c['missing_from_computed']} missing from computed, "
+                 f"{c['missing_from_slip']} missing from slip"
+                 + (f", {c['ambiguous_listing']} ambiguous"
+                    if c.get("ambiguous_listing") else "")
+                 + (f", {c['no_slip_expected']} no slip expected"
+                    if c.get("no_slip_expected") else "")
+                 + f" (tolerance ±{tolerance:,.2f})")
+    cmd = "tjs reconcile-slips --details"
+    bad = c["mismatch"] + c["missing_from_computed"] \
+        + c.get("ambiguous_listing", 0)
+    if bad:
+        lines.append(act(f"Explain or fix {bad} difference(s) before "
+                         f"filing", cmd))
+    if c["missing_from_slip"]:
+        lines.append(f"Check each MISSING_FROM_SLIP against the {slip}s "
+                     f"— {cmd}")
+    return "\n".join(lines)
+
+
 def render(rep: Dict[str, Any], tolerance: float,
            country: Optional[str] = None) -> str:
     """The console report in the house style (docs/output-style.md):
@@ -792,16 +857,7 @@ def render(rep: Dict[str, Any], tolerance: float,
             lines.extend(wrap(r["detail"], None, "    ", "    "))
     c = rep["counts"]
     lines.append("")
-    lines.extend(wrap(
-        f"{c['ok']} OK, {c['mismatch']} mismatch, "
-        f"{c['missing_from_computed']} missing from computed, "
-        f"{c['missing_from_slip']} missing from slip"
-        + (f", {c['ambiguous_listing']} ambiguous listing"
-           if c.get("ambiguous_listing") else "")
-        + (f", {c['no_slip_expected']} with no slip row "
-           f"expected (not a failure)"
-           if c.get("no_slip_expected") else "")
-        + f" (tolerance ±{tolerance:,.2f})."))
+    lines.extend(wrap(_counts_text(c, tolerance)))
     lines.append("")
     lines.append("NOTES")
     if country == "usa":
@@ -889,6 +945,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "(default: 1.00)")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    parser.add_argument("--brief", action="store_true",
+                        help="The essentials only (what `taxjson reconcile-slips` prints "
+                             "without --details): the notes and each "
+                             "message's detail are left out")
     parser.add_argument("--ticker-map", type=Path, default=None,
                         help="The project's ticker.map: slip symbols are "
                              "renamed the way the books were (SAMPLK -> SAMPLJ, "
@@ -962,12 +1022,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         json.dump(rep, sys.stdout, indent=2, sort_keys=True)
         print()
     else:
-        print(render(rep, args.tolerance, args.country))
-        if dropped_rows:
+        print(render_brief(rep, args.tolerance, args.country)
+              if args.brief else render(rep, args.tolerance, args.country))
+        if dropped_rows and not args.brief:
             from taxjson.lib.out import fill
             print()
             print(fill(f"NOT RECONCILED: {dropped_rows} slip row(s) had "
                        f"an unreadable cell (see the warnings above)."))
+        elif dropped_rows:
+            from taxjson.lib.out import act
+            print(act(f"NOT RECONCILED: {dropped_rows} slip row(s) had an "
+                      f"unreadable cell (warnings above)"))
     return 0 if rep["clean"] else 1
 
 

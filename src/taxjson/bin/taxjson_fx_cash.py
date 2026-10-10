@@ -381,6 +381,62 @@ def unreliable_status(doc: Dict[str, Any], year: int,
             "overdrafts_in_year": od, "unreliable_raw": raw}
 
 
+def render_brief(doc: Dict[str, Any], base: str, year: int,
+                 country: str, verdict: Dict[str, Any],
+                 width_: Optional[int] = None) -> str:
+    """`taxjson fx-cash`'s default view (docs/output-style.md, Essentials
+    first): the NOT RELIABLE line first, a legend, the table, the
+    year-end balance to compare and the lines to act on; the reasons,
+    the rule and the caveats with --details (render_report)."""
+    from taxjson.lib import out
+    from taxjson.lib.report_model import fmt_money
+    w = out.width() if width_ is None else width_
+    st = unreliable_status(doc, year, verdict)
+    od = doc.get("overdrafts_year") or {}
+    n = sum(int(v.get("count") or 0) for v in od.values())
+    if st["active"]:
+        head = (f"FX on foreign cash: NOT RELIABLE for {year} — {n} "
+                f"in-year overdraft{'' if n == 1 else 's'}; do not file "
+                f"this figure")
+    else:
+        head = st["headline"]
+    lines = out.wrap(head + ".", w, "", "  ")
+    lines.append("")
+    lines += out.wrap(f"FX GAINS ON CASH — {base}, tax year {year}, "
+                      f"{verdict['rule']}, ledger v1 (default)", w)
+    active = {c: s for c, s in doc["per_currency"].items()
+              if any(abs(v) > 0.005 for v in s.values())}
+    if not active:
+        lines.append("No foreign-currency cash activity in taxable "
+                     "accounts this year.")
+        return "\n".join(lines)
+    lines.append(f"GAIN(LOSS): the FX move realized when foreign cash is "
+                 f"spent (pooled average cost), in {base}.")
+    body = [[c, fmt_money(s["acquired"]), fmt_money(s["disposed"]),
+             fmt_money(s["gain"])]
+            for c, s in sorted(active.items(),
+                               key=lambda kv: -kv[1]["disposed"])]
+    foot = [["NET (NOT RELIABLE)", "", "", fmt_money(doc["net_gain"])]]
+    lines += out.fit_table(["CUR", "ACQUIRED", "DISPOSED", "GAIN(LOSS)"],
+                           body, aligns=["<", ">", ">", ">"], foot=foot,
+                           width_=w)
+    lines.append("")
+    ye = doc.get("pools_year_end") or {}
+    if ye:
+        bal = ", ".join(f"{c} {fmt_money(v['units'])}"
+                        for c, v in sorted(ye.items()))
+        lines.append(f"Ledger balance at {year}-12-31: {bal} — compare "
+                     f"with the brokers' year-end cash")
+    if doc["unrated"]:
+        lines.append(out.act("Cash events skipped with no FX rate on file",
+                             "tjs run"))
+    lines.append(out.act("It misses conversions, deposits and margin; "
+                         "ledger v2 reads them", "tjs fx-cash --ledger v2"))
+    lines.append(out.details_hint("tjs fx-cash --details",
+                                  "why it is not reliable"))
+    return "\n".join(lines)
+
+
 def render_report(doc: Dict[str, Any], base: str, year: int,
                   country: str, verdict: Dict[str, Any],
                   width_: Optional[int] = None) -> str:
