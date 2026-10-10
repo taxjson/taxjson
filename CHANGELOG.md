@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- `taxjson redact` in a year folder with shared exports copied the year's
+  taxjson.toml, ticker.map and tobase.map unredacted: an account id found
+  only in the configuration (`account`, `broker_accounts`, `query_id`), a
+  denylist or `--also` match found only in those files and contact details
+  in their comments stayed in the copy, and `--check` said "Nothing to
+  redact". They are now redacted (an id with the same placeholder as in
+  the exports, so the copy still runs) and counted; in a single-folder
+  project an id only taxjson.toml names is replaced in the exports too
+  (#22).
 - A taxjson.toml value written over several lines (a `holdings = [...]`
   list with one file per line, a multi-line string) was only partly
   rewritten by `taxjson redact`, `align --write` and `migrate --to-years`:

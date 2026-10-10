@@ -1,5 +1,12 @@
-"""GitHub issues #26, #27, #29 (synthetic data only).
+"""GitHub issues #22, #26, #27, #29 (synthetic data only).
 
+- #22: `taxjson redact` of a year folder with shared exports copies the
+  year's taxjson.toml, ticker.map and tobase.map: an account id found
+  only in the config (account, broker_accounts, query_id), a denylist /
+  --also match found only in a project file, and contact details in
+  their comments are redacted too, with the same placeholder as the
+  exports, and `--check` reports them. A single-folder project's
+  exports get the config's ids too.
 - #26: project_layout.set_key_text replaces (or comments out) the WHOLE
   value of a key — a multi-line array or string included; redact,
   align and migrate --to-years write a taxjson.toml that reads.
@@ -15,7 +22,7 @@ import unittest
 from pathlib import Path
 
 from _style import CapturedWidth
-from test_fix_multi_year import multi, single, tjs
+from test_fix_multi_year import multi, run_ok, single, tjs
 
 from taxjson.lib import project_layout as PL
 from taxjson.lib.tomlcompat import tomllib
@@ -50,6 +57,115 @@ def _year(extra_account: str = "", tail: str = "") -> Path:
 def _all_text(folder: Path) -> str:
     return "\n".join(p.read_text(errors="replace") for p in
                      sorted(folder.rglob("*")) if p.is_file())
+
+
+class TestRedactProjectFiles(unittest.TestCase):
+    """#22."""
+
+    def test_config_only_ids(self):
+        y = _year(f'account = "{IB}"\nbroker_accounts = ["{BROKER}"]\n'
+                  f'query_id = "{QUERY}"\n')
+        r = tjs("-C", str(y), "redact", "--check")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn("Nothing to redact", r.stdout)
+        self.assertIn("taxjson.toml: 3 account ids", r.stdout)
+        r = tjs("-C", str(y), "redact")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        red = y / "inputs_redact"
+        text = (red / "taxjson.toml").read_text()
+        for v in (IB, BROKER, QUERY):
+            self.assertNotIn(v, _all_text(red))
+            self.assertNotIn(v, r.stdout + r.stderr)
+        acct = tomllib.loads(text)["accounts"]["margin"]
+        self.assertTrue(acct["account"].startswith("U999"), acct)
+        self.assertRegex(acct["broker_accounts"][0], r"^9990\d{4}$")
+        run_ok(self, red)
+
+    def test_config_id_matches_the_exports_placeholder(self):
+        # The same id in an export's comment and in broker_accounts: one
+        # placeholder, so the copy's broker_accounts still names the
+        # copy's statements.
+        y = _year(f'broker_accounts = ["{BROKER}"]\n')
+        tt = y.parent / "inputs" / "margin" / "trades.tt"
+        tt.write_text(f"# account {BROKER}\n" + tt.read_text())
+        r = tjs("-C", str(y), "redact")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        red = y / "inputs_redact"
+        ph = tomllib.loads((red / "taxjson.toml").read_text())[
+            "accounts"]["margin"]["broker_accounts"][0]
+        self.assertIn(f"# account {ph}",
+                      (red / "inputs" / "margin" / "trades.tt").read_text())
+        self.assertNotIn(BROKER, _all_text(red))
+
+    def test_also_matches_only_in_project_files(self):
+        y = _year(tail="# Synthetic Secret Marker\n")
+        (y / "ticker.map").write_text(
+            "# Synthetic Secret Marker\nGLOBAL QZA.TO QZB.TO\n")
+        (y / "tobase.map").write_text("# Synthetic Secret Marker\n")
+        r = tjs("-C", str(y), "redact", "--check", "--also",
+                "Synthetic Secret Marker")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("taxjson.toml: 1 denylist / --also match", r.stdout)
+        self.assertIn("ticker.map: 1 denylist / --also match", r.stdout)
+        r = tjs("-C", str(y), "redact", "--also", "Synthetic Secret Marker")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        red = y / "inputs_redact"
+        self.assertNotIn("Secret", _all_text(red))
+        self.assertIn("GLOBAL QZA.TO QZB.TO", (red / "ticker.map").read_text())
+        tomllib.loads((red / "taxjson.toml").read_text())
+
+    def test_comment_text(self):
+        y = _year(tail=f"# questions: jane.sample@example.org, "
+                       f"phone 416-555-0199\n# old IB account {IB}\n")
+        (y / "ticker.map").write_text(
+            f"# from Questrade {BROKER}, ask jane.sample@example.org\n"
+            "GLOBAL QZA.TO QZB.TO\n")
+        r = tjs("-C", str(y), "redact")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        red = y / "inputs_redact"
+        out = _all_text(red)
+        for v in ("jane.sample", "416-555-0199", IB, BROKER):
+            self.assertNotIn(v, out)
+        self.assertIn("GLOBAL QZA.TO QZB.TO", (red / "ticker.map").read_text())
+
+    def test_rule_lines_are_not_read_as_names(self):
+        # A map's rule lines are settings, not an export: no name or
+        # address heuristics on them.
+        y = _year()
+        rules = "GLOBAL QZA.TO QZB.TO\nGLOBAL ZZA ZZB.TO\n"
+        (y / "ticker.map").write_text(rules)
+        r = tjs("-C", str(y), "redact", "--check")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Nothing to redact", r.stdout)
+
+    def test_single_folder_config_ids_reach_the_exports(self):
+        root = single("canada", 2024)
+        t = (root / "taxjson.toml").read_text().replace(
+            '[accounts.margin]\ntype = "taxable"\n',
+            f'[accounts.margin]\ntype = "taxable"\n'
+            f'broker_accounts = ["{BROKER}"]\n')
+        (root / "taxjson.toml").write_text(t)
+        tt = root / "inputs" / "margin" / "trades.tt"
+        tt.write_text(f"# statement {BROKER} Synthetic Secret Marker\n"
+                      + tt.read_text())
+        r = tjs("-C", str(root), "redact", "--check", "--also",
+                "Synthetic Secret Marker")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        r = tjs("-C", str(root), "redact", "--also",
+                "Synthetic Secret Marker")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = _all_text(root / "inputs_redact")
+        self.assertNotIn(BROKER, out)
+        self.assertNotIn("Secret", out)
+
+    def test_invalid_copy_is_refused(self):
+        # An --also pattern that breaks the copied configuration: refused,
+        # nothing written.
+        y = _year()
+        r = tjs("-C", str(y), "redact", "--also", r"\[accounts")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("would not read", r.stdout + r.stderr)
+        self.assertFalse((y / "inputs_redact").exists())
 
 
 _MULTI = """\

@@ -86,6 +86,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `not brought over`
 
+### `tjs redact` in a year folder: the copy's taxjson.toml, ticker.map or tobase.map still holds an account id, a comment or an `--also` match, and the console said "taxjson.toml: nothing to redact" (or `tjs redact --check`: "Done. Nothing to redact.")
+- **Check:** search the copy (`inputs_redact/taxjson.toml`, `ticker.map`, `tobase.map`) for the values of your accounts' `account`, `broker_accounts` and `query_id` keys and for the `--also` text. On an older release the year's own files were copied as they were.
+- **Cause:** in a year folder of a shared-exports project, `taxjson redact` copies the year's own files beside the exports as a runnable project, but it replaced in them only the ids it had found in the exports: an id only the configuration holds, the denylist and `--also` patterns and the contact details in their comments were never applied to them.
+- **Fix:** upgrade and run `tjs redact --force` again. The configuration's ids get placeholders (the same as in the exports, so the copy still runs), e-mail addresses and denylist / `--also` matches are replaced in every file, phones, addresses and names in their comments, and `--check` counts them. In a single-folder project an id only taxjson.toml names is now replaced in the exports too. Review the copy before sharing it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_redact.py` — `redact_project_text`, `config_ids`, `redact_tree`
+
 ### `tjs redact` in a year folder: "Error: the redacted taxjson.toml would not read as TOML (…) — nothing written"; or, on an older release, a copy (or an `align --write`, `migrate --to-years` result) whose taxjson.toml stops `tjs run` after a `holdings = [` list written over several lines
 - **Check:** the project's taxjson.toml has a value over several lines (`holdings = [` with one file per line, a `"""` string). On an older release the written file shows the new first line followed by the old value's remaining lines.
 - **Cause:** the editor of taxjson.toml lines (`src/taxjson/lib/project_layout.py` — `set_key_text`: redact's holdings lists and folder settings, `align --write`, `migrate --to-years`) replaced or commented out only the first line of a value.
