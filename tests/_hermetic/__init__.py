@@ -15,6 +15,7 @@ call. A test now never sees the developer's HOME:
     constant made-up rate per currency pair, every weekday from
     2000-01-01 to a week past today, recorded as the Bank of Canada /
     Yahoo coverage taxjson-to-base-curr reads. No rate in it is real.
+  * TAXJSON_WIDTH=0 unless set (full messages, as the gate runs them).
   * TAXJSON_OFFLINE=1, so no stage downloads anything: rates, prices
     and crypto prices come from the caches only. A test of an online
     path injects its fetcher (or clears the variable itself).
@@ -103,6 +104,11 @@ def install() -> str:
     if os.name == "nt":
         os.environ["USERPROFILE"] = home
     os.environ["TAXJSON_OFFLINE"] = "1"
+    # Unwrapped, full-length messages, as scripts/ci.sh runs the suite:
+    # a GitHub runner sets no TAXJSON_WIDTH, and at a terminal width the
+    # essentials-first output cuts long messages to one line. A test of
+    # the cut view sets its own width (tests/_style.CapturedWidth).
+    os.environ.setdefault("TAXJSON_WIDTH", "0")
     os.environ[MARK] = home
     return home
 
