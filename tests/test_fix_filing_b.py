@@ -378,10 +378,14 @@ class TestInstalmentsCaveats(unittest.TestCase):
             (root / "inputs" / "margin" / "m.tt").write_text(
                 _TT_MARGIN.replace("2025", "2023"))
             self.assertEqual(_cli(root, "run", "--no-input").returncode, 0)
-            r = _cli(root, "instalments")
+            # The note in full: --details (Essentials first); the default
+            # view flags it in a `! ` line.
+            r = _cli(root, "instalments", "--details")
+            b = _cli(root, "instalments")
             j = _cli(root, "instalments", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("predates the earliest built-in rate", r.stdout)
+        self.assertIn("! Rate tables of another year used", b.stdout)
         self.assertTrue(json.loads(j.stdout)["vintage_notes"])
 
 

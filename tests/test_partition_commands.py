@@ -263,7 +263,8 @@ class TestChecksFollowTheRadar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = projects_both(td, year=2026, files=_base_files(rows))
             sell = cli_both(p, "sell-check", "BND.US", "--json")
-            buy = cli_both(p, "buy-check", "ZZZ.US")
+            # The window-a-buy-starts note: --details.
+            buy = cli_both(p, "buy-check", "ZZZ.US", "--details")
         v = {c: json.loads(sell[c].stdout)["results"][0]
              for c in COUNTRIES}
         self.assertEqual(v["canada"]["verdict"], "ACTION", sell["canada"])
@@ -310,7 +311,9 @@ class TestEdgeCases(unittest.TestCase):
             for c in COUNTRIES:
                 (p[c] / "work" / "margin_gains_wash.json").write_text(
                     _gains_doc(g[c]))
-            r = cli_both(p, "edge-cases")
+            # Every section and the rules: --details (docs/output-
+            # style.md, Essentials first).
+            r = cli_both(p, "edge-cases", "--details")
             for c in COUNTRIES:
                 self.assertEqual(r[c].returncode, 0, r[c].stderr)
                 out[c] = r[c].stdout
@@ -403,7 +406,8 @@ class TestWording(unittest.TestCase):
             for c in COUNTRIES:
                 (p[c] / "work" / "margin_gains_wash.json").write_text(
                     _gains_doc(g[c]))
-            ws = cli_both(p, "wash-sales")
+            # --details: the notes name the IRA (Essentials first).
+            ws = cli_both(p, "wash-sales", "--details")
             rad = cli_both(p, "wash-radar", "--date", "2025-03-25")
         self.assertIn("superficial-loss rule", ws["canada"].stdout)
         self.assertIn("§1091", ws["usa"].stdout)
@@ -506,7 +510,9 @@ class TestUsEstimateAndCarryover(unittest.TestCase):
             p = projects_both(td, year=2025, canada={"province": "ON"},
                               files={"work/margin_gains.json":
                                      json.dumps(g)})
-            r = cli_both(p, "estimate", "--other-income", "300000")
+            # The assumptions in full: --details (Essentials first).
+            r = cli_both(p, "estimate", "--other-income", "300000",
+                         "--details")
         us, ca = r["usa"].stdout, r["canada"].stdout
         self.assertEqual(r["usa"].returncode, 0, r["usa"].stderr)
         self.assertIn("NIIT", us)

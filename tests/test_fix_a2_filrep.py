@@ -396,7 +396,8 @@ class TestReturnFooters(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             f = json.loads(r.stdout)["filing"]
             self.assertEqual(f["totals"]["permanently_denied"], 200.0)
-            t = _cli(root, "sum").stdout.split("FOR THE RETURN")[1]
+            t = _cli(root, "sum", "--details").stdout.split(
+                "FOR THE RETURN")[1]
             self.assertIn("IRA, which is lost for good", t)
 
     @rule("CA-SL-09")
@@ -407,7 +408,8 @@ class TestReturnFooters(unittest.TestCase):
                    permanently_disallowed=100.0)
             (root / "work" / "margin_gains.json").write_text(json.dumps(
                 {"summary": {"year": 2025}, "transactions": [e]}))
-            t = _cli(root, "sum").stdout.split("FOR THE RETURN")[1]
+            t = _cli(root, "sum", "--details").stdout.split(
+                "FOR THE RETURN")[1]
             t = " ".join(t.split())
             self.assertIn("affiliated person's acquisition is permanent "
                           "for this return (that person adds it to their "

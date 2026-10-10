@@ -569,7 +569,14 @@ class TestTypedSlips(unittest.TestCase):
             assert_labelled(self, shown.stdout + shown.stderr)
             txt = tj(root, home, "slip-audit").stdout
             for frag in ("SLIP AUDIT — tax year 2025", "BOOKS CAD DAILY",
-                         "SLIP CAD AVERAGE", "Counted in 2025: ZZF.TO",
+                         "SLIP CAD AVERAGE",
+                         "spare: Canadian dividends 40.00 CAD is on no "
+                         "slip", "below the T5 minimum"):
+                self.assertIn(frag, txt)
+            # The record-date notes and each coverage line's sources moved
+            # behind --details (docs/output-style.md, Essentials first).
+            txt = tj(root, home, "slip-audit", "--details").stdout
+            for frag in ("Counted in 2025: ZZF.TO",
                          "spare: Canadian dividends 40.00 CAD from "
                          "spare.tt is on no slip",
                          "no T5 is issued below 50"):

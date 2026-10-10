@@ -80,7 +80,9 @@ class TestFitted(unittest.TestCase):
                     if ln.startswith("CLASS"))
         self.assertNotIn("LARGEST_WIN", head)
         self.assertIn("PROFIT_FACTOR", head)
-        self.assertIn("How the trades are counted", r.stdout)
+        # The counting notes: --details (Essentials first).
+        self.assertIn("How the trades are counted",
+                      project("canada").run("stats", "--details").stdout)
         # Unwrapped (captured), every column stays.
         r = project("canada").run("stats", TAXJSON_WIDTH=0)
         head = next(ln for ln in r.stdout.splitlines()
@@ -88,7 +90,8 @@ class TestFitted(unittest.TestCase):
         self.assertIn("LARGEST_WIN", head)
 
     def test_fees_sum_sections(self):
-        r = project("canada").run("fees-sum")
+        # The Definitions: --details (Essentials first).
+        r = project("canada").run("fees-sum", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.splitlines()
         self.assertTrue(lines[0].startswith(
@@ -157,12 +160,13 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
         return err.getvalue()
 
     def test_one_note_for_a_person(self):
+        # A few roots: one line (docs/output-style.md, Essentials
+        # first); more than three: the headline and the list.
         text = self._emit(100)
         self.assertEqual(text.count("Info:"), 1, text)
-        self.assertTrue(text.startswith("Info: 2 option root(s) whose "
-                                        "export does not state"), text)
-        self.assertIn("\nQZA, QZB.\n", text)
-        self.assertIn("`MULT <ROOT> N`", text)
+        self.assertEqual(text, "Info: QZA, QZB: 100 shares per option "
+                               "contract ASSUMED — `MULT <ROOT> N` in "
+                               "ticker.map if not\n")
         assert_styled(self, text)
 
     def test_a_line_per_root_when_captured(self):
@@ -234,7 +238,7 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
             markets.reset_notes()
         reg.assert_called_once_with(markets.flush_notes)
         text = err.getvalue()
-        self.assertEqual(text.count("Info: 2 option root(s)"), 2, text)
+        self.assertEqual(text.count("Info: QZA, QZB: 100 shares"), 2, text)
         self.assertEqual(text.count("Info:"), 2, text)
 
 

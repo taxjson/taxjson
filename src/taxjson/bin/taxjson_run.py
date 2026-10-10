@@ -36,6 +36,7 @@ Subcommands:
 from taxjson.lib.out import exit_text
 from taxjson.lib.stage_msg import emit_line
 import argparse
+import contextlib
 import hashlib
 import re
 import shutil
@@ -425,6 +426,31 @@ def _echo_captured(line: str, indent: str = "  ", file=None,
             _ECHO_SKIP[0] = False
     if _w(file) > 0:
         indent, source = "", False
+    if _run_concise(file):
+        # One line per message (Essentials first): the continuation
+        # lines and the detail wait for `taxjson run --details` — an
+        # error keeps its detail (the fix).
+        from taxjson.lib.out import relabel as _relabel
+        if is_continuation(line):
+            if _ECHO_LAST_ERROR[0]:
+                show(console_lines(line, indent, stream=file,
+                                   source=source), file, cont=True)
+            else:
+                _DETAILS_HIDDEN[0] = True
+            return
+        _ECHO_LAST_ERROR[0] = _relabel(line.strip()).startswith("Error:")
+        if _ECHO_LAST_ERROR[0]:
+            show(console_lines(line, indent, stream=file, source=source),
+                 file)
+            return
+        lines = console_lines(line, indent, stream=file, source=source,
+                              concise=True)
+        full = console_lines(line, indent, stream=file, source=source)
+        if lines != full:
+            _DETAILS_HIDDEN[0] = True
+        if lines:
+            show(lines, file)
+        return
     show(console_lines(line, indent, stream=file, source=source), file,
          cont=is_continuation(line))
 
@@ -485,19 +511,58 @@ def _wrote(path: Path, root: Path, what: str = "summary") -> None:
     _step(f"Writing {what} {shown}{'/' if path.is_dir() else ''}")
 
 
+def _run_concise(file=None) -> bool:
+    """True on `taxjson run`'s console shown to a person without
+    --details: each message is one line (docs/output-style.md,
+    Essentials first); captured output (width 0) keeps every byte."""
+    from taxjson.lib.out import width as _w
+    return (_CURRENT_CMD == "run" and not _CURRENT_DETAILS
+            and _w(sys.stdout if file is None else file) > 0)
+
+
+# Set when the run's console left a message's detail out (_run_concise):
+# the closing lines then name `taxjson run --details`.
+_DETAILS_HIDDEN = [False]
+# The last message _echo_captured showed was an error (its continuation
+# lines are shown whole).
+_ECHO_LAST_ERROR = [False]
+
+
 def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
-         indent: str = "", file=None) -> None:
+         indent: str = "", file=None, short: Optional[str] = None,
+         cmd: Optional[str] = None) -> None:
     """A run-console message in the house style: `[<prog>: ]<kind>:
     <headline>` and indented `details` (stderr by default). kind: note |
     warning | attention | error. `indent` nests the captured form
     (width 0) only: shown to a person the label starts the line, its
     continuations are flush-left and a message of more than one line is
-    followed by one blank line (The run's console)."""
-    from taxjson.lib.stage_msg import message_lines
-    from taxjson.lib.out import show, width as _w
+    followed by one blank line (The run's console). On the run's
+    console without --details (_run_concise) a note or warning is one
+    line: `short` when given, else its headline and the command its
+    detail names, or `cmd` (lib/stage_msg.concise_line); an error keeps
+    its detail (the fix)."""
+    from taxjson.lib.stage_msg import concise_line, message_lines
+    from taxjson.lib.out import label, show, width as _w
     file = sys.stderr if file is None else file
     if _w(file) > 0:
         indent = ""
+    if kind != "error" and _run_concise(file):
+        lab = label("warning" if kind == "attention" else kind,
+                    stream=file)
+        w = _w(file)
+        if kind == "attention":
+            from taxjson.lib.out import shown_topic
+            text = shown_topic(text)
+        from taxjson.lib.stage_msg import shorten_commands
+        one = shorten_commands(f"{lab}{short}" if short else
+                               concise_line(f"{lab}{text}", details, w,
+                                            cmd=cmd), w)
+        if details or short or len(one) < len(lab) + len(text):
+            _DETAILS_HIDDEN[0] = True
+        # One line, cut at the width; the third of a kind folded.
+        from taxjson.lib.out import concise_show
+        concise_show(one, file)
+        return
     show(message_lines(kind, text, details, prog=prog, indent=indent,
                        stream=file), file)
 
@@ -1127,6 +1192,10 @@ def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
 # The command currently executing (set by main's dispatch loop) so
 # shared helpers' errors can say WHICH command in a chain failed.
 _CURRENT_CMD = ""
+# --details on the command currently executing (docs/output-style.md,
+# Essentials first): shared helpers print a warning's detail lines only
+# then; the default view shows its headline.
+_CURRENT_DETAILS = False
 
 
 class _CappedHelpFormatter(argparse.HelpFormatter):
@@ -2788,6 +2857,12 @@ def _report_detection(name: str, found, cache: Path) -> None:
                         f"activity: skipped (`taxjson sanity` and "
                         f"`taxjson opening` read it)")
             elif det.broker:
+                if _run_concise():
+                    # The broker each file was read as: --details (and
+                    # work/<acct>_detect.diag); the default console
+                    # keeps the per-file counts (Essentials first).
+                    _DETAILS_HIDDEN[0] = True
+                    continue
                 text = f"Info: File {where} → identified as {det.display}"
             else:
                 text = (f"Warning: File {where} → not identified"
@@ -3890,9 +3965,10 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         return
     if not pl.names and mhm is None:
         print("taxjson migrate: nothing to migrate in this project")
-        for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} is "
-                             f"here.", indent="  "):
-            print(_ln)
+        if _details(args):
+            for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} "
+                                 f"is here.", indent="  "):
+                print(_ln)
         return
     if not pl.names:
         _migrate_missing_history(root, mhm, args)
@@ -3925,12 +4001,16 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     except OSError as e:
         _die_input(f"could not write the migration: {e}")
     print("\nDone.")
-    for _ln in _out_wrap(
-            "Review ticker.map and taxjson.toml and commit them (in a git "
-            "repository, `git rm` the old files too); delete the "
-            "*.migrated files once you are satisfied; run `taxjson run` to "
-            "rebuild.", indent="  "):
-        print(_ln)
+    if _details(args):
+        for _ln in _out_wrap(
+                "Review ticker.map and taxjson.toml and commit them (in a "
+                "git repository, `git rm` the old files too); delete the "
+                "*.migrated files once you are satisfied; run `taxjson run` "
+                "to rebuild.", indent="  "):
+            print(_ln)
+    else:
+        print("  Review and commit ticker.map and taxjson.toml, then "
+              "`taxjson run` (more: --details).")
     if mhm is not None:
         _migrate_missing_history(root, mhm, args)
 
@@ -5065,7 +5145,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   "wash-sale rule NOT applied to crypto",
                   "The IRS treats crypto as property, not a security "
                   "(§1091 does not reach it); losses are allowed in full.",
-                  indent="  ", file=sys.stdout)
+                  indent="  ", file=sys.stdout,
+                  short="wash-sale rule NOT applied to crypto (property, "
+                        "not a security): losses allowed in full")
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
     cmd += _locked_year_flags(cache.parent, settings)
@@ -6286,7 +6368,8 @@ def _say_xlist_losses(root: Path, cfg: Dict[str, Any], cache: Path, *,
     for f in found[:XR.RADAR_SHOWN]:
         head, details = XR.message(f.record(), country)
         _say_once(("xlist-loss", f.loss_symbol, f.other_symbol), "warning",
-                  head, *details, indent="  ", file=sys.stdout)
+                  head, *details, indent="  ", file=sys.stdout,
+                  cmd="taxjson ticker-map --suggest")
     if len(found) > XR.RADAR_SHOWN:
         # The rest counted in one line (third pre-release review,
         # finding 9: one Warning per pair flooded the console).
@@ -6362,18 +6445,25 @@ def _say_option_transition(root: Path, cfg: Dict[str, Any]) -> None:
     asked = [r for r in rows if r not in done]
     if done:
         head, _details = OB.question_message(done, int(year), since)
+        _ans = (f"answered in checklist.json (option-boundary marked "
+                f"{mark[0]}{': ' + mark[1] if mark[1] else ''})")
         _say_once(("option-transition", "answered"), "note",
-                  f"{head} — answered in checklist.json (option-boundary "
-                  f"marked {mark[0]}{': ' + mark[1] if mark[1] else ''})",
-                  indent="  ", file=sys.stdout)
+                  f"{head} — {_ans}", indent="  ", file=sys.stdout,
+                  short=f"{len(done)} option contract(s) on transition "
+                        f"close timing: {_ans}")
     if asked:
         head, details = OB.question_message(asked, int(year), since)
         if done:
             details = details + [
                 "checklist.json's option-boundary mark answered other "
                 "contracts; mark it done again once these are answered."]
+        _tot = sum(float(r.get("premium") or 0.0) for r in asked)
+        _wys = "/".join(sorted({str(r["write_year"]) for r in asked}))
         _say_once(("option-transition",), "warning", head, *details,
-                  indent="  ", file=sys.stdout)
+                  indent="  ", file=sys.stdout,
+                  short=f"{len(asked)} option contract(s) written in "
+                        f"{_wys}: is {_tot:,.2f} of premium taxed in "
+                        f"{year} right? — `taxjson checklist`")
 
 
 def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
@@ -6394,23 +6484,32 @@ def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
     mark = _checklist_answered(root, year, EC.STEP)
     for g in gaps:
         key = ("export-coverage", g.account, g.broker)
+        _where = (f"{EC.broker_name(g.broker)} exports for {g.account} "
+                  f"end {g.end}")
         if g.info:
             # Every position open at the end was closed by .tt lines.
             _say_once(key, "note", EC.info_message(g), indent="  ",
-                      file=sys.stdout)
+                      file=sys.stdout,
+                      short=f"{_where}: the positions then open were "
+                            f"closed by .tt lines")
             continue
         head, details = EC.message(g, int(year))
+        _n_open = len(g.positions or ()) + len(g.expired or ())
         # A DONE mark answers the gaps it recorded (account, broker,
         # end — the user knows the broker had no later activity there);
         # a new gap or a later end asks again. A skip accepts them all.
         if _mark_answers(mark, g.key):
-            _say_once(key, "note", f"{head} — marked {mark[0]} in "
-                      f"checklist.json ({EC.STEP}"
-                      f"{': ' + mark[1] if mark[1] else ''})", indent="  ",
-                      file=sys.stdout)
+            _marked = (f"marked {mark[0]} in checklist.json ({EC.STEP}"
+                       f"{': ' + mark[1] if mark[1] else ''})")
+            _say_once(key, "note", f"{head} — {_marked}", indent="  ",
+                      file=sys.stdout, short=f"{_where}: {_marked}")
             continue
+        from taxjson.lib.out import width as _ow
         _say_once(key, "warning", head, *details, indent="  ",
-                  file=sys.stdout)
+                  file=sys.stdout,
+                  short=(head if len("Warning: " + head) <= _ow(sys.stdout)
+                         else f"{_where} with {_n_open} position(s) open: "
+                              f"download the rest of {year}"))
 
 
 def _say_in_kind(root: Path, cache: Path, settings: Dict[str, Any], *,
@@ -7004,7 +7103,9 @@ def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
                      f"identical row(s))",
                      "Every row of it is booked in BOTH. Put each broker "
                      "account's exports under ONE inputs/<account>/ "
-                     "folder.", indent="  ", file=sys.stdout)
+                     "folder.", indent="  ", file=sys.stdout,
+                     short=f"broker account #{h[:6]} is in both {a} and "
+                           f"{b}: keep its exports in one inputs/ folder")
     return shared
 
 
@@ -7275,6 +7376,27 @@ def _acquire_run_lock(cache: Path) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    """`taxjson run` (_cmd_run). On a person's console without --details
+    each message is one line (Essentials first, docs/output-style.md):
+    said to the stages too (lib/stage_msg.CONCISE_ENV, whose own messages
+    reach the console), and taken back when the run ends."""
+    import os
+    from taxjson.lib.stage_msg import CONCISE_ENV
+    old = os.environ.get(CONCISE_ENV)
+    if _run_concise():
+        os.environ[CONCISE_ENV] = "1"
+    else:
+        os.environ.pop(CONCISE_ENV, None)
+    try:
+        _cmd_run(args)
+    finally:
+        if old is None:
+            os.environ.pop(CONCISE_ENV, None)
+        else:
+            os.environ[CONCISE_ENV] = old
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
     # Full rebuild is the DEFAULT: stale cached artifacts must never
     # feed a filing decision. `--fast` opts back into the mtime cache.
     args.force = not getattr(args, "fast", False)
@@ -7287,6 +7409,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     _DATED_SETTLED.clear()
     _IN_KIND_THIS_RUN.clear()
     _SHORT_SOURCES.clear()
+    _DETAILS_HIDDEN[0] = _ECHO_LAST_ERROR[0] = False
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     # Register the config path globally so every `needs_rebuild` call
@@ -7298,7 +7421,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     settings = cfg.get("settings", {})
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
-        _say("note", *_US_EXPERIMENTAL_NOTE)
+        _say("note", *_US_EXPERIMENTAL_NOTE,
+             short="the US engine is EXPERIMENTAL: treat the output as a "
+                   "draft")
     _loose = _loose_project_dirs(root)
     if _loose:
         _say_once("loose-permissions", "warning",
@@ -7306,7 +7431,9 @@ def cmd_run(args: argparse.Namespace) -> None:
                   f"this computer (made by an older taxjson or another "
                   f"program; new files are owner-only)",
                   f"Tighten it once: chmod -R go-rwx {_shell_quote(root)}",
-                  prog=_PROG)
+                  prog=_PROG,
+                  short=f"{', '.join(_loose)} can be read by other users: "
+                        f"`chmod -R go-rwx` it")
     _since_warn = _grant_since_warning(settings, root, accounts)
     if _since_warn:
         # (a crypto-only project writes no options — nothing to warn about)
@@ -8628,7 +8755,9 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
         pass
     from taxjson.lib.out import show_blocks
     # (a project with only .tt OPENING cost=unknown lines: named so)
-    show_blocks(FR.render_blocks(doc, mh_name="missing_history.tt"),
+    show_blocks(FR.render_blocks(doc, mh_name="missing_history.tt",
+                                 concise=_run_concise(sys.stdout),
+                                 details_hint=_DETAILS_HIDDEN[0]),
                 sys.stdout)
 
 
@@ -8832,13 +8961,24 @@ def _wrong_country_section(doc, wrong: List[Dict[str, str]],
                indent="  ")
 
 
+def _option_brief(desc: str) -> str:
+    """An election option's description cut to its first clause (`elect
+    --pending`'s OPTION table; --details prints the whole text)."""
+    import re as _re
+    head = _re.split(r"(?<!\bs)\. |: | — |; ", (desc or "").strip(), 1)[0]
+    head = head.rstrip(".")
+    return head if len(head) <= 52 else head[:49].rstrip() + "..."
+
+
 def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                    agg: Dict[str, Any], wrong: List[Dict[str, str]],
-                   country: str) -> None:
+                   country: str, details: bool = False) -> None:
     """`taxjson elect --pending`: each deferred event with its options —
-    what each one books, the hints it needs and the ready `--set` line —
-    and a last line saying what to do (the checklist's elections step
-    shows that line)."""
+    a table of the options (first clause of what each books, the hint it
+    needs) and one `--set` line to copy; with `details`, each option's
+    whole description and its own ready `--set` line — and a last line
+    saying what to do (the checklist's elections step shows that
+    line)."""
     from taxjson.lib.corp_actions import Manifest
     from taxjson.lib.out import Doc, Verbatim
     events = [(acct, ev) for acct, adoc in
@@ -8870,6 +9010,18 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                      f"`taxjson run` to apply", indent="  ")
         else:
             open_n += 1
+        if not details:
+            opts = ev.get("options", [])
+            doc.table(["OPTION", "WHAT IT BOOKS", "HINT"],
+                      [[o["election"], _option_brief(o.get("description")),
+                        ", ".join(h["key"] for h in (o.get("hints") or []))]
+                       for o in opts], indent="  ", drop=(2,))
+            _hinted = any(o.get("hints") for o in opts)
+            doc.kv([("set", Verbatim(
+                f"taxjson elect {acct} --set {eid}=OPTION"
+                + (" [--hint KEY=VALUE]" if _hinted else "")))],
+                indent="  ")
+            continue
         for i, o in enumerate(ev.get("options", []), 1):
             hints = o.get("hints") or []
             doc.blank().line(f"  {i}. {o['election']}")
@@ -8884,6 +9036,9 @@ def _print_pending(root: Path, inputs_dir: Path, cache: Path,
                 f"{hint_args}")))
             doc.kv(pairs, indent="     ")
     doc.blank()
+    if open_n and not details:
+        doc.line("What each option books, and its hints: "
+                 "taxjson elect --pending --details")
     if open_n:
         # ONE short line: `taxjson checklist` shows it as the step's
         # detail.
@@ -9000,7 +9155,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
                           | ({"wrong_country": _wrong} if _wrong else {}))
                 return
             if _wrong:
-                _print_pending(root, inputs_dir, cache, {}, _wrong, country)
+                _print_pending(root, inputs_dir, cache, {}, _wrong, country,
+                               _details(args))
                 return
             print("No pending elections (no --no-input run has deferred "
                   "any, or they've been resolved).")
@@ -9018,7 +9174,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
                 doc = dict(doc, wrong_country=_wrong)
             print(_json.dumps(doc, indent=2, sort_keys=True))
             return
-        _print_pending(root, inputs_dir, cache, doc, _wrong, country)
+        _print_pending(root, inputs_dir, cache, doc, _wrong, country,
+                       _details(args))
         return
 
     # No account → list every account's elections (read-only).
@@ -10215,19 +10372,42 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                    if c["how"] == "ticker.map" else
                    f"{c['account']}: {c['code']} UNRESOLVED "
                    f"({c['evidence']})" for c in codes])
+    _det = _details(args)
+    _td = "tjs transfers --details"
+
+    def _brief_codes(doc) -> None:
+        # Essentials first: the codes, one line each kind (--details
+        # lists them).
+        unres = [c for c in codes if not c["symbol"]
+                 and c["how"] != "ticker.map"]
+        inferred = [c for c in codes if c["symbol"]]
+        if unres:
+            doc.item(*_act_item(f"{len(unres)} Questrade code(s) UNRESOLVED: "
+                              f"map them in ticker.map", _td))
+        if inferred:
+            doc.para(f"{len(inferred)} Questrade code(s) booked under an "
+                     f"inferred ticker — {_td}")
+
     doc = Doc("CUSTODY TRANSFERS — evidence, not tax events")
-    doc.para("Basis comes from the buy and sell history. WHERE: sidecar = "
-             "kept out of the books; book = a sheltered account's "
-             "transfers, kept in.")
-    doc.blank()
+    if _det:
+        doc.para("Basis comes from the buy and sell history. WHERE: "
+                 "sidecar = kept out of the books; book = a sheltered "
+                 "account's transfers, kept in.")
+        doc.blank()
     if not rows:
+        if not _det:
+            doc.blank()
         doc.para("No transfer rows found"
                  + (f" for account {want!r}" if want else "")
                  + " — re-run `taxjson run` after enabling the sidecar, "
                    "or the broker reported none.")
-        _codes_section(doc)
+        (_codes_section if _det else _brief_codes)(doc)
         doc.print()
         return
+    if not _det:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("WHERE: sidecar = kept out of the books, book = kept in; "
+                 "IN_BOOKS: how a transfer-in is booked.")
     body = []
     for r in rows:
         # Type column: the transfer KIND (InterDepot/Internal/ATON…);
@@ -10249,6 +10429,20 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                "CUR", "WHERE", "IN_BOOKS"], body, drop=(6, 8, 4),
               key=(0, 1, 2))
     doc.blank().para(f"{len(rows)} transfer row(s).")
+    if not _det:
+        _nc = [r for r in rows
+               if r["arrival"].replace(" ", "_") == "NO_COST"]
+        if _nc:
+            _few = ", ".join(dict.fromkeys(r["symbol"] for r in _nc[:3]))
+            doc.item(*_act_item(
+                f"{len(_nc)} transfer-in(s) with no cost ({_few}"
+                + (f" +{len(_nc) - 3} more" if len(_nc) > 3 else "")
+                + "): add the purchase to a .tt file", _td))
+        _brief_codes(doc)
+        from taxjson.lib.out import details_hint as _dh
+        doc.para(_dh(_td, "what each IN_BOOKS value means"))
+        doc.print()
+        return
     if any(r["arrival"] != "-" for r in rows):
         doc.section("IN_BOOKS — a taxable account's transfer-in")
         doc.items([
@@ -10449,10 +10643,11 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if args.json:
         _json_out(report)
         return
-    _print_crypto_sends(root, report)
+    _print_crypto_sends(root, report, _details(args))
 
 
-def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
+def _print_crypto_sends(root: Path, report: Dict[str, Any],
+                        details: bool = False) -> None:
     """The crypto-sends listing in the house layout (docs/output-style.md):
     a title, one section per crypto account, each send's id and decision
     with its facts aligned under it (the ready .tt line never wrapped),
@@ -10468,18 +10663,24 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         # over the basis); `gift` is refused (COMMAND_COUNTRY).
         doc.para("A move to your own wallet is not a sale (self); a "
                  "payment is a sale at fair market value. A gift is not a "
-                 "sale for a US donor: record it as self.")
+                 "sale for a US donor: record it as self." if details else
+                 "self: a move to your own wallet (or a gift), no sale; "
+                 "payment: a sale at fair market value.")
     else:
         doc.para("A move to your own wallet is not a sale (self); a gift "
-                 "or a payment is a disposition at fair market value.")
+                 "or a payment is a disposition at fair market value."
+                 if details else
+                 "self: a move to your own wallet, no sale; gift or "
+                 "payment: a disposition at fair market value.")
     fx_by_year: Dict[str, float] = {}
     last = None
     for acct, adoc in report["accounts"].items():
         sends = adoc["sends"]
         doc.section(f"{acct} — {len(sends)} unmatched send(s), "
                     f"{adoc['undecided']} undecided")
-        doc.para(f"{adoc['matched']} matched to an arrival (self-custody "
-                 f"moves, `taxjson transfers`).", indent="  ")
+        if details or adoc["matched"]:
+            doc.para(f"{adoc['matched']} matched to an arrival (self-"
+                     f"custody moves, `taxjson transfers`).", indent="  ")
         _short = adoc.get("network_fees") or []
         if _short:
             # R1-26: the coins lost in transit paid the network fee — a
@@ -10587,9 +10788,10 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
             doc.message("warning", w)
         for sid in adoc["orphans"]:
             doc.message("note", f"sends.json has a decision for {sid}, "
-                        f"which is no longer a send in the exports",
-                        details=["Inputs or local_timezone changed? It "
-                                 "is ignored."])
+                        f"which is no longer a send in the exports"
+                        + ("" if details else ": it is ignored"),
+                        details=(["Inputs or local_timezone changed? It "
+                                  "is ignored."] if details else []))
         if adoc["undecided"]:
             last = (f"Decide: taxjson crypto-sends {acct} --set "
                     f"ID={'self|payment' if _usa else 'self|gift|payment'}"
@@ -10597,18 +10799,25 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
             doc.line(last)
     if fx_by_year:
         doc.section("STABLECOIN GIFTS AND PAYMENTS — currency gain")
+        if not details:
+            doc.line("Superficial losses are excluded.")
         doc.kv([(y, f"{g:+,.2f} {base}")
                 for y, g in sorted(fx_by_year.items())], indent="  ")
         # fx-cash has no input for it (re-audit A2-0591): the amount is
         # added by hand to the year's s.39(1.1) currency total.
-        doc.para("Superficial losses are excluded. Stablecoins are "
-                 "US-dollar cash in these books, so this is a "
-                 "foreign-currency gain: ITA s.39(1.1) taxes only the "
-                 "year's NET currency gain beyond $200. It is NOT in any "
-                 "taxjson figure (`taxjson fx-cash` does not read it): add "
-                 "it by hand to the year's net foreign-exchange gain or "
-                 "loss (the fx-cash net before the $200) and apply the "
-                 "$200 to the total.", indent="  ")
+        if not details:
+            from taxjson.lib.out import act as _act
+            doc.line(_act("add it by hand to the year's net FX gain (not "
+                          "in fx-cash)", "tjs crypto-sends --details"))
+        else:
+            doc.para("Superficial losses are excluded. Stablecoins are "
+                     "US-dollar cash in these books, so this is a "
+                     "foreign-currency gain: ITA s.39(1.1) taxes only the "
+                     "year's NET currency gain beyond $200. It is NOT in "
+                     "any taxjson figure (`taxjson fx-cash` does not read "
+                     "it): add it by hand to the year's net foreign-"
+                     "exchange gain or loss (the fx-cash net before the "
+                     "$200) and apply the $200 to the total.", indent="  ")
     pool = report.get("pool")
     if pool and pool.get("overdrafts"):
         doc.blank()
@@ -11527,9 +11736,17 @@ def cmd_stats(args: argparse.Namespace) -> None:
            f"taxable accounts: {', '.join(sorted(resolved))}")
     from taxjson.lib.out import Doc
     doc = Doc(f"CLOSED-TRADE STATISTICS — {scope} ({base}; {who})")
+    _det = _details(args)
     doc.para(f"Economic P/L in {base} before any {rule} denial — a view "
-             f"of how the trades went, not a filing number.")
-    doc.blank()
+             f"of how the trades went, not a filing number." if _det else
+             f"Economic P/L in {base} before any {rule} denial: how the "
+             f"trades went, not a filing number.")
+    if _det:
+        doc.blank()
+    else:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("WIN_RATE = wins / trades; PROFIT_FACTOR = gross wins / "
+                 "gross losses.")
     # Too wide: the largest win/loss go first, then the averages (the
     # --json output keeps them all).
     doc.table(["CLASS", "TRADES", "WINS", "LOSSES", "WIN_RATE", "NET_P/L",
@@ -11542,6 +11759,15 @@ def cmd_stats(args: argparse.Namespace) -> None:
     doc.para(f"Denied by the {rule} rule (NOT subtracted above): "
              f"{money(res['denied_total'])} {base} over "
              f"{res['denied_count']} disposition(s).")
+    if not _det:
+        if res["tainted_skipped"]:
+            doc.para(f"{res['tainted_skipped']} disposition(s) with an "
+                     f"unknown cost are not counted — tjs "
+                     f"find-missing-history")
+        from taxjson.lib.out import details_hint as _dh
+        doc.para(_dh("tjs stats --details", "how the trades are counted"))
+        doc.print()
+        return
     doc.section("How the trades are counted")
     doc.items([
         "WIN_RATE = wins / trades (a break-even trade is neither); "
@@ -13477,12 +13703,17 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     # wash pass). We fall back to the older wash file
                     # for label consistency — but say so, or the
                     # staleness is invisible.
+                    _brief1 = _brief(sys.stderr)
                     _out.note(f"{acct}: serving the previous {p_basis} "
-                              f"numbers", prog=_prog,
-                              details=[f"The latest per-account rebuild is "
-                                       f"{rep.get('basis')} only. Run a "
-                                       f"full `taxjson run` to refresh the "
-                                       f"wash-adjusted aggregates."])
+                              f"numbers"
+                              + (" — run a full `taxjson run`" if _brief1
+                                 else ""),
+                              prog=_prog,
+                              details=[] if _brief1 else [
+                                  f"The latest per-account rebuild is "
+                                  f"{rep.get('basis')} only. Run a full "
+                                  f"`taxjson run` to refresh the "
+                                  f"wash-adjusted aggregates."])
             except (OSError, ValueError):
                 res = None
         if res is None:
@@ -13739,6 +13970,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # it refused (_fx_cash_status).
     _fx_note: Optional[Dict[str, Any]] = None
     _fx_err = ""
+    # Essentials first (docs/output-style.md): shown to a person without
+    # --details, each warning below is one `! ` line after the tables
+    # (`_acts`); with --details, under --json, or captured (width 0) it
+    # is the full stderr message it always was.
+    _full_msgs = (_details(args) or bool(getattr(args, "json", False))
+                  or _out.width(sys.stderr) == 0)
+    _acts: List[str] = []
     if filing_rows and not _is_us:
         import contextlib as _ctx
         import io as _io
@@ -13755,7 +13993,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
             _fx_note, _fx_err = None, f"{type(e).__name__}: {e}"
         _fx_warn = [ln for ln in _fx_buf.getvalue().splitlines()
                     if "warning" in ln.lower()]
-        if _fx_err or _fx_warn:
+        if (_fx_err or _fx_warn) and not _full_msgs:
+            _acts.append(_out.act(
+                "FX-on-cash (line 15300) estimate "
+                + ("omitted" if _fx_err else "built with warnings"),
+                "tjs fx-cash"))
+        elif _fx_err or _fx_warn:
             _out.warn("FX-on-cash (line 15300) estimate "
                       + ("omitted" if _fx_err else
                          "built with warnings"), prog=_prog,
@@ -13764,14 +14007,23 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # Base currency is just a label here — soft-read, no hard config
     # dependency (the command works from the work/ gains files).
     base = _base_currency(root)
-    if tainted_included:
+    if tainted_included and not _full_msgs:
+        _acts.append(_out.act(
+            f"totals include {_count_noun(tainted_included, 'sale')} with an "
+            f"unknown cost; the filing totals leave them out",
+            "tjs form-export"))
+    elif tainted_included:
         # In-line tainted rows (raw engine output): counted in totals.
         _out.warn(f"totals include {tainted_included} disposition(s) "
                   f"with an unknown cost (no purchase in your files)",
                   prog=_prog,
                   details=["form-export and carryover exclude them, so "
                            "the filing totals will differ."])
-    if tainted_routed:
+    if tainted_routed and not _full_msgs:
+        _acts.append(_out.act(
+            f"{_count_noun(tainted_routed, 'sale')} with an unknown cost NOT "
+            f"in these totals: report them by hand", "tjs form-export"))
+    elif tainted_routed:
         # Pipeline files: tainted rows were STRIPPED to the
         # manual_reporting_required section — totals exclude them, and
         # without this line `sum` gave no signal at all (round-five
@@ -13796,7 +14048,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   for r in _no_purchase if r.get("booked") == "open"]
     _in_totals = [r for r in _no_purchase if r.get("booked") != "open"]
     _covers = [r for r in _in_totals if r.get("booked") == "short_cover"]
-    if _covers:
+    _no_buy = "with no purchase in your files"
+    if _covers and not _full_msgs:
+        _acts.append(_out.act_list(
+            f"{_count_noun(len(_covers), 'sale')} {_no_buy} booked as short "
+            f"sales a later purchase closed",
+            [r["symbol"] for r in _covers], "tjs find-missing-history"))
+    elif _covers:
         _shown_c = ", ".join(f"{r['symbol']} ({r['account']})"
                              for r in _covers[:4]) \
             + (f" +{len(_covers) - 4} more" if len(_covers) > 4 else "")
@@ -13810,7 +14068,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
                            "start, `taxjson find-missing-history` lists "
                            "them and the fixes (docs/getting-started.md, "
                            "step 5)."])
-    if _uncovered:
+    if _uncovered and not _full_msgs:
+        _acts.append(_out.act_list(
+            f"{_count_noun(len(_uncovered), 'sale')} with no purchase NOT in "
+            f"these totals", [r["symbol"] for r in _uncovered],
+            "tjs find-missing-history"))
+    elif _uncovered:
         _shown = ", ".join(f"{r['symbol']} ({r['account']})"
                            for r in _uncovered[:4]) \
             + (f" +{len(_uncovered) - 4} more" if len(_uncovered) > 4
@@ -13907,14 +14170,24 @@ def cmd_summary(args: argparse.Namespace) -> None:
         for _ln in _out.wrap(text, None, "- ", "  "):
             print(_ln)
 
+    _det = _details(args)
     print(f"REALIZED-GAINS SUMMARY — {base}, tax year {year}, "
           f"basis: {basis}")
-    _para("REALIZED = NON-OPT + OPTION capital gain (NON-OPT: shares, "
-          "units, futures and crypto); TOTAL = REALIZED + DIVIDEND + PIL.")
-    if sheltered_included:
-        _filing = ("carryover and form-export"
-                   if _is_us
-                   else "carryover, t1135 and form-export")
+    # The legend, before the tables (docs/output-style.md, Essentials
+    # first): what the columns mean, and a crypto row's DIVIDEND.
+    _para("REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; "
+          "TOTAL = REALIZED + DIVIDEND + PIL.")
+    _stk = [r for r in acct_rows
+            if r.get("dividend_is_staking") and abs(r["dividend"]) >= 0.005]
+    if _stk:
+        # The crypto rows' DIVIDEND is staking rewards: ordinary income
+        # (no gross-up/credit, no withholding), as the estimate treats
+        # it — not a figure for the dividend lines (S023-11).
+        _para("DIVIDEND of " + ", ".join(r["account"] for r in _stk)
+              + " is staking rewards: ordinary income, not dividends.")
+    _filing = ("carryover and form-export" if _is_us
+               else "carryover, t1135 and form-export")
+    if sheltered_included and (_det or not grouped):
         _para(f"Totals include sheltered account(s) "
               f"{', '.join(sheltered_included)} — not taxable events; "
               f"{_filing} exclude them.")
@@ -13922,25 +14195,25 @@ def cmd_summary(args: argparse.Namespace) -> None:
     _tdrop = (6, 5)           # FEES, then PIL, when the width is short
     if grouped:
         for gname, rows in group_defs:
-            print(f"{gname} ACCOUNTS")
+            print(f"{gname} ACCOUNTS"
+                  + (" — not taxable" if gname == "SHELTERED" else ""))
             _print_report_table(_table_lines(rows, "SUBTOTAL"),
                                 rule_before_last=True, fit=True,
                                 drop=_tdrop)
             print()
-        print("ALL ACCOUNTS")
+        print("ALL ACCOUNTS"
+              + (" — sheltered included" if sheltered_included else ""))
     _print_report_table(_table_lines(acct_rows, "TOTAL"),
                         rule_before_last=True, fit=True, drop=_tdrop)
-    _stk = [r for r in acct_rows
-            if r.get("dividend_is_staking") and abs(r["dividend"]) >= 0.005]
-    if _stk:
-        # The crypto rows' DIVIDEND is staking rewards: ordinary income
-        # (no gross-up/credit, no withholding), as the estimate treats
-        # it — not a figure for the dividend lines (S023-11).
+    if _stk and _det:
         _para("DIVIDEND for crypto account(s) "
               + ", ".join(f"{r['account']} ({money(r['dividend'])})"
                           for r in _stk)
               + " is STAKING rewards — ordinary income, not dividends.")
 
+    # After the data: the one-line act-on and must-not-miss lines
+    # (`_acts`, `_tail`); --details adds the notes they leave out.
+    _tail: List[str] = []
     if filing_rows:
         _names = ", ".join(r["account"] for r in filing_rows)
         _ynote = year_not_ended_text(_fyear)
@@ -13949,7 +14222,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
             _para(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Form 8949 → Schedule D, tax year {_fyear})")
             if _ynote:
-                _para(_ynote)
+                _para(_ynote if _det else
+                      f"Tax year {_fyear} has not ended: these are "
+                      f"YEAR-TO-DATE figures.")
+            _para("(h) = (d) − (e) + (g), the allowed gain; (g) = the "
+                  "code-W wash-sale loss disallowed, added back.")
             _body = [[f"{r['label']} → {r['schedule_d']}",
                       money(r["proceeds"]), money(r["cost"]),
                       money(r["adjustment"]), money(r["gain"])]
@@ -13963,37 +14240,50 @@ def cmd_summary(args: argparse.Namespace) -> None:
                      "(g) ADJUSTMENT", "(h) GAIN"], _body,
                     aligns=["<", ">", ">", ">", ">"], foot=_foot):
                 print(_ln)
-            print()     # the table's notes stand apart from its RETURN row
             _permd = filing_total.get("permanently_denied") or 0.0
-            _item("(d) − (e) + (g) = (h). Column (g) is the code-W wash-"
-                  "sale loss disallowed and added back, so (h) is the "
-                  "allowed gain; the disallowed loss moves to the "
-                  "replacement shares' basis"
-                  + (f", except {money(_permd)} from a repurchase in an "
-                     f"IRA, which is lost for good — no basis addition "
-                     f"(US-WASH-11)" if _permd > 0.005 else "") + ".")
             if _filing_6781 and _filing_6781.get("dispositions"):
-                _item(f"Not on Form 8949: {_filing_6781['dispositions']} "
-                      f"§1256 contract disposition(s), net "
-                      f"{money(_filing_6781['gain'])} — Form 6781 by hand "
-                      f"(60/40; year-end marking not modelled, US-FUT-02 / "
-                      f"US-OPT-04). `taxjson form-export` lists them.")
-            if abs(_round_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total gain is "
-                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
-                      f"RETURN row).")
-            if abs(_denied_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total {_denied_label} is "
-                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
-                      f"the RETURN row).")
-            _item("Per-sale rows: `taxjson form-export`.")
+                _acts.append(_out.act(
+                    f"{_count_noun(_filing_6781['dispositions'], '§1256 sale')}"
+                    f", net {money(_filing_6781['gain'])}, not on Form "
+                    f"8949: Form 6781 by hand", "tjs form-export"))
+            if _det:
+                print()     # the notes stand apart from the RETURN row
+                _item("(d) − (e) + (g) = (h). Column (g) is the code-W "
+                      "wash-sale loss disallowed and added back, so (h) "
+                      "is the allowed gain; the disallowed loss moves to "
+                      "the replacement shares' basis"
+                      + (f", except {money(_permd)} from a repurchase in "
+                         f"an IRA, which is lost for good — no basis "
+                         f"addition (US-WASH-11)" if _permd > 0.005
+                         else "") + ".")
+                if _filing_6781 and _filing_6781.get("dispositions"):
+                    _item(f"Not on Form 8949: "
+                          f"{_filing_6781['dispositions']} §1256 contract "
+                          f"disposition(s), net "
+                          f"{money(_filing_6781['gain'])} — Form 6781 by "
+                          f"hand (60/40; year-end marking not modelled, "
+                          f"US-FUT-02 / US-OPT-04). `taxjson form-export` "
+                          f"lists them.")
+                if abs(_round_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total gain is "
+                          f"{money(_engine_gain)} ({_round_gap:+,.2f} on "
+                          f"the RETURN row).")
+                if abs(_denied_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total {_denied_label} "
+                          f"is {money(_engine_denied)} "
+                          f"({_denied_gap:+,.2f} on the RETURN row).")
+                _item("Per-sale rows: `taxjson form-export`.")
+            _tail.append("More: tjs sum --details (notes); per sale: "
+                         "tjs form-export")
         else:
             _para(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
             if _ynote:
-                _para(_ynote)
+                _para(_ynote if _det else
+                      f"Tax year {_fyear} has not ended: these are "
+                      f"YEAR-TO-DATE figures.")
             _body = [[f"Line {r['line']} {r['short']} "
                       f"({r['proceeds_code']}/{r['gain_code']})"
                       if r["line"] else
@@ -14007,66 +14297,101 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       money(filing_total["outlays"]),
                       money(filing_total["gain"]),
                       money(filing_total["denied"])]]
-            # Too wide: DENIED goes first (its total is in the notes),
+            # Too wide: DENIED goes first (its total moves to the legend),
             # then one record per line.
-            for _ln in _out.fit_table(
-                    ["SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)",
-                     "OUTLAYS", "GAIN", "DENIED"], _body,
-                    aligns=["<", ">", ">", ">", ">", ">"], foot=_foot,
-                    drop=(5,)):
+            _s3 = _out.fit_table(
+                ["SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)", "OUTLAYS",
+                 "GAIN", "DENIED"], _body,
+                aligns=["<", ">", ">", ">", ">", ">"], foot=_foot,
+                drop=(5,))
+            _den_shown = any("DENIED" in _ln for _ln in _s3[:1])
+            _para("GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed "
+                  "gain; "
+                  + ("DENIED = superficial losses denied." if _den_shown
+                     else f"superficial losses denied: "
+                          f"{money(filing_total['denied'])}."))
+            for _ln in _s3:
                 print(_ln)
-            print()     # the table's notes stand apart from its RETURN row
             _permd = filing_total.get("permanently_denied") or 0.0
-            _item("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed "
-                  "gain. A short sale shows what it brought in as "
-                  "PROCEEDS and the cover as ACB, and sell-side "
-                  "commissions are outlays, as on the form.")
-            _item(f"Where a superficial loss was DENIED "
-                  f"({money(filing_total['denied'])} in all) the ACB is "
-                  f"REDUCED by it, so the gain stays the allowed one; a "
-                  f"deferred denial is added to the ACB of the "
-                  f"replacement property, but one caused by a "
-                  f"registered-account acquisition is lost for good, and "
-                  f"one caused by an affiliated person's acquisition is "
-                  f"permanent for this return (that person adds it to "
-                  f"their own ACB, s.53(1)(f)) — no ACB addition here"
-                  + (f" ({money(_permd)} of the DENIED total)"
-                     if _permd > 0.005 else "") + ".")
-            _dcon = filing_total.get("denied_contribution") or 0.0
-            if _dcon > 0.005:
-                _item(f"Denied: contribution to a registered plan — "
-                      f"{money(_dcon)} of losses on in-kind contributions "
-                      f"to an RRSP/TFSA/... are nil (s.40(2)(g)(iv)): the "
-                      f"ACB shown is reduced by them, they are lost for "
-                      f"good (no ACB addition anywhere) and they are not "
-                      f"in DENIED.")
-            if abs(_round_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total gain is "
-                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
-                      f"RETURN row).")
-            if abs(_denied_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total {_denied_label} is "
-                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
-                      f"the RETURN row).")
-            if _fx_note is not None:
-                _item(_fx_sum_item(_fx_note, money))
-            else:
-                _item("FX on foreign cash (s.39(1.1)) is not in the rows "
-                      "above — T4037 puts it on line 15300; see `taxjson "
-                      "fx-cash`.")
+            # FX on foreign cash (line 15300): never in the rows.
+            if _fx_note is None:
+                _acts.append(_out.act("FX on foreign cash (line 15300) is "
+                                      "not in the rows", "tjs fx-cash"))
+            elif (_fx_note.get("ledger") == "v2"
+                    and _fx_note.get("status") == "computed"):
+                _acts.append(_out.act(
+                    f"FX on foreign cash (line 15300), not in the rows: "
+                    f"reportable {money(_fx_note['reportable'])}",
+                    "tjs fx-cash"))
+            elif _fx_note.get("ledger") == "v2":
+                _acts.append(_out.act("FX on foreign cash (line 15300): "
+                                      "not computed, not in the rows",
+                                      "tjs fx-cash"))
+            elif _fx_note.get("active"):
+                _acts.append(_out.act("FX on foreign cash (line 15300): "
+                                      "not in the rows; its estimate is "
+                                      "NOT RELIABLE", "tjs fx-cash"))
+            if _det:
+                print()     # the notes stand apart from the RETURN row
+                _item("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed "
+                      "gain. A short sale shows what it brought in as "
+                      "PROCEEDS and the cover as ACB, and sell-side "
+                      "commissions are outlays, as on the form.")
+                _item(f"Where a superficial loss was DENIED "
+                      f"({money(filing_total['denied'])} in all) the ACB "
+                      f"is REDUCED by it, so the gain stays the allowed "
+                      f"one; a deferred denial is added to the ACB of the "
+                      f"replacement property, but one caused by a "
+                      f"registered-account acquisition is lost for good, "
+                      f"and one caused by an affiliated person's "
+                      f"acquisition is permanent for this return (that "
+                      f"person adds it to their own ACB, s.53(1)(f)) — no "
+                      f"ACB addition here"
+                      + (f" ({money(_permd)} of the DENIED total)"
+                         if _permd > 0.005 else "") + ".")
+                _dcon = filing_total.get("denied_contribution") or 0.0
+                if _dcon > 0.005:
+                    _item(f"Denied: contribution to a registered plan — "
+                          f"{money(_dcon)} of losses on in-kind "
+                          f"contributions to an RRSP/TFSA/... are nil "
+                          f"(s.40(2)(g)(iv)): the ACB shown is reduced by "
+                          f"them, they are lost for good (no ACB addition "
+                          f"anywhere) and they are not in DENIED.")
+                if abs(_round_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total gain is "
+                          f"{money(_engine_gain)} ({_round_gap:+,.2f} on "
+                          f"the RETURN row).")
+                if abs(_denied_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total {_denied_label} "
+                          f"is {money(_engine_denied)} "
+                          f"({_denied_gap:+,.2f} on the RETURN row).")
+                if _fx_note is not None:
+                    _item(_fx_sum_item(_fx_note, money))
+                else:
+                    _item("FX on foreign cash (s.39(1.1)) is not in the "
+                          "rows above — T4037 puts it on line 15300; see "
+                          "`taxjson fx-cash`.")
+                # Slip capital gains are part of line 19700 too (R1-44).
+                _item("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
+                      "slips are not in the rows above — Schedule 3 lines "
+                      "17600 and 17400, entered from the slips (the books "
+                      "carry those distributions as dividends).")
+                _item("Per-security rows: `taxjson form-export`; per "
+                      "account: `taxjson sum --json`.")
             # Slip capital gains are part of line 19700 too (R1-44).
-            _item("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
-                  "slips are not in the rows above — Schedule 3 lines "
-                  "17600 and 17400, entered from the slips (the books "
-                  "carry those distributions as dividends).")
-            _item("Per-security rows: `taxjson form-export`; per account: "
-                  "`taxjson sum --json`.")
+            _tail.append("Not in the rows: T3/T5 slip capital gains (lines "
+                         "17600, 17400). More: tjs sum --details")
 
     if _positions:
         _rule = ("wash-sale rule (§1091)" if _is_us
                  else "superficial-loss rule (s.54)")
+        _acts.append(_out.act(
+            f"{_count_noun(len(_positions), 'loss', 'losses')} claimed "
+            f"against the {_rule.split(' (')[0]} (.tt ALLOWLOSS)",
+            "tjs sum --details"))
+    if _positions and _det:
         print()
         # "the totals above include them" only of this year's sales: a
         # position on another year's sale shapes this year's ACB, not
@@ -14098,6 +14423,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
               "to support it (" + ("IRS" if _is_us else "CRA")
               + " guidance, a tax professional). Delete the line to apply "
               "the rule.")
+    if not _det and (_acts or _tail):
+        print()
+        for _ln in _acts + _tail:
+            print(_ln)
 
     if want_estimate:
         _print_tax_estimate(
@@ -14312,6 +14641,10 @@ def _relay_child_stderr(text: str) -> None:
     for ln in (text or "").splitlines():
         if not ln.strip():
             continue
+        if ln[:1].isspace() and not _CURRENT_DETAILS:
+            # Essentials first (docs/output-style.md): a message's
+            # detail lines with --details only; the headline always.
+            continue
         ln = labelled(ln, sys.stderr, source=True)
         lead = ln[:len(ln) - len(ln.lstrip())]
         for w in wrap(ln.strip(), None, lead, lead or "  ",
@@ -14414,6 +14747,20 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         _json_out(doc)
         return
     from taxjson.lib import out as _out
+    if not _details(args):
+        # Essentials first (docs/output-style.md): the explanations,
+        # the assumptions and what is not modelled with --details.
+        print(INST.render_brief(doc, base))
+        if _assumed:
+            print(_out.act("Assumed 0: " + ", ".join(
+                a.split(" (")[0].split(" is ")[0] for a in _assumed),
+                "tjs instalments --details"))
+        if doc["vintage_notes"]:
+            print(_out.act("Rate tables of another year used",
+                           "tjs instalments --details"))
+        print("Not modelled: self-employed CPP/EI, FX on cash, slip "
+              "gains — tjs instalments --details")
+        return
     print(INST.render(doc, base))
 
     def _items(texts) -> None:
@@ -14442,9 +14789,49 @@ def cmd_estimate(args: argparse.Namespace) -> None:
     disagree): tax(other income + investment income) minus
     tax(other income), on the filing (wash-adjusted) basis, FTC from
     the books' actual TAX rows. ESTIMATE ONLY — never filing
-    numbers."""
+    numbers.
+
+    Essentials first (docs/output-style.md): the default view is the
+    estimate block alone (the gains table is `taxjson sum`) with the
+    summary's act-on `! ` lines; --details and --json keep the summary
+    first."""
     args.estimate = True
-    cmd_summary(args)
+    if getattr(args, "json", False) or _details(args):
+        cmd_summary(args)
+        return
+    import contextlib as _ctx
+    import io as _io
+    import os as _os
+    from taxjson.lib import out as _out
+    buf = _io.StringIO()
+    # The captured text keeps the width the person's stdout has.
+    _old_w = _os.environ.get("TAXJSON_WIDTH")
+    _os.environ["TAXJSON_WIDTH"] = str(_out.width(sys.stdout))
+    try:
+        with _ctx.redirect_stdout(buf):
+            cmd_summary(args)
+    except SystemExit:
+        sys.stdout.write(buf.getvalue())
+        raise
+    finally:
+        if _old_w is None:
+            _os.environ.pop("TAXJSON_WIDTH", None)
+        else:
+            _os.environ["TAXJSON_WIDTH"] = _old_w
+    text = buf.getvalue()
+    at = text.find("TAX ESTIMATE —")
+    head, block = (text[:at], text[at:]) if at >= 0 else ("", text)
+    lines = block.rstrip("\n").split("\n")
+    more = [ln for ln in lines if ln.startswith("More: ")]
+    for ln in lines:
+        if not ln.startswith("More: "):
+            print(ln)
+    # The act-on lines first, then the pointers to the long form.
+    for ln in [x for x in head.split("\n") if x.startswith(_out.ACT)]:
+        print(ln)
+    for ln in more:
+        print(ln)
+    print("Gains by account and the lines for the return: tjs sum")
 
 
 def cmd_amt(args: argparse.Namespace) -> None:
@@ -14523,7 +14910,7 @@ def cmd_amt(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out(doc)
         return
-    for ln in AR.render(doc):
+    for ln in AR.render(doc, details=_details(args)):
         print(ln)
 
 
@@ -14751,8 +15138,21 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
     # for the project year — never the import-time module default.
     RATE_VINTAGE = r.get("vintage", "?")
     from taxjson.lib import out as _out
+    # Essentials first (docs/output-style.md): the figures and a legend;
+    # the notes, the assumptions and the AMT explanation with --details
+    # (the --verbose calculation trace is the most detailed view).
+    details = _CURRENT_DETAILS or verbose
+    # The default view's figure lines keep a column gap after the label
+    # and its sub-headings start the line, so they read as a block of
+    # figures (lib/out.classify); --details keeps the long layout.
+    _g = " " if details else "  "
+    _h = "  " if details else ""
 
-    def _est_row(label: str, amt: float, note: str = "") -> None:
+    def _est_row(label: str, amt: float, note: str = "",
+                 short: Optional[str] = None) -> None:
+        # The default view takes the row's `short` note (one line).
+        if not details and short is not None:
+            note = short
         # `  label  amount  [note]`: a long note wraps under itself.
         head = f"  {label:<30}{money(amt):>14}"
         if not note:
@@ -14780,6 +15180,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 continue
             cur += ch
         parts.append(cur.strip().rstrip("."))
+        if not details:
+            return
         print(indent + "Assumes:")
         for _p in parts:
             if _p:
@@ -14787,12 +15189,31 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                                      indent + "  "):
                     print(_ln)
 
+    def _est_tail(res: Dict[str, Any], yr, assumes: str) -> None:
+        # The default view's closing lines: a rate-table mismatch to act
+        # on, then the assumptions and notes behind --details.
+        if year is not None and str(res.get("vintage")) != str(yr):
+            print(_out.act(f"Tax year {yr} uses the {res.get('vintage')} "
+                           f"rate tables", "tjs estimate --details"))
+        n = len(res.get("notes") or [])
+        print(assumes)
+        print(_out.details_hint("tjs estimate --details",
+                                "assumptions" + (f", {n} note(s)"
+                                                 if n else "")))
+
     print()
     if r["country"] == "canada":
         print(f"TAX ESTIMATE — canada/{r['province']}, rates vintage "
               f"{RATE_VINTAGE}")
-        print("ESTIMATE ONLY, not filing numbers; taxable accounts only.")
-        print()
+        if not details:
+            # The legend, directly above the rows it explains.
+            print("ESTIMATE ONLY, not filing numbers: taxable accounts "
+                  "only; [ ] says how an amount was built.")
+        else:
+            print("ESTIMATE ONLY, not filing numbers; taxable accounts "
+                  "only.")
+            print()
+        _ftc_src = str(r.get("ftc_source") or "")
         rows = [
             ("Other income", other_income, ""),
             ("Capital gains (taxable)", r["taxable_gain"],
@@ -14803,41 +15224,50 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                f"x{_TE.fmt_pct(_TE.CA_INCLUSION)}]"),
         ] + ([("Capital-gains dividends", r["capital_gains_dividends"],
                "[T5 box 18, line 17400: in the gains above, not "
-               "grossed up]")]
+               "grossed up]", "[T5 box 18: in the gains above]")]
              if r.get("capital_gains_dividends") else []) + [
             ("Eligible dividends (grossed)", r["grossed_eligible"],
              f"[{money(est['div_ca'])} x{_TE.CA_ELIGIBLE_GROSSUP:g}, "
              f"Canadian issuers, "
-             f"trust distributions included]"),
+             f"trust distributions included]",
+             f"[{money(est['div_ca'])} x{_TE.CA_ELIGIBLE_GROSSUP:g}]"),
             ("Foreign dividends", est["div_foreign"],
              f"[FTC {money(r['ftc_assumed'])} — "
-             f"{r.get('ftc_source') or 'assumed ' + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING)}]"),
+             f"{r.get('ftc_source') or 'assumed ' + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING)}]",
+             f"[FTC {money(r['ftc_assumed'])}, "
+             + ("from the TAX rows]" if _ftc_src.startswith("actual")
+                else "assumed "
+                + _TE.fmt_pct(_TE.CA_FOREIGN_WITHHOLDING) + "]")),
             ("Payments in lieu", est["pil"], ""),
         ] + ([("Crypto staking (ordinary)", r["staking"],
                "[no withholding, no FTC]")]
              if r.get("staking") else []) \
           + ([("Deductions", -r["deductions"],
-               "[lines 20700-23500, e.g. RRSP 20800; in full under AMT]")]
+               "[lines 20700-23500, e.g. RRSP 20800; in full under AMT]",
+               "[lines 20700-23500]")]
              if r.get("deductions") else []) \
           + ([("Carrying charges", -r["carrying_charges"],
                f"[line 22100; "
                f"{_TE.fmt_pct(_TE.CA_AMT_CARRYING_CHARGE_ALLOWANCE)} under "
                f"AMT]")]
              if r.get("carrying_charges") else [])
-        for label, amt, note in rows:
-            _est_row(label, amt, note)
+        for label, amt, note, *short in rows:
+            _est_row(label, amt, note, *short)
         print()
-        print(f"  Tax with investments: {money(r['tax_with']['total'])} "
-              f"(federal {money(r['tax_with']['federal'])} + "
+        print(f"  Tax with investments:{_g}{money(r['tax_with']['total'])}"
+              f"{_g}(federal {money(r['tax_with']['federal'])} + "
               f"{r['province']} {money(r['tax_with']['provincial'])})")
-        print(f"  Tax on other income alone: "
+        print(f"  Tax on other income alone:{_g}"
               f"{money(r['tax_base']['total'])}")
         print(f"  => ESTIMATED TAX ON INVESTMENT INCOME: "
               f"{money(r['estimated_tax'])} {base_cur}"
               + (f"  ({r['avg_rate_pct']:.1f}% of "
                  f"{money(r['investment_income'])})"
                  if r["avg_rate_pct"] is not None else ""))
-        if r["estimated_tax"] < -0.005:
+        if r["estimated_tax"] < -0.005 and not details:
+            print("  (negative: a saving — the dividend tax credit "
+                  "exceeds the tax on the grossed-up dividends)")
+        elif r["estimated_tax"] < -0.005:
             # Signed (R1-47): eligible dividends at a low bracket earn
             # more credit than the tax on their grossed-up amount.
             print(_wrap_note(
@@ -14846,16 +15276,16 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 f"{money(-r['estimated_tax'])} (the dividend tax credit "
                 f"exceeds the tax on the grossed-up dividends)."))
         if r["losses_unused"]:
-            print(f"  Unused capital losses: {money(r['losses_unused'])} "
-                  f"(carry forward)")
+            print(f"  Unused capital losses:{_g}{money(r['losses_unused'])}"
+                  f"{_g}(carry forward)")
         _ls = (r.get("carry_sources") or {}).get("other_losses")
         if _ls and other_losses:
-            print(f"  Net capital losses carried in: "
+            print(f"  Net capital losses carried in:{_g}"
                   f"{money(other_losses)} — from {_ls}")
         amt = r.get("amt")
         if amt:
             print()
-            print(f"  AMT CHECK — post-2024 minimum tax "
+            print(f"{_h}AMT CHECK — post-2024 minimum tax "
                   f"({amt['rate'] * 100:.1f}% over "
                   f"{money(amt['exemption'])} exemption)")
             print(f"  {'Adjusted taxable income':<30}"
@@ -14872,27 +15302,29 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 print(f"  {'=> TOTAL WITH AMT':<30}"
                       f"{money(r['estimated_tax'] + amt['topup']):>14} "
                       f"{base_cur}")
-                print(_wrap_note(
-                    f"AMT binds because capital gains enter at 100% "
-                    f"(vs {_TE.fmt_pct(_TE.CA_INCLUSION)}) and the "
-                    f"dividend tax credit is denied. "
-                    f"The federal excess ({money(amt['carryforward'])}) "
-                    f"is creditable against REGULAR tax for 7 years, "
-                    f"but recovery needs a future year where regular "
-                    f"tax exceeds the minimum — gains-heavy, "
-                    f"salary-light years keep hitting AMT instead."))
+                if details:
+                    print(_wrap_note(
+                        f"AMT binds because capital gains enter at 100% "
+                        f"(vs {_TE.fmt_pct(_TE.CA_INCLUSION)}) and the "
+                        f"dividend tax credit is denied. "
+                        f"The federal excess ({money(amt['carryforward'])}) "
+                        f"is creditable against REGULAR tax for 7 years, "
+                        f"but recovery needs a future year where regular "
+                        f"tax exceeds the minimum — gains-heavy, "
+                        f"salary-light years keep hitting AMT instead."))
             else:
                 print(f"  {'=> does not bind':<30}"
                       f"{money(amt['headroom']):>14}  [headroom]")
-                print(_wrap_note(
-                    f"AMT recomputes with capital gains at 100% (vs "
-                    f"{_TE.fmt_pct(_TE.CA_INCLUSION)}) and the dividend "
-                    f"tax credit denied; on "
-                    "these numbers regular tax still exceeds the "
-                    "minimum, so no top-up is owed."))
+                if details:
+                    print(_wrap_note(
+                        f"AMT recomputes with capital gains at 100% (vs "
+                        f"{_TE.fmt_pct(_TE.CA_INCLUSION)}) and the dividend "
+                        f"tax credit denied; on "
+                        "these numbers regular tax still exceeds the "
+                        "minimum, so no top-up is owed."))
             _cy = amt.get("carryover") or {}
             if _cy.get("entered") or _cy.get("created", 0.0) > 0.005:
-                print(f"  MINIMUM TAX CARRYOVER (s.120.2; line 40427)"
+                print(f"{_h}MINIMUM TAX CARRYOVER (s.120.2; line 40427)"
                       + (f" — from {_cy['source']}"
                          if _cy.get("source") else ""))
                 if _cy.get("entered"):
@@ -14904,8 +15336,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                           f"{money(_cy.get('recovered_federal', 0.0))}"
                           f" + {r['province']} "
                           f"{money(_cy.get('recovered_provincial', 0.0))}]")
-                    if abs(_cy.get("attributed", 0.0)
-                           - _cy.get("recovered", 0.0)) > 0.005:
+                    if details and abs(_cy.get("attributed", 0.0)
+                                       - _cy.get("recovered", 0.0)) > 0.005:
                         print(_wrap_note(
                             f"The other income alone would recover "
                             f"{money(_cy.get('base_recovered', 0.0))}, so "
@@ -14996,7 +15428,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             _idoc = _instalments_doc(root, r, year, _icfg)
             if _idoc and _idoc["required_at_all"]:
                 print()
-                print(f"  INSTALMENTS — {_idoc['basis'].replace('_', '-')} "
+                print(f"{_h}INSTALMENTS — {_idoc['basis'].replace('_', '-')} "
                       f"option (Mar/Jun/Sep/Dec 15)")
                 print(f"  {'Required this year':<30}"
                       f"{money(_idoc['required_total']):>14}")
@@ -15017,34 +15449,49 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                     print(f"  {'=> balance due ' + balance_due_label():<30}"
                           f"{money(_idoc['shortfall']):>14}"
                           f"  [taxjson instalments]")
-        print()
-        _est_notes("  ")
-        _assumes(r["assumptions"])
+        if details:
+            print()
+            _est_notes("  ")
+            _assumes(r["assumptions"])
+        else:
+            # The trust gross-up is stated on the default view too
+            # (owner decision A2-0828, CA-EST-TRUST).
+            _est_tail(r, year, "Assumes Canadian dividends (trusts' too) "
+                      "eligible; no interest, FX on cash or slip gains")
     else:
         st_in = r["st_input"]
         print(f"TAX ESTIMATE — usa (single, standard deduction), rates "
               f"vintage {RATE_VINTAGE}")
-        print("ESTIMATE ONLY, not filing numbers; taxable accounts only.")
-        print()
+        if not details:
+            print("ESTIMATE ONLY, not filing numbers: taxable accounts "
+                  "only; [ ] says how an amount was built.")
+        else:
+            print("ESTIMATE ONLY, not filing numbers; taxable accounts "
+                  "only.")
+            print()
         rows = [
             ("Other income", other_income, ""),
             ("Short-term gains (net)", r["st_net"],
              f"[{money(st_in)} before carryovers; short-term "
-             f"carryover {money(r.get('carryover_short_term', 0.0))}]"),
+             f"carryover {money(r.get('carryover_short_term', 0.0))}]",
+             f"[{money(st_in)} less carryover "
+             f"{money(r.get('carryover_short_term', 0.0))}]"),
             ("Long-term gains (net)", r["lt_net"],
              f"[{money(est['lt'])} before carryovers; long-term "
-             f"carryover {money(r.get('carryover_long_term', 0.0))}]"),
+             f"carryover {money(r.get('carryover_long_term', 0.0))}]",
+             f"[{money(est['lt'])} less carryover "
+             f"{money(r.get('carryover_long_term', 0.0))}]"),
             ("Qualified dividends",
              est["div_ca"] + est["div_foreign"], ""),
             ("Payments in lieu", est["pil"], "[ordinary]"),
         ] + ([("Crypto staking", est["staking"], "[ordinary]")]
              if est.get("staking") else [])
-        for label, amt, note in rows:
-            _est_row(label, amt, note)
+        for label, amt, note, *short in rows:
+            _est_row(label, amt, note, *short)
         print()
-        print(f"  Tax with investments: {money(r['tax_with']['total'])} "
-              f"+ NIIT {money(r['niit'])}")
-        print(f"  Tax on other income alone: "
+        print(f"  Tax with investments:{_g}{money(r['tax_with']['total'])}"
+              f" + NIIT {money(r['niit'])}")
+        print(f"  Tax on other income alone:{_g}"
               f"{money(r['tax_base']['total'])}")
         print(f"  => ESTIMATED TAX ON INVESTMENT INCOME: "
               f"{money(r['estimated_tax'])} {base_cur}"
@@ -15052,15 +15499,15 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                  f"{money(r['investment_income'])})"
                  if r["avg_rate_pct"] is not None else ""))
         if r["ordinary_offset"]:
-            print(f"  Ordinary income offset by losses: "
-                  f"{money(r['ordinary_offset'])} (max "
+            print(f"  Ordinary income offset by losses:{_g}"
+                  f"{money(r['ordinary_offset'])}{_g}(max "
                   f"{_TE.US_ORDINARY_LOSS_CAP:,.0f})")
         if r["losses_unused"]:
-            print(f"  Unused capital losses: {money(r['losses_unused'])} "
-                  f"(carry forward)")
+            print(f"  Unused capital losses:{_g}{money(r['losses_unused'])}"
+                  f"{_g}(carry forward)")
         _ls = (r.get("carry_sources") or {}).get("other_losses")
         if _ls and (other_losses or lt_losses):
-            print(f"  Capital loss carryovers in: short-term "
+            print(f"  Capital loss carryovers in:{_g}short-term "
                   f"{money(other_losses)}, long-term {money(lt_losses)}"
                   f" — from {_ls}")
         if verbose:
@@ -15105,6 +15552,10 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             print(f"    => WITH - BASE + NIIT = "
                   f"{money(r['estimated_tax'])} estimated tax on "
                   f"investment income")
+        if not details:
+            _est_tail(r, year, "Assumes single filer, standard deduction, "
+                      "qualified dividends; no state tax, no §988 FX")
+            return
         print()
         _est_notes("  ")
         _assumes("Assumes: single filer, standard deduction, all "
@@ -15427,6 +15878,8 @@ def cmd_redact(args: argparse.Namespace) -> None:
         argv.append("--force")
     if args.check:
         argv.append("--check")
+    if _details(args):
+        argv.append("--details")
     argv += ["--", *args.files]          # a file named `--check` stays a file
     raise SystemExit(redact_main(argv))
 
@@ -15732,20 +16185,33 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
             return
     elif not args.write or not (offer or (verify and interactive)
                                 or (tob_covered and interactive)):
+        # Essentials first (docs/output-style.md): the lines; each one's
+        # reason, the skipped ones and the advice behind --details.
+        _det = _details(args)
         d = Doc(f"TICKER.MAP SUGGESTIONS — {len(offer)} from the last run"
                 + (f", {len(verify)} to verify" if verify else ""))
         if offer:
             d.blank()
+            if not _det:
+                d.line("Lines for ticker.map, from the run's evidence (a "
+                       "pair's reason under it; every reason: --details).")
             for s in offer:
-                d.line(s.line + ("   (a template: edit, then add it by "
-                                 "hand)" if s.template else
-                                 "   (a .tt line: add it to a .tt file of "
-                                 "the account)" if s.tt else ""))
-                d.para(s.reason, indent="  ")
+                d.line(s.line + (("   (a template: edit, then add it by "
+                                  "hand)" if _det else "   (template: edit "
+                                  "it, add by hand)") if s.template else
+                                 ("   (a .tt line: add it to a .tt file of "
+                                  "the account)" if _det else
+                                  "   (a .tt line)") if s.tt else ""))
+                if _det or s.conditional or s.keyword in ("TOBASE",
+                                                          "DISTINCT"):
+                    # A pair joins (or parts) two listings' cost: its
+                    # evidence stays in the default view.
+                    d.para(s.reason, indent="  ")
         if verify:
             d.section(f"To verify: one security or two? ({len(verify)})")
             for s in verify:
                 d.line(f"{s.line}   or   {s.alternative}")
+                # (the evidence to choose by: kept in the default view)
                 d.para(s.reason, indent="  ")
         if gap_unread:
             d.blank()
@@ -15757,31 +16223,58 @@ def cmd_ticker_map(args: argparse.Namespace) -> None:
         covered = [x for x in skipped if TS.covered_by_suggestion(x[1])]
         answered = [x for x in skipped
                     if not TS.covered_by_suggestion(x[1])]
+        _skip_lines = []
         for head, items in (("Already answered by ticker.map", answered),
                             ("Covered by another suggestion", covered)):
-            if items:
+            if items and _det:
                 d.section(f"{head} ({len(items)})")
                 for s, why in items:
                     d.item(f"{s.line}: {why}", "  ")
+            elif items:
+                _skip_lines.append(f"{head} ({len(items)})")
+        if _skip_lines:
+            d.blank()
+            d.line("; ".join(_skip_lines)
+                   + " — tjs ticker-map --suggest --details")
         if unused:
             d.section(f"Unused rules, delete? ({len(unused)})")
             for u in unused:
                 d.line(u.line)
-                d.para(u.reason, indent="  ")
+                if _det:
+                    d.para(u.reason, indent="  ")
         if tob_covered:
             d.section(f"Covered by tobase.map (delete?) "
                       f"({len(tob_covered)})")
             for c in tob_covered:
                 d.item(f"{c.rule} (ticker.map:{c.lineno}): {c.where} "
                        f"states the same pair", "  ")
-            d.para("Keeping them is harmless: your line holds even if "
-                   "the interlisted master later retracts the pair. "
-                   "`taxjson ticker-map --suggest --write` on a terminal "
-                   "asks for each (keep is the default).", indent="  ")
+            if _det:
+                d.para("Keeping them is harmless: your line holds even if "
+                       "the interlisted master later retracts the pair. "
+                       "`taxjson ticker-map --suggest --write` on a "
+                       "terminal asks for each (keep is the default).",
+                       indent="  ")
         if unread:
             d.blank()
             d.para(MH.first_unread(unread))
         d.blank()
+        if not _det:
+            from taxjson.lib.out import act as _act
+            if args.write and args.all and verify and not offer:
+                d.line(_act("Nothing written: --all, never a pair to "
+                            "verify; answer each",
+                            "tjs ticker-map --suggest --write"))
+            elif offer or verify:
+                d.line(_act("Add only the lines right for your "
+                            "securities, then `tjs run`",
+                            "tjs ticker-map --suggest --write"))
+            elif unused or tob_covered:
+                d.line("Nothing to add; the lines above are harmless "
+                       "(why: --details).")
+            else:
+                d.line("Nothing to add.")
+            d.print()
+            return
         d.para("Add a line only when it is right for your securities: "
                "`taxjson ticker-map --suggest --write` asks for each one "
                "(a pair to verify: TOBASE, DISTINCT or skip; --all adds "
@@ -16047,7 +16540,7 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out(doc)
     else:
-        for ln in render(doc, show_all=args.all):
+        for ln in render(doc, show_all=args.all, details=_details(args)):
             print(ln)
     if doc["errors"]:
         raise SystemExit(1)
@@ -16081,7 +16574,7 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out(doc)
         return
-    for line in render_text(doc):
+    for line in render_text(doc, details=_details(args)):
         print(line)
 
 
@@ -16229,15 +16722,27 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             print(_ln)
 
     print(f"OPTION YEAR-BOUNDARY REVIEW — tax year {year}")
-    _para(f"Premium timing: {timing}"
+    # Essentials first (docs/output-style.md): --details adds each
+    # contract's where and what-if.
+    _det = _details(args)
+    if not _det:
+        _para(f"Premium timing: {timing}"
+              + (f" (from {since})" if timing == "grant" and since else "")
+              + "; filed-year locks: "
+              + (", ".join(str(y) + (" (partial: taken before the year "
+                                     "ended)" if y in partial_locks else "")
+                           for y in sorted(filed_years))
+                 if filed_years else "none") + ".")
+    else:
+        _para(f"Premium timing: {timing}"
           + (f" (contracts written from {since})"
              if timing == "grant" and since else "") + ".")
-    if filed_years:
+    if filed_years and _det:
         _para("Filed-year locks: " + ", ".join(
             str(y) + (" (partial: taken before the year ended)"
                       if y in partial_locks else "")
             for y in sorted(filed_years)) + ".")
-    else:
+    elif _det:
         _para("No filed-year locks (run `taxjson close-year` after "
               "filing).")
     for _py in sorted(partial_locks):
@@ -16253,23 +16758,37 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         out.append(" ".join([r["account"], r["symbol"], r["written"], f"{r['units']:g}",
                              fmt_money(r["premium"]), r["closed"] or "-", r["close_kind"],
                              fmt_money(r["paid"]) if r["paid"] else "-"]))
+    if not _det:
+        print("KIND: how it closed (open: still open at year end); PAID: "
+              "the cost to close it.")
     # Too wide: PAID, then UNITS go; then one record per contract.
     _print_report_table(out, fit=True, drop=(7, 3), key=(1, 0))
     print()
-    for i, r in enumerate(rows, 1):
+    if not _det:
+        for r in rows:
+            if str(r.get("action", "")).startswith("T1-ADJ"):
+                print(_out.act(f"{r['symbol']} ({r['account']}): an "
+                               f"amended return (T1-ADJ)",
+                               "tjs option-boundary --details"))
+            elif r.get("attention"):
+                print(_out.act(f"{r['symbol']} ({r['account']}): review "
+                               f"it", "tjs option-boundary --details"))
+    for i, r in enumerate(rows if _det else [], 1):
         _lead = f"{i:>3}. "
         _hang = " " * len(_lead)
         _para(f"{r['symbol']} ({r['account']}, written {r['written']}): "
               f"{r['where']}", _lead, _hang)
         _para(f"=> {r['action']}", _hang, _hang + "   ")
-    print()
-    if attention:
+    if _det:
+        print()
+    # (the default view said each as a `! ` line above)
+    if attention and _det:
         _para(f"{len(attention)} item(s) need ATTENTION (review; a locked "
               f"year may need a T1-ADJ) — marked above.")
-    if amend:
+    if amend and _det:
         _para(f"{len(amend)} item(s) require an amended return (T1-ADJ) — "
               f"listed above with the year and amount.")
-    elif not attention:
+    if not amend and not attention:
         _para("No amended return is required by these contracts under the "
               "timing in force.")
 
@@ -16399,16 +16918,25 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             _die(str(e))
         return
 
+    # The default view is the essentials (docs/output-style.md):
+    # --all (or --details) is the full list, every item's commands and
+    # why; --only ID shows that item in full.
+    full = bool(args.all or _details(args) or only)
     try:
         results = cl.evaluate(ctx, only=only, quick=args.quick,
-                              progress=cl.stderr_progress)
+                              progress=(cl.stderr_progress
+                                        if full or args.json
+                                        else cl.once_progress()))
     except cl.StateFileError as e:
         _die(str(e))
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
-    else:
+    elif full:
         print(cl.render(results, year, country, quick=args.quick,
-                        show_all=args.all))
+                        show_all=bool(args.all or _details(args))))
+    else:
+        print(cl.render_summary(results, year, country,
+                                quick=args.quick))
     if not all(r.passed for r in results):
         sys.exit(1)
 
@@ -16561,7 +17089,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     print(f"\n{seen} open step(s) visited. Summary "
           f"(`taxjson checklist` re-checks everything):\n")
     results = cl.evaluate(ctx, only=only, quick=True)
-    print(cl.render(results, ctx.year, country, quick=True))
+    print(cl.render_summary(results, ctx.year, country, quick=True))
     if quit_early or left_open:
         # Open steps remain (the one quit on, the ones passed over).
         sys.exit(1)
@@ -17214,6 +17742,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         raise SystemExit(0 if not all_rows else 1)
 
     from taxjson.lib.out import kv_lines as _kv, wrap as _wrap
+    from taxjson.lib.out import act as _act
+    # Essentials first (docs/output-style.md): --details adds the
+    # explanations, the cost/income tables and the not-compared list.
+    _det = _details(args)
     for n in config_notes:
         _sanity_note(n)
     multi = len(ordered) > 1 or any(g["paired"] for g in ordered)
@@ -17235,7 +17767,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             pairs.append(("as of", f"{grp['as_of']} — the report's date; "
                                    f"the books' positions on that day "
                                    f"(rebuilt from "
-                                   f"work/<account>_base.json)"))
+                                   f"work/<account>_base.json)" if _det
+                          else f"{grp['as_of']} (the report's date)"))
         # One line per file, PATH first: the label alone (the file's
         # meta.account, else its stem) didn't say which export was
         # actually read — a stale or wrong path is the first thing to
@@ -17266,11 +17799,18 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                                     if grp["rows"] else "OK"))
         for ln in _kv(pairs, "  "):
             print(ln)
-    if uncovered:
+    if uncovered and _det:
         print()
         for a in uncovered:
             print(f"  - account {a} not included "
                   f"({len(tax[a])} position(s) unchecked)")
+    elif uncovered and items:
+        # (with no items the UNCHECKED line below names them)
+        print()
+        _unc = [f"{a} ({len(tax[a])})" for a in uncovered]
+        print("Not compared (no holdings file given): "
+              + ", ".join(_unc[:4])
+              + (f" +{len(_unc) - 4} more" if len(_unc) > 4 else ""))
     print()
     if uncovered and not items:
         # The checklist's sanity step reads this line: "done" while
@@ -17301,6 +17841,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     else:
         if (uncovered and not items) or config_notes:
             print()
+        # The legend, before the table (Essentials first).
+        print("ISSUE: MISSING_IN_HOLDINGS = not in the broker's file; "
+              "MISSING_IN_TAXJSON = not in the books.")
         out_lines = [("ACCOUNTS SYMBOL ISSUE TAXJSON HOLDINGS DIFF"
                       if multi else
                       "SYMBOL ISSUE TAXJSON HOLDINGS DIFF")]
@@ -17313,8 +17856,19 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             out_lines.append(" ".join(cells))
         _print_report_table(out_lines, fit=True, key=(0, 1) if multi
                             else 0)
-        print(f"\n{len(all_rows)} discrepancy(ies).")
-        if any(r["holdings_qty"] - r["taxjson_qty"] > 0 for r in all_rows):
+        _fewer = any(r["holdings_qty"] - r["taxjson_qty"] > 0
+                     for r in all_rows)
+        if not _det:
+            print()
+            print(_act(f"{len(all_rows)} differ; fewer shares in the books "
+                       f"usually means missing history",
+                       "tjs find-missing-history") if _fewer else
+                  _act(f"{len(all_rows)} differ: a trade after your last "
+                       f"export, or a booking problem",
+                       "tjs audit SYMBOL"))
+        else:
+            print(f"\n{len(all_rows)} discrepancy(ies).")
+        if _fewer and _det:
             # Fewer shares in the books than at the broker: on a first
             # project that is history the download does not reach
             # (new-user study), not a booking bug.
@@ -17328,7 +17882,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 print(ln)
     _sanity_print_extras(ordered, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
-                         brief=getattr(args, "brief_extras", False))
+                         brief=getattr(args, "brief_extras", False),
+                         concise=not _det)
     raise SystemExit(0 if not all_rows else 1)
 
 
@@ -17596,7 +18151,8 @@ def cmd_opening(args: argparse.Namespace) -> None:
 
 def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
                          cost_na, income_all, multi,
-                         brief: bool = False) -> None:
+                         brief: bool = False,
+                         concise: bool = False) -> None:
     """The COST and INCOME sections of `taxjson sanity` (after the
     quantity check, never changing its exit code). `brief` (the check
     `taxjson run` ends with): one line each, the tables are
@@ -17621,6 +18177,19 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
             _p(f"INCOME: {len(income_all)} dividend row(s) state a "
                f"share count the books did not hold — `taxjson "
                f"sanity` lists them.")
+        return
+    if concise:
+        # The default view (Essentials first): one line each,
+        # informational; --details has the tables and the reasons.
+        if cost_diffs:
+            print()
+            print(f"COST: {len(cost_diffs)} of {compared} differ from the "
+                  f"broker's book value (informational) — tjs sanity "
+                  f"--details")
+        if income_all:
+            print()
+            print(f"INCOME: {len(income_all)} dividend row(s) state shares "
+                  f"the books did not hold — tjs sanity --details")
         return
     if compared or cost_na:
         print()
@@ -17965,9 +18534,16 @@ def cmd_positions(args: argparse.Namespace) -> None:
             f"as of the latest data in the books"
             + (f" ({horizon})" if horizon else ""))
     _vprint(f"{title} — {base}, {when}")
-    _vprint(f"COST is book cost after ticker.map and the base-currency "
-            f"conversion, basis: {basis}.")
-    print()
+    _det = _details(args)
+    if _det:
+        _vprint(f"COST is book cost after ticker.map and the base-currency "
+                f"conversion, basis: {basis}.")
+        print()
+    else:
+        # The legend, before the table (docs/output-style.md).
+        _vprint(f"COST: book cost in {base} after ticker.map, basis: "
+                f"{basis}" + ("; DEFERRED: denied losses in it."
+                              if total_deferred > 0.005 else "."))
     from taxjson.lib.out import fit_table as _fit_table
     n_sus = sum(1 for r in out_rows if r[7] != "-")
 
@@ -17991,6 +18567,9 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 f"({n_sus}):")
         _table([r for r in out_rows if r[7] != "-"], note=False)
         print()
+    if negative_only and n_sus and not _det:
+        pass        # one `! ` line under the count (below)
+    elif negative_only and n_sus:
         _vprint("Each is a sale your files show nothing to close for: a "
                 "purchase before the data (or a transfer-in) is missing. "
                 "Supply it (`taxjson find-missing-history` lists the "
@@ -18006,6 +18585,25 @@ def cmd_positions(args: argparse.Namespace) -> None:
         print()
     _vprint(f"{n_pos} position(s), total book cost {money(total_cost)} "
             f"{base}")
+    if not _det:
+        from taxjson.lib.out import act as _act
+        if n_sus and not negative_only:
+            print(_act(f"{n_sus} short position(s) with no purchase in "
+                       f"your files (missing history?)",
+                       "tjs list --negative"))
+        elif n_sus:
+            # Essentials first: the fixes are find-missing-history's.
+            print(_act("supply each missing purchase, or record it as an "
+                       "opening with no cost", "tjs find-missing-history"))
+        if total_deferred > 0.005:
+            _us_l = _country(_soft_settings(root)) == "usa"
+            print(f"DEFERRED: {money(total_deferred)} {base} of the book "
+                  f"cost is "
+                  + ("disallowed wash-sale losses (§1091)." if _us_l
+                     else "denied superficial losses (s.54)."))
+        from taxjson.lib.out import details_hint as _dh
+        print(_dh("tjs list --details"))
+        return
     if n_sus and not negative_only:
         _vprint(f"{n_sus} short position(s) marked `missing history?`: a "
                 f"sale with no purchase in your files, not a real short — "
@@ -18188,6 +18786,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     rows.sort(key=lambda r: (r[0], r[1], str(r[2].get("symbol") or "")))
 
     from taxjson.lib.out import Doc
+    from taxjson.lib.out import details_hint as _out_details_hint
 
     # The user's filing positions against the rule (.tt ALLOWLOSS): the
     # loss is allowed, so the table never shows it (CA-SL-18 /
@@ -18200,7 +18799,24 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     _positions = [p for p in _LO.positions(_lo_items, year, _lo_basis)
                   if p["in_year"]]
 
+    _det = _details(args)
+    _ws_cmd = "tjs wash-sales --details"
+
     def _flags_section(doc):
+        if not _det:
+            # Essentials first (docs/output-style.md): one act-on line
+            # each; --details lists them.
+            if _positions or flags:
+                doc.blank()
+            if _positions:
+                doc.item(*_act_item(
+                    f"FILING POSITIONS: {len(_positions)} loss(es) "
+                    f"claimed against the rule (.tt ALLOWLOSS)", _ws_cmd))
+            if flags:
+                doc.item(*_act_item(
+                    f"MANUAL CHECK: {len(flags)} warn-only flag(s) to "
+                    f"decide by hand", _ws_cmd))
+            return
         if _positions:
             doc.section(f"FILING POSITIONS — {len(_positions)} loss(es) "
                         f"claimed against the rule (.tt ALLOWLOSS)")
@@ -18276,10 +18892,17 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     base = _base_currency(root)
     doc = Doc(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — {base}, "
               f"tax year {year}, basis: {gains_basis_label(resolved)}")
-    doc.para("Losses denied under "
-             + ("the wash-sale rule, §1091." if _usa
-                else "the superficial-loss rule, s.54."))
-    doc.blank()
+    if _det:
+        doc.para("Losses denied under "
+                 + ("the wash-sale rule, §1091." if _usa
+                    else "the superficial-loss rule, s.54."))
+        doc.blank()
+    else:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("DENIED: the loss "
+                 + ("the wash-sale rule (§1091) disallows" if _usa
+                    else "the superficial-loss rule (s.54) denies")
+                 + "; ALLOWED: the loss you claim.")
     # Too wide (a long option symbol): COST, then PROCEEDS, go first —
     # GAIN is their difference.
     doc.table(header, body, drop=(5, 4), key=(2, 1, 0))
@@ -18292,6 +18915,13 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     if embedded > 0.005:
         doc.para(f"Currently embedded in OPEN positions: {money(embedded)} "
                  f"{base} of deferred losses (`taxjson list`, DEFERRED).")
+    if not _det:
+        _flags_section(doc)
+        doc.para(_out_details_hint(
+            _ws_cmd + " (what DENIED means); --explain: each denial's "
+                      "trace", ""))
+        doc.print()
+        return
     doc.section("WHAT DENIED MEANS")
     if _usa:
         doc.item("DENIED is added to the cost basis of the repurchased "
@@ -18416,6 +19046,10 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     argv += _loss_override_flags(cache)
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_t1135.main(argv))
 
 
@@ -18548,6 +19182,10 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     _warn_run_state(root, cfg)
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_carryover.main(argv))
 
 
@@ -18572,9 +19210,11 @@ def _taxable_gains_argv(root: Path, cache: Path, *,
     if exclude_crypto:
         crypto = sorted(n for n in taxable if accounts_cfg[n].get("crypto"))
         if crypto:
-            note(prog, f"crypto account(s) {', '.join(crypto)} excluded",
-                 details=["Exchanges issue no T5008/1099-B slips, so there "
-                          "is nothing to reconcile them against."])
+            note(prog, f"crypto account(s) {', '.join(crypto)} excluded "
+                       f"(exchanges issue no slips)",
+                 details=(["Exchanges issue no T5008/1099-B slips, so "
+                           "there is nothing to reconcile them against."]
+                          if _CURRENT_DETAILS else []))
             taxable = [n for n in taxable if n not in crypto]
         if not taxable:
             _die("every taxable account is crypto — nothing to reconcile",
@@ -18656,6 +19296,10 @@ def cmd_form_export(args: argparse.Namespace) -> None:
         argv += ["--csv", args.csv]
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     if form == "txf":
         argv += ["--box", args.box or "A"]
         if args.out:
@@ -18815,6 +19459,10 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         cmd += ["--ibkr-port", str(args.ibkr_port)]
     if args.json:
         cmd.append("--json")
+    elif not _details(args):
+        # Essentials first (docs/output-style.md): COLUMNS, NOTES and
+        # the scope paragraph are the --details view.
+        cmd.append("--brief")
     if args.verbose:
         cmd.append("--verbose")
     _exec_tool(cmd, cwd=str(root))
@@ -18852,10 +19500,29 @@ def _warn_artifact_year(files: Dict[str, Path], config_year) -> None:
     if not bad:
         return
     got = ", ".join(f"{a} ({y})" for a, y in sorted(bad.items()))
+    if _brief(sys.stderr):
+        _say("warning", f"these figures are NOT {config_year}'s: work/ "
+             f"was built for another year — run `taxjson run`",
+             prog=_cmd_prog())
+        return
     _say("warning", f"[settings].year is {config_year} but the work/ "
          f"books were built for another tax year: {got}",
          f"These figures are NOT {config_year}'s — rebuild with `taxjson "
          f"run` first.", prog=_cmd_prog())
+
+
+def _count_noun(n: int, one: str, many: Optional[str] = None) -> str:
+    """`1 sale`, `2 sales` (`many` for an irregular plural)."""
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def _brief(stream=None) -> bool:
+    """A shared report-command warning shows only its headline: shown to
+    a person (width > 0) without --details (docs/output-style.md,
+    Essentials first). Captured (width 0) it keeps every detail line."""
+    from taxjson.lib.out import width as _w
+    return (not _CURRENT_DETAILS
+            and _w(sys.stderr if stream is None else stream) > 0)
 
 
 def _tax_date_basis(settings: Dict[str, Any]) -> str:
@@ -18937,7 +19604,13 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
     built under the other country are refused outright."""
     _refuse_other_country_books(root, cfg)
     probs = _run_state_problems(root, cfg)
-    if probs:
+    if probs and _brief(sys.stderr):
+        _filed = ("; the filed year's inputs changed"
+                  if _filed_year_stale_hint(root, cfg, probs) else "")
+        _say("warning", f"these books are not the clean result of the "
+             f"current inputs ({_count_noun(len(probs), 'problem')}"
+             f"{_filed}): `taxjson checklist`", prog=_cmd_prog())
+    elif probs:
         _say("warning", "these books are not the clean result of the "
              "current inputs",
              *[f"- {p}" for p in probs],
@@ -19199,7 +19872,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                if isinstance(_old_lock.get("filed_totals"), dict)
                else "")
             + " — pass --filed-dispositions to replace them."))
-    _cf = _carryforwards_for_lock(root, cfg)
+    _cf = _carryforwards_for_lock(root, cfg, _details(args))
     if _cf is not None:
         extra["carryforwards"] = _cf
     if _fx_cash_ledger_choice(settings) == "v2":
@@ -19257,15 +19930,20 @@ def cmd_close_year(args: argparse.Namespace) -> None:
              ("Income", f"{tot['income']:,.2f}")]
     _mw = max(len(v) for _, v in _rows)
     _kv = [(k, _out.Verbatim(f"{v:>{_mw}}")) for k, v in _rows]
+    # Essentials first (docs/output-style.md): --details adds the why.
+    _det = _details(args)
     _kv.append(("Lock", f"{_out.relpath(path, root)} — commit it with "
                         f"your records; `taxjson check-filed` now guards "
-                        f"it"))
+                        f"it" if _det else
+                        f"{_out.relpath(path, root)} — commit it with "
+                        f"your records"))
     _ft = extra.get("filed_totals")
     if _ft:
         _kv.append(("As filed", f"{_ft['source']}: {_ft['dispositions']} "
-                                f"dispositions, gain {_ft['gain']:,.2f} — "
-                                f"the {int(year) + 1} project's `taxjson "
-                                f"handoff` checks against these"))
+                                f"dispositions, gain {_ft['gain']:,.2f}"
+                                + (f" — the {int(year) + 1} project's "
+                                   f"`taxjson handoff` checks against "
+                                   f"these" if _det else "")))
     _ye = extra.get("year_end") or {}
     _kv.append(("Year-end positions",
                 (", ".join(f"{g} {len(v)}" for g, v in _ye.items())
@@ -19275,11 +19953,12 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     for _ln in _out.kv_lines(_kv, indent="  "):
         print(_ln)
     if _cf is not None:
-        for _ln in _carryforwards_summary(_cf, int(year)):
+        for _ln in _carryforwards_summary(_cf, int(year), _det):
             print(_ln)
 
 
-def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
+def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
+                            details: bool = True
                             ) -> Optional[Dict[str, Any]]:
     """The `carryforwards` block close-year writes (lib/carryforward):
     the year's net capital loss (Canada) or ST/LT capital loss
@@ -19310,8 +19989,10 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
         _show(_fill(_label("note", stream=sys.stdout)
                     + (f"province {prov} is not modelled" if prov else
                        "no [settings] province")
-                    + " — the carry-forwards are computed federal-only "
-                    "(no provincial tax or minimum-tax recovery).",
+                    + (" — the carry-forwards are computed federal-only "
+                       "(no provincial tax or minimum-tax recovery)."
+                       if details else
+                       " — the carry-forwards are federal-only."),
                     hang="  " if _ow(sys.stdout) <= 0 else "").split("\n"),
               sys.stdout)
     res = _run(argv, capture_output=True)
@@ -19333,8 +20014,10 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any]
     return block
 
 
-def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
-    """close-year's lines on what the lock carries into year + 1."""
+def _carryforwards_summary(cf: Dict[str, Any], year: int,
+                           details: bool = True) -> List[str]:
+    """close-year's lines on what the lock carries into year + 1
+    (`details`: the notes in full and what reads them)."""
     from taxjson.lib.out import kv_lines, labelled, wrap
     kv: List[Tuple[str, str]] = []
     notes: List[str] = []
@@ -19355,20 +20038,24 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int) -> List[str]:
                    f"recovered {mt['recovered_federal']:,.2f}, created "
                    f"{mt['created']:,.2f}, carried into {year + 1}: "
                    f"{mt['closing']:,.2f}"))
-        if not mt.get("other_income_entered"):
+        if not mt.get("other_income_entered") and details:
             notes.append("note: the minimum tax was computed with no "
                          "[estimate] other_income — compare it with the "
                          "T691 you filed; the next project's [estimate] "
                          "amt_carryover (from your notice of assessment) "
                          "wins over this record.")
+        elif not mt.get("other_income_entered"):
+            notes.append("note: no [estimate] other_income — compare the "
+                         "minimum tax with the T691 you filed.")
     if not kv:
         return []
     out = ["", f"CARRIED INTO {year + 1}"] + kv_lines(kv, indent="  ")
     for n in notes:
         out += wrap(labelled(n), None, "  ", "    ")
-    out += wrap(f"The {year + 1} project's estimate, carryover and amt "
-                f"read these; its handoff checks its inputs against "
-                f"them.", None, "  ", "  ")
+    if details:
+        out += wrap(f"The {year + 1} project's estimate, carryover and "
+                    f"amt read these; its handoff checks its inputs "
+                    f"against them.", None, "  ", "  ")
     return out
 
 
@@ -19977,6 +20664,10 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         argv.append(f"--tolerance={args.tolerance!r}")
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_reconcile_slips.main(argv))
 
 
@@ -20235,7 +20926,7 @@ def cmd_slip_audit(args: argparse.Namespace) -> None:
     if args.json:
         _json_out(rep)
     else:
-        for ln in SA.render(rep):
+        for ln in SA.render(rep, details=_details(args)):
             print(ln)
     if rep["issues"]:
         raise SystemExit(1)
@@ -20504,6 +21195,10 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         cmd += ["--all"]
     if getattr(args, "json", False):
         cmd += ["--json"]
+    elif not _details(args):
+        # Essentials first (docs/output-style.md): the stage's full
+        # report (reports/wash_radar_*.rpt) is the --details view.
+        cmd += ["--brief"]
     _exec_tool(cmd)
 
 
@@ -21152,7 +21847,8 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                    "pools_year_end": ledger.get("pools_year_end") or {},
                    "currency": base, "year": year})
         return
-    print(FX.render_report(ledger, base, year, country, verdict))
+    print((FX.render_report if _details(args) else FX.render_brief)(
+        ledger, base, year, country, verdict))
     if getattr(args, "events", False) and ledger["events"]:
         print()
         print("EVENTS")
@@ -21675,8 +22371,14 @@ def _last_loss_line(ll) -> Optional[str]:
             + f") — {_inout}.")
 
 
+# A buy-check line's trailing caveat on the window a buy starts: the
+# --details view (docs/output-style.md, Essentials first).
+_FUTURE_CAVEAT = " (Any buy starts a 30-day window: "
+
+
 def _print_check_results(results: List[Dict[str, Any]],
-                         country: str) -> None:
+                         country: str, details: bool = True,
+                         cmd: str = "") -> None:
     """buy-check / sell-check text: per symbol a `SYMBOL: VERDICT` line
     and its detail lines as `- ` items (a radar note quoted in one as
     its own `Info:` item), a blank line between symbols, then the scope
@@ -21691,9 +22393,15 @@ def _print_check_results(results: List[Dict[str, Any]],
             lines.append("")
         lines.append(f"{r['symbol']}: {r['verdict']}")
         for ln in r["detail"]:
+            if not details:
+                ln = ln.split(_FUTURE_CAVEAT, 1)[0]
             lines += advisory_lines(ln, w, "- ", "  ")
-    lines.append("")
-    lines += scope_lines(country, w)
+    if details:
+        lines.append("")
+        lines += scope_lines(country, w)
+    else:
+        from taxjson.lib.wash_scope import scope_more
+        lines += out.wrap(scope_more(f"tjs {cmd} --details", country), w)
     print("\n".join(lines))
 
 
@@ -21947,7 +22655,8 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out({"results": results, "scope_note": _scope})
     else:
-        _print_check_results(results, "usa" if _usa else "canada")
+        _print_check_results(results, "usa" if _usa else "canada",
+                             _details(args), "buy-check")
     if unsafe:
         raise SystemExit(1)
 
@@ -22142,7 +22851,8 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out({"results": results, "scope_note": _scope})
     else:
-        _print_check_results(results, "usa" if _usa else "canada")
+        _print_check_results(results, "usa" if _usa else "canada",
+                             _details(args), "sell-check")
     if unsafe:
         raise SystemExit(1)
 
@@ -22351,6 +23061,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl.append("--no-trace")
         if getattr(args, "no_color", False):
             fl.append("--no-color")
+        if not _details(args):
+            # Essentials first (docs/output-style.md): the rounding
+            # note is the --details view.
+            fl.append("--brief")
         # "Nothing matched" is decided across ALL invocations below.
         fl += ["--no-match-rc", "3"]
         return fl
@@ -22509,6 +23223,11 @@ def cmd_audit(args: argparse.Namespace) -> None:
         raise SystemExit(2)
     if getattr(args, "json", False):
         _json_out(_merge_audit_json(json_docs, base_currency, country))
+    elif not _details(args) and rc != 1:
+        from taxjson.lib.out import details_hint as _dh
+        print(_dh("tjs audit --details",
+                  "why the totals can differ from the return's rows by "
+                  "cents"))
     if _uncovered and not _acct:
         # One line (the checklist shows a failed command's last line).
         from taxjson.lib.out import warn as _warn
@@ -22908,6 +23627,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
     if (_PL.ticker_map_path(root)).exists():
         # Name the broker's ticker of a renamed symbol (S049-01).
         cmd += ["--ticker-map", str(_PL.ticker_map_path(root))]
+    if _details(args) and getattr(args, "write_purchases", None) is None:
+        cmd += ["--details"]
     _exec_tool(cmd)
 
 
@@ -22982,6 +23703,9 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
         cmd += ["--ticker-map", str(_PL.ticker_map_path(root))]
     if args.json:
         cmd += ["--json"]
+    elif not _details(args):
+        # Essentials first (docs/output-style.md).
+        cmd += ["--brief"]
     _exec_tool(cmd)
 
 
@@ -23025,9 +23749,12 @@ def cmd_format(args: argparse.Namespace) -> None:
              f"{', '.join(res.unrecognised)}", prog=f"{_PROG} format")
     if res.notes_lines:
         _say("note", f"{res.notes_lines} comment line(s) could not be "
-             f"attached to a setting",
-             "They are kept in the \"Your notes\" block at the end of the "
-             "file.", prog=f"{_PROG} format")
+             f"attached to a setting"
+             + ("" if _details(args) else
+                ": kept in the \"Your notes\" block at the end"),
+             *(["They are kept in the \"Your notes\" block at the end of "
+                "the file."] if _details(args) else []),
+             prog=f"{_PROG} format")
     if not res.changed:
         print("taxjson.toml is already formatted.")
         return
@@ -23041,9 +23768,15 @@ def cmd_format(args: argparse.Namespace) -> None:
             text.splitlines(keepends=True),
             res.text.splitlines(keepends=True),
             fromfile="taxjson.toml", tofile="taxjson.toml (formatted)"))
-        _say("note", "dry run: nothing written",
-             "`taxjson format --write` applies this; your configuration "
-             "loads the same either way.", prog=f"{_PROG} format")
+        if _details(args):
+            _say("note", "dry run: nothing written",
+                 "`taxjson format --write` applies this; your "
+                 "configuration loads the same either way.",
+                 prog=f"{_PROG} format")
+        else:
+            _say("note", "dry run: nothing written — `taxjson format "
+                 "--write` applies it (your settings load the same)",
+                 prog=f"{_PROG} format")
         return
     from taxjson.lib.safe_write import link_outside, write_atomic
     target = link_outside(cfg, root)
@@ -23525,11 +24258,19 @@ def cmd_init(args: argparse.Namespace) -> None:
         # It says what to download from each broker (new-user study).
         _stub(f"inputs/{acct}/README.txt", _readme(country, acct))
 
+    # Essentials first (docs/output-style.md): the project made and the
+    # next steps, one line each; the files written, the layout and the
+    # next-year hint with --details.
+    _det = _details(args)
     print(f"Initialized taxjson project at {root}"
           + (f" (the {first_year} folder of {top}: one folder of exports "
-             f"for every year)" if years else ""))
-    for rel in written:
-        print(f"  wrote {rel}")
+             f"for every year)" if years and _det else ""))
+    if _det:
+        for rel in written:
+            print(f"  wrote {rel}")
+    elif cfg.with_name(bak_name).exists() and any(
+            w.endswith("(your previous config)") for w in written):
+        print(f"  wrote {_yrel}{bak_name} (your previous config)")
     # Folders a previous scaffold (e.g. --force from canada to usa)
     # left under inputs/ that the new config has no section for.
     _inputs = top / "inputs"
@@ -23538,17 +24279,41 @@ def cmd_init(args: argparse.Namespace) -> None:
                       and d.name != "slips") if _inputs.is_dir() else []
     if _orphans:
         from taxjson.lib.out import labelled as _labelled
-        for _ln in _out_wrap(_labelled(
-                f"note: inputs/ has folder(s) with no [accounts.*] "
-                f"section in the new config: {', '.join(_orphans)}"),
-                indent="  ", hang="    "):
-            print(_ln)
-        for _ln in _out_wrap(f"Re-add their sections (see {bak_name}) or "
-                             f"remove the folders.", indent="    "):
-            print(_ln)
+        if _det:
+            for _ln in _out_wrap(_labelled(
+                    f"note: inputs/ has folder(s) with no [accounts.*] "
+                    f"section in the new config: {', '.join(_orphans)}"),
+                    indent="  ", hang="    "):
+                print(_ln)
+            for _ln in _out_wrap(f"Re-add their sections (see {bak_name}) "
+                                 f"or remove the folders.", indent="    "):
+                print(_ln)
+        else:
+            _shown_o = ", ".join(_orphans[:3]) + (
+                f" +{len(_orphans) - 3} more" if len(_orphans) > 3 else "")
+            print(_labelled(f"note: inputs/ {_shown_o}: no [accounts.*] "
+                            f"section — re-add (see {bak_name}) or "
+                            f"remove them"))
     import shlex as _shlex
-    print("\nNext:")
     from taxjson.lib.config_template import system_timezone as _systz
+    if not _det:
+        print("\nNEXT STEPS")
+        print(f"  1. Edit {_yrel}taxjson.toml: "
+              + ("your accounts" if years else "the year, your accounts")
+              + " and currencies"
+              + (", and [settings] local_timezone" if _systz() is None
+                 else "") + ".")
+        print("  2. Save the broker exports in inputs/<account>/"
+              + (f" (every year), positions snapshots in {_yrel}holdings/."
+                 if years else "."))
+        # Commands to copy: their own lines, never wrapped.
+        print(f"  3. taxjson -C {_shlex.quote(str(root))} run")
+        print(f"  4. taxjson -C {_shlex.quote(str(root))} checklist")
+        if country == "usa":
+            _say("note", f"{_US_EXPERIMENTAL_NOTE[0]}: treat the output "
+                 f"as a draft", prog=f"{_PROG} init")
+        return
+    print("\nNext:")
     _step1 = (f"1. Edit {_yrel}taxjson.toml: set the accounts and source "
               f"currencies" if years else
               "1. Edit taxjson.toml: set the year, accounts, and source "
@@ -23621,6 +24386,9 @@ def cmd_years(args: argparse.Namespace) -> None:
         _json_out(rep)
         return
     from taxjson.lib import out as _out
+    if not _details(args):
+        _years_table(top, rep)
+        return
     print(f"Year projects in {top}")
     if not rep["years"]:
         print(_out.fill("No year folder yet — `taxjson new-year YYYY` "
@@ -23683,6 +24451,86 @@ def cmd_years(args: argparse.Namespace) -> None:
             print(_ln)
 
 
+def _years_table(top: Path, rep: Dict[str, Any]) -> None:
+    """`taxjson years`, the default view (docs/output-style.md,
+    Essentials first): one table row per year, then one line per thing
+    to do; --details prints each year's state in words."""
+    from taxjson.lib import out as _out
+    print(f"YEAR PROJECTS — {top}")
+    if not rep["years"]:
+        print()
+        print(_out.act("No year folder yet", "tjs new-year YYYY"))
+        return
+    newest = rep["newest"]
+    body = []
+    for r in rep["years"]:
+        state = (("filed " + (r["closed_at"][:10] if r["closed_at"] else "")
+                  ).strip() + ("*" if r["partial_lock"] else "")
+                 if r["filed"] else "open")
+        t = r["totals"] or {}
+        diff = r["differs_from_newest"] or {}
+        vs = ", ".join(x for x in (
+            f"{diff['map_rules']} rule(s)" if diff.get("map_rules") else "",
+            f"{diff['tobase_rules']} tobase line(s)"
+            if diff.get("tobase_rules") else "",
+            f"{diff['keys']} setting(s)" if diff.get("keys") else "") if x)
+        marks = r["marks"]
+        body.append([str(r["year"]), state,
+                     f"{float(t.get('realized') or 0):,.2f}" if t else "",
+                     f"{float(t.get('disallowed') or 0):,.2f}" if t else "",
+                     r["last_run"][:16].replace("T", " ")
+                     if r["last_run"] else "not run",
+                     "changed" if r["stale"] else "",
+                     vs or ("" if r["year"] == newest else "same"),
+                     f"{marks['done']} done" if marks["done"] else ""])
+    print()
+    print(f"INPUTS: changed since that year's last run; VS {newest}: what "
+          f"differs from the newest year."
+          + (" *: locked before the year ended." if any(
+              r["partial_lock"] for r in rep["years"]) else ""))
+    for _ln in _out.fit_table(
+            ["YEAR", "STATE", "REALIZED", "DENIED", "LAST RUN", "INPUTS",
+             f"VS {newest}", "CHECKLIST"], body,
+            aligns=["<", "<", ">", ">", "<", "<", "<", "<"],
+            drop=(7, 3), key=0):
+        print(_ln)
+    acts = []
+    stale = [r for r in rep["years"] if r["stale"]]
+    if stale:
+        acts.append(_out.act(
+            f"Inputs changed since the last run of "
+            f"{', '.join(str(r['year']) for r in stale[:3])}"
+            + (f" +{len(stale) - 3}" if len(stale) > 3 else ""),
+            f"tjs -C {stale[0]['year']} run"))
+    for r in rep["years"]:
+        if r["problem"]:
+            acts.append(_out.act(f"{r['year']}: {r['problem']}"[:80],
+                                 "tjs years --details"))
+    differ = [r for r in rep["years"] if r["year"] != newest and any(
+        (r["differs_from_newest"] or {}).get(k)
+        for k in ("map_rules", "keys", "tobase_rules"))]
+    if differ:
+        acts.append(f"What differs: tjs years --diff {differ[0]['year']} "
+                    f"{newest}")
+    shared: Dict[str, List[int]] = {}
+    own = [r["year"] for r in rep["years"]
+           if r.get("tobase_map") and not r.get("tobase_shared")]
+    for r in rep["years"]:
+        if r.get("tobase_shared"):
+            shared.setdefault(r["tobase_map"], []).append(r["year"])
+    for p, ys in sorted(shared.items()):
+        acts.append(f"tobase.map: {p}, shared by "
+                    f"{', '.join(str(y) for y in ys)}")
+    if own:
+        acts.append(_out.act(f"tobase.map: a copy in each of "
+                             f"{', '.join(str(y) for y in own[:4])}; make "
+                             f"them one file", "tjs migrate"))
+    if acts:
+        print()
+        for a in acts:
+            print(a)
+
+
 def cmd_new_year(args: argparse.Namespace) -> None:
     """`taxjson new-year YYYY`: the year's folder beside the others,
     with the previous year's taxjson.toml and ticker.map copied in
@@ -23738,6 +24586,30 @@ def cmd_new_year(args: argparse.Namespace) -> None:
             hold.mkdir(exist_ok=True, mode=0o700)
     except OSError as e:
         _die_input(f"cannot create {year}/: {e.strerror or e}")
+    _yd = _shlex.quote(str(folder))
+    shared = _PL.shared_inputs(folder)
+    if not _details(args):
+        # Essentials first (docs/output-style.md): what was made and the
+        # next steps, one line each; the long form with --details.
+        print(f"Created {year}/ from {prev_year}/: taxjson.toml (year "
+              f"{year}), " + "".join(f"{n}, " for n in copied)
+              + "holdings/")
+        if _legacy_tobase:
+            _say("note", f"{year}/ got its own copy of {prev_year}'s "
+                 f"tobase.map — `taxjson migrate` makes it one file",
+                 prog=_PROG)
+        print("\nNEXT STEPS")
+        print(f"  1. Save the {year} exports in "
+              + (f"{_PL.shown(_PL.inputs_dir(folder), top)}/<account>/"
+                 if shared else f"{year}/inputs/<account>/")
+              + f", positions snapshots in {year}/holdings/.")
+        print(f"  2. taxjson -C {_yd} run")
+        print(f"  3. taxjson -C {_yd} checklist")
+        print(f"  4. Later, in {year}/: taxjson align --from {prev_year}")
+        if not (prev / "filed" / f"{prev_year}.json").is_file():
+            _say("note", f"{prev_year} is not locked yet: `taxjson "
+                 f"close-year` in {prev_year}/ after filing it")
+        return
     for _ln in _out_wrap(
             f"Created {year}/ from {prev_year}/: taxjson.toml (year {year}, "
             f"prior_year_record ../{prev_year}/filed/{prev_year}.json, the "
@@ -23816,7 +24688,13 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
     from taxjson.lib.cli_diag import read_text_utf8
     ticker_text = read_text_utf8(tm) if tm.is_file() else ""
     tob = TB.read_tobase(root)
-    if shared and not args.json:
+    # Essentials first (docs/output-style.md): --details adds the
+    # master's figures, each line's reason and the long headings.
+    _det = _details(args)
+    from taxjson.lib.out import act as _act
+    if shared and not args.json and not _det:
+        print(f"{_PL.tobase_shown(root)}: read by {_yrs_text}.")
+    elif shared and not args.json:
         for _ln in _out_wrap(
                 f"{_PL.tobase_shown(root)}: read by {_yrs_text} — a "
                 f"change applies to each (a filed year's `taxjson "
@@ -23847,8 +24725,9 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                                               for r, w in ov.overridden],
                        "written": bool(args.write)})
         else:
-            for _ln in _out_wrap(head):
-                print(_ln)
+            if _det:
+                for _ln in _out_wrap(head):
+                    print(_ln)
             for _ln in _out_wrap(
                     f"This project has no tobase.map yet: one would hold "
                     f"{n_lines} pair line(s)."):
@@ -23866,6 +24745,8 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                     for _ln in _out_wrap(f"- {g.rule}: {how}", "  ",
                                          "    "):
                         print(_ln)
+            elif not _det:
+                print("None of them changes these books.")
             else:
                 for _ln in _out_wrap(
                         "None of them changes these books (ticker.map "
@@ -23877,10 +24758,15 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                 print(f"ticker.map decides {len(ov.overridden)} pair(s) "
                       f"otherwise (ticker.map wins; reported only):")
                 for r, w in ov.overridden:
-                    for _ln in _out_wrap(f"- {r} ({w})", "  ", "    "):
+                    for _ln in _out_wrap(f"- {r}" + (f" ({w})" if _det
+                                                     else ""),
+                                         "  ", "    "):
                         print(_ln)
         if not args.write:
-            if not args.json:
+            if not args.json and not _det:
+                print(_act("Nothing written: create tobase.map, then "
+                           "`tjs run`", "tjs update-tobase-map --write"))
+            elif not args.json:
                 for _ln in _out_wrap(
                         "Nothing written: `taxjson update-tobase-map "
                         "--write` creates tobase.map; then `taxjson run`."):
@@ -23938,13 +24824,16 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                                             plan.old_stamp !=
                                             plan.new_stamp))})
     else:
-        for _ln in _out_wrap(head):
-            print(_ln)
+        if _det:
+            for _ln in _out_wrap(head):
+                print(_ln)
         print(f"tobase.map was made from the master of "
-              f"{plan.old_stamp or 'an unknown date'}.")
+              f"{plan.old_stamp or 'an unknown date'}"
+              + ("." if _det else f"; installed: {master.generated}."))
         if plan.added:
-            print(f"Added: {len(plan.added)} line(s) (new interlistings or "
-                  f"listings)" + (f"; {len(in_books)} name a symbol of "
+            print(f"Added: {len(plan.added)} line(s)"
+                  + (" (new interlistings or listings)" if _det else "")
+                  + (f"; {len(in_books)} name a symbol of "
                                   f"these books:" if in_books else "."))
             for g in in_books:
                 print(f"  + {g.rule}")
@@ -23953,18 +24842,28 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                     if g not in in_books:
                         print(f"  + {g.rule}")
         if plan.ended:
-            print(f"Ended: {len(plan.ended)} interlisting(s) (annotated "
-                  f"with `until`, kept for the years they traded):")
+            print(f"Ended: {len(plan.ended)} interlisting(s)"
+                  + (" (annotated with `until`, kept for the years they "
+                     "traded):" if _det else ":"))
             for ln, g in plan.ended:
                 print(f"  ~ {ln.rule} until {g.until}")
         if plan.retracted:
-            print(f"Retracted: {len(plan.retracted)} line(s) the master no "
-                  f"longer gives or no longer needs (removed; never a "
-                  f"line you edited):")
+            print(f"Retracted: {len(plan.retracted)} line(s)"
+                  + (" the master no longer gives or no longer needs "
+                     "(removed; never a line you edited):" if _det
+                     else " (removed):"))
             for ln, why in plan.retracted:
-                for _ln in _out_wrap(f"- {ln.rule}: {why}", "  ", "    "):
+                for _ln in _out_wrap(f"- {ln.rule}"
+                                     + (f": {why}" if _det else ""),
+                                     "  ", "    "):
                     print(_ln)
-        if plan.retracted_edited:
+        if plan.retracted_edited and not _det:
+            print(_act(f"{len(plan.retracted_edited)} line(s) you edited "
+                       f"were retracted by the master: check each",
+                       "tjs update-tobase-map --details"))
+            for ln, why in plan.retracted_edited:
+                print(f"  ? {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
+        elif plan.retracted_edited:
             print(f"ATTENTION: {len(plan.retracted_edited)} line(s) you "
                   f"edited are lines the master RETRACTED (kept as you "
                   f"wrote them; check each):")
@@ -23974,8 +24873,9 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                     print(_ln)
         if plan.edited:
             print(f"Left as written: {len(plan.edited)} marked line(s) you "
-                  f"edited (yours now; the master's line for the same "
-                  f"listing is not added beside it):")
+                  f"edited" + (" (yours now; the master's line for the "
+                               "same listing is not added beside it):"
+                               if _det else ":"))
             for ln in plan.edited:
                 print(f"  = {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
         if plan.unknown:
@@ -23985,8 +24885,10 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                 print(f"  ? {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
         if plan.removed_now:
             print(f"Removed by you: {len(plan.removed_now)} master line(s) "
-                  f"you deleted (recorded as `# removed:` lines and never "
-                  f"added again; delete such a line to have it back):")
+                  f"you deleted" + (" (recorded as `# removed:` lines and "
+                                    "never added again; delete such a "
+                                    "line to have it back):" if _det
+                                    else ":"))
             for g in plan.removed_now:
                 print(f"  x {g.rule}")
         if plan.opted_out:
@@ -23994,8 +24896,11 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                   f"opted out of (`# removed:` or commented out).")
         if plan.others:
             print(f"Kept as written: {len(plan.others)} line(s) that are "
-                  f"not TOBASE / DISTINCT lines (the run refuses them: "
-                  f"move them to ticker.map):")
+                  f"not TOBASE / DISTINCT lines" + (" (the run refuses "
+                                                    "them: move them to "
+                                                    "ticker.map):" if _det
+                                                    else " (move them to "
+                                                    "ticker.map):"))
             for r in plan.others:
                 print(f"  ! {r.strip()}")
         for o, n, pooled in plan.renamed:
@@ -24019,13 +24924,16 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
             print(f"ticker.map decides {len(plan.conflicts)} pair(s) "
                   f"otherwise (ticker.map wins; reported only):")
             for r, w in plan.conflicts:
-                for _ln in _out_wrap(f"- {r} ({w})", "  ", "    "):
+                for _ln in _out_wrap(f"- {r}" + (f" ({w})" if _det else ""),
+                                     "  ", "    "):
                     print(_ln)
         if not plan.changes:
             print(f"tobase.map is up to date with the installed master.")
     stale = plan.old_stamp != plan.new_stamp
     if not args.write:
-        if (plan.changes or stale) and not args.json:
+        if (plan.changes or stale) and not args.json and not _det:
+            print(_act("Nothing written", "tjs update-tobase-map --write"))
+        elif (plan.changes or stale) and not args.json:
             print("Nothing written: `taxjson update-tobase-map --write` "
                   "applies it.")
         if not tm.is_file() and not args.json:
@@ -25298,8 +26206,10 @@ def _build_parser(prog: str = "taxjson"
              "taxjson.toml here, or -C DIR) each step is checked — by "
              "running the command that proves it, or from the project's "
              "files — and marked done, needs attention, to do, blocked, "
-             "to confirm, yours to run and read or n/a; the last line "
-             "names the next step and its command. --done/--skip/--undo "
+             "to confirm, yours to run and read or n/a. The default "
+             "view is the counts per section, one `!` line per step "
+             "needing attention and, last, the next step and its "
+             "command; --all lists every step. --done/--skip/--undo "
              "record the steps no command can prove; --walk steps "
              "through the open ones. Exit 1 while anything is open. "
              "Outside a project it prints the steps as a guide (exit 0).")
@@ -25321,8 +26231,9 @@ def _build_parser(prog: str = "taxjson"
     p_ck.add_argument("--show", action="store_true",
                       help="With --done/--skip/--undo: also print the checklist")
     p_ck.add_argument("--all", action="store_true",
-                      help="Show every step's commands and why, also "
-                           "the done ones")
+                      help="The full list: every step with its state, "
+                           "commands and why, also the done ones (the same "
+                           "as --details)")
     p_ck.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text (a stable schema, "
                            "schema_version 2: docs/settings.md)")
@@ -25926,7 +26837,79 @@ def _build_parser(prog: str = "taxjson"
         # Same width cap as the top-level parser — add_parser doesn't
         # inherit formatter_class, and 40 call-site edits would drift.
         _sp.formatter_class = _CappedHelpFormatter
+        if _act.dest in _DETAILS_CMDS:
+            # Essentials first (docs/output-style.md): the default view
+            # is the essentials; --details prints what it leaves out.
+            _sp.add_argument("--details", action="store_true",
+                             help="Also print the explanations, caveats "
+                                  "and notes the default view leaves out")
     return p, sub
+
+
+# The commands whose default view is the essentials and whose --details
+# prints the rest (docs/output-style.md, Essentials first).
+_DETAILS_CMDS = frozenset({
+    "run", "checklist", "sum", "estimate", "amt", "instalments",
+    "carryover", "t1135", "fx-cash", "form-export", "reconcile-slips",
+    "slip-audit", "wash-sales", "wash-radar", "sell-check", "buy-check",
+    "harvest", "tips", "sanity", "audit", "list", "check-dates",
+    "edge-cases", "find-missing-history", "ticker-map",
+    "update-tobase-map", "years", "close-year", "check-filed", "handoff",
+    "redact", "migrate", "new-year", "init", "elect", "journals",
+    "renames", "opening", "transfers", "format", "crypto-sends", "stats",
+    "fees-sum", "option-boundary", "spinoffs", "splits"})
+
+
+def _act_item(text: str, cmd: Optional[str] = None):
+    """Doc.item() arguments for an `! ` act-on line (lib/out.act): one
+    line at the house width, wrapped under itself only on a terminal
+    narrower than it."""
+    from taxjson.lib import out
+    return out.act(text, cmd)[len(out.ACT):], "", out.ACT
+
+
+def _details(args: argparse.Namespace) -> bool:
+    """`--details` given (docs/output-style.md, Essentials first)."""
+    return bool(getattr(args, "details", False))
+
+
+# Commands whose messages are their report and keep their lines: the
+# run (it sets the switch itself), redact's name map (shown only once,
+# never written), check-filed's DRIFTED figures.
+_OWN_MESSAGES = frozenset({"run", "redact", "check-filed"})
+
+
+@contextlib.contextmanager
+def _brief_messages(args: argparse.Namespace):
+    """Essentials first for the messages a command's engine and stages
+    print while it runs (an income-year note of a recomputed year, a
+    split-share note ...): shown to a person without --details or
+    --json, each is one line and a message said more than twice is
+    folded into one count line at the end (lib/stage_msg.CONCISE_ENV,
+    fold_summary). `run` sets the switch itself (cmd_run); captured
+    output (width 0) keeps every byte."""
+    import os
+    from taxjson.lib import stage_msg
+    from taxjson.lib.out import width as _w
+    on = (args.cmd in _DETAILS_CMDS and args.cmd not in _OWN_MESSAGES
+          and not _details(args) and not getattr(args, "json", False)
+          and _w(sys.stderr) > 0)
+    old = os.environ.get(stage_msg.CONCISE_ENV)
+    if on:
+        os.environ[stage_msg.CONCISE_ENV] = "1"
+    try:
+        yield
+    finally:
+        _mk = sys.modules.get("taxjson.lib.markets")
+        if on and _mk is not None:
+            # Its rolled-up notes (said at exit) as one line too.
+            _mk.flush_notes()
+        stage_msg.fold_summary(sys.stderr)
+        if on:
+            if old is None:
+                os.environ.pop(stage_msg.CONCISE_ENV, None)
+            else:
+                os.environ[stage_msg.CONCISE_ENV] = old
 
 
 def _main() -> None:
@@ -25980,11 +26963,12 @@ def _main() -> None:
                           f"could also have taken it as an argument — "
                           f"run the commands separately if that was the "
                           f"intent.", file=sys.stderr)
-    global _CURRENT_CMD
+    global _CURRENT_CMD, _CURRENT_DETAILS
     from taxjson.lib.corp_actions import ManifestError
     for seg in segments:
         args = p.parse_args(seg)
         _CURRENT_CMD = next((t for t in seg if t in commands), "")
+        _CURRENT_DETAILS = _details(args)
         if args.cmd == "run":
             # The run's console: whole lines in order whatever reads
             # them (a pipe, `| tee`), and every line under a step —
@@ -26018,7 +27002,8 @@ def _main() -> None:
             # tool) that is missing, a directory, not UTF-8 or not JSON:
             # one `taxjson <cmd>: error:` line with exit 2, never a
             # traceback — the S070-23 / S079-10 contract (A2-1420).
-            _guarded_func(args)
+            with _brief_messages(args):
+                _guarded_func(args)
             _note_shared_decision(args)
         except SystemExit as e:
             # A failing command stops the chain and propagates its

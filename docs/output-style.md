@@ -4,6 +4,78 @@ How taxjson prints to people. One module implements it,
 `src/taxjson/lib/out.py`; a command's text output goes through it, and its
 tests check the result with `out.lint()`.
 
+## Essentials first
+
+A command's default output is the essential information, said
+concisely. It is not a place for every exception and caveat: a reader
+who wants the finer points asks for them (`--details`, the topic
+command, the docs). Every command follows these rules.
+
+1. **Legend before the data.** A table that needs explaining gets a
+   legend of **one or two short lines directly above it**: what the
+   columns mean, nothing else. No tax theory, no edge cases, no "how
+   we got here".
+
+   ```
+   REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; TOTAL = REALIZED + DIVIDEND + PIL.
+   ACCOUNT  NON-OPT  OPTION  REALIZED  ...
+   ```
+
+2. **After the data, only what the reader must act on or must not
+   miss**, each on **one line** naming the command that has the detail.
+   A line the reader must act on starts `! ` (`out.act(text, cmd)`); a
+   line they must not miss but need not act on has no prefix. Nothing
+   else after the data: no prose paragraph, no list of caveats. The last
+   line may point at the long form (`out.details_hint`):
+
+   ```
+   ! 2 sales with no purchase in your files are NOT in these totals — tjs find-missing-history
+   Not in the rows: capital gains on T3/T5 slips (lines 17600, 17400) — tjs slip-audit
+   More: tjs sum --details (notes)
+   ```
+
+   An `! ` line is never wrapped: keep it within 100 columns (name two
+   or three items and `+N more`, never the whole list).
+3. **The explanations move, they are not dropped.** Explanations,
+   edge-case caveats, rounding notes, legal citations and per-item
+   reasoning are printed with `--details` (every reworked command has
+   it, and it prints everything the default view leaves out), or live in
+   the per-topic command (`audit`, `wash-sales`, `fx-cash`, `form-export`,
+   `find-missing-history`, `slip-audit` ...) and the docs.
+4. **A budget.** The default output's non-table lines — every line that
+   is not a table row or rule, a title or section heading, a `==> `
+   step or a `label:  value` figure (`out.classify`; the budget counts
+   `out.prose_lines`) — are at most **6**, stdout and stderr together.
+   Where a command needs another budget it is listed here:
+
+   | command | budget |
+   | --- | --- |
+   | `run` | each message one line (its headline; the detail with `--details` and in work/*.diag); the closing block under `==> Before you trust these numbers` at most 6 lines; `==> ` steps are not counted |
+   | `checklist` | the next step, one `! ` line per item needing attention, one line per section with its counts (a table); at most 6 other lines. `--all` is the full list |
+   | `format`, `format-map` | the diff is the data; the note after it one line |
+   | `init --force` over another project | 8: the backup it kept and the leftover folders are never left out |
+   | `tax-logic`, `help`, `-h` | exempt: they are the reference text |
+   | `form-export --form txf`, `--json`, `events` `.tt` lines | exempt: machine output |
+
+5. **Numbers the reader files stay on the default view.** A total for
+   the return, a threshold result, an amount to enter: never behind
+   `--details`.
+6. **Every check that protects a filed figure stays**, as a one-line
+   `! ` pointing at its detail: never silently dropped. A warning on
+   stderr is its headline (one line) in the default view; its detail
+   lines come back with `--details`. The messages a command's engine
+   and stages print while it runs (a recomputed year's income-year
+   notes, a built-in list note) are one line each, cut at the width
+   (` ...`), and a message of one kind said more than twice is folded
+   into one count line at the end (`Info: 7 more like "..." (--details
+   shows each)`): `out.concise_show`, `out.fold_summary`, switched on
+   by `taxjson_run._brief_messages` (run, redact and check-filed keep
+   their own lines).
+
+`--json` is unchanged by all of this (its schema is stable), and so is
+the captured text other programs read (see "Never changed by a style
+pass").
+
 ## Width
 
 - On a terminal, prose wraps at the **terminal's full width, at most
@@ -187,7 +259,18 @@ blank line, never two, never first or last. No indentation, no bare line
 `ATTENTION:` word, no stage program name (`taxjson-gains:` — the stage
 is an implementation detail; its captured line in work/ keeps it), no
 `(content: ...)` detection detail (work/`<acct>`_detect.diag keeps it).
-For example:
+Without `--details` every message is ONE line, its headline and the
+command with the detail (`stage_msg.concise_line`; Essentials first):
+
+```
+==> Reading 2 files
+Warning: ib_demo.csv: no Cash Report, so its cash is not reconciled: add it to the export
+Info: ib_demo.csv: 9 tax objects
+==> Processing corporate actions
+```
+
+`taxjson run --details` shows each message with its detail lines (the
+captured .diag always has them):
 
 ```
 ==> Reading 2 files
@@ -239,7 +322,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Downloading USD → CAD rates` | a rate refresh (`Loading cached USD → CAD rates` with TAXJSON_OFFLINE=1: the cache only) |
 | `==> margin  (taxable, first pass: transfers between your accounts)` | accounts read first so transfers (crypto: sends) pair across them — every equity account, sheltered too, when there are two or more (a transfer journal joins two listings in every account's books); the account's books later take this read (same command, same files), so its `Reading` step and messages are shown once, here |
 | `==> tfsa  (sheltered)` / `==> margin  (taxable)` / `==> crypto  (taxable, crypto)` | an account's books |
-| `Info: File inputs/tfsa/x.csv → identified as Interactive Brokers` | one per input file (a message, not a step) |
+| `Info: File inputs/tfsa/x.csv → identified as Interactive Brokers` | with `--details`: one per input file (a message, not a step; work/`<acct>`_detect.diag keeps it) |
 | `==> Reading 2 files` / `==> Reading 1 Kraken file` | the broker parse (the broker named when the account has several) |
 | `Info: x.csv: 384 tax objects` | one per file parsed |
 | `==> Processing corporate actions` | once per account |
@@ -252,7 +335,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Writing holdings reports/tfsa_holdings.toml` | equity accounts (the native-currency holdings stages are not shown) |
 | `==> Writing summary reports/tfsa.sum` | every account |
 | `==> Combining sheltered accounts` | registered accounts, for the loss checks |
-| `==> Checking for missing purchase history` | a position goes short with no purchase in the files: after every account's books, each one that bears on the tax year as a `Warning:` (or one `Info:` per taxable account), the rest in ONE `Info:` line naming `find-missing-history --write-missing-history --outside-year` |
+| `==> Checking for missing purchase history` | a position goes short with no purchase in the files: after every account's books, each one that bears on the tax year as a `Warning:` (or one `Info:` per taxable account), the rest in ONE `Info:` line naming `find-missing-history` (`--write-missing-history --outside-year` in its detail, `run --details`) |
 | `==> Checking crypto for superficial losses with the sheltered accounts` | one crypto account (US: wash sales) |
 | `==> Pooling cost and checking superficial losses across taxable accounts (margin, qt)` | Canada's blended pass (US: `Checking wash sales across ...`; crypto: `... crypto accounts`) |
 | `==> Writing summary reports/margin_wash.sum` | the filing-basis summary |

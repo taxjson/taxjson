@@ -28,6 +28,27 @@ _NOTE = {
 }
 
 
+# The same disclosure in a few words, for a default view's closing line
+# (docs/output-style.md, Essentials first); scope_note() is the
+# --details view's.
+_SHORT = {
+    "canada": "not checked: affiliated persons' buys (ITA s.251.1)",
+    "usa": "not checked: your spouse's or company's buys (IRS Pub. 550)",
+}
+
+
+def scope_short(country: str) -> str:
+    """scope_note(country) in a few words (CA-PLAN-04 / US-PLAN-04)."""
+    c = canonical_country(country)
+    return _SHORT["usa" if c == USA else "canada"]
+
+
+def scope_more(cmd: str, country: str) -> str:
+    """A default view's closing line: the --details pointer and the
+    scope in a few words (`More: <cmd>; not checked: ...`)."""
+    return f"More: {cmd}; {scope_short(country)}"
+
+
 def scope_note(country: str) -> str:
     """The one-line scope disclosure for `country` (canada | usa)."""
     c = canonical_country(country)

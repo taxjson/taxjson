@@ -369,7 +369,7 @@ class TestRun(unittest.TestCase):
             self.assertAlmostEqual(fp["would_disallow"], 1000.0)
             self.assertAlmostEqual(fp["would_permanent"], 1000.0)
             self.assertTrue(fp["in_year"])
-            text = " ".join(cli(root, "sum").stdout.split())
+            text = " ".join(cli(root, "sum", "--details").stdout.split())
             self.assertIn("FILING POSITIONS — 1 loss(es) claimed against "
                           "the superficial-loss rule (s.54)", text)
             ws = cli(root, "wash-sales")

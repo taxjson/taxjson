@@ -606,6 +606,14 @@ def _days_to_long_term(start: Optional[str],
     return max(0, (lt_from - (today or date.today())).days)
 
 
+def _act_item(text: str, cmd: Optional[str] = None):
+    """Doc.item() arguments for an `! ` act-on line (lib/out.act): one
+    line at the house width, wrapped under itself only on a terminal
+    narrower than it."""
+    from taxjson.lib import out
+    return out.act(text, cmd)[len(out.ACT):], "", out.ACT
+
+
 def main(argv: Optional[List[str]] = None,
          fetchers: Optional[List] = None,
          option_fetchers: Optional[List] = None) -> int:
@@ -683,6 +691,12 @@ def main(argv: Optional[List[str]] = None,
                    help="Emit the report as JSON instead of text")
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Show per-tier price-chain diagnostics")
+    p.add_argument("--brief", action="store_true",
+                   help="The essentials (docs/output-style.md): a legend, "
+                        "the tables, the harvestable losses and one line "
+                        "per action; no COLUMNS / NOTES / scope "
+                        "paragraph (`taxjson harvest` passes it unless "
+                        "--details)")
     args = p.parse_args(argv)
     if args.ticker_map is not None and not Path(args.ticker_map).exists():
         # A named input that does not exist is refused, not silently
@@ -704,7 +718,7 @@ def main(argv: Optional[List[str]] = None,
     # the set stays empty there — the two countries never mix.
     wash_exempt_accounts = (set(args.crypto_account) if is_usa
                             else set())
-    from taxjson.lib.wash_scope import scope_note
+    from taxjson.lib.wash_scope import scope_more, scope_note
     _scope = scope_note(args.country)
 
     files = [Path(f) for f in args.files]
@@ -753,8 +767,9 @@ def main(argv: Optional[List[str]] = None,
     total = len(tickers) + len(option_tickers)
     # Progress, on stderr: stdout is the report (or the --json document).
     from taxjson.lib.cli_diag import note as _note
-    _note(PROG, f"pricing {total} symbol(s): IBKR -> yfinance -> cache"
-          f"{' (options: IBKR -> cache)' if option_tickers else ''}")
+    if not args.brief or args.verbose:
+        _note(PROG, f"pricing {total} symbol(s): IBKR -> yfinance -> "
+              f"cache{' (options: IBKR -> cache)' if option_tickers else ''}")
 
     # The project's ticker.map QUOTE lines: next to the inputs, then the
     # project root above work/ — the cwd only last. Looking in the cwd first
@@ -1067,9 +1082,14 @@ def main(argv: Optional[List[str]] = None,
     from taxjson.lib.wash_scope import advisory_parts
     doc = out.Doc(f"HARVEST — unrealized open positions, "
                   f"{args.base_currency}, basis: {basis}")
-    doc.para("Losses first. PRICE marks its source: ^ IBKR, + yfinance, "
-             "* cache. ADVISORY is the wash radar's.")
-    doc.blank()
+    if args.brief:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("Losses first. PRICE: ^ IBKR, + yfinance, * cache. "
+                 "ADVISORY: the wash radar's.")
+    else:
+        doc.para("Losses first. PRICE marks its source: ^ IBKR, + "
+                 "yfinance, * cache. ADVISORY is the wash radar's.")
+        doc.blank()
     # Too wide for the width: the columns are packed into as few tables
     # as fit, each led by ACCOUNT and SYMBOL — the position and its
     # verdict; the radar's advisory and the last buys; the cost and the
@@ -1139,6 +1159,31 @@ def main(argv: Optional[List[str]] = None,
                         if r.get("verdict") == "LOSS"
                         and ((r.get("radar") or {}).get("category")
                              == "RISK"))
+        _blocked_now = sum(abs(float(r.get("unrealized") or 0.0))
+                           for r in rows
+                           if r.get("verdict") == "LOSS"
+                           and ((r.get("radar") or {}).get("category")
+                                == "BLOCKED"))
+        _flag_n = len({r["symbol"] for r in rows
+                       if r.get("verdict") == "LOSS"
+                       and (r.get("radar") or {}).get("notes")})
+        if args.brief:
+            _hd = "tjs harvest --details"
+            if _risk_now > 0.005:
+                doc.item(*_act_item(
+                    f"RISK rows ({fmt_money(_risk_now)}): no "
+                    + ("IRA buy" if is_usa else "sheltered buy or DRIP")
+                    + " for 30 days after selling", _hd))
+            if _blocked_now > 0.005:
+                doc.item(*_act_item(
+                    f"BLOCKED rows ({fmt_money(_blocked_now)}): no rebuy "
+                    f"before the clear date", _hd))
+            if _flag_n:
+                doc.item(*_act_item(f"{_flag_n} position(s) flagged for a "
+                                 f"manual check", _hd))
+            doc.para(scope_more(_hd, args.country))
+            doc.print()
+            return 0
         if _risk_now > 0.005:
             _pause = ("IRA buys and dividend reinvestment" if is_usa
                       else "DRIPs/sheltered adds")
@@ -1146,11 +1191,6 @@ def main(argv: Optional[List[str]] = None,
                      f"claimable now — no buys inside the past 30 days; "
                      f"pause {_pause} for 30 days AFTER "
                      f"selling or the denial is permanent.")
-        _blocked_now = sum(abs(float(r.get("unrealized") or 0.0))
-                           for r in rows
-                           if r.get("verdict") == "LOSS"
-                           and ((r.get("radar") or {}).get("category")
-                                == "BLOCKED"))
         if _blocked_now > 0.005:
             doc.item(f"BLOCKED rows ({fmt_money(_blocked_now)}) count as "
                      f"claimable now — a recent loss with no buys inside "
@@ -1160,6 +1200,12 @@ def main(argv: Optional[List[str]] = None,
         doc.item("Estimates at today's prices; any new buy on either side "
                  "pushes a clear date out.")
 
+    if args.brief:
+        # No loss: no action line; the long form is --details.
+        doc.blank()
+        doc.para(scope_more("tjs harvest --details", args.country))
+        doc.print()
+        return 0
     # What the columns mean.
     legend: List[str] = [
         "TX_ADD: last buy in the taxable accounts — a rebuy within 30 "

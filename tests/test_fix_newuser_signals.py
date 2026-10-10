@@ -156,7 +156,7 @@ class TestTransitionQuestionProject(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = make(cls.tmp.name, "opt", 2026,
                         {"margin/book.tt": WRITE_BUYBACK})
-        cls.r = tj(cls.root, "run", "--no-input")
+        cls.r = tj(cls.root, "run", "--no-input", "--details")
 
     @classmethod
     def tearDownClass(cls):
@@ -173,6 +173,17 @@ class TestTransitionQuestionProject(unittest.TestCase):
                       "option_grant_timing_since = 2025", text)
         self.assertIn("`taxjson checklist --done option-boundary`", text)
         self.assertEqual(out.lint(self.r.stdout), [])
+
+    def test_default_console_asks_in_one_line(self):
+        # Essentials first: the default console's one line names the
+        # premium and where the question is (the class's run: --details).
+        d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
+        shutil.copytree(self.root, d)
+        r = tj(d, "run", "--no-input")
+        self.assertIn("Warning: 1 option contract(s) written in 2025: is "
+                      "400.00 of premium taxed in 2026 right? — "
+                      "`taxjson checklist`\n", r.stdout)
+        self.assertNotIn("Did your 2025 return", r.stdout)
 
     @rule("CA-OPT-11")
     def test_option_boundary_json_rows(self):
@@ -200,7 +211,7 @@ class TestTransitionQuestionProject(unittest.TestCase):
                            only=["option-boundary"])
         self.assertEqual(res.effective, "done")
         self.assertIn("did your 2025 return", res.finding)
-        text = flat(console(tj(d, "run", "--no-input")))
+        text = flat(console(tj(d, "run", "--no-input", "--details")))
         self.assertNotIn("Warning: 1 option contract", text)
         self.assertIn("answered in checklist.json (option-boundary marked "
                       "done: 2025 filed on close timing)", text)
@@ -210,7 +221,7 @@ class TestTransitionQuestionProject(unittest.TestCase):
         d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
         shutil.copytree(self.root, d)
         (d / "taxjson.toml").write_text(toml(2026, since=2025))
-        text = flat(console(tj(d, "run", "--no-input")))
+        text = flat(console(tj(d, "run", "--no-input", "--details")))
         self.assertNotIn("transition close timing", text)
         res = cl.d_option_boundary(ctx_of(d, 2026, date(2026, 10, 1)))
         self.assertEqual(res.status, "done", res.detail)
@@ -225,7 +236,7 @@ class TestTransitionQuestionUSA(unittest.TestCase):
                         {"margin/book.tt": WRITE_BUYBACK.replace(
                             ".TO", ".US").replace("CAD", "USD")},
                         country="usa")
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertNotIn("transition close timing", text)
             self.assertEqual(OB.project_question_rows(root, cfg_of(root)),
                              [])
@@ -286,7 +297,7 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
         rrsp = rrsp_row("2025-06-02", "2025-06-03", "ZZC.TO", 50, 50, "CAD",
                         "ZZCELL INC SUBORD VTG SHS")
         root = radar_project(self.tmp.name, "own", margin, rrsp)
-        text = flat(tj(root, "run", "--no-input").stdout)
+        text = flat(tj(root, "run", "--no-input", "--details").stdout)
         self.assertIn("possible superficial loss across listings: ZZC.US "
                       "sold at a loss, ZZC.TO bought within 30 days", text)
         self.assertIn("The listings are both named 'ZZCELL INC'", text)
@@ -301,7 +312,7 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
         rrsp = rrsp_row("2026-01-29", "2026-01-30", "ZZC.TO", 100, 55, "CAD",
                         "ZZCELL INC SUBORD VTG SHS")
         root = radar_project(self.tmp.name, "wording", margin, rrsp)
-        text = flat(tj(root, "run", "--no-input").stdout)
+        text = flat(tj(root, "run", "--no-input", "--details").stdout)
         self.assertIn("possible superficial loss across listings: ZZC.US "
                       "sold at a loss, ZZC.TO bought within 30 days", text)
         self.assertIn("named 'ZZCELL INC COM' and 'ZZCELL INC SUBORD VTG "
@@ -323,7 +334,7 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
                         "ZZCELL INC SUBORD VTG SHS")
         root = radar_project(self.tmp.name, "wording_us", margin, rrsp,
                              country="usa")
-        text = flat(tj(root, "run", "--no-input").stdout)
+        text = flat(tj(root, "run", "--no-input", "--details").stdout)
         self.assertIn("possible wash sale across listings: ZZC.US sold at "
                       "a loss, ZZC.TO bought within 30 days", text)
 
@@ -381,7 +392,7 @@ class TestRadarJudgesTheTradesOwnNames(unittest.TestCase):
                         "QQOTHERCO HOLDINGS SUBORD VTG SHS")
         root = radar_project(self.tmp.name, "diff", margin, rrsp)
         self.assertNotIn("across listings",
-                         flat(tj(root, "run", "--no-input").stdout))
+                         flat(tj(root, "run", "--no-input", "--details").stdout))
 
 
 # ------------------------------------------------------- 3. export coverage
@@ -413,7 +424,7 @@ class TestExportCoverage(unittest.TestCase):
         cls.root = make(cls.tmp.name, "wb", 2025, {
             "margin/webull_2025.csv": webull("September 30 2025",
                                              WB_OPEN_CALLS)})
-        cls.r = tj(cls.root, "run", "--no-input")
+        cls.r = tj(cls.root, "run", "--no-input", "--details")
 
     @classmethod
     def tearDownClass(cls):
@@ -426,6 +437,17 @@ class TestExportCoverage(unittest.TestCase):
                       "download the rest of 2025", text)
         self.assertIn("The export's date range ends 2025-09-30.", text)
         self.assertEqual(out.lint(self.r.stdout), [])
+
+    def test_default_console_is_one_line(self):
+        # Essentials first: the default console's one line keeps the
+        # action (the module's other runs pass --details).
+        d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
+        shutil.copytree(self.root, d)
+        r = tj(d, "run", "--no-input")
+        self.assertIn("Warning: Webull exports for margin end 2025-09-30 "
+                      "with 1 position(s) open: download the rest of 2025\n",
+                      r.stdout)
+        self.assertNotIn("The export's date range ends", r.stdout)
 
     def test_checklist(self):
         res = cl.d_export_coverage(ctx_of(self.root, 2025, date(2026, 3, 1)))
@@ -446,7 +468,7 @@ class TestExportCoverage(unittest.TestCase):
             root = make(tmp, "closed", 2025, {
                 "margin/webull_2025.csv": webull("September 30 2025",
                                                  WB_ALL_CLOSED)})
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertNotIn("exports for margin end", text)
             self.assertEqual(EC.find_gaps(root, cfg_of(root),
                                           today=date(2026, 3, 1)), [])
@@ -456,7 +478,7 @@ class TestExportCoverage(unittest.TestCase):
             root = make(tmp, "full", 2025, {
                 "margin/webull_2025.csv": webull("December 31 2025",
                                                  WB_OPEN_CALLS)})
-            tj(root, "run", "--no-input")
+            tj(root, "run", "--no-input", "--details")
             self.assertEqual(EC.find_gaps(root, cfg_of(root),
                                           today=date(2026, 3, 1)), [])
 
@@ -468,7 +490,7 @@ class TestExportCoverage(unittest.TestCase):
                              20, "CAD", "ZZECHO CORP"))
             root = make(tmp, "qt", 2025, {"margin/questrade_2025.csv":
                                           QT_HEAD + rows})
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("Questrade exports for margin end 2025-06-02 with "
                           "open positions (ZZD.TO 100, ZZE.TO 10)", text)
             self.assertIn("The last row is dated 2025-06-02; the export "
@@ -479,7 +501,7 @@ class TestExportCoverage(unittest.TestCase):
             tj(root, "checklist", "--done", "export-coverage", check=False)
             res, = cl.evaluate(ctx, only=["export-coverage"])
             self.assertEqual(res.effective, "done")
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertNotIn("Warning: Questrade exports", text)
             self.assertIn("marked done in checklist.json (export-coverage)",
                           text)
@@ -510,7 +532,7 @@ class TestExportCoverage(unittest.TestCase):
                 tmp, "BUYSELL 2026-06-15 10:00:00 ZZBB270115C00045000.US "
                      "-14 USD 2 2800\n"
                      "BUYSELL 2026-06-16 10:00:00 ZZCC.US -10 USD 25 250\n")
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertNotIn("Warning: Webull exports", text)
             self.assertIn("Info: Webull exports for margin end 2025-12-31; "
                           "the positions open at the export end "
@@ -532,7 +554,7 @@ class TestExportCoverage(unittest.TestCase):
                 "margin/wb_2026_manual.tt":
                     "BUYSELL 2026-01-05 10:00:00 ZZBB260116C00045000.US "
                     "-14 USD 2 2800\n"})
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("Warning: Webull exports for margin end 2025-09-30 "
                           "with open positions (ZZBB260116C00045000.US 14); "
                           "download the rest of 2025", text)
@@ -545,7 +567,7 @@ class TestExportCoverage(unittest.TestCase):
             root = self._year_summary_project(
                 tmp, "BUYSELL 2026-06-15 10:00:00 ZZBB270115C00045000.US "
                      "-14 USD 2 2800\n")
-            text = flat(console(tj(root, "run", "--no-input")))
+            text = flat(console(tj(root, "run", "--no-input", "--details")))
             self.assertIn("Warning: Webull exports for margin end 2025-12-31 "
                           "with open positions (ZZCC.US 10); download the "
                           "rest of 2026", text)

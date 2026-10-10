@@ -1835,8 +1835,8 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
         say(f"{_info}{n}")
     if rep.description_columns:
         say(f"{_info}free-text Description columns "
-            f"({', '.join(rep.description_columns)}) may still name people "
-            f"— read them once before sharing.")
+            f"({', '.join(rep.description_columns)}) may still name people: "
+            f"read them before sharing.")
     if rep.review:
         say(f"REVIEW these lines of the copy before sharing — free text "
             f"the redactor could not classify ({len(rep.review)}):")
@@ -2098,10 +2098,17 @@ def _plural(n: int, one: str, many: str = "") -> str:
 
 def _file_counts(f: _TreeFile) -> str:
     """What was replaced in one file, counts only (never a value)."""
+    parts = [_plural(n, one, many) for n, one, many in _count_items(f)]
+    return ", ".join(parts) if parts else "nothing to redact"
+
+
+def _count_items(f: _TreeFile) -> List[Tuple[int, str, str]]:
+    """(count, singular, plural) of each kind replaced in one file, the
+    nonzero ones, in report order."""
     rep = f.rep
-    parts = []
+    out: List[Tuple[int, str, str]] = []
     if rep.accounts:
-        parts.append(_plural(len(rep.accounts), "account id"))
+        out.append((len(rep.accounts), "account id", ""))
     for n, one, many in (
             (rep.identity_rows, "identity row/cell", "identity rows/cells"),
             (rep.emails, "e-mail address", "e-mail addresses"),
@@ -2116,8 +2123,47 @@ def _file_counts(f: _TreeFile) -> str:
             (rep.broker_keys, "slips.toml broker_key", ""),
             (f.swept, "id found in another file", "ids found in other files")):
         if n:
-            parts.append(_plural(n, one, many))
-    return ", ".join(parts) if parts else "nothing to redact"
+            out.append((n, one, many))
+    return out
+
+
+def _tree_summary(text_files: List[_TreeFile], names) -> bool:
+    """`taxjson redact` (no FILE), default view: one line of totals, the
+    free text to read as one line, a file whose account id was not
+    replaced everywhere as one warning each. True when anything was
+    found."""
+    totals: Dict[str, List] = {}
+    hit = 0
+    review = []
+    found = False
+    for f in text_files:
+        items = _count_items(f)
+        hit += bool(items)
+        for n, one, many in items:
+            t = totals.setdefault(one, [0, many])
+            t[0] += n
+        shown = names[f.rel].as_posix()
+        if f.rep.unreplaced:
+            lines = [n for n, why in f.rep.review
+                     if "could not replace" in why]
+            _diag("warning", f"{shown}: "
+                  f"{_plural(len(f.rep.unreplaced), 'account id')} not "
+                  f"replaced everywhere — fix {_line_list(lines)} of the "
+                  f"copy by hand or rerun with --also")
+        rv = [n for n, why in f.rep.review if "could not replace" not in why]
+        if rv:
+            review.append(f"{shown} {_line_list(rv, 3)}")
+        found = found or f.rep.found_anything() or bool(f.swept)
+    parts = [_plural(n, one, many) for one, (n, many) in totals.items()]
+    _diag("note", f"{hit} of {_plural(len(text_files), 'file')} redacted"
+          + (f": {', '.join(parts)}" if parts else ""), file=sys.stdout)
+    if review:
+        _diag("warning", "read the copy's unclassified free text: "
+              + review[0]
+              + (f" +{len(review) - 1} more (--details)"
+                 if len(review) > 1 else ""),
+              file=sys.stdout)
+    return found
 
 
 def _line_list(nums: List[int], shown: int = 12) -> str:
@@ -2457,7 +2503,8 @@ def _valid_copy_config(files: List["_TreeFile"]) -> Optional[str]:
 
 
 def redact_tree(root: Path, out: Optional[Path], extra: List[str],
-                check_only: bool, force: bool) -> int:
+                check_only: bool, force: bool,
+                details: bool = False) -> int:
     """`taxjson redact` with no FILE: copy `root`/inputs/ to
     `root`/inputs_redact/ (or `out`), redacted. 0 done (or --check found
     nothing), 1 --check found something, 2 refused."""
@@ -2478,9 +2525,11 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             return 2
 
     def step(text: str) -> None:
-        from taxjson.lib.out import wrap
-        for ln in wrap("==> " + text, None, "", "  ", stream=sys.stdout):
-            print(ln)
+        # A step that wraps continues flush-left, a blank line after it
+        # (docs/output-style.md, The run's console).
+        from taxjson.lib.out import show, wrap
+        show(wrap("==> " + text, None, "", "", stream=sys.stdout),
+             sys.stdout)
     if check_only:
         step("Checking inputs/ (nothing is written)")
     else:
@@ -2575,7 +2624,11 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     text_files = [f for f in files if f.text is not None]
     step(f"Redacting {_plural(len(text_files), 'file')}")
     found = False
-    for f in text_files:
+    if not details:
+        # Essentials first (docs/output-style.md): the totals, the lines
+        # to read and the warnings; each file's counts with --details.
+        found = _tree_summary(text_files, names)
+    for f in (text_files if details else ()):
         shown = names[f.rel].as_posix()
         details = list(f.rep.notes)
         if f.rep.unreplaced:
@@ -2658,6 +2711,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "replace the existing inputs_redact/)")
     ap.add_argument("--check", action="store_true",
                     help="Report only; write nothing; exit 1 if anything would be redacted")
+    ap.add_argument("--details", action="store_true",
+                    help="With no FILE: each file's counts and notes")
     args = ap.parse_args(argv)
     # Fail CLOSED on a bad pattern: silently skipping it would publish
     # exactly the string the user asked to remove.
@@ -2683,7 +2738,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     extra = list(args.also) + deny
     if not args.files:
         return redact_tree(Path(args.dir), Path(args.out) if args.out else None,
-                           extra, args.check, args.force)
+                           extra, args.check, args.force, args.details)
     rc = 0
     known_ids: Dict[str, str] = {}
     pseudonyms = Pseudonyms()

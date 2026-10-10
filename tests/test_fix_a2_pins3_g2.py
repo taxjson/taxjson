@@ -640,7 +640,8 @@ class TestRunNoteWording(unittest.TestCase):
             (root / 'work' / 'margin_questrade.json').write_text(json.dumps(
                 {'transactions': [{'symbol': 'XEI.TO',
                                    'action': 'BUYSELL'}]}))
-            r = _run_cli(root, 'ticker-map', '--suggest')
+            # (each rule's reason: --details, docs/output-style.md)
+            r = _run_cli(root, 'ticker-map', '--suggest', '--details')
         # Each rule is listed as written, its reason under it.
         self.assertIn('Unused rules, delete? (1)', r.stdout)
         self.assertIn('\nTOBASE AAQ.US AAQ.TO\n', r.stdout)
@@ -648,9 +649,14 @@ class TestRunNoteWording(unittest.TestCase):
                       'checked)', ' '.join(r.stdout.split()))
 
     def test_us_estimate_assumptions_exclude_section_988(self):
+        from unittest import mock
+
+        import taxjson.bin.taxjson_run as R
         from taxjson.bin.taxjson_run import _print_tax_estimate
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        # The assumptions are printed with --details (Essentials first).
+        with contextlib.redirect_stdout(out), \
+                mock.patch.object(R, "_CURRENT_DETAILS", True):
             _print_tax_estimate(
                 {'settings': {'country': 'usa', 'year': 2025}},
                 {'realized': 1000.0, 'st': 1000.0, 'lt': 0.0, 'div_ca': 0.0,
@@ -672,7 +678,9 @@ class TestRunNoteWording(unittest.TestCase):
             r = subprocess.run(base + ['--country', 'ca', '--force'], **run)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('wrote taxjson.toml.bak1', r.stdout)
-        self.assertIn('re-add their sections (see taxjson.toml.bak1)',
+        # One line in the default view (docs/output-style.md, Essentials
+        # first).
+        self.assertIn('re-add (see taxjson.toml.bak1)',
                       " ".join(r.stdout.split()).lower())
 
 

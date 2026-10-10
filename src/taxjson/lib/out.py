@@ -40,6 +40,8 @@ __all__ = [
     "printable", "shown", "label", "relabel", "labelled", "exit_text",
     "LABELS", "console_lint", "CONSOLE_LINE_RE", "show", "show_blocks",
     "join_blocks", "settle", "settling_streams", "real_stream",
+    "ACT", "act", "act_list", "details_hint", "CONCISE_ENV", "concise_on",
+    "concise_show", "fold_summary", "truncate", "classify", "prose_lines", "act_lines",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test).
@@ -560,8 +562,20 @@ def settling_streams():
 def emit(kind: str, text: str, *, prog: Optional[str] = None,
          details: Iterable[str] = (), file=None) -> None:
     """Print message(...) to `file` (stderr by default), show()n: one
-    blank line after it when it spans more than one line."""
+    blank line after it when it spans more than one line. With the
+    one-line switch on (concise_on: a default view, Essentials first)
+    a note or warning is its headline and the command its detail
+    names, one line (concise_show); an error keeps its fix lines."""
     file = sys.stderr if file is None else file
+    if kind != "error" and concise_on(file):
+        from taxjson.lib.stage_msg import concise_line
+        text = str(text).strip().split("\n")[0]
+        if kind == "attention":
+            text = shown_topic(text)
+        details = [str(d) for d in details if d is not None]
+        concise_show(concise_line(LABELS[kind] + text, details,
+                                  width(file)), file)
+        return
     show(message(kind, text, prog=prog, details=details, stream=file),
          file)
 
@@ -936,3 +950,193 @@ def console_lint(text: str, width_: int = WIDTH,
         if "(content: " in ln:
             probs.append(f"line {i}: detection detail shown: {ln[:60]}")
     return probs
+
+
+# ------------------------------------------------------- essentials first
+# docs/output-style.md, "Essentials first": a legend of one or two short
+# lines BEFORE the table it explains; after the data only what the reader
+# must act on (`! ` lines) or must not miss, each one line naming the
+# command with the detail; the explanations behind `--details`.
+ACT = "! "
+
+
+def act(text: str, cmd: Optional[str] = None) -> str:
+    """One act-on line: `! <text> — <cmd>` (cmd: the command that gives
+    the detail, `tjs ...`). Never wrapped: keep it short (the tests hold
+    it to 100 columns)."""
+    return ACT + printable(text) + (f" — {cmd}" if cmd else "")
+
+
+def details_hint(cmd: str, what: str = "notes") -> str:
+    """The closing pointer to the long form: `More: <cmd> (<what>)`."""
+    return f"More: {cmd} ({what})" if what else f"More: {cmd}"
+
+
+_UPPER_HEAD_RE = re.compile(r"^(?:\d+\.\s+)?[A-Z0-9][A-Z0-9 &/().,'+#-]*"
+                            r"[A-Z0-9)](?:\s+[—-]\s+.*)?$")
+_KV_FIGURE_RE = re.compile(r"^\s*[^:]{1,48}:\s+[-+(]?[$€£]?\(?[\d.,]+")
+_KV_ALIGNED_RE = re.compile(r"^\s*[^:\s][^:]{0,46}:\s{2,}\S")
+_LABEL_START_RE = re.compile(r"^(?:Info|Warning|Error): |^! ")
+
+
+def classify(text: str) -> List[Tuple[str, str]]:
+    """Each non-blank line of rendered output with its kind, for the
+    concise-output budget (docs/output-style.md, Essentials first):
+    "table" (a table's header, rule or row; a per-record block),
+    "heading" (the title, an upper-case section heading), "step" (`==> `),
+    "figure" (an aligned `label:  value` line, or `label: <number>`),
+    "prose" (everything else: a legend, a note, a message, an `! ` line).
+    The budget counts the prose lines."""
+    lines = [ln.rstrip() for ln in text.split("\n")]
+    gap = re.compile(r"\S {2,}(?=\S)")
+    rule = re.compile(r"[-=─━═_+|\s]{3,}")
+    # Blocks of consecutive non-blank lines: a block with a rule line or
+    # two or more lines with column gaps is a table; its gapped lines
+    # (and the line above a rule) are table lines.
+    kinds: List[Optional[str]] = [None] * len(lines)
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip():
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and lines[j].strip():
+            j += 1
+        blk = range(i, j)
+        rules = [k for k in blk if rule.fullmatch(lines[k].strip())]
+        gapped = [k for k in blk if gap.search(lines[k].strip())
+                  and not _LABEL_START_RE.match(lines[k].lstrip())]
+        if rules or len(gapped) >= 2:
+            for k in rules:
+                kinds[k] = "table"
+                if k - 1 >= i:
+                    kinds[k - 1] = "table"
+            for k in gapped:
+                kinds[k] = "table"
+        i = j
+    out: List[Tuple[str, str]] = []
+    first = True
+    for k, ln in enumerate(lines):
+        t = ln.strip()
+        if not t:
+            continue
+        kind = kinds[k]
+        if kind is None:
+            if t.startswith("==> "):
+                kind = "step"
+            elif _LABEL_START_RE.match(ln.lstrip()):
+                kind = "prose"
+            elif (len(t) <= 110 and _UPPER_HEAD_RE.match(t)
+                    and sum(c.isalpha() for c in t.split(" — ")[0]) >= 3):
+                kind = "heading"
+            elif first and " — " in t and t.split(" — ")[0].isupper():
+                kind = "heading"
+            elif ((_KV_ALIGNED_RE.match(ln) or _KV_FIGURE_RE.match(ln))
+                    and not t.startswith(("- ", "* "))):
+                kind = "figure"
+            elif _LOOKS_TABLE(t):
+                kind = "table"
+            else:
+                kind = "prose"
+        first = False
+        out.append((kind, ln))
+    return out
+
+
+def _LOOKS_TABLE(t: str) -> bool:
+    return _looks_like_table_row(t)
+
+
+def prose_lines(text: str) -> List[str]:
+    """The lines the concise budget counts (classify(): "prose")."""
+    return [ln for kind, ln in classify(text) if kind == "prose"]
+
+
+def act_lines(text: str) -> List[str]:
+    """The act-on lines (`! ...`)."""
+    return [ln for ln in text.split("\n") if ln.startswith(ACT)]
+
+
+def act_list(text: str, names: Sequence[str], cmd: Optional[str] = None,
+             width_: int = 100) -> str:
+    """An act-on line naming items: `! <text> (A, B +3 more) — <cmd>`,
+    as many names as fit in `width_` columns (at least one)."""
+    names = [printable(n) for n in names]
+    for k in range(len(names), 0, -1):
+        more = len(names) - k
+        inner = ", ".join(names[:k]) + (f" +{more} more" if more else "")
+        line = act(f"{text} ({inner})", cmd)
+        if len(line) <= width_ or k == 1:
+            return line
+    return act(text, cmd)
+
+
+# ---------------------------------------------- one-line messages, folded
+# Set while a command's messages are shown one line each (taxjson run's
+# console, and every --details command's default view: taxjson_run
+# _brief_messages): lib/stage_msg's say / emit_line and emit() here.
+CONCISE_ENV = "TAXJSON_RUN_CONCISE"
+# A message of one kind is shown this many times; the rest are counted
+# and said in one line at the end (fold_summary).
+FOLD_SHOWN = 2
+_FOLD: dict = {}
+
+
+def concise_on(file=None) -> bool:
+    """One-line messages: the switch is on and `file` is the process's
+    own stream shown to a person (width > 0; a redirected buffer or a
+    capture keeps every byte)."""
+    file = sys.stderr if file is None else file
+    return (os.environ.get(CONCISE_ENV) == "1" and width(file) > 0
+            and real_stream(file) in (sys.__stderr__, sys.__stdout__))
+
+
+def _fold_key(line: str) -> str:
+    """A message's kind: its text with the symbols, numbers, quoted code
+    and paths taken out (`Warning: Income year: X: distribution 9 CAD
+    paid 9 ...`), its first 60 characters."""
+    t = re.sub(r"`[^`]*`", "`X`", line)
+    t = re.sub(r"\S*[/\\]\S*", "P", t)
+    t = re.sub(r"\b[A-Z][A-Z0-9]*(?:[.:_-][A-Z0-9]+)*\b(?![a-z])", "X", t)
+    t = re.sub(r"\d[\d,.]*", "9", t)
+    return t[:60]
+
+
+def concise_show(line: str, file=None) -> None:
+    """Show one message as one line: cut at a word to the width (` ...`
+    marks the cut; --details has it whole), and the third and later
+    message of one kind (_fold_key) counted, not shown."""
+    file = sys.stderr if file is None else file
+    line = printable(" ".join(str(line).split()))
+    key = _fold_key(line)
+    n, first = _FOLD.get(key, (0, line))
+    _FOLD[key] = (n + 1, first)
+    if n >= FOLD_SHOWN:
+        return
+    show([truncate(line, width(file))], file)
+
+
+def truncate(line: str, width_: int) -> str:
+    """`line` cut at a word to `width_` columns, ` ...` marking the cut
+    (width 0: whole)."""
+    if 0 < width_ < len(line):
+        cut = line[:width_ - 4]
+        cut = cut[:cut.rfind(" ")] if " " in cut else cut
+        return cut.rstrip(" ,;:—-") + " ..."
+    return line
+
+
+def fold_summary(file=None) -> None:
+    """One line per message kind shown FOLD_SHOWN times and said again:
+    `Info: 7 more like "Warning: Income year: ..." (--details shows each)`.
+    Then forget them."""
+    file = sys.stderr if file is None else file
+    items = [(n, first) for n, first in _FOLD.values() if n > FOLD_SHOWN]
+    _FOLD.clear()
+    w = width(file) or WIDTH
+    for n, first in items:
+        tail = "\" (--details shows each)"
+        head = f"Info: {n - FOLD_SHOWN} more like \""
+        room = max(20, w - len(head) - len(tail))
+        quote = first if len(first) <= room else first[:room - 3] + "..."
+        show([head + quote + tail], file)

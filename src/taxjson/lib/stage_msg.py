@@ -24,6 +24,7 @@ short display form (reword), continuation lines flush-left, wrapped;
 the .diag keeps the captured line.
 """
 
+import os
 import re
 import sys
 from bisect import bisect_left
@@ -32,7 +33,8 @@ from typing import Iterable, List, Optional
 from taxjson.lib import out
 
 __all__ = ["say", "message_lines", "console_lines", "split_message",
-           "emit_line", "reword", "is_continuation"]
+           "emit_line", "reword", "is_continuation", "concise_line",
+           "detail_command"]
 
 
 def message_lines(kind: str, text: str, details: Iterable[str] = (), *,
@@ -69,6 +71,14 @@ def say(kind: str, headline: str, details: Iterable[str] = (), *,
     file = sys.stderr if file is None else file
     if legacy is not None and _captured(file):
         print(legacy, file=file)
+        return
+    if kind != "error" and env_concise() and not _captured(file):
+        # Inside a run's one-line console (Essentials first), or a
+        # command's default view: one line, the third of a kind folded.
+        w = out.width(file)
+        text = out.label(kind, stream=file) + headline
+        out.concise_show(shorten_commands(concise_line(text, details, w),
+                                          w), file)
         return
     out.show(message_lines(kind, headline, details, prog=prog,
                            indent=indent, stream=file), file)
@@ -287,9 +297,117 @@ def is_continuation(line: str) -> bool:
             and not _LABELLED.match(out.relabel(first).strip()))
 
 
+# Essentials first (docs/output-style.md): the run's console shows each
+# message as ONE line, its headline naming the command with the detail;
+# `taxjson run --details` (and the captured .diag) keep the rest.
+_CMD_RE = re.compile(r"`(taxjson [^`]+)`")
+
+
+def detail_command(texts: Iterable[str]) -> Optional[str]:
+    """The first `taxjson ...` command a message's detail names (the
+    command that lists or fixes it), or None."""
+    for t in texts:
+        m = _CMD_RE.search(t or "")
+        if m:
+            return m.group(1)
+    return None
+
+
+def concise_line(text: str, details: Iterable[str] = (),
+                 width_: int = 0, cmd: Optional[str] = None) -> str:
+    """A message as one line: its headline (split_message) and, when the
+    headline names no command, ` — `<the command its detail names>``
+    (just `taxjson <command>`, then `tjs <command>`, when the whole one
+    would not fit `width_`; the headline alone when none fits). `cmd`:
+    the command to name instead. `text` carries its label."""
+    if width_ > 0 and len(text) <= width_:
+        # It fits: the whole text is its one line.
+        head, rest = text, ""
+    else:
+        head, rest = split_message(text)
+    if "`taxjson " in head or "`tjs " in head:
+        return head
+    cmd = cmd or detail_command(([rest] if rest else []) + list(details))
+    if not cmd:
+        return head
+    full = f"{head} — `{cmd}`"
+    if width_ <= 0 or len(full) <= width_:
+        return full
+    for cand in (f"{head} — `{' '.join(cmd.split()[:2])}`",
+                 f"{head} — `tjs {' '.join(cmd.split()[1:2])}`"):
+        if len(cand) <= width_:
+            return cand
+    # The headline alone fits: one line (the command is in --details).
+    return head if len(head) <= width_ else cand
+
+
+def _names_of(listing: str, n: int = 2) -> str:
+    """`30 XYZQ.US (2024-05-01); 5 ABC (...)` -> `XYZQ.US, ABC`."""
+    syms = re.findall(r"(?:^|; )[\d.e+-]+ (\S+) \(", listing)
+    return ", ".join(syms[:n]) + (f" +{len(syms) - n} more"
+                                  if len(syms) > n else "")
+
+
+# Set by `taxjson run` for itself and its stages when its console shows
+# each message as one line (no --details): a stage's own message shown
+# to a person is then its one-line form too.
+CONCISE_ENV = out.CONCISE_ENV
+fold_summary = out.fold_summary
+
+
+def env_concise() -> bool:
+    """True inside a run whose console shows one-line messages."""
+    return os.environ.get(CONCISE_ENV) == "1"
+
+
+def shorten_commands(line: str, width_: int) -> str:
+    """`taxjson X` spelled `tjs X` (the same program) when `line` is
+    over `width_`, so a one-line message stays one line."""
+    if 0 < width_ < len(line):
+        return line.replace("`taxjson ", "`tjs ")
+    return line
+
+
+# The one-line console form of frequent captured ATTENTION lines whose
+# headline alone would not say what to do: (pattern on the captured
+# line, builder of the shown line). Display only.
+_CONCISE = [
+    (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: (?P<f>.+?): the "
+                r"statement has no Cash Report — .*"),
+     lambda m: f"Warning: {m['f']}: no Cash Report, so its cash is not "
+               f"reconciled: add it to the export"),
+    (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: short: (?P<s>\S+) "
+                r"\((?P<a>[^()]+)\)(?P<rest>.*)"),
+     lambda m: f"Warning: Short position: {m['s']} ({m['a']}): its purchase "
+               f"is missing — `taxjson find-missing-history`"),
+    (re.compile(r"(?:[\w./-]+: )?note: pending elections written to "
+                r"(?P<p>.*/)?(?P<f>work/[^/]+)"),
+     lambda m: f"Info: pending elections written to {m['f']} — "
+               f"`taxjson elect --pending`"),
+    (re.compile(r"(?:[\w./-]+: )?note: FX (?P<p>\S+): Bank of Canada .*?"
+                r"Yahoo fallback for (?P<y>\d+).*"),
+     lambda m: f"Info: FX {m['p']}: Bank of Canada rates"
+               + (f", Yahoo for {m['y']} dates" if m["y"] != "0" else "")),
+    (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: transfer-in: "
+                r"(?P<a>[^:]+): (?P<n>\d+) transfer-in\(s\) from outside "
+                r"your books have NO cost in the books \((?P<l>.*?)\): "
+                r"the row states.*"),
+     lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} with NO cost, "
+               f"kept out of the books ({_names_of(m['l'])}) — "
+               f"`taxjson transfers`"),
+    (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: transfer-in: "
+                r"(?P<a>[^:]+): (?P<n>\d+) transfer-in\(s\) from outside "
+                r"your books booked at the \w+ the broker states on the "
+                r"row \([^:]*: (?P<l>.*?)\)\. .*"),
+     lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} booked at the "
+               f"broker's stated cost ({_names_of(m['l'])}): check it — "
+               f"`taxjson transfers`"),
+]
+
+
 def console_lines(line: str, indent: str = "", stream=None,
                   width_: Optional[int] = None,
-                  source: bool = True) -> List[str]:
+                  source: bool = True, concise: bool = False) -> List[str]:
     """A captured stage line as the run shows it under `indent`: as is
     when nothing wraps (width 0); else in its display form (reword: a
     frequent wordy note shortened), with its label first (lib/out.relabel:
@@ -311,6 +429,21 @@ def console_lines(line: str, indent: str = "", stream=None,
     # starts the line.
     shown = reword(out.printable(line))
     body = out.relabel(shown[0], source=source).strip()
+    if concise:
+        # One line (Essentials first): a continuation is left out, a
+        # message is its headline and the command with its detail.
+        if shown[0][:1].isspace() and not _LABELLED.match(body):
+            return []
+        p = out.printable(line).strip()
+        if len(p) <= _REWORD_MAX:
+            for rx, build in _CONCISE:
+                m = rx.fullmatch(p)
+                if m:
+                    return [indent + out.truncate(shorten_commands(
+                        build(m), w - len(indent)), w - len(indent))]
+        return [indent + out.truncate(shorten_commands(
+            concise_line(body, shown[1:], w - len(indent)),
+            w - len(indent)), w - len(indent))]
     if shown[0][:1].isspace() and not _LABELLED.match(body):
         # The continuation of the message above.
         lines = out.wrap(body, w, indent, indent)
@@ -340,10 +473,20 @@ def emit_line(text: str, *, file=None, indent: str = "") -> None:
         print(text, file=file)
         return
     blocks: List[List[str]] = []
+    concise = env_concise() and not str(text).lstrip().startswith(
+        ("error:", "ERROR:")) and ": error:" not in str(text)
     for part in str(text).split("\n"):
-        lines = console_lines(part, indent, stream=file, source=False)
+        lines = console_lines(part, indent, stream=file, source=False,
+                              concise=concise)
+        if not lines:
+            continue
         if blocks and is_continuation(part):
             blocks[-1].extend(lines)
         else:
             blocks.append(lines)
+    if concise:
+        # One line each, the third of a kind folded (out.concise_show).
+        for b in blocks:
+            out.concise_show(b[0], file)
+        return
     out.show_blocks(blocks, file)

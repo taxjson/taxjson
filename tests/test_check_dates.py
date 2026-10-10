@@ -93,7 +93,8 @@ class TestAnalyze(unittest.TestCase):
             _r("2025-05-31", "2025-05-31", action="DIVIDEND")]})
         with td:
             doc = analyze(root, cfg, today=date(2026, 1, 1))
-        text = "\n".join(render(doc))
+        # (the notes are listed with --details: docs/output-style.md)
+        text = "\n".join(render(doc, details=True))
         self.assertIn("ABC.US", text)
         self.assertIn("Saturday", text)
 

@@ -399,7 +399,9 @@ class TestS07619Messages(unittest.TestCase):
             out = io.StringIO()
             with contextlib.redirect_stdout(out), \
                     contextlib.redirect_stderr(io.StringIO()):
-                main(["--year", "2025", str(f)])
+                # The fix steps are behind --details (docs/output-
+                # style.md, Essentials first); the default names it.
+                main(["--year", "2025", "--details", str(f)])
         text = out.getvalue()
         self.assertIn("`taxjson find-missing-history "
                       "--write-missing-history` in the project", text)
@@ -570,7 +572,14 @@ class TestWatchStatesItsScope(unittest.TestCase):
             self.assertTrue(last.startswith("Scope:"), w.stdout)
             self.assertIn(must, last)
             self.assertNotIn(must_not, last)
+            # The default view closes with the scope in a few words;
+            # --details with the whole paragraph (Essentials first).
             s = self._tj(root, "sell-check", sym)
+            last = s.stdout.strip().splitlines()[-1]
+            self.assertIn("not checked:", last, s.stdout)
+            self.assertIn(must, last)
+            self.assertNotIn(must_not, last)
+            s = self._tj(root, "sell-check", sym, "--details")
             last = s.stdout.strip().splitlines()[-1]
             self.assertTrue(last.startswith("Scope:"), s.stdout)
             self.assertIn(must, last)

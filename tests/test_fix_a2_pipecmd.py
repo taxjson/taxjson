@@ -589,7 +589,8 @@ class TestAffiliatedDenialWording(unittest.TestCase):
                     "BUYSELL 2026-06-12 10:00:00 XYZ.TO 100 CAD 41 -4100 0"])})
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-1500:])
-            r = _cli(root, home, "wash-sales")
+            # The note on what DENIED means: --details (Essentials first).
+            r = _cli(root, home, "wash-sales", "--details")
             self.assertIn("affiliated person", r.stdout)
             self.assertIn("own ACB", r.stdout)
 

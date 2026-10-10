@@ -101,7 +101,16 @@ class TestCryptoSendsWordingByCountry(unittest.TestCase):
                 r = _cli(root, "run", "--no-input", home=home)
                 self.assertEqual(r.returncode, 0, r.stderr[-1500:])
                 out[c] = _cli(root, "crypto-sends", "crypto", home=home)
-        ca, us = out["canada"].stdout, out["usa"].stdout
+                out[c + "_d"] = _cli(root, "crypto-sends", "crypto",
+                                     "--details", home=home)
+        # The default view's legend is one short line; --details keeps
+        # the sentence (docs/output-style.md, Essentials first).
+        self.assertIn("gift or payment: a disposition at fair market "
+                      "value", out["canada"].stdout)
+        self.assertIn("self: a move to your own wallet (or a gift), no "
+                      "sale", out["usa"].stdout)
+        self.assertNotIn("gift or payment", out["usa"].stdout)
+        ca, us = out["canada_d"].stdout, out["usa_d"].stdout
         self.assertIn("a gift or a payment is a disposition at fair market "
                       "value", ca)
         self.assertNotIn("not a sale for a US donor", ca)
@@ -169,8 +178,10 @@ class TestRadarWordingByCountry(unittest.TestCase):
     @rule("US-WASH-04")
     def test_sell_check_scope_note(self):
         # A2-0499: the US sell-check carried ITA s.251.1.
-        ca = self._out("canada", "sell-check", "ZZZ.TO")
-        us = self._out("usa", "sell-check", "ZZZ.US")
+        # The full scope paragraph: --details (Essentials first; the
+        # default view's last line names s.251.1 / Pub. 550 too).
+        ca = self._out("canada", "sell-check", "ZZZ.TO", "--details")
+        us = self._out("usa", "sell-check", "ZZZ.US", "--details")
         self.assertIn("ITA s.251.1", ca)
         self.assertNotIn("251.1", us)
         self.assertIn("(§1091; IRS Pub. 550)", us)

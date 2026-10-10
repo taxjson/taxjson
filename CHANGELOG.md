@@ -2,6 +2,94 @@
 
 ## Unreleased
 
+### Changed
+
+- Essentials first: a command's default output is the essentials, said
+  concisely (docs/output-style.md, "Essentials first"). A legend of one
+  or two lines comes before the table it explains; after the data only
+  the lines you must act on (starting `! `) or must not miss, one line
+  each, naming the command with the detail; every explanation, caveat,
+  rounding note and citation moved behind a new `--details` flag (or the
+  topic command), nothing dropped. `--json` is unchanged.
+- `taxjson sum`: the column legends before the tables; the sheltered
+  accounts' scope in their headings; after FOR THE RETURN one `! ` line
+  per warning (sales with no purchase, unknown costs, FX on foreign
+  cash, §1256 contracts, ALLOWLOSS filing positions) and one line on
+  slip capital gains; the long notes, the rounding notes and the
+  FILING POSITIONS section are under `sum --details`. When the width
+  drops the DENIED column, its total is in the legend.
+- The report commands' "these books are not the clean result of the
+  current inputs" and "built for another tax year" warnings are one
+  line, naming `taxjson checklist` / `taxjson run`; `--details` lists
+  the problems.
+- `taxjson checklist` shows the essentials: the done count, one row per
+  section with its counts, one line per step needing attention (its id,
+  what was found and the command to run; steps blocked for one reason
+  share a line), and the next step last. `--all` (or `--details`) is the
+  full list with every step's state, commands and why. One progress line
+  instead of one per check.
+- Set-up commands print the essentials (docs/output-style.md, "Essentials
+  first"); `--details` brings back everything they leave out.
+  `taxjson init` and `taxjson new-year`: the project made and four next
+  steps, one line each (the files written and the next-year hint with
+  `--details`). `taxjson elect --pending`: a table of each event's options
+  with the first clause of what each books and the hint it needs, and one
+  `--set` line to copy (each option's full text and its own `--set` line
+  with `--details`; the last line the checklist reads is unchanged).
+  `taxjson redact` (no file): one line of totals and one line naming the
+  free text to read (each file's counts with `--details`). `taxjson
+  format`, `taxjson migrate` and `taxjson crypto-sends`: one-line notes
+  and legends.
+- Essentials first for the summaries: `taxjson estimate`, `amt`,
+  `instalments`, `carryover`, `t1135`, `fx-cash`, `form-export` and
+  `reconcile-slips` print a short legend above each table, the figures
+  for the return, and one line per thing to act on (`! ...`) naming the
+  command with the detail. The notes, caveats, citations and per-row
+  explanations they printed after the data moved behind `--details`
+  (nothing was dropped). `taxjson estimate` shows the estimate alone
+  (the gains table is `taxjson sum`; `--details` puts it back in
+  front); `reconcile-slips` lists one row per symbol with the first
+  clause of its finding. The standalone stage tools keep their full
+  reports (`--brief` gives the short one); `--json` is unchanged.
+- The check commands print the essentials first (docs/output-style.md):
+  `sanity`, `find-missing-history`, `slip-audit`, `edge-cases`,
+  `close-year`, `ticker-map --suggest`, `check-dates`,
+  `update-tobase-map` and `option-boundary` keep their tables and figures, put a one-line legend
+  above a table that needs one, and end with one-line `! ` items naming
+  the command with the detail. The explanations, fix steps, per-row
+  reasoning, notes and empty sections they printed before are behind
+  the new `--details` flag; nothing was dropped. `--json` is unchanged.
+- `taxjson years` is a table, one row per year (state, totals, last
+  run, changed inputs, what differs from the newest year), with one
+  line per thing to do; `--details` prints each year in words as
+  before.
+- `taxjson run`'s console shows each warning and note as one line that
+  names the command with the detail (an error keeps its fix lines); the
+  closing block under "Before you trust these numbers" is at most six
+  lines, every finding kept. The broker each file was read as, and every
+  message's explanation, come back with `taxjson run --details` (and stay
+  in work/*.diag); output captured by a program is unchanged.
+- The trading and loss commands print the essentials first: a one-line
+  legend above each table, then only what to act on (`! ` lines naming
+  the command with the detail) and a closing pointer to `--details`,
+  which prints everything the default view leaves out. `wash-sales`
+  (WHAT DENIED MEANS, the filing positions and manual-check flags in
+  full), `wash-radar` (now one STATUS table of the positions with an
+  advisory and an action line per status; the definitions, empty
+  sections and per-row advisories are the details), `harvest` (the
+  column notes), `audit` (the rounding note), `buy-check` / `sell-check`
+  (the window caveat), `transfers` (the IN_BOOKS meanings), `list`,
+  `stats` and `fees-sum` (the definitions). The planning views close
+  with the scope in a few words (the purchases of a spouse or a
+  controlled corporation are not checked); `--details` keeps the full
+  paragraph. `--json` and the run's reports/ files are unchanged.
+- The note on option roots whose contract size the export does not
+  state is one line when it names three roots or fewer.
+- The messages a command's engine prints while it recomputes (an
+  income-year note of an earlier year, a built-in list note) are one
+  line each in the default view, and one said more than twice is folded
+  into a count line at the end; `--details` shows each in full.
+
 
 ## v0.27.2 (2026-10-10)
 

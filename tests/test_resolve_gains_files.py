@@ -178,7 +178,9 @@ class TestSummaryGroupedTables(unittest.TestCase):
         # accounts only (margin yes, the sheltered rrsp never).
         tables, _, ret = out.partition("FOR THE RETURN")
         self.assertEqual(tables.count("margin"), 2)
-        self.assertEqual(tables.count("rrsp"), 3)   # +1: the NOTE line
+        # (The sheltered scope is in the tables' headings, not a line
+        # naming the account: docs/output-style.md, Essentials first.)
+        self.assertEqual(tables.count("rrsp"), 2)
         self.assertIn("margin", ret)
         self.assertNotIn("rrsp", ret)
         # margin ties wash-adjusted 0.00; rrsp only has pre-wash

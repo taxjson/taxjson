@@ -54,7 +54,7 @@ class TestF3CanadaRadar(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = f3_project(cls.tmp.name, "f3")
-        cls.r = tj(cls.root, "run", "--no-input")
+        cls.r = tj(cls.root, "run", "--no-input", "--details")
 
     @classmethod
     def tearDownClass(cls):
@@ -111,7 +111,7 @@ class TestF3CanadaRadar(unittest.TestCase):
     def test_strict_stops(self):
         d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
         shutil.copytree(self.root, d)
-        r = tj(d, "run", "--no-input", "--strict", check=False)
+        r = tj(d, "run", "--no-input", "--details", "--strict", check=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("--strict: 1 possible superficial loss across "
                       "listings", r.stderr)
@@ -121,7 +121,7 @@ class TestF3CanadaRadar(unittest.TestCase):
         d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
         shutil.copytree(self.root, d)
         (d / "ticker.map").write_text("TOBASE ZZX.US ZZX.TO\n")
-        r = tj(d, "run", "--no-input", "--strict")
+        r = tj(d, "run", "--no-input", "--details", "--strict")
         self.assertNotIn("across listings", console(r))
         loss, = zzx_loss(d)
         self.assertAlmostEqual(loss["gain"], 0.0, places=2)
@@ -134,7 +134,7 @@ class TestF3CanadaRadar(unittest.TestCase):
         d = Path(tempfile.mkdtemp(dir=self.tmp.name)) / "p"
         shutil.copytree(self.root, d)
         (d / "ticker.map").write_text("DISTINCT ZZX.TO ZZX.US\n")
-        r = tj(d, "run", "--no-input", "--strict")
+        r = tj(d, "run", "--no-input", "--details", "--strict")
         self.assertNotIn("across listings", console(r))
         loss, = zzx_loss(d)
         self.assertAlmostEqual(loss["gain"], -1000.0)
@@ -157,7 +157,7 @@ class TestF3Variants(unittest.TestCase):
                 + qt_row("2024-03-11", "2024-03-13", "Buy", "ZZX.TO", 100, 55,
                          "CAD"))
         root = f3_project(self.tmp.name, "rev", rows)
-        r = tj(root, "run", "--no-input")
+        r = tj(root, "run", "--no-input", "--details")
         self.assertIn("ZZX.US sold at a loss, ZZX.TO bought within 30 days",
                       r.stdout)
         self.assertIn("\nTOBASE ZZX.US ZZX.TO\n", r.stdout)
@@ -171,7 +171,7 @@ class TestF3Variants(unittest.TestCase):
                 + qt_row("2024-03-11", "2024-03-13", "Buy", "ZZX", 100, 45,
                          "USD", name="ZZX OTHERCO HOLDINGS LTD"))
         root = f3_project(self.tmp.name, "diff", rows)
-        r = tj(root, "run", "--no-input")
+        r = tj(root, "run", "--no-input", "--details")
         self.assertNotIn("across listings", console(r))
 
     @rule("CA-XLIST-05")
@@ -187,14 +187,14 @@ class TestF3Variants(unittest.TestCase):
                           extra={"tfsa/questrade_2024.csv": tfsa},
                           extra_accounts='[accounts.tfsa]\n'
                                          'type = "sheltered"\n')
-        r = tj(root, "run", "--no-input")
+        r = tj(root, "run", "--no-input", "--details")
         self.assertIn("Bought: ZZX.US 2024-02-20 (tfsa, registered)",
                       r.stdout)
 
     @rule("US-XLIST-04")
     def test_usa_wash_sale_across_listings(self):
         root = f3_project(self.tmp.name, "us", country="usa")
-        r = tj(root, "run", "--no-input")
+        r = tj(root, "run", "--no-input", "--details")
         self.assertIn("Warning: possible wash sale across listings: ZZX.TO "
                       "sold at a loss, ZZX.US bought within 30 days",
                       r.stdout)
@@ -212,7 +212,7 @@ class TestF3Variants(unittest.TestCase):
         res = {}
         for c in ("canada", "usa"):
             root = f3_project(self.tmp.name, c, rows, country=c)
-            res[c] = tj(root, "run", "--no-input").stdout
+            res[c] = tj(root, "run", "--no-input", "--details").stdout
         self.assertNotIn("across listings", res["canada"])
         self.assertIn("possible wash sale across listings", res["usa"])
 

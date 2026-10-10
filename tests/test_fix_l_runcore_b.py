@@ -278,7 +278,8 @@ class TestSumTable(unittest.TestCase):
             self.assertEqual((fx["unreliable_raw"]["net_gain"],
                               fx["unreliable_raw"]["reportable"]),
                              (-12708.35, -12508.35))
-            t = " ".join(_run_with_fx_note(root, "sum").stdout.split())
+            t = " ".join(_run_with_fx_note(root, "sum", "--details")
+                         .stdout.split())
             self.assertIn("FX on foreign cash: NOT RELIABLE for 2025 — 2 "
                           "in-year overdrafts (300.00 USD); conversions, "
                           "deposits/withdrawals and margin balances are not "
@@ -301,7 +302,7 @@ class TestSumTable(unittest.TestCase):
             self.assertEqual(j["filing"]["totals"]["denied"], 200.0)
             self.assertEqual(j["filing"]["totals"]["permanently_denied"],
                              200.0)
-            t = _run_cli(root, "sum").stdout
+            t = _run_cli(root, "sum", "--details").stdout
             # A2-0659: the registered-account part is lost for good,
             # an affiliated person's is theirs to add to their own ACB.
             self.assertIn("is lost for good, and one caused by an "
@@ -384,15 +385,19 @@ class TestInstalmentInputs(unittest.TestCase):
                 _CONFIG.replace('country = "canada"',
                                 'country = "canada"\nprovince = "ON"')
                 + '\n[instalments]\nbasis = "current_year"\n')
-            r = _run_cli(root, "instalments")
+            # The list in full: --details (Essentials first).
+            r = _run_cli(root, "instalments", "--details")
             self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("Not modelled: self-employed CPP/EI",
+                          _run_cli(root, "instalments").stdout)
             flat = " ".join(r.stdout.split())
             self.assertIn("Not modelled - CPP/EI payable on "
                           "self-employment", flat)
             self.assertIn("line 15300", flat)
             j = json.loads(_run_cli(root, "instalments", "--json").stdout)
             self.assertEqual(len(j["not_modelled"]), 2)
-            e = _run_cli(root, "estimate", "--province", "ON")
+            # The assumptions in full: --details (Essentials first).
+            e = _run_cli(root, "estimate", "--province", "ON", "--details")
             self.assertIn("line 15300", " ".join(e.stdout.split()))
 
 
@@ -685,6 +690,7 @@ class TestViews(unittest.TestCase):
             "import taxjson.bin.taxjson_run as R\n"
             "import taxjson.bin.taxjson_fx_cash as FX\n"
             "FX.render_report = lambda *a, **k: 'REPORT'\n"
+            "FX.render_brief = lambda *a, **k: 'REPORT'\n"
             "R._fx_cash_doc = lambda root, cache: ({'events': [{"
             "'date': '2025-03-03', 'account': 'margin', 'currency': 'USD',"
             " 'units': 61234.57, 'rate': 1.3579, 'gain': 456.7,"

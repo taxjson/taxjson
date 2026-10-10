@@ -1214,7 +1214,8 @@ class TestSumRoundingNote(unittest.TestCase):
                    "PYTHONPATH": str(REPO / "src")}
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
-                 str(root), "sum"], capture_output=True, text=True,
+                 str(root), "sum", "--details"], capture_output=True,
+                text=True,
                 env=env, timeout=300)
             j = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",

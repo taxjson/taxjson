@@ -90,7 +90,7 @@ class TestSumDeniedRoundingNote(unittest.TestCase):
     def test_canada_denied_gap_is_named(self):
         with tempfile.TemporaryDirectory() as td:
             p = self._proj(td, "canada")
-            r = _run(p, "sum")
+            r = _run(p, "sum", "--details")
             j = _run(p, "sum", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("unrounded total denied is 3.01 (-0.01 on the RETURN "
@@ -103,7 +103,7 @@ class TestSumDeniedRoundingNote(unittest.TestCase):
     def test_usa_adjustment_gap_is_named(self):
         with tempfile.TemporaryDirectory() as td:
             p = self._proj(td, "usa")
-            r = _run(p, "sum")
+            r = _run(p, "sum", "--details")
             j = _run(p, "sum", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("FORM 8949", r.stdout)
@@ -121,7 +121,7 @@ class TestSumDeniedRoundingNote(unittest.TestCase):
             _doc(p / "work" / "margin_gains.json",
                  [_gain(f"S{i}.US", "USD", gain=1.004, term="SHORT_TERM")
                   for i in range(3)])
-            r = _run(p, "sum")
+            r = _run(p, "sum", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("FORM 8949", r.stdout)
         self.assertIn("unrounded total gain is 3.01 (-0.01 on the RETURN "

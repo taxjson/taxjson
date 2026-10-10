@@ -128,7 +128,12 @@ class TestSumShelteredScopeNote(unittest.TestCase):
         from taxjson.bin.taxjson_run import cmd_summary
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, sheltered=True)
+            # The default view says it in the tables' headings; the
+            # sentence is the --details view (docs/output-style.md).
             out, _ = _run_cmd(cmd_summary, root)
+            self.assertIn("SHELTERED ACCOUNTS — not taxable", out)
+            self.assertIn("ALL ACCOUNTS — sheltered included", out)
+            out, _ = _run_cmd(cmd_summary, root, details=True)
             self.assertIn("include sheltered account(s) rrsp", out)
             jout, _ = _run_cmd(cmd_summary, root, json=True)
         self.assertEqual(json.loads(jout)["sheltered_included"], ["rrsp"])
@@ -549,7 +554,8 @@ class TestCanBuy(unittest.TestCase):
     def test_unknown_symbol_is_safe_with_forward_note(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
-            r = _cli(root, "buy-check", "ZZZT")
+            # The note on the window a buy starts: --details.
+            r = _cli(root, "buy-check", "ZZZT", "--details")
         self.assertEqual(r.returncode, 0)
         self.assertIn("no wash exposure", r.stdout)
         self.assertIn("30-day window", r.stdout)

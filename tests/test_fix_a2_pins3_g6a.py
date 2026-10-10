@@ -253,7 +253,9 @@ class TestReconcileSlipsWrapper(unittest.TestCase):
             r = _cli(root, "reconcile-slips", str(slip))
         out = r.stdout + r.stderr
         self.assertEqual(r.returncode, 0, out[-2000:])
-        self.assertIn("NEWCO  OK", out)
+        # (a table row in the default view: compare its cells)
+        self.assertIn(["NEWCO", "OK"], [ln.split()[:2]
+                                        for ln in out.splitlines()])
         self.assertIn("0 missing from computed, 0 missing from slip", out)
 
     def test_country_reaches_the_reconciler(self):

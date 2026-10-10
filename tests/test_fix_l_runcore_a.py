@@ -900,7 +900,7 @@ class TestReportLabelsAndTotals(unittest.TestCase):
                                   "dividend": 7.0, "date": "2025-05-03",
                                   "currency": "CAD"}],
                 "summary": {"year": 2025}})
-            r = _run_cli(root, "sum")
+            r = _run_cli(root, "sum", "--details")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("is STAKING rewards", r.stdout)
             j = json.loads(_run_cli(root, "sum", "--json").stdout)
@@ -1073,7 +1073,10 @@ class TestMoreViews(unittest.TestCase):
             r = _run_cli(root, "instalments")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("other income", r.stdout.lower())
-            self.assertIn("assumed 0", r.stdout)
+            self.assertIn("! Assumed 0: other income", r.stdout)
+            # The sentences in full: --details (Essentials first).
+            self.assertIn("assumed 0", _run_cli(root, "instalments",
+                                                "--details").stdout)
             j = json.loads(_run_cli(root, "instalments", "--json").stdout)
             self.assertEqual(len(j["assumed_zero"]), 2)
 

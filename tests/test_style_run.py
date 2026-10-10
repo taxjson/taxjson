@@ -157,6 +157,28 @@ class TestBookStateWarnings(_Width):
             fn()
         return err.getvalue()
 
+    def test_artifact_year_and_run_state_brief(self):
+        # Shown to a person without --details: one line each
+        # (docs/output-style.md, Essentials first).
+        from taxjson.bin import taxjson_run as R
+        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
+                mock.patch.object(R, "_artifact_year_mismatch",
+                                  return_value={"margin": 2023}):
+            text = self._err(lambda: R._warn_artifact_year({}, 2024))
+        self.assertEqual(text.strip().splitlines(), [
+            "Warning: these figures are NOT 2024's: work/ was built for "
+            "another year — run `taxjson run`"])
+        with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
+                mock.patch.object(R, "_refuse_other_country_books"), \
+                mock.patch.object(R, "_run_state_problems",
+                                  return_value=["a stale wash pass",
+                                                "default FX " * 12]):
+            text = self._err(lambda: R._warn_run_state(Path("."), {}))
+        self.assertEqual(text.strip().splitlines(), [
+            "Warning: these books are not the clean result of the "
+            "current inputs (2 problems): `taxjson checklist`"])
+
+    @mock.patch("taxjson.bin.taxjson_run._CURRENT_DETAILS", True)
     def test_artifact_year_and_run_state(self):
         from taxjson.bin import taxjson_run as R
         with mock.patch.object(R, "_CURRENT_CMD", "sum"), \
@@ -226,8 +248,10 @@ class TestRunStyle(unittest.TestCase):
 
     def test_captured_stage_text_is_unchanged(self):
         # The .diag keeps the one-line ATTENTION text the console wraps.
+        # (--details: the default console shows each message as one
+        # line, Essentials first)
         p = self._copy("canada")
-        r = p.run("run", "--no-input")
+        r = p.run("run", "--no-input", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         diag = (p.root / "work" / "margin_ib.json.diag").read_text()
         long = [ln for ln in diag.splitlines()
@@ -250,7 +274,10 @@ class TestRunStyle(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_styled(self, r.stdout, allow=("taxjson -C ",))
                 assert_styled(self, r.stderr)
-                self.assertIn("  3. Run:\n       taxjson -C ", r.stdout)
+                # The next steps, one line each (docs/output-style.md,
+                # Essentials first): the commands to copy.
+                self.assertIn("  3. taxjson -C ", r.stdout)
+                self.assertIn("  4. taxjson -C ", r.stdout)
                 if country == "usa":
                     self.assertTrue(r.stderr.lstrip().startswith(
                         "Info: the US engine is "

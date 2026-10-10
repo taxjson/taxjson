@@ -295,7 +295,8 @@ class TestRunWithRulesNamingTheCodes(unittest.TestCase):
         codes = {c['code']: c for c in json.loads(r.stdout)['symbol_codes']}
         self.assertEqual({c: v['how'] for c, v in codes.items()},
                          {'X000001': 'ticker.map', 'X000004': 'ticker.map'})
-        r = _run(self.root, "transfers")
+        # Each code is listed with --details (Essentials first).
+        r = _run(self.root, "transfers", "--details")
         self.assertIn('X000004 → ticker.map rule', r.stdout)
 
 

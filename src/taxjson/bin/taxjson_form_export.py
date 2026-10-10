@@ -1027,14 +1027,14 @@ def year_not_ended_note(year: Any, today: Optional[Any] = None) -> str:
 # shared with the account .sum reports and keeps its layout.
 
 def _table(header: Tuple[str, ...], rows: List[Tuple[str, ...]],
-           right: set) -> List[str]:
+           right: set, key=0) -> List[str]:
     """A table fitted to the house width (lib/out.fit_table): too wide,
-    one record per row headed by its first column."""
+    one record per row headed by its `key` column(s)."""
     from taxjson.lib.out import fit_table
     if not rows:
         return ["  (no dispositions)"]
     aligns = [">" if i in right else "<" for i in range(len(header))]
-    return fit_table(header, rows, aligns=aligns)
+    return fit_table(header, rows, aligns=aligns, key=key)
 
 
 def _para(text: str, indent: str = "",
@@ -1073,17 +1073,23 @@ def _amounts(pairs: List[Tuple[str, float]], indent: str) -> List[str]:
             for (k, _), v in zip(pairs, vals)]
 
 
-def _manual_console(rows: List[Dict[str, Any]], cur: str) -> List[str]:
+def _manual_console(rows: List[Dict[str, Any]], cur: str,
+                    details: bool = True) -> List[str]:
     """manual_section() in the console layout."""
     if not rows:
         return []
     total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
     lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} sale(s) with no "
              f"purchase in your files"]
-    lines += _para(f"Unknown cost (.tt OPENING cost=unknown), proceeds "
-                   f"{total:,.2f} {cur}: NOT in the rows or totals above. "
-                   f"Report each by hand once its cost is known "
-                   f"(`taxjson find-missing-history`).")
+    if details:
+        lines += _para(f"Unknown cost (.tt OPENING cost=unknown), proceeds "
+                       f"{total:,.2f} {cur}: NOT in the rows or totals "
+                       f"above. Report each by hand once its cost is known "
+                       f"(`taxjson find-missing-history`).")
+    else:
+        from taxjson.lib.out import act
+        lines.append(act("Not in the rows or totals above: report each "
+                         "by hand", "tjs find-missing-history"))
     table = [(str(r.get("symbol") or ""), str(r.get("date") or ""),
               _qty_str(abs(float(r.get("qty") or 0.0))),
               f"{abs(float(r.get('proceeds') or 0.0)):,.2f}",
@@ -1134,24 +1140,40 @@ def _year_note(rep: Dict[str, Any]) -> List[str]:
     return _para(t) if t else []
 
 
-def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
+def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str,
+                details: bool = True) -> str:
+    """The Form 8949 console report. `details` (--details): the notes
+    and each row's filing-position note; the default view (docs/output-
+    style.md, Essentials first) is the legend, the rows and totals, and
+    one line per thing to act on."""
     lines = [f"FORM 8949 — Sales and Other Dispositions of Capital Assets, "
              f"tax year {year or '?'}, {cur}"]
     lines += _year_note(rep)
+    if not details:
+        lines.append("Each sale: (a) description, (b) acquired, (c) sold, "
+                     "then its amounts; (h) = (d) − (e) + (g).")
     lines.append("")
     header = ("(a) DESCRIPTION", "(b) ACQUIRED", "(c) SOLD",
               "(d) PROCEEDS", "(e) COST", "(f)", "(g) ADJ",
               "(h) GAIN(LOSS)")
 
     def _rows_table(rows):
+        # Too wide: one record per sale headed by (a)-(c) (the legend
+        # names them in the default view).
         return _table(header, [
             (r["description"], r["date_acquired"], r["date_sold"],
              f"{r['proceeds']:,.2f}", f"{r['cost']:,.2f}", r["code"],
              f"{r['adjustment']:,.2f}" if r["code"] else "",
-             f"{r['gain']:,.2f}") for r in rows], right={3, 4, 6, 7})
+             f"{r['gain']:,.2f}") for r in rows], right={3, 4, 6, 7},
+            key=0 if details else (0, 1, 2))
 
     def _totals(label: str, t: Dict[str, float]) -> List[str]:
-        return [f"  {label}"] + _amounts(
+        head = f"  {label}"
+        if not details and label.startswith("TOTALS (to Schedule D part"):
+            # A heading in the default view: TOTALS — SCHEDULE D PART I.
+            head = ("TOTALS — SCHEDULE D PART "
+                    + label.split()[-1].rstrip("):"))
+        return [head] + _amounts(
             [("proceeds", t['proceeds']), ("cost", t['cost']),
              ("adjustments", t['adjustment']), ("gain", t['gain'])],
             "    ")
@@ -1162,6 +1184,10 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
                         ("II", "PART II — LONG-TERM")):
         rows = rep[f"part_{part}"]
         t = rep[f"part_{part}_totals"]
+        if not rows and not details:
+            lines.append(f"{label}: no dispositions")
+            lines.append("")
+            continue
         lines.append(label)
         if has_da:
             # One table per checkbox group: securities, then the 2025+
@@ -1184,13 +1210,25 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
         if rows:
             lines += _totals(f"TOTALS (to Schedule D part {part}):", t)
         for r in rows:
-            if r.get("filing_position"):
+            if r.get("filing_position") and details:
                 lines += _item(f"{r['description']} sold {r['date_sold']}: "
                                f"{r['filing_position']['note']}", "  ")
         lines.append("")
     lines += section_1256_lines(rep, cur)
     lines += _manual_console(rep.get("manual_reporting_required") or [],
-                             cur)
+                             cur, details)
+    if not details:
+        from taxjson.lib.out import act
+        _cmd = "tjs form-export --details"
+        _fp = sum(1 for p in ("I", "II") for r in rep[f"part_{p}"]
+                  if r.get("filing_position"))
+        if _fp:
+            lines.append(act(f"{_fp} row(s) carry a filing position "
+                             f"(.tt ALLOWLOSS)", _cmd))
+        lines.append(f"Code W: wash sale, (g) the loss added back; check "
+                     f"the 8949 box for each part — {_cmd}")
+        return "\n".join(ln for i, ln in enumerate(lines)
+                         if ln or i + 1 < len(lines))
     lines.append("NOTES")
     lines += _item("Code W rows are wash sales; column (g) is the "
                    "disallowed loss added back, so (h) is the allowed "
@@ -1217,11 +1255,18 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
 
 
 def render_schedule3(rep: Dict[str, Any], year: Optional[int],
-                     cur: str) -> str:
+                     cur: str, details: bool = True) -> str:
+    """The Schedule 3 console report. `details` (--details): each line's
+    form label, the rows' notes and the NOTES; the default view (docs/
+    output-style.md, Essentials first) is the legend, the rows and line
+    totals, and one line per thing to act on or not to miss."""
     year = year or rep.get("year")
     lines = [f"SCHEDULE 3 — Capital Gains (or Losses), tax year "
              f"{year or '?'}, {cur}"]
     lines += _year_note(rep)
+    if not details:
+        lines.append("GAIN(LOSS) = PROCEEDS − ACB − OUTLAYS, the allowed "
+                     "amount; 100% amounts (the form applies the rate).")
     lines.append("")
     header = ("UNITS", "SYMBOL", "ACQ. YEAR", "PROCEEDS", "ACB",
               "OUTLAYS", "GAIN(LOSS)")
@@ -1229,12 +1274,16 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
     if not by_line:
         spec = schedule3_line("shares", year)
         lines.append(line_title(spec).upper())
-        lines += _para(spec['label'])
+        if details:
+            lines += _para(spec['label'])
         lines += _table(header, [], right=set())
         lines.append("")
     for ln in by_line:
-        lines.append(ln['title'].upper())
-        lines += _para(ln['label'])
+        # The default view's heading: the period, then its lines.
+        lines.append(ln['title'].upper() if details else
+                     ln['title'].replace(", lines ", " — lines ").upper())
+        if details:
+            lines += _para(ln['label'])
         sel = [r for r in rep["rows"] if r["line_key"] == ln["key"]]
         table = [(f"{r['units']:,.8f}".rstrip("0").rstrip(".") or "0",
                   r["symbol"],
@@ -1247,10 +1296,28 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
             [(f"Line {ln['proceeds_code']} (proceeds of disposition)",
               ln['proceeds']),
              (f"Line {ln['gain_code']} (gain/loss)", ln['gain'])], "  ")
-        lines += _row_notes([(r["symbol"], r["notes"]) for r in sel])
+        if details:
+            lines += _row_notes([(r["symbol"], r["notes"]) for r in sel])
         lines.append("")
     lines += _manual_console(rep.get("manual_reporting_required") or [],
-                             cur)
+                             cur, details)
+    if not details:
+        from taxjson.lib.out import act
+        _cmd = "tjs form-export --details"
+        _rows = rep.get("rows") or []
+        _fp = sum(1 for r in _rows if r.get("filing_positions"))
+        if _fp:
+            lines.append(act(f"{_fp} row(s) carry a filing position "
+                             f"(.tt ALLOWLOSS)", _cmd))
+        _den = [r for r in _rows if (r.get("denied") or 0) > 0.005
+                or (r.get("denied_contribution") or 0) > 0.005]
+        if _den:
+            lines.append(f"{len(_den)} row(s) with a denied superficial "
+                         f"loss: the ACB shown is reduced by it — "
+                         f"tjs wash-sales")
+        lines.append("Not in the rows: FX on cash (15300), slip capital "
+                     "gains (17400, 17600) — " + _cmd)
+        return "\n".join(lines).rstrip("\n")
     lines.append("NOTES")
     if year is not None and int(year) == PERIOD_YEAR:
         # The 2024 form's two periods (A2-0166).
@@ -1454,6 +1521,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "summary.tax_date_basis, else the form's "
                              "convention (8949/txf trade, Schedule 3 "
                              "settle).")
+    parser.add_argument("--brief", action="store_true",
+                        help="The essentials only (what `taxjson form-export` prints "
+                             "without --details): the notes and each "
+                             "message's detail are left out")
     args = parser.parse_args(argv)
 
     # The same ownership table `taxjson` dispatch enforces: Schedule 3
@@ -1686,9 +1757,11 @@ def _main(args) -> int:
     if _ynote:
         rep["year_not_ended"] = _ynote
     if args.form == "8949":
-        text = render_8949(rep, args.year, rep["currency"])
+        text = render_8949(rep, args.year, rep["currency"],
+                           not args.brief)
     else:
-        text = render_schedule3(rep, args.year, rep["currency"])
+        text = render_schedule3(rep, args.year, rep["currency"],
+                                not args.brief)
 
     if args.csv:
         try:

@@ -446,9 +446,18 @@ class TestElectStyle(_NoWidthEnv):
         self.assertTrue(lines[-1].startswith("Redo one: "))
 
     def test_pending_listing(self):
+        # Each option's text and its own `set:` line are the --details
+        # view (docs/output-style.md, Essentials first); the default is
+        # a table of the options and one `set:` line.
         with tempfile.TemporaryDirectory() as tmp:
             root = _elect_project(tmp, pending=_pending_doc())
-            text, _ = _elect(root, pending=True)
+            brief, _ = _elect(root, pending=True)
+            text, _ = _elect(root, pending=True, details=True)
+        self.assertEqual(out.lint(brief, allow=("taxjson elect ",)), [],
+                         brief)
+        self.assertEqual(len([ln for ln in brief.splitlines()
+                              if ln.lstrip().startswith("set:")]), 1)
+        self.assertEqual(brief.splitlines()[-1], text.splitlines()[-1])
         self.assertEqual(out.lint(text, allow=("taxjson elect ",)), [],
                          text)
         lines = text.splitlines()
@@ -552,7 +561,9 @@ class TestWashSalesStyle(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_table(self):
-        r = _cli(self.root, "wash-sales")
+        # The notes (WHAT DENIED MEANS) are in --details (docs/output-
+        # style.md, Essentials first).
+        r = _cli(self.root, "wash-sales", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         text = r.stdout
         self.assertEqual(out.lint(text), [], text)

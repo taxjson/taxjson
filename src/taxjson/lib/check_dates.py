@@ -448,11 +448,14 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
 
 
 def render(doc: Dict[str, Any], show_all: bool = False,
-           per_code: int = 10, width_: Optional[int] = None) -> List[str]:
+           per_code: int = 10, width_: Optional[int] = None,
+           details: bool = False) -> List[str]:
     """The report in the house layout (docs/output-style.md): a title, a
     section per severity, each code with its count and meaning and its
-    rows as a table that fits the width; the last line says what to do."""
-    from taxjson.lib.out import Doc
+    rows as a table that fits the width; the last line says what to do.
+    The default view (Essentials first) counts the information notes in
+    one line; `details` lists them, with the later-years note."""
+    from taxjson.lib.out import Doc, act
     n_src = len(doc['sources'])
     d = Doc(f"CHECK DATES — {doc['checked']} rows from {n_src} "
             f"source{'' if n_src == 1 else 's'}", width_=width_)
@@ -462,6 +465,14 @@ def render(doc: Dict[str, Any], show_all: bool = False,
     for sev in ("ERROR", "WARN", "NOTE"):
         codes = doc["counts"].get(sev, {})
         if not codes:
+            continue
+        if sev == "NOTE" and not details:
+            d.blank()
+            d.line(f"NOTES: {sum(codes.values())} ("
+                   + ", ".join(f"{c} {n}" for c, n in sorted(
+                       codes.items(), key=lambda kv: -kv[1])[:3])
+                   + (", ..." if len(codes) > 3 else "")
+                   + ") — tjs check-dates --details")
             continue
         d.section(f"{heads[sev]} ({sum(codes.values())})")
         for k, (code, n) in enumerate(sorted(codes.items(),
@@ -482,7 +493,7 @@ def render(doc: Dict[str, Any], show_all: bool = False,
             if not show_all and len(rows) > per_code:
                 d.para(f"... {len(rows) - per_code} more (--all lists "
                        f"them)", "    ")
-    if doc.get("later_years"):
+    if doc.get("later_years") and details:
         d.blank()
         d.para(f"Info: {doc['later_years']} row(s) dated after "
                f"{doc['year'] + 1}: later years' exports in the shared "
@@ -491,6 +502,9 @@ def render(doc: Dict[str, Any], show_all: bool = False,
     d.blank()
     if not doc["issues"]:
         d.para("Every date lands where its market allows.")
+    elif doc["errors"] and not details:
+        d.line(act(f"{doc['errors']} date(s) cannot be right; fix the "
+                   f"source file or the parser"))
     elif doc["errors"]:
         d.para(f"{doc['errors']} date(s) cannot be right; fix the "
                f"source file or the parser.")

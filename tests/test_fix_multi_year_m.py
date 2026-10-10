@@ -170,7 +170,8 @@ class TestCheckDatesLaterYears(unittest.TestCase):
         doc = json.loads(r.stdout)
         self.assertEqual(doc["errors"], 0, doc["counts"])
         self.assertEqual(doc["later_years"], 2)
-        r = tjs("-C", str(y), "check-dates")
+        # (the later-years note: --details, docs/output-style.md)
+        r = tjs("-C", str(y), "check-dates", "--details")
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("Info: 2 row(s) dated after 2025", r.stdout)
 

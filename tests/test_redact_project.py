@@ -197,10 +197,18 @@ class TestRedactProject(unittest.TestCase):
             "==> Copying inputs/ to inputs_redact/\n==> Redacting "), r.stdout)
         self.assertTrue(r.stdout.rstrip().endswith(
             "==> Done. Review inputs_redact/ before sharing it."), r.stdout)
-        self.assertIn("Info: margin/ib_demo.csv: 1 account id", r.stdout)
-        self.assertIn("Info: margin/broker.toml: 1 account id", r.stdout)
+        # Essentials first (docs/output-style.md): the default view is one
+        # line of totals; each file's counts moved to --details.
+        self.assertRegex(r.stdout, r"Info: \d+ of \d+ files redacted: ")
+        self.assertNotIn("Info: margin/ib_demo.csv", r.stdout)
         self.assertIn("Warning: inputs/margin/statement.xlsx not copied",
                       r.stderr)
+        d = tj(self.root, "redact", "--no-denylist", "--details", "--out",
+               str(self.tmp / "details_copy"), TAXJSON_WIDTH="100")
+        self.assertEqual(d.returncode, 0, d.stderr)
+        assert_console(self, d.stdout)
+        self.assertIn("Info: margin/ib_demo.csv: 1 account id", d.stdout)
+        self.assertIn("Info: margin/broker.toml: 1 account id", d.stdout)
         # Counts only: no identifier is printed except in the name map.
         no_map = re.sub(r"(?m)^(?:  )?inputs/.*→.*$", "", r.stdout + r.stderr)
         for s in SECRETS:

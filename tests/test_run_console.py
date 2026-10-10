@@ -51,13 +51,16 @@ class _Runs(unittest.TestCase):
         return Project(dst, country), tmp
 
     @classmethod
-    def run_of(cls, country, pending=False, **env):
-        """(project, CompletedProcess) of a full `run --no-input` on a
-        copy, once per class and key."""
-        key = (country, pending, tuple(sorted(env.items())))
+    def run_of(cls, country, pending=False, details=False, **env):
+        """(project, CompletedProcess) of a full `run --no-input` (with
+        `--details`: every message's detail lines) on a copy, once per
+        class and key."""
+        key = (country, pending, details, tuple(sorted(env.items())))
         if key not in cls._cache:
             p, tmp = cls._copy(country, pending)
-            cls._cache[key] = (p, tmp, p.run("run", "--no-input", **env))
+            cls._cache[key] = (p, tmp, p.run(
+                "run", "--no-input", *(["--details"] if details else []),
+                **env))
         return cls._cache[key][0], cls._cache[key][2]
 
     @classmethod
@@ -88,7 +91,11 @@ class TestEveryLine(_Runs):
                 self._check(r.stderr, "stderr")
 
     def test_blank_line_only_after_a_multi_line_message(self):
-        _p, r = self.run_of("canada")
+        # The default console has one-line messages (no blank line at
+        # all on this project); --details brings the multi-line ones.
+        _p, r0 = self.run_of("canada")
+        self.assertNotIn("\n\n", r0.stdout)
+        _p, r = self.run_of("canada", details=True)
         self.assertNotIn("\n\n\n", r.stdout)
         self.assertFalse(r.stdout.startswith("\n"))
         self.assertFalse(r.stdout.endswith("\n\n"))
@@ -150,8 +157,12 @@ class TestSteps(_Runs):
             "Calculating capital gains",
             "Writing holdings reports/tfsa_holdings.toml",
             "Writing summary reports/tfsa.sum"])
+        # The broker each file was read as: with --details (Essentials
+        # first; work/<acct>_detect.diag keeps it).
+        self.assertNotIn("identified as", r.stdout)
+        _p, rd = self.run_of("canada", details=True)
         self.assertIn("Info: File inputs/tfsa/rbc_direct_demo.csv → "
-                      "identified as RBC Direct Investing", r.stdout)
+                      "identified as RBC Direct Investing", rd.stdout)
         self.assertIn("\nInfo: rbc_direct_demo.csv: 7 tax objects\n",
                       r.stdout)
         # Two brokers in one account name the broker per read.
@@ -177,7 +188,17 @@ class TestSteps(_Runs):
                       "(margin)", steps)
 
     def test_closing_summary(self):
-        _p, r = self.run_of("canada")
+        # Default: one line per finding (Essentials first).
+        _p, r0 = self.run_of("canada")
+        tail = r0.stdout[r0.stdout.index("==> Before you trust"):]
+        lines = tail.splitlines()
+        self.assertTrue(lines[1].startswith(
+            "Warning: NOT in the totals: 2 sales with no purchase"), tail)
+        self.assertEqual(lines[-1], "Info: Then run `taxjson checklist` "
+                                    "(the next step); each message's "
+                                    "detail: `taxjson run --details`")
+        # --details: the long form.
+        _p, r = self.run_of("canada", details=True)
         tail = r.stdout[r.stdout.index("==> Before you trust"):]
         lines = tail.splitlines()
         self.assertTrue(lines[1].startswith(
@@ -201,8 +222,10 @@ class TestCaptured(_Runs):
         diag = (p.root / "work" / "margin_ib.json.diag").read_text()
         self.assertIn("warning: ATTENTION: ib_demo.csv: the statement has "
                       "no Cash Report", diag)
+        self.assertIn("Warning: ib_demo.csv: no Cash Report", r.stdout)
+        _p, rd = self.run_of("canada", details=True)
         self.assertIn("Warning: ib_demo.csv: the statement has no Cash "
-                      "Report", r.stdout)
+                      "Report", rd.stdout)
 
     def test_captured_bytes_do_not_depend_on_the_console(self):
         # A run shown to a person (width 100) and a run captured for a

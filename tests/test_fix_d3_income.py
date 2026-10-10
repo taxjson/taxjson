@@ -153,8 +153,18 @@ class TestEstimatePrintsTheTrustAssumption(unittest.TestCase):
                  str(root), "estimate", "--other-income", "80000"],
                 cwd=repo, capture_output=True, text=True, env=env,
                 stdin=subprocess.DEVNULL)
+            # The whole assumption: --details (Essentials first).
+            d = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                 str(root), "estimate", "--other-income", "80000",
+                 "--details"],
+                cwd=repo, capture_output=True, text=True, env=env,
+                stdin=subprocess.DEVNULL)
         self.assertEqual(r.returncode, 0, r.stderr)
-        out = " ".join(r.stdout.split())
+        # The default view states it in its one assumptions line.
+        self.assertIn("Assumes Canadian dividends (trusts' too) eligible",
+                      " ".join(r.stdout.split()))
+        out = " ".join(d.stdout.split())
         self.assertIn("trust distributions included", out)
         self.assertIn("a Canadian trust's distribution (ETF, REIT or fund "
                       "units) is grossed up as an eligible dividend", out)

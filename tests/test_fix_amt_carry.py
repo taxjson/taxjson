@@ -324,7 +324,8 @@ class TestCaChain(_CaChain):
                                places=2)
         self.assertIn("2025 close-year record",
                       amt["carry_sources"]["amt_carryover"])
-        text = _ok(cli(root, "amt")).stdout
+        # The citations in full: --details (Essentials first).
+        text = _ok(cli(root, "amt", "--details")).stdout
         for want in ("ADJUSTED TAXABLE INCOME (s.127.52)",
                      "Basic exemption (s.127.53)",
                      "MINIMUM TAX CARRYOVER (s.120.2)",
@@ -439,7 +440,8 @@ class TestCaLossChain(unittest.TestCase):
                              "--other-losses")
             text = _ok(cli(p26, "estimate", "--province", "ON")).stdout
             self.assertIn("Net capital losses carried in: 7,000.00 — "
-                          "from ../a25/filed/2025.json", text)
+                          "from ../a25/filed/2025.json",
+                          " ".join(text.split()))
             # The ledger starts 2026 from the lock's balance.
             led = json.loads(_ok(cli(p26, "carryover", "--json")).stdout)
             r25 = next(r for r in led["rows"] if r["year"] == 2025)
