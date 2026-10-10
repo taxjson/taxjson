@@ -491,6 +491,47 @@ if [ "$mode" != tree ]; then
     fail "commit message contains NUL bytes"
   fi
 fi
+if [ "$mode" = diff ] && LC_ALL=C grep -aqE '^diff --(cc|combined) ' "$RAWF"; then
+  # A merge commit's own patch (`git log -p --cc`, issue #33) is a
+  # combined diff: one prefix column per parent. A line is ADDED by the
+  # merge only when it is '+' in EVERY column (absent from all parents:
+  # the resolution wrote it); a line some parent already has is that
+  # parent's (scanned with its own commit, or already published) and
+  # becomes context; a removed line is dropped. Rewritten here into the
+  # plain unified diff every check below reads (headers, @@ counts).
+  if LC_ALL=C awk '
+    function flush(  i) {
+      if (inh) {
+        print "@@ -" st "," ctx " +" st "," (ctx + add) " @@"
+        for (i = 1; i <= nb; i++) print B[i]
+      }
+      inh = 0; nb = 0; ctx = 0; add = 0
+    }
+    /^diff --(cc|combined) / {
+      flush(); cc = 1; p = $0; sub(/^diff --(cc|combined) /, "", p)
+      print "diff --git a/" p " b/" p; next }
+    /^diff / { flush(); cc = 0; print; next }
+    !cc { print; next }
+    /^@@@+ / {
+      flush(); match($0, /^@+/); np = RLENGTH - 1
+      h = $0; sub(/ @@@+.*$/, "", h); n = split(h, F, " ")
+      r = F[n]; sub(/^\+/, "", r); split(r, Q, ","); st = Q[1] + 0
+      inh = 1; next }
+    inh && /^[-+ ]/ {
+      pre = substr($0, 1, np); body = substr($0, np + 1)
+      if (pre ~ /-/) next
+      if (pre ~ /^\++$/ && length(pre) == np) { B[++nb] = "+" body; add++ }
+      else { B[++nb] = " " body; ctx++ }
+      next }
+    inh && /^\\/ { B[++nb] = $0; next }
+    { flush(); print }
+    END { flush() }' "$RAWF" > "$RAWF.cc"; then
+    mv -f "$RAWF.cc" "$RAWF"
+  else
+    rm -f "$RAWF.cc"
+    fail "could not read a merge commit's combined diff (--cc) — the scan failed"
+  fi
+fi
 if [ "$mode" = diff ]; then
   RAW="$(tr -d '\0' < "$RAWF")"
   INPUT="$(printf '%s\n' "$RAW" | grep -E '^\+' | grep -vE '^\+\+\+ ' | sed -E 's/^\+//')"

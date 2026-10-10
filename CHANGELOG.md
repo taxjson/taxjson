@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Security
+
+- The pre-push hook scans every merge commit's own patch too (#33): a
+  value that only a merge resolution wrote, and a later commit removed,
+  is in the published history but was in neither the net diff nor the
+  per-commit pass (`git log -p --no-merges`). The per-commit pass reads
+  merges as combined diffs (`--cc`), and `scripts/check-pii.sh --diff`
+  scans the lines a merge adds against every parent; lines a parent
+  already had are that parent's commit's. The `pr-commits` CI job scans
+  a pull request's merge commits (patch, message, identities) the same
+  way; `scripts/release.sh` and `scripts/promote.sh` run the hook, so
+  they get it too.
+
 
 ## v0.28.1 (2026-10-10)
 

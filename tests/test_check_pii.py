@@ -797,6 +797,159 @@ class TestPushEveryCommitAndDiffAmounts(_Sandbox):
                 self.assertEqual(r.returncode, 0, path + r.stdout)
 
 
+class TestMergeResolutionScanned(_Sandbox):
+    """Issue #33: the per-commit pass skipped merge commits (`git log -p
+    --no-merges`), and the net diff no longer shows a value a merge
+    resolution added and a later commit removed — yet history publishes
+    it. Every merge is now scanned for the lines its result adds against
+    EVERY parent (a combined diff), so content that only the resolution
+    introduced is seen. Synthetic values only."""
+
+    # Assembled at run time: never a credential-shaped literal in the file.
+    _KEY = "sk-" + "a1b2c3d4" * 4
+    _AMT = "1" + ",234,567" + ".89"
+
+    def _commit(self, path, text, msg="c"):
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", msg)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def _remote_with_base(self):
+        remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)],
+                       check=True, env=self.env, capture_output=True)
+        self.git("remote", "add", "origin", str(remote))
+        base = self._commit("notes.txt", "safe\n", "base")
+        self.git("push", "-q", "--no-verify", "origin", "main")
+        return base
+
+    def _merge(self, *branches, resolve=None, msg="merge"):
+        """Merge BRANCHES into the current branch; RESOLVE maps path -> the
+        text the merge result holds (an "evil" resolution)."""
+        r = subprocess.run(["git", "merge", "-q", "--no-ff", "--no-commit",
+                            *branches], cwd=self.repo, capture_output=True,
+                           text=True, env=self.env)
+        for path, text in (resolve or {}).items():
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / path).write_text(text)
+        if r.returncode and not resolve:
+            self.fail(r.stdout + r.stderr)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", msg)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def _side(self, name, path, text):
+        self.git("checkout", "-q", "-b", name)
+        self._commit(path, text, name)
+        self.git("checkout", "-q", "main")
+
+    def _pre_push(self, new, old, ref="main"):
+        return subprocess.run(
+            ["bash", str(self.repo / "scripts" / "hooks" / "pre-push"),
+             "origin", "unused-url"], cwd=self.repo, capture_output=True,
+            text=True, env=self.env,
+            input=f"refs/heads/{ref} {new} refs/heads/{ref} {old}\n")
+
+    def test_credential_added_by_a_merge_then_removed_is_refused(self):
+        base = self._remote_with_base()
+        self._side("left", "left.txt", "left\n")
+        self._side("right", "right.txt", "right\n")
+        self.git("merge", "-q", "--ff-only", "left")
+        self._merge("right", resolve={"notes.txt": self._KEY + "\n"})
+        tip = self._commit("notes.txt", "safe\n", "clean final tree")
+        self.assertNotIn(self._KEY, self.git("diff", base, tip))   # net: clean
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("credential", (r.stdout + r.stderr).lower())
+        self.assertNotIn(self._KEY, r.stdout + r.stderr)
+        # the same history pushed as a NEW branch is refused too
+        r = self._pre_push(tip, "0" * 40, ref="topic")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_conflict_resolution_and_new_file_in_a_merge_are_scanned(self):
+        base = self._remote_with_base()
+        self._side("side", "notes.txt", "side\n")
+        pre = self._commit("notes.txt", "main\n")
+        for resolve in ({"notes.txt": f"main\nacct {_ACCT}\nside\n"},
+                        {"notes.txt": "main\nside\n",
+                         "docs/new.md": f"total {self._AMT}\n"},
+                        {"notes.txt": "main\nside\n",
+                         "data/s.csv": f"Account,Qty\n{_ACCT},1\n"}):
+            with self.subTest(resolve=sorted(resolve)):
+                self.git("reset", "-q", "--hard", pre)
+                self._merge("side", resolve=resolve)
+                (self.repo / "notes.txt").write_text("main\nside\n")
+                for p in resolve:
+                    if p != "notes.txt":
+                        (self.repo / p).unlink()
+                self.git("add", "-A")
+                self.git("commit", "-q", "--allow-empty", "-m", "tidy")
+                tip = self.git("rev-parse", "HEAD").strip()
+                self.assertNotIn(_ACCT, self.git("diff", base, tip))
+                r = self._pre_push(tip, base)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertNotIn(_ACCT, r.stdout + r.stderr)
+                self.assertNotIn(self._AMT, r.stdout + r.stderr)
+
+    def test_octopus_merge_resolution_is_scanned(self):
+        base = self._remote_with_base()
+        for n in ("a", "b", "c"):
+            self._side(n, f"{n}.txt", f"{n}\n")
+        self._merge("a", "b", "c", resolve={"notes.txt": self._KEY + "\n"})
+        tip = self._commit("notes.txt", "safe\n", "clean")
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn(self._KEY, r.stdout + r.stderr)
+
+    def test_clean_merges_pass(self):
+        base = self._remote_with_base()
+        self._side("side", "notes.txt", "side\n")
+        self._commit("notes.txt", "main\n")
+        self._merge("side", resolve={"notes.txt": "main\nside\n"})   # conflict
+        self._side("more", "more.txt", "more\n")
+        tip = self._merge("more")                                   # clean
+        r = self._pre_push(tip, base)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self._pre_push(tip, "0" * 40, ref="topic")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_diff_mode_reads_a_combined_diff(self):
+        # `git log -p --cc` output: only the lines the merge result adds
+        # against every parent are "added"; a line one parent already
+        # had is context (that parent's own commit was scanned).
+        self._remote_with_base()
+        self._side("side", "notes.txt", f"side {_ACCT}\n")
+        self._commit("notes.txt", "main\n")
+        self._merge("side", resolve={"notes.txt": f"main\nside {_ACCT}\nnew\n"})
+        cc = self.git("log", "-p", "--cc", "--format=", "-1")
+        self.assertIn("diff --cc notes.txt", cc)
+        r = self.scan("--diff", stdin=cc)
+        self.assertEqual(r.returncode, 0, r.stdout)     # the parent's line
+        self.git("reset", "-q", "--hard", "HEAD^")
+        self._merge("side", resolve={"notes.txt": f"main {_ACCT}\nside {_ACCT}\n"})
+        r = self.scan("--diff", stdin=self.git("log", "-p", "--cc", "--format=", "-1"))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("private denylist match", r.stdout)
+
+    def test_many_merges_stay_fast(self):
+        import time
+        base = self._remote_with_base()
+        for i in range(40):
+            self.git("checkout", "-q", "-b", f"s{i}")
+            self._commit(f"f{i}.txt", f"line {i}\n" * 50, f"s{i}")
+            self.git("checkout", "-q", "main")
+            self._commit("notes.txt", f"main {i}\n", f"m{i}")
+            self._merge(f"s{i}")
+        tip = self.git("rev-parse", "HEAD").strip()
+        t = time.monotonic()
+        r = self._pre_push(tip, base)
+        took = time.monotonic() - t
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertLess(took, 30, f"pre-push took {took:.1f}s on 40 merges")
+
+
 class TestPrivateFigureList(_Sandbox):
     """The maintainer's private figure list: `--collect-amounts` hashes the
     distinctive figures of a project's outputs into a salted SHA-256 list
@@ -1123,9 +1276,12 @@ class TestReleaseAndCiGates(unittest.TestCase):
         self.assertIn("fetch-depth: 0", job)
         run = job[job.index("run: |"):]
         for part in ('git show "$BASE_SHA:scripts/check-pii.sh"',
-                     "git log -p --no-merges", "--diff", "--message",
+                     "git log -p --cc", "--diff", "--message",
                      "--identity", 'range="$BASE_SHA..$HEAD_SHA"'):
             self.assertIn(part, run)
+        # Issue #33: merge commits are published too — their own patch,
+        # message and identities are scanned.
+        self.assertNotIn("--no-merges", run)
         self.assertNotIn("${{", run)          # event data only via env
 
     def test_workflow_actions_pinned_by_sha(self):

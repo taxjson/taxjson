@@ -133,7 +133,8 @@ scripts/check-pii.sh --collect-amounts path/to/project-2025 path/to/project-2026
 ```
 
 (it merges into the existing list). Every check-pii mode — the tree scan
-in `ci.sh`, the pre-push diff and per-commit scan, commit and tag
+in `ci.sh`, the pre-push diff and per-commit scan (merge commits
+included: the lines a merge adds against every parent), commit and tag
 messages, ref names — then refuses a line holding one of those figures,
 naming the file and line ("matches a figure from your own books") but
 never the figure. There is no `pii-ok` escape: if a synthetic number
