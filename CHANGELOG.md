@@ -5,6 +5,7 @@
 ### Fixed
 
 - Tests: every test process runs with full-length messages (`TAXJSON_WIDTH=0` unless a test sets its own), as the local gate does, so GitHub CI and `scripts/ci.sh` agree again.
+- Tests: the new-user tests start taxjson through the launcher that uses `-P` only on Python 3.11+, so they run on 3.9 and 3.10.
 
 
 ## v0.28.0 (2026-10-10)

@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from _style import CapturedWidth
+from taxjson.lib.dispatch import python_module_argv  # -P only on 3.11+
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = str(REPO / "src")
@@ -45,7 +46,7 @@ def _env(**extra):
 
 def _cli(*args, cwd=None, env=None, stdin=subprocess.DEVNULL):
     return subprocess.run(
-        [sys.executable, "-P", "-m", "taxjson.bin.taxjson_run", *args],
+        python_module_argv("taxjson.bin.taxjson_run", args),
         cwd=cwd, stdin=stdin, capture_output=True, text=True,
         env=env or _env())
 
