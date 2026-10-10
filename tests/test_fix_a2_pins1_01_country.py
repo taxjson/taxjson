@@ -279,7 +279,7 @@ class TestUsCryptoRecomputes(unittest.TestCase):
             _project(root, "usa", _CRYPTO_US)
             _run(self, root)
             a = _cli(root, "audit", "--json")
-            c = _cli(root, "close-year")
+            c = _cli(root, "close-year", "--yes")
             self.assertEqual(c.returncode, 0, c.stderr[-1500:])
             f = _cli(root, "check-filed")
         self.assertEqual(a.returncode, 0, a.stdout[-1500:])

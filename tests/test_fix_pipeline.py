@@ -138,7 +138,7 @@ class TestAccountTypeCheckedEverywhere(unittest.TestCase):
     def test_filing_commands_refuse_an_invalid_type(self):
         for args in (("estimate",), ("instalments",), ("sum",),
                      ("sum", "margin"), ("form-export",),
-                     ("carryover",), ("close-year",), ("checklist",),
+                     ("carryover",), ("close-year", "--yes",), ("checklist",),
                      ("t1135",)):
             with self.subTest(args=args):
                 self._refused(*args)

@@ -528,7 +528,7 @@ class TestExitCodes(_Built):
                   ["carryover", "--claimed", "nope.txt"],
                   ["handoff", "--prior", "nope.json"],
                   ["redact", "nope.csv"],
-                  ["close-year", "--force", "--filed-dispositions",
+                  ["close-year", "--yes", "--force", "--filed-dispositions",
                    "nope.csv"]):
             with self.subTest(a=a):
                 self.assertOneLine(self.cli(root, *a), 2)

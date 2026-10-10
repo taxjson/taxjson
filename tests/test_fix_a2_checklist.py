@@ -153,7 +153,7 @@ class TestPlanningEditsKeepBooksCurrent(_Built):
         (p / "taxjson.toml").write_text(t)
         self.assertEqual(cl.d_run_clean(ctx(p)).status, "done")
         # close-year no longer refuses on it
-        r = tj(p, "close-year", check=False)
+        r = tj(p, "close-year", "--yes", check=False)
         self.assertNotIn("not the clean result", r.stderr)
 
     def test_a_run_setting_is_stale(self):
@@ -427,7 +427,7 @@ class TestLocks(unittest.TestCase):
         book = BOOK.replace("2025-", f"{y}-")
         with tempfile.TemporaryDirectory() as td:
             p = make_project(Path(td), toml=TOML.replace("2025", str(y)), book=book)
-            r = tj(p, "close-year", "--force")
+            r = tj(p, "close-year", "--yes", "--force")
             c = ctx(p, today=date.today(), year=y)
             for sid in ("filed-lock", "lock-committed"):
                 res = cl.DETECTORS[sid](c)
@@ -772,7 +772,7 @@ class TestOptionBoundaryPriorYearRecord(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             p25 = make_project(base / "p2025", toml=TOML, book=self.TT)
-            tj(p25, "close-year")
+            tj(p25, "close-year", "--yes")
             outs = {}
             for name, extra, local in (("w", 'prior_year_record = "../p2025/filed/2025.json"\n', False),
                                        ("x", "", True)):

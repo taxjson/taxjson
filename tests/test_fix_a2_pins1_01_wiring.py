@@ -158,7 +158,7 @@ class TestCorporateDistributionsInLocks(unittest.TestCase):
             _corp_project(p25, csv=csv)
             r = _cli(p25, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-1500:])
-            c = _cli(p25, "close-year")
+            c = _cli(p25, "close-year", "--yes")
             self.assertEqual(c.returncode, 0, c.stderr[-1500:])
             lock = json.loads((p25 / "filed" / "2025.json").read_text())
             self.assertAlmostEqual(lock["totals"]["realized"], 0.0,

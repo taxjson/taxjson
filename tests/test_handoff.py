@@ -61,7 +61,7 @@ class TestHandoff(unittest.TestCase):
                            {"questrade.csv": Y2024})
         r = _run_cli(cls.p24, "run", "--no-input")
         assert r.returncode == 0, r.stderr
-        r = _run_cli(cls.p24, "close-year")
+        r = _run_cli(cls.p24, "close-year", "--yes")
         assert r.returncode == 0, r.stderr
         cls.record = json.loads(
             (cls.p24 / "filed" / "2024.json").read_text())
@@ -153,14 +153,14 @@ class TestHandoff(unittest.TestCase):
             csvp = Path(td) / "filed.csv"
             csvp.write_text("symbol,date,qty,proceeds,cost,gain\n"
                             "ABC,2024-12-27,50,1100,1000,100\n")
-            r = _run_cli(p, "close-year", "--force",
+            r = _run_cli(p, "close-year", "--yes", "--force",
                          "--filed-dispositions", str(csvp))
             self.assertEqual(r.returncode, 0, r.stderr)
             rec = json.loads((p / "filed" / "2024.json").read_text())
             self.assertEqual(rec["filed_totals"]["gain"], 100.0)
             bad = Path(td) / "bad.csv"
             bad.write_text("symbol,qty\nABC,1\n")
-            r = _run_cli(p, "close-year", "--force",
+            r = _run_cli(p, "close-year", "--yes", "--force",
                          "--filed-dispositions", str(bad))
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("missing column", r.stderr)

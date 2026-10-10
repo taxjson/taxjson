@@ -508,7 +508,7 @@ class TestCloseYearAndHandoffPins(unittest.TestCase):
                            {"questrade.csv": Y2025})
         r = _run_cli(cls.p25, "run", "--no-input")
         assert r.returncode == 0, r.stderr
-        r = _run_cli(cls.p25, "close-year")
+        r = _run_cli(cls.p25, "close-year", "--yes")
         assert r.returncode == 0, r.stderr
         cls.rec_path = cls.p25 / "filed" / "2025.json"
         cls.record = json.loads(cls.rec_path.read_text())
@@ -654,7 +654,7 @@ class TestCloseYearAccountOrder(unittest.TestCase):
                     + "\n".join(rs) + "\n")
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-            r = _run_cli(root, "close-year")
+            r = _run_cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertRegex((r.stdout + r.stderr).lower(), r"disallowed:? +0\.00")
             rec = json.loads((root / "filed" / "2025.json").read_text())

@@ -19184,6 +19184,24 @@ def _filed_run_gains(cmd_tail, out_path):
                 capture_diag=False)
 
 
+def _close_year_attention(root: Path, cfg: Dict[str, Any],
+                          year: int) -> List[Tuple[str, str]]:
+    """(step id, what it found) for each checklist step before the lock
+    (lib/checklist, the steps ahead of filed-lock) whose result, marks
+    applied, needs attention."""
+    from taxjson.lib import checklist as cl
+    ids = cl.item_ids()
+    only = ids[:ids.index("filed-lock")] if "filed-lock" in ids else ids
+    ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=date_cls.today(),
+                 run_sub=cl.default_run_sub(root))
+    try:
+        results = cl.evaluate(ctx, only=only, progress=cl.stderr_progress)
+    except cl.StateFileError as e:
+        return [("checklist.json", str(e))]
+    return [(r.id, " ".join(str(r.detail or "").split()))
+            for r in results if r.effective == "attention"]
+
+
 def cmd_close_year(args: argparse.Namespace) -> None:
     """`taxjson close-year`: snapshot the current tax year's per-account
     filing aggregates to filed/<year>.json (the filed-year lock)."""
@@ -19367,6 +19385,26 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         _out.warn(f"tax year {year} has not ended — locking a partial "
                   f"year (--force)", prog=_prog,
                   details=[f"Later trades in {year} will show as drift."])
+    # The checklist's steps before the lock that need attention: listed
+    # and confirmed on a terminal; without one, refused unless --yes
+    # (new-user walkthrough: a year was locked with them open).
+    if not getattr(args, "yes", False):
+        _attn = _close_year_attention(root, cfg, int(year))
+        if _attn:
+            _head = (f"{len(_attn)} checklist item(s) before the lock need "
+                     f"attention")
+            _items = [f"- {sid}: {detail}" for sid, detail in _attn]
+            if not sys.stdin.isatty():
+                _die(_head, *_items,
+                     f"Fix them (`{_PROG} checklist` says how), or pass "
+                     f"--yes to lock {year} anyway. {_nothing}")
+            _out.warn(_head, prog=_prog, details=_items)
+            try:
+                _ans = input(f"Lock {year} anyway? [y/N] ")
+            except EOFError:
+                _ans = ""
+            if not _ans.strip().lower().startswith("y"):
+                _die(f"{year} not locked", _nothing)
     print(f"Recording year-end positions and the {year} dispositions "
           f"for the {int(year) + 1} hand-off ...")
     try:
@@ -26000,6 +26038,10 @@ def _build_parser(prog: str = "taxjson"
     p_close.add_argument("--force", action="store_true",
                          help="Replace an existing lock (re-filed/"
                               "amended years only)")
+    p_close.add_argument("--yes", action="store_true",
+                         help="Lock even when checklist steps before the "
+                              "lock need attention (they are listed and, "
+                              "on a terminal, asked about)")
     p_close.add_argument("--filed-dispositions", metavar="CSV",
                          help="The dispositions the return actually "
                               "reported, when it was prepared with another "

@@ -258,7 +258,7 @@ class TestFiledYears(_Runs):
         import json
         p, tmp = self._copy("canada")
         self.addCleanup(shutil.rmtree, tmp, True)
-        c = p.run("close-year", "--force")
+        c = p.run("close-year", "--yes", "--force")
         self.assertEqual(c.returncode, 0, c.stderr)
         r = p.run("run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr)

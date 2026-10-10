@@ -403,11 +403,11 @@ class TestRunStateSurfaced(unittest.TestCase):
                 self.assertIn("not the clean result", r.stderr, cmd)
             j = json.loads(_cli(root, "sum", "--json").stdout)
             self.assertTrue(j["run_state_problems"])
-            r = _cli(root, "close-year")
+            r = _cli(root, "close-year", "--yes")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("inputs changed", r.stderr)
             self.assertFalse((root / "filed").exists())
-            r = _cli(root, "close-year", "--force")
+            r = _cli(root, "close-year", "--yes", "--force")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("warning: locking books", r.stderr)
             r = _cli(root, "check-filed")
@@ -423,7 +423,7 @@ class TestRunStateSurfaced(unittest.TestCase):
                 self.assertEqual(
                     _cli(root, "run", "--account", a,
                          "--no-input").returncode, 0)
-            r = _cli(root, "close-year")
+            r = _cli(root, "close-year", "--yes")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("unblended", r.stderr)
 

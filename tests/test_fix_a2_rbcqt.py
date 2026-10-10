@@ -200,7 +200,7 @@ class TestRbcCloseContractEndToEnd(unittest.TestCase):
                            {"rbc_2024.csv": HDR + OPT_BUY})
         r = _cli_run(cls.p24, "run", "--no-input")
         assert r.returncode == 0, r.stdout + r.stderr
-        r = _cli_run(cls.p24, "close-year", "--force")
+        r = _cli_run(cls.p24, "close-year", "--yes", "--force")
         assert r.returncode == 0, r.stdout + r.stderr
         cls.rec = cls.p24 / "filed" / "2024.json"
 

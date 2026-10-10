@@ -89,7 +89,7 @@ class TestShelteredRerunStaleness(unittest.TestCase):
             self.assertIn("sheltered_base.json", s.stderr)
             f = _cli(root, "form-export")
             self.assertIn("stale", f.stderr)
-            c = _cli(root, "close-year")
+            c = _cli(root, "close-year", "--yes")
             self.assertNotEqual(c.returncode, 0, c.stdout)
             # Either guard may fire first: the run-state check (inputs
             # changed since the last full run) or the STALE wash check.

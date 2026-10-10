@@ -224,7 +224,7 @@ class TestAccountOrderFollowsToml(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "p"
             shutil.copytree(self.roots["zeta_first"], root)
-            r = _cli(root, "close-year")
+            r = _cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             r = _cli(root, "check-filed")
             self.assertEqual(r.returncode, 0,
@@ -447,7 +447,7 @@ class TestOptionTimingForwarded(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "p"
             shutil.copytree(self.root, root)
-            r = _cli(root, "close-year")
+            r = _cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             lock = json.loads((root / "filed" / "2025.json").read_text())
         pos = lock["year_end"]["equity"][_CALL]
@@ -569,7 +569,7 @@ class TestHandoffAppliesPhantoms(unittest.TestCase):
             p25 = _project(Path(td) / "p25", ["margin"], {"margin": book},
                            extra_files={_PH_FILE: _PHANTOMS})
             self.assertEqual(_cli(p25, "run", "--no-input").returncode, 0)
-            r = _cli(p25, "close-year")
+            r = _cli(p25, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             p26 = _project(
                 Path(td) / "p26", ["margin"], {"margin": book + (

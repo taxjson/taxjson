@@ -72,7 +72,7 @@ class TestCloseYearRoundsOnce(unittest.TestCase):
             _project(root, accounts)
             _run(self, root)
             w = _cli(root, "wash-sales", "--json")
-            c = _cli(root, "close-year")
+            c = _cli(root, "close-year", "--yes")
             self.assertEqual(c.returncode, 0, c.stderr[-1500:])
             lock = json.loads((root / "filed" / "2025.json").read_text())
             f = _cli(root, "check-filed")
@@ -94,7 +94,7 @@ class TestCloseYearForceRefusesUnblendedBooks(unittest.TestCase):
             _project(root, {"a": ("taxable", tt), "b": ("taxable", tt)})
             for acct in ("a", "b"):
                 _run(self, root, "--account", acct)
-            c = _cli(root, "close-year", "--force")
+            c = _cli(root, "close-year", "--yes", "--force")
             locked = (root / "filed" / "2025.json").exists()
         self.assertNotEqual(c.returncode, 0, c.stdout[-1500:])
         self.assertIn("only has per-account (pre-wash, unblended) gains",

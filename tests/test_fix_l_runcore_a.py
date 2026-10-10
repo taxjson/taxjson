@@ -112,7 +112,7 @@ class TestSettingsCheckedByEveryReader(unittest.TestCase):
                 (root / "taxjson.toml").write_text(cfg.replace(
                     "source_currencies = []\n",
                     f"source_currencies = []\n{line}\n"))
-                for cmd in (("option-boundary",), ("close-year",)):
+                for cmd in (("option-boundary",), ("close-year", "--yes",)):
                     r = _run_cli(root, *cmd)
                     self.assertNotEqual(r.returncode, 0, r.stdout)
                     self.assertIn("option_", r.stderr)

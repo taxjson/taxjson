@@ -17,6 +17,9 @@
 
 ### Fixed
 
+- `taxjson close-year` no longer locks a year while checklist steps
+  before the lock need attention: it lists them and asks on a terminal;
+  without one it refuses unless `--yes`.
 - The installer's closing recipe built `~/taxes/2026/2026/`: it is now
   `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada && cd
   2026`. `taxjson init` in an empty folder named like a year refuses,

@@ -213,6 +213,61 @@ class TestGrantSinceInANewProject(unittest.TestCase):
         self.assertNotIn("is after year", r.stdout + r.stderr)
 
 
+# ------------------------------------ 7. close-year with open items
+class TestCloseYearWithAttentionItems(unittest.TestCase):
+    """close-year lists the checklist steps before the lock that need
+    attention; without a terminal it refuses unless --yes, on one it
+    asks."""
+
+    def _project(self):
+        root = _tmp(self)
+        (root / "inputs" / "margin").mkdir(parents=True)
+        (root / "inputs" / "margin" / "m.tt").write_text(
+            "BUYSELL 2025-02-03 10:00:00 QZA.TO 100 CAD 10 -1000.00 0.00\n"
+            "BUYSELL 2025-06-03 10:00:00 QZA.TO -100 CAD 12 1200.00 0.00\n")
+        (root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            'base_currency = "CAD"\nsource_currencies = []\n'
+            '\n[accounts.margin]\ntype = "taxable"\n')
+        r = _cli("-C", str(root), "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return root
+
+    def test_refused_without_a_terminal_listing_the_items(self):
+        root = self._project()
+        r = _cli("-C", str(root), "close-year")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("checklist item(s) before the lock need attention",
+                      r.stderr)
+        self.assertIn("- inputs-committed: not a git repository", r.stderr)
+        self.assertIn("pass --yes to lock 2025 anyway", r.stderr)
+        self.assertFalse((root / "filed" / "2025.json").exists())
+        r = _cli("-C", str(root), "close-year", "--yes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((root / "filed" / "2025.json").exists())
+
+    def test_a_terminal_is_asked(self):
+        import argparse
+        from taxjson.bin import taxjson_run as R
+        root = self._project()
+        for answer, locked in (("n", False), ("y", True)):
+            with self.subTest(answer=answer), \
+                    mock.patch.object(R.sys.stdin, "isatty",
+                                      lambda: True), \
+                    mock.patch("builtins.input",
+                               lambda _p: answer) as _i, \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                try:
+                    R.cmd_close_year(argparse.Namespace(
+                        dir=str(root), year=None, force=False,
+                        filed_dispositions=None, yes=False))
+                except SystemExit:
+                    pass
+                self.assertEqual((root / "filed" / "2025.json").exists(),
+                                 locked, err.getvalue())
+
+
 # ------------------------------------------------ 4. one number, two brokers
 class TestSameNumberAtTwoBrokers(unittest.TestCase):
     """A Questrade and a Webull export that print the same account

@@ -125,7 +125,7 @@ class TestCloseYearRefusesBrokenBooks(_Base):
         import shutil
         p = self.copy("noreports")
         shutil.rmtree(p / "reports")
-        r = _run_cli(p, "close-year")
+        r = _run_cli(p, "close-year", "--yes")
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertIn("reports/", r.stderr)
         self.assertIn("Nothing was written", r.stderr)
@@ -140,7 +140,7 @@ class TestCloseYearRefusesBrokenBooks(_Base):
         st = b.stat()
         b.write_text(b.read_text()[:50])
         os.utime(b, (st.st_atime, st.st_mtime))
-        r = _run_cli(p, "close-year")
+        r = _run_cli(p, "close-year", "--yes")
         self.assertNotEqual(r.returncode, 0, r.stdout)
         # Either stop names the damaged book: the unreadable-file check,
         # or (GitHub #15) the stale check, since the blended pass's
@@ -159,7 +159,7 @@ class TestHandoffBrokenBooks(_Base):
         # deleted /tmp merge file.
         import os
         p = self.copy("hb")
-        r = _run_cli(p, "close-year")
+        r = _run_cli(p, "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
         rec = p / "filed" / "2025.json"
         q = _project(self.base / "hb26", 2026, TT25,
@@ -205,7 +205,7 @@ class TestPriorLockTiming(unittest.TestCase):
                           if since25[1] else ""))
         r = _run_cli(p25, "run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr)
-        r = _run_cli(p25, "close-year")
+        r = _run_cli(p25, "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
         p26 = _project(base / "p26", 2026, OPT_TT26,
                        'prior_year_record = "../p25/filed/2025.json"\n'
@@ -278,13 +278,13 @@ class TestCloseYearForce(_Base):
         csvp = p / "filed.csv"
         csvp.write_text("symbol,date,qty,proceeds,cost,gain\n"
                         "SOLD,2025-06-02,10,900,1000,-100\n")
-        r = _run_cli(p, "close-year", "--filed-dispositions", str(csvp))
+        r = _run_cli(p, "close-year", "--yes", "--filed-dispositions", str(csvp))
         self.assertEqual(r.returncode, 0, r.stderr)
         lock = p / "filed" / "2025.json"
         doc = json.loads(lock.read_text())
         doc["totals"]["realized"] = -90.0          # what was filed
         lock.write_text(json.dumps(doc))
-        r = _run_cli(p, "close-year", "--force")
+        r = _run_cli(p, "close-year", "--yes", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         new = json.loads(lock.read_text())
         self.assertEqual(len(new["filed_dispositions"]), 1)
@@ -301,19 +301,19 @@ class TestCloseYearForce(_Base):
         # A2-1138: a UTF-16 (Excel "Unicode Text") save is read.
         u = p / "u16.csv"
         u.write_bytes(good.replace(",", "\t").encode("utf-16"))
-        r = _run_cli(p, "close-year", "--filed-dispositions", str(u))
+        r = _run_cli(p, "close-year", "--yes", "--filed-dispositions", str(u))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads((p / "filed" / "2025.json").read_text())
                          ["filed_totals"]["gain"], 10.0)
         # A directory: one line, exit 2, no traceback.
-        r = _run_cli(p, "close-year", "--force", "--filed-dispositions",
+        r = _run_cli(p, "close-year", "--yes", "--force", "--filed-dispositions",
                      str(p / "inputs"))
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertNotIn("Traceback", r.stderr)
         # A2-1136: a stray quote merged rows and dropped one in silence.
         bad = p / "bad.csv"
         bad.write_text(good.replace("AAA,", '"AAA,', 1))
-        r = _run_cli(p, "close-year", "--force", "--filed-dispositions",
+        r = _run_cli(p, "close-year", "--yes", "--force", "--filed-dispositions",
                      str(bad))
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("unescaped quote", r.stderr)
@@ -327,7 +327,7 @@ class TestPartialYearRecord(unittest.TestCase):
             base = Path(td)
             p = _project(base / "p", 2025, TT25)
             self.assertEqual(_run_cli(p, "run", "--no-input").returncode, 0)
-            self.assertEqual(_run_cli(p, "close-year").returncode, 0)
+            self.assertEqual(_run_cli(p, "close-year", "--yes").returncode, 0)
             lock = p / "filed" / "2025.json"
             doc = json.loads(lock.read_text())
             doc["closed_at"] = "2025-10-01T20:30:42"
@@ -360,7 +360,7 @@ currency="Currency"
 def _year_end(p, year):
     r = _run_cli(p, "run", "--no-input")
     assert r.returncode == 0, r.stderr
-    r = _run_cli(p, "close-year")
+    r = _run_cli(p, "close-year", "--yes")
     assert r.returncode == 0, r.stderr
     return json.loads((p / "filed" / f"{year}.json").read_text()
                       )["year_end"]["equity"]
@@ -483,7 +483,7 @@ class TestHandoffMatching(unittest.TestCase):
 
     def _closed(self, csv, extra=""):
         p = _qt_project(self.base / "p25", 2025, csv, extra)
-        r = _run_cli(p, "close-year")
+        r = _run_cli(p, "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
         return p / "filed" / "2025.json"
 
@@ -553,7 +553,7 @@ class TestHandoffMatching(unittest.TestCase):
         csvp = self.base / "filed.csv"
         csvp.write_text("symbol,date,qty,proceeds,cost,gain\n"
                         "ABC.TO,2025-12-31,100,5000,4000,1000\n")
-        r = _run_cli(p, "close-year", "--filed-dispositions", str(csvp))
+        r = _run_cli(p, "close-year", "--yes", "--filed-dispositions", str(csvp))
         self.assertEqual(r.returncode, 0, r.stderr)
         rc, rep = self._handoff(p / "filed" / "2025.json", h + (
             _qt("2025-12-31", "2026-01-02", "Sell", "ABC.TO", -100, 50.0)
@@ -626,7 +626,7 @@ class TestHandoffAcrossDec31(unittest.TestCase):
         p25 = _project(self.base / "p25", 2025)
         (p25 / "inputs" / "margin" / "q25.csv").write_text(f25)
         self.assertEqual(_run_cli(p25, "run", "--no-input").returncode, 0)
-        r = _run_cli(p25, "close-year")
+        r = _run_cli(p25, "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
         p26 = _project(self.base / "p26", 2026, "",
                        'prior_year_record = "../p25/filed/2025.json"\n')
@@ -644,7 +644,7 @@ class TestHandoffAcrossDec31(unittest.TestCase):
         (p25b / "inputs" / "margin" / "q25.csv").write_text(f25)
         (p25b / "inputs" / "margin" / "q26.csv").write_text(f26)
         self.assertEqual(_run_cli(p25b, "run", "--no-input").returncode, 0)
-        self.assertEqual(_run_cli(p25b, "close-year").returncode, 0)
+        self.assertEqual(_run_cli(p25b, "close-year", "--yes").returncode, 0)
         t = (p26 / "taxjson.toml").read_text().replace("../p25/", "../p25b/")
         (p26 / "taxjson.toml").write_text(t)
         r = _run_cli(p26, "handoff", "--json")
@@ -660,7 +660,7 @@ class TestHandoffAcrossDec31(unittest.TestCase):
         p25 = _project(self.base / "p25", 2025, TT25
                        + "BUYSELL 2026-01-02 09:30:00 QZQ.TO 50 CAD 10 500 0\n")
         self.assertEqual(_run_cli(p25, "run", "--no-input").returncode, 0)
-        r = _run_cli(p25, "close-year")
+        r = _run_cli(p25, "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
         p26 = _project(self.base / "p26", 2026, TT25 + (
             "BUYSELL 2025-12-31 19:00:00 ETH.TO 1 CAD 4000 4000 0\n"
@@ -690,7 +690,7 @@ class TestHandoffAcrossDec31(unittest.TestCase):
                        'ric_january_dividends = ["VTI.US 2026-01-05"]\n',
                        country="usa", cur="USD")
         self.assertEqual(_run_cli(p25, "run", "--no-input").returncode, 0)
-        r = _run_cli(p25, "close-year")
+        r = _run_cli(p25, "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stderr)
         p26 = _project(self.base / "p26", 2026, tt,
                        'prior_year_record = "../p25/filed/2025.json"\n',

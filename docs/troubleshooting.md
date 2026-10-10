@@ -1654,6 +1654,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_reconcile_slips`; `src/taxjson/lib/checklist.py` — `slip_files`
 
+### `tjs close-year`: "Error: 3 checklist item(s) before the lock need attention" followed by "- inputs-committed: not a git repository" and the like
+- **Check:** `tjs checklist` shows the same steps `[!]`.
+- **Cause:** the lock records the filed year; a step before it that needs attention (inputs not committed, missing history, an undecided send …) usually means the books are not final. Earlier releases locked the year without a word.
+- **Fix:** fix the items (the checklist says how), mark one `--done` or `--skip` when it truly does not apply, then close. To lock anyway: on a terminal answer `y`; in a script pass `--yes`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_close_year_attention`, `cmd_close_year`, `checklist item(s) before the lock need`
+
 ### `tjs handoff`: "Error: no prior-year record at filed/2024.json"
 - **Check:** `tjs checklist` step `handoff` says "no 2024 record".
 - **Cause:** handoff compares this year's opening positions with last year's lock, and there is none (first year with taxjson, or `close-year` was never run there).
