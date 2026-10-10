@@ -21716,8 +21716,14 @@ def _last_loss_line(ll) -> Optional[str]:
             + f") — {_inout}.")
 
 
+# A buy-check line's trailing caveat on the window a buy starts: the
+# --details view (docs/output-style.md, Essentials first).
+_FUTURE_CAVEAT = " (Any buy starts a 30-day window: "
+
+
 def _print_check_results(results: List[Dict[str, Any]],
-                         country: str) -> None:
+                         country: str, details: bool = True,
+                         cmd: str = "") -> None:
     """buy-check / sell-check text: per symbol a `SYMBOL: VERDICT` line
     and its detail lines as `- ` items (a radar note quoted in one as
     its own `Info:` item), a blank line between symbols, then the scope
@@ -21732,9 +21738,15 @@ def _print_check_results(results: List[Dict[str, Any]],
             lines.append("")
         lines.append(f"{r['symbol']}: {r['verdict']}")
         for ln in r["detail"]:
+            if not details:
+                ln = ln.split(_FUTURE_CAVEAT, 1)[0]
             lines += advisory_lines(ln, w, "- ", "  ")
-    lines.append("")
-    lines += scope_lines(country, w)
+    if details:
+        lines.append("")
+        lines += scope_lines(country, w)
+    else:
+        from taxjson.lib.wash_scope import scope_more
+        lines += out.wrap(scope_more(f"tjs {cmd} --details", country), w)
     print("\n".join(lines))
 
 
@@ -21988,7 +22000,8 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out({"results": results, "scope_note": _scope})
     else:
-        _print_check_results(results, "usa" if _usa else "canada")
+        _print_check_results(results, "usa" if _usa else "canada",
+                             _details(args), "buy-check")
     if unsafe:
         raise SystemExit(1)
 
@@ -22183,7 +22196,8 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out({"results": results, "scope_note": _scope})
     else:
-        _print_check_results(results, "usa" if _usa else "canada")
+        _print_check_results(results, "usa" if _usa else "canada",
+                             _details(args), "sell-check")
     if unsafe:
         raise SystemExit(1)
 

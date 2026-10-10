@@ -40,7 +40,7 @@ from taxjson.lib.price_chain import is_crypto_symbol
 from taxjson.lib.ticker_map import is_option_ticker
 from taxjson.lib import out as _out
 from taxjson.lib.wash_scope import (advisory_lines, advisory_parts,
-                                    scope_lines,
+                                    scope_lines, scope_more,
                                     scope_note)
 
 # UTC-noon epoch helpers: shared home in lib/dates (the DST rationale
@@ -2360,9 +2360,7 @@ def _render_brief(sections, by_cat, country: str, as_of: str,
             doc.line(a)
     if not acts:
         doc.blank()
-    doc.para(_out.details_hint(
-        "tjs wash-radar --details",
-        "each verdict; accounts outside the project are not checked"))
+    doc.para(scope_more("tjs wash-radar --details", country))
     return doc
 
 

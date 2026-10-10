@@ -77,6 +77,34 @@ class TestWashRadar(_Base):
                       _flat(r["canada"].stdout))
 
 
+class TestBuySellCheck(_Base):
+    def test_default_is_concise(self):
+        for args in (("buy-check", "QZQ{sfx}"), ("sell-check", "SAMPA{sfx}")):
+            for c, r in self.run_both(*args, ok=(0, 1)).items():
+                with self.subTest(country=c, args=args):
+                    assert_concise(self, r.stdout, r.stderr)
+                    self.assertNotIn("Any buy starts", r.stdout)
+                    last = r.stdout.strip().splitlines()[-1]
+                    self.assertIn("not checked:", last)
+                    self.assertIn("s.251.1" if c == "canada"
+                                  else "Pub. 550", last)
+
+    def test_details_keep_the_notes(self):
+        r = self.run_both("buy-check", "QZQ{sfx}", details=True, ok=(0, 1))
+        for c in r:
+            self.assertIn("Any buy starts a 30-day window",
+                          _flat(r[c].stdout))
+            self.assertIn("these verdicts cover this project's accounts "
+                          "only", _flat(r[c].stdout))
+
+
+class TestScopeInDefaultViews(_Base):
+    def test_radar_and_harvest_name_the_scope(self):
+        for c, r in self.run_both("wash-radar").items():
+            self.assertIn("s.251.1" if c == "canada" else "Pub. 550",
+                          r.stdout.strip().splitlines()[-1])
+
+
 def _no_box_rules(text):
     # The audit's ══ / ── rules are rules (lib/out.classify counts only
     # ASCII rules as such).

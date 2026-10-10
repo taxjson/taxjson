@@ -549,7 +549,8 @@ class TestCanBuy(unittest.TestCase):
     def test_unknown_symbol_is_safe_with_forward_note(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
-            r = _cli(root, "buy-check", "ZZZT")
+            # The note on the window a buy starts: --details.
+            r = _cli(root, "buy-check", "ZZZT", "--details")
         self.assertEqual(r.returncode, 0)
         self.assertIn("no wash exposure", r.stdout)
         self.assertIn("30-day window", r.stdout)

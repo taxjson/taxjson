@@ -570,7 +570,14 @@ class TestWatchStatesItsScope(unittest.TestCase):
             self.assertTrue(last.startswith("Scope:"), w.stdout)
             self.assertIn(must, last)
             self.assertNotIn(must_not, last)
+            # The default view closes with the scope in a few words;
+            # --details with the whole paragraph (Essentials first).
             s = self._tj(root, "sell-check", sym)
+            last = s.stdout.strip().splitlines()[-1]
+            self.assertIn("not checked:", last, s.stdout)
+            self.assertIn(must, last)
+            self.assertNotIn(must_not, last)
+            s = self._tj(root, "sell-check", sym, "--details")
             last = s.stdout.strip().splitlines()[-1]
             self.assertTrue(last.startswith("Scope:"), s.stdout)
             self.assertIn(must, last)

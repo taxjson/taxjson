@@ -263,7 +263,8 @@ class TestChecksFollowTheRadar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = projects_both(td, year=2026, files=_base_files(rows))
             sell = cli_both(p, "sell-check", "BND.US", "--json")
-            buy = cli_both(p, "buy-check", "ZZZ.US")
+            # The window-a-buy-starts note: --details.
+            buy = cli_both(p, "buy-check", "ZZZ.US", "--details")
         v = {c: json.loads(sell[c].stdout)["results"][0]
              for c in COUNTRIES}
         self.assertEqual(v["canada"]["verdict"], "ACTION", sell["canada"])

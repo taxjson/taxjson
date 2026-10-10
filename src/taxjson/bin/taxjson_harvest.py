@@ -710,7 +710,7 @@ def main(argv: Optional[List[str]] = None,
     # the set stays empty there — the two countries never mix.
     wash_exempt_accounts = (set(args.crypto_account) if is_usa
                             else set())
-    from taxjson.lib.wash_scope import scope_note
+    from taxjson.lib.wash_scope import scope_more, scope_note
     _scope = scope_note(args.country)
 
     files = [Path(f) for f in args.files]
@@ -1173,9 +1173,7 @@ def main(argv: Optional[List[str]] = None,
             if _flag_n:
                 doc.line(out.act(f"{_flag_n} position(s) flagged for a "
                                  f"manual check", _hd))
-            doc.para(out.details_hint(
-                _hd, "columns, notes; accounts outside the project are "
-                     "not checked"))
+            doc.para(scope_more(_hd, args.country))
             doc.print()
             return 0
         if _risk_now > 0.005:
@@ -1197,10 +1195,7 @@ def main(argv: Optional[List[str]] = None,
     if args.brief:
         # No loss: no action line; the long form is --details.
         doc.blank()
-        doc.para(out.details_hint(
-            "tjs harvest --details",
-            "columns, notes; accounts outside the project are not "
-            "checked"))
+        doc.para(scope_more("tjs harvest --details", args.country))
         doc.print()
         return 0
     # What the columns mean.

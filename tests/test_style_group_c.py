@@ -168,7 +168,8 @@ class TestBuySellCheckStyle(unittest.TestCase):
             for args in (("buy-check", f"QZQ{sfx}", f"SAMPA{sfx}"),
                          ("sell-check", f"SAMPA{sfx}", f"QZQ{sfx}")):
                 with self.subTest(country=country, args=args):
-                    r = project(country).run(*args)
+                    # The scope paragraph: --details (Essentials first).
+                    r = project(country).run(*args, "--details")
                     self.assertIn(r.returncode, (0, 1), r.stderr)
                     assert_styled(self, r.stdout)
                     lines = r.stdout.splitlines()
