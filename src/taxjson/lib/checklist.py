@@ -1075,10 +1075,35 @@ def _empty_manifest(p: Path) -> bool:
         return False
 
 
+# The fingerprint entry of the filed-year locks a US gains run reads
+# (not a file: the set of locked years, see _locked_years_entry).
+LOCKED_YEARS_KEY = "filed/ (locked years)"
+
+
+def _locked_years_entry(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """The locked years a US gains run is given (`--locked-year`, one
+    per filed/<year>.json and the prior_year_record lock; US-WASH-22):
+    a new or removed lock moves a wash-sale basis add between years
+    with no input file changed (issue #32). What the engine reads of a
+    lock is its year, so the entry is the years. None for Canada (its
+    gains read no lock) and for a US project with no lock."""
+    try:
+        from taxjson.bin.taxjson_filed import locked_year_flags
+        flags = locked_year_flags(root, cfg.get("settings") or {})
+    except Exception:                                   # noqa: BLE001
+        return None
+    years = flags[1::2]
+    return "locked-years:" + ",".join(years) if years else None
+
+
 def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
-    """{project-relative path: sha256} of every run input."""
+    """{project-relative path: sha256} of every run input, plus the
+    locked years a US gains run reads (LOCKED_YEARS_KEY)."""
     import hashlib
     out: Dict[str, str] = {}
+    locked = _locked_years_entry(root, cfg)
+    if locked:
+        out[LOCKED_YEARS_KEY] = locked
     for p in _input_paths(root, cfg):
         if p.name == "manifest.json" and _empty_manifest(p):
             continue

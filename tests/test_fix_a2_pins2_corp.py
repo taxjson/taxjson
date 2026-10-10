@@ -622,12 +622,13 @@ currency="Currency"
 
 
 class TestCloseYearAccountOrder(unittest.TestCase):
-    """A2-1556: the close-year snapshot blends the taxable accounts in
-    taxjson.toml order, as the run does — rows of two accounts at one
-    moment (the generic importer prints no clock time) follow it."""
+    """A2-1556, issue #31: the close-year snapshot books the taxable
+    accounts as the run does — rows of two accounts at one moment (the
+    generic importer prints no clock time) follow the accounts' names,
+    not their taxjson.toml order."""
 
     @rule("CA-DATE-14")
-    def test_a2_1556_year_end_follows_the_toml_account_order(self):
+    def test_a2_1556_year_end_follows_the_run_account_order(self):
         rows = {
             "zeta": ["2025-01-06,2025-01-07,BUY,XYZ.TO,100,10,-1000,CAD",
                      "2025-03-03,2025-03-04,SELL,XYZ.TO,-100,12,1200,CAD"],
@@ -636,10 +637,10 @@ class TestCloseYearAccountOrder(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "p"
             root.mkdir()
-            # zeta (the sale) is listed first: it sells from the shares
-            # held before alpha's same-moment buy — a 200 gain, nothing
-            # denied. Alphabetical order would sell from the blended
-            # pool at a loss and record a deferral the return never had.
+            # zeta (the sale) is listed first, but alpha's same-moment
+            # buy comes first by name: the sale is made from the blended
+            # pool at a loss, denied (300) and deferred into the 100
+            # still held — as the run booked it.
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n\n'
@@ -656,12 +657,12 @@ class TestCloseYearAccountOrder(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             r = _run_cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertRegex((r.stdout + r.stderr).lower(), r"disallowed:? +0\.00")
+            self.assertRegex((r.stdout + r.stderr).lower(),
+                             r"disallowed:? +300\.00")
             rec = json.loads((root / "filed" / "2025.json").read_text())
         xyz = rec["year_end"]["equity"]["XYZ.TO"]
         self.assertAlmostEqual(xyz["qty"], 100.0)
-        self.assertAlmostEqual(xyz["acb"], 2000.0, places=2)
-        self.assertAlmostEqual(xyz.get("deferred", 0.0), 0.0, places=2)
+        self.assertAlmostEqual(xyz["acb"], 1800.0, places=2)
 
 
 if __name__ == '__main__':

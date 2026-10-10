@@ -15,6 +15,13 @@
 - `migrate --to-years` moves a holdings folder named by `holdings_dir` with the year (or names one further away from the year folder) (#43), and makes a moved ticker.map link by a relative path again from the year folder (#44).
 - `align` and `years --diff` stop with an error naming a taxjson.toml or ticker.map that cannot be read, instead of reporting no differences; `years` lists it as that year's problem (#56).
 - `new-year` in Canada sets `option_grant_timing_since` to the previous year when that year left it unset (on grant timing), so a premium written then and closed in the new year is not taxed again (#57).
+- Rows of two accounts at the same moment follow the accounts' names, not their order in taxjson.toml: reordering the file changed gains without calling the books stale (CA-DATE-14 / US-DATE-13; a filed year with such a trade can show DRIFTED once) (#31).
+- US: adding or removing a filed-year lock makes the books stale (`filed/ (locked years)`), since the gains read the locked years (US-WASH-22) (#32).
+- `taxjson years` names a damaged `filed/<year>.json` ("lock damaged", with the problem) instead of showing the year as filed (#49).
+- `taxjson option-boundary` on a base book without its rows stops with one error naming the file, not a traceback (#53).
+- `taxjson wash-radar` and `taxjson-safe-to-sell` refuse a `--date` whose window leaves the calendar (9999-12-31) instead of a traceback (#54).
+- The estimate says when its carried losses or minimum tax come from a lock taken before its year ended (provisional): one `!` line, the note with `--details` (#55).
+
 
 ## v0.28.1 (2026-10-10)
 

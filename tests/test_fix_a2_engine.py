@@ -160,11 +160,11 @@ class TestCaSameMomentOrder(unittest.TestCase):
                     self.assertAlmostEqual(inv[C], 100 * cpx, places=2)
 
     @rule("CA-SL-10", "CA-DATE-14")
-    def test_same_moment_accounts_follow_input_order(self):
-        # A2-0965: two taxable accounts rebuy at one moment; the trigger
-        # cited is the account listed first (taxjson.toml order), not the
-        # alphabetically first label, and the window trace lists rows in
-        # processing order.
+    def test_same_moment_accounts_follow_name_order(self):
+        # A2-0965, issue #31: two taxable accounts rebuy at one moment;
+        # the trigger cited is the account whose NAME comes first, in
+        # either input (taxjson.toml) order — never the rows' content —
+        # and the window trace lists rows in processing order.
         for first, second in (('zeta', 'alpha'), ('alpha', 'zeta')):
             book = [_row('2025-01-02', 100, 10, first),
                     _row('2025-03-03', -100, 8, first),
@@ -175,7 +175,7 @@ class TestCaSameMomentOrder(unittest.TestCase):
             loss = next(e for e in res['transactions']
                         if 'proceeds' in e and e['date'] == '2025-03-03')
             self.assertEqual((loss.get('wash_trigger') or {})
-                             .get('trigger_account'), first)
+                             .get('trigger_account'), 'alpha', first)
 
 
 class TestCaPostLossBumpPlacement(unittest.TestCase):

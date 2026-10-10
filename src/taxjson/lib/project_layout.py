@@ -1278,7 +1278,13 @@ def years_report(folder: Path) -> Dict[str, Any]:
             rec["filed"] = True
             try:
                 doc = json.loads(lock.read_text(encoding="utf-8"))
-                if isinstance(doc, dict):
+                from taxjson.bin.taxjson_filed import lock_shape_problem
+                bad = lock_shape_problem(doc, y)
+                if bad:
+                    # A damaged lock is named, never shown as a
+                    # clean filed year (issue #49).
+                    rec["problem"] = f"filed/{y}.json {bad}"
+                elif isinstance(doc, dict):
                     rec["closed_at"] = str(doc.get("closed_at") or "") or None
                     t = doc.get("totals")
                     if isinstance(t, dict):
@@ -1301,7 +1307,8 @@ def years_report(folder: Path) -> Dict[str, Any]:
                 rec["stale"] = bool(why) if why is not None else None
                 rec["changed"] = why or None
         except (LayoutError, OSError) as e:
-            rec["problem"] = str(e).splitlines()[0]
+            rec["problem"] = "; ".join(
+                x for x in (rec["problem"], str(e).splitlines()[0]) if x)
         try:
             p = tobase_setting(d)
         except LayoutError:

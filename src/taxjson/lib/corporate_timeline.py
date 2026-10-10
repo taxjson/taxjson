@@ -60,6 +60,13 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 #                                                  tests.
 #   plain_walk   (date, time)                   — the missing-history walks'
 #                                                  bare ordering.
+#
+# The key is the MOMENT and its rung; rows tied on it keep their input
+# order (a stable sort). The engines take each input book with its
+# accounts' rows in NAME order (`account_tie`, core._by_account_name), so
+# rows of two accounts at one moment never depend on the order the
+# books were merged in (issue #31) — while "same moment" stays a
+# moment, whatever the accounts' names.
 
 class Phase(IntEnum):
     """Canada execution-order phase at a shared sort date. A row that
@@ -259,6 +266,21 @@ def radar_priority(tx: Any) -> int:
     if action in ('ASSIGN', 'SPLIT'):
         return RadarPriority.ASSIGN_OR_SPLIT
     return RadarPriority.TRADE
+
+
+def account_tie(tx: Any) -> str:
+    """A row's account name, the key the engines (and the walks that
+    replay them: the wash radar, t1135) stable-sort each input book by
+    before ordering it by event_sort_key: rows of DIFFERENT accounts at
+    one moment (same date, time and rung) then go in the accounts' NAME
+    order, rows of one account keep the export's row order (CA-DATE-14 /
+    US-DATE-13). It used to be the accounts' order in taxjson.toml,
+    which a reordered file changed without any input changing (issue
+    #31), and which every recompute had to rebuild by hand (A2-0497,
+    A2-0502). Rows with no account (a single book) tie as one."""
+    a = getattr(tx, 'account', '') if not isinstance(tx, dict) \
+        else tx.get('account', '')
+    return str(a or '')
 
 
 def event_sort_key(tx: Any, *, profile: str,

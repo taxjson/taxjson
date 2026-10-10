@@ -1617,6 +1617,8 @@ def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
             ltl = float(lr.get("lt_losses") or 0.0)
             src["long_term_losses"] = lr["source"]
         src["notes"] += lr["notes"]
+        if lr.get("partial_lock"):
+            src["partial_lock"] = lr["partial_lock"]
     amt = None
     if country == "canada":
         try:
@@ -1625,6 +1627,8 @@ def _carry_inputs(root: Path, args, cfg: Dict[str, Any], ol: float,
             _die(str(e))
         amt = a["by_year"]
         src["amt_carryover"] = a["source"]
+        if a.get("partial_lock"):
+            src["partial_lock"] = a["partial_lock"]
         for n in a["notes"]:
             if n not in src["notes"]:
                 src["notes"].append(n)
@@ -15297,7 +15301,7 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
 def _carry_sources_doc(cs: Dict[str, Any]) -> Dict[str, Any]:
     """Where the estimate's carry-forward inputs came from (JSON)."""
     return {k: cs.get(k) for k in ("other_losses", "long_term_losses",
-                                   "amt_carryover")
+                                   "amt_carryover", "partial_lock")
             if k in cs}
 
 
@@ -15393,6 +15397,13 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         if year is not None and str(res.get("vintage")) != str(yr):
             print(_out.act(f"Tax year {yr} uses the {res.get('vintage')} "
                            f"rate tables", "tjs estimate --details"))
+        # Carryovers read from a lock taken before its year ended are
+        # provisional: one line, the note behind --details (issue #55).
+        _pl = (res.get("carry_sources") or {}).get("partial_lock")
+        if _pl:
+            print(_out.act(f"Carryovers come from the {_pl} lock, taken "
+                           f"before {_pl} ended: provisional",
+                           "tjs estimate --details"))
         n = len(res.get("notes") or [])
         print(assumes)
         print(_out.details_hint("tjs estimate --details",
@@ -16937,8 +16948,14 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         # A truncated, non-UTF-8 or wrong-shape book was a traceback
         # here (S042-18).
         doc = _load_json_or_die(base)
+        if not isinstance(doc.get("transactions"), list):
+            # An object without its rows ({"accounts": []}) iterated its
+            # keys as rows: an AttributeError traceback (issue #53).
+            _die_input(f'work/{base.name} has no "transactions" list — the '
+                 f'books are damaged or from an interrupted run',
+                 "Run `taxjson run` to rebuild them.")
         txs = []
-        for r in (doc.get("transactions", doc) if isinstance(doc, dict) else doc):
+        for r in doc["transactions"]:
             try:
                 txs.append(TaxTransaction(**{k: v for k, v in r.items()
                                              if k in TaxTransaction.__dataclass_fields__}))
@@ -21491,12 +21508,12 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         # Same shape+calendar validation as `list --date` — the
         # standalone fed the raw string straight into strptime, so a
         # typo'd date died with a traceback instead of a usage error.
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
-            _die("--date expects YYYY-MM-DD")
-        try:
-            datetime.strptime(args.date, "%Y-%m-%d")
-        except ValueError:
-            _die(f"--date {args.date} is not a real calendar date")
+        # A date whose 30-day window leaves the calendar Python can
+        # hold (9999-12-31) is refused too (issue #54).
+        from taxjson.lib.dates import as_of_date_problem
+        _bad = as_of_date_problem(args.date)
+        if _bad:
+            _die(_bad)
         cmd += ["--date", args.date]
     if args.verbose:
         cmd += ["--verbose"]
@@ -24936,6 +24953,9 @@ def _years_table(top: Path, rep: Dict[str, Any]) -> None:
         state = (("filed " + (r["closed_at"][:10] if r["closed_at"] else "")
                   ).strip() + ("*" if r["partial_lock"] else "")
                  if r["filed"] else "open")
+        if r["filed"] and str(r["problem"] or "").startswith(
+                f"filed/{r['year']}.json"):
+            state = "lock damaged"          # issue #49
         t = r["totals"] or {}
         diff = r["differs_from_newest"] or {}
         vs = ", ".join(x for x in (

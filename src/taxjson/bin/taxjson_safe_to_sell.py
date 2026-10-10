@@ -22,7 +22,6 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime
 from typing import List, Optional
 
 from taxjson.lib.cli_diag import guard_main
@@ -70,10 +69,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.date:
-        try:
-            datetime.strptime(args.date, "%Y-%m-%d")
-        except ValueError:
-            parser.error(f"--date {args.date!r} is not a valid YYYY-MM-DD date")
+        from taxjson.lib.dates import as_of_date_problem
+        _bad = as_of_date_problem(args.date)
+        if _bad:
+            parser.error(_bad)
 
     from taxjson.lib.dispatch import python_module_argv
     # Never with the cwd on sys.path (security review H1).

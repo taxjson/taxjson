@@ -1017,6 +1017,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.17.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_expired_open_options`, `the export is missing its expiry, `
 
+### `tjs option-boundary`: "error: work/margin_base.json has no "transactions" list — the books are damaged or from an interrupted run"
+- **Check:** `work/margin_base.json` is a JSON object without its `transactions` rows. On v0.28.1 and older the command stopped with an `AttributeError` traceback (issue #53).
+- **Cause:** an interrupted `tjs run`, a disk that filled up, or a hand-edited file.
+- **Fix:** `tjs run`, which rebuilds `work/`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_option_boundary`
+
 ## Before you file
 
 ### `tjs sum`: "! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash", or `tjs fx-cash`: "FX on foreign cash: NOT RELIABLE for 2025 — 3 in-year overdrafts; do not file this figure."
@@ -1327,6 +1334,34 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.25.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `_git_refusal`, `_GIT_COMMAND_KEYS`, `_git_status`, `d_inputs_committed`, `d_lock_committed`
 
+### "Warning: filed 2024 DRIFTED vs 2024.json" after an upgrade, for a sale with a trade of the same security in another account at the same moment
+- **Check:** `tjs check-filed` lists the figure that moved; `tjs wash-sales --explain` shows the sale and, at the same date and time, a purchase or sale of the same security in another account (the generic importer and Webull print no clock time, so their rows of one day share one).
+- **Cause:** taxjson v0.28.1 and older took rows of two accounts at one moment in the order the accounts are listed in taxjson.toml, and reordering the file changed the gains without calling the books stale (issue #31). They now go in the accounts' name order, whatever the file's order (`CA-DATE-14` / `US-DATE-13` in `tjs tax-logic --ids`).
+- **Fix:** if you know which trade came first, give the rows their clock times (a `.tt` line in place of the broker row). Otherwise review the moved figure: amend the return, or refresh the lock with `tjs close-year --force` if the new figure is the one you filed.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/corporate_timeline.py` — `account_tie`, `event_sort_key`; `src/taxjson/lib/core.py` — `_by_account_name`
+
+### US project: "inputs changed since the last full run (added: filed/ (locked years))" after `tjs close-year`, or after adding or removing a `filed/<year>.json`
+- **Check:** `tjs sum --details` or `tjs checklist` names `filed/ (locked years)` (`changed:` when the project already had a lock, `removed:` when its last lock was deleted). `ls filed/` (and `[settings] prior_year_record`) shows the locks.
+- **Cause:** a US gains run books a wash-sale basis add that reaches a sale in a filed year in the loss's year instead (`US-WASH-22`), so the set of locked years is an input of the books. On v0.28.1 and older a new lock left the books looking current although a run would change them (issue #32). A Canadian project's gains read no lock.
+- **Fix:** `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/checklist.py` — `LOCKED_YEARS_KEY`, `_locked_years_entry`, `input_fingerprint`; `src/taxjson/bin/taxjson_filed.py` — `locked_year_flags`
+
+### `tjs years`: "lock damaged" and "! 2024: filed/2024.json is not a close-year lock (an array, not a JSON object)"
+- **Check:** open `filed/2024.json`: it is not the object `tjs close-year` writes (an array, a string, an `accounts` that is not a table of accounts, `totals` that are not a table, or a `year` other than the file's). `tjs check-filed` refuses the same file. On v0.28.1 and older `tjs years` showed such a year as filed with no problem (issue #49).
+- **Cause:** the lock was edited by hand, truncated, or replaced by another file.
+- **Fix:** restore it from git (`git log -- filed/2024.json`), or, after checking the year's figures against the return you filed, write it again with `tjs close-year --force` in that year's folder.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_filed.py` — `lock_shape_problem`; `src/taxjson/lib/project_layout.py` — `years_report`; `src/taxjson/bin/taxjson_run.py` — `_years_table`
+
+### `tjs estimate`: "! Carryovers come from the 2024 lock, taken before 2024 ended: provisional"
+- **Check:** `tjs estimate --details` lists the note "The carried balances are provisional: the 2024 lock was taken on 2024-06-01, before the year ended (close-year --force) …"; `tjs years` marks the year `filed*`. On v0.28.1 and older the estimate used the balances without saying so (issue #55).
+- **Cause:** the net capital loss or minimum tax carried into this year comes from last year's lock, and that lock was written with `close-year --force` before last year ended: a snapshot, not the return you filed.
+- **Fix:** after filing last year, run `tjs close-year --force` in last year's project, or enter the figures from your notice of assessment (`[estimate]` `other_losses`, `amt_carryover`).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/carryforward.py` — `resolve_losses`, `resolve_amt`, `partial_lock`; `src/taxjson/bin/taxjson_filed.py` — `partial_year_note`; `src/taxjson/bin/taxjson_run.py` — `Carryovers come from the`
+
 ## Stand-alone tools and hand-written JSON books
 
 ### `taxjson-gains book.json`: "impossible date='2025-02-30' (not a real calendar date written YYYY-MM-DD) — fix the input data", or a hand-written book whose gains change when a date is written `2025-2-01` instead of `2025-02-01`
@@ -1370,3 +1405,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** upgrade. Re-run `tjs run` to rebuild a work file; for a file you wrote, complete the row. Dividend rows (`DIVIDEND`, `DIVIDEND_IN_LIEU`) need none of these, and an unknown-cost row flagged `tainted` needs only its date and units.
 - **Fixed in:** `v0.25.0`
 - **Code:** `src/taxjson/lib/json_input.py` — `require_gains_doc`, `check_gains_rows`, `gains_row_kind`; `src/taxjson/bin/taxjson_form_export.py` — `load_dispositions`; `src/taxjson/bin/taxjson_filed.py` — `aggregates_from_gains`; `src/taxjson/bin/taxjson_carryover.py` — `yearly_nets`
+
+### `tjs wash-radar --date 9999-12-31`: "error: --date 9999-12-31 is out of range: the view looks 60 days either side of it; use a date from 0001-03-02 to 9999-10-31"
+- **Check:** the date given to `tjs wash-radar` (or `taxjson-safe-to-sell`) is within 60 days of the first or last date Python can hold. On v0.28.1 and older it stopped with "ValueError: year 10000 is out of range" (issue #54).
+- **Cause:** the radar looks 30 days either side of the date (more with settlement days), and those dates do not exist.
+- **Fix:** give the date you meant (`--date YYYY-MM-DD`), or leave it out for today.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/dates.py` — `as_of_date_problem`; `src/taxjson/bin/taxjson_run.py` — `cmd_wash_radar`; `src/taxjson/bin/taxjson_wash_radar.py` — `main`; `src/taxjson/bin/taxjson_safe_to_sell.py` — `main`

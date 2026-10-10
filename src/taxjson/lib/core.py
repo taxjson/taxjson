@@ -10,7 +10,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from taxjson.lib.country import check_engine_allowed as _check_engine_allowed
-from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
+from taxjson.lib.corporate_timeline import (SplitTimeline, account_tie,
+                                            event_sort_key,
                                             normalize_symbol_new, split_seen,
                                             SPLIT_DATE_WINDOW_DAYS)
 from decimal import Decimal
@@ -1299,6 +1300,17 @@ def _per_share(amount, qty, symbol) -> float:
     return float(amount) / (q * mult)
 
 
+def _by_account_name(*books):
+    """Each book with its accounts' rows in account-name order, one
+    account's rows in their own order (a stable sort; None stays None).
+    The engines' same-moment tie-break, and every first-wins step
+    before it (one copy of a split two brokers dated apart, duplicate
+    ids), then never depend on the order the accounts' books were
+    merged in — taxjson.toml's (issue #31; CA-DATE-14 / US-DATE-13)."""
+    return tuple(None if b is None else sorted(b, key=account_tie)
+                 for b in books)
+
+
 def _disambiguate_duplicate_ids(*books) -> None:
     """Give a row whose content (and so whose id) repeats an earlier
     row's a distinct id, in place, with one NOTE. The engines link a
@@ -2378,6 +2390,9 @@ class CanadaTaxRules(TaxRules):
         # symbol, an action the engine does not book.
         require_computable_rows(transactions, sheltered_transactions,
                                 affiliated_transactions)
+        transactions, sheltered_transactions, affiliated_transactions = \
+            _by_account_name(transactions, sheltered_transactions,
+                             affiliated_transactions)
         # A move between two of your own taxable accounts changes nothing
         # in Canada: the ACB is one pool across them (s.47).
         transactions = [t for t in transactions
@@ -3818,11 +3833,11 @@ class CanadaTaxRules(TaxRules):
             _running: Dict[tuple, float] = {}
             # The main pass's own processing order: its fixed rungs, then
             # the export's row order at one moment (CA-DATE-14; accounts
-            # in taxjson.toml order). Every same-moment question below —
+            # in name order, issue #31). Every same-moment question below —
             # which loss claims a shared replacement first, whether a rebuy
             # listed after the loss sale is acquired after it, which of two
             # same-moment triggers takes the bump — is answered by this
-            # order, never by the rows' content-hash id or account label
+            # order, never by the rows' content-hash id
             # (audit A2-0059/0551/0058/0193/0192/0961/0965: a one-cent
             # price change used to move a denial).
             _pos = {id(_t): _i for _i, _t in enumerate(current_tx_list)}
@@ -4319,8 +4334,8 @@ class CanadaTaxRules(TaxRules):
                     # (taxable) acquisition first, then registered, then
                     # affiliated accounts; within one rank, the main
                     # pass's processing order (export row order, accounts
-                    # in taxjson.toml order — CA-DATE-14) — never the
-                    # rows' content-hash id or the account label, which
+                    # in name order — CA-DATE-14) — never the
+                    # rows' content-hash id, which
                     # let a one-cent change flip a deferral into a
                     # permanent denial or move the bump between a call
                     # and the shares (audits S018-06, A2-0192/0961/0965).
@@ -5218,6 +5233,9 @@ class USATaxRules(TaxRules):
         # The computation's input contract (issues #14, #16; as Canada).
         require_computable_rows(transactions, sheltered_transactions,
                                 affiliated_transactions)
+        transactions, sheltered_transactions, affiliated_transactions = \
+            _by_account_name(transactions, sheltered_transactions,
+                             affiliated_transactions)
         _disambiguate_duplicate_ids(transactions, sheltered_transactions,
                                     affiliated_transactions)
         # §1091 contemplates a narrower "related party" rule than CRA's

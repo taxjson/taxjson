@@ -58,6 +58,17 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.28.2
+
+- **Same-moment trades of two accounts follow the accounts' names.**
+  Rows of two accounts at the same date and time used to follow the
+  order the accounts are listed in taxjson.toml; reordering the file
+  changed gains without the books being called stale. They now go in
+  the accounts' name order, whatever the file's order. A sale with a
+  same-moment trade of the same security in another account can move:
+  a filed year then shows `filed <year> DRIFTED vs <year>.json` on the
+  next `tjs run` ([troubleshooting.md](troubleshooting.md)).
+
 ### v0.28.0
 
 - **Shorter command output.** A command's default output is the

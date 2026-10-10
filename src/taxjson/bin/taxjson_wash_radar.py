@@ -35,7 +35,7 @@ from taxjson.lib.core import (TaxTransaction, is_stock_dividend,
                               not_a_purchase)
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
-                                            split_seen)
+                                            account_tie, split_seen)
 from taxjson.lib.price_chain import is_crypto_symbol
 from taxjson.lib.ticker_map import is_option_ticker
 from taxjson.lib import out as _out
@@ -415,11 +415,12 @@ def main():
         sys.stdout = io.StringIO()
 
     if args.date:
-        try:
-            today_dt = datetime.strptime(args.date, "%Y-%m-%d")
-        except ValueError:
-            _out.fail(f"--date {args.date!r} is not a valid YYYY-MM-DD "
-                     f"date", prog=_PROG)
+        from taxjson.lib.dates import as_of_date_problem
+        _bad = as_of_date_problem(args.date)
+        if _bad:
+            # 9999-12-31: the window past it is no date (issue #54).
+            _out.fail(_bad, prog=_PROG)
+        today_dt = datetime.strptime(args.date, "%Y-%m-%d")
     else:
         today_dt = datetime.now()
 
@@ -490,6 +491,12 @@ def main():
 
     load_files(args.taxable, 'TAXABLE')
     load_files(args.sheltered, 'SHELTERED')
+    # The engine's input order (core._by_account_name): taxable rows,
+    # then sheltered, each in account-name order, so a tie at one moment
+    # is broken as the engine breaks it — never by the order the books
+    # were passed in (taxjson.toml's; issue #31).
+    transactions.sort(key=lambda t: (t._group != 'TAXABLE',
+                                     account_tie(t)))
 
     # Custody-move TRANSFER noise (broker moves, cancel/rebook
     # restatements, registered-to-registered moves) must be invisible

@@ -22,7 +22,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** CRA technical interpretation **2012-0468931C6** (a publicly traded share is disposed of on the settlement date).
 - **Rule ids:** `CA-DATE-01`, `CA-DATE-02` *(setting: `tax_date = "trade"`)*, `CA-DATE-03` … `CA-DATE-09`, `CA-DATE-10` *(setting: `futures_settle = "next_day"`)*, `CA-DATE-11`, `CA-DATE-13` … `CA-DATE-18`, `CA-DATE-SESSION`.
 - **Code:** `src/taxjson/lib/dates.py` — `settlement_date`, `market_of`, `settlement_lag_days`; `src/taxjson/lib/market_calendar.py`; `src/taxjson/lib/country.py` — `resolve_tax_date`, `futures_settle_mode`; `src/taxjson/lib/corporate_timeline.py` — `event_sort_key`; `src/taxjson/lib/brokerages/ib_extractor.py` — `_ib_split_datetime`.
-- **Edge cases and limits:** outside the US and Canada only weekends are skipped (a local bank holiday is not), so such a settle date can be a day early; venues other than the listed Asian exchanges keep IB's Eastern clock date (docs/limits.md "Settlement calendars outside North America"). Webull prints the settle date and the trade date is walked back one cycle (`CA-DATE-17`). Rows of one account at one moment from two files follow the files' name order (`CA-DATE-18`). Schedule 3's "year of acquisition" is counted on trade dates (`CA-DISP-07`).
+- **Edge cases and limits:** outside the US and Canada only weekends are skipped (a local bank holiday is not), so such a settle date can be a day early; venues other than the listed Asian exchanges keep IB's Eastern clock date (docs/limits.md "Settlement calendars outside North America"). Webull prints the settle date and the trade date is walked back one cycle (`CA-DATE-17`). Rows of one account at one moment from two files follow the files' name order (`CA-DATE-18`); rows of two accounts at one moment follow the accounts' name order, not their order in taxjson.toml (`CA-DATE-14`). Schedule 3's "year of acquisition" is counted on trade dates (`CA-DISP-07`).
 
 ## Foreign currency: Bank of Canada rates
 
@@ -307,7 +307,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row for the US date basis: see `taxjson tax-logic` rule `US-DATE-01`.
 - **Rule ids:** `US-DATE-01`, `US-DATE-02` *(setting: `tax_date = "settle"`)*, `US-DATE-03` … `US-DATE-11`, `US-DATE-12` *(setting: `futures_settle = "next_day"`)*, `US-DATE-13` … `US-DATE-17`, `US-DATE-SESSION`, `US-INC-DATE-DIV`.
 - **Code:** `src/taxjson/lib/dates.py` — `settlement_date`, `market_of`; `src/taxjson/lib/country.py` — `resolve_tax_date`, `DEFAULT_TAX_DATE`; `src/taxjson/lib/corporate_timeline.py` — `event_sort_key`, `UsPriority`.
-- **Edge cases and limits:** rows of one account at one moment from two files follow the files' name order, which decides which lot FIFO takes (`US-DATE-17`).
+- **Edge cases and limits:** rows of one account at one moment from two files follow the files' name order, which decides which lot FIFO takes (`US-DATE-17`); rows of two accounts at one moment follow the accounts' name order, not their order in taxjson.toml (`US-DATE-13`).
 
 ## Currency
 
