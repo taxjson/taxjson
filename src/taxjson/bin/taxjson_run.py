@@ -24945,13 +24945,92 @@ def _years_table(top: Path, rep: Dict[str, Any]) -> None:
             print(a)
 
 
+def _os_path_lexists(p: Path) -> bool:
+    import os
+    return os.path.lexists(p)
+
+
+def _implicit_grant_since(doc: Dict[str, Any]) -> Optional[int]:
+    """The option grant-timing cutoff a Canadian project applies by
+    default — its own `year`, when option_premium_timing is "grant"
+    (the default) and option_grant_timing_since is not set — or None
+    (the key set, close timing, a US project: lib/country)."""
+    from taxjson.lib.country import CANADA, CountryError, settings_country
+    st = doc.get("settings")
+    if not isinstance(st, dict):
+        return None
+    try:
+        if settings_country(st) != CANADA:
+            return None
+    except CountryError:
+        return None
+    if str(st.get("option_premium_timing") or "grant").strip().lower() \
+            != "grant":
+        return None
+    if st.get("option_grant_timing_since") not in (None, ""):
+        return None
+    yr = st.get("year")
+    return yr if isinstance(yr, int) and not isinstance(yr, bool) else None
+
+
+def _new_year_publish(top: Path, folder: Path, config_text: str,
+                      files: Dict[str, bytes], make_holdings: bool) -> None:
+    """`taxjson new-year`: the new year's files made in a staging folder
+    beside the years, then moved into place — the whole folder in one
+    rename when it does not exist yet, else file by file with
+    taxjson.toml last and every one moved before it taken back when one
+    fails. A failure leaves no taxjson.toml behind, so the command can
+    simply be run again (GitHub #40). OSError when it cannot be done."""
+    import os
+    import shutil
+    import tempfile
+    from taxjson.lib.safe_write import write_atomic
+    stage = Path(tempfile.mkdtemp(prefix=f".{folder.name}.new-",
+                                  dir=str(top)))
+    try:
+        for n, data in files.items():
+            write_atomic(stage / n, data)
+        if make_holdings:
+            (stage / _PL.HOLDINGS).mkdir(mode=0o700)
+        write_atomic(stage / _PL.CONFIG, config_text)
+        if not os.path.lexists(folder):
+            os.rename(stage, folder)
+            return
+        names = list(files) + ([_PL.HOLDINGS] if make_holdings else []) \
+            + [_PL.CONFIG]
+        for n in names:
+            if os.path.lexists(folder / n):
+                raise FileExistsError(17, "already exists",
+                                      str(folder / n))
+        moved: List[Path] = []
+        try:
+            for n in names:
+                os.rename(stage / n, folder / n)
+                moved.append(folder / n)
+        except OSError:
+            for m in reversed(moved):
+                try:
+                    if m.is_dir() and not m.is_symlink():
+                        shutil.rmtree(m)
+                    else:
+                        m.unlink()
+                except OSError:
+                    pass
+            raise
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+
+
 def cmd_new_year(args: argparse.Namespace) -> None:
     """`taxjson new-year YYYY`: the year's folder beside the others,
     with the previous year's taxjson.toml and ticker.map copied in
     (year bumped, prior_year_record set, the year's own tables commented
-    out — lib/project_layout.new_year_text) and an empty holdings/."""
+    out — lib/project_layout.new_year_text; a Canadian project's
+    default option grant-timing cutoff kept) and an empty holdings/,
+    made in a staging folder and moved into place only when complete
+    (_new_year_publish)."""
     import shlex as _shlex
-    from taxjson.lib.safe_write import write_atomic
     root = Path(args.dir).resolve()
     top = _years_folder(root)
     year = args.year
@@ -24972,42 +25051,64 @@ def cmd_new_year(args: argparse.Namespace) -> None:
         _die_input(f"no earlier year folder in {top} to start {year} from",
                    f"`taxjson init --year {year}` creates a first one.")
     prev_year, prev = earlier[-1]
+    text = _read_config_text(prev / "taxjson.toml")
+    kept_since = None
     try:
-        text = _read_config_text(prev / "taxjson.toml")
         new_text = _PL.new_year_text(text, prev_year, year)
-        tomllib.loads(new_text)
-    except Exception as e:                              # noqa: BLE001
-        _die(f"{prev_year}/taxjson.toml cannot be copied: {e}")
+        kept_since = _implicit_grant_since(_PL.parse_toml(text))
+        if kept_since is not None:
+            # The cutoff the previous year applied by default (its own
+            # year) is kept: the new year's default would be the new
+            # year, taxing again a premium written last year and closed
+            # this year (GitHub #57; tax-logic CA-OPT-01).
+            new_text = _PL.set_key_text(
+                new_text, ("settings", "option_grant_timing_since"),
+                kept_since, after="year")
+        new_settings = _PL.parse_toml(new_text).get("settings")
+    except _PL.LayoutError as e:
+        _die_input(f"{prev_year}/taxjson.toml cannot be copied: {e}",
+                   "Nothing was created.")
+    if not isinstance(new_settings, dict):
+        new_settings = {}
+    # tobase.map: the interlisted pairs, one file every year reads
+    # (`[settings] tobase_map`, kept by the taxjson.toml copy): no
+    # per-year copy. A year from before v0.27.1 with its own copy passes
+    # it on (`taxjson migrate` makes the copies one file).
+    _legacy_tobase = (not _PL.shared_tobase(prev)
+                      and (prev / _PL.TOBASE_MAP).is_file())
+    # (The positions bought before the data are .tt lines of the shared
+    # inputs: the same every year.)
+    copied = [n for n in ("ticker.map",) + ((_PL.TOBASE_MAP,)
+                                             if _legacy_tobase else ())
+              if (prev / n).is_file()
+              and not _os_path_lexists(folder / n)]
     try:
-        folder.mkdir(exist_ok=True, mode=0o700)
-        write_atomic(folder / "taxjson.toml", new_text)
-        copied = []
-        # tobase.map: the interlisted pairs, one file every year reads
-        # (`[settings] tobase_map`, kept by the taxjson.toml copy): no
-        # per-year copy. A year from before v0.27.1 with its own copy
-        # passes it on (`taxjson migrate` makes the copies one file).
-        _legacy_tobase = (not _PL.shared_tobase(prev)
-                          and (prev / _PL.TOBASE_MAP).is_file())
-        for _name in ("ticker.map",) + ((_PL.TOBASE_MAP,)
-                                        if _legacy_tobase else ()):
-            # (The positions bought before the data are .tt lines of
-            # the shared inputs: the same every year.)
-            if (prev / _name).is_file() and not (folder / _name).exists():
-                write_atomic(folder / _name, (prev / _name).read_bytes())
-                copied.append(_name)
-        hold = _PL.holdings_folder(folder)
-        if hold == folder / _PL.HOLDINGS:
-            hold.mkdir(exist_ok=True, mode=0o700)
+        hold = _PL.folder_setting(folder, _PL.HOLDINGS_KEY, new_settings)
+    except _PL.LayoutError:
+        hold = None                 # said by the new year's run
+    make_hold = hold is None
+    if make_hold and _os_path_lexists(folder / _PL.HOLDINGS) \
+            and not (folder / _PL.HOLDINGS).is_dir():
+        _die_input(f"{year}/{_PL.HOLDINGS} exists and is not a folder — "
+                   f"move it away first.", "Nothing was created.")
+    make_hold = make_hold and not (folder / _PL.HOLDINGS).is_dir()
+    try:
+        _new_year_publish(top, folder, new_text,
+                          {n: (prev / n).read_bytes() for n in copied},
+                          make_hold)
     except OSError as e:
-        _die_input(f"cannot create {year}/: {e.strerror or e}")
+        _die_input(f"cannot create {year}/: {e.strerror or e}",
+                   "Nothing was created.")
     _yd = _shlex.quote(str(folder))
     shared = _PL.shared_inputs(folder)
     if not _details(args):
         # Essentials first (docs/output-style.md): what was made and the
         # next steps, one line each; the long form with --details.
         print(f"Created {year}/ from {prev_year}/: taxjson.toml (year "
-              f"{year}), " + "".join(f"{n}, " for n in copied)
-              + "holdings/")
+              f"{year}"
+              + (f", option_grant_timing_since = {kept_since} as "
+                 f"{prev_year} had it" if kept_since is not None else "")
+              + "), " + "".join(f"{n}, " for n in copied) + "holdings/")
         if _legacy_tobase:
             _say("note", f"{year}/ got its own copy of {prev_year}'s "
                  f"tobase.map — `taxjson migrate` makes it one file",
@@ -25028,7 +25129,11 @@ def cmd_new_year(args: argparse.Namespace) -> None:
             f"Created {year}/ from {prev_year}/: taxjson.toml (year {year}, "
             f"prior_year_record ../{prev_year}/filed/{prev_year}.json, the "
             f"{prev_year} [estimate] / [instalments] and accounts' "
-            f"holdings commented out), "
+            f"holdings commented out"
+            + (f", option_grant_timing_since = {kept_since}: the cutoff "
+               f"{prev_year} used by default, kept so a premium written "
+               f"before {year} is not taxed again"
+               if kept_since is not None else "") + "), "
             + "".join(f"{n}, " for n in copied) + "holdings/"
             + (f"; it reads {_PL.tobase_shown(folder)} "
                f"([settings] {_PL.TOBASE_KEY})"

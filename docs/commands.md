@@ -318,7 +318,12 @@ lock, last year's `[estimate]` / `[instalments]` and the accounts'
 `holdings` commented out for reference) and its `ticker.map` copied, and
 an empty `holdings/`. In Canada the new year keeps reading the
 `tobase.map` every year shares (a year from before v0.27.1 that has its
-own copy passes it on). It prints where to save the year's downloads.
+own copy passes it on), and keeps the option grant-timing cutoff the
+previous year applied by default (`option_grant_timing_since`, set to
+that year when it was not set). The files are made in a staging folder
+and moved into place when complete: a failure leaves no `taxjson.toml`
+behind, so the command can be run again. It prints where to save the
+year's downloads.
 
 #### taxjson align
 

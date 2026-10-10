@@ -26,13 +26,15 @@ key changed, else LayoutError and nothing is written.
 """
 import argparse
 import json
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from _style import CapturedWidth
 from _tmpfiles import private_dir
-from test_fix_multi_year import tjs
+from tax_rules import rule, rule_absent
+from test_fix_multi_year import run_ok, tjs
 
 from taxjson.lib import project_layout as PL
 from taxjson.lib.tomlcompat import tomllib
@@ -368,6 +370,84 @@ class TestNewYear(unittest.TestCase):
         self.assertEqual(doc["settings"]["prior_year_record"],
                          "../2024/filed/2024.json")
         self.assertEqual(doc["settings"]["year"], 2025)
+
+    def test_a_failure_leaves_nothing_to_block_a_retry(self):
+        """#40."""
+        top = _years((2024, _cfg()))
+        (top / "2025").mkdir()
+        (top / "2025" / "holdings").write_text("pre-existing file\n")
+        r = tjs("-C", str(top), "new-year", "2025")
+        self.assertEqual(r.returncode, 2, _out(r))
+        self.assertIn("holdings exists and is not a folder", r.stderr)
+        self.assertFalse((top / "2025" / "taxjson.toml").exists())
+        self.assertFalse((top / "2025" / "ticker.map").exists())
+        (top / "2025" / "holdings").unlink()
+        r = tjs("-C", str(top), "new-year", "2025")
+        self.assertEqual(r.returncode, 0, _out(r))
+        self.assertTrue((top / "2025" / "holdings").is_dir())
+        self.assertEqual(sorted(p.name for p in top.iterdir()),
+                         ["2024", "2025", "inputs"])
+
+    def test_a_failed_move_is_taken_back(self):
+        """#40: a step failing after others were placed."""
+        from taxjson.bin import taxjson_run as R
+        top = _years((2024, _cfg()))
+        (top / "2025").mkdir()
+        real = os.rename
+
+        def _rename(a, b):
+            if Path(b).name == "taxjson.toml":
+                raise OSError(13, "Permission denied")
+            return real(a, b)
+        with mock.patch.object(os, "rename", _rename):
+            with self.assertRaises(OSError):
+                R._new_year_publish(top, top / "2025", "x = 1\n",
+                                    {"ticker.map": b""}, True)
+        self.assertEqual(list((top / "2025").iterdir()), [])
+        self.assertEqual(sorted(p.name for p in top.iterdir()),
+                         ["2024", "2025", "inputs"])
+
+    @rule("CA-OPT-01")
+    def test_canada_keeps_the_default_cutoff(self):
+        """#57: a premium written in 2024 and closed in 2025 is taxed in
+        2024 only."""
+        top = _years((2024, _cfg()))
+        (top / "inputs" / "margin").mkdir()
+        (top / "inputs" / "margin" / "trades.tt").write_text(
+            "BUYSELL 2024-12-20 09:30:00 QZZQ250117C00010000.TO -1 CAD 1 "
+            "100 0\n"
+            "BUYSELL 2025-01-17 09:30:00 QZZQ250117C00010000.TO 1 CAD 0 0 "
+            "0\n")
+        r = tjs("-C", str(top), "new-year", "2025")
+        self.assertEqual(r.returncode, 0, _out(r))
+        self.assertIn("option_grant_timing_since = 2024", r.stdout)
+        self.assertEqual(
+            _doc(top / "2025")["settings"]["option_grant_timing_since"],
+            2024)
+        gains = {}
+        for y in ("2024", "2025"):
+            run_ok(self, top / y)
+            gains[y] = json.loads(
+                (top / y / "work" / "margin_gains_wash.json").read_text()
+            )["summary"]["total_gain"]
+        self.assertEqual(gains, {"2024": 100, "2025": 0})
+
+    @rule("CA-OPT-01")
+    def test_canada_set_or_close_timing_is_kept_as_is(self):
+        for extra, want in (("option_grant_timing_since = 2022\n", 2022),
+                            ('option_premium_timing = "close"\n', None)):
+            top, r = self._new_year(_cfg(extra=extra))
+            self.assertEqual(r.returncode, 0, _out(r))
+            self.assertEqual(_doc(top / "2025")["settings"].get(
+                "option_grant_timing_since"), want)
+
+    @rule_absent("CA-OPT-01", country="usa")
+    def test_usa_adds_no_cutoff(self):
+        top, r = self._new_year(_cfg(country="usa"))
+        self.assertEqual(r.returncode, 0, _out(r))
+        self.assertNotIn("option_grant_timing_since",
+                         _doc(top / "2025")["settings"])
+
 
 if __name__ == "__main__":
     unittest.main()
