@@ -246,7 +246,7 @@ Where the project reads its exports and positions and writes files for other too
 
 ### `[accounts.NAME]`
 
-One table per folder under `inputs/` (the folder name is the account name). Names use letters, digits, `_`, `-` and `.`; `COMBINED`, `sheltered`, a name ending in a pipeline suffix (`_raw`, `_base`, `_gains`, `_wash`, `_merged`, `_sorted`, `_filled`, `_mapped`, `_report`, `_tt`, `_manifest`, `_sources`) and a name inside another account's work files (`margin_ib` beside `margin`) are refused.
+One table per folder under `inputs/` (the folder name is the account name). Names use letters, digits, `_`, `-` and `.`; `COMBINED`, `sheltered`, a name ending in a pipeline suffix (`_raw`, `_base`, `_gains`, `_wash`, `_merged`, `_sorted`, `_filled`, `_mapped`, `_report`, `_tt`, `_manifest`, `_sources`) a name inside another account's work files (`margin_ib` beside `margin`) and two names that differ only by letter case (`Margin` and `margin`) are refused.
 
 #### `type`
 - **Meaning:** `taxable` (on your return) or `sheltered` (a registered or retirement plan: tracked, kept out of the filing totals, counted for the superficial-loss / wash-sale rule).

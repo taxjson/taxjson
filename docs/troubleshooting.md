@@ -215,6 +215,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `validate_config`, `contains data but has`
 
+### "Error: [accounts.Margin] and [accounts.margin] differ only by letter case — an account's name is also its inputs/ folder and its holdings file's name, which letter case does not tell apart"
+- **Check:** taxjson.toml has two `[accounts.NAME]` tables whose names are the same apart from capitals.
+- **Cause:** an account's name is also its `inputs/` folder, its `work/` files and the name a `holdings/` snapshot is matched by, and those matches ignore letter case (on Windows and macOS the two folders are one). Such names were accepted, and both accounts' snapshots went to one of them while the other was not checked.
+- **Fix:** rename one account (its table and its `inputs/` folder), for example `margin` and `margin-2`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/config_check.py` — `account_pair_problems`, `differ only by letter case`
+
 ### "Error: account 'qt' has no crypto flag in taxjson.toml but its inputs contain coinbase files" (or "has crypto = true … contain questrade files")
 - **Check:** the next line names each file and how it was detected, e.g. `inputs/qt/coinbase_demo.csv (coinbase: content: columns Timestamp,Transaction Type,Asset…)`.
 - **Cause:** crypto exchange exports (Coinbase, Kraken) go through the crypto pipeline (price lookups, coin pools) and equity exports through the securities pipeline, chosen by the account's `crypto` flag. A file in an account of the other kind would be booked wrongly, so the run stops.

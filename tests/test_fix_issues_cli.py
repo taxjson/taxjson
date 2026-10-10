@@ -294,5 +294,29 @@ class TestSnapshotBrokerId(unittest.TestCase):
         self.assertEqual(list(found), ["ib"])
 
 
+class TestCaseOnlyAccountNames(unittest.TestCase):
+    """#48: account names that differ only by case are refused."""
+
+    def test_config_problem(self):
+        from taxjson.lib.config_check import account_type_problems
+        cfg = {"settings": {"country": "canada"},
+               "accounts": {n: {"type": "taxable"}
+                            for n in ("Margin", "margin")}}
+        problems = account_type_problems(cfg)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("Margin", problems[0])
+        self.assertIn("margin", problems[0])
+        self.assertIn("case", problems[0])
+        cfg["accounts"] = {"margin": {"type": "taxable"},
+                           "margin_us": {"type": "taxable"}}
+        self.assertEqual(account_type_problems(cfg), [])
+
+    def test_run_refuses(self):
+        root = _project(_tmp(self) / "p", accounts=("Margin", "margin"))
+        r = _cli("-C", str(root), "run", "--no-input")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("differ only", " ".join(r.stderr.split()))
+
+
 if __name__ == "__main__":
     unittest.main()
