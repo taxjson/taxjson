@@ -12,7 +12,18 @@ Every example below uses made-up data (tickers like `SAMPA.TO`). The
 command output is real output from those examples, shortened where it
 says `...`.
 
-`tjs` is the short name of `taxjson`; both work.
+`tjs` is the short name of `taxjson`; both work. A word you don't know
+(ACB, superficial loss, TOBASE, journal ...) is in the
+[glossary](glossary.md).
+
+**The reading path.** This guide first; then
+[brokers.md](brokers.md) when you download each broker's files (step 3),
+and [filing.md](filing.md) when the year is over (step 7). Everything
+else is reference: [commands.md](commands.md) (every command),
+[settings.md](settings.md) (every setting and file),
+[tax-rules.md](tax-rules.md) (the rules), [limits.md](limits.md) (what
+taxjson does not do), [troubleshooting.md](troubleshooting.md) (a message
+you don't understand).
 
 **Not sure what comes next?** Run `tjs checklist`. It lists every
 step of this guide with the command for it; in a project folder it
@@ -29,8 +40,13 @@ tjs --version
 This also installs the taxjson-fetch plugin (`taxjson fetch`: Questrade /
 IBKR Flex auto-fetch, a separate package that does nothing until you run
 it); add `_ --without-fetch` to the installer line to leave it out.
-Other ways to install (from a checkout, channels) are in the README's
-[Install](../README.md#install) section.
+Re-run the same line to upgrade; release channels and what changed
+between releases are in [upgrading.md](upgrading.md); installing from a
+checkout is in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
+
+<!-- TODO-SYNC: feat/newuser-fixes adds a demo project; name its command here once it lands. -->
+**Try it first (optional).** A demo project with made-up exports shows
+what a finished run looks like before you download anything of your own.
 
 ## 2. Create a project
 
@@ -101,12 +117,15 @@ it, which may be years back.
 | Broker | Download | Notes |
 | --- | --- | --- |
 | Interactive Brokers | Activity Statement, CSV | Longest period allowed; one file per year is fine. |
-| Questrade | Account activity, CSV | Every year available. |
+| Questrade | Transaction history (account activity) | Every year available. It downloads as Excel: convert it with `taxjson-xlsx-to-csv FILE.xlsx -o FILE.csv`. |
 | RBC Direct Investing | Transaction history, CSV | Every year available. |
-| Webull | Trading Summary, CSV | Buys and sells only: enter dividends and interest from the slips (README, "Supported brokerages"). |
+| Webull | Trading Summary, CSV | Buys and sells only: enter dividends and interest from the slips ([brokers.md](brokers.md#webull)). |
 | Kraken | Trades **and** Ledgers, CSV | Both, into the same folder. |
 | Coinbase | Transaction history, CSV | |
-| Anything else | Any CSV | A column mapping: README, "Any other broker". |
+| Anything else | Any CSV | A column mapping: [brokers.md, "Any other broker"](brokers.md#any-other-broker-generic-importer). |
+
+Where each download is in the broker's website, how far back it goes and
+each broker's quirks: [brokers.md](brokers.md).
 
 Also save, for each account, **two positions reports with book cost**
 (the broker may call it "Holdings", "Positions" or "Portfolio"):
@@ -126,11 +145,14 @@ type its positions into a small file (step 5). Keep these reports out
 of `inputs/`, or leave them there: `tjs run` skips a positions report.
 
 **Sharing a sample** (a broker taxjson does not read yet, or a bug
-report): run `tjs redact` in the project. It copies `inputs/` to
-`inputs_redact/` and replaces account numbers, names and contact details
-in the copy, file names included; `inputs/` is not changed, and the run
-never reads `inputs_redact/`. Read the copy before you share it: the
-redactor works from patterns, so it can miss something. With one folder
+report): never share a raw export. First choice: a made-up file in the
+same shape (copy the broker's `examples/*_demo.csv` and edit its rows;
+made-up amounts are fine). Otherwise run `tjs redact` in the project. It
+copies `inputs/` to `inputs_redact/` and replaces account numbers, names
+and contact details in the copy, file names included; `inputs/` is not
+changed, and the run never reads `inputs_redact/`. It keeps amounts,
+prices, dates and symbols, and works from patterns, so it can miss
+something: read all of the copy, and share it only after that review. With one folder
 of exports for every year, run it in the year's folder: `2025/inputs_redact/`
 is then that year as a single-folder project (the shared exports and the
 year's slips under `inputs/`, its `holdings/`, `taxjson.toml` and
@@ -231,7 +253,13 @@ SAMPA.TO  margin   CAD   -20.0000  2025-03-10          1        795.05
 SAMPK.TO  margin   CAD   -10.0000  2025-05-12          1        115.05
 ```
 
-Every row marked **AFFECTS 2025** is a sale that is not in `tjs sum` yet.
+Every row marked **AFFECTS 2025** is a sale that is not in `tjs sum` yet
+(in Canada also a short whose stock another of your taxable accounts
+trades that year: one ACB pool). Rows **ACTIVE IN 2025** trade, move or
+pay income in the year without a sale drawing on the missing cost. A
+short the broker itself declares (RBC's `SHORT.` description, an IB sale
+whose `Code` says it opened a position) is listed apart as a real short,
+not missing history.
 `tjs list --negative` shows the same positions, under **Missing history (a
 sale with no purchase in your files)**, apart from real shorts (the plain
 `tjs list` marks them `missing history?`). `tjs run` names them after the
@@ -406,7 +434,9 @@ HELD - no gain yet; give them their ACB before they are sold:
 ```
 
 (US: a stock dividend's shares share the old shares' basis, so they are
-not listed.)
+not listed.) They count as covered once a positive `ADJUST` line of the
+same stock and account, dated from 31 days before to 7 days after they
+arrived, gives them a cost (5d).
 
 ### 5b. Fix, in this order
 
@@ -539,8 +569,8 @@ BUYSELL  2019-06-03  09:30:00  SAMPA.TO  20  CAD  30.00  604.95  4.95
 
 `total` for a buy is quantity × price + commission. Check a file before
 running with `taxjson-convert-tt --account margin inputs/margin/margin_start.tt`.
-The full line format (sales, return of capital, options) is in the
-README, "Importing manual cost basis".
+The full line format (sales, return of capital, options) is in
+[settings.md, ".tt files"](settings.md#tt-files).
 
 **Let the broker's figure draft the lines.** When the broker states what
 a sale with no purchase cost (IB's `Basis` on a sale coded closing), or
