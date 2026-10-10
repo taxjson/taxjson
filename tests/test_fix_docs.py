@@ -111,8 +111,8 @@ class TestNoPhantomCommands(unittest.TestCase):
 class TestKnownIssuesCurrent(unittest.TestCase):
     def test_ric_january_entry_is_the_implemented_one(self):
         # A2-0948/0952/0953/0954/1621/1625: the deferred entry went; the
-        # list-based one stays.
-        ki = _read("KNOWN_ISSUES.md")
+        # list-based one stays. Limitations by design moved to docs/limits.md.
+        ki = _read("KNOWN_ISSUES.md") + _read("docs/limits.md")
         self.assertNotIn("January-paid Q4 fund dividends are dated in the "
                          "pay year", ki)
         self.assertIn("ric_january_dividends", ki)
@@ -122,7 +122,8 @@ class TestKnownIssuesCurrent(unittest.TestCase):
 
     def test_rbc_rename_hint_scope_stated(self):
         # A2-1629: the hint needs the old symbol's rows in an export.
-        ki = _read("KNOWN_ISSUES.md")
+        # The entry is a limitation by design, now in docs/limits.md.
+        ki = _read("KNOWN_ISSUES.md") + _read("docs/limits.md")
         self.assertIn("only when an export in the project holds the old "
                       "symbol's rows", ki)
 
