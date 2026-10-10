@@ -362,6 +362,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.25.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_outside_dir_links`, `_WRITTEN_DIRS`, `load_config`; `src/taxjson/lib/safe_write.py` — `link_outside`
 
+### "Error: '-C sum' is not a valid command in this chain — nothing was executed." from `tjs -C run run sum`
+- **Check:** the folder given to `-C` (or `--dir`) has the name of a taxjson command (`run`, `sum`, `events` ...); `tjs -C run checklist` with one command fails the same way, or `tjs -C run` alone stops with "the following arguments are required: COMMAND" instead of showing the help page.
+- **Cause:** command chaining looked for the first word that names a command, and took the folder after `-C` for it: the project folder was lost and the first command's name became the folder.
+- **Fix:** upgrade: the value of `-C` / `--dir` is always the folder. On an older release, write the folder another way (`tjs -C ./run run sum`, or an absolute path).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_command_index`, `_takes_separate_value`, `_split_command_segments`, `_no_command`
+
+### `tjs events sum` prints the gains summary for an account named `sum` (or "note: 'sum' starts a new chained command; the previous command ('events') could also have taken it as an argument"), or `tjs init sum` initializes the current folder
+- **Check:** taxjson.toml has an `[accounts.NAME]` whose NAME is also a command (`sum`, `trades`, `run` ...), or the folder given to `init` is named like a command.
+- **Cause:** chaining (`tjs run sum`) started a new command at every command name after a complete command, so an optional account or folder named like a command ran that command instead, and `tjs events -- sum` chained too: no spelling addressed the account.
+- **Fix:** upgrade: a command name starts the next command only when the command before it cannot take the word, and an account of the project, a folder (`init`) or a symbol (`audit`) is the command's own (`tjs events sum` lists the events of account sum). To chain after such a command, separate the two with `--` (`tjs events -- sum`). On an older release, rename the account (its `inputs/` folder too), or give `init` the folder as `./sum`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_split_command_segments`, `_chain_accounts`, `_CHAIN_ACCOUNT_DESTS`
+
 ### "Warning: the project folder, inputs/ can be read by other users: `chmod -R go-rwx` it"
 - **Check:** `tjs run --details` says it in full: "the project folder, inputs/ can be read by other users of this computer (made by an older taxjson or another program; new files are owner-only)" and "Tighten it once: chmod -R go-rwx <project>". `ls -ld . inputs reports` in the project: a mode other than `drwx------` (for example `drwxrwxr-x`) on any of them. The warning shows once per `tjs run`.
 - **Cause:** taxjson creates every folder and file owner-only (0700 / 0600), but folders made by an older release, by `mkdir`, `git clone` or a copy keep your shell's permissions, and other accounts on the machine can then list or read your statements and books.

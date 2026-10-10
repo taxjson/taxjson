@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Command chaining: the folder after `-C` / `--dir` is never taken for the first command when it is named like one (`tjs -C run run sum`), and `tjs -C run` alone shows the help page (#51).
+- Command chaining: an account, a folder or a symbol named like a command is the command's own argument where the command takes one (`tjs events sum` with an account named sum, `tjs init sum`, `tjs audit sum`); `--` always separates two commands (`tjs events -- sum`), and `tjs run sum` and `tjs fetch run` chain as before (#52).
+
 
 ## v0.28.1 (2026-10-10)
 

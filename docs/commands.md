@@ -654,9 +654,16 @@ Commands chain in one invocation, each with its own flags: `taxjson run
 sum`, `taxjson run close-year check-filed`. A chained `--json` command's
 stdout follows the earlier commands' progress output, so pipe consumers
 should run the JSON command on its own. A failing command stops the
-chain and its exit code is the chain's. Option values that collide with
-command names are handled (`--account sum`); for the rare ambiguous
-positional, separate with `--`.
+chain and its exit code is the chain's. The whole chain is checked
+before any of it runs. `-C DIR` (before the first command) applies to
+every command, whatever the folder is called (`taxjson -C run run sum`).
+A command name starts the next command only when the command before it
+cannot take the word: an option's value (`--account sum`), an account
+of the project (`taxjson events sum` with an `[accounts.sum]`), a folder
+(`taxjson init sum`) or a symbol (`taxjson audit sum`) stays the
+command's own. `--` always separates two commands: `taxjson events --
+sum` runs `events`, then `sum`. With no account of that name, `taxjson
+events sum` and `taxjson fetch run` chain as written.
 
 #### taxjson crypto-sends
 
