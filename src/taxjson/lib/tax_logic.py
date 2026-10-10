@@ -383,7 +383,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  + (f", for contracts written from {start}" if start else "")
                  + (" (option_grant_timing_since" if since_set else
                     " (defaults to the project year; set "
-                    "option_grant_timing_since once") + ").", keys=tk),
+                    "option_grant_timing_since once — `taxjson new-year` "
+                    "writes the previous year's default into the new "
+                    "project") + ").", keys=tk),
             Rule("CA-OPT-02", "Earlier contracts keep close timing.",
                  keys=tk, cont=True),
             Rule("CA-OPT-11",

@@ -1393,20 +1393,28 @@ def apply_shared(plan: SharedPlan) -> Tuple[List[int], List[Path]]:
     when it differs), the setting in each year of `set_years`
     (taxjson.toml rewritten in place, comments kept), then each year's
     copy removed — kept as tobase.map.bak beside it. Returns (the years
-    given the setting, the backups of the copies)."""
+    given the setting, the backups of the copies). Every taxjson.toml
+    is changed in memory first (set_key_text reads each result back):
+    a LayoutError there leaves every file as it was (GitHub #34)."""
     from taxjson.lib import project_layout as _PL
     from taxjson.lib.safe_write import (backup_copy, write_user_file)
+    edits: List[Tuple[int, Path, Path, str, str]] = []
+    for y in plan.set_years:
+        d = plan.folder / str(y)
+        cfg = d / _PL.CONFIG
+        text = cfg.read_text(encoding="utf-8-sig")
+        try:
+            new = _PL.set_key_after(text, f"settings.{_PL.TOBASE_KEY}",
+                                    _PL.SHARED_TOBASE, _PL.INPUTS_KEY)
+        except _PL.LayoutError as e:
+            raise _PL.LayoutError(f"{y}/{_PL.CONFIG}: {e}") from None
+        edits.append((y, d, cfg, text, new))
     cur = plan.target.read_bytes() if plan.target.is_file() else None
     if cur != plan.text:
         write_user_file(plan.target, plan.text, plan.folder,
                         backup=cur is not None)
     done: List[int] = []
-    for y in plan.set_years:
-        d = plan.folder / str(y)
-        cfg = d / _PL.CONFIG
-        text = cfg.read_text(encoding="utf-8-sig")
-        new = _PL.set_key_after(text, f"settings.{_PL.TOBASE_KEY}",
-                                _PL.SHARED_TOBASE, _PL.INPUTS_KEY)
+    for y, d, cfg, text, new in edits:
         if new != text:
             write_user_file(cfg, new, d, backup=False)
         done.append(y)

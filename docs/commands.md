@@ -318,17 +318,27 @@ lock, last year's `[estimate]` / `[instalments]` and the accounts'
 `holdings` commented out for reference) and its `ticker.map` copied, and
 an empty `holdings/`. In Canada the new year keeps reading the
 `tobase.map` every year shares (a year from before v0.27.1 that has its
-own copy passes it on). It prints where to save the year's downloads.
+own copy passes it on), and keeps the option grant-timing cutoff the
+previous year applied by default (`option_grant_timing_since`, set to
+that year when it was not set). The files are made in a staging folder
+and moved into place when complete: a failure leaves no `taxjson.toml`
+behind, so the command can be run again. It prints where to save the
+year's downloads.
 
 #### taxjson align
 
 `taxjson align --from YEAR [--write [--all]] [--json]`
 
 The `ticker.map` rules and `taxjson.toml` keys of another year's project
-that differ from this one's (the year's own keys aside). `--write` brings
+that differ from this one's (the year's own keys and the accounts' ids
+and `holdings` aside; an array of tables such as `[[distributions]]` is
+one key; `accounts (order)` when the accounts are in another order). A
+file that cannot be read is an error, never "the same". `--write` brings
 the other year's into this project, asked one by one on a terminal
 (`--all`: every one), keeping the previous file as `.bak`; the other year
-is never written.
+is never written. Every chosen change is made and read back first: the
+files are written only when all of them can be (otherwise nothing is),
+and the accounts' order is shown, never rewritten.
 
 #### taxjson format
 

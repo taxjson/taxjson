@@ -618,64 +618,53 @@ def new_year_text(text: str, old_year: int, new_year: int) -> str:
     tables ([estimate], [instalments]) and each account's `holdings`
     (last year's positions snapshots) commented out under a note —
     everything else (accounts, settings, comments) kept as written.
-    Tables and keys are found by toml_statements: a quoted or hyphenated
-    account table (`[accounts."margin-main"]`) and a value over several
-    lines are what they are (GitHub #27)."""
-    lines = _lines(text)
-    stmts = toml_statements(text)
-    have_prior = any(s.kind == "kv" and s.table + s.key
-                     == ("settings", "prior_year_record") for s in stmts)
-    prior = f'"../{old_year}/filed/{old_year}.json"'
-    out: List[str] = []
-    table: Tuple[str, ...] = ()
-    for st in stmts:
-        seg = lines[st.first:st.last + 1]
-        if st.kind == "table":
-            table = st.table
-            if table[0] in YEAR_ONLY_TABLES:
-                out.append(f"## {old_year}'s figures, kept for reference "
-                           f"by `taxjson new-year`: put {new_year}'s in and "
-                           f"uncomment them.")
-                out += ["# " + ln for ln in seg]
-                continue
-        elif st.kind == "kv":
-            full = st.table + st.key
-            if full[0] in YEAR_ONLY_TABLES:
-                out += ["# " + ln for ln in seg]
-                continue
-            if full[0] == "accounts" and len(full) == 3 \
-                    and full[2] == "holdings":
-                # Last year's positions snapshots are not this year's:
-                # the new year's go in its holdings/ (found by account),
-                # or are listed here again (lib/holdings_dir).
-                out.append(f"## {old_year}'s positions snapshots, "
-                           f"commented out by `taxjson new-year`: save "
-                           f"{new_year}'s in holdings/, or list them here.")
-                out += ["# " + ln for ln in seg]
-                continue
-            if full == ("settings", "year"):
-                seg = [re.sub(r"=(\s*)\d{4}", lambda mm: f"={mm.group(1)}"
-                              f"{new_year}", seg[0], count=1)] + seg[1:]
-                if not have_prior:
-                    seg.append(f"prior_year_record = {prior}")
-            elif full == ("settings", "prior_year_record"):
-                seg = [seg[0].split("=", 1)[0] + "= " + prior]
-        elif table[:1] and table[0] in YEAR_ONLY_TABLES:
-            # A line of a year-only table that does not parse.
-            seg = [ln if not ln.strip() or ln.lstrip().startswith("#")
-                   else "# " + ln for ln in seg]
-        out += seg
-    return "\n".join(out) + "\n"
+    Every change goes through set_key_text, which reads the keys as
+    tomllib does (a quoted or hyphenated account table, GitHub #27; a
+    value over several lines; `year` spelt `+2024` or `2_024`, GitHub
+    #37; [settings] as an inline table, #38, or dotted keys, #39) and
+    checks that the result reads as intended. LayoutError when the
+    text cannot be read or changed that way."""
+    doc = parse_toml(text)
+    for t in YEAR_ONLY_TABLES:
+        if t in doc:
+            text = set_key_text(
+                text, (t,), None,
+                note=f"## {old_year}'s figures, kept for reference by "
+                     f"`taxjson new-year`: put {new_year}'s in and "
+                     f"uncomment them.")
+    accounts = doc.get("accounts")
+    for name, a in (accounts.items() if isinstance(accounts, dict)
+                    else ()):
+        if isinstance(a, dict) and "holdings" in a:
+            # Last year's positions snapshots are not this year's: the
+            # new year's go in its holdings/ (found by account), or are
+            # listed here again (lib/holdings_dir).
+            text = set_key_text(
+                text, ("accounts", name, "holdings"), None,
+                note=f"## {old_year}'s positions snapshots, commented out "
+                     f"by `taxjson new-year`: save {new_year}'s in "
+                     f"holdings/, or list them here.")
+    text = set_key_text(text, ("settings", "year"), new_year)
+    return set_key_text(text, ("settings", "prior_year_record"),
+                        f"../{old_year}/filed/{old_year}.json",
+                        after="year")
 
 
 # ----------------------------------------------------------- comparing
 
 def map_rules(path: Path) -> List[str]:
-    """ticker.map's rule lines, comments and spacing dropped."""
-    try:
-        text = Path(path).read_text(encoding="utf-8-sig")
-    except OSError:
+    """ticker.map's rule lines, comments and spacing dropped ([] when
+    there is no file). LayoutError when the file is there but cannot be
+    read (a folder, a link to a missing file, not UTF-8): an unreadable
+    map is never compared as an empty one."""
+    p = Path(path)
+    if not os.path.lexists(p):
         return []
+    try:
+        text = p.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        why = e.strerror if isinstance(e, OSError) else "not UTF-8 text"
+        raise LayoutError(f"cannot read {p}: {why or e}") from None
     out = []
     for ln in text.splitlines():
         ln = ln.split("#", 1)[0].strip()
@@ -684,29 +673,46 @@ def map_rules(path: Path) -> List[str]:
     return out
 
 
-def flat_keys(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """{"settings.year": 2025, "accounts.margin.type": "taxable", ...}:
-    each key of a parsed taxjson.toml by its dotted name (an array or
-    inline table as one value)."""
-    out: Dict[str, Any] = {}
+KeyPath = Tuple[str, ...]
+
+
+def flat_paths(doc: Dict[str, Any]) -> Dict[KeyPath, Any]:
+    """{("settings", "year"): 2025, ("accounts", "margin", "type"):
+    "taxable", ...}: each key of a parsed taxjson.toml by its path (an
+    array, an array of tables or an inline table as one value). A name
+    holding a dot (`[accounts."margin.one"]`) stays one part (GitHub
+    #36)."""
+    out: Dict[KeyPath, Any] = {}
     for t, v in doc.items():
         if t == "accounts" and isinstance(v, dict):
             for name, a in v.items():
                 if isinstance(a, dict):
                     for k, x in a.items():
-                        out[f"accounts.{name}.{k}"] = x
+                        out[("accounts", name, k)] = x
                 else:
-                    out[f"accounts.{name}"] = a
+                    out[("accounts", name)] = a
         elif isinstance(v, dict):
             for k, x in v.items():
-                out[f"{t}.{k}"] = x
+                out[(t, k)] = x
         else:
-            out[t] = v
+            out[(t,)] = v
     return out
 
 
+def flat_keys(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """flat_paths with each path written as its TOML dotted key
+    (`accounts."margin.one".type`)."""
+    return {key_text(p): v for p, v in flat_paths(doc).items()}
+
+
+def key_text(path: Sequence[str]) -> str:
+    """A key path as a TOML dotted key: `settings.year`,
+    `accounts."margin.one".type` (a part that is not a bare key quoted)."""
+    return _dotted(path)
+
+
 # Keys that differ from year to year by design.
-_PER_YEAR_KEYS = ("settings.year", "settings.prior_year_record")
+_PER_YEAR_KEYS = (("settings", "year"), ("settings", "prior_year_record"))
 # Account keys never compared or brought over: the year's own positions
 # snapshots (`holdings`), and the broker's account ids and query id
 # (an id is the user's, never shown in a list of differences).
@@ -714,12 +720,32 @@ _ACCOUNT_KEYS_APART = ("holdings", "account", "broker_accounts",
                        "query_id")
 
 
-def _compared(key: str) -> bool:
-    parts = key.split(".")
-    if key in _PER_YEAR_KEYS or parts[0] in YEAR_ONLY_TABLES:
+def _compared(path: KeyPath) -> bool:
+    if path in _PER_YEAR_KEYS or path[0] in YEAR_ONLY_TABLES:
         return False
-    return not (parts[0] == "accounts" and len(parts) == 3
-                and parts[2] in _ACCOUNT_KEYS_APART)
+    return not (path[0] == "accounts" and len(path) == 3
+                and path[2] in _ACCOUNT_KEYS_APART)
+
+
+# compare()'s key for the accounts' order (GitHub #42).
+ACCOUNT_ORDER_KEY = "accounts (order)"
+
+
+def account_order(here: Dict[str, Any], there: Dict[str, Any]
+                  ) -> Optional[Dict[str, List[str]]]:
+    """The accounts both configurations have, in each one's order, when
+    the orders differ (None when they agree): the [accounts.NAME] tables
+    are processed in the order they are written, so trades at the same
+    moment in two accounts can book differently (GitHub #42)."""
+    def _names(doc):
+        a = doc.get("accounts")
+        return [n for n, v in a.items() if isinstance(v, dict)] \
+            if isinstance(a, dict) else []
+    a, b = _names(here), _names(there)
+    common = set(a) & set(b)
+    a = [n for n in a if n in common]
+    b = [n for n in b if n in common]
+    return None if a == b else {"here": a, "there": b}
 
 
 def compare(here: Path, other: Path) -> Dict[str, Any]:
@@ -727,7 +753,14 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     taxjson.toml keys (`taxjson align`, `taxjson years --diff`): rules
     only in one, keys set differently (`year`, prior_year_record, the
     year's own tables and the accounts' holdings and broker ids left
-    out: _compared; arrays of tables compared whole)."""
+    out: _compared; arrays of tables compared whole), and the order of
+    the accounts both have when it differs (one more key,
+    ACCOUNT_ORDER_KEY, with `"order": true` and the names in each
+    order). Each key is given by its path (`path`, a name with a dot
+    one part) and its TOML spelling (`key`). LayoutError naming the file when either
+    taxjson.toml or ticker.map cannot be read: an unreadable file never
+    compares as the same (GitHub #56)."""
+    da, db = read_config(here), read_config(other)
     a, b = map_rules(here / TICKER_MAP), map_rules(other / TICKER_MAP)
     # tobase.map (lib/tobase_map): the interlisted pairs. With one file
     # every year shares (`tobase_map`) the setting is compared (a key
@@ -738,20 +771,21 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     tb: List[str] = []
     if not (shared_tobase(here) or shared_tobase(other)):
         ta, tb = map_rules(here / TOBASE_MAP), map_rules(other / TOBASE_MAP)
-    try:
-        fa = flat_keys(read_config(here))
-        fb = flat_keys(read_config(other))
-    except LayoutError:
-        fa, fb = {}, {}
-    keys = sorted(k for k in set(fa) | set(fb)
-                  if _compared(k) and fa.get(k) != fb.get(k))
+    fa, fb = flat_paths(da), flat_paths(db)
+    order = account_order(da, db)
+    keys = sorted((k for k in set(fa) | set(fb)
+                   if _compared(k) and fa.get(k) != fb.get(k)),
+                  key=lambda p: (key_text(p), p))
     return {
         "map_only_here": [r for r in a if r not in b],
         "map_only_there": [r for r in b if r not in a],
         "tobase_only_here": [r for r in ta if r not in set(tb)],
         "tobase_only_there": [r for r in tb if r not in set(ta)],
-        "keys": [{"key": k, "here": fa.get(k), "there": fb.get(k)}
-                 for k in keys],
+        "keys": [{"key": key_text(k), "path": list(k),
+                  "here": fa.get(k), "there": fb.get(k)} for k in keys]
+        + ([{"key": ACCOUNT_ORDER_KEY, "path": ["accounts"], "order": True,
+             "here": order["here"], "there": order["there"]}]
+           if order else []),
     }
 
 
@@ -762,7 +796,7 @@ def toml_value(v: Any) -> str:
         return "true" if v else "false"
     if isinstance(v, (int, float)):
         return repr(v)
-    if isinstance(v, (_dt.date, _dt.datetime)):
+    if isinstance(v, (_dt.date, _dt.datetime, _dt.time)):
         return v.isoformat()
     if isinstance(v, str):
         return json.dumps(v, ensure_ascii=False)
@@ -949,47 +983,243 @@ def _dotted(parts: Sequence[str]) -> str:
     return ".".join(_toml_key(p) for p in parts)
 
 
-def set_key_text(text: str, dotted: Union[str, Sequence[str]],
-                 value: Any) -> str:
-    """`text` (a taxjson.toml) with the key `dotted` ("settings.x",
-    "accounts.NAME.x", or its parts as a tuple when a name holds a dot)
-    set to `value`: every line of its value replaced where it is set (a
-    value over several lines included — only the first was, leaving
-    the rest as invalid TOML, GitHub #26; a comment after a one-line
-    value kept), else added at the end of its table (the table added at
-    the end of the file when absent). Comments and the rest kept. A
-    value None comments the key out, each of its lines."""
-    parts = tuple(dotted.split(".")) if isinstance(dotted, str) \
-        else tuple(dotted)
-    table, key = parts[:-1], parts[-1]
-    lines = _lines(text)
-    start = end = None
-    for st in toml_statements(text):
-        if st.kind == "table":
-            if start is not None and end is None:
-                end = st.first
-            if st.table == table and not st.array:
-                start, end = st.first, None
-            continue
-        if st.kind == "kv" and st.table + st.key == parts:
+def parse_toml(text: str) -> Dict[str, Any]:
+    """`text` parsed (a leading BOM dropped); LayoutError when it does
+    not read as TOML."""
+    from taxjson.lib.tomlcompat import tomllib
+    try:
+        doc = tomllib.loads(text.lstrip("﻿"))
+    except Exception as e:                              # noqa: BLE001
+        raise LayoutError(f"taxjson.toml is not valid TOML: {e}") from None
+    return doc if isinstance(doc, dict) else {}
+
+
+def _with_key(doc: Dict[str, Any], path: KeyPath, value: Any
+              ) -> Dict[str, Any]:
+    """A copy of the parsed `doc` with `path` set to `value` (removed
+    when None): what set_key_text's result must read as. LayoutError
+    when the path runs through a value that is not a table (an array
+    of tables included)."""
+    import copy
+    out = copy.deepcopy(doc)
+    cur = out
+    for i, p in enumerate(path[:-1]):
+        nxt = cur.get(p)
+        if nxt is None:
             if value is None:
-                new = ["# " + ln for ln in lines[st.first:st.last + 1]]
-            else:
-                new = [f"{_dotted(st.key)} = {toml_value(value)}"
-                       + (f"  {st.comment}" if st.comment else "")]
-            lines[st.first:st.last + 1] = new
-            return "\n".join(lines) + "\n"
+                return out
+            nxt = cur[p] = {}
+        if not isinstance(nxt, dict):
+            raise LayoutError(f"cannot {'remove' if value is None else 'set'}"
+                              f" {_dotted(path)}: {_dotted(path[:i + 1])} "
+                              f"is not a table")
+        cur = nxt
     if value is None:
-        return text
-    new = f"{_toml_key(key)} = {toml_value(value)}"
-    if start is None:
-        return text.rstrip("\n") + f"\n\n[{_dotted(table)}]\n{new}\n"
-    if end is None:
-        end = len(lines)
-    while end > start + 1 and not lines[end - 1].strip():
-        end -= 1
-    lines.insert(end, new)
-    return "\n".join(lines) + "\n"
+        cur.pop(path[-1], None)
+    else:
+        cur[path[-1]] = value
+    return out
+
+
+def _value_at(doc: Dict[str, Any], path: KeyPath) -> Any:
+    cur: Any = doc
+    for p in path:
+        if not isinstance(cur, dict) or p not in cur:
+            return None
+        cur = cur[p]
+    return cur
+
+
+def _commented(ln: str, whole: bool) -> str:
+    """A line commented out: every line of a key's value (`whole`), else
+    only one that is not blank or a comment already."""
+    if whole or (ln.strip() and not ln.lstrip().startswith("#")):
+        return "# " + ln
+    return ln
+
+
+def set_key_text(text: str, dotted: Union[str, Sequence[str]],
+                 value: Any, *, after: Optional[str] = None,
+                 note: Optional[str] = None) -> str:
+    """`text` (a taxjson.toml) with the key `dotted` ("settings.x", or
+    its parts as a tuple when a name holds a dot) set to `value`, or
+    commented out when `value` is None — comments and the rest of the
+    text kept as written.
+
+    Where the key is set, every line of its value is replaced (a value
+    over several lines included, GitHub #26; a comment after a one-line
+    value kept), whatever the spelling of the old value (`+2024`,
+    `2_024`, GitHub #37). A key inside an inline table (`settings =
+    {year = 2024}`) rewrites that inline table (#34, #38); a key of a
+    table written as dotted keys (`settings.year = 2024`) is added
+    beside them, in the same table (#39); an array of tables
+    (`[[distributions]]`) is written or commented out as [[...]]
+    sections (#41). A key not set yet goes after the key `after` of the
+    same table when that is set, else at the end of its table (the
+    table added at the end of the file when absent). Removing comments
+    out every line that sets it (each section of an array of tables),
+    under `note` when given.
+
+    The result is read back and must equal the original with exactly
+    this key changed: LayoutError otherwise (and when `text` does not
+    read as TOML) — never a file that reads differently from what was
+    asked."""
+    path: KeyPath = tuple(dotted.split(".")) if isinstance(dotted, str) \
+        else tuple(dotted)
+    if not path:
+        raise LayoutError("no key to set")
+    doc = parse_toml(text)
+    want = _with_key(doc, path, value)
+    if value is None and want == doc:
+        return text                 # not set: nothing to remove
+    out = _edit_text(text, doc, path, value, after, note)
+    try:
+        got = parse_toml(out)
+    except LayoutError as e:
+        got, why = None, str(e)
+    else:
+        why = "it would read differently"
+    if got != want:
+        raise LayoutError(
+            f"cannot {'remove' if value is None else 'set'} "
+            f"{_dotted(path)} in taxjson.toml safely ({why}): the table "
+            f"is written in a form this edit does not handle — write it "
+            f"out as a [table] with one key per line, then try again")
+    return out
+
+
+def _edit_text(text: str, doc: Dict[str, Any], path: KeyPath, value: Any,
+               after: Optional[str], note: Optional[str]) -> str:
+    """set_key_text's edit of the lines (checked by the caller)."""
+    lines = _lines(text)
+    stmts = toml_statements(text)
+    n = len(path)
+
+    def full(s: TomlStatement) -> KeyPath:
+        return s.table + s.key
+
+    def one(s: TomlStatement, v: Any) -> List[str]:
+        # The key as written (its spacing and alignment kept).
+        first = lines[s.first]
+        _segs, k = _toml_key_at(first, 0)
+        while k < len(first) and first[k] in " \t":
+            k += 1
+        k += 1                                          # the "="
+        while k < len(first) and first[k] in " \t":
+            k += 1
+        return [first[:k] + toml_value(v)
+                + (f"  {s.comment}" if s.comment else "")]
+
+    kvs = [s for s in stmts if s.kind == "kv"]
+    # A key of an inline table: the inline table is rewritten whole.
+    anc = [s for s in kvs if len(full(s)) < n and path[:len(full(s))]
+           == full(s)]
+    if anc:
+        s = anc[0]
+        sub = _value_at(doc, full(s))
+        if not isinstance(sub, dict):
+            raise LayoutError(f"cannot set {_dotted(path)}: "
+                              f"{_dotted(full(s))} is not a table")
+        sub = _with_key(sub, path[len(full(s)):], value)
+        lines[s.first:s.last + 1] = one(s, sub)
+        return "\n".join(lines) + "\n"
+    exact = [s for s in kvs if full(s) == path]
+    below = [s for s in kvs if len(full(s)) > n and full(s)[:n] == path]
+    heads = [i for i, s in enumerate(stmts) if s.kind == "table"]
+    sections = [i for i in heads if stmts[i].table[:n] == path]
+    if exact and not below and not sections and value is not None:
+        s = exact[0]
+        lines[s.first:s.last + 1] = one(s, value)
+        return "\n".join(lines) + "\n"
+    # Comment out every statement that sets the key: its own line(s),
+    # dotted keys below it, and each [path...] / [[path]] section.
+    gone = set(id(s) for s in exact + below)
+    for i in sections:
+        nxt = next((h for h in heads if h > i), len(stmts))
+        gone.update(id(s) for s in stmts[i:nxt])
+    out: Dict[int, List[str]] = {}
+    noted = False
+    for s in stmts:
+        if id(s) not in gone:
+            continue
+        seg = [_commented(ln, s.kind != "other")
+               for ln in lines[s.first:s.last + 1]]
+        if note and not noted:
+            seg = [note] + seg
+            noted = True
+        out[s.first] = seg
+        for k in range(s.first + 1, s.last + 1):
+            out[k] = []
+    end: List[str] = []
+    if value is not None:
+        key = path[-1]
+        parent = path[:-1]
+        line = f"{_toml_key(key)} = {toml_value(value)}"
+        live = [s for s in stmts if id(s) not in gone]
+        if isinstance(value, list) and value \
+                and all(isinstance(x, dict) for x in value):
+            # An array of tables: one [[path]] section per element.
+            for x in value:
+                end += ["", f"[[{_dotted(path)}]]"] + [
+                    f"{_toml_key(k)} = {toml_value(v)}"
+                    for k, v in x.items()]
+        elif isinstance(value, dict) and sections:
+            end += ["", f"[{_dotted(path)}]"] + [
+                f"{_toml_key(k)} = {toml_value(v)}"
+                for k, v in value.items()]
+        else:
+            at = None
+            sib = [s for s in live if s.kind == "kv" and after is not None
+                   and full(s) == parent + (after,)]
+            hdr = [i for i in heads if id(stmts[i]) not in gone
+                   and stmts[i].table == parent and not stmts[i].array]
+            dk = [s for s in live if s.kind == "kv"
+                  and len(full(s)) > len(parent)
+                  and full(s)[:len(parent)] == parent
+                  and len(s.table) <= len(parent)]
+            if sib:
+                s = sib[0]
+                at = s.last
+                line = (f"{_dotted(s.key[:-1] + (key,))} = "
+                        f"{toml_value(value)}")
+            elif hdr:
+                # After the table's last key (a comment or blank line
+                # after it stays below).
+                i = hdr[0]
+                nxt = next((h for h in heads if h > i), len(stmts))
+                body = [s for s in stmts[i + 1:nxt] if s.kind == "kv"]
+                at = body[-1].last if body else stmts[i].last
+            elif dk and parent:
+                s = dk[-1]
+                at = s.last
+                line = (f"{_dotted(parent[len(s.table):] + (key,))} = "
+                        f"{toml_value(value)}")
+            elif not parent:
+                # A key of the root table: before the first table.
+                first = stmts[heads[0]].first if heads else len(lines)
+                at = first - 1
+                while at >= 0 and not lines[at].strip():
+                    at -= 1
+                if at < 0:
+                    if lines:
+                        out[0] = [line] + out.get(0, [lines[0]])
+                    else:
+                        end.append(line)
+                    line = ""
+            else:
+                end += ["", f"[{_dotted(parent)}]", line]
+                line = ""
+            if at is not None and line:
+                cur = out.get(at, [lines[at]])
+                out[at] = cur + [line]
+    res: List[str] = []
+    for k, ln in enumerate(lines):
+        res += out.get(k, [ln])
+    if end:
+        while res and not res[-1].strip():
+            res.pop()
+        res += end
+    return "\n".join(res) + "\n"
 
 
 def tobase_layout(folder) -> Dict[str, Any]:
@@ -1020,24 +1250,8 @@ def set_key_after(text: str, dotted: str, value: Any,
                   after: str) -> str:
     """set_key_text, a key not set yet going on the line after the key
     `after` of the same table when that is set (`tobase_map` beside
-    `inputs_dir`), else where set_key_text puts it. Tables and keys are
-    read with toml_statements (quoted or hyphenated names, values over
-    several lines)."""
-    parts = tuple(dotted.split("."))
-    table, key = parts[:-1], parts[-1]
-    at = None
-    for st in toml_statements(text):
-        if st.kind != "kv" or st.table != table or len(st.key) != 1:
-            continue
-        if st.key[0] == key:
-            return set_key_text(text, dotted, value)
-        if at is None and st.key[0] == after:
-            at = st.last
-    if at is None or value is None:
-        return set_key_text(text, dotted, value)
-    lines = text.splitlines()
-    lines.insert(at + 1, f"{key} = {toml_value(value)}")
-    return "\n".join(lines) + "\n"
+    `inputs_dir`)."""
+    return set_key_text(text, dotted, value, after=after)
 
 
 # ------------------------------------------------------------ years view
@@ -1097,13 +1311,18 @@ def years_report(folder: Path) -> Dict[str, Any]:
                              if (d / TOBASE_MAP).is_file() else None)
         rec["tobase_shared"] = p is not None
         if newest is not None and d != newest:
-            c = compare(d, newest)
-            rec["differs_from_newest"] = {
-                "map_rules": len(c["map_only_here"])
-                + len(c["map_only_there"]),
-                "tobase_rules": len(c["tobase_only_here"])
-                + len(c["tobase_only_there"]),
-                "keys": len(c["keys"])}
+            try:
+                c = compare(d, newest)
+            except LayoutError as e:
+                # Never "the same" when a file cannot be read (#56).
+                rec["problem"] = rec["problem"] or str(e).splitlines()[0]
+            else:
+                rec["differs_from_newest"] = {
+                    "map_rules": len(c["map_only_here"])
+                    + len(c["map_only_there"]),
+                    "tobase_rules": len(c["tobase_only_here"])
+                    + len(c["tobase_only_there"]),
+                    "keys": len(c["keys"])}
         try:
             st = CL.load_state(d)
             for ov in (st.get("overrides") or {}).values():
