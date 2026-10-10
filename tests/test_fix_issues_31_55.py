@@ -38,14 +38,14 @@ def _env():
 
 def _cli(root, *args):
     return subprocess.run(
-        [sys.executable, "-P", "-m", "taxjson.bin.taxjson_run", "-C",
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
          str(root), *args], capture_output=True, text=True, env=_env(),
         stdin=subprocess.DEVNULL, timeout=300)
 
 
 def _tool(module, *args):
     return subprocess.run(
-        [sys.executable, "-P", "-m", module, *args], capture_output=True,
+        [sys.executable, "-m", module, *args], capture_output=True,
         text=True, env=_env(), stdin=subprocess.DEVNULL, timeout=300)
 
 
