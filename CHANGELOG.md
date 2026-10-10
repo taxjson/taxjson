@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- `taxjson run`'s console shows each warning and note as one line that
+  names the command with the detail (an error keeps its fix lines); the
+  closing block under "Before you trust these numbers" is at most six
+  lines, every finding kept. The broker each file was read as, and every
+  message's explanation, come back with `taxjson run --details` (and stay
+  in work/*.diag); output captured by a program is unchanged.
 
 ## v0.27.1 (2026-10-10)
 

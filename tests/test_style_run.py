@@ -226,8 +226,10 @@ class TestRunStyle(unittest.TestCase):
 
     def test_captured_stage_text_is_unchanged(self):
         # The .diag keeps the one-line ATTENTION text the console wraps.
+        # (--details: the default console shows each message as one
+        # line, Essentials first)
         p = self._copy("canada")
-        r = p.run("run", "--no-input")
+        r = p.run("run", "--no-input", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         diag = (p.root / "work" / "margin_ib.json.diag").read_text()
         long = [ln for ln in diag.splitlines()

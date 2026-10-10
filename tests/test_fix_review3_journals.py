@@ -159,7 +159,9 @@ class TestShortNoteReadsThisRun(unittest.TestCase):
                            country=country)
             tj(root, "run", "--no-input")
             (root / "inputs" / "margin" / "book.tt").write_text(second)
-            r = tj(root, "run", "--no-input")
+            # --details: the note's detail line (_OPEN) is not on the
+            # default one-line console (Essentials first).
+            r = tj(root, "run", "--no-input", "--details")
             s = tj(root, "sum", "--json").stdout
             mid = " ".join(r.stdout.split(
                 "Checking for missing purchase history", 1)[-1]
@@ -338,7 +340,11 @@ class TestTtTotalWarning(unittest.TestCase):
 
     def _check(self, country):
         # (a sheltered account: the arrival leg needs no broker row)
-        r = self._run(country, "lots.tt", _ACQ, acct="plan")
+        # The line and the price that agrees are the warning's detail:
+        # --details (the default console shows its headline).
+        r0 = self._run(country, "lots.tt", _ACQ, acct="plan")
+        self.assertIn("inputs/plan/lots.tt:1", r0.stdout + r0.stderr)
+        r = self._run(country, "lots.tt", _ACQ, "--details", acct="plan")
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr)
         text = " ".join(r.stdout.split() + r.stderr.split())
         self.assertIn("ACQUIRED 2024-01-10 09:30:00 QZA.TO 40 CAD 12.00 "

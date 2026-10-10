@@ -496,15 +496,115 @@ def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.tt",
                                          width_=width_))
 
 
+def _syms(items: Sequence[Dict[str, Any]], n: int = 2) -> str:
+    """`GHOSTQ.TO, OLDCO.US +1 more`: the symbols only (one-line form)."""
+    shown = ", ".join(str(i["symbol"]) for i in items[:n])
+    return shown + (f" +{len(items) - n} more" if len(items) > n else "")
+
+
+# The closing block's one-line form (docs/output-style.md, Essentials
+# first): at most this many lines under its heading.
+CONCISE_BUDGET = 6
+
+
+def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Each finding as (kind, one line naming the command with the
+    detail): the default view of the run's closing block. Every warning
+    class render_blocks says is here; the explanation is in --details."""
+    items: List[Tuple[str, str]] = []
+    np_ = doc.get("no_purchase") or []
+    if np_:
+        items.append(("Warning", f"NOT in the totals: "
+                      f"{_n(len(np_), 'sale', 'sales')} with no purchase "
+                      f"({_syms(np_)}) — `taxjson find-missing-history`"))
+    ins = doc.get("no_purchase_in_sum") or []
+    cov = [i for i in ins if i.get("booked") == BOOKED_SHORT_COVER]
+    mat = [i for i in ins if i.get("booked") != BOOKED_SHORT_COVER]
+    if cov:
+        items.append(("Warning", f"{_n(len(cov), 'sale', 'sales')} with no "
+                      f"purchase booked as shorts covered later "
+                      f"({_syms(cov)}) — `taxjson find-missing-history`"))
+    zs, zh = doc.get("zero_cost_sold") or [], doc.get("zero_cost_held") or []
+    if zs or zh:
+        items.append(("Warning", f"{_n(len(zs) + len(zh), 'position', 'positions')}"
+                      f" at a $0 cost ({_syms(zs + zh)}) — "
+                      f"`taxjson find-missing-history`"))
+    tn = doc.get("transfer_in_no_cost") or []
+    if tn:
+        items.append(("Warning", f"{_n(len(tn), 'transfer-in', 'transfer-ins')}"
+                      f" kept out with no cost ({_syms(tn)}) — "
+                      f"`taxjson transfers`"))
+    inc = doc.get("income_not_held") or []
+    if inc:
+        items.append(("Warning", f"{_n(len(inc), 'security', 'securities')}"
+                      f" paid income the books do not hold ({_syms(inc)}) — "
+                      f"`taxjson sanity`"))
+    if mat:
+        items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
+                      f"read short by the history check are in the totals "
+                      f"({_syms(mat)}) — `taxjson find-missing-history`"))
+    zd = doc.get("zero_cost_declared") or []
+    if zd:
+        items.append(("Info", f"{_n(len(zd), 'position', 'positions')} at "
+                      f"the $0 cost you declared ({_syms(zd)}) — "
+                      f"`taxjson spinoffs`"))
+    un = doc.get("unchecked_accounts") or []
+    if un:
+        items.append(("Info", f"{len(un)} "
+                      f"{'account' if len(un) == 1 else 'accounts'} with "
+                      f"positions not checked against the broker's "
+                      f"holdings — `taxjson sanity`"))
+    return items
+
+
 def render_blocks(doc: Dict[str, Any], *,
                   mh_name: str = "missing_history.tt",
-                  width_: Optional[int] = None) -> List[List[str]]:
+                  width_: Optional[int] = None,
+                  concise: bool = False,
+                  details_hint: bool = False) -> List[List[str]]:
     """render() as its entries (the heading, each finding, the closing
     line), each a list of lines: lib/out.show_blocks prints them with a
-    blank line after an entry of more than one line."""
-    if is_clean(doc):
+    blank line after an entry of more than one line. `concise`: the
+    run's default console — one line per finding (concise_items), at
+    most CONCISE_BUDGET lines under the heading (the Info findings folded
+    into one when there are more), and the closing line naming
+    `taxjson run --details` when `details_hint`."""
+    if is_clean(doc) and not (concise and details_hint):
         return []
     from taxjson.lib import out
+    if concise:
+        w = out.width() if width_ is None else width_
+        heading = ["==> Before you trust these numbers "
+                   "(docs/getting-started.md, step 5)"]
+        items = concise_items(doc)
+        room = CONCISE_BUDGET - 1
+        if len(items) > room:
+            warns = [i for i in items if i[0] == "Warning"]
+            infos = [i for i in items if i[0] != "Warning"]
+            keep = max(0, room - len(warns) - 1)
+            items = warns + infos[:keep]
+            rest = infos[keep:]
+            if rest:
+                items.append(("Info", f"{len(rest)} more check(s) not yet "
+                              f"made — `taxjson checklist`"))
+        closing = ("Info: Then run `taxjson checklist` (the next step); "
+                   "each message's detail: `taxjson run --details`"
+                   if details_hint else
+                   "Info: Then run `taxjson checklist`: it checks every "
+                   "step and names the next one.")
+
+        def _one(text: str) -> List[str]:
+            if 0 < w < len(text):
+                text = text.replace("`taxjson ", "`tjs ")
+            if 0 < w < len(text):
+                # Still too long: the names go (the command lists them).
+                import re as _re
+                text = _re.sub(r" \([^()]*\)(?= — )", "", text, count=1)
+            return out.wrap(text, w, "", "" if w > 0 else "  ")
+        blocks = ([heading] if items else [])
+        blocks += [_one(f"{kind}: {it}") for kind, it in items]
+        blocks.append(_one(closing))
+        return blocks
     yr = doc.get("year")
     items: List[Tuple[str, str]] = []
     np_ = doc.get("no_purchase") or []

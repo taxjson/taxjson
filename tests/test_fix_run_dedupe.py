@@ -126,9 +126,9 @@ class TestEachParserMessageOnce(_Project):
                               "accounts", r.stdout)
                 # The parser's ATTENTION warning, and each file's count,
                 # exactly once.
+                # (one line on the default console: Essentials first)
                 self.assertEqual(text.count(
-                    "Warning: ib_demo.csv: the statement has no Cash "
-                    "Report"), 1, text)
+                    "Warning: ib_demo.csv: no Cash Report"), 1, text)
                 self.assertEqual(text.count("Info: ib_demo.csv: 9 tax "
                                             "objects"), 1, text)
                 self.assertEqual(len(re.findall(
