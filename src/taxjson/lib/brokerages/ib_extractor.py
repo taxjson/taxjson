@@ -3814,7 +3814,7 @@ class IbBrokerage(BaseBrokerage):
                                              _book)
                         self.count_skip(
                             f"{_NE}Trades/Forex (currency conversion, "
-                            f"not modeled — KNOWN_ISSUES)")
+                            f"not modeled — docs/limits.md)")
                     elif asset_cat in ('Total', '') or 'Total' in asset_cat:
                         self.count_skip(f"{_NE}Trades subtotal row")
                     else:

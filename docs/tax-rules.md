@@ -8,7 +8,7 @@ How to read an entry:
 - **Source:** the citation as `REFERENCES.md` gives it. Where `REFERENCES.md` has no row, the entry says so and names the tax-logic rule that states the behaviour (and the section that rule's own text cites, if any).
 - **Rule ids:** the ids in `src/taxjson/lib/tax_logic.py`. Tests that pin a rule carry the id (`@rule("CA-SL-02")`); `scripts/check_tax_rules.py` fails on an unknown id or an untested rule. Ids marked *(setting)* are stated only when a non-default setting is in force.
 - **Code:** where it is implemented (`path` — `symbols`). The two engines are `CanadaTaxRules` and `USATaxRules` in `src/taxjson/lib/core.py`; their `compute_gains` methods are thousands of lines long, so search them for the helper named.
-- **Edge cases and limits:** what the rule does not cover, from `KNOWN_ISSUES.md` and the code.
+- **Edge cases and limits:** what the rule does not cover, from `docs/limits.md`, `KNOWN_ISSUES.md` and the code.
 
 Settings named here are explained in `docs/settings.md`. taxjson computes; it does not give tax advice.
 
@@ -22,7 +22,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** CRA technical interpretation **2012-0468931C6** (a publicly traded share is disposed of on the settlement date).
 - **Rule ids:** `CA-DATE-01`, `CA-DATE-02` *(setting: `tax_date = "trade"`)*, `CA-DATE-03` … `CA-DATE-09`, `CA-DATE-10` *(setting: `futures_settle = "next_day"`)*, `CA-DATE-11`, `CA-DATE-13` … `CA-DATE-18`, `CA-DATE-SESSION`.
 - **Code:** `src/taxjson/lib/dates.py` — `settlement_date`, `market_of`, `settlement_lag_days`; `src/taxjson/lib/market_calendar.py`; `src/taxjson/lib/country.py` — `resolve_tax_date`, `futures_settle_mode`; `src/taxjson/lib/corporate_timeline.py` — `event_sort_key`; `src/taxjson/lib/brokerages/ib_extractor.py` — `_ib_split_datetime`.
-- **Edge cases and limits:** outside the US and Canada only weekends are skipped (a local bank holiday is not), so such a settle date can be a day early; venues other than the listed Asian exchanges keep IB's Eastern clock date (KNOWN_ISSUES "Settlement calendars outside North America"). Webull prints the settle date and the trade date is walked back one cycle (`CA-DATE-17`). Rows of one account at one moment from two files follow the files' name order (`CA-DATE-18`). Schedule 3's "year of acquisition" is counted on trade dates (`CA-DISP-07`).
+- **Edge cases and limits:** outside the US and Canada only weekends are skipped (a local bank holiday is not), so such a settle date can be a day early; venues other than the listed Asian exchanges keep IB's Eastern clock date (docs/limits.md "Settlement calendars outside North America"). Webull prints the settle date and the trade date is walked back one cycle (`CA-DATE-17`). Rows of one account at one moment from two files follow the files' name order (`CA-DATE-18`). Schedule 3's "year of acquisition" is counted on trade dates (`CA-DISP-07`).
 
 ## Foreign currency: Bank of Canada rates
 
@@ -30,7 +30,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** Folio **S5-F4-C1** *Income Tax Reporting Currency*; T4037 "Foreign currencies".
 - **Rule ids:** `CA-FX-01`, `CA-FX-02`, `CA-FX-03`, `CA-CTRY-03` (base currency must be CAD).
 - **Code:** `src/taxjson/bin/to_base_curr.py` — `fetch_boc`, `fetch_boc_noon`, `fetch_yahoo`, `build_rates`, `MAX_FILL_DAYS`; `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`.
-- **Edge cases and limits:** the stand-alone converters accept your own rate (`--default-rate`); `taxjson fx-cash` and `taxjson crypto-sends` leave an unrated event unrated rather than stop. A failed intra-day spot fetch (a non-CAD base only) is silent (KNOWN_ISSUES "to_base_curr.py real-time intra-day fetch").
+- **Edge cases and limits:** the stand-alone converters accept your own rate (`--default-rate`); `taxjson fx-cash` and `taxjson crypto-sends` leave an unrated event unrated rather than stop. A failed intra-day spot fetch (a non-CAD base only) is silent (docs/limits.md "The intra-day FX rate is fetched silently").
 
 ## Capital gain and the Schedule 3 lines
 
@@ -38,7 +38,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.40(1); Guide **T4037** *Capital Gains*, "Calculating your capital gain or loss"; inclusion rate s.38(a), Schedule 3 line 19900; Schedule 3 and Guide **T4091** *T5008 Guide* (the taxpayer's ACB governs, not the slip).
 - **Rule ids:** `CA-DISP-01` … `CA-DISP-08`.
 - **Code:** `src/taxjson/bin/taxjson_form_export.py` — `build_schedule3`, `schedule3_line`, `schedule3_period`, `_foot_cells`; `src/taxjson/lib/core.py` — `CanadaTaxRules`; `src/taxjson/bin/taxjson_reconcile_slips.py`.
-- **Edge cases and limits:** `<account>.sum` TOTAL PROCEEDS / TOTAL COST are the engine's signed figures (short covers and buy-backs count as negative proceeds), not Schedule 3 cells: take those from `taxjson form-export` or the FOR THE RETURN block of `taxjson sum`; `<account>_wash.sum` is the canonical gains file (KNOWN_ISSUES "`<account>.sum` vs `<account>_wash.sum`"). `taxjson reconcile-slips` compares per security and cannot read IBKR's per-type-code T5008 rows.
+- **Edge cases and limits:** `<account>.sum` TOTAL PROCEEDS / TOTAL COST are the engine's signed figures (short covers and buy-backs count as negative proceeds), not Schedule 3 cells: take those from `taxjson form-export` or the FOR THE RETURN block of `taxjson sum`; `<account>_wash.sum` is the canonical gains file (docs/limits.md "`<account>.sum` vs `<account>_wash.sum`"). `taxjson reconcile-slips` compares per security and cannot read IBKR's per-type-code T5008 rows.
 
 ## ACB: average cost, one pool across your taxable accounts (s.47)
 
@@ -54,7 +54,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.47(1); **IT-387R2**; T4037 "Identical properties" (cross-listings of the same share are identical, CDRs are not).
 - **Rule ids:** `CA-ACB-04`, `CA-XLIST-01`, `CA-XLIST-02`, `CA-XLIST-03`, `CA-XLIST-04`, `CA-XLIST-06`, `CA-ACB-CODES`, `CA-ACB-RENAME`, `CA-CRYPTO-RENAME`, `CA-CORP-02`.
 - **Code:** `src/taxjson/lib/cross_listings.py` — `analyze`, `map_split`, `_names_verdict`, `_journal_names_verdict`, `journal_wording`, `business_days`, `map_lines`, `companies_differ`, `collisions`, `extract_words`, `listing_root`, `_hub_partners_agree`, `near_restatements`; `src/taxjson/lib/missing_history.py` — `walk_journal_symbols`, `JournalDays`, `undeclared_journal_days`; `src/taxjson/lib/brokerages/questrade.py` — `_plan_qt_journals`, `_journal_listing`, `journal_codes`; `src/taxjson/lib/markets.py` — `usd_unit_listing`; `src/taxjson/lib/brokerages/ib_extractor.py` — `ib_temp_symbol_ticker`, `_ib_temp_folds`, `_warn_stock_aliases`; `src/taxjson/lib/symbol_codes.py` — `resolve`, `names_agree`, `exact_name`, `code_designators`, `designators_agree`; `src/taxjson/lib/corp_actions.py` — `parse_questrade_corporate_actions`; `src/taxjson/lib/renames.py` — `apply_dated_renames`, `late_rows`, `unresolved_late`; `src/taxjson/lib/dated_events.py` — `read_declarations`, `settle_journals`, `journal_legs`; `src/taxjson/bin/taxjson_ticker_map.py` — `merge_renames`; `src/taxjson/lib/listing_suffix.py` — `resolve`, `scan_questrade`, `scan_rbc`; `src/taxjson/bin/taxjson_run.py` — `stage_cross_listings`, `stage_symbol_codes`, `stage_listing_suffix`, `cmd_renames`; `src/taxjson/lib/brokerages/base.py` — `canonical_ca_listing`; `src/taxjson/lib/tobase_map.py` — `compute_overlay`, `venue_alias`, `until_findings`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_file`.
-- **Edge cases and limits:** the missing-history checks read a day's buys before its sales (whatever the broker's clock) only on a journal's days: its legs' own days and, in that account within 5 business days of them, the one nearest day whose trades are the journal's own — its units of the listing it moves FROM bought and of the listing it moves TO sold (an RBC gambit's trades, its `J~` legs dated the settlement day); opposite trades of another quantity or direction near a journal are not its own, so a sale with no purchase there stays missing history. A legacy ticker.map `JOURNAL` line names its days of a buy of one listing and a sale of the same quantity of the other. A `TOBASE` line names none — it says two listings are one security, not that units moved — so a sale with no purchase on such a day is missing history, and the run names the `.tt` JOURNAL line to add if the units were journaled; a sale and rebuy of one listing is never a journal. A `.tt` JOURNAL line bigger than the broker's journal between the same listings stops the run on the journal's own date and is booked with a Warning one business day away (or on the journal's trades' day). A trade in OLD after a dated rename is a different security until its declaration says `late=fold` or `late=separate` (a `.tt` RENAME line; a line's choice covers its own account and every account without a line of its own that held OLD before the date — another account's OLD rows stay OLD, listed, until its own line says; an account's late rows are the ones the engine takes after its own rename row — it orders by settlement date and takes a ticker change ahead of every trade executed on its date, so an OLD trade executed that day is late even before an evening corporate-action row's clock time); such trades stop `run --strict` and are listed by `taxjson renames`. A `.tt` RENAME applies to the accounts of its declaring account's kind: a security's change never moves a coin, nor a coin's a security (`CA-CRYPTO-RENAME`: a coin's ticker change carries its pool; a swap into another token is a trade). Declarations of one change are one event, dated the earliest; a chain A to B to C carries the position on one date too (any rename row into B that day, the broker's included, holds B); a declaration naming the symbol ticker.map gives OLD (`GLOBAL RAW OLD`) books on the RAW rows too; declarations that cannot all be true (a cycle, one change on two dates) stop the run; a declaration no account's books carry books nothing, is named in a Warning and by `taxjson renames`, and stops `run --strict`. A ticker.map `TOBASE` or `DISTINCT` line that writes `ROOT.V` also covers `ROOT.TO` (the books never hold `ROOT.V`); a `GLOBAL` line is matched as written. An interlisting whose end date the master does not know (`until=unknown`) gives no Warning for a later trade in a reused ticker. A CSE/NEO ticker that duplicates a different TSX ticker shares its pool (KNOWN_ISSUES "Canadian listings carry no venue"). Anything less certain than an exact-name journal pair is only a suggestion (`taxjson ticker-map --suggest`), and two listings whose names name different companies are not even suggested. A `.US` symbol whose rows name two different companies, one a Canadian-listed fund's US-dollar units, is a symbol collision: a Warning and an `EXTRACT ... | USD | ROOT.U.TO` suggestion (plus its `TOBASE`), never a join. IB's temporary time-stamped symbol (YYYYMMDDHHMMSS then the ticker) under the ticker's own contract id is the ticker, unless a ticker.map line names the stamped symbol (the line decides); a ticker change IB shows only as one contract id under two symbols is booked as a dated rename (a ticker.map `DISTINCT OLD NEW` line undoes it) only when that contract id's own rows date it (dated on the new symbol's earliest row of any section; a ticker another company used has its own contract id; a symbol listed under two ids in one statement, or new-symbol rows that start on or before the old symbol's last position or cost row, leave it unbooked, with the `.tt` line to add, dated at the new symbol's earliest row in any IB account), never toward IB's `.OLD` placeholder or a temporary symbol, and not when the parse books a corporate action naming both symbols as the change (a CUSIP/ISIN change row it leaves unbooked does not count) or a declaration renames the old symbol elsewhere; a declared date (`.tt` or ticker.map) after an IB account's first new-symbol trade stops the run naming that account, and a declaration the other way round (new to old) while the rows date old to new is an ATTENTION line; a weaker look-alike (Questrade, RBC, Webull) is only suggested, as the `.tt` line. A `.tt` `SPLIT <date> <time> OLD NEW 1` line is a dated rename in its own account only; a manual SPLIT that repeats the broker's row is applied once, with a warning to delete it. An undated rule (`GLOBAL OLD NEW`, an undated `RENAME`) renames every row of OLD at any date. Identification never changes a tax rule.
+- **Edge cases and limits:** the missing-history checks read a day's buys before its sales (whatever the broker's clock) only on a journal's days: its legs' own days and, in that account within 5 business days of them, the one nearest day whose trades are the journal's own — its units of the listing it moves FROM bought and of the listing it moves TO sold (an RBC gambit's trades, its `J~` legs dated the settlement day); opposite trades of another quantity or direction near a journal are not its own, so a sale with no purchase there stays missing history. A legacy ticker.map `JOURNAL` line names its days of a buy of one listing and a sale of the same quantity of the other. A `TOBASE` line names none — it says two listings are one security, not that units moved — so a sale with no purchase on such a day is missing history, and the run names the `.tt` JOURNAL line to add if the units were journaled; a sale and rebuy of one listing is never a journal. A `.tt` JOURNAL line bigger than the broker's journal between the same listings stops the run on the journal's own date and is booked with a Warning one business day away (or on the journal's trades' day). A trade in OLD after a dated rename is a different security until its declaration says `late=fold` or `late=separate` (a `.tt` RENAME line; a line's choice covers its own account and every account without a line of its own that held OLD before the date — another account's OLD rows stay OLD, listed, until its own line says; an account's late rows are the ones the engine takes after its own rename row — it orders by settlement date and takes a ticker change ahead of every trade executed on its date, so an OLD trade executed that day is late even before an evening corporate-action row's clock time); such trades stop `run --strict` and are listed by `taxjson renames`. A `.tt` RENAME applies to the accounts of its declaring account's kind: a security's change never moves a coin, nor a coin's a security (`CA-CRYPTO-RENAME`: a coin's ticker change carries its pool; a swap into another token is a trade). Declarations of one change are one event, dated the earliest; a chain A to B to C carries the position on one date too (any rename row into B that day, the broker's included, holds B); a declaration naming the symbol ticker.map gives OLD (`GLOBAL RAW OLD`) books on the RAW rows too; declarations that cannot all be true (a cycle, one change on two dates) stop the run; a declaration no account's books carry books nothing, is named in a Warning and by `taxjson renames`, and stops `run --strict`. A ticker.map `TOBASE` or `DISTINCT` line that writes `ROOT.V` also covers `ROOT.TO` (the books never hold `ROOT.V`); a `GLOBAL` line is matched as written. An interlisting whose end date the master does not know (`until=unknown`) gives no Warning for a later trade in a reused ticker. A CSE/NEO ticker that duplicates a different TSX ticker shares its pool (docs/limits.md "Canadian listings carry no venue"). Anything less certain than an exact-name journal pair is only a suggestion (`taxjson ticker-map --suggest`), and two listings whose names name different companies are not even suggested. A `.US` symbol whose rows name two different companies, one a Canadian-listed fund's US-dollar units, is a symbol collision: a Warning and an `EXTRACT ... | USD | ROOT.U.TO` suggestion (plus its `TOBASE`), never a join. IB's temporary time-stamped symbol (YYYYMMDDHHMMSS then the ticker) under the ticker's own contract id is the ticker, unless a ticker.map line names the stamped symbol (the line decides); a ticker change IB shows only as one contract id under two symbols is booked as a dated rename (a ticker.map `DISTINCT OLD NEW` line undoes it) only when that contract id's own rows date it (dated on the new symbol's earliest row of any section; a ticker another company used has its own contract id; a symbol listed under two ids in one statement, or new-symbol rows that start on or before the old symbol's last position or cost row, leave it unbooked, with the `.tt` line to add, dated at the new symbol's earliest row in any IB account), never toward IB's `.OLD` placeholder or a temporary symbol, and not when the parse books a corporate action naming both symbols as the change (a CUSIP/ISIN change row it leaves unbooked does not count) or a declaration renames the old symbol elsewhere; a declared date (`.tt` or ticker.map) after an IB account's first new-symbol trade stops the run naming that account, and a declaration the other way round (new to old) while the rows date old to new is an ATTENTION line; a weaker look-alike (Questrade, RBC, Webull) is only suggested, as the `.tt` line. A `.tt` `SPLIT <date> <time> OLD NEW 1` line is a dated rename in its own account only; a manual SPLIT that repeats the broker's row is applied once, with a warning to delete it. An undated rule (`GLOBAL OLD NEW`, an undated `RENAME`) renames every row of OLD at any date. Identification never changes a tax rule.
 
 ## Superficial loss (s.54)
 
@@ -62,7 +62,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.54 "superficial loss"; s.40(2)(g)(i); s.53(1)(f); T4037 "Superficial loss"; **s.251.1(1)(g)** (affiliated persons).
 - **Rule ids:** `CA-SL-01` … `CA-SL-11`, `CA-SL-12` *(setting: `option_buyback_loss_superficial = true`)*, `CA-SL-13`, `CA-SL-14`, `CA-SL-15`, `CA-PLAN-01`, `CA-PLAN-02`, `CA-PLAN-04`, `CA-RPT-07`, `CA-XLIST-05`.
 - **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `_holder_rank`, `disposition_groups`, `detect_option_replacement_matches`, `detect_right_replacement_matches`, `option_contract_size`; `src/taxjson/bin/taxjson_wash_radar.py` — `main`; `src/taxjson/bin/taxjson_harvest.py`; `src/taxjson/lib/edge_cases.py`; `src/taxjson/lib/checklist.py` — `d_wash_reviewed`; `src/taxjson/lib/xlist_loss_radar.py` — `analyze`.
-- **Edge cases and limits:** a spouse's or controlled corporation's purchases count only when given: `taxjson run` never reads them, so declare their account `type = "sheltered"` (see "Registered and affiliated holders"; KNOWN_ISSUES "Purchases by an affiliated person"). When both a taxable and a registered account bought in the window, which absorbs the denial follows the matching order, a stated policy (KNOWN_ISSUES "Superficial-loss attribution"). A partial sale inside the window can inherit part of the bump and be denied again (KNOWN_ISSUES "Second-order superficial losses"). Only the IB export states a contract's size: for Questrade, RBC, Webull and the generic importer 100 is ASSUMED (a row whose own money fits a mini's 10 and not 100 is booked as a mini), the run notes once per option root when an assumed size decided a quantity, and ticker.map `MULT` (or a `.tt` line's `x10`) sets it. Flags deny nothing: `taxjson wash-sales` lists them and the checklist's wash-reviewed step stays open. The planning tools see only the project's accounts.
+- **Edge cases and limits:** a spouse's or controlled corporation's purchases count only when given: `taxjson run` never reads them, so declare their account `type = "sheltered"` (see "Registered and affiliated holders"; docs/limits.md "Purchases by an affiliated person"). When both a taxable and a registered account bought in the window, which absorbs the denial follows the matching order, a stated policy (docs/limits.md "Superficial-loss attribution"). A partial sale inside the window can inherit part of the bump and be denied again (KNOWN_ISSUES "Second-order superficial losses"). Only the IB export states a contract's size: for Questrade, RBC, Webull and the generic importer 100 is ASSUMED (a row whose own money fits a mini's 10 and not 100 is booked as a mini), the run notes once per option root when an assumed size decided a quantity, and ticker.map `MULT` (or a `.tt` line's `x10`) sets it. Flags deny nothing: `taxjson wash-sales` lists them and the checklist's wash-reviewed step stays open. The planning tools see only the project's accounts.
 
 ## Filing positions against a superficial-loss denial (ALLOWLOSS)
 
@@ -78,7 +78,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.53(1)(f) applied to an exempt trust; CRA's position on RRSP/TFSA repurchases (T4037 example); **s.251.1(1)(g)** (a trust is affiliated with its majority-interest beneficiary).
 - **Rule ids:** `CA-SL-03`, `CA-SL-04`, `CA-SL-09`, `CA-ACB-05`.
 - **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `permanently_disallowed`, `_holder_rank`.
-- **Edge cases and limits:** an affiliated person's trades (a spouse or common-law partner, a corporation you control) are not an account type: the engine applies them only when given (`taxjson-gains --affiliated`). In a project, declare that person's account `type = "sheltered"`: their purchases then deny your loss for good (the ACB addition belongs to them, s.53(1)(f)), but the account shows in the SHELTERED tables and the wash radar as if it were your registered plan — read it as theirs. The planning tools' verdicts cover the project's accounts only and say so. An RESP is treated as affiliated (the conservative choice; whether an RESP subscriber is affiliated is not settled — KNOWN_ISSUES "RESP accounts are treated as affiliated").
+- **Edge cases and limits:** an affiliated person's trades (a spouse or common-law partner, a corporation you control) are not an account type: the engine applies them only when given (`taxjson-gains --affiliated`). In a project, declare that person's account `type = "sheltered"`: their purchases then deny your loss for good (the ACB addition belongs to them, s.53(1)(f)), but the account shows in the SHELTERED tables and the wash radar as if it were your registered plan — read it as theirs. The planning tools' verdicts cover the project's accounts only and say so. An RESP is treated as affiliated (the conservative choice; whether an RESP subscriber is affiliated is not settled — docs/limits.md "RESP accounts are treated as affiliated").
 
 ## Registered-account transfers
 
@@ -110,12 +110,12 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.49(1)–(4); **IT-479R** paras 23–32. The warrant rule (`CA-OPT-09`) is stated in `taxjson tax-logic`, which cites s.49(3).
 - **Rule ids:** `CA-OPT-06`, `CA-OPT-08`, `CA-OPT-09`.
 - **Code:** `src/taxjson/lib/core.py` — `_pair_assign_legs`, `_AssignPremiumLedger`, `exercise_target`, `is_assign_premium_leg`; `src/taxjson/lib/brokerages/webull.py` — `_mark_assignments`.
-- **Edge cases and limits:** Webull exports have no exercise code: a pair is inferred only with `[accounts.NAME] exercise_fee` set and the charge on the stock leg (KNOWN_ISSUES "Webull exercise/assignment inference"). The generic importer has no assignment target: book the pair as `.tt` ASSIGN rows. An IB warrant leg that cannot be paired is a disposal at 0 with an ATTENTION line; RBC refuses the file.
+- **Edge cases and limits:** Webull exports have no exercise code: a pair is inferred only with `[accounts.NAME] exercise_fee` set and the charge on the stock leg (docs/limits.md "Webull exercise/assignment inference"). The generic importer has no assignment target: book the pair as `.tt` ASSIGN rows. An IB warrant leg that cannot be paired is a disposal at 0 with an ATTENTION line; RBC refuses the file.
 
 ## Futures
 
 - **Rule:** a futures contract is booked on its settled P/L: nothing is paid to open one, so its notional is never converted. Each close's P/L (commissions included, average cost of the open contracts) is converted at the closing leg's rate; Schedule 3 shows a gain as proceeds and a loss as ACB. Options on futures are ordinary options. Futures settle on the trade date unless `futures_settle = "next_day"`.
-- **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-FX-04` … `CA-FX-06` (KNOWN_ISSUES "Futures are booked on their settled P/L" cites s.261(2)(b)).
+- **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-FX-04` … `CA-FX-06` (docs/limits.md "Futures are booked on their settled P/L" cites s.261(2)(b)).
 - **Rule ids:** `CA-FX-04`, `CA-FX-05`, `CA-FX-06`, `CA-DATE-09`.
 - **Code:** `src/taxjson/lib/futures.py` — `settle_futures`, `method_for`; `src/taxjson/bin/taxjson_form_export.py` — `build_schedule3`.
 - **Edge cases and limits:** the P/L is realized at the close, not marked to market daily, so the CAD figure can differ by about P/L × the FX move over the holding period. A futures row other than a BUYSELL fill stops the conversion. A generic-import futures row at a negative price is read as its magnitude (KNOWN_ISSUES "A negative futures price").
@@ -126,7 +126,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.47; T4037 "Stock splits".
 - **Rule ids:** `CA-CORP-01`, `CA-CORP-02`.
 - **Code:** `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `lineage_factor`, `cumulative_factor`; `src/taxjson/lib/corp_actions.py` — `NAME_CHANGE`, `_emit_rename`; `src/taxjson/lib/core.py` — `_redenoms`, `SplitStraddlesSettlementError`.
-- **Edge cases and limits:** a rename-split dated between a trade's execution and its settlement is refused (`SplitStraddlesSettlementError`): re-date the row's settlement or the split. Cash in lieu of a fractional share is a sale of the fraction (`CA-CORP-05`); IB's cash-in-lieu wording is modelled, not seen in a real statement (KNOWN_ISSUES "IB cash-in-lieu row wording is unverified").
+- **Edge cases and limits:** a rename-split dated between a trade's execution and its settlement is refused (`SplitStraddlesSettlementError`): re-date the row's settlement or the split. Cash in lieu of a fractional share is a sale of the fraction (`CA-CORP-05`); IB's cash-in-lieu wording is modelled, not seen in a real statement (docs/limits.md "Export rows modelled without a real sample").
 
 ## Mergers and takeovers
 
@@ -134,7 +134,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.85.1, s.86, s.87; T4037 "Shares".
 - **Rule ids:** `CA-CORP-03`, `CA-CORP-04`, `CA-CORP-05`, `CA-CORP-08`, `CA-CORP-09`, `CA-CORP-10`.
 - **Code:** `src/taxjson/lib/corp_actions.py` — `CANADA_MERGER`, `_canada_merger_taxable`, `_canada_merger_rollover`, `_ib_unsupported_events`, `Manifest`; `src/taxjson/bin/taxjson_run.py` — `cmd_elect`.
-- **Edge cases and limits:** enter a stock-plus-cash merger by hand in a `.tt` file and elect the event `ignore` (KNOWN_ISSUES "IB stock-plus-cash mergers are not booked"). A merger the broker booked at $0 needs an `fmv_per_share` hint for a taxable disposition.
+- **Edge cases and limits:** enter a stock-plus-cash merger by hand in a `.tt` file and elect the event `ignore` (docs/limits.md "IB stock-plus-cash mergers are not booked"). A merger the broker booked at $0 needs an `fmv_per_share` hint for a taxable disposition.
 
 ## Spin-offs: s.86.1 rollover or taxable deemed dividend
 
@@ -142,7 +142,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.86.1; T4037 "Eligible distributions".
 - **Rule ids:** `CA-CORP-06`, `CA-CORP-07`.
 - **Code:** `src/taxjson/lib/corp_actions.py` — `CANADA_SPINOFF`, `_canada_spinoff_rollover_s_86_1`, `_canada_spinoff_deemed_dividend`, `HINTS_BY_ELECTION`, `FILING_REQUIRED_ELECTIONS`, `zero_basis_rollover_rows`.
-- **Edge cases and limits:** a rollover booked with $0 allocated cost keeps the parent's whole cost and moves the gain to the spin-off's sale; every run warns about it. A company's Form 8937 percentage is a US figure and can differ from the s.86.1(3) split. An older manifest's `allocated_acb` (in the event's currency) is converted at the spin-off date's rate, with a warning to re-elect with `allocated_acb_cad`. A Canadian parent's tax-deferred spin-off (a butterfly) has no election of its own: book it with `rollover_s_86_1` and the allocated ACB (KNOWN_ISSUES "Spin-off default wording").
+- **Edge cases and limits:** a rollover booked with $0 allocated cost keeps the parent's whole cost and moves the gain to the spin-off's sale; every run warns about it. A company's Form 8937 percentage is a US figure and can differ from the s.86.1(3) split. An older manifest's `allocated_acb` (in the event's currency) is converted at the spin-off date's rate, with a warning to re-elect with `allocated_acb_cad`. A Canadian parent's tax-deferred spin-off (a butterfly) has no election of its own: book it with `rollover_s_86_1` and the allocated ACB (docs/limits.md "Spin-off default").
 
 ## Spin-offs and mergers in a registered account
 
@@ -158,7 +158,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row for this cost rule: see `taxjson tax-logic` rules `CA-CORP-07`, `CA-INC-04` and `CA-STKDIV-01`.
 - **Rule ids:** `CA-CORP-07`, `CA-INC-04`, `CA-STKDIV-01`.
 - **Code:** `src/taxjson/lib/corp_actions.py` — `_canada_spinoff_deemed_dividend`, `_emit_distribution`; `src/taxjson/lib/brokerages/kraken.py` — `_build_staking_reward`.
-- **Edge cases and limits:** a pre-2026 Kraken export has no price on staking rows; the price is filled from Yahoo, and an unpriced row is a validation error (KNOWN_ISSUES "Kraken staking emits `net_amount=0`").
+- **Edge cases and limits:** a pre-2026 Kraken export has no price on staking rows; the price is filled from Yahoo, and an unpriced row is a validation error (docs/limits.md "Kraken staking rewards in older exports carry no price").
 
 ## Return of capital
 
@@ -166,7 +166,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.53(2)(h)(i.1); s.40(3); T4037 "Adjusted cost base — return of capital". The foreign-issuer reading (`CA-ACB-08`) is stated in `taxjson tax-logic`, which cites s.90(1).
 - **Rule ids:** `CA-ACB-06`, `CA-ACB-07`, `CA-ACB-08`, `CA-ACB-09` *(setting: `foreign_return_of_capital = "acb"`)*, `CA-ACB-13`, `CA-ACB-14`, `CA-INC-DATE-ROC`, `CA-INC-DATE-ROC-TRUST`.
 - **Code:** `src/taxjson/lib/pipeline.py` — `apply_roc_record_dates`, `apply_trust_roc_record_dates`; `src/taxjson/lib/income_dating.py` — `IncomeRules`, `roc_record_date`; `src/taxjson/lib/country.py` — `foreign_roc_mode`; `src/taxjson/lib/core.py` — `CanadaTaxRules`.
-- **Edge cases and limits:** Questrade and RBC rows carry no ISIN, so a US issuer's ROC there stays an ACB reduction — check it by hand (KNOWN_ISSUES "Foreign return of capital is only reclassified for IBKR"). IB prints no record date: a January-paid ROC on a Canadian issuer is warned about, with the two `.tt` ADJUST lines that move it to Dec 31 (if it is a trust, check the prior year's T3 box 42); the warning stops once both lines are in the books, or once a corporation is listed in `corporate_distributions` (its ROC keeps the pay date). Every Canadian issuer counts as a trust except the split-share list and `corporate_distributions`.
+- **Edge cases and limits:** Questrade and RBC rows carry no ISIN, so a US issuer's ROC there stays an ACB reduction — check it by hand (docs/limits.md "Foreign return of capital is only reclassified for IBKR"). IB prints no record date: a January-paid ROC on a Canadian issuer is warned about, with the two `.tt` ADJUST lines that move it to Dec 31 (if it is a trust, check the prior year's T3 box 42); the warning stops once both lines are in the books, or once a corporation is listed in `corporate_distributions` (its ROC keeps the pay date). Every Canadian issuer counts as a trust except the split-share list and `corporate_distributions`.
 
 ## Non-cash and reinvested distributions
 
@@ -174,7 +174,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** T4037 "Mutual fund units and reinvested distributions"; s.53(2)(h)(i.1) for a negative factor.
 - **Rule ids:** `CA-DIST-01`, `CA-DIST-02`, `CA-DIST-03`.
 - **Code:** `src/taxjson/bin/taxjson_apply_distributions.py` — `apply_distributions`, `balance_on`; `src/taxjson/lib/project_tables.py` — `distribution_rows`; `src/taxjson/lib/brokerages/rbc_direct.py` — `_build_book_adjust`.
-- **Edge cases and limits:** a US-listed fund's USD factor must be converted by you first; a `0` is a placeholder and is not applied. RBC posts year-end book-cost rows in the following spring, so an export taken earlier misses them (KNOWN_ISSUES "RBC exports by Date miss back-dated year-end book-cost rows"; setting `year_end_posting`). A `[[distributions]]` adjustment dated before an opening snapshot is not cut off (KNOWN_ISSUES "Opening balances").
+- **Edge cases and limits:** a US-listed fund's USD factor must be converted by you first; a `0` is a placeholder and is not applied. RBC posts year-end book-cost rows in the following spring, so an export taken earlier misses them (docs/limits.md "RBC year-end book-cost rows arrive the next spring"; setting `year_end_posting`). A `[[distributions]]` adjustment dated before an opening snapshot is not cut off (KNOWN_ISSUES "Opening balances").
 
 ## Stock dividends
 
@@ -182,7 +182,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rule `CA-STKDIV-01`.
 - **Rule ids:** `CA-STKDIV-01`.
 - **Code:** `src/taxjson/lib/core.py` — `STOCK_DIVIDEND`, `is_stock_dividend`; `src/taxjson/lib/country.py` — `stock_dividend_zero_cost`, `stock_dividend_in_loss_window`.
-- **Edge cases and limits:** a stock dividend received while short is booked as a $0 purchase that covers part of the short (KNOWN_ISSUES "Stock dividends: $0 in Canada until the declared amount is added").
+- **Edge cases and limits:** a stock dividend received while short is booked as a $0 purchase that covers part of the short (KNOWN_ISSUES "A stock dividend received while short covers part of the short").
 
 ## Income dating: dividends, trust distributions and ROC record dates
 
@@ -190,7 +190,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-INC-DATE-DIV` (citing s.82(1)), `CA-INC-DATE-TRUST` (citing s.104(13)), `CA-INC-DATE-PIL`, `CA-INC-DATE-ISSUER`. A trust's return of capital is dated by the same record date: see "Return of capital".
 - **Rule ids:** `CA-INC-DATE-DIV`, `CA-INC-DATE-PIL`, `CA-INC-DATE-TRUST`, `CA-INC-DATE-ISSUER`, `CA-DATE-11`.
 - **Code:** `src/taxjson/lib/income_dating.py` — `IncomeRules`, `trust_record_date`, `is_canadian_issuer`, `split_share_roots`, `MAX_RECORD_LEAD_DAYS`; `src/taxjson/lib/markets.py` — `is_split_share_root`.
-- **Edge cases and limits:** IB prints no record date and calls a trust's distribution a dividend, so IB rows keep the pay date (the ex date of IB's accruals is not used): a December-record trust distribution IB pays in January stays in the pay year — compare with the T3 (KNOWN_ISSUES "IB income rows carry no record date"). The exports do not say which Canadian issuer is a trust: every Canadian issuer is treated as one except the split-share list and `corporate_distributions`. The T3 slip is authoritative.
+- **Edge cases and limits:** IB prints no record date and calls a trust's distribution a dividend, so IB rows keep the pay date (the ex date of IB's accruals is not used): a December-record trust distribution IB pays in January stays in the pay year — compare with the T3 (docs/limits.md "IB income rows carry no record date"). The exports do not say which Canadian issuer is a trust: every Canadian issuer is treated as one except the split-share list and `corporate_distributions`. The T3 slip is authoritative.
 
 ## Payments in lieu of a dividend
 
@@ -198,7 +198,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-INC-03` and `CA-INC-07` (citing s.260(5)/(5.1)).
 - **Rule ids:** `CA-INC-03`, `CA-INC-07`, `CA-INC-DATE-PIL`.
 - **Code:** `src/taxjson/lib/income_dating.py` — `pil_is_dividend`; `src/taxjson/bin/taxjson_sum_income.py` — `summarize_income`.
-- **Edge cases and limits:** an IB file without its BrokerName header leaves the dealer unknown and the payment ordinary income; a trust unit whose payouts no export calls distributions (IB) cannot be told from a share (KNOWN_ISSUES "Payments in lieu: what the exports cannot say"). The dealer's T5 is authoritative.
+- **Edge cases and limits:** an IB file without its BrokerName header leaves the dealer unknown and the payment ordinary income; a trust unit whose payouts no export calls distributions (IB) cannot be told from a share (docs/limits.md "Payments in lieu: what the exports cannot say"). The dealer's T5 is authoritative.
 
 ## Capital-gains dividends (T5 box 18)
 
@@ -230,7 +230,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.39(1.1) (individuals, since 2016; formerly s.39(2)); **IT-95R** *Foreign Exchange Gains and Losses*.
 - **Rule ids:** `CA-FX-07`.
 - **Code:** `src/taxjson/bin/taxjson_fx_cash.py` — `build_ledger`, `apply_jurisdiction`, `unreliable_status`, `_non_cash`, `CA_EXEMPTION`; `src/taxjson/lib/fx_cash_v2.py` — `build`, `headline`, `TOL`; `src/taxjson/lib/cash_events.py` — `parse_line`, `collect`, `pair_internal`, `Books`.
-- **Edge cases and limits:** v2 reads no Questrade or Webull cash events (declare them with `.tt` lines) and IB's deposit advances are netted against their cancellation; futures' daily cash settlement (IB "Cash Settling MTM") is not modelled, so an IB account with open futures at a statement end will not reconcile (KNOWN_ISSUES "FX on foreign cash"). The estimate leaves the FX result out (KNOWN_ISSUES "Estimate and instalments: FX on cash").
+- **Edge cases and limits:** v2 reads no Questrade or Webull cash events (declare them with `.tt` lines) and IB's deposit advances are netted against their cancellation; futures' daily cash settlement (IB "Cash Settling MTM") is not modelled, so an IB account with open futures at a statement end will not reconcile (docs/limits.md "FX on foreign cash: ledger v2 limits"). The estimate leaves the FX result out (docs/limits.md "FX on cash, slip gains and self-employment CPP/EI are not in the estimate").
 
 ## Shares with an unknown cost: missing history, transfers in, opening balances
 
@@ -238,7 +238,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `CA-ACB-10` … `CA-ACB-12`, `CA-ACB-15`, `CA-ACB-TRANSFER-BV`, `CA-OPEN-01` … `CA-OPEN-03`.
 - **Rule ids:** `CA-ACB-10`, `CA-ACB-11`, `CA-ACB-12`, `CA-ACB-15`, `CA-ACB-TRANSFER-BV`, `CA-OPEN-01`, `CA-OPEN-02`, `CA-OPEN-03`.
 - **Code:** `src/taxjson/lib/missing_history.py` — `detect_missing_history`, `load_missing_history`, `read_tt_openings`, `synthesize_openings`, `detect_superficial_loss_warnings`, `format_purchase_drafts`; `src/taxjson/lib/transfer_in.py` — `stated_book_value`, `arrivals`, `mark_covered`; `src/taxjson/lib/opening.py` — `apply_opening_cutoff`; `src/taxjson/bin/taxjson_convert_tt.py` — `expand_acquired`, `parse_opening_line`; `src/taxjson/bin/taxjson_run.py` — `stage_transfer_arrivals`, `cmd_opening`, `cmd_find_missing_history`.
-- **Edge cases and limits:** a broker's book value may leave out a superficial loss, a ROC or the same shares elsewhere: `taxjson sanity` compares costs (KNOWN_ISSUES "Transfers into taxable accounts stay out of the books"). IB's Basis is the cost of the lots IB closed (FIFO), not your ACB. A missing-history opening has no cost, so T1135's cost test can understate (KNOWN_ISSUES "T1135 cost amounts follow the books"). An opening cost in another currency is converted at the snapshot day's rate.
+- **Edge cases and limits:** a broker's book value may leave out a superficial loss, a ROC or the same shares elsewhere: `taxjson sanity` compares costs (docs/limits.md "Transfers into a taxable account"). IB's Basis is the cost of the lots IB closed (FIFO), not your ACB. A missing-history opening has no cost, so T1135's cost test can understate (docs/limits.md "T1135 sees only the brokerage books"). An opening cost in another currency is converted at the snapshot day's rate.
 
 ## T1135 foreign property
 
@@ -248,7 +248,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **The issuer's country of a pooled foreign issuer.** A pair tobase.map books under the US listing of an issuer the interlisted master knows is domiciled outside Canada (BEP.UN, BIP.UN and the like) takes the issuer's country (`country=` on its tobase.map line: Bermuda `BMU`, Switzerland `CHE`), not the `.US` suffix's USA; a `T1135` line overrides it. The same booking makes the TSX-held units foreign property and their distributions foreign dividends; a Canadian issuer's NYSE- or Nasdaq-bought shares and their options, booked under the TSX line, are not foreign property and pay Canadian dividends. A `T1135` line naming a listing a `TOBASE` line books under another symbol applies to that symbol.
 - **Rule ids:** `CA-RPT-01`, `CA-RPT-02`, `CA-RPT-12`, `CA-RPT-13`, `CA-RPT-15`, `CA-RPT-17`, `CA-XLIST-06`.
 - **Code:** `src/taxjson/bin/taxjson_t1135.py` — `walk_costs`, `build_report`, `classify_country`, `FILING_THRESHOLD`, `DETAILED_THRESHOLD`; `src/taxjson/lib/t1135_country.py` — `parse_country`, `iso3_of`; `src/taxjson/lib/tobase_map.py` — `t1135_countries`.
-- **Edge cases and limits:** the test covers these books only; foreign bank accounts, cash and shares held elsewhere add to the same $100,000 and are not seen (KNOWN_ISSUES "T1135 sees only the brokerage books"). A foreign listing whose rows carry a Canadian ISIN is named for a `T1135 SYMBOL CA` line.
+- **Edge cases and limits:** the test covers these books only; foreign bank accounts, cash and shares held elsewhere add to the same $100,000 and are not seen (docs/limits.md "T1135 sees only the brokerage books"). A foreign listing whose rows carry a Canadian ISIN is named for a `T1135 SYMBOL CA` line.
 
 ## Net capital losses: carryforward and carry-back
 
@@ -256,7 +256,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.111(1)(b); T4037 "Applying net capital losses".
 - **Rule ids:** `CA-RPT-10`, `CA-EST-LOSSES`, `CA-CARRY-01` … `CA-CARRY-05`, `CA-RPT-08`, `CA-RPT-09`.
 - **Code:** `src/taxjson/bin/taxjson_carryover.py` — `build_canada_ledger`, `lock_figure`, `load_claimed`; `src/taxjson/lib/carryforward.py` — `resolve_losses`, `record_block`, `handoff_issues`; `src/taxjson/lib/handoff.py`.
-- **Edge cases and limits:** a pre-2001 loss is not rescaled for its old inclusion rate (KNOWN_ISSUES "Carryover has no inclusion-rate adjustment"). Losses actually applied on filed returns go in `[carryover] claimed`.
+- **Edge cases and limits:** a pre-2001 loss is not rescaled for its old inclusion rate (docs/limits.md "Carryover has no inclusion-rate adjustment"). Losses actually applied on filed returns go in `[carryover] claimed`.
 
 ## Alternative minimum tax and the minimum tax carryover
 
@@ -264,7 +264,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.127.5–127.55 (as amended 2024); provincial: ON428 worksheet 5006-D, *BC Income Tax Act* s.4.8, AB428 line 67. The carryover rule is stated in `taxjson tax-logic` (`CA-AMT-02` … `CA-AMT-07`, citing s.120.2).
 - **Rule ids:** `CA-AMT-01` … `CA-AMT-08`, `CA-EST-AMT`.
 - **Code:** `src/taxjson/lib/tax_estimate.py` — `_amt_canada`, `ca_amt_carryover`, `ca_amt_exemption`, `CA_AMT_CARRY_YEARS`; `src/taxjson/lib/amt_report.py` — `build`, `render`; `src/taxjson/lib/carryforward.py` — `resolve_amt`, `amt_from_config`; `src/taxjson/bin/taxjson_run.py` — `cmd_amt`.
-- **Edge cases and limits:** a year before 2024 runs on the 2024 tables and is flagged (the old 15% AMT is not modelled). The stock-option deduction add-back, donated securities and credits other than the BPA are not modelled, so AMT can bind when the check says it does not (KNOWN_ISSUES "Estimate: credits, OAS recovery tax and AMT adjustments").
+- **Edge cases and limits:** a year before 2024 runs on the 2024 tables and is flagged (the old 15% AMT is not modelled). The stock-option deduction add-back, donated securities and credits other than the BPA are not modelled, so AMT can bind when the check says it does not (docs/limits.md "Credits, OAS recovery tax and AMT adjustments outside the books").
 
 ## Instalments and prescribed interest
 
@@ -272,7 +272,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** s.156(1), s.161(2), s.161(4.01); CRA "instalment interest and penalty charges"; prescribed rate: s.161(2), Reg. 4301(a).
 - **Rule ids:** `CA-RPT-11`, `CA-INST-PRIOR`, `CA-INST-INTEREST`, `CA-INST-PENALTY`, `CA-INST-RATES`, `CA-INST-DUE`.
 - **Code:** `src/taxjson/bin/taxjson_instalments.py` — `due_dates`, `least_cumulative_schedule`, `interest_and_penalty`, `PUBLISHED_RATES`, `THRESHOLD`, `BASES`; `src/taxjson/bin/taxjson_run.py` — `cmd_instalments`.
-- **Edge cases and limits:** a year whose net tax is not given is assumed to meet the prior-year test, so instalments are reported as required. A payment dated before January 1 counts only with `tax_year = YEAR` on its row. Self-employment CPP/EI is not an input (KNOWN_ISSUES "Estimate and instalments"). US estimated tax (1040-ES) is not modelled.
+- **Edge cases and limits:** a year whose net tax is not given is assumed to meet the prior-year test, so instalments are reported as required. A payment dated before January 1 counts only with `tax_year = YEAR` on its row. Self-employment CPP/EI is not an input (docs/limits.md "FX on cash, slip gains and self-employment CPP/EI are not in the estimate"). US estimated tax (1040-ES) is not modelled.
 
 ## Tax estimate (planning only)
 
@@ -280,7 +280,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** eligible dividends s.82(1)(b)(ii), s.121(b); foreign dividends s.126(1), Form T2209; BPA s.118(1)(c), (1.1); brackets s.117 and the provincial acts (see `REFERENCES.md` "Canada — income and the tax estimate").
 - **Rule ids:** `CA-RPT-03` … `CA-RPT-06`, `CA-EST-TRUST`, `CA-EST-DEDUCT`, `CA-EST-BPA`, `CA-EST-PROV`, `CA-EST-FTC`, `CA-EST-VINTAGE`, `CA-EST-FED-TABLE`, `CA-EST-DTC`, `CA-EST-ON-TABLE`, `CA-EST-BC-TABLE`, `CA-EST-AB-TABLE`, `CA-EST-OHP`, `CA-INC-01`, `CA-INC-02`, `CA-INC-05`, `CA-RPT-16`, `CA-SCAN-01`, `CA-SCAN-02`.
 - **Code:** `src/taxjson/lib/tax_estimate.py` — `estimate_canada`, `_canada_tax`, `ca_fed_bpa`, `ontario_health_premium`, `_VINTAGES`, `CA_PROVINCES`; `src/taxjson/lib/trade_stats.py`.
-- **Edge cases and limits:** non-eligible dividends are estimated as eligible; Quebec and other provinces are refused; OAS recovery tax is not modelled; dividends are classified by listing suffix when the books carry no ISIN (KNOWN_ISSUES "Non-eligible dividends are estimated as eligible", "Estimate classifies dividends by listing suffix"). `taxjson stats` is a view, not a filing number.
+- **Edge cases and limits:** non-eligible dividends are estimated as eligible; Quebec and other provinces are refused; OAS recovery tax is not modelled; dividends are classified by listing suffix when the books carry no ISIN (docs/limits.md "Non-eligible dividends are estimated as eligible", "Estimate classifies dividends by listing suffix"). `taxjson stats` is a view, not a filing number.
 
 ## Capital or income account (scope)
 
@@ -322,7 +322,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** Reg. §1.1012-1(c) (FIFO only).
 - **Rule ids:** `US-BASIS-01`, `US-BASIS-02`, `US-BASIS-03`, `US-BASIS-COMMREFUND`, `US-BASIS-05`, `US-BASIS-07`.
 - **Code:** `src/taxjson/lib/core.py` — `USATaxRules`, `_draw_long_lots`, `_move_long_lots`; `src/taxjson/bin/taxjson_run.py` — `stage_own_account_moves`, `stage_blended_wash_pass`.
-- **Edge cases and limits:** a broker 1099-B computed under specific ID will not reconcile per lot (KNOWN_ISSUES "US: specific-lot identification is not supported"). Out and in rows that look like a move but do not pair are ATTENTION lines; those shares' sales are reported by hand.
+- **Edge cases and limits:** a broker 1099-B computed under specific ID will not reconcile per lot (docs/limits.md "US: specific-lot identification is not supported"). Out and in rows that look like a move but do not pair are ATTENTION lines; those shares' sales are reported by hand.
 
 ## Holding period
 
@@ -330,7 +330,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** §1222; **Rev. Rul. 66-7**; §1223(3) (tacking).
 - **Rule ids:** `US-HOLD-01`, `US-HOLD-02`, `US-HOLD-03`, `US-WASH-10`.
 - **Code:** `src/taxjson/lib/core.py` — `held_more_than_one_year`, `USATaxRules`.
-- **Edge cases and limits:** only the matched shares of a replacement lot carry the tacked holding period (KNOWN_ISSUES "§1223(3) tacking is per-share").
+- **Edge cases and limits:** only the matched shares of a replacement lot carry the tacked holding period.
 
 ## Identical security: listings, renames and broker codes
 
@@ -345,7 +345,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** **IRC §1091**; Treas. Reg. **§1.1091-1**; §1223(3); **Publication 550** "Wash Sales".
 - **Rule ids:** `US-WASH-01` … `US-WASH-10`, `US-WASH-12`, `US-WASH-14`, `US-WASH-15`, `US-WASH-17`, `US-WASH-19` … `US-WASH-22`, `US-RPT-05`, `US-PLAN-01`, `US-PLAN-02`, `US-PLAN-04`, `US-XLIST-04`.
 - **Code:** `src/taxjson/lib/core.py` — `USATaxRules`, `find_replacements_in_window`, `_sold_replacements_in_window`, `detect_option_replacement_matches`; `src/taxjson/lib/pipeline.py` — `place_retro_wash_adjustments`; `src/taxjson/bin/taxjson_wash_radar.py` — `_us_engine_losses`; `src/taxjson/lib/xlist_loss_radar.py` — `analyze`.
-- **Edge cases and limits:** a long SALE within the window of a short-cover loss does not disallow it (§1091(e)(1) not modelled, `US-WASH-19`). A replacement bought and sold in the loss's own account before the loss does not wash it. Options as replacement property are advisory only: a long call in the window is a warning (§1091 "option to acquire"), not a disallowance — treat it as an instruction (KNOWN_ISSUES "US: options as replacement property are advisory-only"). A call on the loss's futures contract is flagged, with a note that a commodity future is usually outside §1091. Matching across accounts needs a full `taxjson run`.
+- **Edge cases and limits:** a long SALE within the window of a short-cover loss does not disallow it (§1091(e)(1) not modelled, `US-WASH-19`). A replacement bought and sold in the loss's own account before the loss does not wash it. Options as replacement property are advisory only: a long call in the window is a warning (§1091 "option to acquire"), not a disallowance — treat it as an instruction (docs/limits.md "US: options as replacement property are advisory-only"). A call on the loss's futures contract is flagged, with a note that a commodity future is usually outside §1091. Matching across accounts needs a full `taxjson run`.
 
 ## Filing positions against a wash-sale disallowance (ALLOWLOSS)
 
@@ -361,7 +361,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** **Rev. Rul. 2008-5** (IRA repurchases); IRC §1091(d) for the affiliated case is stated in `taxjson tax-logic` rule `US-WASH-16`.
 - **Rule ids:** `US-WASH-04`, `US-WASH-11`, `US-WASH-16`.
 - **Code:** `src/taxjson/lib/core.py` — `USATaxRules`; `src/taxjson/bin/taxjson_run.py` — `stage_wash_pass`.
-- **Edge cases and limits:** `taxjson run` never reads a spouse's account unless you add it (KNOWN_ISSUES "Purchases by an affiliated person"); the engine applies such trades only when given (`taxjson-gains --affiliated`). A declared account shows in the SHELTERED tables and the radar as if it were your retirement account — read it as theirs, and give them the disallowed amount for their basis.
+- **Edge cases and limits:** `taxjson run` never reads a spouse's account unless you add it (docs/limits.md "Purchases by an affiliated person"); the engine applies such trades only when given (`taxjson-gains --affiliated`). A declared account shows in the SHELTERED tables and the radar as if it were your retirement account — read it as theirs, and give them the disallowed amount for their basis.
 
 ## Retirement-account transfers
 
@@ -392,7 +392,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no §1256 row: see `taxjson tax-logic` rules `US-OPT-04`, `US-FUT-01`, `US-FUT-02`, `US-WASH-18`.
 - **Rule ids:** `US-OPT-04`, `US-FUT-01`, `US-FUT-02`, `US-WASH-18`, `US-DATE-09`.
 - **Code:** `src/taxjson/lib/futures.py` — `section_1256_kind`, `settle_futures`; `src/taxjson/bin/taxjson_form_export.py` — `build_8949`, `filing_6781`, `section_1256_lines`; `src/taxjson/lib/markets.py` — `is_index_option_root`.
-- **Edge cases and limits:** report §1256 contracts on Form 6781 from your 1099-B; an index option whose root is not listed is filed as an ordinary option (KNOWN_ISSUES "§1256 (60/40 mark-to-market) is not implemented").
+- **Edge cases and limits:** report §1256 contracts on Form 6781 from your 1099-B; an index option whose root is not listed is filed as an ordinary option (docs/limits.md "§1256 (60/40 mark-to-market) is not implemented").
 
 ## Mergers: §1001, §368 and §356
 
@@ -444,7 +444,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-INC-01` … `US-INC-03`, `US-INC-DATE-RIC` (citing §852(b)(7), §857(b)(9)).
 - **Rule ids:** `US-INC-01`, `US-INC-02`, `US-INC-03`, `US-INC-DATE-RIC`.
 - **Code:** `src/taxjson/lib/income_dating.py` — `parse_ric_entries`, `ric_prior_year`, `IncomeRules`.
-- **Edge cases and limits:** no export says which payer is a fund (KNOWN_ISSUES "US January fund and REIT dividends need a list"). Form 1099-DIV is authoritative.
+- **Edge cases and limits:** no export says which payer is a fund (docs/limits.md "US January fund and REIT dividends need a list"). Form 1099-DIV is authoritative.
 
 ## Crypto as property (no wash sale)
 
@@ -452,7 +452,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no US crypto row: see `taxjson tax-logic` rules `US-CRYPTO-01` … `US-CRYPTO-08`, `US-WASH-13`.
 - **Rule ids:** `US-CRYPTO-01` … `US-CRYPTO-08`, `US-WASH-13`, `US-PLAN-05`, `US-DATE-07`, `US-DATE-11`.
 - **Code:** `src/taxjson/lib/brokerages/kraken.py` — `KrakenBrokerage`; `src/taxjson/lib/brokerages/coinbase.py` — `CoinbaseBrokerage`; `src/taxjson/lib/crypto_sends.py` — `own_moves`, `match_transfers`; `src/taxjson/lib/core.py` — `non_capital`.
-- **Edge cases and limits:** the US lot epsilon is 1e-8 units; each case is named in a warning (KNOWN_ISSUES "Sub-micro quantity tolerance in the US engine").
+- **Edge cases and limits:** the US lot epsilon is 1e-8 units; each case is named in a warning (docs/limits.md "Sub-micro quantity tolerance in the US engine").
 
 ## Crypto sends: payments and gifts
 
@@ -474,7 +474,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-BASIS-04`, `US-BASIS-08`, `US-BASIS-TRANSFER-BV`, `US-OPEN-01` … `US-OPEN-03`.
 - **Rule ids:** `US-BASIS-04`, `US-BASIS-08`, `US-BASIS-TRANSFER-BV`, `US-OPEN-01`, `US-OPEN-02`, `US-OPEN-03`.
 - **Code:** `src/taxjson/lib/missing_history.py` — `detect_missing_history`; `src/taxjson/lib/transfer_in.py` — `stated_book_value`; `src/taxjson/lib/opening.py` — `apply_opening_cutoff`.
-- **Edge cases and limits:** IB's Open Positions Lot rows are not read, so a US opening from an IB statement has no lot dates: list the lots in a holdings TOML with `acquired` (KNOWN_ISSUES "Positions reports: what is not read").
+- **Edge cases and limits:** IB's Open Positions Lot rows are not read, so a US opening from an IB statement has no lot dates: list the lots in a holdings TOML with `acquired` (docs/limits.md "Positions reports: what is read").
 
 ## Form 8949 boxes and exports
 
@@ -496,7 +496,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 - **Source:** qualified dividends §1(h)(11); NIIT §1411.
 - **Rule ids:** `US-RPT-04`, `US-RPT-07`, `US-EST-NIIT`, `US-EST-NIIT-LOSS`, `US-EST-VINTAGE`, `US-EST-TABLE`, `US-AMT-01`.
 - **Code:** `src/taxjson/lib/tax_estimate.py` — `estimate_usa`, `_usa_tax`, `US_NIIT_RATE`.
-- **Edge cases and limits:** KNOWN_ISSUES "US AMT is not computed", "US estimated taxes (1040-ES) are not modeled", "`taxjson sum` tax estimate assumes dividend classification".
+- **Edge cases and limits:** docs/limits.md "US AMT is not computed", "US estimated taxes (1040-ES) are not modeled", "Non-eligible dividends are estimated as eligible".
 
 ## Project country (partition)
 

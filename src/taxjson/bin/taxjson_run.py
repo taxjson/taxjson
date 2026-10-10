@@ -14348,7 +14348,7 @@ def cmd_instalments(args: argparse.Namespace) -> None:
             not in ("canada", "ca"):
         _die("instalments are modeled for canada only",
              "US estimated taxes use a different regime — see "
-             "KNOWN_ISSUES.")
+             "docs/limits.md.")
     _oi, _ol = _estimate_inputs(root, args)
     _ded, _cc = _estimate_deductions(root, args)
     _argv = [sys.executable, "-m", "taxjson.bin.taxjson_run",

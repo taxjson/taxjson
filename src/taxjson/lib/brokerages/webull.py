@@ -761,7 +761,7 @@ class WebullBrokerage(BaseBrokerage):
                   f"If the statement shows an exercise/assignment, the "
                   f"premium belongs in the shares' cost or proceeds"
                   f"{meta[oi][1]} — see "
-                  f"KNOWN_ISSUES 'Webull exercise/assignment inference'.")
+                  f"docs/limits.md 'Webull exercise/assignment inference'.")
         named = set()
         for oi, i in qty_mismatch:
             if oi in used_opt or i in used_stock or oi in named:
@@ -782,7 +782,7 @@ class WebullBrokerage(BaseBrokerage):
                   f"expiry plus a separate trade. If the statement shows "
                   f"an exercise/assignment, the premium belongs in the "
                   f"shares' cost or proceeds{meta[oi][1]} — book it by hand (see "
-                  f"KNOWN_ISSUES 'Webull exercise/assignment inference').")
+                  f"docs/limits.md 'Webull exercise/assignment inference').")
 
     def _check_zero_closes(self, pool, expiries, source) -> None:
         """A $0 option row (no Price, no Proceeds) is booked only as a
