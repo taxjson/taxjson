@@ -44,7 +44,10 @@ taxjson is not published on PyPI: a `taxjson` or `taxjson-fetch` package
 there is not ours — use the installer or a checkout. Release channels (`stable`, `beta`, `latest`,
 `dev`, a pinned version): [docs/upgrading.md](docs/upgrading.md#how-to-upgrade).
 From a checkout: [CONTRIBUTING.md](CONTRIBUTING.md#setup). Python 3.9+;
-the core needs no third-party package (only `tomli` before Python 3.11).
+the core needs no third-party package (only `tomli` before Python 3.11,
+`tzdata` on Windows). The installer also adds the `fx` extra (yfinance
+and pandas: the Yahoo Finance rates the Bank of Canada does not
+publish) and the taxjson-fetch plugin.
 
 ## Five-minute start
 
