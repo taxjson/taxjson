@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Changed
+
+- The trading and loss commands print the essentials first: a one-line
+  legend above each table, then only what to act on (`! ` lines naming
+  the command with the detail) and a closing pointer to `--details`,
+  which prints everything the default view leaves out. `wash-sales`
+  (WHAT DENIED MEANS, the filing positions and manual-check flags in
+  full), `wash-radar` (now one STATUS table of the positions with an
+  advisory and an action line per status; the definitions, empty
+  sections and per-row advisories are the details), `harvest` (the
+  column notes), `audit` (the rounding note), `buy-check` / `sell-check`
+  (the window caveat), `transfers` (the IN_BOOKS meanings), `list`,
+  `stats` and `fees-sum` (the definitions). The planning views close
+  with the scope in a few words (the purchases of a spouse or a
+  controlled corporation are not checked); `--details` keeps the full
+  paragraph. `--json` and the run's reports/ files are unchanged.
+- The note on option roots whose contract size the export does not
+  state is one line when it names three roots or fewer.
+
 
 ## v0.27.1 (2026-10-10)
 
