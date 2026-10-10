@@ -6036,6 +6036,15 @@ def _say_tobase_map(root: Path, ticker_map: Path) -> None:
              "Delete the ticker.map line to use the master's pair, or "
              "keep it: `taxjson update-tobase-map` lists these too.",
              prog=_PROG)
+    if ov.internal:
+        _say("note", f"{TB.TOBASE_MAP}: {len(ov.internal)} of its line(s) "
+             f"not applied: another {TB.TOBASE_MAP} line decides the same "
+             f"listing",
+             *[f"- {rule} not applied ({why})"
+               for rule, why in ov.internal],
+             f"Usually a line you edited beside the master's: keep one of "
+             f"the two (`taxjson update-tobase-map` lists your edits).",
+             prog=_PROG)
 
 
 def _say_tobase_until(root: Path) -> None:
@@ -12766,10 +12775,13 @@ def cmd_tips(args: argparse.Namespace) -> None:
     # Every (root, suffix) sighting across holdings + dividend history +
     # the map itself — the cross-listing evidence base (an option is a
     # sighting of its underlying, S042-04).
+    # (The map's own lines only: a tobase.map pair is not a sighting,
+    # lib/map_hygiene.own_renames.)
+    own_u = _MH.own_renames(map_file) if map_file.is_file() else {}
     seen_suffixes = _MH.sightings(
         [str(h.get("symbol") or "") for rows in holdings.values()
-         for h in rows] + sorted(div_syms) + list(renames_u)
-        + list(renames_u.values()))
+         for h in rows] + sorted(div_syms) + list(own_u)
+        + list(own_u.values()))
 
     from taxjson.lib.markets import canadian_suffixes as _ca_sufs
     _CA_SUFS = tuple(sorted(_ca_sufs()))
@@ -23630,7 +23642,9 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                         "what the pairs change in them cannot be shown."):
                     print(_ln)
             elif changes:
-                print(f"{len(changes)} of them change these books:")
+                print(f"{len(changes)} of them change these books (read "
+                      f"over their full history, every year the exports "
+                      f"hold):")
                 for g, how in changes:
                     for _ln in _out_wrap(f"- {g.rule}: {how}", "  ",
                                          "    "):
@@ -23667,6 +23681,12 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
     in_books = [g for g in plan.added
                 if g.keyword == "TOBASE" and ({g.a, TB.venue_alias(g.a)}
                                               & books)]
+    made_map = False
+    if args.write and not tm.is_file():
+        # tobase.map is read beside a ticker.map only (_say_tobase_map).
+        from taxjson.lib.ticker_map_format import init_template
+        write_user_file(tm, init_template(), root, backup=False)
+        made_map = True
     if args.json:
         _json_out({
             "schema_version": 1, "exists": True,
@@ -23677,10 +23697,21 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
             "added_in_books": [g.rule for g in in_books],
             "ended": [{"line": ln.rule, "until": g.until} for ln, g in
                       plan.ended],
-            "retracted": [ln.rule for ln in plan.retracted],
+            "retracted": [{"line": ln.rule, "why": w}
+                          for ln, w in plan.retracted],
+            "retracted_but_edited": [{"line": ln.rule, "why": w}
+                                     for ln, w in plan.retracted_edited],
             "edited": [ln.rule for ln in plan.edited],
+            "edited_replaces": [{"master": g.rule, "yours": ln.rule}
+                                for g, ln in plan.suppressed],
+            "unknown_figi": [ln.rule for ln in plan.unknown],
+            "opted_out": [g.rule for g in plan.opted_out],
+            "removed_by_you": [g.rule for g in plan.removed_now],
+            "not_tobase_lines": plan.others,
+            "made_ticker_map": made_map,
             "ticker_changed": [{"old": o.rule, "new": n.rule,
-                                "until": o.until} for o, n in plan.renamed],
+                                "until": o.until, "pooled": pooled}
+                               for o, n, pooled in plan.renamed],
             "ticker_map_decides": [{"line": r, "why": w}
                                    for r, w in plan.conflicts],
             "written": bool(args.write and (plan.changes or
@@ -23709,23 +23740,59 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
         if plan.retracted:
             print(f"Retracted: {len(plan.retracted)} line(s) the master no "
                   f"longer gives (removed; never a line you edited):")
-            for ln in plan.retracted:
-                print(f"  - {ln.rule}")
+            for ln, why in plan.retracted:
+                for _ln in _out_wrap(f"- {ln.rule}: {why}", "  ", "    "):
+                    print(_ln)
+        if plan.retracted_edited:
+            print(f"ATTENTION: {len(plan.retracted_edited)} line(s) you "
+                  f"edited name a listing the master RETRACTED (kept as "
+                  f"you wrote them; check each):")
+            for ln, why in plan.retracted_edited:
+                for _ln in _out_wrap(f"! {ln.rule} ({TB.TOBASE_MAP}:"
+                                     f"{ln.lineno}): {why}", "  ", "    "):
+                    print(_ln)
         if plan.edited:
             print(f"Left as written: {len(plan.edited)} marked line(s) you "
-                  f"edited:")
+                  f"edited (yours now; the master's line for the same "
+                  f"listing is not added beside it):")
             for ln in plan.edited:
                 print(f"  = {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
-        for o, n in plan.renamed:
+        if plan.unknown:
+            print(f"Kept: {len(plan.unknown)} marked line(s) whose FIGI "
+                  f"this master does not know:")
+            for ln in plan.unknown:
+                print(f"  ? {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
+        if plan.removed_now:
+            print(f"Removed by you: {len(plan.removed_now)} master line(s) "
+                  f"you deleted (recorded as `# removed:` lines and never "
+                  f"added again; delete such a line to have it back):")
+            for g in plan.removed_now:
+                print(f"  x {g.rule}")
+        if plan.opted_out:
+            print(f"Kept out: {len(plan.opted_out)} master line(s) you "
+                  f"opted out of (`# removed:` or commented out).")
+        if plan.others:
+            print(f"Kept as written: {len(plan.others)} line(s) that are "
+                  f"not TOBASE / DISTINCT lines (the run refuses them: "
+                  f"move them to ticker.map):")
+            for r in plan.others:
+                print(f"  ! {r.strip()}")
+        for o, n, pooled in plan.renamed:
             old_sym, new_sym = o.a, n.a
             when = o.until if o.until and o.until != "unknown" else \
                 "YYYY-MM-DD"
-            for _ln in _out_wrap(
-                    f"Ticker change: {old_sym} is now {new_sym} (the old "
-                    f"line is kept for the years it traded). Book the "
-                    f"change as a dated event: a .tt line `RENAME {when} "
-                    f"{old_sym} {new_sym}` (the first day it traded as "
-                    f"{new_sym}).", "", "  "):
+            if pooled:
+                msg = (f"Ticker change: {old_sym} is now {new_sym} (the "
+                       f"old line is kept for the years it traded). Both "
+                       f"are booked as {n.b} already: nothing more to "
+                       f"write.")
+            else:
+                msg = (f"Ticker change: {old_sym} is now {new_sym} (the "
+                       f"old line is kept for the years it traded). Book "
+                       f"the change as a dated event: a .tt line `RENAME "
+                       f"{when} {old_sym} {new_sym}` (the first day it "
+                       f"traded as {new_sym}).")
+            for _ln in _out_wrap(msg, "", "  "):
                 print(_ln)
         if plan.conflicts:
             print(f"ticker.map decides {len(plan.conflicts)} pair(s) "
@@ -23740,7 +23807,13 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
         if (plan.changes or stale) and not args.json:
             print("Nothing written: `taxjson update-tobase-map --write` "
                   "applies it.")
+        if not tm.is_file() and not args.json:
+            print("There is no ticker.map beside tobase.map (it is not "
+                  "read without one): `taxjson update-tobase-map --write` "
+                  "makes one.")
         return
+    if made_map and not args.json:
+        print("Wrote an empty ticker.map (tobase.map is read beside one).")
     if not plan.changes and not stale:
         return
     bak = write_user_file(TB.tobase_path(root), plan.new_text, root,

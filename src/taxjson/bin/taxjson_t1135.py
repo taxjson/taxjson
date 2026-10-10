@@ -917,7 +917,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  sheltered_paths: List[Path] = (),
                  option_timing: Optional[Dict[str, Any]] = None,
                  full_history: bool = True,
-                 income_rules: Optional[Dict[str, Any]] = None
+                 income_rules: Optional[Dict[str, Any]] = None,
+                 issuer_countries: Optional[Dict[str, str]] = None,
+                 key_renames: Optional[Dict[str, str]] = None
                  ) -> Dict[str, Any]:
     """The T1135 report model. `today` (ISO date, default the real
     date) decides whether the year is complete: before Dec 31 the
@@ -928,13 +930,31 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     history (`full_history_wash_sales`, with `sheltered_paths` as wash
     context and the project's `option_timing`) so a superficial loss
     denied in ANY year is in the replacement's cost; off, only the
-    gains files' (year-scoped) denials are."""
+    gains files' (year-scoped) denials are.
+
+    `issuer_countries` ({symbol: ISO alpha-3}, lib/tobase_map.
+    t1135_countries): the country of a foreign issuer the interlisted
+    pairs book under its US listing (BMU for a Bermuda issuer, not the
+    .US suffix's USA); a user override wins. `key_renames` (the map's
+    renames to the base symbol): a user `T1135 SYMBOL` line naming a
+    listing a TOBASE line books under another symbol follows it."""
     from datetime import date as _date
     today = today or _date.today().isoformat()
     check_currency(list(base_paths) + list(gains_paths), base_currency)
     txs = load_transactions(base_paths, phantoms)
-    user_keys = set(overrides)
-    overrides = dict(overrides)         # the walk adds rename targets
+    key_renames = key_renames or {}
+    written: Dict[str, str] = {}        # booked symbol -> as written
+    mapped: Dict[str, Optional[str]] = {}
+    for k, v in overrides.items():
+        nk = key_renames.get(k, k)
+        if nk != k and nk in overrides:
+            continue        # the user's line for the booked symbol wins
+        mapped[nk] = v
+        if nk != k:
+            written[nk] = k
+    user_keys = set(mapped)
+    overrides = dict(issuer_countries or {})
+    overrides.update(mapped)            # the walk adds rename targets
     # Every denied superficial loss joins the walk as ADJUST rows where
     # the engine put it (G7-0, S008-07): the full-history pass covers
     # losses denied before the project year.
@@ -957,7 +977,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     unused_overrides = sorted(k for k in user_keys if k not in seen)
     for k in unused_overrides:
         from taxjson.lib.out import warn as _warn
-        _warn(f"ticker.map: `T1135 {k}` matches no symbol in the books — "
+        shown = (f"`T1135 {written[k]}` (booked as {k})" if k in written
+                 else f"`T1135 {k}`")
+        _warn(f"ticker.map: {shown} matches no symbol in the books — "
               f"the override is not applied",
               details=["Renamed, consolidated by ticker.map, or a typo?"])
     # A Canadian issuer on a foreign listing (its ISIN says CA — IB
@@ -1385,6 +1407,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     overrides = load_overrides(args.map)
+    # The interlisted pairs (lib/tobase_map): a foreign issuer's country
+    # and the renames a user T1135 key follows.
+    issuer_countries: Dict[str, str] = {}
+    key_renames: Dict[str, str] = {}
+    if args.map is not None:
+        from taxjson.lib.tobase_map import t1135_countries
+        issuer_countries = t1135_countries(args.map)
+        try:
+            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                        merge_renames)
+            key_renames = {str(k).upper(): str(v).upper() for k, v in
+                           merge_renames(_parse_map_file(args.map)[0],
+                                         to_base=True).items()}
+        except Exception:                               # noqa: BLE001
+            key_renames = {}
     if args.option_premium_timing is None:
         # The T1135 test is Canadian; a Canada project's run uses grant
         # timing from the project year — say so instead of silently
@@ -1423,6 +1460,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                transfers_as_acquisitions=(
                                    args.transfers_as_acquisitions)),
                            full_history=not args.year_wash_only,
+                           issuer_countries=issuer_countries,
+                           key_renames=key_renames,
                            income_rules=dict(corporate_distributions=tuple(
                                args.corporate_distribution or ()),
                                # The ALLOWLOSS positions the books took

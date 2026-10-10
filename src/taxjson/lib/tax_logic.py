@@ -1300,7 +1300,20 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "TOBASE and DISTINCT line of either file. An ended "
                  "interlisting keeps its line (`until=`), and a row in "
                  "an ended listing dated after it is a Warning: the "
-                 "ticker may now name another security."),
+                 "ticker may now name another security; when the master "
+                 "knows the ticker names another security today "
+                 "(`reused_by=`), every row of it is a Warning, whatever "
+                 "its date. A listing the master retracts (shipped in "
+                 "error) leaves the master for good, and `taxjson "
+                 "update-tobase-map` removes its line unless you edited "
+                 "it. The effect of the home listing: a foreign issuer's "
+                 "TSX-held units (booked under the US line) are foreign "
+                 "property and pay foreign dividends; a Canadian issuer's "
+                 "NYSE- or Nasdaq-bought shares and their options "
+                 "(booked under the TSX line) are not foreign property "
+                 "and pay Canadian dividends. A TSX fund's US-dollar line "
+                 "(X.U) of the same units is booked under its CAD line "
+                 "(X)."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -1968,9 +1981,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Canadian ISIN is named for a `T1135 SYMBOL CA` line, "
                  "since a Canadian corporation's shares are not foreign "
                  "property); crypto held on an exchange counts. A T1135 "
-                 "line follows its symbol through a rename, and a line "
+                 "line follows its symbol through a rename (a TOBASE "
+                 "line's included: a line naming a listing booked under "
+                 "another symbol applies to that symbol), and a line "
                  "that matches no symbol in the books is named in a "
-                 "warning.",
+                 "warning, with the symbol it is booked as. A pair "
+                 "tobase.map books under the US listing of an issuer the "
+                 "interlisted master knows is domiciled outside Canada "
+                 "takes the issuer's country, not the .US suffix's "
+                 "(`country=` on its line: a Bermuda issuer is BMU, a "
+                 "Swiss one CHE); a T1135 line overrides it.",
                  cont=True),
             Rule("CA-RPT-15",
                  "The test covers these books only: specified foreign "

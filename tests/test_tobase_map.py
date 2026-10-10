@@ -102,11 +102,12 @@ class TestRender(unittest.TestCase):
         ex = text.index(TB.SECTION_EXCHANGE)
         otc = text.index(TB.SECTION_OTC)
         self.assertLess(ex, otc)
-        a = text.index(f"TOBASE QZAB.US QZA.TO  # master:{F1}")
+        a = text.index(f"TOBASE QZAB.US QZA.TO  # master:{F1}:"
+                       f"{TB.line_hash('TOBASE QZAB.US QZA.TO')}")
         b = text.index(f"TOBASE QZBBF.US QZB.TO  # master:{F2}")
         self.assertTrue(ex < a < otc < b)
-        self.assertIn(f"TOBASE QZG.US QZG.TO  # master:{F3} "
-                      f"until=2025-06-30", text)
+        self.assertRegex(text, rf"TOBASE QZG.US QZG.TO  # master:{F3}:"
+                               rf"[0-9a-f]{{6}} until=2025-06-30\n")
         self.assertNotIn("DISTINCT", text.split(TB.STAMP)[1])
 
     def test_receipt_distinct_only_when_the_books_hold_it(self):
@@ -135,8 +136,9 @@ class TestRender(unittest.TestCase):
                                           "kind": "us",
                                           "until": "2024-03-01"}])}
         text = TB.render(_master(sec))
-        self.assertIn(f"TOBASE QZAX.US QZA.TO  # master:{F1} "
-                      f"until=2024-03-01 ended=QZAX.US", text)
+        self.assertRegex(text, rf"TOBASE QZAX.US QZA.TO  # master:{F1}:"
+                               rf"[0-9a-f]{{6}} until=2024-03-01 "
+                               rf"ended=QZAX.US\n")
 
 
 # ------------------------------------------------------------ overlay
@@ -199,7 +201,10 @@ class TestOverlay(unittest.TestCase):
         self.assertEqual([x for x in ov.lines if x.startswith("TOBASE QZA.")
                           and "QZA.V" not in x],
                          ["TOBASE QZA.US QZA.TO"])
-        self.assertEqual(len(ov.overridden), 2)
+        # Two tobase.map lines another tobase.map line contradicts:
+        # never blamed on ticker.map.
+        self.assertEqual(len(ov.internal), 2)
+        self.assertEqual(ov.overridden, [])
 
     def test_bad_line_is_a_problem_naming_tobase_map(self):
         with tempfile.TemporaryDirectory() as td:
@@ -330,13 +335,23 @@ class TestPlan(unittest.TestCase):
         plan = TB.plan_update(_master(sec), old, set(), "")
         self.assertEqual(len(plan.ended), 1)
         self.assertEqual(plan.retracted, [])
-        # A pair of the entry the master no longer gives at all.
+        # A pair of the entry the master no longer gives at all (an
+        # older marker, no check: judged by what the master could give).
+        sec = {F1: dict(SEC[F1], us=["QZAN.US"])}
+        old = TB.parse_tobase(f"TOBASE QZAB.US QZA.TO  # master:{F1}\n")
+        plan = TB.plan_update(_master(sec), old, set(), "")
+        self.assertEqual([ln.rule for ln, _w in plan.retracted], [])
+        self.assertEqual([ln.rule for ln in plan.edited],
+                         ["TOBASE QZAB.US QZA.TO"])
+        # The reversed direction of a marked line is the user's edit:
+        # kept, never retracted.
         sec = {F1: dict(SEC[F1], ca=["QZA.TO", "QZA.U.TO"])}
         old = TB.parse_tobase(f"TOBASE QZA.TO QZA.U.TO  # master:{F1}\n")
         plan = TB.plan_update(_master(sec), old, set(), "")
-        self.assertEqual([ln.rule for ln in plan.retracted],
+        self.assertEqual(plan.retracted, [])
+        self.assertEqual([ln.rule for ln in plan.edited],
                          ["TOBASE QZA.TO QZA.U.TO"])
-        self.assertNotIn("TOBASE QZA.TO QZA.U.TO", plan.new_text)
+        self.assertIn("TOBASE QZA.TO QZA.U.TO", plan.new_text)
 
     def test_ticker_change_keeps_the_old_line_and_suggests_rename(self):
         sec = {F1: dict(SEC[F1], us=["QZAN.US"],
@@ -346,9 +361,11 @@ class TestPlan(unittest.TestCase):
         plan = TB.plan_update(_master(sec), old, set(), "")
         self.assertEqual([g.rule for g in plan.added],
                          ["TOBASE QZAN.US QZA.TO"])
-        (o, n), = plan.renamed
+        (o, n, pooled), = plan.renamed
         self.assertEqual((o.a, n.a, o.until), ("QZAB.US", "QZAN.US",
                                                "2026-02-01"))
+        # Both book as QZA.TO: nothing more to write.
+        self.assertTrue(pooled)
         self.assertIn("TOBASE QZAB.US QZA.TO", plan.new_text)
 
     def test_conflicts_reported(self):
