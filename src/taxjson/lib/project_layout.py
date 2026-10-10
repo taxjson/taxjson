@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 CONFIG = "taxjson.toml"
 TICKER_MAP = "ticker.map"
+TOBASE_MAP = "tobase.map"
 INPUTS = "inputs"
 SLIPS = "slips"
 HOLDINGS = "holdings"
@@ -599,6 +600,9 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     year's own tables and the accounts' holdings and broker ids left
     out: _compared; arrays of tables compared whole)."""
     a, b = map_rules(here / TICKER_MAP), map_rules(other / TICKER_MAP)
+    # tobase.map (lib/tobase_map): the interlisted pairs each year's
+    # `update-tobase-map` keeps; shown apart (align never copies them).
+    ta, tb = map_rules(here / TOBASE_MAP), map_rules(other / TOBASE_MAP)
     try:
         fa = flat_keys(read_config(here))
         fb = flat_keys(read_config(other))
@@ -609,6 +613,8 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     return {
         "map_only_here": [r for r in a if r not in b],
         "map_only_there": [r for r in b if r not in a],
+        "tobase_only_here": [r for r in ta if r not in set(tb)],
+        "tobase_only_there": [r for r in tb if r not in set(ta)],
         "keys": [{"key": k, "here": fa.get(k), "there": fb.get(k)}
                  for k in keys],
     }
@@ -731,6 +737,8 @@ def years_report(folder: Path) -> Dict[str, Any]:
             rec["differs_from_newest"] = {
                 "map_rules": len(c["map_only_here"])
                 + len(c["map_only_there"]),
+                "tobase_rules": len(c["tobase_only_here"])
+                + len(c["tobase_only_there"]),
                 "keys": len(c["keys"])}
         try:
             st = CL.load_state(d)

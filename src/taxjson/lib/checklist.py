@@ -770,8 +770,8 @@ def d_roc_entered(ctx: Ctx) -> Result:
 def d_inputs_committed(ctx: Ctx) -> Result:
     if not _is_git_repo(ctx.root):
         return Result("inputs-committed", "attention", "not a git repository")
-    paths = ["inputs", "taxjson.toml", "ticker.map", "missing_history.json",
-             "phantoms.json"]
+    paths = ["inputs", "taxjson.toml", "ticker.map", "tobase.map",
+             "missing_history.json", "phantoms.json"]
     paths = [p for p in paths if (ctx.root / p).exists()]
     refused = _git_refusal(ctx.root)
     if refused:
@@ -975,7 +975,7 @@ FINGERPRINT_FILE = ".inputs_fingerprint.json"     # in work/
 FINGERPRINT_VERSION = 2
 # Project-root maps `taxjson run` reads (taxjson_run._PROJECT_ROOT_INPUTS
 # is the same list; a test keeps the two equal — A2-0363, A2-1158).
-PROJECT_ROOT_MAPS = ("ticker.map", "missing_history.json",
+PROJECT_ROOT_MAPS = ("ticker.map", "tobase.map", "missing_history.json",
                      "phantoms.json")
 # phantoms.json is the old name of missing_history.json (still read): a
 # fingerprint keys it by the new name, so renaming the file is not an
@@ -2845,6 +2845,15 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
               Cmd("tjs ticker-map --suggest --write", "adds them, one by "
                   "one (--all: every line the evidence names; a pair to "
                   "verify is asked on a terminal)"))),
+        Item("tobase-map", "Fill the gaps",
+             "Interlisted pairs up to date (tobase.map)",
+             "A TSX share and its US listing are one security: one ACB "
+             "pool, one security for the superficial-loss rule.",
+             (Cmd("tjs update-tobase-map", "what the installed "
+                  "interlisted master adds, ends or retracts, and the pairs "
+                  "that change these books", "canada"),
+              Cmd("tjs update-tobase-map --write", "applies it (the "
+                  "previous file kept as tobase.map.bak)", "canada"))),
         _check("journals",
                "A journal the books do not pool leaves a long on one "
                "listing and a short on the other.",
@@ -3292,6 +3301,34 @@ def s_ticker_map(ctx: Ctx, f: _Facts) -> Result:
     return Result("ticker-map", "done", "nothing suggested")
 
 
+def s_tobase_map(ctx: Ctx, f: _Facts) -> Result:
+    """Canada: tobase.map (lib/tobase_map) made from the installed
+    interlisted master — older is attention; none is a step to take."""
+    from taxjson.lib import tobase_map as TB
+    if is_us(ctx.settings.get("country")):
+        return Result("tobase-map", "n/a", "Canada only for now (the "
+                      "interlisted pairs: tax-logic US-XLIST-05)")
+    try:
+        master = TB.load_master()
+        tob = TB.read_tobase(ctx.root)
+    except (OSError, ValueError) as e:
+        return Result("tobase-map", "blocked", f"could not read: {e}")
+    if tob is None:
+        # A project from before tobase.map: optional, so a step to read
+        # (review), never a gap.
+        return Result("tobase-map", "review", "no tobase.map — `tjs "
+                      "update-tobase-map` shows the interlisted pairs "
+                      "that would change these books")
+    if (tob.stamp or "") < master.generated:
+        return Result("tobase-map", "attention",
+                      f"tobase.map is from the master of "
+                      f"{tob.stamp or 'an unknown date'}; this taxjson has "
+                      f"the one of {master.generated} — `tjs "
+                      f"update-tobase-map`")
+    return Result("tobase-map", "done", f"from the master of "
+                  f"{master.generated}")
+
+
 def s_tt_lines(ctx: Ctx, f: _Facts) -> Result:
     tts = sorted(p for n in ctx.accounts
                  for p in _data_files(_PL.inputs_dir(ctx.root) / n)
@@ -3359,6 +3396,7 @@ STEP_RULES: Dict[str, Callable[[Ctx, _Facts], Result]] = {
     "configure": s_configure,
     "transfers": s_transfers,
     "ticker-map": s_ticker_map,
+    "tobase-map": s_tobase_map,
     "tt-lines": s_tt_lines,
     "format": s_format,
     "tips": _review("tips"),

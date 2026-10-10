@@ -125,6 +125,7 @@ PARTITION_RULES = frozenset({
     "CA-OPEN-01",      # opening balance: pooled, not a purchase (US: lot dates)
     "CA-XLIST-03",     # a broker's CAD/USD currency journal joined (US: transfer legs)
     "CA-XLIST-05",     # cross-listing loss radar: still held at day 30 (US: none)
+    "CA-XLIST-06",     # tobase.map: the interlisted master's pairs (US: not read)
     "CA-OPEN-02",      # opening cost at the snapshot day's BoC rate (US: USD only)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
@@ -1277,6 +1278,42 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "line says so); a GLOBAL or TOBASE line so written is "
                  "not re-read (it would join pools): a Warning names "
                  "the line to write."),
+            Rule("CA-XLIST-06",
+                 "The interlisted master that ships with taxjson (a TSX or "
+                 "TSX Venture share and its US exchange and OTC listings "
+                 "of the SAME share class, checked against OpenFIGI's "
+                 "share-class FIGI; a depositary receipt — a CDR, an ADR "
+                 "— is never paired) gives each Canadian project a "
+                 "tobase.map beside ticker.map: one `TOBASE US CA` line "
+                 "per pair, read as if written in ticker.map — one ACB "
+                 "pool, one security for the superficial-loss rule "
+                 "(identical property), booked under the issuer's home "
+                 "listing (the US line of a company the master knows is "
+                 "domiciled outside Canada: its dividends and T1135 "
+                 "status stay foreign). ticker.map wins: a pair is not "
+                 "applied when a ticker.map rule decides one of its "
+                 "listings (a TOBASE, JOURNAL, GLOBAL, DELETE or dated "
+                 "RENAME of either, a TOBASE booking another listing "
+                 "under the one the pair would move, a DISTINCT pair), "
+                 "with an Info line when the two disagree. A TSX Venture listing and its "
+                 "TSX spelling (X.V, X.TO) are one listing for every "
+                 "TOBASE and DISTINCT line of either file. An ended "
+                 "interlisting keeps its line (`until=`), and a row in "
+                 "an ended listing dated after it is a Warning: the "
+                 "ticker may now name another security; when the master "
+                 "knows the ticker names another security today "
+                 "(`reused_by=`), every row of it is a Warning, whatever "
+                 "its date. A listing the master retracts (shipped in "
+                 "error) leaves the master for good, and `taxjson "
+                 "update-tobase-map` removes its line unless you edited "
+                 "it. The effect of the home listing: a foreign issuer's "
+                 "TSX-held units (booked under the US line) are foreign "
+                 "property and pay foreign dividends; a Canadian issuer's "
+                 "NYSE- or Nasdaq-bought shares and their options "
+                 "(booked under the TSX line) are not foreign property "
+                 "and pay Canadian dividends. A TSX fund's US-dollar line "
+                 "(X.U) of the same units is booked under its CAD line "
+                 "(X)."),
             Rule("CA-ACB-11",
                  "Shares sold with no purchase in your files (bought "
                  "before the data starts) go in missing_history.json "
@@ -1944,9 +1981,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Canadian ISIN is named for a `T1135 SYMBOL CA` line, "
                  "since a Canadian corporation's shares are not foreign "
                  "property); crypto held on an exchange counts. A T1135 "
-                 "line follows its symbol through a rename, and a line "
+                 "line follows its symbol through a rename (a TOBASE "
+                 "line's included: a line naming a listing booked under "
+                 "another symbol applies to that symbol), and a line "
                  "that matches no symbol in the books is named in a "
-                 "warning.",
+                 "warning, with the symbol it is booked as. A pair "
+                 "tobase.map books under the US listing of an issuer the "
+                 "interlisted master knows is domiciled outside Canada "
+                 "takes the issuer's country, not the .US suffix's "
+                 "(`country=` on its line: a Bermuda issuer is BMU, a "
+                 "Swiss one CHE); a T1135 line overrides it.",
                  cont=True),
             Rule("CA-RPT-15",
                  "The test covers these books only: specified foreign "
@@ -1954,6 +1998,25 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "cash, shares held elsewhere) adds to the same $100,000, "
                  "so the report, its JSON (scope) and the checklist say "
                  "\"on these books\".", cont=True),
+            Rule("CA-RPT-17",
+                 "Filing position (taxjson's): an option listed in the "
+                 "United States on a Canadian issuer whose US and "
+                 "Canadian listings are one pooled security (a TOBASE "
+                 "line, tobase.map's included, booking the pair under "
+                 "the Canadian listing) follows the pooled listing: it "
+                 "is booked under the Canadian listing's option code and "
+                 "is not counted as specified foreign property. The "
+                 "reasoning: a property that confers a right to acquire "
+                 "another property is specified foreign property when "
+                 "that other property is (s.233.3(1)), and the shares of "
+                 "a corporation resident in Canada are not; the "
+                 "contract's US listing and clearing are not read as "
+                 "making it property held outside Canada. CRA's T1135 "
+                 "guidance does not address listed options. A pair "
+                 "booked under its US line (an issuer the master knows "
+                 "is domiciled outside Canada) keeps its options "
+                 "foreign, and a `T1135 SYMBOL COUNTRY` line in "
+                 "ticker.map sets another country for a contract."),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
                  "the gains engine computes it, day by day over the full "
@@ -2916,6 +2979,17 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "line says so); a GLOBAL or TOBASE line so written is "
                  "not re-read (it would join pools): a Warning names "
                  "the line to write."),
+            Rule("US-XLIST-05",
+                 "A US project does not read tobase.map, the interlisted "
+                 "master's pairs (Canada only for now: CA-XLIST-06; "
+                 "`taxjson update-tobase-map` is refused): two listings "
+                 "of one share are joined only by your own ticker.map "
+                 "lines, the transfer journal (US-XLIST-01) or a .tt "
+                 "JOURNAL line, and X.V and X.TO stay two spellings. "
+                 "Planned: the same master's share-class groups become "
+                 "the substantially-identical groups the wash-sale rule "
+                 "(§1091) matches across listings, each lot keeping its "
+                 "own listing and basis."),
             Rule("US-BASIS-07",
                  "Accounts typed \"sheltered\" (an IRA, Roth IRA, "
                  "401(k)...) are tracked but kept out of the filing "

@@ -392,10 +392,15 @@ class TestCommand(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn("already formatted", r.stdout)
                 # The commented examples parse to nothing: an empty map.
+                # (A Canadian project's tobase.map adds the interlisted
+                # pairs — every one of them `generated`, none the
+                # user's: lib/tobase_map.)
                 from taxjson.bin.taxjson_ticker_map import _parse_map_file
                 tm, problems, notes = _parse_map_file(root / "ticker.map")
                 self.assertEqual((problems, notes), ([], []))
-                self.assertFalse(tm.glob or tm.tobase or tm.delete)
+                self.assertFalse(tm.glob or tm.delete)
+                self.assertFalse(set(tm.tobase) - set(tm.generated))
+                self.assertEqual(bool(tm.tobase), country == "canada")
 
     def test_console_style(self):
         from _style import assert_console, assert_labelled, assert_styled

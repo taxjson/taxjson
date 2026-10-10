@@ -474,11 +474,27 @@ def check_against_map(decl: Declarations, tmap) -> List[str]:
                 f"the {dr.old} rows too), or keep only one of the two: "
                 f"{dr.line!r}")
             continue
+        tob = tmap.tobase or {}
+        gen = getattr(tmap, "generated", ()) or ()
+
+        def _base(x: str) -> str:
+            seen = set()
+            while x in tob and x not in seen:
+                seen.add(x)
+                x = tob[x]
+            return x
+        # Both already one security (each a listing TOBASE books under
+        # the same base, e.g. a US ticker change tobase.map pools under
+        # the TSX line): the rename changes nothing there — no warning.
+        same_base = (dr.old in tob or dr.new in tob) and \
+            _base(dr.old) == _base(dr.new)
         for sym in (dr.old, dr.new):
-            if sym in (tmap.tobase or {}):
+            if sym in tob and not same_base:
+                src = ("tobase.map (the interlisted master's pair)"
+                       if sym in gen else "ticker.map")
                 decl.warnings.append(
                     f"{dr.where}: RENAME {dr.date} {dr.old} {dr.new}: "
-                    f"ticker.map also joins {sym} to {tmap.tobase[sym]} "
+                    f"{src} also joins {sym} to {tob[sym]} "
                     f"(TOBASE, at every date, in the base-currency books) "
                     f"— the change is booked on the exports' symbols "
                     f"first; check that both lines are meant")

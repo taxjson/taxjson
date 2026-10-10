@@ -2,8 +2,105 @@
 
 ## Unreleased
 
+### Added
+
+- Interlisted shares (Canada): taxjson ships a master of Canadian shares
+  that also trade in the United States under the same share class (a TSX
+  or TSX Venture line, its US exchange listing and its US OTC listings),
+  each pair checked against OpenFIGI's share-class FIGI and the Nasdaq
+  Trader symbol directory; depositary receipts are never paired. A
+  Canadian project carries its pairs as `tobase.map` beside ticker.map
+  (`taxjson init --country canada` writes it, `taxjson new-year` copies
+  it): read as if its `TOBASE` lines were in ticker.map, so the two
+  listings are one ACB pool and one security for the superficial-loss
+  rule (tax-logic CA-XLIST-06). ticker.map wins over it, with an Info
+  line when the two disagree. A US project does not read it (US-XLIST-05).
+- `taxjson update-tobase-map [--write] [--json]`: what a newer master
+  adds, ends (`until`, never deleted) or retracts, the ticker changes
+  (nothing to write when the old and new tickers already book under the
+  same listing; else the dated `.tt` RENAME event to write) and the pairs
+  your ticker.map decides otherwise; without a tobase.map, which pairs
+  would change the books (read over their full history, every year the
+  exports hold). Dry run by default. Your edits are kept: a marked line
+  whose rule you changed (another target, the direction reversed) is
+  yours, and the master's line for the same listing is not added beside
+  it; a master line you delete stays deleted (recorded as a `# removed:`
+  line); your comment lines and lines that are not `TOBASE` / `DISTINCT`
+  are kept (the latter listed). `--write` also creates an empty
+  ticker.map when there is none. A new checklist item says when
+  tobase.map is older than the installed master, and `taxjson years`
+  counts the tobase.map lines that differ between years.
+- A row in an ended interlisting after its `until` date is a Warning
+  naming the possible reuse of the ticker; when the master knows the
+  ticker names another security today, every row of it is a Warning,
+  whatever its date.
+- The interlisted master's corrections: a listing shipped in error is
+  retracted for good (with its reason) and `update-tobase-map` removes
+  its line unless you edited it (an edited one is kept and flagged). The
+  maintainer's build refuses an ended US ticker that names another
+  security today unless the reuse is recorded. This release retracts an
+  ended pair's wrong US ticker (another company's ADR), moves an ended
+  trust's US line to the share class it traded under, ends an OTC ticker
+  of an issuer's former name, adds three ended pairs (a former Nasdaq
+  ticker of a current pair among them), and leaves out FINRA's temporary
+  `...D` OTC symbols (a new issue or reverse split).
+- Interlisted master: a TSX fund's US-dollar line of the same units
+  (`X.U` beside `X`, the same share-class FIGI) is one security, booked
+  under the CAD line (`TOBASE DLR.U.TO DLR.TO`); a `.U` line of another
+  share class (a separate series) is not paired. Coverage is the TSX and
+  TSX Venture only (Cboe Canada and the CSE are not covered).
+- `taxjson ticker-map --suggest` lists your own ticker.map `TOBASE` /
+  `DISTINCT` lines that tobase.map states identically ("Covered by
+  tobase.map (delete?)", JSON `covered`): listed only — keeping one is
+  harmless, and it holds even if the master later retracts the pair; on
+  a terminal `--write` asks keep / delete for each (keep is the
+  default), `--all` never deletes one.
+- `scripts/build_interlisted.py` rebuilds the master: an offline,
+  append-only build from a cache outside the repository; the network
+  fetch is a maintainer step.
+  It also resolves a TMX issuer root whose shares trade only as a class
+  or as trust units (the class B line, the `.UN` units), records the US
+  ticker's own company beside each depositary-receipt DISTINCT pair, never
+  caches an OpenFIGI error as "not found", and lets the maintainer's end
+  date for an ended pair replace an earlier `until=unknown`.
+- The interlisted master's first refresh: more Canadian lines (share
+  classes and trust units the issuer list names by their bare root), the
+  Canadian depositary receipts whose root is a US ticker as DISTINCT pairs
+  (two securities), the issuer's country for more exchange-listed pairs,
+  and the ended pairs' dates where known.
+
 ### Changed
 
+- In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
+  TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), the
+  one the books carry: the two are one listing.
+- IB's `GREY` listing venue is a US listing (`.US`), like `PINK` and `OTC`.
+- tobase.map books a pair under the issuer's home listing, and that
+  changes filing numbers: a foreign issuer's TSX-held shares or units
+  (BEP.UN, BIP.UN and each other pair the master lists with a domicile
+  outside Canada and a US exchange listing) are booked under the US
+  listing — foreign property, and their distributions foreign dividends;
+  a Canadian issuer's NYSE- or Nasdaq-bought shares and their options are
+  booked under the TSX line — they leave the T1135 and their dividends
+  are Canadian. `taxjson t1135` gives a pooled foreign issuer the
+  country of its domicile (`country=` on the tobase.map line: a Bermuda
+  issuer is BMU, not the `.US` suffix's USA); a `T1135` line still
+  overrides it, and now follows a `TOBASE` line (a line naming the TSX
+  listing applies to the US symbol it is booked as; the "matches no
+  symbol" warning names that symbol).
+- A `.tt` RENAME of a listing tobase.map pools says the pair is
+  tobase.map's (it said ticker.map), and says nothing when the old and
+  new symbols already book as one.
+- `taxjson ticker-map --suggest` no longer reads a tobase.map pair as a
+  sighting of a cross-listing: a TSX Venture issuer sharing a US
+  company's letters is no longer offered as a pair to verify.
+- `taxjson redact` carries a year's tobase.map into the redacted copy.
+- T1135 (documentation, no change in behaviour): taxjson's filing position
+  on a US-listed option of a Canadian issuer that a `TOBASE` line pools
+  under its Canadian listing is now stated (tax-logic CA-RPT-17): the
+  option follows the pooled listing and is not specified foreign
+  property, since a right to acquire shares of a Canadian-resident
+  corporation is not; CRA's guidance does not address listed options.
 - Developers: the gate's test suite runs in parallel
   (`scripts/run_tests_parallel.py`, standard library only): a process per
   test module, each with its own temp folder and synthetic HOME, longest

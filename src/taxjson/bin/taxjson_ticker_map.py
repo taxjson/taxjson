@@ -80,11 +80,17 @@ _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
 # STABLE, MULT, an EXTRACT target) — they change no symbol, but a line
 # written for a symbol says the user decided what that symbol is
 # (named_symbols(lookups=True)).
+# generated: the FROM symbols and DISTINCT pairs that tobase.map lines
+# (and the .V / .TO spellings, lib/tobase_map) add to a project's map —
+# not the user's own lines (the unused-rule check leaves them alone);
+# overlay_named: the symbols only those lines name (named_symbols leaves
+# them out: an inference yields only to a line the user wrote).
 TickerMap = namedtuple("TickerMap",
                        ["glob", "tobase", "journal", "delete",
                         "distinct", "dated", "undated_rename",
-                        "lookup_named"],
-                       defaults=((), frozenset(), frozenset()))
+                        "lookup_named", "generated", "overlay_named"],
+                       defaults=((), frozenset(), frozenset(),
+                                 frozenset(), frozenset()))
 
 
 def _bare_symbol(sym: str) -> bool:
@@ -195,9 +201,30 @@ def listing_spelling_notes(text: str, name: str = "ticker.map",
 
 def _parse_map_file(file_path: Path):
     """_parse_map_text of the file at `file_path` (a non-UTF-8 map is a
-    one-line error naming it, S053-06; a BOM is dropped)."""
+    one-line error naming it, S053-06; a BOM is dropped). A project's
+    ticker.map is read with its tobase.map (lib/tobase_map: the
+    interlisted master's pairs, ticker.map winning, and in a Canadian
+    project the .V / .TO spellings of its TOBASE and DISTINCT lines);
+    a tobase.map line that cannot be used is a problem naming it."""
     from taxjson.lib.cli_diag import read_text_utf8
-    return _parse_map_text(read_text_utf8(file_path), file_path.name)
+    text = read_text_utf8(file_path)
+    file_path = Path(file_path)
+    if file_path.name == "ticker.map":
+        from taxjson.lib.tobase_map import overlay_for
+        ov = overlay_for(file_path, text)
+        if ov is not None and (ov.text or ov.problems):
+            sep = "" if not text or text.endswith("\n") else "\n"
+            tmap, problems, notes = _parse_map_text(text + sep + ov.text,
+                                                    file_path.name)
+            gen = frozenset(ov.generated)
+            own = named_symbols(_parse_map_text(text, file_path.name)[0],
+                                lookups=True)
+            ov_syms = {p.upper() for ln in ov.lines
+                       for p in ln.split()[1:3]}
+            return (tmap._replace(generated=gen,
+                                  overlay_named=frozenset(ov_syms - own)),
+                    list(ov.problems) + problems, notes)
+    return _parse_map_text(text, file_path.name)
 
 
 def _parse_map_text(text: str, name: str = "ticker.map",
@@ -506,7 +533,9 @@ def named_symbols(tmap: "TickerMap", lookups: bool = False) -> frozenset:
     EXTRACT target — TickerMap.lookup_named): an inference that would
     move a symbol's rows to another symbol (lib/listing_suffix, IB's
     temporary-symbol fold) leaves a symbol any ticker.map line names, so
-    the line keeps meaning what it says."""
+    the line keeps meaning what it says. A symbol only tobase.map's
+    lines name (TickerMap.overlay_named) is not counted: those lines
+    are the master's, not the user's decision."""
     out = set(tmap.delete)
     if lookups:
         out.update(tmap.lookup_named)
@@ -517,6 +546,8 @@ def named_symbols(tmap: "TickerMap", lookups: bool = False) -> frozenset:
         out.update(pair)
     for dr in tmap.dated:
         out.update((dr.old, dr.new))
+    # The symbols only tobase.map's lines name are not the user's call.
+    out.difference_update(getattr(tmap, "overlay_named", ()) or ())
     return frozenset(s.upper() for s in out)
 
 

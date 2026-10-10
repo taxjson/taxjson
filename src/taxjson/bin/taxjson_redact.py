@@ -2065,6 +2065,9 @@ def _write_tree(dst: Path, dirs: List[Path], files: List[_TreeFile],
 # beside its inputs/ and holdings/.
 _PROJECT_FILES = (_PL.CONFIG, _PL.TICKER_MAP, "missing_history.json")
 
+# Canada: the interlisted pairs (lib/tobase_map), a year's own file too.
+_PROJECT_FILES += (_PL.TOBASE_MAP,)
+
 
 def _project_tree(root: Path, inputs: Path
                   ) -> Tuple[List[Path], List[_TreeFile], int]:

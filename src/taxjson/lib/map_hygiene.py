@@ -146,6 +146,26 @@ def gap_reason(us: str, ca: str, verdict: str, what: str,
             f"{lines}")
 
 
+def own_renames(path: Path) -> Dict[str, str]:
+    """The base-stage renames a map file's OWN lines make (upper-cased):
+    a ticker.map without its tobase.map overlay, the run's effective map
+    without the overlay section (lib/tobase_map.own_map_text). The
+    sightings of a cross-listing come from the books and these only: a
+    tobase.map pair (and its target) is the master's, not evidence that
+    the books hold that listing (a TSX Venture junior sharing a US
+    company's letters is no pair to verify). {} when unreadable."""
+    from taxjson.bin.taxjson_ticker_map import _parse_map_text, merge_renames
+    from taxjson.lib.cli_diag import read_text_utf8
+    from taxjson.lib.tobase_map import own_map_text
+    try:
+        text = own_map_text(read_text_utf8(Path(path)))
+        tmap = _parse_map_text(text, Path(path).name)[0]
+        return {str(k).upper(): str(v).upper()
+                for k, v in merge_renames(tmap, to_base=True).items()}
+    except Exception:                                   # noqa: BLE001
+        return {}
+
+
 def _map_view(root: Path) -> Tuple[Dict[str, str], Dict[str, str],
                                    Set[frozenset]]:
     """(the base-stage renames: ticker.map's, plus those of the last
@@ -235,7 +255,14 @@ def map_gaps(root: Path) -> Tuple[List[MapGap], List[str]]:
                     or "")).upper() or None
     renames, glob, distinct = _map_view(root)
     syms, unread = books_listings(root, equity)
-    seen = sightings(list(syms) + list(renames) + list(renames.values()))
+    # Sightings: the books and the map's own lines (own_renames), never
+    # a tobase.map pair or its target.
+    from taxjson.lib.cross_listings import EFFECTIVE_MAP
+    own: Dict[str, str] = {}
+    for f in (root / "work" / EFFECTIVE_MAP, _PL.ticker_map_path(root)):
+        if f.is_file():
+            own.update(own_renames(f))
+    seen = sightings(list(syms) + list(own) + list(own.values()))
     ca_sufs = canadian_suffixes()
     names: Optional[Tuple[Dict[str, set], Dict[tuple, str]]] = None
     out: List[MapGap] = []
@@ -316,9 +343,15 @@ def unused_rules(root: Path) -> Tuple[List[UnusedRule], List[str]]:
     except Exception:                                   # noqa: BLE001
         return [], []
     rules: Dict[str, Tuple[str, str]] = {}
+    # A line tobase.map gives the map (the interlisted master's pairs and
+    # the .V / .TO spellings, lib/tobase_map) is never "unused": most
+    # pairs are there for a security the books may hold one day.
+    generated = set(getattr(tmap, "generated", ()) or ())
     for kw, table in (("GLOBAL", tmap.glob), ("TOBASE", tmap.tobase),
                       ("JOURNAL", tmap.journal)):
         for frm, to in table.items():
+            if frm in generated:
+                continue
             rules[str(frm)] = (kw, str(to))
     if not rules:
         return [], []
