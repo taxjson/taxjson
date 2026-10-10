@@ -541,7 +541,8 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
                       f"`taxjson sanity`"))
     if mat:
         items.append(("Info", f"{_n(len(mat), 'position', 'positions')} "
-                      f"read short by the history check are in the totals "
+                      f"read short by the history check "
+                      f"{'is' if len(mat) == 1 else 'are'} in the totals "
                       f"({_syms(mat)}) — `taxjson find-missing-history`"))
     zd = doc.get("zero_cost_declared") or []
     if zd:

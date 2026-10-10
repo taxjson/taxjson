@@ -193,6 +193,18 @@ class TestConciseItems(unittest.TestCase):
     def test_clean_is_silent(self):
         self.assertEqual(FR.render_blocks({"year": 2024}, concise=True), [])
 
+    def test_read_short_line_agrees_with_its_count(self):
+        def line(n):
+            doc = {"no_purchase_in_sum": [
+                {"symbol": f"QZQ{i}.US", "booked": "matched"}
+                for i in range(n)]}
+            return [t for _, t in FR.concise_items(doc)
+                    if "read short" in t][0]
+        self.assertIn("1 position read short by the history check is in "
+                      "the totals", line(1))
+        self.assertIn("2 positions read short by the history check are "
+                      "in the totals", line(2))
+
 
 if __name__ == "__main__":
     unittest.main()
