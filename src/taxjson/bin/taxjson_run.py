@@ -19067,9 +19067,8 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
         _filed = ("; the filed year's inputs changed"
                   if _filed_year_stale_hint(root, cfg, probs) else "")
         _say("warning", f"these books are not the clean result of the "
-             f"current inputs ({len(probs)} problem(s){_filed}): fix and "
-             f"re-run `taxjson run` (`taxjson checklist` lists them)",
-             prog=_cmd_prog())
+             f"current inputs ({_count_noun(len(probs), 'problem')}"
+             f"{_filed}): `taxjson checklist`", prog=_cmd_prog())
     elif probs:
         _say("warning", "these books are not the clean result of the "
              "current inputs",
