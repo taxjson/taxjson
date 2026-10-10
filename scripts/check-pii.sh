@@ -317,8 +317,8 @@ def main():
                 old = int(m.group(1) if m.group(1) is not None else 1)
                 n = int(m.group(2))
                 new = int(m.group(3) if m.group(3) is not None else 1)
-            elif line.startswith("+++ "):
-                path_ = line[4:]
+            elif line.startswith("\x02+++ "):   # a header (HDR-marked)
+                path_ = line[5:]
                 path_ = path_[2:] if path_.startswith("b/") else path_
             elif line.startswith("diff --git "):
                 path_ = "?"
@@ -491,18 +491,85 @@ if [ "$mode" != tree ]; then
     fail "commit message contains NUL bytes"
   fi
 fi
+if [ "$mode" = diff ] && LC_ALL=C grep -aqE '^diff --(cc|combined) ' "$RAWF"; then
+  # A merge commit's own patch (`git log -p --cc`, issue #33) is a
+  # combined diff: one prefix column per parent. A line is ADDED by the
+  # merge only when it is '+' in EVERY column (absent from all parents:
+  # the resolution wrote it); a line some parent already has is that
+  # parent's (scanned with its own commit, or already published) and
+  # becomes context; a removed line is dropped. Rewritten here into the
+  # plain unified diff every check below reads (headers, @@ counts).
+  if LC_ALL=C awk '
+    function flush(  i) {
+      if (inh) {
+        print "@@ -" st "," ctx " +" st "," (ctx + add) " @@"
+        for (i = 1; i <= nb; i++) print B[i]
+      }
+      inh = 0; nb = 0; ctx = 0; add = 0
+    }
+    /^diff --(cc|combined) / {
+      flush(); cc = 1; p = $0; sub(/^diff --(cc|combined) /, "", p)
+      print "diff --git a/" p " b/" p; next }
+    /^diff / { flush(); cc = 0; print; next }
+    !cc { print; next }
+    /^@@@+ / {
+      flush(); match($0, /^@+/); np = RLENGTH - 1
+      h = $0; sub(/ @@@+.*$/, "", h); n = split(h, F, " ")
+      r = F[n]; sub(/^\+/, "", r); split(r, Q, ","); st = Q[1] + 0
+      inh = 1; next }
+    inh && /^[-+ ]/ {
+      pre = substr($0, 1, np); body = substr($0, np + 1)
+      if (pre ~ /-/) next
+      if (pre ~ /^\++$/ && length(pre) == np) { B[++nb] = "+" body; add++ }
+      else { B[++nb] = " " body; ctx++ }
+      next }
+    inh && /^\\/ { B[++nb] = $0; next }
+    { flush(); print }
+    END { flush() }' "$RAWF" > "$RAWF.cc"; then
+    mv -f "$RAWF.cc" "$RAWF"
+  else
+    rm -f "$RAWF.cc"
+    fail "could not read a merge commit's combined diff (--cc) — the scan failed"
+  fi
+fi
+HDR=$'\002'  # --diff: marks a file header "+++ " line (below)
 if [ "$mode" = diff ]; then
+  # A "+++ " line is a file header only in a header block (after
+  # "diff --git" or "---", before the hunk); inside a hunk it is an added
+  # line whose text begins "++ " — it used to be taken for a header and
+  # skipped by every pattern. The hunks are walked by their @@ counts,
+  # and each header line gets the HDR byte in front, so the readers below
+  # tell the two apart. An added line outside any hunk stays an added line.
+  if LC_ALL=C awk -v H="$HDR" '
+    hunk {
+      c = substr($0, 1, 1)
+      if (c == "+") nw--; else if (c == "-") od--; else if (c != "\\") { od--; nw-- }
+      if (od <= 0 && nw <= 0) hunk = 0
+      print; next }
+    /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/ {
+      h = $0; sub(/^@@ -/, "", h); split(h, A, " ")
+      n = split(A[1], O, ","); od = (n > 1) ? O[2] + 0 : 1
+      sub(/^\+/, "", A[2]); n = split(A[2], N, ","); nw = (n > 1) ? N[2] + 0 : 1
+      hunk = (od > 0 || nw > 0); hb = 0; print; next }
+    /^diff --git / || /^--- / { hb = 1; print; next }
+    hb && /^\+\+\+ / { print H $0; hb = 0; next }
+    { print }' "$RAWF" > "$RAWF.hd"; then
+    mv -f "$RAWF.hd" "$RAWF"
+  else
+    rm -f "$RAWF.hd"
+    fail "could not read the diff's file headers — the scan failed"
+  fi
   RAW="$(tr -d '\0' < "$RAWF")"
-  INPUT="$(printf '%s\n' "$RAW" | grep -E '^\+' | grep -vE '^\+\+\+ ' | sed -E 's/^\+//')"
+  INPUT="$(printf '%s\n' "$RAW" | grep -E '^\+' | sed -E 's/^\+//')"
   # Money amounts (A2-1384, security review M2) are checked where owner
   # figures were once quoted: every added line of a CHANGELOG or a
   # markdown / reST doc, and the COMMENT part (from a #, //, /* or <!--
   # at the start or after a blank) of any other added line, each
   # prefixed with its file. Data and code are not: fixtures carry
   # synthetic amounts.
-  AMT_INPUT="$(printf '%s\n' "$RAW" | LC_ALL=C awk '
+  AMT_INPUT="$(printf '%s\n' "$RAW" | LC_ALL=C awk -v H="$HDR" '
     /^diff --git / { f = ""; next }
-    /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); next }
+    index($0, H "+++ ") == 1 { f = substr($0, 6); sub(/^b\//, "", f); next }
     /^\+/ {
       s = substr($0, 2)
       if (f ~ /(^|\/)CHANGELOG[^\/]*$/ || f ~ /\.(md|markdown|rst)$/) { print f ": " s; next }
@@ -510,7 +577,7 @@ if [ "$mode" = diff ]; then
     }')"
   # Destination paths: +++ lines, plus the headers a PURE rename/copy
   # or an empty new file carries instead (no +++ line at all).
-  NAMES="$( { printf '%s\n' "$RAW" | sed -nE 's#^\+\+\+ b/##p; s#^(rename|copy) to ##p'
+  NAMES="$( { printf '%s\n' "$RAW" | sed -nE "s#^$HDR\\+\\+\\+ b/##p; s#^(rename|copy) to ##p"
               printf '%s\n' "$RAW" | sed -nE 's#^diff --git a/.* b/(.*)$#\1#p'; } | sort -u)"
   # git shows binaries as "Binary files … differ" and cannot scan them.
   # A real binary (pdf, png) is fine; a TEXT-extension file that git
@@ -867,9 +934,9 @@ elif [ "$mode" = diff ]; then
   # The pre-push diff (A2-1388): split the hunks of every .csv/.tsv per
   # file, then read them with the file's header row in front.
   DC="$(mktemp -d)"; trap 'rm -rf "$DC" "${RAWF:-}"' EXIT
-  printf '%s\n' "$RAW" | LC_ALL=C awk -v D="$DC" '
+  printf '%s\n' "$RAW" | LC_ALL=C awk -v D="$DC" -v H="$HDR" '
     /^diff --git / { out = ""; next }
-    /^\+\+\+ / { p = substr($0, 5); sub(/^b\//, "", p); out = ""
+    index($0, H "+++ ") == 1 { p = substr($0, 6); sub(/^b\//, "", p); out = ""
                  if (tolower(p) ~ /\.(csv|tsv)$/) { k++; out = D "/" k
                    print p > (out ".path"); close(out ".path") }
                  next }

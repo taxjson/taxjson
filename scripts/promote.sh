@@ -38,6 +38,11 @@ case "$CH" in
   *) die "Channel must be stable or beta (got '$CH')." ;;
 esac
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || die "Promote from main."
+# The pre-push PII gate below must run: a checkout without it (or
+# without the scanner it calls) is refused before anything is changed.
+for f in scripts/hooks/pre-push scripts/check-pii.sh; do
+  [ -f "$f" ] || die "$f is missing from this checkout — the pre-push PII gate cannot run, so nothing is promoted."
+done
 [ -f channels.json ] || die "No channels.json in this checkout — pull main first."
 [ -z "$(git status --porcelain -- channels.json)" ] || die "channels.json has uncommitted changes."
 git fetch --tags --force --quiet origin || die "Could not fetch from origin — promoting pushes, so it needs the remote."
@@ -145,13 +150,12 @@ undo_promote() {
 }
 # The pre-push PII gate (commit messages and identities included), run
 # here whether or not this clone has the hook installed, as release.sh
-# does.
-if [ -x scripts/hooks/pre-push ]; then
-  if ! printf 'refs/heads/main %s refs/heads/main %s\n' "$(git rev-parse HEAD)" "$(git rev-parse origin/main)" \
-       | scripts/hooks/pre-push origin "$(git remote get-url origin)"; then
-    undo_promote && die "pre-push gate refused — nothing pushed, and the promote commit is taken back."
-    die "pre-push gate refused — nothing pushed."
-  fi
+# does — always (checked above), through bash: a lost executable bit
+# used to skip it silently.
+if ! printf 'refs/heads/main %s refs/heads/main %s\n' "$(git rev-parse HEAD)" "$(git rev-parse origin/main)" \
+     | bash scripts/hooks/pre-push origin "$(git remote get-url origin)"; then
+  undo_promote && die "pre-push gate refused — nothing pushed, and the promote commit is taken back."
+  die "pre-push gate refused — nothing pushed."
 fi
 if ! git push -q origin main; then
   undo_promote && die "The push to origin was refused (did main move on?) — the promote commit is taken back; nothing changed here or there. Pull, then run it again."

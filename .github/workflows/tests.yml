@@ -108,11 +108,11 @@ jobs:
   pr-commits:
     # Every commit a pull request adds — its patch, message and author /
     # committer identities — as the pre-push hook checks a push: the tree
-    # scan above sees only the final tree, and a value one commit adds
-    # and a later one removes is still published by the merge. Generic
-    # patterns only (no private files here). The scanner is the BASE
-    # branch's copy, so a pull request cannot weaken the check it is
-    # judged by.
+    # scan above sees only the final tree, and a value one commit (or a
+    # merge's resolution) adds and a later one removes is still
+    # published by the merge. Generic patterns only (no private files
+    # here). The scanner is the BASE branch's copy, so a pull request
+    # cannot weaken the check it is judged by.
     if: github.event_name == 'pull_request'
     name: pii / pull-request commits
     runs-on: ubuntu-latest
@@ -132,9 +132,12 @@ jobs:
           check="$RUNNER_TEMP/pii/scripts/check-pii.sh"
           git show "$BASE_SHA:scripts/check-pii.sh" > "$check"
           range="$BASE_SHA..$HEAD_SHA"
-          git log -p --no-merges --format='' "$range" -- | bash "$check" --diff
-          git log --no-merges --format=%B "$range" | bash "$check" --message
-          git log --no-merges --format='%an <%ae>%n%cn <%ce>' "$range" \
+          # Merge commits too (issue #33): a merge's patch is its combined
+          # diff (--cc), whose lines added against every parent are what
+          # the resolution wrote; its message and identities are published.
+          git log -p --cc --format='' "$range" -- | bash "$check" --diff
+          git log --format=%B "$range" | bash "$check" --message
+          git log --format='%an <%ae>%n%cn <%ce>' "$range" \
             | sort -u | bash "$check" --identity
 
   test:

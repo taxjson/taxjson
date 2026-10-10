@@ -29,6 +29,28 @@
 - Two account names that differ only by letter case (`Margin` and `margin`) are refused with a message naming both: their folders and holdings snapshots could not be told apart, and one account received the other's positions (#48).
 - `tjs elect ACCOUNT` (and `--json`) no longer lists the sheltered-default events of a longer-named account whose name starts with ACCOUNT and `_` (#50).
 - The run's closing "accounts with positions not checked against the broker's holdings" line no longer counts an account whose `holdings/` snapshot the positions check found (by broker account id or file name) and compared; an account with no snapshot is still listed. `tjs sanity`'s `UNCHECKED:` line now says a holdings/ snapshot also counts.
+### Security
+
+- The pre-push hook scans every merge commit's own patch too (#33): a
+  value that only a merge resolution wrote, and a later commit removed,
+  is in the published history but was in neither the net diff nor the
+  per-commit pass (`git log -p --no-merges`). The per-commit pass reads
+  merges as combined diffs (`--cc`), and `scripts/check-pii.sh --diff`
+  scans the lines a merge adds against every parent; lines a parent
+  already had are that parent's commit's. The `pr-commits` CI job scans
+  a pull request's merge commits (patch, message, identities) the same
+  way; `scripts/release.sh` and `scripts/promote.sh` run the hook, so
+  they get it too.
+- `scripts/check-pii.sh --diff` (the pre-push hook, the `pr-commits`
+  CI job) scans an added line whose text begins with `++ `: in a diff
+  it reads `+++ …`, and it was taken for a file header and skipped by
+  every pattern. Only a `+++ ` line in a file's header block, before its
+  first hunk, is a header now.
+- `scripts/promote.sh` no longer skips the pre-push PII gate when
+  `scripts/hooks/pre-push` is not executable: it runs the hook through
+  `bash`, and refuses before changing anything when the hook or
+  `scripts/check-pii.sh` is missing. `scripts/release.sh` refuses the
+  same way up front and runs the hook through `bash` too.
 
 
 ## v0.28.1 (2026-10-10)
