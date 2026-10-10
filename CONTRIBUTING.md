@@ -13,34 +13,52 @@ Thanks for your interest. This project computes numbers that real people put on 
 ```bash
 git clone https://github.com/taxjson/taxjson.git
 cd taxjson
-python3 -m venv venv
-source venv/bin/activate
-pip install -e .
+scripts/dev-setup.sh     # venv/, editable install with the [fx,dev] extras, the taxjson-fetch plugin, the pre-push hook
+source setup.sh          # activate it (each new shell)
 ```
+
+`scripts/dev-setup.sh` is idempotent (re-run it after a pull). It installs
+the core with `pip install -e ".[fx,dev]"`, then the broker-fetch plugin
+with `pip install --no-deps -e packages/taxjson-fetch` (`--no-deps`: its
+only dependency is the core you just installed — taxjson is not published
+on PyPI, and a `taxjson` package there is not ours), installs the pre-push
+hook (tag guard and personal-data scan, below) and scaffolds your private
+denylist. `scripts/dev-setup.sh --hook-only` (re)installs just the hook.
+End users install with the one-line installer instead (README, "Install").
 
 ## Help wanted: broker exports
 
-The most valuable contribution is a **redacted real export** from a broker
-the parsers don't cover yet (Wealthsimple, TD Direct, BMO InvestorLine,
-CIBC Investor's Edge, Scotia iTRADE, National Bank Direct, Qtrade,
-Desjardins…) or a US account for the experimental US engine. Run
+The most valuable contribution is the **shape of a real export** from a
+broker the parsers don't cover yet (Wealthsimple, TD Direct, BMO
+InvestorLine, CIBC Investor's Edge, Scotia iTRADE, National Bank Direct,
+Qtrade, Desjardins…) or from a US account for the experimental US engine.
+How to share it — the same rule as the bug-report template, README and
+SECURITY.md:
 
-```bash
-taxjson redact ~/Downloads/activity.csv        # writes activity.redacted.csv
-taxjson redact                                 # in a project: inputs/ -> inputs_redact/
-```
+1. **Never attach a raw export** or anything copied from one.
+2. **First choice, a synthetic file:** the header and a few rows of each
+   kind (buy, sell, dividend, fee, transfer, corporate action…), with the
+   broker's exact columns, action words and wording pattern, and made-up
+   symbols, ids and amounts. Its amounts are made up, so they are fine.
+3. **Otherwise a redacted copy, after review.** `taxjson redact` copies an
+   export and strips what it recognises:
 
-It replaces every account number with a same-length placeholder (so the
-file still parses), removes name/alias/address rows and e-mail addresses,
-and prints a report. Read the free-text description column once for
-names, then attach the `.redacted.csv` to an issue or pull request.
-Run with no file in a project, it copies the whole `inputs/` folder to
-`inputs_redact/` and redacts the copy (file names that hold an account
-number included; the old → new names are printed, never written into the
-copy). `inputs/` is left as it was. Binary files (`.xlsx`, `.pdf`) are
-not copied. Review the folder, then zip and attach it.
-Quantities, prices, dates and symbols are kept — that is what a parser
-needs. Never attach an un-redacted statement.
+   ```bash
+   taxjson redact ~/Downloads/activity.csv        # writes activity.redacted.csv
+   taxjson redact                                 # in a project: inputs/ -> inputs_redact/
+   ```
+
+   It replaces every account number with a same-length placeholder (so
+   the file still parses), removes name/alias/address rows and e-mail
+   addresses, and prints a report. Run with no file in a project, it
+   copies the whole `inputs/` folder to `inputs_redact/` and redacts the
+   copy (file names that hold an account number included; the old → new
+   names are printed, never written into the copy); `inputs/` is left as
+   it was, and binary files (`.xlsx`, `.pdf`) are not copied. It is
+   pattern-based and keeps quantities, prices, amounts, dates and symbols
+   (what a parser needs): read all of it — the free-text description
+   column especially — and attach it only after that review, and only if
+   you are comfortable sharing those real amounts.
 
 ## Before anything is pushed: personal data
 
@@ -129,7 +147,7 @@ it private like the denylist.
 ## Running tests
 
 The package uses a `src/` layout, so tests import it **as installed** —
-run `pip install -e .` (from Setup above) first, then:
+run `scripts/dev-setup.sh` (Setup above) first, then:
 
 ```bash
 python scripts/run_tests_parallel.py          # the suite on min(CPUs, 16) processes
@@ -271,19 +289,35 @@ is interrupted restore with `git checkout -- src/taxjson/lib/`.
 ## Adding a broker fetcher (`taxjson fetch`)
 
 Broker API clients never go in the core: the core holds no broker
-client and reads no broker credential, and its only network egress is
-FX rates and crypto prices (SECURITY.md). `taxjson fetch` is a thin
-dispatcher over plugins, so a new broker's downloader is its own
-package:
+client and reads no broker credential (SECURITY.md lists the core's
+network egress). `taxjson fetch` is a thin dispatcher over plugins, so a
+new broker's downloader is its own package. The contract is the module
+docstring of `src/taxjson/lib/fetchers.py`; in short:
 
-1. Write a class with `brokerages` (the `brokerage = "..."` values it
-   serves under `[accounts.<name>]`), `description`, and
-   `fetch(request) -> {account: {...}}` that writes each account's
-   activity into `request.root / "inputs" / <account>` in a format an
-   existing parser reads. Optional: `add_arguments(parser)`,
-   `account_keys`, `setup_hint`. The contract is documented in
-   `src/taxjson/lib/fetchers.py` (and README, "Writing a fetcher for
-   another broker").
+1. Write a class (instantiated with no arguments) or an object with:
+   - `brokerages` — the `brokerage = "..."` values (under
+     `[accounts.<name>]` in taxjson.toml) it serves;
+   - `description` — one line for `taxjson fetch --list`;
+   - `fetch(request) -> {account: {...}}` — download every account in
+     `request.accounts` into `request.inputs / <account>` (the inputs
+     folder: with `[settings] inputs_dir` it is the folder of exports
+     every year's project shares, and `request.shared_inputs` is true),
+     in a format an existing parser reads (or a `.tt` file), and return a
+     JSON-able result per account (the `--json` document). A positions
+     snapshot goes in `request.holdings` (the year's holdings folder).
+     An older core sends no `inputs` / `holdings`: fall back to
+     `request.root / "inputs"` / `request.root / "holdings"` then. Fail
+     with `SystemExit("taxjson fetch: ...")`, never a traceback.
+   - optional: `add_arguments(parser)` (its own `taxjson fetch` options;
+     an option two fetchers both define is shared, so keep the
+     conventional meaning, e.g. `--year`), `account_keys` (extra
+     `[accounts.<name>]` keys the config check should accept; `brokerage`,
+     `account` and `query_id` always are) and `setup_hint` (shown when no
+     account declares one of its brokerages).
+
+   `request` (`FetchRequest`) also carries `root` (the year's project),
+   `work`, the parsed `config`, the parsed `args`, a `say` progress
+   printer (stderr under `--json`) and the `dry_run` / `json` flags.
 2. Register it in your package's `pyproject.toml`:
    `[project.entry-points."taxjson.fetchers"]` → `mybroker =
    "mybroker_fetch.plugin:Fetcher"`, and depend on `taxjson`.
@@ -294,7 +328,51 @@ package:
 
 `packages/taxjson-fetch` (Questrade REST API, IBKR Flex) is the worked
 example; a fetcher kept in this repository lives under `packages/` and
-`scripts/ci.sh` runs its tests.
+`scripts/ci.sh` runs its tests. User setup of the plugin is in
+[docs/brokers.md](docs/brokers.md).
+
+## Running the stages by hand
+
+`taxjson run` drives the whole pipeline for a project. The stage tools
+it calls are console scripts too — handy for one file, scripting, or
+seeing what a parser makes of an export. Each takes `--help`; outputs are
+JSON that feed the next stage. A walk-through on the demo files is in
+[examples/README.md](examples/README.md).
+
+```bash
+export TAXJSON_LOCAL_TZ=America/Toronto   # crypto exports: UTC times dated in this zone (required for Kraken/Coinbase)
+
+# 1. Convert a broker CSV to normalized JSON. --country picks the one
+#    country-specific parse choice (IB foreign return of capital: ITA
+#    s.90(1) dividend in Canada, a basis reduction in the US).
+taxjson-brokerage --brokerage ib --account margin --country ca activity.csv > margin.json
+
+# 2. Merge each ACCOUNT'S files into one per-account JSON. Sheltered
+#    accounts are NOT merged into the taxable input: RRSP/TFSA/IRA trades
+#    are outside the taxable ACB/FIFO pool and go to taxjson-gains via
+#    --sheltered (so they still feed cross-account loss-denial checks).
+#    --dedup / --validate are opt-in; without them merge2 just concatenates.
+taxjson-merge2 --dedup --validate margin.json > taxable.json
+taxjson-merge2 --dedup            rrsp.json   > sheltered.json
+
+# 3. Compute gains for a tax year. --taxable turns on superficial-loss /
+#    wash-sale detection (ITA s.54 and s.40(2)(g) in Canada, IRC §1091 in
+#    the US); --sheltered passes registered-account context for
+#    cross-account matching. A Canada project uses grant timing for
+#    written options: pass --option-premium-timing grant
+#    --option-grant-since YEAR to match `taxjson run`.
+taxjson-gains --country ca --year 2025 --taxable \
+    --sheltered sheltered.json taxable.json > gains.json
+
+# 4. Summarize
+taxjson-sum-gains gains.json        # realized gains/losses
+taxjson-sum-income taxable.json     # dividends/interest (reads merged JSON)
+```
+
+These stages skip what `taxjson run` adds around them (currency
+conversion to the base currency, corporate-action elections, ticker.map,
+the cross-account wash pass, missing-history openings), so their figures
+are not the project's.
 
 ## Adding a country rule set
 
@@ -350,8 +428,18 @@ Retire an id in `tests/tax_rules/retired.txt`; never reuse one.
 
 ## Pull request checklist
 
-- [ ] Tests pass locally (`./run_tests.sh`)
+- [ ] `scripts/ci.sh` passes — read its **last line**: it must say `PASS`
+      (a pipe such as `scripts/ci.sh | tail` hides the exit status).
+      `scripts/ci.sh --quick` while iterating; the full gate before you
+      push, once in a fresh `git clone` (it catches untracked files).
 - [ ] New behavior has a test that would have failed before the change
+- [ ] A tax change edits its `Rule` in `src/taxjson/lib/tax_logic.py` and
+      the test cites it (`@rule("CA-...")`)
+- [ ] Docs kept true: a user-visible fix adds a `CHANGELOG.md` bullet under
+      `## Unreleased` and its `docs/troubleshooting.md` entry (Fixed in:
+      `unreleased`); moved code updates `docs/architecture-map.md`
+- [ ] Synthetic data only; no personal data in the change or its commit
+      messages (the pre-push hook runs `scripts/check-pii.sh`)
 - [ ] No unrelated drift (no formatting churn, no rename cascades)
 - [ ] PR description explains *why*, not just *what*
 
