@@ -542,7 +542,7 @@ def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
     detail names, or `cmd` (lib/stage_msg.concise_line); an error keeps
     its detail (the fix)."""
     from taxjson.lib.stage_msg import concise_line, message_lines
-    from taxjson.lib.out import label, show, width as _w, wrap
+    from taxjson.lib.out import label, show, width as _w
     file = sys.stderr if file is None else file
     if _w(file) > 0:
         indent = ""
@@ -559,7 +559,9 @@ def _say(kind: str, text: str, *details: str, prog: Optional[str] = None,
                                             cmd=cmd), w)
         if details or short or len(one) < len(lab) + len(text):
             _DETAILS_HIDDEN[0] = True
-        show(wrap(one, w, "", ""), file)
+        # One line, cut at the width; the third of a kind folded.
+        from taxjson.lib.out import concise_show
+        concise_show(one, file)
         return
     show(message_lines(kind, text, details, prog=prog, indent=indent,
                        stream=file), file)
