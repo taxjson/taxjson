@@ -394,10 +394,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_warning`, `option_grant_timing_since is not set`
 
-### "Warning: option_grant_timing_since = 2026 is after year = 2025: 2025's written options are taxed at the close"
+### "Warning: option_grant_timing_since = 2026 is after year = 2025: 2025's written options are taxed at the close (right only if 2025 was filed that way)"
 - **Check:** `grep -n option_grant_timing_since taxjson.toml`: usually `year` was lowered (filing an earlier year) and the key kept the value an earlier `taxjson init` wrote.
 - **Cause:** contracts written before `option_grant_timing_since` keep close timing, so every option written in the project year is taxed when it closes, not when written (ITA s.49(1)). A `taxjson init` before this release wrote the key set to the init year in every new project.
-- **Fix:** set it to the first year you file under grant timing (or delete the line for the project year); keep it unchanged in later years.
+- **Fix:** set it to the first year you file under grant timing (or delete the line for the project year); keep it unchanged in later years. When the year was filed on close timing (a reconstruction of a return filed that way), the value is right: nothing to do.
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_after_year`, `_books_write_options`, `_grant_since_warning`; `src/taxjson/lib/config_template.py` — `scaffold_document`
 

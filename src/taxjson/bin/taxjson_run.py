@@ -15645,7 +15645,8 @@ def _grant_since_after_year(settings: Dict[str, Any]) -> Optional[str]:
             .lower() != "grant":
         return None
     return (f"option_grant_timing_since = {since} is after year = {yr}: "
-            f"{yr}'s written options are taxed at the close")
+            f"{yr}'s written options are taxed at the close (right only "
+            f"if {yr} was filed that way)")
 
 
 def _grant_since_warning(settings: Dict[str, Any],

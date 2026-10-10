@@ -207,7 +207,8 @@ class TestGrantSinceInANewProject(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("warning: option_grant_timing_since = 2026 is after "
                       "year = 2025: 2025's written options are taxed at "
-                      "the close\n", r.stderr)
+                      "the close (right only if 2025 was filed that way)\n",
+                      r.stderr)
         r = _cli("-C", str(self._project(since=2025)), "run", "--no-input")
         self.assertNotIn("is after year", r.stdout + r.stderr)
 
