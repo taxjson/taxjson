@@ -183,8 +183,10 @@ class TestLoadMaps(unittest.TestCase):
         (d / "inputs" / "margin" / "missing_history.tt").write_text(
             "OPENING 2023-12-31 SYNTH.US 4 cost=unknown\n"
             "OPENING 2024-01-05 SYNTH.TO 6 cost=unknown\n")
+        from taxjson.lib.missing_history import synthesize_openings
+        pairs = load_missing_history(d)
         with self.assertRaises(TtOpeningError) as cm:
-            load_missing_history(d)
+            synthesize_openings([_t("2024-01-02", "SYNTH.TO", 1)], pairs)
         self.assertIn("opened on two dates", str(cm.exception))
 
 
@@ -206,12 +208,32 @@ class TestTheBooksSymbol(unittest.TestCase):
         return [t for t in out if t.action == "OPENING_BALANCE"], log
 
     @rule("US-BASIS-04")
-    def test_a_rename_before_the_date_opens_the_new_symbol(self):
+    def test_a_rename_before_the_date(self):
         txs = [_t("2024-03-01", "OLDQ.US", 1, "SPLIT", "NEWQ.US"),
                _t("2024-06-01", "NEWQ.US", -8)]
-        ob, _log = self._apply(txs, "OLDQ.US", "2024-04-01", 8)
+        # The account folds the rename's late rows (late=fold): the line
+        # naming the old ticker after the date opens the new one, as its
+        # rows are booked.
+        ob, _log = self._apply(txs, "OLDQ.US", "2024-04-01", 8, folds={
+            "margin": {"OLDQ.US": [("NEWQ.US", "2024-03-01")]}})
         self.assertEqual([(t.symbol, t.quantity) for t in ob],
                          [("NEWQ.US", 8.0)])
+        # Without fold the old ticker after the date is not the new one
+        # (renames are events): the line keeps it.
+        ob, _log = self._apply(txs, "OLDQ.US", "2024-04-01", 8)
+        self.assertEqual([t.symbol for t in ob], ["OLDQ.US"])
+
+    def test_folds_read_from_the_map(self):
+        from taxjson.lib.missing_history import load_missing_history
+        d = _project("canada", "BUYSELL 2024-01-02 10:00:00 ZZB.TO 1 CAD "
+                               "1 2 1\n",
+                     ticker_map="RENAME OLDQ.TO NEWQ.TO 2024-03-01 "
+                                "late=fold\n")
+        (d / "inputs" / "margin" / "missing_history.tt").write_text(
+            "OPENING 2024-04-01 OLDQ.TO 3 cost=unknown\n")
+        self.assertEqual(load_missing_history(d).folds,
+                         {"margin": {"OLDQ.TO": [("NEWQ.TO",
+                                                  "2024-03-01")]}})
 
     def test_native_view_opens_the_traded_listing(self):
         txs = [_t("2024-02-01", "SYNTH.US", -5)]
