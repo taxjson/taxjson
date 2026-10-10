@@ -47,9 +47,11 @@ checkout is in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
 <!-- TODO-SYNC: feat/newuser-fixes adds a demo project; name its command here once it lands. -->
 **Try it first (optional).** The repository's `examples/` folder holds a
 made-up export for each broker (`questrade_demo.csv`, `ib_demo.csv` ...).
-Make a throw-away project (step 2, in a folder of its own), copy one into
-`inputs/margin/`, and `tjs run` then `tjs sum` in the year folder: that is
-what a finished run looks like, before you download anything of your own.
+Make a throw-away project (step 2, in a folder of its own; set
+`local_timezone` or delete `[accounts.crypto]` as step 2 says), copy one
+into `inputs/margin/`, and `tjs run` then `tjs sum` in the year folder
+(`--year 2024` for the demos' dates): that is what a finished run looks
+like, before you download anything of your own.
 
 ## 2. Create a project
 
