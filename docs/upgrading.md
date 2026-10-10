@@ -69,9 +69,22 @@ needed nothing.
   [glossary.md](glossary.md) and this page. KNOWN_ISSUES.md now lists open
   bugs only. A bookmark to a README section lands on the front page; the
   section is in the page above.
-- <!-- TODO-SYNC: feat/concise-output (command output wording) and
-  feat/newuser-fixes (init / demo / help / close-year / FX) — list here
-  whatever of theirs asks something of the user once they merge. -->
+- **Shorter command output.** A command's default output is the
+  essentials: a legend before each table, then only the lines to act on
+  (starting `! `) or not to miss. Every explanation, caveat and citation
+  is still there behind `--details` (`tjs sum --details`,
+  `tjs checklist --all`); `--json` is unchanged. A script that read a
+  note from the text output: read `--json`, or add `--details`.
+  [output-style.md](output-style.md) describes the format.
+- **The help page** lists the maintainer's release commands (`channels`,
+  `deploy`, `promote`) only on a development checkout;
+  `tjs help --all` lists them everywhere, and they still run.
+- `tjs run` downloads exchange rates from a few days before the earliest
+  date in your files instead of from 2000.
+
+<!-- TODO-SYNC: these v0.28.0 bullets follow feat/concise-output and
+feat/newuser-fixes as of their last commits; recheck after both merge,
+and add the demo project command once it lands. -->
 
 ### v0.27.1
 
