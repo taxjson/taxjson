@@ -36,6 +36,7 @@ Subcommands:
 from taxjson.lib.out import exit_text
 from taxjson.lib.stage_msg import emit_line
 import argparse
+import contextlib
 import hashlib
 import re
 import shutil
@@ -26870,6 +26871,45 @@ def _details(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "details", False))
 
 
+# Commands whose messages are their report and keep their lines: the
+# run (it sets the switch itself), redact's name map (shown only once,
+# never written), check-filed's DRIFTED figures.
+_OWN_MESSAGES = frozenset({"run", "redact", "check-filed"})
+
+
+@contextlib.contextmanager
+def _brief_messages(args: argparse.Namespace):
+    """Essentials first for the messages a command's engine and stages
+    print while it runs (an income-year note of a recomputed year, a
+    split-share note ...): shown to a person without --details or
+    --json, each is one line and a message said more than twice is
+    folded into one count line at the end (lib/stage_msg.CONCISE_ENV,
+    fold_summary). `run` sets the switch itself (cmd_run); captured
+    output (width 0) keeps every byte."""
+    import os
+    from taxjson.lib import stage_msg
+    from taxjson.lib.out import width as _w
+    on = (args.cmd in _DETAILS_CMDS and args.cmd not in _OWN_MESSAGES
+          and not _details(args) and not getattr(args, "json", False)
+          and _w(sys.stderr) > 0)
+    old = os.environ.get(stage_msg.CONCISE_ENV)
+    if on:
+        os.environ[stage_msg.CONCISE_ENV] = "1"
+    try:
+        yield
+    finally:
+        _mk = sys.modules.get("taxjson.lib.markets")
+        if on and _mk is not None:
+            # Its rolled-up notes (said at exit) as one line too.
+            _mk.flush_notes()
+        stage_msg.fold_summary(sys.stderr)
+        if on:
+            if old is None:
+                os.environ.pop(stage_msg.CONCISE_ENV, None)
+            else:
+                os.environ[stage_msg.CONCISE_ENV] = old
+
+
 def _main() -> None:
     # Tax data is private: everything this process and its pipeline
     # stages create is owner-only (files 0600, dirs 0700) whatever the
@@ -26960,7 +27000,8 @@ def _main() -> None:
             # tool) that is missing, a directory, not UTF-8 or not JSON:
             # one `taxjson <cmd>: error:` line with exit 2, never a
             # traceback — the S070-23 / S079-10 contract (A2-1420).
-            _guarded_func(args)
+            with _brief_messages(args):
+                _guarded_func(args)
             _note_shared_decision(args)
         except SystemExit as e:
             # A failing command stops the chain and propagates its

@@ -40,7 +40,8 @@ __all__ = [
     "printable", "shown", "label", "relabel", "labelled", "exit_text",
     "LABELS", "console_lint", "CONSOLE_LINE_RE", "show", "show_blocks",
     "join_blocks", "settle", "settling_streams", "real_stream",
-    "ACT", "act", "act_list", "details_hint", "classify", "prose_lines", "act_lines",
+    "ACT", "act", "act_list", "details_hint", "CONCISE_ENV", "concise_on",
+    "concise_show", "fold_summary", "truncate", "classify", "prose_lines", "act_lines",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test).
@@ -561,8 +562,20 @@ def settling_streams():
 def emit(kind: str, text: str, *, prog: Optional[str] = None,
          details: Iterable[str] = (), file=None) -> None:
     """Print message(...) to `file` (stderr by default), show()n: one
-    blank line after it when it spans more than one line."""
+    blank line after it when it spans more than one line. With the
+    one-line switch on (concise_on: a default view, Essentials first)
+    a note or warning is its headline and the command its detail
+    names, one line (concise_show); an error keeps its fix lines."""
     file = sys.stderr if file is None else file
+    if kind != "error" and concise_on(file):
+        from taxjson.lib.stage_msg import concise_line
+        text = str(text).strip().split("\n")[0]
+        if kind == "attention":
+            text = shown_topic(text)
+        details = [str(d) for d in details if d is not None]
+        concise_show(concise_line(LABELS[kind] + text, details,
+                                  width(file)), file)
+        return
     show(message(kind, text, prog=prog, details=details, stream=file),
          file)
 
@@ -1056,3 +1069,74 @@ def act_list(text: str, names: Sequence[str], cmd: Optional[str] = None,
         if len(line) <= width_ or k == 1:
             return line
     return act(text, cmd)
+
+
+# ---------------------------------------------- one-line messages, folded
+# Set while a command's messages are shown one line each (taxjson run's
+# console, and every --details command's default view: taxjson_run
+# _brief_messages): lib/stage_msg's say / emit_line and emit() here.
+CONCISE_ENV = "TAXJSON_RUN_CONCISE"
+# A message of one kind is shown this many times; the rest are counted
+# and said in one line at the end (fold_summary).
+FOLD_SHOWN = 2
+_FOLD: dict = {}
+
+
+def concise_on(file=None) -> bool:
+    """One-line messages: the switch is on and `file` is the process's
+    own stream shown to a person (width > 0; a redirected buffer or a
+    capture keeps every byte)."""
+    file = sys.stderr if file is None else file
+    return (os.environ.get(CONCISE_ENV) == "1" and width(file) > 0
+            and real_stream(file) in (sys.__stderr__, sys.__stdout__))
+
+
+def _fold_key(line: str) -> str:
+    """A message's kind: its text with the symbols, numbers, quoted code
+    and paths taken out (`Warning: Income year: X: distribution 9 CAD
+    paid 9 ...`), its first 60 characters."""
+    t = re.sub(r"`[^`]*`", "`X`", line)
+    t = re.sub(r"\S*[/\\]\S*", "P", t)
+    t = re.sub(r"\b[A-Z][A-Z0-9]*(?:[.:_-][A-Z0-9]+)*\b(?![a-z])", "X", t)
+    t = re.sub(r"\d[\d,.]*", "9", t)
+    return t[:60]
+
+
+def concise_show(line: str, file=None) -> None:
+    """Show one message as one line: cut at a word to the width (` ...`
+    marks the cut; --details has it whole), and the third and later
+    message of one kind (_fold_key) counted, not shown."""
+    file = sys.stderr if file is None else file
+    line = printable(" ".join(str(line).split()))
+    key = _fold_key(line)
+    n, first = _FOLD.get(key, (0, line))
+    _FOLD[key] = (n + 1, first)
+    if n >= FOLD_SHOWN:
+        return
+    show([truncate(line, width(file))], file)
+
+
+def truncate(line: str, width_: int) -> str:
+    """`line` cut at a word to `width_` columns, ` ...` marking the cut
+    (width 0: whole)."""
+    if 0 < width_ < len(line):
+        cut = line[:width_ - 4]
+        cut = cut[:cut.rfind(" ")] if " " in cut else cut
+        return cut.rstrip(" ,;:—-") + " ..."
+    return line
+
+
+def fold_summary(file=None) -> None:
+    """One line per message kind shown FOLD_SHOWN times and said again:
+    `Info: 7 more like "Warning: Income year: ..." (--details shows each)`.
+    Then forget them."""
+    file = sys.stderr if file is None else file
+    items = [(n, first) for n, first in _FOLD.values() if n > FOLD_SHOWN]
+    _FOLD.clear()
+    w = width(file) or WIDTH
+    for n, first in items:
+        tail = "\" (--details shows each)"
+        head = f"Info: {n - FOLD_SHOWN} more like \""
+        room = max(20, w - len(head) - len(tail))
+        quote = first if len(first) <= room else first[:room - 3] + "..."
+        show([head + quote + tail], file)

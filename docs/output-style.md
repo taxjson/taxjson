@@ -63,7 +63,14 @@ command, the docs). Every command follows these rules.
 6. **Every check that protects a filed figure stays**, as a one-line
    `! ` pointing at its detail: never silently dropped. A warning on
    stderr is its headline (one line) in the default view; its detail
-   lines come back with `--details`.
+   lines come back with `--details`. The messages a command's engine
+   and stages print while it runs (a recomputed year's income-year
+   notes, a built-in list note) are one line each, cut at the width
+   (` ...`), and a message of one kind said more than twice is folded
+   into one count line at the end (`Info: 7 more like "..." (--details
+   shows each)`): `out.concise_show`, `out.fold_summary`, switched on
+   by `taxjson_run._brief_messages` (run, redact and check-filed keep
+   their own lines).
 
 `--json` is unchanged by all of this (its schema is stable), and so is
 the captured text other programs read (see "Never changed by a style

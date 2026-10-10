@@ -73,11 +73,12 @@ def say(kind: str, headline: str, details: Iterable[str] = (), *,
         print(legacy, file=file)
         return
     if kind != "error" and env_concise() and not _captured(file):
-        # Inside a run's one-line console (Essentials first).
+        # Inside a run's one-line console (Essentials first), or a
+        # command's default view: one line, the third of a kind folded.
         w = out.width(file)
         text = out.label(kind, stream=file) + headline
-        out.show(out.wrap(shorten_commands(concise_line(text, details, w),
-                                           w), w, "", ""), file)
+        out.concise_show(shorten_commands(concise_line(text, details, w),
+                                          w), file)
         return
     out.show(message_lines(kind, headline, details, prog=prog,
                            indent=indent, stream=file), file)
@@ -350,7 +351,8 @@ def _names_of(listing: str, n: int = 2) -> str:
 # Set by `taxjson run` for itself and its stages when its console shows
 # each message as one line (no --details): a stage's own message shown
 # to a person is then its one-line form too.
-CONCISE_ENV = "TAXJSON_RUN_CONCISE"
+CONCISE_ENV = out.CONCISE_ENV
+fold_summary = out.fold_summary
 
 
 def env_concise() -> bool:
@@ -437,12 +439,11 @@ def console_lines(line: str, indent: str = "", stream=None,
             for rx, build in _CONCISE:
                 m = rx.fullmatch(p)
                 if m:
-                    return out.wrap(shorten_commands(build(m),
-                                                     w - len(indent)),
-                                    w, indent, indent)
-        return out.wrap(shorten_commands(
+                    return [indent + out.truncate(shorten_commands(
+                        build(m), w - len(indent)), w - len(indent))]
+        return [indent + out.truncate(shorten_commands(
             concise_line(body, shown[1:], w - len(indent)),
-            w - len(indent)), w, indent, indent)
+            w - len(indent)), w - len(indent))]
     if shown[0][:1].isspace() and not _LABELLED.match(body):
         # The continuation of the message above.
         lines = out.wrap(body, w, indent, indent)
@@ -483,4 +484,9 @@ def emit_line(text: str, *, file=None, indent: str = "") -> None:
             blocks[-1].extend(lines)
         else:
             blocks.append(lines)
+    if concise:
+        # One line each, the third of a kind folded (out.concise_show).
+        for b in blocks:
+            out.concise_show(b[0], file)
+        return
     out.show_blocks(blocks, file)

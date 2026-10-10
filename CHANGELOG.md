@@ -85,6 +85,11 @@
   paragraph. `--json` and the run's reports/ files are unchanged.
 - The note on option roots whose contract size the export does not
   state is one line when it names three roots or fewer.
+- The messages a command's engine prints while it recomputes (an
+  income-year note of an earlier year, a built-in list note) are one
+  line each in the default view, and one said more than twice is folded
+  into a count line at the end; `--details` shows each in full.
+
 
 ## v0.27.2 (2026-10-10)
 
