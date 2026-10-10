@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.27.0 (2026-10-09)
+
 ### Added
 
 - Interlisted shares (Canada): taxjson ships a master of Canadian shares

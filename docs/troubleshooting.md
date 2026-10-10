@@ -111,21 +111,21 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `ls missing_history.json phantoms.json` in the project (or the year folder); every command but `migrate`, `init` and `help` stops with this line (exit 2), and `tjs checklist` shows it as its configure item.
 - **Cause:** since v0.27.0 missing history is a dated event in the account's inputs — `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` beside the exports, its quantity and date fixed (with one folder of exports for every year: one record for every year). The project-root file (and its older name `phantoms.json`) is no longer read; running on without it would silently drop its openings and move sales back into the totals.
 - **Fix:** `tjs migrate --dry-run`, then `tjs migrate` (in a year folder it merges every year folder's file). It sizes each entry as the last `taxjson run` opened it, from the books in `work/`; without books it says so: move the file aside, `tjs run`, move it back, `tjs migrate`. Each entry becomes a line dated the day before the account's first row; entries every year sizes the same are one line, entries that open nothing anywhere (no rows, never short) are dropped and listed, and each file is renamed `missing_history.json.migrated` (delete it once satisfied). When the year folders disagree it writes nothing — see the next entry. Then `tjs run` in each year and compare `tjs sum` with your last figures; the dates and quantities are yours to correct.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/migrate.py` — `MISSING_HISTORY_FILES`, `legacy_message`; `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`, `project_view`, `apply_missing_history_migration`, `read_legacy_entries`; `src/taxjson/bin/taxjson_run.py` — `_migrate_missing_history`, `_refuse_legacy_project_files`
 
 ### "Error: the year folders' missing_history.json files disagree (listed above) — nothing was written for them"
 - **Check:** `tjs migrate` lists "The projects disagree on" with each year's quantity (`2024: 10, 2025: not listed`).
 - **Cause:** the year folders' `missing_history.json` files, sized as each year's run sized them, open different quantities of a symbol, or list it in some years only; one shared `.tt` line cannot be both.
 - **Fix:** decide each: the units you held before the data. Edit the year files to agree and run `tjs migrate` again, or `tjs migrate --write` (each entry as the newest year listing it sizes it), then edit the written line. A year whose totals change was relying on a different opening; `tjs sum` before and after shows it.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_migrate_missing_history`; `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`
 
 ### "Warning: ATTENTION: inputs/margin/missing_history.tt:3 opens 10 QZQ.US / margin: the position goes short again on 2025-11-03 (40 units) after those units are used up" (or "… on 2024-03-01, but the position is already short on 2024-02-01 (60 units)")
 - **Check:** `tjs find-missing-history` shows "the run opens the 10 units its line states" under the position.
 - **Cause:** a `.tt` `OPENING ... cost=unknown` line opens its quantity on its date, exactly: the account sells more than that and its purchases in the files, or sells before the line's date.
 - **Fix:** raise the quantity to the units held before the data (or add the missing purchase); date the line before the first sale it covers — the day before the account's first row is always early enough. A real short sale needs nothing.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `short_again_message`, `_apply_fixed_openings`
 
 ### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
@@ -202,70 +202,70 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the lines under it, `- TOBASE QZAB.US QZA.TO not applied (ticker.map: TOBASE QZAB.US QZZ.TO)`; `tjs update-tobase-map` lists the same pairs.
 - **Cause:** a Canadian project reads tobase.map (the interlisted master's pairs) with ticker.map, and ticker.map wins: a `TOBASE`, `JOURNAL`, `GLOBAL`, `DELETE` or dated `RENAME` of either listing, a `TOBASE` that books another listing under the one the pair would move, or a `DISTINCT` pair keeps the master's line from applying.
 - **Fix:** nothing, if your line is right (it is what the books use). If the master's pair is right, delete your ticker.map line and re-run. A pair your map pools the same way is never listed.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `compute_overlay`; `src/taxjson/bin/taxjson_run.py` — `_say_tobase_map`
 
 ### "Warning: QZG.US has 2 row date(s) after 2025-06-30, when its interlisting ended (tobase.map:41: `TOBASE QZG.US QZG.TO`)"
 - **Check:** the dates listed; the security name on those rows (`tjs trades`, `tjs events`). The tobase.map line ends `until=2025-06-30`.
 - **Cause:** the master records that the pair stopped trading as one security on that date (an acquisition, a delisting). A later row in that ticker may be another company's: US tickers are reused, and the line would pool it with the Canadian listing.
 - **Fix:** if those rows are another security, add `DISTINCT QZG.US QZG.TO` to ticker.map (it keeps the two apart at every date; book the old security's earlier rows under a symbol of their own with a dated `.tt` `RENAME` line if the year holds both). If they are the same security (a late corporate-action row), nothing.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `until_findings`, `until_message`; `src/taxjson/bin/taxjson_run.py` — `_say_tobase_until`
 
 ### "Warning: QZG.US has 3 row date(s) in the books and the ticker is reused: today it names QZ OTHER CO (tobase.map:41: `TOBASE QZG.US QZG.TO`)"
 - **Check:** the dates listed and the security name on each row (`tjs trades`, `tjs events`); the tobase.map line carries `reused_by="..."`.
 - **Cause:** the master knows the ended US ticker of the pair names another security today, so any row of it — before the end date too, if the books' history is ambiguous — may be that other company's. The line pools every row of it with the Canadian listing.
 - **Fix:** if the rows are the old company's, nothing. If some are the other company's, add `DISTINCT QZG.US QZG.TO` to ticker.map and book the old company's rows under a symbol of their own (a dated `.tt` `RENAME` line).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `until_findings`, `until_message`; `scripts/build_interlisted.py` — `check_reused`
 
 ### `tjs update-tobase-map`: "Retracted: 1 line(s) the master no longer gives" naming `TOBASE QZG.US QZG.TO` (or "ATTENTION: … line(s) you edited name a listing the master RETRACTED")
 - **Check:** the reason printed beside the line; the master's entry in `src/taxjson/data/interlisted.toml` (its `retracted` list, found by the FIGI in the line's marker).
 - **Cause:** an earlier master shipped a wrong pair (for instance an ended pair's US ticker that was another company's). A correction retracts it for good; an unedited line is removed, an edited one kept and flagged.
 - **Fix:** `tjs update-tobase-map --write`, then `tjs run`. For a flagged edited line, check it and delete it if it was the master's mistake. Rows of the retracted ticker that were pooled before are no longer: check the year's gains.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `retracted_listings`, `is_edited`; `scripts/build_interlisted.py` — `merge_previous`, `load_history`
 
 ### `tjs ticker-map --suggest` lists a pair to verify such as `TOBASE QZOR.US QZOR.TO` for a US share you hold
 - **Check:** `grep -n 'QZOR.TO' tobase.map`: a tobase.map line pools an OTC listing under a TSX Venture issuer with the same letters.
 - **Cause:** the listing-pair check read tobase.map's pairs (and their targets) as sightings of the TSX listing in the books, so a US company's shares looked like one side of an interlisting.
 - **Fix:** upgrade; the pair is no longer suggested. Never add such a line: it would pool two companies.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/map_hygiene.py` — `map_gaps`, `own_renames`; `src/taxjson/lib/tobase_map.py` — `own_map_text`
 
 ### `tjs t1135` lists a TSX-held `BEP.UN` (booked as `BEP.US`) under the USA, or warns "`T1135 BEP.UN.TO` matches no symbol in the books"
 - **Check:** the tobase.map line `TOBASE BEP.UN.TO BEP.US … country=BMU`; `tjs t1135 --json` (`properties`, `country`).
 - **Cause:** tobase.map books a foreign-domiciled issuer's pair under its US listing (its dividends and T1135 status are foreign); older versions classified that symbol by its `.US` suffix (USA) and did not follow a `T1135` line naming the TSX listing through the `TOBASE` line.
 - **Fix:** upgrade, `tjs update-tobase-map --write` (the lines gain `country=`), `tjs run`, `tjs t1135`. A `T1135 SYMBOL COUNTRY` line still overrides.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `t1135_countries`, `issuer_country`; `src/taxjson/bin/taxjson_t1135.py` — `build_report`
 
 ### `tjs update-tobase-map --write` added back a master line I deleted, or duplicated a line I edited
 - **Check:** the `## --- Master lines you removed` section of tobase.map; `tjs update-tobase-map` lists "Left as written" (your edits) and "Removed by you".
 - **Cause:** older versions could not tell a deleted line from a new one, nor an edited line (another target, the direction reversed) from a retracted one.
 - **Fix:** upgrade. A deleted master line is recorded as `# removed: master:<FIGI> TOBASE A B` and stays out (delete that line and copy the master's line back to have it again); a commented-out marked line is an opt-out too; an edited line is yours and the master's line for the same listing is not added beside it. Your comment lines are kept.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `parse_tobase`, `line_hash`, `is_edited`
 
 ### `tjs update-tobase-map` lists no pair for a TSX class share or trust unit (`QZK.B.TO`, `QZR.UN.TO`) that trades over the counter in the US
 - **Check:** `grep -n 'QZR.UN.TO' tobase.map`; the master's entry in `src/taxjson/data/interlisted.toml` (`ca = ["QZR.UN.TO"]`).
 - **Cause:** the TMX issuer list the master is built from names an issuer by its bare root (`QZR`), and OpenFIGI knows the line only under its class or unit spelling, so masters before the first refresh left such issuers out (their US OTC line, and some exchange pairs, were missing).
 - **Fix:** upgrade taxjson, then `tjs update-tobase-map --write` and `tjs run`. Before that, a `TOBASE QZRUF.US QZR.UN.TO` line in ticker.map pools the two.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `scripts/build_interlisted.py` — `CLASS_SPELLINGS`, `build`
 
 ### "Error: 1 ticker.map problem(s)" with "tobase.map:12: tobase.map holds `TOBASE FROM TO` and `DISTINCT A B` lines only"
 - **Check:** the named tobase.map line; `tjs update-tobase-map` lists marked lines you edited.
 - **Cause:** tobase.map is read with ticker.map, and a line it cannot use would drop a pair silently, so the run stops as for a ticker.map problem.
 - **Fix:** move your own rule to ticker.map (any keyword lives there) and delete it from tobase.map, or run `tjs update-tobase-map --write` to lay the file out again (your own unmarked `TOBASE` / `DISTINCT` lines are kept).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `parse_tobase`; `src/taxjson/bin/taxjson_ticker_map.py` — `_parse_map_file`
 
 ### `tjs checklist`: "[!] tobase-map … tobase.map is from the master of 2026-01-01; this taxjson has the one of 2026-10-01"
 - **Check:** `tjs update-tobase-map` (a dry run) lists what an update adds, ends and retracts, and the pairs that name a symbol of your books.
 - **Cause:** an upgrade installed a newer interlisted master; the project's tobase.map was made from an older one (its `# master-generated` line).
 - **Fix:** `tjs update-tobase-map --write` (the previous file is kept as `tobase.map.bak`), then `tjs run`. In a project with several year folders, run it in each year you still work on (`tjs years` counts the differing lines).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `s_tobase_map`; `src/taxjson/bin/taxjson_run.py` — `cmd_update_tobase_map`
 
 ### "Error: `taxjson update-tobase-map` is Canada-only (Canada only for now: the interlisted pairs pool identical property …); this project is country = "usa""
@@ -579,14 +579,14 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the dividend's record date (its `REC mm/dd/yy`, or the payer's notice) against your sale's settlement date; for the cost line, the account's `type = "sheltered"` in taxjson.toml.
 - **Cause:** the check compared the share count a dividend states with the books' position on the pay date (or required an exact match), so a sale after the record date — the dividend paid weeks later with the position at 0 — read as income on shares not held. A registered account's broker book cost was compared with the books' cost, but there it is not a tax cost (an in-kind transfer in resets it to the market value).
 - **Fix:** upgrade: entitlement is the record date (the row's, a `.tt` `record=`, or the description's `REC`), else any time in the 45 days to the pay date — the position of the security as the books spelled it then (a ticker change between the record date and the pay date — a broker's, a dated `.tt` RENAME, a ticker.map rename — is followed back to the old symbol), settled on the record date or traded by the eve of the ex-date on the market's own calendar (T+2 before May 2024, T+1 since — a broker's settlement date can follow another market's holiday); only a payment on more shares than the books held then (or on a symbol never held) is listed. Costs are compared for taxable accounts only; a registered account's quantities are still compared.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/positions_check.py` — `income_share_mismatches`, `INCOME_WINDOW_DAYS`, `_record_date_of`, `_max_held`, `held_as`, `last_entitled_trade_day`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `cost not compared for registered accounts`
 
 ### `tjs sanity`: "VQQ.US MISSING_IN_HOLDINGS -500 0" for a position whose shares bought before the data were sold (covered by missing history)
 - **Check:** `tjs find-missing-history` lists the symbol as covered (a `.tt` `OPENING ... cost=unknown` line); the holdings snapshot is dated before the books' last row (sanity compares the books' positions on its date); the dividend check may also list a dividend "on a share count the books did not hold".
 - **Cause:** sanity rebuilt the books' positions on the snapshot's date from the merged rows only (work/<account>_base.json), without the missing-history openings the gains run adds, so the sale of those units read as a short.
 - **Fix:** upgrade: every positions view uses the books' own positions, the missing-history units included (`taxjson sanity`, the end-of-run holdings check, the dividend share-count check). A sale with no purchase that missing history does not cover is still flagged.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/positions_check.py` — `book_rows`; `src/taxjson/lib/missing_history.py` — `openings_from_log`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`
 
 ### `tjs sanity`: "QZD.U.TO MISSING_IN_TAXJSON" (or `QTY_MISMATCH` on QZD.TO) for a listing the run joined by its transfer journal
