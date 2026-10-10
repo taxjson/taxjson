@@ -2587,6 +2587,7 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
             named.update((_dr.old, _dr.new))
         from taxjson.lib.country import is_canada
         from taxjson.lib import dated_events as _DE
+        from taxjson.lib import tobase_map as _TBR
         _decl = stage_dated_events(cache, accounts or [name])
         _rows: list = []
         legs, names, shown = XL.gather(cache, accounts or [name], _rows)
@@ -2616,7 +2617,12 @@ def stage_cross_listings(name: str, settings: Dict[str, Any], cache: Path,
                             # The pairs left alone (the user's map, two
                             # companies): `taxjson journals` lists them.
                             refused=_refused,
-                            map_renames=_renames)
+                            map_renames=_renames,
+                            # A Canadian depositary receipt and its US
+                            # share (the interlisted master, CA-XLIST-06):
+                            # never joined from a journal, with no line.
+                            receipts=_TBR.receipt_pairs(is_canada(
+                                settings.get("country"))))
         result["collisions"] = _coll
         result["refused"] = _refused
         # A pair the map refused whose legs it books as two symbols:
@@ -3701,7 +3707,7 @@ def _unreadable_project_inputs(root: Path) -> List[str]:
     import os
     out = []
     for name in _PROJECT_ROOT_INPUTS:
-        p = _PL.data_file(root, name)
+        p = _PL.project_map_path(root, name)
         if p.is_symlink() and not p.exists():
             try:
                 tgt = os.readlink(p)
@@ -3727,8 +3733,9 @@ def _refuse_legacy_project_files(root: Path) -> None:
 
 
 # What `migrate --to-years` moves from a single-folder project into its
-# year's folder: everything but the exports (inputs/ stays, shared).
-_TO_YEARS_MOVED = ("taxjson.toml", "ticker.map", "tobase.map",
+# year's folder: everything but the exports (inputs/ stays, shared) and
+# tobase.map (stays, the one file every year reads: `tobase_map`).
+_TO_YEARS_MOVED = ("taxjson.toml", "ticker.map",
                    "checklist.json", "work", "reports",
                    "filed", "export", "holdings")
 
@@ -3766,6 +3773,11 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
                             f"../{_PL.INPUTS}")
     text = _PL.set_key_text(text, f"settings.{_PL.EXPORTS_KEY}",
                             f"../{_PL.EXPORTS}")
+    _tob = (root / _PL.TOBASE_MAP).is_file()
+    if _tob:
+        # tobase.map stays at the top: the one file every year reads.
+        text = _PL.set_key_after(text, f"settings.{_PL.TOBASE_KEY}",
+                                 _PL.SHARED_TOBASE, _PL.EXPORTS_KEY)
     fixed = []
     moved_rel = {_PL.shown(a, root) for a, _b in moves}
 
@@ -3804,6 +3816,8 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
           + ", ".join(_PL.shown(a, root) for a, _b in moves))
     print(f"{year}/taxjson.toml: [settings] {_PL.INPUTS_KEY} = "
           f"\"../{_PL.INPUTS}\", {_PL.EXPORTS_KEY} = \"../{_PL.EXPORTS}\""
+          + (f", {_PL.TOBASE_KEY} = \"{_PL.SHARED_TOBASE}\" (tobase.map "
+             f"stays here, read by every year)" if _tob else "")
           + (f"; {', '.join(fixed)} (one level down)" if fixed else ""))
     if dry_run:
         print("Dry run: nothing moved.")
@@ -3820,7 +3834,7 @@ def _migrate_to_years(root: Path, dry_run: bool) -> None:
     # What stays at the top besides the shared folders: no year reads
     # it (a note of the user's, a script, a stray export).
     _kept = {_PL.INPUTS, _PL.EXPORTS, str(year), ".git", ".gitignore",
-             ".gitattributes"}
+             ".gitattributes", _PL.TOBASE_MAP}
     try:
         left = sorted(e.name for e in root.iterdir()
                       if e.name not in _kept)
@@ -3848,6 +3862,16 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     if getattr(args, "to_years", False):
         _migrate_to_years(root, args.dry_run)
         return
+    # A multi-year project's per-year tobase.map copies become one file
+    # every year reads (in the folder holding the years, or any year).
+    _top = _PL.multi_root(root)
+    _tob_done = (_migrate_shared_tobase(_top, args) if _top is not None
+                 else False)
+    if not _PL.has_config(root):
+        if not _tob_done:
+            print("taxjson migrate: nothing to migrate here (no year "
+                  "folder holds a tobase.map of its own)")
+        return
     try:
         pl = M.plan(root)
     except M.MigrateError as e:
@@ -3862,6 +3886,8 @@ def cmd_migrate(args: argparse.Namespace) -> None:
                    "first:", *str(e).splitlines(), "Nothing was changed.")
     except (OSError, ValueError) as e:
         _die_input(str(e), "Nothing was changed.")
+    if not pl.names and mhm is None and _tob_done:
+        return
     if not pl.names and mhm is None:
         print("taxjson migrate: nothing to migrate in this project")
         for _ln in _out_wrap(f"None of {', '.join(M.LEGACY_FILES)} is "
@@ -3907,6 +3933,89 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         print(_ln)
     if mhm is not None:
         _migrate_missing_history(root, mhm, args)
+
+
+def _migrate_shared_tobase(top: Path, args: argparse.Namespace) -> bool:
+    """`taxjson migrate` in a multi-year project: the year folders'
+    tobase.map copies (the layout before v0.27.1) become one tobase.map
+    in `top` that every year reads (`[settings] tobase_map =
+    "../tobase.map"`, lib/tobase_map.plan_shared). Identical copies:
+    written at once, each copy kept as tobase.map.bak. Copies that
+    differ: listed (the lines of yours only another year has), and
+    nothing is written without --write (the newest year's file wins).
+    False when no year holds a copy."""
+    from taxjson.lib import tobase_map as TB
+    dry = bool(getattr(args, "dry_run", False))
+    force = bool(getattr(args, "write", False))
+    try:
+        plan = TB.plan_shared(top)
+    except (OSError, ValueError) as e:
+        _die_input(f"cannot read the year folders' tobase.map: {e}",
+                   "Nothing was changed.")
+    if not plan.work:
+        return False
+    years = ", ".join(str(y) for y in sorted(plan.copies))
+    print(f"tobase.map: one file every year reads, in {top} "
+          f"([settings] {_PL.TOBASE_KEY} = \"{_PL.SHARED_TOBASE}\")")
+    for _ln in _out_wrap(
+            f"The copies in {years}"
+            + (f" and the shared {TB.TOBASE_MAP}" if plan.target.is_file()
+               else "")
+            + (" are identical: one file, the copies removed (each kept "
+               "as tobase.map.bak)." if plan.identical else
+               f" differ: {plan.source} (the newest year's) is the one "
+               f"kept."), indent="  "):
+        print(_ln)
+    if plan.problems:
+        _die_input("the year folders' tobase.map cannot be made one file:",
+                   *plan.problems, "Nothing was changed.")
+    for where, rules in sorted(plan.user_lines.items()):
+        print(f"  Lines of yours only {where} has (not carried over — "
+              f"add each you still need to the shared {TB.TOBASE_MAP}, "
+              f"or that year's ticker.map):")
+        for r in rules:
+            print(f"    {r}")
+    for where, n in sorted(plan.other_lines.items()):
+        for _ln in _out_wrap(
+                f"{where}: {n} more line(s) of another master version "
+                f"(`taxjson update-tobase-map` brings the shared file in "
+                f"step with this taxjson's master).", indent="  ",
+                hang="    "):
+            print(_ln)
+    if plan.set_years:
+        print(f"  {'would set' if dry else 'set'} [settings] "
+              f"{_PL.TOBASE_KEY} = \"{_PL.SHARED_TOBASE}\" in "
+              + ", ".join(f"{y}/taxjson.toml" for y in plan.set_years))
+    if plan.without:
+        for _ln in _out_wrap(
+                f"Not changed: {', '.join(str(y) for y in plan.without)} "
+                f"read no tobase.map (add the setting there to read the "
+                f"shared one).", indent="  ", hang="    "):
+            print(_ln)
+    if dry:
+        print("  dry run: nothing was written")
+        return True
+    if not plan.identical and not force:
+        _die("the year folders' tobase.map copies differ (listed above) — "
+             "nothing was written for them",
+             f"Pass --write to keep {plan.source} as the one file every "
+             f"year reads (the lines listed above are not carried over).")
+    from taxjson.lib.safe_write import OutsideLinkError
+    try:
+        done, baks = TB.apply_shared(plan)
+    except (OSError, OutsideLinkError) as e:
+        _die_input(f"could not write the migration: {e}")
+    for b in baks:
+        print(f"  removed {_PL.shown(b.with_name(TB.TOBASE_MAP), top)} "
+              f"(kept as {_PL.shown(b, top)})")
+    for _ln in _out_wrap(
+            f"Done: {TB.TOBASE_MAP} here is the one file "
+            + ", ".join(str(y) for y in sorted(set(done) | set(plan.sharing)))
+            + " read. `taxjson update-tobase-map` in any year folder "
+            "updates it for every year; commit the change (in git, `git "
+            "rm` the copies).", indent="  ", hang="  "):
+        print(_ln)
+    return True
 
 
 def _migrate_missing_history(root: Path, mhm: Any,
@@ -4220,7 +4329,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         + [_c.with_name(_c.name + ".toml")
            for _c in _generic_files(grouped)]
         + [acct_dir / "generic.toml"]
-        + [cache.parent / _m for _m in _PROJECT_ROOT_INPUTS]
+        + [_PL.project_map_path(cache.parent, _m)
+           for _m in _PROJECT_ROOT_INPUTS]
         # The elections manifest (and its legacy work/ copy), a crypto
         # account's sends.json and taxjson.toml itself change the books
         # too: restored with an older mtime they kept the previous
@@ -12802,8 +12912,12 @@ def cmd_tips(args: argparse.Namespace) -> None:
             _xl["names"], _xl["shown"] = _MH.listing_names(
                 cache, _equity_accts,
                 {k.upper(): v.upper() for k, v in glob_renames.items()})
+        if "receipts" not in _xl:
+            # A CDR and its US share (the interlisted master, Canada).
+            from taxjson.lib.tobase_map import receipt_pairs
+            _xl["receipts"] = receipt_pairs(country == "canada")
         return _MH.pair_verdict(a.upper(), b.upper(), _xl["names"],
-                                  _xl["shown"])
+                                  _xl["shown"], _xl["receipts"])
 
     def _ca_twins(rt: str, sym_u: str) -> List[str]:
         # ticker.map (GLOBAL/TOBASE onto a Canadian listing) is the
@@ -23330,7 +23444,10 @@ def cmd_init(args: argparse.Namespace) -> None:
     config_text, account_names = _render_init_config(
         country, getattr(args, "year", None),
         ({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
-          _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}"} if years else None))
+          _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
+          # Canada: the interlisted pairs, one file every year reads.
+          **({_PL.TOBASE_KEY: _PL.SHARED_TOBASE}
+             if country == "canada" else {})} if years else None))
     # The tree is checked BEFORE anything is written: inputs/ existing
     # as a file was a NotADirectoryError traceback after taxjson.toml
     # and ticker.map were already in place (re-audit A2-0781).
@@ -23377,9 +23494,11 @@ def cmd_init(args: argparse.Namespace) -> None:
     _stub(f"{_yrel}ticker.map", init_template())
     if country == "canada":
         # The interlisted master's pairs (lib/tobase_map, CA-XLIST-06):
-        # every US and OTC listing of a Canadian share, one security.
+        # every US and OTC listing of a Canadian share, one security —
+        # with a year folder, one file at the top every year reads
+        # (`[settings] tobase_map`).
         from taxjson.lib import tobase_map as _TB
-        _stub(f"{_yrel}{_TB.TOBASE_MAP}", _TB.render(_TB.load_master()))
+        _stub(_TB.TOBASE_MAP, _TB.render(_TB.load_master(), shared=years))
     _stub(".gitignore", _TEMPLATE_GITIGNORE + (
         "# The newest year's positions and wash radar, for other tools "
         "(`taxjson run`).\nexports/\n" if years else ""))
@@ -23529,6 +23648,25 @@ def cmd_years(args: argparse.Namespace) -> None:
             line += f"; {r['problem']}"
         for _ln in _out.wrap(line, None, "  ", "        "):
             print(_ln)
+    # tobase.map (Canada): one file every year reads, or per-year copies.
+    shared: Dict[str, List[int]] = {}
+    own = [r["year"] for r in rep["years"]
+           if r.get("tobase_map") and not r.get("tobase_shared")]
+    for r in rep["years"]:
+        if r.get("tobase_shared"):
+            shared.setdefault(r["tobase_map"], []).append(r["year"])
+    for p, ys in sorted(shared.items()):
+        for _ln in _out.wrap(f"tobase.map: {p}, shared by "
+                             f"{', '.join(str(y) for y in ys)} ([settings] "
+                             f"{_PL.TOBASE_KEY})", None, "", "  "):
+            print(_ln)
+    if own:
+        for _ln in _out.wrap(
+                f"tobase.map: a copy in each of "
+                f"{', '.join(str(y) for y in own)} — `taxjson migrate` "
+                f"here makes them one file every year reads", None, "",
+                "  "):
+            print(_ln)
 
 
 def cmd_new_year(args: argparse.Namespace) -> None:
@@ -23568,11 +23706,16 @@ def cmd_new_year(args: argparse.Namespace) -> None:
         folder.mkdir(exist_ok=True, mode=0o700)
         write_atomic(folder / "taxjson.toml", new_text)
         copied = []
-        for _name in ("ticker.map", "tobase.map"):
-            # tobase.map: the interlisted pairs (`update-tobase-map`
-            # brings it up to date with the installed master). (The
-            # positions bought before the data are .tt lines of the
-            # shared inputs: the same every year.)
+        # tobase.map: the interlisted pairs, one file every year reads
+        # (`[settings] tobase_map`, kept by the taxjson.toml copy): no
+        # per-year copy. A year from before v0.27.1 with its own copy
+        # passes it on (`taxjson migrate` makes the copies one file).
+        _legacy_tobase = (not _PL.shared_tobase(prev)
+                          and (prev / _PL.TOBASE_MAP).is_file())
+        for _name in ("ticker.map",) + ((_PL.TOBASE_MAP,)
+                                        if _legacy_tobase else ()):
+            # (The positions bought before the data are .tt lines of
+            # the shared inputs: the same every year.)
             if (prev / _name).is_file() and not (folder / _name).exists():
                 write_atomic(folder / _name, (prev / _name).read_bytes())
                 copied.append(_name)
@@ -23586,9 +23729,18 @@ def cmd_new_year(args: argparse.Namespace) -> None:
             f"prior_year_record ../{prev_year}/filed/{prev_year}.json, the "
             f"{prev_year} [estimate] / [instalments] and accounts' "
             f"holdings commented out), "
-            + "".join(f"{n}, " for n in copied) + "holdings/.",
+            + "".join(f"{n}, " for n in copied) + "holdings/"
+            + (f"; it reads {_PL.tobase_shown(folder)} "
+               f"([settings] {_PL.TOBASE_KEY})"
+               if _PL.shared_tobase(folder) else "") + ".",
             indent="", hang=""):
         print(_ln)
+    if _legacy_tobase:
+        _say("note", f"{year}/ got its own copy of {prev_year}'s "
+             f"tobase.map: the years keep one copy each",
+             f"`taxjson -C {_shlex.quote(str(top))} migrate` makes "
+             f"them one tobase.map every year reads ([settings] "
+             f"{_PL.TOBASE_KEY} = \"{_PL.SHARED_TOBASE}\").", prog=_PROG)
     _yd = _shlex.quote(str(folder))
     shared = _PL.shared_inputs(folder)
     print("\nNext:")
@@ -23628,14 +23780,35 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
     from taxjson.lib.ticker_map_suggest import books_symbols
     root = Path(args.dir).resolve()
     if not _PL.has_config(root):
-        _die_input(f"no taxjson.toml in {root}: run it in a project's "
-                   f"(year) folder")
+        root = _tobase_root_year(root, args.json)
+    both = _PL.tobase_both_problem(root, _soft_settings(root))
+    if both:
+        _die_input(both, "Nothing was written.")
+    shared = _PL.shared_tobase(root)
+    # Every year that reads the file this one does (its own: this year).
+    readers = [root]
+    if shared:
+        _lay = _PL.tobase_layout(root.parent)
+        readers = [root.parent / str(y) for y in
+                   _lay["shared"].get(_PL.tobase_map_path(root), [])] \
+            or [root]
+    _yrs_text = ", ".join(p.name for p in readers)
+    boundary = root.parent if shared else root
     master = TB.load_master()
-    books = books_symbols(root)
+    books: Set[str] = set()
+    for _r in readers:
+        books |= books_symbols(_r)
     tm = _PL.ticker_map_path(root)
     from taxjson.lib.cli_diag import read_text_utf8
     ticker_text = read_text_utf8(tm) if tm.is_file() else ""
     tob = TB.read_tobase(root)
+    if shared and not args.json:
+        for _ln in _out_wrap(
+                f"{_PL.tobase_shown(root)}: read by {_yrs_text} — a "
+                f"change applies to each (a filed year's `taxjson "
+                f"check-filed` shows whether it moved its figures; each "
+                f"year's ticker.map still wins)."):
+            print(_ln)
     nsec = len(master.security)
     exch = sum(1 for e in master.security.values() if e.get("us"))
     otc = sum(1 for e in master.security.values()
@@ -23645,7 +23818,7 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
             f"a US exchange listing, {otc} with OTC listings only.")
     no_run = not books
     if tob is None:
-        text = TB.render(master, books)
+        text = TB.render(master, shared=shared)
         n_lines = sum(1 for ln in text.splitlines()
                       if ln.split("#", 1)[0].strip())
         changes = TB.books_changes(master, books, ticker_text)
@@ -23702,12 +23875,15 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
         if not tm.is_file():
             from taxjson.lib.ticker_map_format import init_template
             write_user_file(tm, init_template(), root, backup=False)
-        write_user_file(TB.tobase_path(root), text, root, backup=False)
+        write_user_file(TB.tobase_path(root), text, boundary, backup=False)
         if not args.json:
-            print(f"Wrote {TB.TOBASE_MAP} ({n_lines} lines). Run `taxjson "
-                  f"run` to rebuild the books with it.")
+            print(f"Wrote {_PL.tobase_shown(root)} ({n_lines} lines). Run "
+                  f"`taxjson run` "
+                  + (f"in each year that reads it ({_yrs_text}) "
+                     if shared else "")
+                  + "to rebuild the books with it.")
         return
-    plan = TB.plan_update(master, tob, books, ticker_text)
+    plan = TB.plan_update(master, tob, books, ticker_text, shared=shared)
     in_books = [g for g in plan.added
                 if g.keyword == "TOBASE" and ({g.a, TB.venue_alias(g.a)}
                                               & books)]
@@ -23769,14 +23945,15 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                 print(f"  ~ {ln.rule} until {g.until}")
         if plan.retracted:
             print(f"Retracted: {len(plan.retracted)} line(s) the master no "
-                  f"longer gives (removed; never a line you edited):")
+                  f"longer gives or no longer needs (removed; never a "
+                  f"line you edited):")
             for ln, why in plan.retracted:
                 for _ln in _out_wrap(f"- {ln.rule}: {why}", "  ", "    "):
                     print(_ln)
         if plan.retracted_edited:
             print(f"ATTENTION: {len(plan.retracted_edited)} line(s) you "
-                  f"edited name a listing the master RETRACTED (kept as "
-                  f"you wrote them; check each):")
+                  f"edited are lines the master RETRACTED (kept as you "
+                  f"wrote them; check each):")
             for ln, why in plan.retracted_edited:
                 for _ln in _out_wrap(f"! {ln.rule} ({TB.TOBASE_MAP}:"
                                      f"{ln.lineno}): {why}", "  ", "    "):
@@ -23846,12 +24023,53 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
         print("Wrote an empty ticker.map (tobase.map is read beside one).")
     if not plan.changes and not stale:
         return
-    bak = write_user_file(TB.tobase_path(root), plan.new_text, root,
+    bak = write_user_file(TB.tobase_path(root), plan.new_text, boundary,
                           backup=not args.no_backup)
     if not args.json:
-        print(f"Wrote {TB.TOBASE_MAP}"
+        print(f"Wrote {_PL.tobase_shown(root)}"
               + (f" (the previous file kept as {bak.name})" if bak else "")
-              + ". Run `taxjson run` to rebuild the books with it.")
+              + ". Run `taxjson run` "
+              + (f"in each year that reads it ({_yrs_text}) "
+                 if shared else "")
+              + "to rebuild the books with it.")
+
+
+def _tobase_root_year(top: Path, as_json: bool) -> Path:
+    """`update-tobase-map` in the folder holding the year folders: the
+    newest year that reads the tobase.map every year shares (the file is
+    updated as from there). Dies when there is no such file or it is
+    ambiguous: a year keeps a copy of its own, or the years name
+    different files."""
+    yrs = _PL.year_dirs(top)
+    if not yrs:
+        _die_input(f"no taxjson.toml in {top}: run it in a project's "
+                   f"(year) folder")
+    lay = _PL.tobase_layout(top)
+    if lay["own"]:
+        _die_input(f"the year folders {', '.join(str(y) for y in sorted(lay['own']))} "
+                   f"keep a tobase.map of their own — which file to "
+                   f"update is ambiguous here",
+                   "`taxjson migrate` here makes the copies one file every "
+                   "year reads; or run update-tobase-map in a year folder.")
+    if len(lay["shared"]) != 1:
+        if not lay["shared"]:
+            _die_input("no year folder reads a shared tobase.map "
+                       f"([settings] {_PL.TOBASE_KEY}) — run "
+                       f"update-tobase-map in a year folder")
+        _die_input("the year folders read different tobase.map files: "
+                   + "; ".join(f"{_PL.shown(p, top)} ({', '.join(map(str, ys))})"
+                               for p, ys in sorted(lay["shared"].items())),
+                   "Point each year's [settings] tobase_map at one file, "
+                   "or run update-tobase-map in a year folder.")
+    (_p, ys), = lay["shared"].items()
+    year = max(ys)
+    if not as_json:
+        for _ln in _out_wrap(f"(In the folder holding the years: the shared "
+                             f"{_PL.shown(_p, top)}, updated as from "
+                             f"{year}/, the newest year that reads it; "
+                             f"ticker.map conflicts are {year}'s.)"):
+            print(_ln)
+    return top / str(year)
 
 
 def _align_show(c: Dict[str, Any], here: str, there: str,
@@ -23874,9 +24092,9 @@ def _align_show(c: Dict[str, Any], here: str, there: str,
                 print(f"{title}:")
                 for r in rows:
                     print(f"  {r}")
-        print("(tobase.map: the interlisted pairs; `taxjson "
-              "update-tobase-map` in each year brings it to the installed "
-              "master.)")
+        print("(tobase.map: the interlisted pairs, a copy in each year; "
+              "`taxjson migrate` in the folder holding the years makes "
+              "them one file every year reads.)")
     if not (c["map_only_here"] or c["map_only_there"] or c["keys"]):
         if any(rows for _t, rows in _tob):
             return
@@ -24152,14 +24370,21 @@ def _build_parser(prog: str = "taxjson"
              "ticker.map / taxjson.toml (appended; each old file is "
              "renamed <name>.migrated). Every other command stops while "
              "one of those files is present. A leftover tv_exchange.map "
-             "(the removed TradingView export) is only renamed.")
+             "(the removed TradingView export) is only renamed. In a "
+             "multi-year project (the folder holding the years, or a "
+             "year folder) the years' tobase.map copies become one "
+             "tobase.map beside the year folders that every year reads "
+             "([settings] tobase_map = \"../tobase.map\"; each copy kept "
+             "as tobase.map.bak).")
     p_mig.add_argument("--dry-run", action="store_true",
                        help="Show what would be appended and moved; "
                             "write nothing")
     p_mig.add_argument("--write", action="store_true",
                        help="missing_history.json of year folders that "
                             "disagree: write anyway, each entry as the "
-                            "newest year listing it sizes it")
+                            "newest year listing it sizes it; tobase.map "
+                            "copies that differ: keep the newest year's "
+                            "as the one file")
     p_mig.add_argument("--to-years", action="store_true",
                        help="Turn this single-folder project into one "
                             "folder of exports for every year: inputs/ "
@@ -24294,10 +24519,15 @@ def _build_parser(prog: str = "taxjson"
                     "not edit them), ticker changes (the new line added, "
                     "the old kept, with the dated RENAME event to write), "
                     "the pairs your ticker.map decides otherwise "
-                    "(ticker.map wins; reported only) and a DISTINCT line "
-                    "for each depositary receipt the books hold. Without a "
-                    "tobase.map it shows the pairs that would change the "
-                    "books. Dry run by default; --write applies it.")
+                    "(ticker.map wins; reported only), and the DISTINCT "
+                    "lines earlier versions wrote for a depositary receipt "
+                    "(retracted: look-alike listings are never joined). "
+                    "Without a tobase.map it shows the pairs that would "
+                    "change the books. In a year folder that reads the "
+                    "tobase.map every year shares ([settings] tobase_map), "
+                    "or in the folder holding the years, it updates that "
+                    "one file for every year. Dry run by default; --write "
+                    "applies it.")
     p_tb.add_argument("--write", action="store_true",
                       help="Write tobase.map (the previous one is kept as "
                            "tobase.map.bak)")
@@ -25971,7 +26201,10 @@ def _refuse_artifact_account(args: argparse.Namespace) -> None:
 # Every other command is refused there, naming the year folders — a
 # year is never guessed.
 _YEARS_ROOT_CMDS = frozenset({
-    "init", "help", "tax-logic", "redact", "years", "new-year"}) | frozenset(_RELEASE_CMDS)
+    "init", "help", "tax-logic", "redact", "years", "new-year",
+    # What the years share: the per-year tobase.map copies made one file
+    # (migrate), that file brought in step with the master.
+    "migrate", "update-tobase-map"}) | frozenset(_RELEASE_CMDS)
 
 
 # The commands (and the flags that make them write) that save a decision
@@ -26094,6 +26327,12 @@ def _enforce_command_country(args: argparse.Namespace) -> None:
     if command_country(cmd, variant) is None and not flags:
         return
     settings = _soft_settings(Path(args.dir).resolve())
+    if not settings and cmd in _YEARS_ROOT_CMDS:
+        # The folder holding the year folders: the newest year's
+        # country (a command that works on what the years share).
+        _yrs = _PL.year_dirs(Path(args.dir).resolve())
+        if _yrs:
+            settings = _soft_settings(_yrs[-1][1])
     if not settings:
         _die("no taxjson.toml here — this command needs a project "
              "(its country decides whether it applies).")

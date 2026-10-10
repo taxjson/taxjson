@@ -219,7 +219,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `until_findings`, `until_message`; `scripts/build_interlisted.py` — `check_reused`
 
-### `tjs update-tobase-map`: "Retracted: 1 line(s) the master no longer gives" naming `TOBASE QZG.US QZG.TO` (or "ATTENTION: … line(s) you edited name a listing the master RETRACTED")
+### `tjs update-tobase-map`: "Retracted: 1 line(s) the master no longer gives or no longer needs" naming `TOBASE QZG.US QZG.TO` (or "ATTENTION: … line(s) you edited are lines the master RETRACTED")
 - **Check:** the reason printed beside the line; the master's entry in `src/taxjson/data/interlisted.toml` (its `retracted` list, found by the FIGI in the line's marker).
 - **Cause:** an earlier master shipped a wrong pair (for instance an ended pair's US ticker that was another company's). A correction retracts it for good; an unedited line is removed, an edited one kept and flagged.
 - **Fix:** `tjs update-tobase-map --write`, then `tjs run`. For a flagged edited line, check it and delete it if it was the master's mistake. Rows of the retracted ticker that were pooled before are no longer: check the year's gains.
@@ -264,9 +264,30 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### `tjs checklist`: "[!] tobase-map … tobase.map is from the master of 2026-01-01; this taxjson has the one of 2026-10-01"
 - **Check:** `tjs update-tobase-map` (a dry run) lists what an update adds, ends and retracts, and the pairs that name a symbol of your books.
 - **Cause:** an upgrade installed a newer interlisted master; the project's tobase.map was made from an older one (its `# master-generated` line).
-- **Fix:** `tjs update-tobase-map --write` (the previous file is kept as `tobase.map.bak`), then `tjs run`. In a project with several year folders, run it in each year you still work on (`tjs years` counts the differing lines).
+- **Fix:** `tjs update-tobase-map --write` (the previous file is kept as `tobase.map.bak`), then `tjs run`. In a project with several year folders the years read one shared tobase.map (since v0.27.1): run it once, in any year folder or in the folder holding them, then `tjs run` in each year it names (a filed year's `tjs check-filed` shows whether it moved the filed figures). Years that still keep a copy each: `tjs migrate` there first.
 - **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/checklist.py` — `s_tobase_map`; `src/taxjson/bin/taxjson_run.py` — `cmd_update_tobase_map`
+
+### `tjs update-tobase-map`: "Retracted: … `DISTINCT QZD.US QZD.TO`: not needed: look-alike listings are never joined" (or `tjs checklist`: "[!] tobase-map … holds 1 DISTINCT line(s) an earlier version wrote")
+- **Check:** `grep -n '^DISTINCT' tobase.map` (in a multi-year project, the `tobase.map` beside the year folders): lines marked `# master:<FIGI>` under "Depositary receipts the books hold".
+- **Cause:** v0.27.0 wrote a `DISTINCT` line for each Canadian depositary receipt (CDR) the books held whose root is a US ticker. taxjson never joins two listings because their letters match (only a broker's journal evidence or a `TOBASE` line joins), and the interlisted master itself keeps a CDR apart from its US share (no journal join, no `ticker-map --suggest` pair, no MAP-GAP, no loss-radar warning), so the lines say nothing. Nothing in the books changes when they go.
+- **Fix:** `tjs update-tobase-map --write` removes the unedited ones (the previous file kept as `tobase.map.bak`). A line you edited is kept and listed under ATTENTION: delete it, or keep it (harmless). A `DISTINCT` line of your own in ticker.map stays as written.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `DISTINCT_NOT_NEEDED`, `receipt_pairs`; `src/taxjson/lib/cross_listings.py` — `shown_apart`, `RECEIPT`; `src/taxjson/lib/checklist.py` — `s_tobase_map`
+
+### "Error: two tobase.map files for this year: [settings] tobase_map = '../tobase.map' names ../tobase.map (shared by every year), and this folder holds a tobase.map of its own"
+- **Check:** `ls 2025/tobase.map ../tobase.map` and `grep -n tobase_map 2025/taxjson.toml` (each year folder); `tjs years` (run in the folder holding the years) names the shared file and any year that keeps a copy.
+- **Cause:** since v0.27.1 the years of a multi-year project read one `tobase.map` beside the year folders (`[settings] tobase_map`). A year folder that has the setting and still holds a copy of its own would leave one of the two silently unread, so every command refuses it (a copy restored from git, or a setting copied with `tjs align` into a year that kept its copy).
+- **Fix:** `tjs migrate` in the folder holding the years (or `tjs -C .. migrate` from a year folder) makes the copies one shared file: identical copies at once, each kept as `tobase.map.bak`; copies that differ are listed and need `--write` (the newest year's file is kept). Or delete the year's own `tobase.map`, or remove its `tobase_map` setting (it then reads its own copy, the layout before v0.27.1).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `tobase_both_problem`, `tobase_setting`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_refuse_folder_settings`, `_migrate_shared_tobase`
+
+### `tjs migrate`: "the year folders' tobase.map copies differ (listed above) — nothing was written for them"
+- **Check:** the lines `tjs migrate` lists: "Lines of yours only 2024/tobase.map has" (your own lines and edited marked lines that the newest year's copy lacks) and how many master lines of another master version each copy has. `tjs migrate --dry-run` shows the plan without writing.
+- **Cause:** the year folders of a project made before v0.27.1 keep a copy of tobase.map each, and they differ (an update run in one year only, or a line you added in one year). One file every year reads needs one text, and taxjson does not guess which of your lines to keep.
+- **Fix:** `tjs migrate --write` keeps the newest year's file as the shared `tobase.map` (each copy kept as `tobase.map.bak`); then add any listed line of yours you still need to the shared file (or to that year's ticker.map, which wins over it), and run `tjs update-tobase-map --write` once to bring the shared file to the installed master. `tjs run` in each year.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `plan_shared`, `apply_shared`; `src/taxjson/bin/taxjson_run.py` — `_migrate_shared_tobase`, `cmd_migrate`
 
 ### "Error: `taxjson update-tobase-map` is Canada-only (Canada only for now: the interlisted pairs pool identical property …); this project is country = "usa""
 - **Check:** `[settings] country` in taxjson.toml.

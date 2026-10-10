@@ -772,6 +772,11 @@ def d_inputs_committed(ctx: Ctx) -> Result:
         return Result("inputs-committed", "attention", "not a git repository")
     paths = ["inputs", "taxjson.toml", "ticker.map", "tobase.map"]
     paths = [p for p in paths if (ctx.root / p).exists()]
+    if _PL.shared_tobase(ctx.root) and _PL.tobase_map_path(ctx.root).exists():
+        # The tobase.map every year shares, beside the year folders.
+        import os as _os
+        paths.append(_os.path.relpath(_PL.tobase_map_path(ctx.root),
+                                      ctx.root.resolve()))
     refused = _git_refusal(ctx.root)
     if refused:
         return Result("inputs-committed", "blocked", refused)
@@ -994,7 +999,12 @@ _ACCOUNT_SIDECARS = ("manifest.json", "sends.json")
 _PLANNING_TABLES = ("instalments", "estimate", "carryover",
                     "capital_gains_dividends")
 _PLANNING_SETTINGS = ("province", "prior_year_record", "holdings_dir",
-                      "exports_dir")
+                      "exports_dir",
+                      # Where the shared tobase.map is: its content is
+                      # fingerprinted itself (_input_paths), so the year
+                      # that starts reading an identical shared copy
+                      # (`taxjson migrate`) is not stale.
+                      "tobase_map")
 _PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id",
                           "broker_accounts")
 
@@ -1012,7 +1022,8 @@ def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
     generic-mapping sidecars (inputs/<acct>/*.toml), its elections
     manifest and its crypto send decisions (from the shared inputs/ when
     `inputs_dir` names one — lib/project_layout)."""
-    out = [root / n for n in _ROOT_INPUTS if (root / n).is_file()]
+    out = [p for p in (_PL.project_map_path(root, n) for n in _ROOT_INPUTS)
+           if p.is_file()]
     for n in sorted((cfg.get("accounts") or {})):
         folder = _PL.inputs_dir(root) / n
         if not folder.is_dir():
@@ -1077,12 +1088,27 @@ def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _fp_key(root: Path, p: Path) -> str:
-    """A fingerprinted file's name: relative to the project, or for a
-    shared inputs/ folder (lib/project_layout) "inputs/<account>/..."."""
+    """A fingerprinted file's name: relative to the project, for a
+    shared inputs/ folder (lib/project_layout) "inputs/<account>/...",
+    for the tobase.map every year shares its path from the project
+    ("../tobase.map": _shared_key)."""
     try:
         return p.relative_to(root).as_posix()
     except ValueError:
-        return p.relative_to(_PL.inputs_dir(root).parent).as_posix()
+        pass
+    if p == _PL.tobase_map_path(root):
+        import os as _os
+        return Path(_os.path.relpath(p, Path(root).resolve())).as_posix()
+    return p.relative_to(_PL.inputs_dir(root).parent).as_posix()
+
+
+# A fingerprint key of the tobase.map every year shares, said as such in
+# what changed (one edit there moves every year's books).
+_SHARED_NOTE = " (shared by every year)"
+
+
+def _shared_key(k: str) -> bool:
+    return k.startswith("../")
 
 
 def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
@@ -1217,6 +1243,14 @@ def _canon_fingerprint(files: Dict[str, str]) -> Dict[str, str]:
 
 def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
     before, now = _canon_fingerprint(before), _canon_fingerprint(now)
+    # The year's own tobase.map made the shared one (`taxjson migrate`)
+    # with the same content: the books read the same pairs.
+    own = _PL.TOBASE_MAP
+    for k in [k for k in now if _shared_key(k)]:
+        if k not in before and own in before and own not in now \
+                and before[own] == now[k]:
+            before = dict(before)
+            before[k] = before.pop(own)
     changed = sorted(k for k in before.keys() & now.keys()
                      if before[k] != now[k])
     added = sorted(now.keys() - before.keys())
@@ -1225,7 +1259,9 @@ def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
     for label, items in (("changed", changed), ("added", added),
                          ("removed", removed)):
         if items:
-            parts.append(f"{label}: {', '.join(items[:3])}"
+            shown = [k + (_SHARED_NOTE if _shared_key(k) else "")
+                     for k in items[:3]]
+            parts.append(f"{label}: {', '.join(shown)}"
                          + (" ..." if len(items) > 3 else ""))
     return "; ".join(parts)
 
@@ -3302,19 +3338,31 @@ def s_tobase_map(ctx: Ctx, f: _Facts) -> Result:
         tob = TB.read_tobase(ctx.root)
     except (OSError, ValueError) as e:
         return Result("tobase-map", "blocked", f"could not read: {e}")
+    # The file this year reads: its own, or the one every year shares.
+    name = _PL.tobase_shown(ctx.root)
     if tob is None:
         # A project from before tobase.map: optional, so a step to read
         # (review), never a gap.
-        return Result("tobase-map", "review", "no tobase.map — `tjs "
+        return Result("tobase-map", "review", f"no tobase.map"
+                      + (f" ({name})" if _PL.shared_tobase(ctx.root)
+                         else "") + " — `tjs "
                       "update-tobase-map` shows the interlisted pairs "
                       "that would change these books")
     if (tob.stamp or "") < master.generated:
         return Result("tobase-map", "attention",
-                      f"tobase.map is from the master of "
+                      f"{name} is from the master of "
                       f"{tob.stamp or 'an unknown date'}; this taxjson has "
                       f"the one of {master.generated} — `tjs "
                       f"update-tobase-map`")
-    return Result("tobase-map", "done", f"from the master of "
+    stale = [ln.rule for ln in tob.lines
+             if ln.figi and ln.keyword == "DISTINCT"
+             and not TB.is_edited(ln, master)]
+    if stale:
+        return Result("tobase-map", "attention",
+                      f"{name} holds {len(stale)} DISTINCT line(s) an "
+                      f"earlier version wrote ({TB.DISTINCT_NOT_NEEDED}) "
+                      f"— `tjs update-tobase-map --write` retracts them")
+    return Result("tobase-map", "done", f"{name}, from the master of "
                   f"{master.generated}")
 
 

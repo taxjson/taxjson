@@ -304,6 +304,9 @@ SETTING_COUNTRY: Dict[str, str] = {
     "option_buyback_loss_superficial": CANADA,
     "foreign_return_of_capital": CANADA,
     "corporate_distributions": CANADA,
+    # The tobase.map every year shares: the interlisted master's pairs
+    # are read in Canada only (CA-XLIST-06 / US-XLIST-05).
+    "tobase_map": CANADA,
     "ric_january_dividends": USA,
 }
 
@@ -323,6 +326,8 @@ SETTING_WHY: Dict[str, str] = {
                                "(dated when paid) rather than a trust's",
     "ric_january_dividends": "IRC §852(b)(7) / §857(b)(9) January "
                              "dividends received on Dec 31",
+    "tobase_map": "the interlisted master's pairs (tobase.map) are read "
+                  "in Canadian projects only (CA-XLIST-06; US-XLIST-05)",
 }
 
 # Config paths outside [settings] owned by one country.

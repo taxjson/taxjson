@@ -357,6 +357,14 @@ def _classify(j: Dict[str, Any], m: _Map) -> None:
         j["decided_by"] = "ticker.map"
         j["undo"] = ("edit that line, or add `" + _settle_lines(j)[1]
                      + "` to ticker.map if they are one security")
+    elif why == "receipt":
+        # The interlisted master knows the pair as a Canadian depositary
+        # receipt and its US share (lib/tobase_map.receipt_pairs): two
+        # securities, decided with no line of the user's.
+        j["decided_by"] = "the interlisted master"
+        j["undo"] = ("add `" + _settle_lines(j)[1] + "` to ticker.map "
+                     "only if they are one security (a receipt is its own "
+                     "security, not a listing of the share)")
     elif why == "unproven":
         # A .tt JOURNAL line between two listings nothing shows are one
         # security (lib/cross_listings.declared_verdict): the run stops.
@@ -424,7 +432,8 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
     counts = {s: sum(1 for j in out if j["state"] == s) for s in STATES}
     # The refused journals the user's own ticker.map decided (not
     # pending).
-    counts["decided"] = sum(1 for j in out if j["decided_by"])
+    counts["decided"] = sum(1 for j in out
+                            if j["decided_by"] == "ticker.map")
     return {"format": FORMAT, "account": account,
             "year": int(year) if year else None,
             "map": (None if m.path is None else
@@ -502,8 +511,10 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
             if j["state"] == "joined":
                 continue
             d.blank()
-            how = (f"{j['state']} by your ticker.map" if j["decided_by"]
-                   else j["state"])
+            how = (f"{j['state']} by {j['decided_by']}"
+                   if j["decided_by"] == "the interlisted master"
+                   else f"{j['state']} by your ticker.map"
+                   if j["decided_by"] else j["state"])
             d.item(f"{j['date']} {j['from']} → {j['to']} {how}: "
                    f"{j['reason']}", "  ")
             if j["state"] == "suggested":

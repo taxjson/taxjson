@@ -45,8 +45,9 @@ cd ~/taxes/2025
 `init` writes one folder per account under `~/taxes/inputs/`: `margin`,
 `tfsa`, `rrsp` and `crypto` for Canada (`margin`, `roth`, `401k`,
 `crypto` for the US) — every year's exports go there — and the year's
-project, `~/taxes/2025/`: `taxjson.toml`, a `ticker.map`, in Canada a
-`tobase.map` (below) and an empty `holdings/`. Each account folder's
+project, `~/taxes/2025/`: `taxjson.toml`, a `ticker.map` and an empty
+`holdings/`; in Canada also `~/taxes/tobase.map` (below), one file every
+year reads. Each account folder's
 `README.txt` says which export to download from each broker. Every command
 runs in the year's folder.
 
@@ -55,11 +56,16 @@ TSX and in the US (NYSE, Nasdaq, or over the counter): the two listings are
 one security for your ACB and the superficial-loss rule. `tobase.map` holds
 those pairs, from the list that ships with taxjson (`TOBASE QZAB.US QZA.TO`,
 one line per US listing); you do not edit it. Your own `ticker.map` lines
-win over it (`DISTINCT QZAB.US QZA.TO` keeps a pair apart). After an
+win over it (`DISTINCT QZAB.US QZA.TO` keeps a pair apart). Look-alike
+tickers need no line: taxjson never joins two listings because their
+letters match. After an
 upgrade, `tjs update-tobase-map` shows what a newer list changes and
-`tjs update-tobase-map --write` applies it (the checklist says when); in a
+`tjs update-tobase-map --write` applies it, for every year at once (the
+checklist says when); in a
 project made before tobase.map existed, the same command shows which pairs
 would change your books before it writes anything ([settings.md](settings.md#tobasemap)).
+A project made before v0.27.1 keeps a copy in each year folder: `tjs
+migrate` in `~/taxes` makes them one.
 (`tjs init --single` makes one folder for one year instead, with
 `inputs/` inside it; see "One folder of exports for every year" below.)
 
@@ -861,10 +867,12 @@ and a complete project per tax year beside them.
 ~/taxes/
   inputs/<account>/     every year's exports, .tt lines, manifest.json
   exports/              the newest year's positions and wash radar
+  tobase.map            Canada: the interlisted pairs every year reads
+                        (`tjs update-tobase-map`)
   2024/                 the 2024 project
-    taxjson.toml        year = 2024, inputs_dir = "../inputs"
-    ticker.map
-    tobase.map          Canada: the interlisted pairs (`tjs update-tobase-map`)
+    taxjson.toml        year = 2024, inputs_dir = "../inputs",
+                        tobase_map = "../tobase.map" (Canada)
+    ticker.map          the year's own (wins over tobase.map)
     holdings/           2024's broker positions snapshots
     inputs/slips/       2024's slips (slips.toml, IB's report, T5008)
     filed/ work/ reports/ checklist.json
@@ -875,7 +883,11 @@ and a complete project per tax year beside them.
   are read exactly as a single-folder project's: a change to 2025's map
   never touches 2024's books. Only `inputs/` is shared, through
   `inputs_dir = "../inputs"` in each year's `[settings]`
-  ([settings.md](settings.md#folders)). Run every command in a year
+  ([settings.md](settings.md#folders)) — and in Canada `tobase.map`,
+  through `tobase_map = "../tobase.map"`: an update there applies to
+  every year (each year's run, `tjs years` and the checklist name it
+  as changed; a filed year's `tjs check-filed` shows whether it moved
+  the filed figures). Run every command in a year
   folder (`cd 2025`, or `tjs -C 2025 run`); in `~/taxes` itself a
   command that needs a year is refused, naming the year folders.
 - **What is shared and what is the year's own.** Shared, in
@@ -902,7 +914,8 @@ and a complete project per tax year beside them.
   set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's
   `[estimate]` and `[instalments]` commented out for reference, and each
   account's `holdings` list commented out: those are 2025's snapshots),
-  `ticker.map` and `tobase.map` copied, and an empty `holdings/`. The
+  `ticker.map` copied (it keeps reading the shared `tobase.map`), and
+  an empty `holdings/`. The
   missing-history lines are in the shared inputs: the same in every
   year, their quantities fixed.
 - **Keeping the years aligned:** a map line or setting added in one year

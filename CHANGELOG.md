@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Changed
+
+- Multi-year projects (Canada): one `tobase.map` beside the year folders
+  that every year reads, through a new `[settings] tobase_map =
+  "../tobase.map"` (the path must stay inside the folder holding the
+  years, like `inputs_dir`). `taxjson init` writes it there and sets the
+  key, `taxjson new-year` keeps the key (no per-year copy), and
+  `taxjson update-tobase-map` in any year folder, or in the folder
+  holding them, updates that one file and says it applies to every
+  year. Each year's ticker.map still wins over it. A change to the
+  shared file shows in every year's run banner, `taxjson years` and the
+  checklist as `../tobase.map (shared by every year)`, so a filed
+  year's drift check catches what it moved. Single-folder projects keep
+  tobase.map beside ticker.map.
+- `taxjson migrate` (in the folder holding the years, or a year folder)
+  makes the per-year copies earlier versions wrote one shared file:
+  identical copies at once (each kept as `tobase.map.bak`); copies that
+  differ are listed with the lines of yours only an older copy has, and
+  need `--write` (the newest year's file is kept). A year folder that
+  has the setting and still holds a tobase.map of its own is refused,
+  naming both. `taxjson years` and `taxjson align` compare the setting,
+  not the file; `migrate --to-years` keeps tobase.map at the top.
+- tobase.map no longer carries `DISTINCT` lines for a Canadian
+  depositary receipt (CDR): taxjson never joins two listings because
+  their letters match, so look-alike listings need no line.
+  `taxjson update-tobase-map --write` retracts the ones earlier versions
+  wrote ("not needed: look-alike listings are never joined"; a line you
+  edited is kept and flagged). The interlisted master still knows each
+  CDR: in a Canadian project a broker's journal between a CDR and its US
+  share is never joined (a `.tt` JOURNAL line between them stops the
+  run), and neither `ticker-map --suggest`, a MAP-GAP nor the
+  cross-listing loss radar pairs them (tax-logic CA-XLIST-06).
+
 
 ## v0.27.0 (2026-10-09)
 

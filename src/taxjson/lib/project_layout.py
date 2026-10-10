@@ -11,25 +11,31 @@ projects of every year:
       exports/                 the newest year's positions and radar
       2024/                    a complete project for 2024
         taxjson.toml           year = 2024, inputs_dir = "../inputs"
-        ticker.map             its own map
+        ticker.map             its own map (always wins over tobase.map)
         holdings/              2024's broker positions snapshots
         inputs/slips/          2024's slips (its own inputs/ holds only them)
         filed/ work/ reports/ checklist.json
       2025/ ...
+      tobase.map               Canada: the interlisted pairs, one file every
+                               year reads (`tobase_map = "../tobase.map"`)
 
 Each year folder is a complete project: its own taxjson.toml and
 ticker.map, read exactly as a single-folder project's; only the exports
-are shared (`inputs_dir`), and `exports_dir` names where the newest
-year's run writes the files other tools read. A folder a setting names
-must be inside the folder that holds the project (its parent): a path
-that leaves it, by `..` or a symlink, is refused. `holdings_dir`
+are shared (`inputs_dir`, and in Canada `tobase_map`: the interlisted
+master's pairs, the same for every year), and `exports_dir` names where
+the newest year's run writes the files other tools read. A folder or
+file a setting names must be inside the folder that holds the project
+(its parent): a path that leaves it, by `..` or a symlink, is refused.
+A year folder that names a shared tobase.map and still holds a
+tobase.map of its own is refused, naming both (`taxjson migrate` at the
+top makes the per-year copies one shared file). `holdings_dir`
 (default holdings/) holds the year's positions snapshots
 (lib/holdings_dir). A year folder (named YYYY) of a shared-exports
 project must hold that year's project.
 
 Every path to an input goes through here (`inputs_dir`,
-`ticker_map_path`, `data_file`, `slips_dir`, `holdings_folder`,
-`exports_folder`); a project without these settings reads exactly as
+`ticker_map_path`, `tobase_map_path`, `data_file`, `slips_dir`,
+`holdings_folder`, `exports_folder`); a project without these settings reads exactly as
 before.
 """
 from __future__ import annotations
@@ -52,6 +58,10 @@ INPUTS_KEY = "inputs_dir"
 HOLDINGS_KEY = "holdings_dir"
 EXPORTS_KEY = "exports_dir"
 FOLDER_KEYS = (INPUTS_KEY, HOLDINGS_KEY, EXPORTS_KEY)
+# [settings] key naming the tobase.map every year shares (Canada): a
+# file at the folder holding the year folders.
+TOBASE_KEY = "tobase_map"
+SHARED_TOBASE = f"../{TOBASE_MAP}"
 _KEY_EXAMPLE = {INPUTS_KEY: INPUTS, HOLDINGS_KEY: HOLDINGS,
                 EXPORTS_KEY: EXPORTS}
 YEAR_DIR_RE = re.compile(r"^\d{4}$")
@@ -276,6 +286,15 @@ def data_file(root, name: str) -> Path:
     return Path(root) / name
 
 
+def project_map_path(root, name: str) -> Path:
+    """Where the project's map `name` is read from: tobase.map through
+    `[settings] tobase_map` (tobase_map_path), any other beside
+    taxjson.toml."""
+    if name == TOBASE_MAP:
+        return tobase_map_path(root)
+    return Path(root) / name
+
+
 def data_root(root) -> Path:
     """The folder of the project's own files (ticker.map ...)."""
     return Path(root)
@@ -312,6 +331,108 @@ def exports_folder(root) -> Optional[Path]:
     """Where the newest year's run writes files for other tools
     (`exports_dir`), or None."""
     return _folder(root, EXPORTS_KEY, None)
+
+
+def tobase_setting(root, settings: Optional[Dict[str, Any]] = None
+                   ) -> Optional[Path]:
+    """The shared tobase.map `[settings] tobase_map` names, resolved
+    against the project (None when unset). LayoutError when it is not a
+    path string, or resolves (a symlink followed) outside the folder
+    holding the project (its parent), to a folder, inside this project
+    (its own tobase.map needs no setting) or inside another year's
+    folder: the file every year shares sits beside the year folders."""
+    root = _resolved(root)
+    st = _settings(root) if settings is None else settings
+    v = st.get(TOBASE_KEY)
+    if v is None:
+        return None
+    if not isinstance(v, str) or not v.strip():
+        raise LayoutError(f"[settings] {TOBASE_KEY} must be a file path "
+                          f"such as \"{SHARED_TOBASE}\" (got {v!r})")
+    p = Path(v.strip()).expanduser()
+    p = p if p.is_absolute() else root / p
+    real = _resolved(p)
+    bound = root.parent
+    try:
+        real.relative_to(bound)
+    except ValueError:
+        raise LayoutError(
+            f"[settings] {TOBASE_KEY} = {v!r} leads to {real}, outside "
+            f"{bound} (the folder that holds this project): the "
+            f"tobase.map every year shares sits beside the year folders, "
+            f"not further out (a symlink that leaves it counts too)"
+        ) from None
+    if real.is_dir() or real in (bound, root):
+        raise LayoutError(f"[settings] {TOBASE_KEY} = {v!r} names a "
+                          f"folder — name the file, such as "
+                          f"\"{SHARED_TOBASE}\"")
+    if _overlaps(real, root):
+        raise LayoutError(f"[settings] {TOBASE_KEY} = {v!r} names a file "
+                          f"inside this project — {TOBASE_KEY} names the "
+                          f"tobase.map every year shares, beside the year "
+                          f"folders (\"{SHARED_TOBASE}\"); for this "
+                          f"project's own tobase.map remove the setting")
+    for y in _year_folders_beside(root):
+        if y != root and _overlaps(real, y):
+            raise LayoutError(f"[settings] {TOBASE_KEY} = {v!r} names a "
+                              f"file inside {y.name}/, another year's "
+                              f"project — the shared tobase.map sits "
+                              f"beside the year folders "
+                              f"(\"{SHARED_TOBASE}\")")
+    return real
+
+
+def tobase_map_path(root) -> Path:
+    """The tobase.map the project reads: the shared file `[settings]
+    tobase_map` names, else tobase.map beside ticker.map. (A setting
+    that cannot be used is refused by load_config; a reader that runs
+    anyway sees the project's own file, never an outside one.)"""
+    try:
+        p = tobase_setting(root)
+    except LayoutError:
+        p = None
+    return p if p is not None else Path(root) / TOBASE_MAP
+
+
+def shared_tobase(root) -> bool:
+    """The project reads a tobase.map every year shares (`tobase_map`)."""
+    try:
+        return tobase_setting(root) is not None
+    except LayoutError:
+        return False
+
+
+def tobase_shown(root) -> str:
+    """The project's tobase.map as written in messages: `tobase.map`, or
+    for a shared one its path from the project and what it is
+    ("../tobase.map, shared by every year")."""
+    if not shared_tobase(root):
+        return TOBASE_MAP
+    return (f"{shown(tobase_map_path(root), _resolved(root))}, shared by "
+            f"every year")
+
+
+def tobase_both_problem(root, settings: Dict[str, Any]) -> Optional[str]:
+    """Why a year folder's tobase.map files are ambiguous, or None: the
+    setting names a shared file and the folder still holds a tobase.map
+    of its own (one of the two would be silently ignored)."""
+    try:
+        shared = tobase_setting(root, settings)
+    except LayoutError:
+        return None                 # said by setting_problems already
+    own = Path(root) / TOBASE_MAP
+    if shared is None or not os.path.lexists(own):
+        return None
+    if own.exists() and _resolved(own) == shared:
+        return None                 # a link to the shared file itself
+    v = settings.get(TOBASE_KEY)
+    return (f"two tobase.map files for this year: [settings] {TOBASE_KEY} "
+            f"= {v!r} names {shown(shared, _resolved(root))} (shared by "
+            f"every year), and this folder holds a tobase.map of its own "
+            f"— `taxjson migrate` in the folder holding the year folders "
+            f"makes the per-year copies one shared file (each kept as "
+            f"tobase.map.bak); or delete this folder's tobase.map, or "
+            f"remove the setting")
 
 
 def config_files(root) -> List[Path]:
@@ -379,7 +500,9 @@ def multi_root(root) -> Optional[Path]:
 
 def setting_problems(root, settings: Dict[str, Any]) -> List[str]:
     """What load_config refuses about the folder settings: a path that
-    is not one or leaves the folder holding the project; an
+    is not one or leaves the folder holding the project (the shared
+    tobase.map too, and a year folder holding a tobase.map of its own
+    beside that setting: tobase_both_problem); an
     `exports_dir` that overlaps another folder (exports_overlap); a
     year folder
     (named YYYY) of a shared-exports project whose `year` is another."""
@@ -389,6 +512,13 @@ def setting_problems(root, settings: Dict[str, Any]) -> List[str]:
             folder_setting(root, key, settings)
         except LayoutError as e:
             out.append(str(e))
+    try:
+        tobase_setting(root, settings)
+    except LayoutError as e:
+        out.append(str(e))
+    both = tobase_both_problem(root, settings)
+    if both:
+        out.append(both)
     ov = exports_overlap(root, settings)
     if ov:
         out.append(ov)
@@ -600,9 +730,15 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     year's own tables and the accounts' holdings and broker ids left
     out: _compared; arrays of tables compared whole)."""
     a, b = map_rules(here / TICKER_MAP), map_rules(other / TICKER_MAP)
-    # tobase.map (lib/tobase_map): the interlisted pairs each year's
-    # `update-tobase-map` keeps; shown apart (align never copies them).
-    ta, tb = map_rules(here / TOBASE_MAP), map_rules(other / TOBASE_MAP)
+    # tobase.map (lib/tobase_map): the interlisted pairs. With one file
+    # every year shares (`tobase_map`) the setting is compared (a key
+    # below), never the file; per-year copies (the layout before
+    # v0.27.1, `taxjson migrate` makes them one) are compared line by
+    # line, shown apart (align never copies them).
+    ta: List[str] = []
+    tb: List[str] = []
+    if not (shared_tobase(here) or shared_tobase(other)):
+        ta, tb = map_rules(here / TOBASE_MAP), map_rules(other / TOBASE_MAP)
     try:
         fa = flat_keys(read_config(here))
         fb = flat_keys(read_config(other))
@@ -685,6 +821,57 @@ def set_key_text(text: str, dotted: str, value: Any) -> str:
     return "\n".join(lines) + "\n"
 
 
+def tobase_layout(folder) -> Dict[str, Any]:
+    """The tobase.map files of a multi-year folder's year projects:
+    {"shared": {resolved path: [years naming it]}, "own": {year: its
+    own tobase.map}, "both": [years holding one beside the setting],
+    "problems": {year: why its setting cannot be used}}."""
+    out: Dict[str, Any] = {"shared": {}, "own": {}, "both": [],
+                           "problems": {}}
+    for y, d in year_dirs(folder):
+        st = _settings(d)
+        try:
+            p = tobase_setting(d, st)
+        except LayoutError as e:
+            out["problems"][y] = str(e)
+            p = None
+        if p is not None:
+            out["shared"].setdefault(p, []).append(y)
+        own = d / TOBASE_MAP
+        if own.is_file() and not own.is_symlink():
+            out["own"][y] = own
+            if p is not None and _resolved(own) != p:
+                out["both"].append(y)
+    return out
+
+
+def set_key_after(text: str, dotted: str, value: Any,
+                  after: str) -> str:
+    """set_key_text, a key not set yet going on the line after the key
+    `after` of the same table when that is set (`tobase_map` beside
+    `inputs_dir`), else where set_key_text puts it."""
+    parts = dotted.split(".")
+    table, key = ".".join(parts[:-1]), parts[-1]
+    lines = text.splitlines()
+    cur = None
+    at = None
+    for i, ln in enumerate(lines):
+        m = _TABLE_RE.match(ln)
+        if m:
+            cur = m.group(1).replace('"', "")
+            continue
+        if cur != table:
+            continue
+        if re.match(rf"^\s*{re.escape(key)}\s*=", ln):
+            return set_key_text(text, dotted, value)
+        if at is None and re.match(rf"^\s*{re.escape(after)}\s*=", ln):
+            at = i
+    if at is None or value is None:
+        return set_key_text(text, dotted, value)
+    lines.insert(at + 1, f"{key} = {toml_value(value)}")
+    return "\n".join(lines) + "\n"
+
+
 # ------------------------------------------------------------ years view
 
 def years_report(folder: Path) -> Dict[str, Any]:
@@ -702,6 +889,7 @@ def years_report(folder: Path) -> Dict[str, Any]:
                                "last_run": None, "stale": None,
                                "changed": None, "problem": None,
                                "differs_from_newest": None,
+                               "tobase_map": None, "tobase_shared": False,
                                "marks": {"done": 0, "skipped": 0}}
         lock = d / "filed" / f"{y}.json"
         if lock.is_file():
@@ -732,6 +920,14 @@ def years_report(folder: Path) -> Dict[str, Any]:
                 rec["changed"] = why or None
         except (LayoutError, OSError) as e:
             rec["problem"] = str(e).splitlines()[0]
+        try:
+            p = tobase_setting(d)
+        except LayoutError:
+            p = None
+        rec["tobase_map"] = (shown(p, _resolved(folder)) if p is not None
+                             else f"{d.name}/{TOBASE_MAP}"
+                             if (d / TOBASE_MAP).is_file() else None)
+        rec["tobase_shared"] = p is not None
         if newest is not None and d != newest:
             c = compare(d, newest)
             rec["differs_from_newest"] = {

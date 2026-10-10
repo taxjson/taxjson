@@ -606,7 +606,9 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
     conditional suggestion whose symbols the books do not all hold is
     in neither list (books_symbols), and neither is a conditional join
     of two listings the exports show apart (cross_listings.shown_apart:
-    a CDR, another company): holding both is no evidence they are one."""
+    a CDR — the exports' names or venue, or the interlisted master in a
+    Canadian project —, another company): holding both is no evidence
+    they are one."""
     st = map_state(_PL.ticker_map_path(Path(root)))
     offer: List[Suggestion] = []
     skipped: List[Tuple[Suggestion, str]] = []
@@ -614,6 +616,7 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
     extracts: Dict[Tuple[str, str], str] = {}
     books: Optional[Set[str]] = None
     names: Optional[Dict[str, Set[Tuple[str, ...]]]] = None
+    receipts: Optional[Dict[frozenset, str]] = None
     for s in gather(root):
         why = already(s, st)
         if why:
@@ -628,7 +631,10 @@ def pending(root: Path) -> Tuple[List[Suggestion], List[Tuple[Suggestion, str]]]
                 if names is None:
                     names = _export_names(Path(root))
                 from taxjson.lib.cross_listings import shown_apart
-                if shown_apart(s.needs[0], s.needs[1], names):
+                if receipts is None:
+                    from taxjson.lib.tobase_map import receipt_pairs_for
+                    receipts = receipt_pairs_for(Path(root))
+                if shown_apart(s.needs[0], s.needs[1], names, receipts):
                     continue
         if s.keyword == "EXTRACT":
             prev = extracts.get(s.extract_key)

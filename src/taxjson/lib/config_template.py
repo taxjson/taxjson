@@ -222,6 +222,9 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
     Key("exports_dir", '"../exports"',
         "Where the newest year's run copies its positions and wash radar "
         "for other tools. No default."),
+    Key("tobase_map", '"../tobase.map"',
+        "The tobase.map every year reads (the interlisted pairs), beside "
+        "the year folders. Default: tobase.map here."),
     Key("leaps_months", "9",
         "Options bought more than this many months before expiry count as "
         "LEAPS (the leaps and leaps-sum views only; no tax figure). "
@@ -340,7 +343,8 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
 SETTINGS_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Project", ("year", "country", "province", "tax_date",
                  "local_timezone", "prior_year_record")),
-    ("Folders", ("inputs_dir", "holdings_dir", "exports_dir")),
+    ("Folders", ("inputs_dir", "holdings_dir", "exports_dir",
+                 "tobase_map")),
     ("Currencies", ("base_currency", "source_currencies", "fx_cash_gains",
                     "fx_cash_ledger", "fx_cash_inflow_cost")),
     ("Options", ("option_premium_timing", "option_grant_timing_since",
