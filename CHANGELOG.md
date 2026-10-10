@@ -28,12 +28,6 @@
   share a line), and the next step last. `--all` (or `--details`) is the
   full list with every step's state, commands and why. One progress line
   instead of one per check.
-
-## v0.27.2 (2026-10-10)
-
-### Fixed
-
-- Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
 - Set-up commands print the essentials (docs/output-style.md, "Essentials
   first"); `--details` brings back everything they leave out.
   `taxjson init` and `taxjson new-year`: the project made and four next
@@ -46,6 +40,12 @@
   free text to read (each file's counts with `--details`). `taxjson
   format`, `taxjson migrate` and `taxjson crypto-sends`: one-line notes
   and legends.
+
+## v0.27.2 (2026-10-10)
+
+### Fixed
+
+- Docs: the examples in KNOWN_ISSUES.md and README.md use made-up figures.
 
 
 ## v0.27.1 (2026-10-10)
