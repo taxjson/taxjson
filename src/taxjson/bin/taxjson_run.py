@@ -2913,7 +2913,7 @@ def _raw_align_adjust_currency(raw_json: Path, rates_path: Path,
     """Restate, in the pool's own currency, every ADJUST / DISALLOW row of
     the NATIVE-currency raw merge that is in another currency: a USD
     return of capital on a TSX listing (RBC, Questrade, IB), a CAD T3
-    box-42 ADJUST on a USD unit (README recipe); and a purchase booked
+    box-42 ADJUST on a USD unit (docs/tax-rules.md recipe); and a purchase booked
     under a listing of another currency than its cash (its
     `listing_currency`: a Questrade REI paid on the USD side buying the
     account's TSX listing, GitHub issue #3), price and amounts alike. The native gains pass
@@ -12379,7 +12379,7 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                  f"distribution shows negative).",
                  f"Enter fund ROC from your {_slip} as .tt ADJUST lines OR "
                  f"as [[distributions]] in taxjson.toml, never both — see "
-                 f"the README's ROC section."):
+                 f"docs/tax-rules.md, \"Return of capital\"."):
         _vprint(item, indent="- ", hang="  ")
 
 

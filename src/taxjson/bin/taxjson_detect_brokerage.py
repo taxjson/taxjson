@@ -59,7 +59,7 @@ def cannot_detect_message(det, shown=None) -> str:
     return (f"cannot detect broker for {name}.{near} Check the header "
             f"first: the file must carry its export's own header row "
             f"(Interactive Brokers, Questrade, Webull, RBC Direct, Coinbase "
-            f"or Kraken — README \"How a file's broker is detected\"). "
+            f"or Kraken — docs/brokers.md, \"How a file's broker is detected\"). "
             f"Another broker: add a generic column mapping, "
             f"{tail}.toml (see examples/generic_wealthsimple.toml). "
             f"Last resort for a Coinbase or Kraken export whose header is "

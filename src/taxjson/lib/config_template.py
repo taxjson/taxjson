@@ -257,7 +257,7 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         inline="dividend | acb"),
     Key("corporate_distributions", '["XYZQ.TO"]',
         "Canadian issuers whose distributions are a corporation's, dated "
-        "when paid (README \"Income dating\"). No default."),
+        "when paid (docs/tax-rules.md, \"Income dating\"). No default."),
     Key("ric_january_dividends", '["XYZQ.US {next_year}-01-30"]',
         "January fund/REIT dividends taxed as received Dec 31 (IRC "
         "§852(b)(7) / §857(b)(9)): \"SYMBOL\" (every January one) or "
@@ -1265,13 +1265,14 @@ def render_document(doc: Dict[str, Any], country: str,
 _EQUITY_EXPORTS = (
     ("Interactive Brokers", "Activity Statement, CSV: the longest period "
                             "allowed (one file per year is fine)."),
-    ("Questrade", "Account activity, CSV: every year available."),
+    ("Questrade", "Transaction history: every year available. It "
+                  "downloads as Excel: convert it with taxjson-xlsx-to-csv."),
     ("RBC Direct Investing", "Transaction history, CSV: every year "
                              "available."),
     ("Webull", "Trading Summary, CSV: buys and sells only; enter "
                "dividends and interest from your slips."),
-    ("Any other broker", "Any CSV, plus a column mapping (README, \"Any "
-                         "other broker\")."),
+    ("Any other broker", "Any CSV, plus a column mapping "
+                         "(docs/brokers.md, \"Any other broker\")."),
 )
 _CRYPTO_EXPORTS = (
     ("Kraken", "Trades AND Ledgers, CSV: both, every year available."),
