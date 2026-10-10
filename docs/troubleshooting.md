@@ -90,28 +90,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** search the copy (`inputs_redact/taxjson.toml`, `ticker.map`, `tobase.map`) for the values of your accounts' `account`, `broker_accounts` and `query_id` keys and for the `--also` text. On an older release the year's own files were copied as they were.
 - **Cause:** in a year folder of a shared-exports project, `taxjson redact` copies the year's own files beside the exports as a runnable project, but it replaced in them only the ids it had found in the exports: an id only the configuration holds, the denylist and `--also` patterns and the contact details in their comments were never applied to them.
 - **Fix:** upgrade and run `tjs redact --force` again. The configuration's ids get placeholders (the same as in the exports, so the copy still runs), e-mail addresses and denylist / `--also` matches are replaced in every file, phones, addresses and names in their comments, and `--check` counts them. In a single-folder project an id only taxjson.toml names is now replaced in the exports too. Review the copy before sharing it.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `redact_project_text`, `config_ids`, `redact_tree`
 
 ### `tjs redact`: "Error: inputs/rrsp/questrade_2026.csv: a number would change in the redacted copy — … row 3 of what the parser reads (…): price changed; nothing written"; or, on an older release, `tjs run` on the redacted copy stops with "|Gross Amount| 280.00 is not |Quantity| 2 x Price 1.4 x 1 = 2.80 ('CALL QZP 09/18/26 REDACTED …')"
 - **Check:** the error names the file and the row (or the parser's refusal of the copy). On an older release, the redacted copy's option description reads `REDACTED` where the original had the strike and the issuer's name.
 - **Cause:** redaction must never change what the parser reads, but a pattern can hit a field it reads: the street-address pattern took a Questrade option description's strike and issuer (`40 QZERO SQUARE`) for a house number and street, and a denylist or `--also` pattern can match part of a number. The copy then booked differently or not at all.
 - **Fix:** upgrade: a number right after an option's expiry date is not read as an address, and every redacted export is read by its parser beside the original's text and compared number by number; a difference refuses the whole copy. With the new error, narrow the denylist / `--also` pattern it names; if none is given, report the row's shape (made-up values) as a bug.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `numbers_changed`, `_sub_address`, `_EXPIRY_BEFORE`
 
 ### `tjs redact` in a year folder: "Error: the redacted taxjson.toml would not read as TOML (…) — nothing written"; or, on an older release, a copy (or an `align --write`, `migrate --to-years` result) whose taxjson.toml stops `tjs run` after a `holdings = [` list written over several lines
 - **Check:** the project's taxjson.toml has a value over several lines (`holdings = [` with one file per line, a `"""` string). On an older release the written file shows the new first line followed by the old value's remaining lines.
 - **Cause:** the editor of taxjson.toml lines (`src/taxjson/lib/project_layout.py` — `set_key_text`: redact's holdings lists and folder settings, `align --write`, `migrate --to-years`) replaced or commented out only the first line of a value.
 - **Fix:** upgrade: every line of the value is replaced or commented out, and redact checks that the whole copied file reads before anything is written. With the new message, a denylist / `--also` pattern matched part of a setting: narrow the pattern (or fix the project's own taxjson.toml if `tjs run` refuses it too).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/project_layout.py` — `set_key_text`, `toml_statements`; `src/taxjson/bin/taxjson_redact.py` — `_copy_holdings_lists`, `_valid_copy_config`
 
 ### `tjs new-year 2026`: the new taxjson.toml still lists last year's `holdings = [...]` for an account whose table is quoted or hyphenated (`[accounts."margin-main"]`, `[accounts.margin-main]`)
 - **Check:** `grep -n holdings 2026/taxjson.toml` shows a line not commented out under such an account, although new-year said the accounts' holdings were commented out; or that account's other lines were commented out when `[estimate]` or `[instalments]` came just before it.
 - **Cause:** new-year recognised only table names made of letters, digits, `_` and `.`: a quoted or hyphenated name was not read as a table, so the table before it stayed in effect.
 - **Fix:** upgrade; for a year made by an older release, comment out (or delete) the account's `holdings` line in the new year's taxjson.toml and uncomment any account line commented by mistake (the new year's snapshots go in its holdings/).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/project_layout.py` — `new_year_text`, `toml_statements`
 
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
@@ -160,28 +160,28 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** ticker.map or tobase.map has `TOBASE QZQ.US QZQ.TO`, the `OPENING … cost=unknown` line names `QZQ.US`, and `work/<account>_gains.json` → `missing_history_log` says "no rows for this symbol/account" for it; `tjs --version` is 0.27.0.
 - **Cause:** the line's symbol was matched as written against books whose rows ticker.map had already renamed: the opening was dropped, the sales became short sales closed by the later purchase (a gain at that purchase's cost), and the raw holdings listed the listing short.
 - **Fix:** (issue #23) upgrade: the line's symbol goes through ticker.map and tobase.map as the rows do (the base-currency books open the TOBASE target, the native holdings view the listing the books trade); a mapping added after the line is followed too. Two lines that become one security open its units together when they have one date; on two dates the run stops naming both — write one line.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/missing_history.py` — `load_missing_history`, `declaration_maps`, `_book_fixed`; `src/taxjson/bin/taxjson_gains.py` — `--native-books`
 
 ### "warning: inputs/margin/missing_history.tt:1 opens QZQ.TO / margin, but no row in the data has that symbol and account — nothing was applied" for a holding you simply kept
 - **Check:** no row of the account trades the symbol after the line's date (or only its dividends do); `tjs --version` is 0.27.0; the holding is missing from `reports/<account>_holdings.toml`, `tjs sanity` and `tjs t1135`.
 - **Cause:** a dated `OPENING … cost=unknown` line was applied only when a later trade of the symbol was in the data.
 - **Fix:** (issue #24) upgrade: the line's units are held whether or not a later row trades them; its currency comes from the security's rows, else the books (the base currency; the listing's in the native holdings view). The run now says `note: … its units are held as written` when no row at all has the symbol: check the spelling if it is not a holding you kept. When the currency cannot be told the run stops naming the line.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/missing_history.py` — `_apply_fixed_openings`, `_opening_currency`, `report_missing_history_log`
 
 ### "Error: 1 entry cannot be converted (listed above) — nothing was written or renamed" from `tjs migrate`
 - **Check:** `tjs migrate` lists "Cannot convert (no books for the account in a year folder listing it …)"; the account is configured only in an older year folder.
 - **Cause:** a line is dated the day before the account's first row in the books (`work/<account>_base.json`) of the year that sized the entry; no year folder listing the entry has books for the account. Before the fix (0.27.0) the date was looked up in the newest year only, the entry was skipped and every `missing_history.json` was renamed `.migrated` anyway, losing it.
 - **Fix:** (issue #25) `tjs run` in the year folder whose `taxjson.toml` has the account, then `tjs migrate` again. The files are renamed only once every entry is converted.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`, `apply_missing_history_migration`; `src/taxjson/bin/taxjson_run.py` — `_migrate_missing_history`
 
 ### `tjs migrate` lists "2024: 5, 2025: opens nothing (no opening needed) — written: nothing (2025's view …)"
 - **Check:** the newest year's last run found the entry's rows never go short (its books are complete), an older year's opened units.
 - **Cause:** the newest year listing an entry decides it, an explicit "opens nothing" included; 0.27.0 skipped it and wrote the older year's opening, putting unknown-cost units back into books that no longer need them. A year that does not list the entry, or whose books have no row of it, does not decide.
 - **Fix:** (issue #28) nothing to do if the newer books are right: `tjs migrate --write` writes no line for it. If the older opening is right, write the `OPENING … cost=unknown` line yourself.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/missing_history.py` — `plan_missing_history_migration`, `_view_parts`
 
 ### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
@@ -328,21 +328,21 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `grep -n '^DISTINCT' tobase.map` (in a multi-year project, the `tobase.map` beside the year folders): lines marked `# master:<FIGI>` under "Depositary receipts the books hold".
 - **Cause:** v0.27.0 wrote a `DISTINCT` line for each Canadian depositary receipt (CDR) the books held whose root is a US ticker. taxjson never joins two listings because their letters match (only a broker's journal evidence or a `TOBASE` line joins), and the interlisted master itself keeps a CDR apart from its US share (no journal join, no `ticker-map --suggest` pair, no MAP-GAP, no loss-radar warning), so the lines say nothing. Nothing in the books changes when they go.
 - **Fix:** `tjs update-tobase-map --write` removes the unedited ones (the previous file kept as `tobase.map.bak`). A line you edited is kept and listed under ATTENTION: delete it, or keep it (harmless). A `DISTINCT` line of your own in ticker.map stays as written.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `DISTINCT_NOT_NEEDED`, `receipt_pairs`; `src/taxjson/lib/cross_listings.py` — `shown_apart`, `RECEIPT`; `src/taxjson/lib/checklist.py` — `s_tobase_map`
 
 ### "Error: two tobase.map files for this year: [settings] tobase_map = '../tobase.map' names ../tobase.map (shared by every year), and this folder holds a tobase.map of its own"
 - **Check:** `ls 2025/tobase.map ../tobase.map` and `grep -n tobase_map 2025/taxjson.toml` (each year folder); `tjs years` (run in the folder holding the years) names the shared file and any year that keeps a copy.
 - **Cause:** since v0.27.1 the years of a multi-year project read one `tobase.map` beside the year folders (`[settings] tobase_map`). A year folder that has the setting and still holds a copy of its own would leave one of the two silently unread, so every command refuses it (a copy restored from git, or a setting copied with `tjs align` into a year that kept its copy).
 - **Fix:** `tjs migrate` in the folder holding the years (or `tjs -C .. migrate` from a year folder) makes the copies one shared file: identical copies at once, each kept as `tobase.map.bak`; copies that differ are listed and need `--write` (the newest year's file is kept). Or delete the year's own `tobase.map`, or remove its `tobase_map` setting (it then reads its own copy, the layout before v0.27.1).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/project_layout.py` — `tobase_both_problem`, `tobase_setting`, `setting_problems`; `src/taxjson/bin/taxjson_run.py` — `_refuse_folder_settings`, `_migrate_shared_tobase`
 
 ### `tjs migrate`: "the year folders' tobase.map copies differ (listed above) — nothing was written for them"
 - **Check:** the lines `tjs migrate` lists: "Lines of yours only 2024/tobase.map has" (your own lines and edited marked lines that the newest year's copy lacks) and how many master lines of another master version each copy has. `tjs migrate --dry-run` shows the plan without writing.
 - **Cause:** the year folders of a project made before v0.27.1 keep a copy of tobase.map each, and they differ (an update run in one year only, or a line you added in one year). One file every year reads needs one text, and taxjson does not guess which of your lines to keep.
 - **Fix:** `tjs migrate --write` keeps the newest year's file as the shared `tobase.map` (each copy kept as `tobase.map.bak`); then add any listed line of yours you still need to the shared file (or to that year's ticker.map, which wins over it), and run `tjs update-tobase-map --write` once to bring the shared file to the installed master. `tjs run` in each year.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `plan_shared`, `apply_shared`; `src/taxjson/bin/taxjson_run.py` — `_migrate_shared_tobase`, `cmd_migrate`
 
 ### "Error: `taxjson update-tobase-map` is Canada-only (Canada only for now: the interlisted pairs pool identical property …); this project is country = "usa""
@@ -1532,7 +1532,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `ps` shows the `pdftotext` it started still running minutes later.
 - **Cause:** the 60-second limit covered only reading pdftotext's output: a pdftotext (or a program installed under that name) that closed its output and kept running was then waited for without a limit.
 - **Fix:** upgrade: the one limit covers the reading and the process's exit, and the process is killed and reaped when it passes. On an older release, stop that pdftotext; type the slip into `inputs/slips/slips.toml` instead.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `_read_capped`, `pdf_text`
 
 ### `tjs slip-audit --import-cra`: one PDF shows as two slips ("merged.pdf #1", "merged.pdf #2"), or "skipped merged.pdf: box 24 twice in one T5 slip — the page cannot be read cleanly; not imported"

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.27.1 (2026-10-10)
+
 ### Changed
 
 - Multi-year projects (Canada): one `tobase.map` beside the year folders
