@@ -18537,6 +18537,10 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     argv += _loss_override_flags(cache)
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_t1135.main(argv))
 
 
@@ -18669,6 +18673,10 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     _warn_run_state(root, cfg)
     if args.json:
         argv.append("--json")
+    if not _details(args) and not getattr(args, "json", False):
+        # Essentials first (docs/output-style.md): the stage's default
+        # view; --details prints its whole report.
+        argv.append("--brief")
     raise SystemExit(taxjson_carryover.main(argv))
 
 

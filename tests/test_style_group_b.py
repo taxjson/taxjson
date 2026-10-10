@@ -48,7 +48,8 @@ class TestCanadaOnlyViews(unittest.TestCase):
                 assert_styled(self, r.stderr)
 
     def test_t1135_lists_property_notes_under_the_table(self):
-        out = project("canada").run("t1135").stdout
+        # The property notes in full: --details (Essentials first).
+        out = project("canada").run("t1135", "--details").stdout
         self.assertNotIn(" | ", out)
         self.assertIn("- BTC, ETH: crypto — check where held", out)
         self.assertTrue(out.splitlines()[-1].startswith("- Not tax advice"))

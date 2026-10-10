@@ -531,6 +531,110 @@ def _authority(country: str) -> str:
             else "CRA's loss balance")
 
 
+# Essentials first (docs/output-style.md): with --brief (what `taxjson
+# carryover` passes unless --details) a message is its headline and the
+# ledger is render_brief; the standalone tool prints everything.
+_DETAILS = True
+
+
+def _dl(lines: List[str]) -> List[str]:
+    """A message's detail lines: with --details only."""
+    return list(lines) if _DETAILS else []
+
+
+def render_brief(ledger: Dict[str, Any], cur: str,
+                 first_tx_year: Optional[int]) -> str:
+    """The default view: a legend, the table, the balance, then one
+    `! ` line per thing to act on and the pointer to --details (the
+    NOTES `render` prints)."""
+    from taxjson.lib import out as _out
+    country = ledger['country']
+    rule = 'wash-sale' if country == 'usa' else 'superficial-loss'
+    lines = [f"CAPITAL-LOSS CARRYOVER LEDGER — {country}, {cur}"]
+    rows = ledger['rows']
+    if not rows:
+        lines.append("No dispositions found.")
+        return "\n".join(lines)
+    if country == 'canada':
+        lines.append(f"100% amounts after the {rule} rule; CARRYFWD "
+                     f"BAL: the net capital loss left.")
+        header = ("YEAR", "NET GAIN(LOSS)", "APPLIED", "CARRYFWD BAL")
+        table = [(str(r['year']), _money(r['net_gain']),
+                  _money(r['claimed_applied']),
+                  _money(r['carryforward_balance'])) for r in rows]
+        aligns = ["<", ">", ">", ">"]
+    else:
+        lines.append(f"100% amounts, after the {rule} rule; 3K OFFSET: "
+                     f"used against ordinary income.")
+        header = ("YEAR", "NET ST", "NET LT", "3K OFFSET",
+                  "ST CARRY", "LT CARRY")
+        table = [(str(r['year']), _money(r['net_st']), _money(r['net_lt']),
+                  _money(r['ordinary_income_offset']),
+                  _money(r['st_carryover']), _money(r['lt_carryover']))
+                 for r in rows]
+        aligns = ["<", ">", ">", ">", ">", ">"]
+    lines.extend(_out.fit_table(header, table, aligns=aligns))
+    lines.append("")
+    _final_year = ledger.get('final_year', rows[-1]['year'])
+    if country == 'canada':
+        lines.append(f"Net-capital-loss carryforward after {_final_year}: "
+                     f"{_money(ledger['final_carryforward'])}")
+    else:
+        _st = ledger['final_st_carryover']
+        _lt = ledger['final_lt_carryover']
+        lines.append(f"Carryover after {_final_year}: "
+                     f"{_money(round(_st + _lt, 2))} (ST {_money(_st)} + "
+                     f"LT {_money(_lt)})")
+    acts: List[str] = []
+    cmd = "tjs carryover --details"
+    if country == 'canada':
+        for r in rows:
+            if r['available_to_apply'] > 0.005:
+                acts.append(f"{r['year']}: apply up to "
+                            f"{_money(r['available_to_apply'])} of the "
+                            f"carryforward")
+            for cb in r['carryback_candidates']:
+                acts.append(f"{r['year']}: {_money(cb['amount'])} can be "
+                            f"carried back to {cb['year']} (T1A)")
+        if ledger.get('unmatched_claims'):
+            acts.append(f"{_money(ledger['unmatched_claims'])} claimed "
+                        f"beyond the losses this history supports")
+        for _y, _amt in (ledger.get('expired_claims') or {}).items():
+            acts.append(f"{_money(_amt)} claimed for {_y} met no loss "
+                        f"in these books")
+    if ledger.get('claimed_ignored'):
+        acts.append(f"{len(ledger['claimed_ignored'])} claimed line(s) "
+                    f"unreadable, not applied")
+    after = [r['year'] for r in rows if r.get('after_project_year')]
+    if after:
+        acts.append(f"Rows after {ledger.get('project_year')} are partial "
+                    f"(that year's project has the ledger)")
+    prior = [r['year'] for r in rows if r.get('prior_year')]
+    if prior:
+        acts.append(f"Rows before {ledger.get('project_year')} are "
+                    f"rebuilt, maybe partial: check the filed return")
+    if (first_tx_year is not None and rows
+            and rows[0]['year'] <= first_tx_year
+            and not any(r.get('balance_from_lock')
+                        and r['year'] >= first_tx_year - 1
+                        for r in rows)):
+        acts.append(f"History starts in {first_tx_year}: earlier losses "
+                    f"are not in the balance")
+    if ledger.get('filing_positions'):
+        acts.append(f"{len(ledger['filing_positions'])} loss(es) claimed "
+                    f"against the {rule} rule (ALLOWLOSS) counted")
+    shown = acts[:4]
+    for a in shown:
+        lines.append(_out.act(a, cmd))
+    if len(acts) > len(shown):
+        lines.append(_out.act(f"{len(acts) - len(shown)} more", cmd))
+    lines.append(("Not in the nets: slip capital gains, FX on cash"
+                  if country == 'canada' else
+                  "Not in the nets: 1099-DIV capital gain distributions")
+                 + f" — {cmd}")
+    return "\n".join(lines)
+
+
 def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
            claimed_used: bool) -> str:
     """The console ledger in the house style (docs/output-style.md): a
@@ -842,7 +946,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Canada, grant timing: buy-back loss of a "
                              "written option can be superficial.")
+    parser.add_argument("--brief", action="store_true",
+                        help="The essentials only (what `taxjson carryover` prints "
+                             "without --details): the notes and each "
+                             "message's detail are left out")
     args = parser.parse_args(argv)
+    global _DETAILS
+    _DETAILS = not args.brief
     refuse_foreign_flags(args, "taxjson-carryover")
     # Standalone runs default to close timing while a Canada project
     # uses grant timing: say so, as taxjson-gains does (R1-177, A2-0677).
@@ -1051,8 +1161,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             from taxjson.lib.out import warn as _warn
             _warn(f"{y}: the filed-year lock {lp} could not be read — the "
                   f"{y} row is not checked against the filed return",
-                  details=[f"{exc}", "Fix or restore the lock (it is the "
-                           "record of that return)."])
+                  details=_dl([f"{exc}", "Fix or restore the lock (it is the "
+                           "record of that return)."]))
             continue
         info['path'] = lp
         lock_info[y] = info
@@ -1141,7 +1251,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 from taxjson.lib.out import note as _note
                 _note(f"{y}: the ledger uses the filed figure "
                       f"{sd['figure']:,.2f} from {sd['path']}",
-                      details=[f"{LOCK_SOURCE_TEXT[sd['source']]}; this "
+                      details=_dl([f"{LOCK_SOURCE_TEXT[sd['source']]}; this "
                                f"project's books rebuild "
                                f"{sd['rebuilt']:,.2f} for {y}"
                                + ("" if sd['had_rows'] else
@@ -1150,17 +1260,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  "rebuilt from opening lots and whatever "
                                  "prior exports are in inputs/, so the "
                                  "lock is what " + _authority(country)
-                               + " is built on."])
+                               + " is built on."]))
             if (country == 'usa' and sd.get('filed_totals_gain') is not None
                     and abs(sd['filed_totals_gain'] - sd['figure']) > 0.01):
                 from taxjson.lib.out import warn as _warn
                 _warn(f"{y}: {sd['path']} records "
                       f"{sd['filed_totals_gain']:,.2f} filed with another "
                       f"tool, which has no short/long-term split",
-                      details=[f"The ledger uses the lock's own Part I/II "
-                               f"split ({sd['figure']:,.2f}) — enter the "
-                               f"filed carryover with --claimed if they "
-                               f"differ."])
+                      details=_dl([f"The ledger uses the lock's own Part "
+                                   f"I/II split ({sd['figure']:,.2f}) — "
+                                   f"enter the filed carryover with "
+                                   f"--claimed if they differ."]))
             continue
         if y in lock_info:
             info = lock_info[y]
@@ -1180,7 +1290,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             from taxjson.lib.out import warn as _warn
             _warn(f"{y}: the ledger's net {net:,.2f} differs from the "
                   f"filed lock's {fig:,.2f}",
-                  details=[f"{LOCK_SOURCE_TEXT[src]}"
+                  details=_dl([f"{LOCK_SOURCE_TEXT[src]}"
                            + (", as filed with another tool"
                               if src == 'filed_totals' else "")
                            + f" ({where}). This ledger recomputes "
@@ -1190,20 +1300,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                               "option_grant_timing_since, tax_date")
                            + "); the lock is what was filed and what "
                            + _authority(country) + " is built on — check "
-                           "the settings or use `taxjson check-filed`."])
+                           "the settings or use `taxjson check-filed`."]))
     if results.get('manual_reporting_required'):
         n = len(results['manual_reporting_required'])
         from taxjson.lib.out import warn as _warn
         _warn(f"{n} disposition(s) with an unknown cost (no purchase in "
               f"your files) are EXCLUDED from the ledger",
-              details=["See manual_reporting_required in the gains output; "
-                       "their years' nets are incomplete until resolved."])
+              details=_dl(["See manual_reporting_required in the gains "
+                           "output; their years' nets are incomplete "
+                           "until resolved."]))
 
     if args.json:
         ledger["currency"] = args.base_currency.upper()
         from taxjson.lib.json_input import dump_filing_json
         dump_filing_json(ledger, sys.stdout)
         print()
+    elif args.brief:
+        print(render_brief(ledger, args.base_currency.upper(),
+                           first_tx_year))
     else:
         print(render(ledger, args.base_currency.upper(), first_tx_year,
                      claimed_used=bool(claimed)))

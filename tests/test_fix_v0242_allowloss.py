@@ -242,7 +242,9 @@ class TestOutputs(unittest.TestCase):
         for c, word in (("canada", "deny"), ("usa", "disallow")):
             with self.subTest(country=c):
                 root = self.roots[c]
-                text = _flat(cli(root, "carryover").stdout)
+                self.assertIn("! 1 loss(es) claimed against the ",
+                              cli(root, "carryover").stdout)
+                text = _flat(cli(root, "carryover", "--details").stdout)
                 self.assertIn("Includes 1 filing position(s)", text)
                 self.assertIn(f"2025 QZA.{'TO' if c == 'canada' else 'US'}"
                               f" loss 1,000.00 claimed, the rule would "
