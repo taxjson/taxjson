@@ -298,31 +298,62 @@ def _read_capped(p: "subprocess.Popen", cap: int, timeout: float
                  ) -> Tuple[Optional[bytes], bool]:
     """(stdout, over the cap) of `p`, reading at most `cap` + 1 bytes;
     the process is killed when it exceeds the cap or `timeout` seconds
-    ((None, False) on a timeout)."""
+    ((None, False) on a timeout). One deadline covers the reading AND
+    the process's exit: a child that closed its stdout and ran on
+    waited in an unbounded p.wait() (GitHub #29). On every path the
+    child is reaped and its stdout closed (by the reader thread, when
+    it is done with it)."""
     import threading
+    import time
+    deadline = time.monotonic() + timeout
     buf = bytearray()
     over = [False]
 
+    read = getattr(p.stdout, "read1", p.stdout.read)
+
     def pump() -> None:
-        while True:
-            chunk = p.stdout.read(65536)
-            if not chunk:
-                return
-            buf.extend(chunk)
-            if len(buf) > cap:
-                over[0] = True
-                p.kill()
-                return
+        try:
+            while True:
+                chunk = read(65536)
+                if not chunk:
+                    return
+                buf.extend(chunk)
+                if len(buf) > cap:
+                    over[0] = True
+                    p.kill()
+                    return
+        except (OSError, ValueError):
+            return
+        finally:
+            try:
+                p.stdout.close()
+            except (OSError, ValueError):
+                pass
     t = threading.Thread(target=pump, daemon=True)
     t.start()
-    t.join(timeout)
-    if t.is_alive():
-        p.kill()
+    timed_out = False
+    try:
+        t.join(max(0.0, deadline - time.monotonic()))
+        if t.is_alive():
+            timed_out = True
+        elif not over[0]:
+            try:
+                p.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+    finally:
+        if p.poll() is None:
+            p.kill()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:                # pragma: no cover
+            pass
+        # Killed: its end of the pipe is closed, the reader ends (a
+        # grandchild still holding the pipe: the daemon thread is
+        # left to it).
         t.join(5)
-        p.wait()
+    if timed_out:
         return None, False
-    p.wait()
-    p.stdout.close()
     return bytes(buf[:cap]), over[0]
 
 

@@ -1451,6 +1451,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `pdf_text`
 
+### `tjs slip-audit --import-cra` hangs on a PDF, with no "pdftotext took over 60 s" error
+- **Check:** `ps` shows the `pdftotext` it started still running minutes later.
+- **Cause:** the 60-second limit covered only reading pdftotext's output: a pdftotext (or a program installed under that name) that closed its output and kept running was then waited for without a limit.
+- **Fix:** upgrade: the one limit covers the reading and the process's exit, and the process is killed and reaped when it passes. On an older release, stop that pdftotext; type the slip into `inputs/slips/slips.toml` instead.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `_read_capped`, `pdf_text`
+
 ### `tjs slip-audit --import-cra`: one PDF shows as two slips ("merged.pdf #1", "merged.pdf #2"), or "skipped merged.pdf: box 24 twice in one T5 slip — the page cannot be read cleanly; not imported"
 - **Check:** the PDF holds two slips (pages saved together, or files merged); `pdftotext -layout merged.pdf -` shows two "2025 T5 slip (original) from …" lines.
 - **Cause:** each slip is read from its own slip line to the next one. Before, the first slip line was taken and the box rows of every later page were read into it: a T3 and a T5 became one slip (the T3's box 24 read as the T5's, boxes lost, placed in the wrong fund). A slip whose page repeats a box cannot be read cleanly and the whole file is refused.

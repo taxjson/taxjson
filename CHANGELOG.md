@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- `slip-audit --import-cra`: the 60-second limit on pdftotext covered
+  only reading its output; a pdftotext that closed its output and kept
+  running was waited for without a limit. The limit now covers its exit
+  too, and it is killed and reaped when it passes (#29).
+
 
 ## v0.27.0 (2026-10-09)
 
