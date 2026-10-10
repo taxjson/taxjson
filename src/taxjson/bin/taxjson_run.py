@@ -5053,7 +5053,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # tainted sale as a realized gain (audit A2-0111 / A2-0305,
             # R1-275 / R1-322). A pair spelled with a TOBASE target the
             # native books do not use simply has no rows here.
-            _ph_raw = (["--incomplete-history", str(incomplete_history)]
+            # (--native-books: the lines' symbols mapped as these rows
+            # were — GLOBAL renames only, issue #23.)
+            _ph_raw = (["--incomplete-history", str(incomplete_history),
+                        "--native-books"]
                        if incomplete_history is not None else [])
             _ph_deps = ([incomplete_history]
                         if incomplete_history is not None else [])

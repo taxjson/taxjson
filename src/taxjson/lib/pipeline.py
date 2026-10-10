@@ -1017,7 +1017,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                   country: Optional[str] = None,
                   transfers_as_acquisitions: bool = False,
                   moves_out: Optional[list] = None,
-                  year: Optional[int] = None):
+                  year: Optional[int] = None,
+                  native_books: bool = False):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then missing-history
     opening synthesis. Returns (transactions, sheltered, affiliated,
@@ -1033,6 +1034,10 @@ def prepare_books(transactions, sheltered_transactions=(),
     (`spot_crypto`) — is said as an ATTENTION `short:` line (`taxjson
     run` echoes it and `run --strict` refuses), as is a sale the broker
     codes CLOSING with no position (re-audit A2-0395, A2-0137, A2-1223).
+
+    `native_books`: the books are a native-currency view (no TOBASE /
+    JOURNAL renames): the missing-history lines map their symbols as
+    those rows were (load_missing_history, issue #23).
     """
     transactions = list(transactions)
     sheltered_transactions = list(sheltered_transactions)
@@ -1053,7 +1058,8 @@ def prepare_books(transactions, sheltered_transactions=(),
 
     missing_history_log: list = []
     if incomplete_history:
-        mh_pairs = load_missing_history(Path(incomplete_history))
+        mh_pairs = load_missing_history(Path(incomplete_history),
+                                        native=native_books)
         # (A pair without a .tt line — none here: every pair is a
         # line, opened as written — would be sized through the year end.)
         from taxjson.lib.missing_history import sizing_until
@@ -1227,6 +1233,8 @@ class GainsRequest:
     taxable: bool = False
     tax_date: Optional[str] = None            # None → country-aware default
     incomplete_history: Optional[Path] = None
+    # The books are a native-currency view (taxjson-gains --native-books).
+    native_books: bool = False
     trace: bool = False
     no_wash: bool = False
     detect_wash: Optional[bool] = None        # None → taxable and not no_wash
@@ -1607,7 +1615,8 @@ def run_gains(transactions, sheltered_transactions=(),
             base_currency=HOME_CURRENCY.get(req.country),
             country=req.country,
             transfers_as_acquisitions=req.transfers_as_acquisitions,
-            moves_out=_netted_moves, year=req.year)
+            moves_out=_netted_moves, year=req.year,
+            native_books=req.native_books)
 
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- A `.tt` `OPENING … cost=unknown` line follows ticker.map and tobase.map
+  as the rows do: a line naming a TOBASE listing opens the security in the
+  base-currency books (it was dropped and the later trades became short
+  covers) and the listing the books trade in the native holdings view; a
+  mapping added after the line is followed too (#23).
+- A dated `OPENING … cost=unknown` line's units are held even when no
+  later row trades them (a holding kept, or one that only pays
+  dividends): in the gains inventory, the holdings report, `sanity` and
+  `t1135` (#24).
 
 ## v0.27.0 (2026-10-09)
 

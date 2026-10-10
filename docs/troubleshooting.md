@@ -128,6 +128,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.27.0`
 - **Code:** `src/taxjson/lib/missing_history.py` — `short_again_message`, `_apply_fixed_openings`
 
+### "Info: 1 position(s) go short in margin's data (QZQ.TO): booked as short sales closed by a later purchase" although `missing_history.tt` opens QZQ.US (a TOBASE listing of it)
+- **Check:** ticker.map or tobase.map has `TOBASE QZQ.US QZQ.TO`, the `OPENING … cost=unknown` line names `QZQ.US`, and `work/<account>_gains.json` → `missing_history_log` says "no rows for this symbol/account" for it; `tjs --version` is 0.27.0.
+- **Cause:** the line's symbol was matched as written against books whose rows ticker.map had already renamed: the opening was dropped, the sales became short sales closed by the later purchase (a gain at that purchase's cost), and the raw holdings listed the listing short.
+- **Fix:** (issue #23) upgrade: the line's symbol goes through ticker.map and tobase.map as the rows do (the base-currency books open the TOBASE target, the native holdings view the listing the books trade); a mapping added after the line is followed too. Two lines that become one security open its units together when they have one date; on two dates the run stops naming both — write one line.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `load_missing_history`, `declaration_maps`, `_book_fixed`; `src/taxjson/bin/taxjson_gains.py` — `--native-books`
+
+### "warning: inputs/margin/missing_history.tt:1 opens QZQ.TO / margin, but no row in the data has that symbol and account — nothing was applied" for a holding you simply kept
+- **Check:** no row of the account trades the symbol after the line's date (or only its dividends do); `tjs --version` is 0.27.0; the holding is missing from `reports/<account>_holdings.toml`, `tjs sanity` and `tjs t1135`.
+- **Cause:** a dated `OPENING … cost=unknown` line was applied only when a later trade of the symbol was in the data.
+- **Fix:** (issue #24) upgrade: the line's units are held whether or not a later row trades them; its currency comes from the security's rows, else the books (the base currency; the listing's in the native holdings view). The run now says `note: … its units are held as written` when no row at all has the symbol: check the spelling if it is not a holding you kept. When the currency cannot be told the run stops naming the line.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/missing_history.py` — `_apply_fixed_openings`, `_opening_currency`, `report_missing_history_log`
+
 ### `tjs checklist`: "[!] inputs-committed … ../inputs/ is not in this project's git repository"
 - **Check:** `git -C 2025 rev-parse --show-toplevel` and `git -C inputs rev-parse --show-toplevel` name different folders (or the second fails).
 - **Cause:** the year folder is its own repository, so the shared `inputs/` beside it is committed nowhere the checklist can see.

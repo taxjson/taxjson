@@ -786,8 +786,10 @@ class TestMissingHistoryFileDiagnostics(unittest.TestCase):
                 prepare_books(main, sh, [], taxable=True,
                               incomplete_history=ph)
         e = err.getvalue()
+        # Its units are held as written (issue #24), said once.
         self.assertEqual(e.count("missing_history.tt:2 opens ABCD.TO / "
                                  "margin, but no row"), 1)
+        self.assertIn("held as written", e)
         self.assertNotIn("ZZZ.TO", e)       # another account's line
         self.assertNotIn("ABC.TO / margin", e)
         # The go-short hint still names the pair the file does not list.
