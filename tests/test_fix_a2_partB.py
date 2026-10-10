@@ -360,7 +360,8 @@ class TestWashSalesNamesTheRule(unittest.TestCase):
             for c, root in p.items():
                 r = cli(root, "run", "--no-input")
                 self.assertEqual(r.returncode, 0, (c, r.stderr[-2000:]))
-            w = cli_both(p, "wash-sales")
+            # --details: the notes on what DENIED means (Essentials first).
+            w = cli_both(p, "wash-sales", "--details")
             x = cli_both(p, "wash-sales", "--explain")
             one = cli_both(p, "run", "--no-input", "--account", "margin")
             empty = projects_both(Path(td) / "e", files={
@@ -416,7 +417,8 @@ class TestIncomeViewsWording(unittest.TestCase):
             roc = cli_both(p, "roc-sum")
             divs = cli_both(p, "divs-sum")
             trades = cli_both(p, "trades-sum")
-            aud = cli_both(p, "audit")
+            # The rounding note naming the form: --details.
+            aud = cli_both(p, "audit", "--details")
             empty = cli_both(p, "roc-sum", "2024")
         us = roc["usa"].stdout + divs["usa"].stdout + trades["usa"].stdout
         for bad in ("T3", "T5", "ACB", "registered"):

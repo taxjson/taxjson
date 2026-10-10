@@ -88,6 +88,8 @@ class TestManualCheckFlagsKeepWashReviewOpen(unittest.TestCase):
                 p = cli(root, "wash-sales")
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertIn("MANUAL CHECK", p.stdout)
+                # The flags themselves: --details (Essentials first).
+                p = cli(root, "wash-sales", "--details")
                 self.assertIn("[right_vs_share_loss]", p.stdout)
                 j = json.loads(cli(root, "wash-sales", "--json").stdout)
                 self.assertEqual(len(j["manual_check_flags"]), 1)
@@ -275,8 +277,9 @@ class TestEndToEndWording(unittest.TestCase):
         self.assertIn("for Schedule 3 proceeds and ACB", ca)
 
     def test_audit_totals_note(self):
-        us = self._out(USA, "audit")
-        ca = self._out(CANADA, "audit")
+        # The rounding note: --details (Essentials first).
+        us = self._out(USA, "audit", "--details")
+        ca = self._out(CANADA, "audit", "--details")
         self.assertIn("Form 8949 rows (form-export", us)
         self.assertNotIn("Schedule 3", us)
         self.assertIn("Schedule 3 rows (form-export", ca)

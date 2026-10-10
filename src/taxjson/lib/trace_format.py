@@ -670,13 +670,8 @@ def _report_window_lines(g: Dict[str, Any], width_: Optional[int],
     if not txs:
         return out
     rows = _wash_window_rows(txs)
-    out.append("")
-    out += fit_table(
-        ["DAY", "DATE", "ACCOUNT", "ACTION", "QTY", "PRICE", "POOL_BAL",
-         "ACB/SH", "ROLE"],
-        [r[:8] + (r[9],) for r in rows],
-        aligns=["<", "<", "<", "<", ">", ">", ">", ">", "<"],
-        drop=(6, 5), width_=width_, indent=indent + "  ")
+    # The legend before the table it explains (docs/output-style.md,
+    # Essentials first).
     legend = []
     for key in dict.fromkeys(r[10] for r in rows):
         line = _ROLE_TAGS.get(key, (None, None, None))[2]
@@ -688,6 +683,12 @@ def _report_window_lines(g: Dict[str, Any], width_: Optional[int],
     out.append("")
     for ln in legend:
         out += wrap(ln, width_, indent + "  ", indent + "    ")
+    out += fit_table(
+        ["DAY", "DATE", "ACCOUNT", "ACTION", "QTY", "PRICE", "POOL_BAL",
+         "ACB/SH", "ROLE"],
+        [r[:8] + (r[9],) for r in rows],
+        aligns=["<", "<", "<", "<", ">", ">", ">", ">", "<"],
+        drop=(6, 5), width_=width_, indent=indent + "  ")
     return out
 
 

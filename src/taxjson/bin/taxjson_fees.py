@@ -330,7 +330,7 @@ _DEFINITIONS = (
 
 
 def render_text(buckets, grand, info, *, to_curr, by_account, year,
-                default_rate, scope=None) -> List[str]:
+                default_rate, scope=None, brief=False) -> List[str]:
     """The report in the house layout (docs/output-style.md): a title,
     the fee table fitted to the width, the non-option / option split and
     the native currencies under their headings, the provenance footer
@@ -351,7 +351,12 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
     if converting:
         ctx.append(f"all amounts in {to_curr}")
     doc = Doc(title + (" — " + "; ".join(ctx) if ctx else ""))
-    doc.blank()
+    if brief:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("%NOTNL: fees / trade value; $/UNIT: per unit; "
+                 "$/CONTR: per option contract.")
+    else:
+        doc.blank()
 
     body: List[List[str]] = []
     foot: List[List[str]] = []
@@ -403,9 +408,12 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
     # the pipeline runs this stage with stderr discarded).
     doc.blank()
     gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    doc.para(f"Generated {gen} | files: {info['files_read']} | "
-             f"fee rows: {info['rows']} | dups collapsed: {info['dups']}"
-             + (f" | rows w/o id: {info['no_id']}" if info['no_id'] else ""))
+    if not brief:
+        doc.para(f"Generated {gen} | files: {info['files_read']} | "
+                 f"fee rows: {info['rows']} | dups collapsed: "
+                 f"{info['dups']}"
+                 + (f" | rows w/o id: {info['no_id']}" if info['no_id']
+                    else ""))
     if info["zero_fee"]:
         if info.get("manual_fees"):
             _un = info.get("unnamed") or [MANUAL_TT]
@@ -419,7 +427,7 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
         else:
             doc.para(f"Brokers with NO fees in this period: "
                      f"{', '.join(info['zero_fee'])}")
-    if info["skipped"]:
+    if info["skipped"] and not brief:
         # In --cache mode most files legitimately lack a brokerage tag, so a
         # full dump is noise; name them only when the list is short.
         if len(info["skipped"]) <= 6:
@@ -435,6 +443,11 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
         emit_fallback_summary(default_rate, stream=_StdoutList(_fb))
         for ln in _fb:
             doc.para(ln)
+    if brief:
+        from taxjson.lib.out import details_hint
+        doc.para(details_hint("tjs fees-sum --details",
+                              "definitions, the files read"))
+        return doc.lines()
     doc.section("Definitions")
     doc.items(_DEFINITIONS)
     return doc.lines()
@@ -529,6 +542,10 @@ def main():
                    help="Break down by account/brokerage instead of brokerage.")
     p.add_argument("--json", action="store_true",
                    help="Emit machine-readable JSON instead of a text table.")
+    p.add_argument("--brief", action="store_true",
+                   help="The essentials (docs/output-style.md): no "
+                        "provenance line or definitions (`taxjson "
+                        "fees-sum` passes it unless --details)")
     args = p.parse_args()
 
     if args.to_curr and not args.rates:
@@ -595,7 +612,8 @@ def main():
     else:
         for line in render_text(buckets, grand, info, to_curr=args.to_curr,
                                 by_account=args.by_account, year=year,
-                                default_rate=args.default_rate, scope=scope):
+                                default_rate=args.default_rate, scope=scope,
+                                brief=args.brief):
             print(line)
 
     # Also emit the fallback summary to stderr (the .diag path) so it's caught

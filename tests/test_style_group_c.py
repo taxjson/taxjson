@@ -61,8 +61,11 @@ def _price_every_holding(p: Project) -> None:
 class TestWashRadarStyle(unittest.TestCase):
     def test_layout_both_countries(self):
         for country in ("canada", "usa"):
-            for args in (("wash-radar",),
-                         ("wash-radar", "--date", "2024-11-25", "--all")):
+            # The full report (definitions, scope): --details
+            # (docs/output-style.md, Essentials first).
+            for args in (("wash-radar", "--details"),
+                         ("wash-radar", "--date", "2024-11-25", "--all",
+                          "--details")):
                 with self.subTest(country=country, args=args):
                     r = project(country).run(*args)
                     self.assertEqual(r.returncode, 0, r.stderr)
@@ -80,7 +83,7 @@ class TestWashRadarStyle(unittest.TestCase):
 
     def test_sections_show_counts_and_rows(self):
         r = project("canada").run("wash-radar", "--date", "2024-11-25",
-                                  "--all")
+                                  "--all", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         flat = _flat(r.stdout)
         self.assertIn("VIOLATION — superficial loss; act to rescue the "
@@ -121,7 +124,10 @@ class TestHarvestStyle(unittest.TestCase):
                 p = _copy(country)
                 self.addCleanup(shutil.rmtree, p.root.parent, True)
                 _price_every_holding(p)
-                r = p.run("harvest", "--no-ibkr", "--options")
+                # COLUMNS and the pricing note: --details
+                # (docs/output-style.md, Essentials first).
+                r = p.run("harvest", "--no-ibkr", "--options",
+                          "--details")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_styled(self, r.stdout)
                 assert_styled(self, r.stderr)
@@ -162,7 +168,8 @@ class TestBuySellCheckStyle(unittest.TestCase):
             for args in (("buy-check", f"QZQ{sfx}", f"SAMPA{sfx}"),
                          ("sell-check", f"SAMPA{sfx}", f"QZQ{sfx}")):
                 with self.subTest(country=country, args=args):
-                    r = project(country).run(*args)
+                    # The scope paragraph: --details (Essentials first).
+                    r = project(country).run(*args, "--details")
                     self.assertIn(r.returncode, (0, 1), r.stderr)
                     assert_styled(self, r.stdout)
                     lines = r.stdout.splitlines()

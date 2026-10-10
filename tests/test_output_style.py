@@ -561,7 +561,9 @@ class TestWashSalesStyle(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_table(self):
-        r = _cli(self.root, "wash-sales")
+        # The notes (WHAT DENIED MEANS) are in --details (docs/output-
+        # style.md, Essentials first).
+        r = _cli(self.root, "wash-sales", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         text = r.stdout
         self.assertEqual(out.lint(text), [], text)

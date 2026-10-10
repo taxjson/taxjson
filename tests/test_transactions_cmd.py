@@ -664,7 +664,7 @@ class TestWashRadarCmd(unittest.TestCase):
     def test_all_taxable_only_excludes_sheltered(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = _runsub(self._project(tmp), "wash-radar",
-                        "--date", "2026-07-02")
+                        "--date", "2026-07-02", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("LCK.TO", r.stdout)
         # One combined invocation → the Definitions legend prints exactly once
@@ -676,7 +676,9 @@ class TestWashRadarCmd(unittest.TestCase):
             r = _runsub(self._project(tmp), "wash-radar", "margin",
                         "--date", "2026-07-02")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("LOCKED", r.stdout)
+        # The default view lists the statuses with a row (the empty
+        # sections are in --details: Essentials first).
+        self.assertIn("LCK.TO", r.stdout)
 
     def test_missing_account_errors(self):
         with tempfile.TemporaryDirectory() as tmp:

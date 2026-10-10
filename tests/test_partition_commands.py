@@ -263,7 +263,8 @@ class TestChecksFollowTheRadar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = projects_both(td, year=2026, files=_base_files(rows))
             sell = cli_both(p, "sell-check", "BND.US", "--json")
-            buy = cli_both(p, "buy-check", "ZZZ.US")
+            # The window-a-buy-starts note: --details.
+            buy = cli_both(p, "buy-check", "ZZZ.US", "--details")
         v = {c: json.loads(sell[c].stdout)["results"][0]
              for c in COUNTRIES}
         self.assertEqual(v["canada"]["verdict"], "ACTION", sell["canada"])
@@ -405,7 +406,8 @@ class TestWording(unittest.TestCase):
             for c in COUNTRIES:
                 (p[c] / "work" / "margin_gains_wash.json").write_text(
                     _gains_doc(g[c]))
-            ws = cli_both(p, "wash-sales")
+            # --details: the notes name the IRA (Essentials first).
+            ws = cli_both(p, "wash-sales", "--details")
             rad = cli_both(p, "wash-radar", "--date", "2025-03-25")
         self.assertIn("superficial-loss rule", ws["canada"].stdout)
         self.assertIn("§1091", ws["usa"].stdout)

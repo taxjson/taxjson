@@ -178,8 +178,10 @@ class TestRadarWordingByCountry(unittest.TestCase):
     @rule("US-WASH-04")
     def test_sell_check_scope_note(self):
         # A2-0499: the US sell-check carried ITA s.251.1.
-        ca = self._out("canada", "sell-check", "ZZZ.TO")
-        us = self._out("usa", "sell-check", "ZZZ.US")
+        # The full scope paragraph: --details (Essentials first; the
+        # default view's last line names s.251.1 / Pub. 550 too).
+        ca = self._out("canada", "sell-check", "ZZZ.TO", "--details")
+        us = self._out("usa", "sell-check", "ZZZ.US", "--details")
         self.assertIn("ITA s.251.1", ca)
         self.assertNotIn("251.1", us)
         self.assertIn("(§1091; IRS Pub. 550)", us)

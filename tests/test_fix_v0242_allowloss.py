@@ -236,7 +236,9 @@ class TestOutputs(unittest.TestCase):
 
     @rule("US-WASH-25")
     def test_us_wash_radar_honours_the_position(self):
-        r = cli(self.roots["usa"], "wash-radar", "--date", "2025-12-15")
+        # The advisory text: --details (Essentials first).
+        r = cli(self.roots["usa"], "wash-radar", "--date", "2025-12-15",
+                "--details")
         text = _flat(r.stdout)
         self.assertIn("claimed as your filing position against §1091 "
                       "(ALLOWLOSS inputs/margin/m.tt:4): the rule would "
