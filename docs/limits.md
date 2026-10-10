@@ -577,12 +577,14 @@ The figures go on real returns, so correctness is checked in layers, not by test
 
 - **The broker's positions are the outside check.** `tjs sanity` compares the positions the books say
   you hold with the positions in your broker's own export, account by account; `tjs run` ends with it
-  when `taxjson.toml` names the holdings files. Every internal report can agree and still be wrong; this
+  when the year's `holdings/` holds positions snapshots (matched to their accounts without a setting). Every internal report can agree and still be wrong; this
   is the check that finds a stray fractional share or a split option class.
 - **`tjs audit` is the authority.** It recomputes every sale from the parsed broker row through FX,
   ACB or FIFO and the superficial-loss / wash-sale decision, and ties each figure to the pipeline's
   saved gains; any disagreement exits 1. The other filing commands (`sum`, `carryover`, `form-export`,
   `t1135`) are checked against it.
+- **8,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
+  failed before it. This figure is the one the deck and the website quote (`tests/test_deck.py`).
 - **Property fuzzers.** Seeded generators build thousands of random books per run and check
   conservation, determinism and ordering laws (the engine, custody transfers, settlement-lag and split
   interactions).

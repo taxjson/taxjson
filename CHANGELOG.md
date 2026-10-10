@@ -168,8 +168,15 @@
   upgrade alone fixes), docs/limits.md (what taxjson does not do; Canada
   supported, US experimental) and docs/glossary.md. The knowledge-pack
   test checks the new pages' paths, symbols and commands.
-- The first-run recipe in the deck matches the folder `tjs init` makes
-  (one folder of exports, the year's folder inside it).
+- The deck (docs/deck/) is brought up to date: the year folders, shared
+  inputs/ and tobase.map; real `tjs wash-sales` output from the demo
+  project on the worked example; the test count docs/limits.md states;
+  the commands slide rendered from the help page's groups
+  (`scripts/deck_commands.py`); the privacy slide's dependency and
+  network wording as SECURITY.md has it; the brokers as docs/brokers.md
+  names their downloads; a first run that starts with `tjs init --demo`.
+  `scripts/build_deck.sh` renders the PDF with WeasyPrint 70.0 and
+  records the HTML's hash, and a test fails when the PDF was not rebuilt.
 - SECURITY.md lists every network call with what it sends, including the
   Yahoo Finance closes for in-kind moves between taxable and registered
   accounts and for crypto-send values.
