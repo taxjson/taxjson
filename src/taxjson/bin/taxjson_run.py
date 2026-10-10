@@ -16276,7 +16276,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         _para(f"Premium timing: {timing}"
               + (f" (from {since})" if timing == "grant" and since else "")
               + "; filed-year locks: "
-              + (", ".join(str(y) + ("*" if y in partial_locks else "")
+              + (", ".join(str(y) + (" (partial: taken before the year "
+                                     "ended)" if y in partial_locks else "")
                            for y in sorted(filed_years))
                  if filed_years else "none") + ".")
     else:
