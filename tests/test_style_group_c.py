@@ -124,7 +124,10 @@ class TestHarvestStyle(unittest.TestCase):
                 p = _copy(country)
                 self.addCleanup(shutil.rmtree, p.root.parent, True)
                 _price_every_holding(p)
-                r = p.run("harvest", "--no-ibkr", "--options")
+                # COLUMNS and the pricing note: --details
+                # (docs/output-style.md, Essentials first).
+                r = p.run("harvest", "--no-ibkr", "--options",
+                          "--details")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 assert_styled(self, r.stdout)
                 assert_styled(self, r.stderr)

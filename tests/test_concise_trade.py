@@ -77,5 +77,36 @@ class TestWashRadar(_Base):
                       _flat(r["canada"].stdout))
 
 
+class TestHarvest(_Base):
+    def _runs(self, *args):
+        import shutil
+        from test_style_group_c import _copy, _price_every_holding
+        out = {}
+        for c in ("canada", "usa"):
+            p = _copy(c)
+            self.addCleanup(shutil.rmtree, p.root.parent, True)
+            _price_every_holding(p)
+            out[c] = (p.run("harvest", "--no-ibkr", *args, **_W),
+                      p.run("harvest", "--no-ibkr", *args, "--details",
+                            **_W))
+        return out
+
+    def test_default_is_concise_details_keep_the_notes(self):
+        for args in (("--options",), ("--crypto",)):
+            for c, (r, d) in self._runs(*args).items():
+                with self.subTest(country=c, args=args):
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    assert_concise(self, r.stdout, r.stderr,
+                                   legend="PRICE: ^ IBKR")
+                    self.assertIn("HARVESTABLE LOSSES", r.stdout)
+                    self.assertNotIn("COLUMNS", r.stdout)
+                    self.assertIn("COLUMNS", d.stdout)
+                    self.assertIn("these verdicts cover this project's "
+                                  "accounts only", _flat(d.stdout))
+                    self.assertIn("Info: pricing ", d.stderr)
+                    if c == "usa":
+                        self.assertIn("! RISK rows (", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

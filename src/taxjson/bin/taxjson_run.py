@@ -18848,6 +18848,10 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         cmd += ["--ibkr-port", str(args.ibkr_port)]
     if args.json:
         cmd.append("--json")
+    elif not _details(args):
+        # Essentials first (docs/output-style.md): COLUMNS, NOTES and
+        # the scope paragraph are the --details view.
+        cmd.append("--brief")
     if args.verbose:
         cmd.append("--verbose")
     _exec_tool(cmd, cwd=str(root))
