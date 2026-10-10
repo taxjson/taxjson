@@ -157,12 +157,13 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
         return err.getvalue()
 
     def test_one_note_for_a_person(self):
+        # A few roots: one line (docs/output-style.md, Essentials
+        # first); more than three: the headline and the list.
         text = self._emit(100)
         self.assertEqual(text.count("Info:"), 1, text)
-        self.assertTrue(text.startswith("Info: 2 option root(s) whose "
-                                        "export does not state"), text)
-        self.assertIn("\nQZA, QZB.\n", text)
-        self.assertIn("`MULT <ROOT> N`", text)
+        self.assertEqual(text, "Info: QZA, QZB: 100 shares per option "
+                               "contract ASSUMED — `MULT <ROOT> N` in "
+                               "ticker.map if not\n")
         assert_styled(self, text)
 
     def test_a_line_per_root_when_captured(self):
@@ -234,7 +235,7 @@ class TestContractSizeNoteRollUp(unittest.TestCase):
             markets.reset_notes()
         reg.assert_called_once_with(markets.flush_notes)
         text = err.getvalue()
-        self.assertEqual(text.count("Info: 2 option root(s)"), 2, text)
+        self.assertEqual(text.count("Info: QZA, QZB: 100 shares"), 2, text)
         self.assertEqual(text.count("Info:"), 2, text)
 
 

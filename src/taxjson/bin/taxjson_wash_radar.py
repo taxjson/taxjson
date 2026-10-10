@@ -2357,7 +2357,11 @@ def _render_brief(sections, by_cat, country: str, as_of: str,
     if acts:
         doc.blank()
         for a in acts:
-            doc.line(a)
+            # Wrapped only on a terminal narrower than the line.
+            if a.startswith(_out.ACT):
+                doc.item(a[len(_out.ACT):], bullet=_out.ACT)
+            else:
+                doc.para(a)
     if not acts:
         doc.blank()
     doc.para(scope_more("tjs wash-radar --details", country))

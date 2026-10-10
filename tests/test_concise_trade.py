@@ -105,6 +105,24 @@ class TestScopeInDefaultViews(_Base):
                           r.stdout.strip().splitlines()[-1])
 
 
+class TestTransfers(_Base):
+    def test_default_is_concise(self):
+        for c, r in self.run_both("transfers").items():
+            with self.subTest(country=c):
+                assert_concise(self, r.stdout, r.stderr,
+                               legend="WHERE: sidecar")
+                self.assertNotIn("own_move:", r.stdout)
+        r = project("canada").run("transfers", **_W)
+        self.assertIn("! 1 transfer-in(s) with no cost (XYZQ.US)", r.stdout)
+
+    def test_details_keep_the_meanings(self):
+        r = self.run_both("transfers", details=True)
+        self.assertIn("own_move: your own shares moving",
+                      _flat(r["canada"].stdout))
+        self.assertIn("Basis comes from the buy and sell history",
+                      _flat(r["usa"].stdout))
+
+
 def _no_box_rules(text):
     # The audit's ══ / ── rules are rules (lib/out.classify counts only
     # ASCII rules as such).

@@ -10215,19 +10215,42 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                    if c["how"] == "ticker.map" else
                    f"{c['account']}: {c['code']} UNRESOLVED "
                    f"({c['evidence']})" for c in codes])
+    _det = _details(args)
+    _td = "tjs transfers --details"
+
+    def _brief_codes(doc) -> None:
+        # Essentials first: the codes, one line each kind (--details
+        # lists them).
+        unres = [c for c in codes if not c["symbol"]
+                 and c["how"] != "ticker.map"]
+        inferred = [c for c in codes if c["symbol"]]
+        if unres:
+            doc.item(*_act_item(f"{len(unres)} Questrade code(s) UNRESOLVED: "
+                              f"map them in ticker.map", _td))
+        if inferred:
+            doc.para(f"{len(inferred)} Questrade code(s) booked under an "
+                     f"inferred ticker — {_td}")
+
     doc = Doc("CUSTODY TRANSFERS — evidence, not tax events")
-    doc.para("Basis comes from the buy and sell history. WHERE: sidecar = "
-             "kept out of the books; book = a sheltered account's "
-             "transfers, kept in.")
-    doc.blank()
+    if _det:
+        doc.para("Basis comes from the buy and sell history. WHERE: "
+                 "sidecar = kept out of the books; book = a sheltered "
+                 "account's transfers, kept in.")
+        doc.blank()
     if not rows:
+        if not _det:
+            doc.blank()
         doc.para("No transfer rows found"
                  + (f" for account {want!r}" if want else "")
                  + " — re-run `taxjson run` after enabling the sidecar, "
                    "or the broker reported none.")
-        _codes_section(doc)
+        (_codes_section if _det else _brief_codes)(doc)
         doc.print()
         return
+    if not _det:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("WHERE: sidecar = kept out of the books, book = kept in; "
+                 "IN_BOOKS: how a transfer-in is booked.")
     body = []
     for r in rows:
         # Type column: the transfer KIND (InterDepot/Internal/ATON…);
@@ -10249,6 +10272,20 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                "CUR", "WHERE", "IN_BOOKS"], body, drop=(6, 8, 4),
               key=(0, 1, 2))
     doc.blank().para(f"{len(rows)} transfer row(s).")
+    if not _det:
+        _nc = [r for r in rows
+               if r["arrival"].replace(" ", "_") == "NO_COST"]
+        if _nc:
+            _few = ", ".join(dict.fromkeys(r["symbol"] for r in _nc[:3]))
+            doc.item(*_act_item(
+                f"{len(_nc)} transfer-in(s) with no cost ({_few}"
+                + (f" +{len(_nc) - 3} more" if len(_nc) > 3 else "")
+                + "): add the purchase to a .tt file", _td))
+        _brief_codes(doc)
+        from taxjson.lib.out import details_hint as _dh
+        doc.para(_dh(_td, "what each IN_BOOKS value means"))
+        doc.print()
+        return
     if any(r["arrival"] != "-" for r in rows):
         doc.section("IN_BOOKS — a taxable account's transfer-in")
         doc.items([
@@ -18188,7 +18225,6 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     rows.sort(key=lambda r: (r[0], r[1], str(r[2].get("symbol") or "")))
 
     from taxjson.lib.out import Doc
-    from taxjson.lib.out import act as _out_act
     from taxjson.lib.out import details_hint as _out_details_hint
 
     # The user's filing positions against the rule (.tt ALLOWLOSS): the
@@ -18212,11 +18248,11 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
             if _positions or flags:
                 doc.blank()
             if _positions:
-                doc.line(_out_act(
+                doc.item(*_act_item(
                     f"FILING POSITIONS: {len(_positions)} loss(es) "
                     f"claimed against the rule (.tt ALLOWLOSS)", _ws_cmd))
             if flags:
-                doc.line(_out_act(
+                doc.item(*_act_item(
                     f"MANUAL CHECK: {len(flags)} warn-only flag(s) to "
                     f"decide by hand", _ws_cmd))
             return
@@ -26011,6 +26047,14 @@ _DETAILS_CMDS = frozenset({
     "redact", "migrate", "new-year", "init", "elect", "journals",
     "renames", "opening", "transfers", "format", "crypto-sends", "stats",
     "fees-sum", "option-boundary", "spinoffs", "splits"})
+
+
+def _act_item(text: str, cmd: Optional[str] = None):
+    """Doc.item() arguments for an `! ` act-on line (lib/out.act): one
+    line at the house width, wrapped under itself only on a terminal
+    narrower than it."""
+    from taxjson.lib import out
+    return out.act(text, cmd)[len(out.ACT):], "", out.ACT
 
 
 def _details(args: argparse.Namespace) -> bool:

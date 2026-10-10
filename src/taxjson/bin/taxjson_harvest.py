@@ -606,6 +606,14 @@ def _days_to_long_term(start: Optional[str],
     return max(0, (lt_from - (today or date.today())).days)
 
 
+def _act_item(text: str, cmd: Optional[str] = None):
+    """Doc.item() arguments for an `! ` act-on line (lib/out.act): one
+    line at the house width, wrapped under itself only on a terminal
+    narrower than it."""
+    from taxjson.lib import out
+    return out.act(text, cmd)[len(out.ACT):], "", out.ACT
+
+
 def main(argv: Optional[List[str]] = None,
          fetchers: Optional[List] = None,
          option_fetchers: Optional[List] = None) -> int:
@@ -1162,16 +1170,16 @@ def main(argv: Optional[List[str]] = None,
         if args.brief:
             _hd = "tjs harvest --details"
             if _risk_now > 0.005:
-                doc.line(out.act(
+                doc.item(*_act_item(
                     f"RISK rows ({fmt_money(_risk_now)}): no "
                     + ("IRA buy" if is_usa else "sheltered buy or DRIP")
                     + " for 30 days after selling", _hd))
             if _blocked_now > 0.005:
-                doc.line(out.act(
+                doc.item(*_act_item(
                     f"BLOCKED rows ({fmt_money(_blocked_now)}): no rebuy "
                     f"before the clear date", _hd))
             if _flag_n:
-                doc.line(out.act(f"{_flag_n} position(s) flagged for a "
+                doc.item(*_act_item(f"{_flag_n} position(s) flagged for a "
                                  f"manual check", _hd))
             doc.para(scope_more(_hd, args.country))
             doc.print()
