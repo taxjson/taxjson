@@ -278,7 +278,8 @@ class TestSumTable(unittest.TestCase):
             self.assertEqual((fx["unreliable_raw"]["net_gain"],
                               fx["unreliable_raw"]["reportable"]),
                              (-12708.35, -12508.35))
-            t = " ".join(_run_with_fx_note(root, "sum").stdout.split())
+            t = " ".join(_run_with_fx_note(root, "sum", "--details")
+                         .stdout.split())
             self.assertIn("FX on foreign cash: NOT RELIABLE for 2025 — 2 "
                           "in-year overdrafts (300.00 USD); conversions, "
                           "deposits/withdrawals and margin balances are not "
@@ -301,7 +302,7 @@ class TestSumTable(unittest.TestCase):
             self.assertEqual(j["filing"]["totals"]["denied"], 200.0)
             self.assertEqual(j["filing"]["totals"]["permanently_denied"],
                              200.0)
-            t = _run_cli(root, "sum").stdout
+            t = _run_cli(root, "sum", "--details").stdout
             # A2-0659: the registered-account part is lost for good,
             # an affiliated person's is theirs to add to their own ACB.
             self.assertIn("is lost for good, and one caused by an "

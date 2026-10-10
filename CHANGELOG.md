@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Changed
+
+- Essentials first: a command's default output is the essentials, said
+  concisely (docs/output-style.md, "Essentials first"). A legend of one
+  or two lines comes before the table it explains; after the data only
+  the lines you must act on (starting `! `) or must not miss, one line
+  each, naming the command with the detail; every explanation, caveat,
+  rounding note and citation moved behind a new `--details` flag (or the
+  topic command), nothing dropped. `--json` is unchanged.
+- `taxjson sum`: the column legends before the tables; the sheltered
+  accounts' scope in their headings; after FOR THE RETURN one `! ` line
+  per warning (sales with no purchase, unknown costs, FX on foreign
+  cash, §1256 contracts, ALLOWLOSS filing positions) and one line on
+  slip capital gains; the long notes, the rounding notes and the
+  FILING POSITIONS section are under `sum --details`. When the width
+  drops the DENIED column, its total is in the legend.
+- The report commands' "these books are not the clean result of the
+  current inputs" and "built for another tax year" warnings are one
+  line, naming `taxjson checklist` / `taxjson run`; `--details` lists
+  the problems.
+
 
 ## v0.27.1 (2026-10-10)
 

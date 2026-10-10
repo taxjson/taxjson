@@ -637,7 +637,7 @@ class TestCli(unittest.TestCase):
 
     @rule("CA-FX-07")
     def test_sum_for_the_return(self):
-        r = _cli(self.root, "sum")
+        r = _cli(self.root, "sum", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         flat = " ".join(r.stdout.split())
         self.assertIn("FX on foreign cash: NOT RELIABLE for 2025 — 1 "
@@ -672,7 +672,7 @@ class TestCli(unittest.TestCase):
         self.assertTrue(t.startswith("FX on foreign cash, ledger v2 "
                                      "(opt-in, under audit): computed"), t)
         self._setting('fx_cash_ledger = "v2"')
-        flat = " ".join(_cli(self.root, "sum").stdout.split())
+        flat = " ".join(_cli(self.root, "sum", "--details").stdout.split())
         self.assertIn("FX on foreign cash, ledger v2 (opt-in, under "
                       "audit), s.39(1.1): net 500.00, reportable 300.00 "
                       "after the $200 exemption — not in the rows above",

@@ -40,7 +40,7 @@ __all__ = [
     "printable", "shown", "label", "relabel", "labelled", "exit_text",
     "LABELS", "console_lint", "CONSOLE_LINE_RE", "show", "show_blocks",
     "join_blocks", "settle", "settling_streams", "real_stream",
-    "ACT", "act", "details_hint", "classify", "prose_lines", "act_lines",
+    "ACT", "act", "act_list", "details_hint", "classify", "prose_lines", "act_lines",
 ]
 
 # Prose wraps here when stdout is not a terminal (a pipe, a file, a test).
@@ -1041,3 +1041,17 @@ def prose_lines(text: str) -> List[str]:
 def act_lines(text: str) -> List[str]:
     """The act-on lines (`! ...`)."""
     return [ln for ln in text.split("\n") if ln.startswith(ACT)]
+
+
+def act_list(text: str, names: Sequence[str], cmd: Optional[str] = None,
+             width_: int = 100) -> str:
+    """An act-on line naming items: `! <text> (A, B +3 more) — <cmd>`,
+    as many names as fit in `width_` columns (at least one)."""
+    names = [printable(n) for n in names]
+    for k in range(len(names), 0, -1):
+        more = len(names) - k
+        inner = ", ".join(names[:k]) + (f" +{more} more" if more else "")
+        line = act(f"{text} ({inner})", cmd)
+        if len(line) <= width_ or k == 1:
+            return line
+    return act(text, cmd)

@@ -170,7 +170,7 @@ class TestCanadaContribution(unittest.TestCase):
             self.assertEqual(t["denied"], 0.0)          # not superficial
             self.assertEqual(t["permanently_denied"], 0.0)
             self.assertEqual(t["denied_contribution"], 400.0)
-            s = " ".join(cli(root, "sum").stdout.split())
+            s = " ".join(cli(root, "sum", "--details").stdout.split())
             self.assertIn("Denied: contribution to a registered plan — "
                           "400.00", s)
             fx = json.loads(cli(root, "form-export", "--json").stdout)

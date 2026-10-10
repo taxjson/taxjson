@@ -97,7 +97,12 @@ class TestBothCountries(unittest.TestCase):
                 self.assertIn("  Assumes:\n  - ", r.stdout)
 
     def test_sum_warning_is_a_headline_with_details(self):
-        r = project("canada").run("sum")
+        # The default view says it in one `! ` line after the tables;
+        # --details prints the message with its detail lines
+        # (docs/output-style.md, Essentials first).
+        self.assertIn("! 2 sales with no purchase NOT in these totals",
+                      project("canada").run("sum").stdout)
+        r = project("canada").run("sum", "--details")
         lines = r.stderr.splitlines()
         self.assertTrue(lines[0].startswith("Warning: 2 "
                                             "position(s) sold"), r.stderr)
@@ -107,7 +112,7 @@ class TestBothCountries(unittest.TestCase):
         assert_console(self, r.stderr)
 
     def test_sum_return_block_fits(self):
-        r = project("canada").run("sum")
+        r = project("canada").run("sum", "--details")
         block = r.stdout.split("FOR THE RETURN")[1]
         self.assertIn("RETURN ", block)
         self.assertIn("- Per-security rows: `taxjson form-export`", block)

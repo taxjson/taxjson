@@ -13481,12 +13481,17 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     # wash pass). We fall back to the older wash file
                     # for label consistency — but say so, or the
                     # staleness is invisible.
+                    _brief1 = _brief(sys.stderr)
                     _out.note(f"{acct}: serving the previous {p_basis} "
-                              f"numbers", prog=_prog,
-                              details=[f"The latest per-account rebuild is "
-                                       f"{rep.get('basis')} only. Run a "
-                                       f"full `taxjson run` to refresh the "
-                                       f"wash-adjusted aggregates."])
+                              f"numbers"
+                              + (" — run a full `taxjson run`" if _brief1
+                                 else ""),
+                              prog=_prog,
+                              details=[] if _brief1 else [
+                                  f"The latest per-account rebuild is "
+                                  f"{rep.get('basis')} only. Run a full "
+                                  f"`taxjson run` to refresh the "
+                                  f"wash-adjusted aggregates."])
             except (OSError, ValueError):
                 res = None
         if res is None:
@@ -13743,6 +13748,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # it refused (_fx_cash_status).
     _fx_note: Optional[Dict[str, Any]] = None
     _fx_err = ""
+    # Essentials first (docs/output-style.md): shown to a person without
+    # --details, each warning below is one `! ` line after the tables
+    # (`_acts`); with --details, under --json, or captured (width 0) it
+    # is the full stderr message it always was.
+    _full_msgs = (_details(args) or bool(getattr(args, "json", False))
+                  or _out.width(sys.stderr) == 0)
+    _acts: List[str] = []
     if filing_rows and not _is_us:
         import contextlib as _ctx
         import io as _io
@@ -13759,7 +13771,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
             _fx_note, _fx_err = None, f"{type(e).__name__}: {e}"
         _fx_warn = [ln for ln in _fx_buf.getvalue().splitlines()
                     if "warning" in ln.lower()]
-        if _fx_err or _fx_warn:
+        if (_fx_err or _fx_warn) and not _full_msgs:
+            _acts.append(_out.act(
+                "FX-on-cash (line 15300) estimate "
+                + ("omitted" if _fx_err else "built with warnings"),
+                "tjs fx-cash"))
+        elif _fx_err or _fx_warn:
             _out.warn("FX-on-cash (line 15300) estimate "
                       + ("omitted" if _fx_err else
                          "built with warnings"), prog=_prog,
@@ -13768,14 +13785,23 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # Base currency is just a label here — soft-read, no hard config
     # dependency (the command works from the work/ gains files).
     base = _base_currency(root)
-    if tainted_included:
+    if tainted_included and not _full_msgs:
+        _acts.append(_out.act(
+            f"totals include {_count_noun(tainted_included, 'sale')} with an "
+            f"unknown cost; the filing totals leave them out",
+            "tjs form-export"))
+    elif tainted_included:
         # In-line tainted rows (raw engine output): counted in totals.
         _out.warn(f"totals include {tainted_included} disposition(s) "
                   f"with an unknown cost (no purchase in your files)",
                   prog=_prog,
                   details=["form-export and carryover exclude them, so "
                            "the filing totals will differ."])
-    if tainted_routed:
+    if tainted_routed and not _full_msgs:
+        _acts.append(_out.act(
+            f"{_count_noun(tainted_routed, 'sale')} with an unknown cost NOT "
+            f"in these totals: report them by hand", "tjs form-export"))
+    elif tainted_routed:
         # Pipeline files: tainted rows were STRIPPED to the
         # manual_reporting_required section — totals exclude them, and
         # without this line `sum` gave no signal at all (round-five
@@ -13800,7 +13826,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   for r in _no_purchase if r.get("booked") == "open"]
     _in_totals = [r for r in _no_purchase if r.get("booked") != "open"]
     _covers = [r for r in _in_totals if r.get("booked") == "short_cover"]
-    if _covers:
+    _no_buy = "with no purchase in your files"
+    if _covers and not _full_msgs:
+        _acts.append(_out.act_list(
+            f"{_count_noun(len(_covers), 'sale')} {_no_buy} booked as short "
+            f"sales a later purchase closed",
+            [r["symbol"] for r in _covers], "tjs find-missing-history"))
+    elif _covers:
         _shown_c = ", ".join(f"{r['symbol']} ({r['account']})"
                              for r in _covers[:4]) \
             + (f" +{len(_covers) - 4} more" if len(_covers) > 4 else "")
@@ -13814,7 +13846,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
                            "start, `taxjson find-missing-history` lists "
                            "them and the fixes (docs/getting-started.md, "
                            "step 5)."])
-    if _uncovered:
+    if _uncovered and not _full_msgs:
+        _acts.append(_out.act_list(
+            f"{_count_noun(len(_uncovered), 'sale')} with no purchase NOT in "
+            f"these totals", [r["symbol"] for r in _uncovered],
+            "tjs find-missing-history"))
+    elif _uncovered:
         _shown = ", ".join(f"{r['symbol']} ({r['account']})"
                            for r in _uncovered[:4]) \
             + (f" +{len(_uncovered) - 4} more" if len(_uncovered) > 4
@@ -13911,14 +13948,24 @@ def cmd_summary(args: argparse.Namespace) -> None:
         for _ln in _out.wrap(text, None, "- ", "  "):
             print(_ln)
 
+    _det = _details(args)
     print(f"REALIZED-GAINS SUMMARY — {base}, tax year {year}, "
           f"basis: {basis}")
-    _para("REALIZED = NON-OPT + OPTION capital gain (NON-OPT: shares, "
-          "units, futures and crypto); TOTAL = REALIZED + DIVIDEND + PIL.")
-    if sheltered_included:
-        _filing = ("carryover and form-export"
-                   if _is_us
-                   else "carryover, t1135 and form-export")
+    # The legend, before the tables (docs/output-style.md, Essentials
+    # first): what the columns mean, and a crypto row's DIVIDEND.
+    _para("REALIZED = NON-OPT (shares, units, futures, crypto) + OPTION; "
+          "TOTAL = REALIZED + DIVIDEND + PIL.")
+    _stk = [r for r in acct_rows
+            if r.get("dividend_is_staking") and abs(r["dividend"]) >= 0.005]
+    if _stk:
+        # The crypto rows' DIVIDEND is staking rewards: ordinary income
+        # (no gross-up/credit, no withholding), as the estimate treats
+        # it — not a figure for the dividend lines (S023-11).
+        _para("DIVIDEND of " + ", ".join(r["account"] for r in _stk)
+              + " is staking rewards: ordinary income, not dividends.")
+    _filing = ("carryover and form-export" if _is_us
+               else "carryover, t1135 and form-export")
+    if sheltered_included and (_det or not grouped):
         _para(f"Totals include sheltered account(s) "
               f"{', '.join(sheltered_included)} — not taxable events; "
               f"{_filing} exclude them.")
@@ -13926,25 +13973,25 @@ def cmd_summary(args: argparse.Namespace) -> None:
     _tdrop = (6, 5)           # FEES, then PIL, when the width is short
     if grouped:
         for gname, rows in group_defs:
-            print(f"{gname} ACCOUNTS")
+            print(f"{gname} ACCOUNTS"
+                  + (" — not taxable" if gname == "SHELTERED" else ""))
             _print_report_table(_table_lines(rows, "SUBTOTAL"),
                                 rule_before_last=True, fit=True,
                                 drop=_tdrop)
             print()
-        print("ALL ACCOUNTS")
+        print("ALL ACCOUNTS"
+              + (" — sheltered included" if sheltered_included else ""))
     _print_report_table(_table_lines(acct_rows, "TOTAL"),
                         rule_before_last=True, fit=True, drop=_tdrop)
-    _stk = [r for r in acct_rows
-            if r.get("dividend_is_staking") and abs(r["dividend"]) >= 0.005]
-    if _stk:
-        # The crypto rows' DIVIDEND is staking rewards: ordinary income
-        # (no gross-up/credit, no withholding), as the estimate treats
-        # it — not a figure for the dividend lines (S023-11).
+    if _stk and _det:
         _para("DIVIDEND for crypto account(s) "
               + ", ".join(f"{r['account']} ({money(r['dividend'])})"
                           for r in _stk)
               + " is STAKING rewards — ordinary income, not dividends.")
 
+    # After the data: the one-line act-on and must-not-miss lines
+    # (`_acts`, `_tail`); --details adds the notes they leave out.
+    _tail: List[str] = []
     if filing_rows:
         _names = ", ".join(r["account"] for r in filing_rows)
         _ynote = year_not_ended_text(_fyear)
@@ -13953,7 +14000,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
             _para(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Form 8949 → Schedule D, tax year {_fyear})")
             if _ynote:
-                _para(_ynote)
+                _para(_ynote if _det else
+                      f"Tax year {_fyear} has not ended: these are "
+                      f"YEAR-TO-DATE figures.")
+            _para("(h) = (d) − (e) + (g), the allowed gain; (g) = the "
+                  "code-W wash-sale loss disallowed, added back.")
             _body = [[f"{r['label']} → {r['schedule_d']}",
                       money(r["proceeds"]), money(r["cost"]),
                       money(r["adjustment"]), money(r["gain"])]
@@ -13967,37 +14018,50 @@ def cmd_summary(args: argparse.Namespace) -> None:
                      "(g) ADJUSTMENT", "(h) GAIN"], _body,
                     aligns=["<", ">", ">", ">", ">"], foot=_foot):
                 print(_ln)
-            print()     # the table's notes stand apart from its RETURN row
             _permd = filing_total.get("permanently_denied") or 0.0
-            _item("(d) − (e) + (g) = (h). Column (g) is the code-W wash-"
-                  "sale loss disallowed and added back, so (h) is the "
-                  "allowed gain; the disallowed loss moves to the "
-                  "replacement shares' basis"
-                  + (f", except {money(_permd)} from a repurchase in an "
-                     f"IRA, which is lost for good — no basis addition "
-                     f"(US-WASH-11)" if _permd > 0.005 else "") + ".")
             if _filing_6781 and _filing_6781.get("dispositions"):
-                _item(f"Not on Form 8949: {_filing_6781['dispositions']} "
-                      f"§1256 contract disposition(s), net "
-                      f"{money(_filing_6781['gain'])} — Form 6781 by hand "
-                      f"(60/40; year-end marking not modelled, US-FUT-02 / "
-                      f"US-OPT-04). `taxjson form-export` lists them.")
-            if abs(_round_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total gain is "
-                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
-                      f"RETURN row).")
-            if abs(_denied_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total {_denied_label} is "
-                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
-                      f"the RETURN row).")
-            _item("Per-sale rows: `taxjson form-export`.")
+                _acts.append(_out.act(
+                    f"{_count_noun(_filing_6781['dispositions'], '§1256 sale')}"
+                    f", net {money(_filing_6781['gain'])}, not on Form "
+                    f"8949: Form 6781 by hand", "tjs form-export"))
+            if _det:
+                print()     # the notes stand apart from the RETURN row
+                _item("(d) − (e) + (g) = (h). Column (g) is the code-W "
+                      "wash-sale loss disallowed and added back, so (h) "
+                      "is the allowed gain; the disallowed loss moves to "
+                      "the replacement shares' basis"
+                      + (f", except {money(_permd)} from a repurchase in "
+                         f"an IRA, which is lost for good — no basis "
+                         f"addition (US-WASH-11)" if _permd > 0.005
+                         else "") + ".")
+                if _filing_6781 and _filing_6781.get("dispositions"):
+                    _item(f"Not on Form 8949: "
+                          f"{_filing_6781['dispositions']} §1256 contract "
+                          f"disposition(s), net "
+                          f"{money(_filing_6781['gain'])} — Form 6781 by "
+                          f"hand (60/40; year-end marking not modelled, "
+                          f"US-FUT-02 / US-OPT-04). `taxjson form-export` "
+                          f"lists them.")
+                if abs(_round_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total gain is "
+                          f"{money(_engine_gain)} ({_round_gap:+,.2f} on "
+                          f"the RETURN row).")
+                if abs(_denied_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total {_denied_label} "
+                          f"is {money(_engine_denied)} "
+                          f"({_denied_gap:+,.2f} on the RETURN row).")
+                _item("Per-sale rows: `taxjson form-export`.")
+            _tail.append("More: tjs sum --details (notes); per sale: "
+                         "tjs form-export")
         else:
             _para(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
             if _ynote:
-                _para(_ynote)
+                _para(_ynote if _det else
+                      f"Tax year {_fyear} has not ended: these are "
+                      f"YEAR-TO-DATE figures.")
             _body = [[f"Line {r['line']} {r['short']} "
                       f"({r['proceeds_code']}/{r['gain_code']})"
                       if r["line"] else
@@ -14011,66 +14075,101 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       money(filing_total["outlays"]),
                       money(filing_total["gain"]),
                       money(filing_total["denied"])]]
-            # Too wide: DENIED goes first (its total is in the notes),
+            # Too wide: DENIED goes first (its total moves to the legend),
             # then one record per line.
-            for _ln in _out.fit_table(
-                    ["SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)",
-                     "OUTLAYS", "GAIN", "DENIED"], _body,
-                    aligns=["<", ">", ">", ">", ">", ">"], foot=_foot,
-                    drop=(5,)):
+            _s3 = _out.fit_table(
+                ["SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)", "OUTLAYS",
+                 "GAIN", "DENIED"], _body,
+                aligns=["<", ">", ">", ">", ">", ">"], foot=_foot,
+                drop=(5,))
+            _den_shown = any("DENIED" in _ln for _ln in _s3[:1])
+            _para("GAIN = PROCEEDS − COST(ACB) − OUTLAYS, the allowed "
+                  "gain; "
+                  + ("DENIED = superficial losses denied." if _den_shown
+                     else f"superficial losses denied: "
+                          f"{money(filing_total['denied'])}."))
+            for _ln in _s3:
                 print(_ln)
-            print()     # the table's notes stand apart from its RETURN row
             _permd = filing_total.get("permanently_denied") or 0.0
-            _item("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed "
-                  "gain. A short sale shows what it brought in as "
-                  "PROCEEDS and the cover as ACB, and sell-side "
-                  "commissions are outlays, as on the form.")
-            _item(f"Where a superficial loss was DENIED "
-                  f"({money(filing_total['denied'])} in all) the ACB is "
-                  f"REDUCED by it, so the gain stays the allowed one; a "
-                  f"deferred denial is added to the ACB of the "
-                  f"replacement property, but one caused by a "
-                  f"registered-account acquisition is lost for good, and "
-                  f"one caused by an affiliated person's acquisition is "
-                  f"permanent for this return (that person adds it to "
-                  f"their own ACB, s.53(1)(f)) — no ACB addition here"
-                  + (f" ({money(_permd)} of the DENIED total)"
-                     if _permd > 0.005 else "") + ".")
-            _dcon = filing_total.get("denied_contribution") or 0.0
-            if _dcon > 0.005:
-                _item(f"Denied: contribution to a registered plan — "
-                      f"{money(_dcon)} of losses on in-kind contributions "
-                      f"to an RRSP/TFSA/... are nil (s.40(2)(g)(iv)): the "
-                      f"ACB shown is reduced by them, they are lost for "
-                      f"good (no ACB addition anywhere) and they are not "
-                      f"in DENIED.")
-            if abs(_round_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total gain is "
-                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
-                      f"RETURN row).")
-            if abs(_denied_gap) >= 0.005:
-                _item(f"Rows are rounded to the cent, as filed: the gains "
-                      f"files' unrounded total {_denied_label} is "
-                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
-                      f"the RETURN row).")
-            if _fx_note is not None:
-                _item(_fx_sum_item(_fx_note, money))
-            else:
-                _item("FX on foreign cash (s.39(1.1)) is not in the rows "
-                      "above — T4037 puts it on line 15300; see `taxjson "
-                      "fx-cash`.")
+            # FX on foreign cash (line 15300): never in the rows.
+            if _fx_note is None:
+                _acts.append(_out.act("FX on foreign cash (line 15300) is "
+                                      "not in the rows", "tjs fx-cash"))
+            elif (_fx_note.get("ledger") == "v2"
+                    and _fx_note.get("status") == "computed"):
+                _acts.append(_out.act(
+                    f"FX on foreign cash (line 15300), not in the rows: "
+                    f"reportable {money(_fx_note['reportable'])}",
+                    "tjs fx-cash"))
+            elif _fx_note.get("ledger") == "v2":
+                _acts.append(_out.act("FX on foreign cash (line 15300): "
+                                      "not computed, not in the rows",
+                                      "tjs fx-cash"))
+            elif _fx_note.get("active"):
+                _acts.append(_out.act("FX on foreign cash (line 15300): "
+                                      "not in the rows; its estimate is "
+                                      "NOT RELIABLE", "tjs fx-cash"))
+            if _det:
+                print()     # the notes stand apart from the RETURN row
+                _item("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed "
+                      "gain. A short sale shows what it brought in as "
+                      "PROCEEDS and the cover as ACB, and sell-side "
+                      "commissions are outlays, as on the form.")
+                _item(f"Where a superficial loss was DENIED "
+                      f"({money(filing_total['denied'])} in all) the ACB "
+                      f"is REDUCED by it, so the gain stays the allowed "
+                      f"one; a deferred denial is added to the ACB of the "
+                      f"replacement property, but one caused by a "
+                      f"registered-account acquisition is lost for good, "
+                      f"and one caused by an affiliated person's "
+                      f"acquisition is permanent for this return (that "
+                      f"person adds it to their own ACB, s.53(1)(f)) — no "
+                      f"ACB addition here"
+                      + (f" ({money(_permd)} of the DENIED total)"
+                         if _permd > 0.005 else "") + ".")
+                _dcon = filing_total.get("denied_contribution") or 0.0
+                if _dcon > 0.005:
+                    _item(f"Denied: contribution to a registered plan — "
+                          f"{money(_dcon)} of losses on in-kind "
+                          f"contributions to an RRSP/TFSA/... are nil "
+                          f"(s.40(2)(g)(iv)): the ACB shown is reduced by "
+                          f"them, they are lost for good (no ACB addition "
+                          f"anywhere) and they are not in DENIED.")
+                if abs(_round_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total gain is "
+                          f"{money(_engine_gain)} ({_round_gap:+,.2f} on "
+                          f"the RETURN row).")
+                if abs(_denied_gap) >= 0.005:
+                    _item(f"Rows are rounded to the cent, as filed: the "
+                          f"gains files' unrounded total {_denied_label} "
+                          f"is {money(_engine_denied)} "
+                          f"({_denied_gap:+,.2f} on the RETURN row).")
+                if _fx_note is not None:
+                    _item(_fx_sum_item(_fx_note, money))
+                else:
+                    _item("FX on foreign cash (s.39(1.1)) is not in the "
+                          "rows above — T4037 puts it on line 15300; see "
+                          "`taxjson fx-cash`.")
+                # Slip capital gains are part of line 19700 too (R1-44).
+                _item("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
+                      "slips are not in the rows above — Schedule 3 lines "
+                      "17600 and 17400, entered from the slips (the books "
+                      "carry those distributions as dividends).")
+                _item("Per-security rows: `taxjson form-export`; per "
+                      "account: `taxjson sum --json`.")
             # Slip capital gains are part of line 19700 too (R1-44).
-            _item("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
-                  "slips are not in the rows above — Schedule 3 lines "
-                  "17600 and 17400, entered from the slips (the books "
-                  "carry those distributions as dividends).")
-            _item("Per-security rows: `taxjson form-export`; per account: "
-                  "`taxjson sum --json`.")
+            _tail.append("Not in the rows: T3/T5 slip capital gains (lines "
+                         "17600, 17400). More: tjs sum --details")
 
     if _positions:
         _rule = ("wash-sale rule (§1091)" if _is_us
                  else "superficial-loss rule (s.54)")
+        _acts.append(_out.act(
+            f"{_count_noun(len(_positions), 'loss', 'losses')} claimed "
+            f"against the {_rule.split(' (')[0]} (.tt ALLOWLOSS)",
+            "tjs sum --details"))
+    if _positions and _det:
         print()
         # "the totals above include them" only of this year's sales: a
         # position on another year's sale shapes this year's ACB, not
@@ -14102,6 +14201,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
               "to support it (" + ("IRS" if _is_us else "CRA")
               + " guidance, a tax professional). Delete the line to apply "
               "the rule.")
+    if not _det and (_acts or _tail):
+        print()
+        for _ln in _acts + _tail:
+            print(_ln)
 
     if want_estimate:
         _print_tax_estimate(
@@ -18856,10 +18959,29 @@ def _warn_artifact_year(files: Dict[str, Path], config_year) -> None:
     if not bad:
         return
     got = ", ".join(f"{a} ({y})" for a, y in sorted(bad.items()))
+    if _brief(sys.stderr):
+        _say("warning", f"these figures are NOT {config_year}'s: work/ "
+             f"was built for another year — run `taxjson run`",
+             prog=_cmd_prog())
+        return
     _say("warning", f"[settings].year is {config_year} but the work/ "
          f"books were built for another tax year: {got}",
          f"These figures are NOT {config_year}'s — rebuild with `taxjson "
          f"run` first.", prog=_cmd_prog())
+
+
+def _count_noun(n: int, one: str, many: Optional[str] = None) -> str:
+    """`1 sale`, `2 sales` (`many` for an irregular plural)."""
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def _brief(stream=None) -> bool:
+    """A shared report-command warning shows only its headline: shown to
+    a person (width > 0) without --details (docs/output-style.md,
+    Essentials first). Captured (width 0) it keeps every detail line."""
+    from taxjson.lib.out import width as _w
+    return (not _CURRENT_DETAILS
+            and _w(sys.stderr if stream is None else stream) > 0)
 
 
 def _tax_date_basis(settings: Dict[str, Any]) -> str:
@@ -18941,7 +19063,14 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
     built under the other country are refused outright."""
     _refuse_other_country_books(root, cfg)
     probs = _run_state_problems(root, cfg)
-    if probs:
+    if probs and _brief(sys.stderr):
+        _filed = ("; the filed year's inputs changed"
+                  if _filed_year_stale_hint(root, cfg, probs) else "")
+        _say("warning", f"these books are not the clean result of the "
+             f"current inputs ({len(probs)} problem(s){_filed}): fix and "
+             f"re-run `taxjson run` (`taxjson checklist` lists them)",
+             prog=_cmd_prog())
+    elif probs:
         _say("warning", "these books are not the clean result of the "
              "current inputs",
              *[f"- {p}" for p in probs],

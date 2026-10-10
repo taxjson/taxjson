@@ -278,7 +278,7 @@ class TestSumOtherYear(unittest.TestCase):
                           "60.00 0.00\n"))["canada"]
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            text = _flat(cli(root, "sum").stdout)
+            text = _flat(cli(root, "sum", "--details").stdout)
         self.assertIn("FILING POSITIONS — 1 loss(es) claimed against the "
                       "superficial-loss rule (s.54) (.tt ALLOWLOSS lines); "
                       "sales of another year: not in the totals above",

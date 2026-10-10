@@ -900,7 +900,7 @@ class TestReportLabelsAndTotals(unittest.TestCase):
                                   "dividend": 7.0, "date": "2025-05-03",
                                   "currency": "CAD"}],
                 "summary": {"year": 2025}})
-            r = _run_cli(root, "sum")
+            r = _run_cli(root, "sum", "--details")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("is STAKING rewards", r.stdout)
             j = json.loads(_run_cli(root, "sum", "--json").stdout)
