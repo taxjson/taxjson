@@ -86,6 +86,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `not brought over`
 
+### `tjs redact` in a year folder: "Error: the redacted taxjson.toml would not read as TOML (…) — nothing written"; or, on an older release, a copy (or an `align --write`, `migrate --to-years` result) whose taxjson.toml stops `tjs run` after a `holdings = [` list written over several lines
+- **Check:** the project's taxjson.toml has a value over several lines (`holdings = [` with one file per line, a `"""` string). On an older release the written file shows the new first line followed by the old value's remaining lines.
+- **Cause:** the editor of taxjson.toml lines (`src/taxjson/lib/project_layout.py` — `set_key_text`: redact's holdings lists and folder settings, `align --write`, `migrate --to-years`) replaced or commented out only the first line of a value.
+- **Fix:** upgrade: every line of the value is replaced or commented out, and redact checks that the whole copied file reads before anything is written. With the new message, a denylist / `--also` pattern matched part of a setting: narrow the pattern (or fix the project's own taxjson.toml if `tjs run` refuses it too).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `set_key_text`, `toml_statements`; `src/taxjson/bin/taxjson_redact.py` — `_copy_holdings_lists`, `_valid_copy_config`
+
+### `tjs new-year 2026`: the new taxjson.toml still lists last year's `holdings = [...]` for an account whose table is quoted or hyphenated (`[accounts."margin-main"]`, `[accounts.margin-main]`)
+- **Check:** `grep -n holdings 2026/taxjson.toml` shows a line not commented out under such an account, although new-year said the accounts' holdings were commented out; or that account's other lines were commented out when `[estimate]` or `[instalments]` came just before it.
+- **Cause:** new-year recognised only table names made of letters, digits, `_` and `.`: a quoted or hyphenated name was not read as a table, so the table before it stayed in effect.
+- **Fix:** upgrade; for a year made by an older release, comment out (or delete) the account's `holdings` line in the new year's taxjson.toml and uncomment any account line commented by mistake (the new year's snapshots go in its holdings/).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `new_year_text`, `toml_statements`
+
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
 - **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.

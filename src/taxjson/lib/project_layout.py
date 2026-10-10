@@ -38,7 +38,8 @@ import datetime as _dt
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (Any, Dict, List, NamedTuple, Optional, Sequence,
+                    Tuple, Union)
 
 CONFIG = "taxjson.toml"
 TICKER_MAP = "ticker.map"
@@ -486,57 +487,55 @@ def new_year_text(text: str, old_year: int, new_year: int) -> str:
     prior_year_record pointed at last year's lock, and the year's own
     tables ([estimate], [instalments]) and each account's `holdings`
     (last year's positions snapshots) commented out under a note —
-    everything else (accounts, settings, comments) kept as written."""
+    everything else (accounts, settings, comments) kept as written.
+    Tables and keys are found by toml_statements: a quoted or hyphenated
+    account table (`[accounts."margin-main"]`) and a value over several
+    lines are what they are (GitHub #27)."""
+    lines = _lines(text)
+    stmts = toml_statements(text)
+    have_prior = any(s.kind == "kv" and s.table + s.key
+                     == ("settings", "prior_year_record") for s in stmts)
+    prior = f'"../{old_year}/filed/{old_year}.json"'
     out: List[str] = []
-    table = None
-    have_prior = False
-    in_holdings = False
-    for ln in text.splitlines():
-        if in_holdings:
-            # The rest of a multi-line `holdings = [...]` array.
-            out.append("# " + ln)
-            in_holdings = "]" not in ln.split("#", 1)[0]
-            continue
-        m = re.match(r"^\s*\[+\s*([A-Za-z0-9_.]+)\s*\]+", ln)
-        if m:
-            table = m.group(1).split(".")[0]
-            if table in YEAR_ONLY_TABLES:
+    table: Tuple[str, ...] = ()
+    for st in stmts:
+        seg = lines[st.first:st.last + 1]
+        if st.kind == "table":
+            table = st.table
+            if table[0] in YEAR_ONLY_TABLES:
                 out.append(f"## {old_year}'s figures, kept for reference "
                            f"by `taxjson new-year`: put {new_year}'s in and "
                            f"uncomment them.")
-                out.append("# " + ln)
+                out += ["# " + ln for ln in seg]
                 continue
-        if table in YEAR_ONLY_TABLES and ln.strip() \
-                and not ln.lstrip().startswith("#"):
-            out.append("# " + ln)
-            continue
-        if table == "accounts" and re.match(r"^\s*holdings\s*=", ln):
-            # Last year's positions snapshots are not this year's: the
-            # new year's go in its holdings/ (found by account), or are
-            # listed here again (lib/holdings_dir).
-            out.append(f"## {old_year}'s positions snapshots, commented "
-                       f"out by `taxjson new-year`: save {new_year}'s in "
-                       f"holdings/, or list them here.")
-            out.append("# " + ln)
-            val = ln.split("=", 1)[1].split("#", 1)[0]
-            in_holdings = "[" in val and "]" not in val
-            continue
-        if table == "settings":
-            if re.match(r"^\s*year\s*=", ln):
-                ln = re.sub(r"=(\s*)\d{4}", lambda mm: f"={mm.group(1)}"
-                            f"{new_year}", ln, count=1)
-            elif re.match(r"^\s*prior_year_record\s*=", ln):
-                have_prior = True
-                ln = (ln.split("=", 1)[0] + "= "
-                      + f'"../{old_year}/filed/{old_year}.json"')
-        out.append(ln)
-    res = "\n".join(out) + "\n"
-    if not have_prior:
-        res = re.sub(r"(?m)^(\s*year\s*=.*)$",
-                     lambda m: m.group(1) + "\nprior_year_record = "
-                     + f'"../{old_year}/filed/{old_year}.json"', res,
-                     count=1)
-    return res
+        elif st.kind == "kv":
+            full = st.table + st.key
+            if full[0] in YEAR_ONLY_TABLES:
+                out += ["# " + ln for ln in seg]
+                continue
+            if full[0] == "accounts" and len(full) == 3 \
+                    and full[2] == "holdings":
+                # Last year's positions snapshots are not this year's:
+                # the new year's go in its holdings/ (found by account),
+                # or are listed here again (lib/holdings_dir).
+                out.append(f"## {old_year}'s positions snapshots, "
+                           f"commented out by `taxjson new-year`: save "
+                           f"{new_year}'s in holdings/, or list them here.")
+                out += ["# " + ln for ln in seg]
+                continue
+            if full == ("settings", "year"):
+                seg = [re.sub(r"=(\s*)\d{4}", lambda mm: f"={mm.group(1)}"
+                              f"{new_year}", seg[0], count=1)] + seg[1:]
+                if not have_prior:
+                    seg.append(f"prior_year_record = {prior}")
+            elif full == ("settings", "prior_year_record"):
+                seg = [seg[0].split("=", 1)[0] + "= " + prior]
+        elif table[:1] and table[0] in YEAR_ONLY_TABLES:
+            # A line of a year-only table that does not parse.
+            seg = [ln if not ln.strip() or ln.lstrip().startswith("#")
+                   else "# " + ln for ln in seg]
+        out += seg
+    return "\n".join(out) + "\n"
 
 
 # ----------------------------------------------------------- comparing
@@ -645,38 +644,210 @@ def _toml_key(k: Any) -> str:
     return k if re.fullmatch(r"[A-Za-z0-9_-]+", k) else json.dumps(k)
 
 
-_TABLE_RE = re.compile(r"^\s*\[\s*([A-Za-z0-9_.\"-]+)\s*\]\s*(#.*)?$")
+def _lines(text: str) -> List[str]:
+    """`text`'s lines, split on "\\n" only (toml_statements' lines)."""
+    ls = text.split("\n")
+    if ls and ls[-1] == "":
+        ls.pop()
+    return ls
 
 
-def set_key_text(text: str, dotted: str, value: Any) -> str:
-    """`text` (a taxjson.toml) with the key `dotted` ("settings.x",
-    "accounts.NAME.x") set to `value`: its line replaced where it is
-    set, else added at the end of its table (the table added at the end
-    of the file when absent). Comments and the rest kept. A value None
-    comments the key out."""
-    parts = dotted.split(".")
-    table, key = ".".join(parts[:-1]), parts[-1]
-    lines = text.splitlines()
-    cur = None
-    start = end = None
-    for i, ln in enumerate(lines):
-        m = _TABLE_RE.match(ln)
-        if m:
-            if cur == table and end is None:
-                end = i
-            cur = m.group(1).replace('"', "")
-            if cur == table:
-                start = i
+class TomlStatement(NamedTuple):
+    """One statement of a TOML text by its lines (0-based, inclusive): a
+    table header ('table': `table` its dotted name as parts, `array`
+    for `[[...]]`), a key = value ('kv': `table` the table it is in,
+    `key` its dotted key as parts, `comment` the comment after the
+    value on its last line), or 'other' (a blank or comment line, or
+    one that does not parse)."""
+    kind: str
+    first: int
+    last: int
+    table: Tuple[str, ...]
+    key: Tuple[str, ...] = ()
+    array: bool = False
+    comment: str = ""
+
+
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+_BASIC_STR = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+_TRIPLE = ('"' * 3, "'" * 3)
+
+
+def _toml_key_at(text: str, k: int) -> Tuple[Optional[List[str]], int]:
+    """The dotted key at `text[k:]` (bare, "basic" or 'literal' parts,
+    spaces around the dots) as its parts, and the position after it;
+    (None, k) when there is none."""
+    n = len(text)
+    segs: List[str] = []
+    while True:
+        while k < n and text[k] in " \t":
+            k += 1
+        if k >= n:
+            return None, k
+        c = text[k]
+        if c == '"':
+            m = _BASIC_STR.match(text, k)
+            if not m:
+                return None, k
+            from taxjson.lib.tomlcompat import tomllib
+            try:
+                segs.append(tomllib.loads(f"k = {m.group(0)}")["k"])
+            except Exception:                           # noqa: BLE001
+                return None, k
+            k = m.end()
+        elif c == "'":
+            e = text.find("'", k + 1)
+            if e < 0 or "\n" in text[k + 1:e]:
+                return None, k
+            segs.append(text[k + 1:e])
+            k = e + 1
+        else:
+            m = _BARE_KEY.match(text, k)
+            if not m:
+                return None, k
+            segs.append(m.group(0))
+            k = m.end()
+        j = k
+        while j < n and text[j] in " \t":
+            j += 1
+        if j < n and text[j] == ".":
+            k = j + 1
             continue
-        if cur == table and re.match(rf"^\s*{re.escape(key)}\s*=", ln):
-            lines[i] = ("# " + ln if value is None
-                        else f"{key} = {toml_value(value)}")
+        return segs, k
+
+
+def _value_end(text: str, k: int, line: int) -> Tuple[int, int, str]:
+    """Where the value starting at `text[k:]` (on line `line`) ends:
+    (the position of the newline after it, or len(text); the line it
+    ends on; the comment after it on that line, '' when none). An array
+    or inline table runs to its closing bracket and a multi-line string
+    to its closing quotes, over any number of lines; a bracket, quote or
+    `#` inside a string does not count."""
+    n = len(text)
+    depth = 0
+    comment = ""
+    while k < n:
+        c = text[k]
+        if c == "\n":
+            if depth <= 0:
+                return k, line, comment
+            line += 1
+            comment = ""
+            k += 1
+        elif text[k:k + 3] in _TRIPLE:
+            q = text[k:k + 3]
+            k += 3
+            while k < n and not text.startswith(q, k):
+                if text[k] == "\\" and q[0] == '"':
+                    k += 1
+                if k < n and text[k] == "\n":
+                    line += 1
+                k += 1
+            k += 3
+            # Up to two quotes of the content may touch the closing ones.
+            for _ in range(2):
+                if k < n and text[k] == q[0]:
+                    k += 1
+        elif c in "\"'":
+            e = k + 1
+            while e < n and text[e] not in (c, "\n"):
+                e += 2 if c == '"' and text[e] == "\\" else 1
+            k = e + 1 if e < n and text[e] == c else e
+        elif c == "#":
+            e = text.find("\n", k)
+            e = n if e < 0 else e
+            comment = text[k:e].rstrip("\r")
+            k = e
+        else:
+            if c in "[{":
+                depth += 1
+            elif c in "]}":
+                depth -= 1
+            k += 1
+    return n, line, comment
+
+
+def toml_statements(text: str) -> List[TomlStatement]:
+    """`text` (a TOML file) as its statements, in order, every line in
+    one: what a line-by-line edit of a taxjson.toml needs — the table a
+    line is in (a quoted or hyphenated name included: a header matched
+    as `[A-Za-z0-9_.]+` left the previous table in effect, GitHub #27)
+    and every line a key's value spans (an array, inline table or
+    string over several lines: GitHub #26)."""
+    out: List[TomlStatement] = []
+    n = len(text)
+    i = line = 0
+    table: Tuple[str, ...] = ()
+    while i < n:
+        j = i
+        while j < n and text[j] in " \t\r":
+            j += 1
+        first = line
+        end = text.find("\n", j)
+        end = n if end < 0 else end
+        st = TomlStatement("other", first, first, table)
+        if j < n and text[j] == "[":
+            arr = text.startswith("[[", j)
+            segs, k = _toml_key_at(text, j + (2 if arr else 1))
+            while k < n and text[k] in " \t":
+                k += 1
+            if segs is not None and text.startswith("]]" if arr else "]",
+                                                     k):
+                table = tuple(segs)
+                st = TomlStatement("table", first, first, table, array=arr)
+        elif j < n and text[j] not in "\n#":
+            segs, k = _toml_key_at(text, j)
+            while k < n and text[k] in " \t":
+                k += 1
+            if segs is not None and k < n and text[k] == "=":
+                end, line, comment = _value_end(text, k + 1, line)
+                st = TomlStatement("kv", first, line, table, tuple(segs),
+                                   comment=comment)
+        out.append(st)
+        i = end + 1
+        line += 1
+    return out
+
+
+def _dotted(parts: Sequence[str]) -> str:
+    return ".".join(_toml_key(p) for p in parts)
+
+
+def set_key_text(text: str, dotted: Union[str, Sequence[str]],
+                 value: Any) -> str:
+    """`text` (a taxjson.toml) with the key `dotted` ("settings.x",
+    "accounts.NAME.x", or its parts as a tuple when a name holds a dot)
+    set to `value`: every line of its value replaced where it is set (a
+    value over several lines included — only the first was, leaving
+    the rest as invalid TOML, GitHub #26; a comment after a one-line
+    value kept), else added at the end of its table (the table added at
+    the end of the file when absent). Comments and the rest kept. A
+    value None comments the key out, each of its lines."""
+    parts = tuple(dotted.split(".")) if isinstance(dotted, str) \
+        else tuple(dotted)
+    table, key = parts[:-1], parts[-1]
+    lines = _lines(text)
+    start = end = None
+    for st in toml_statements(text):
+        if st.kind == "table":
+            if start is not None and end is None:
+                end = st.first
+            if st.table == table and not st.array:
+                start, end = st.first, None
+            continue
+        if st.kind == "kv" and st.table + st.key == parts:
+            if value is None:
+                new = ["# " + ln for ln in lines[st.first:st.last + 1]]
+            else:
+                new = [f"{_dotted(st.key)} = {toml_value(value)}"
+                       + (f"  {st.comment}" if st.comment else "")]
+            lines[st.first:st.last + 1] = new
             return "\n".join(lines) + "\n"
     if value is None:
         return text
-    new = f"{key} = {toml_value(value)}"
+    new = f"{_toml_key(key)} = {toml_value(value)}"
     if start is None:
-        return text.rstrip("\n") + f"\n\n[{table}]\n{new}\n"
+        return text.rstrip("\n") + f"\n\n[{_dotted(table)}]\n{new}\n"
     if end is None:
         end = len(lines)
     while end > start + 1 and not lines[end - 1].strip():

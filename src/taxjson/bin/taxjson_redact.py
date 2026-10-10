@@ -2141,9 +2141,25 @@ def _copy_holdings_lists(root: Path, inputs: Path, files: List[_TreeFile],
                     out.append(names[rel].as_posix())
                 break
         text = _PL.set_key_text(
-            text, f"accounts.{name}.holdings",
+            text, ("accounts", name, "holdings"),
             (out if isinstance(h, list) else out[0]) if out else None)
     cfg_tf.text = text
+
+
+def _valid_copy_config(files: List["_TreeFile"]) -> Optional[str]:
+    """Why the copy's taxjson.toml would not read, or None (every edit
+    of it — folder settings, holdings lists, placeholders, denylist /
+    --also matches — is checked before anything is written)."""
+    from taxjson.lib.tomlcompat import tomllib
+    cfg = next((f for f in files if f.rel == Path(_PL.CONFIG)
+                and f.text is not None), None)
+    if cfg is None or tomllib is None:
+        return None
+    try:
+        tomllib.loads(cfg.text)
+    except Exception as e:                              # noqa: BLE001
+        return str(e)
+    return None
 
 
 def redact_tree(root: Path, out: Optional[Path], extra: List[str],
@@ -2223,6 +2239,15 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     _sweep(files, known_ids, pseudonyms)
     if shared:
         _copy_holdings_lists(root, inputs, files, names)
+        why = _valid_copy_config(files)
+        if why:
+            _diag("error", f"the redacted taxjson.toml would not read as "
+                           f"TOML ({why}) — nothing written",
+                  ["A denylist / --also pattern that matches part of a "
+                   "setting breaks it: narrow the pattern. Else check "
+                   "that the project's own taxjson.toml reads (`taxjson "
+                   "run` says where it does not)."])
+            return 2
     text_files = [f for f in files if f.text is not None]
     step(f"Redacting {_plural(len(text_files), 'file')}")
     found = False
