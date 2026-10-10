@@ -415,11 +415,12 @@ def main():
         sys.stdout = io.StringIO()
 
     if args.date:
-        try:
-            today_dt = datetime.strptime(args.date, "%Y-%m-%d")
-        except ValueError:
-            _out.fail(f"--date {args.date!r} is not a valid YYYY-MM-DD "
-                     f"date", prog=_PROG)
+        from taxjson.lib.dates import as_of_date_problem
+        _bad = as_of_date_problem(args.date)
+        if _bad:
+            # 9999-12-31: the window past it is no date (issue #54).
+            _out.fail(_bad, prog=_PROG)
+        today_dt = datetime.strptime(args.date, "%Y-%m-%d")
     else:
         today_dt = datetime.now()
 

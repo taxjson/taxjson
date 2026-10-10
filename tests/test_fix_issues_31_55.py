@@ -249,5 +249,38 @@ class TestOptionBoundaryDamagedBook(unittest.TestCase):
                       r.stderr)
 
 
+# ------------------------------------------------------------------ #54
+class TestAsOfDateRange(unittest.TestCase):
+
+    def test_problem(self):
+        from taxjson.lib.dates import as_of_date_problem
+        self.assertIsNone(as_of_date_problem("2025-03-03"))
+        self.assertIsNone(as_of_date_problem("9999-10-31"))
+        self.assertIn("out of range", as_of_date_problem("9999-12-31"))
+        self.assertIn("out of range", as_of_date_problem("0001-01-01"))
+        self.assertIn("0001-03-02", as_of_date_problem("0001-01-01"))
+        self.assertIn("not a real calendar date",
+                      as_of_date_problem("2025-02-30"))
+        self.assertIn("not a YYYY-MM-DD", as_of_date_problem("2025-3-3"))
+
+    def test_radar_and_safe_to_sell_refuse_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            book = Path(td) / "book.json"
+            book.write_text(json.dumps({"transactions": [{
+                "action": "BUYSELL", "date": "2025-01-02",
+                "date_settle": "2025-01-03", "time": "09:30:00",
+                "symbol": "QZZQ.TO", "quantity": 10, "price": 10,
+                "net_amount": 100, "currency": "CAD",
+                "account": "margin"}]}))
+            for mod in ("taxjson.bin.taxjson_wash_radar",
+                        "taxjson.bin.taxjson_safe_to_sell"):
+                r = _tool(mod, "--taxable", str(book), "--country",
+                          "canada", "--date", "9999-12-31")
+                self.assertNotEqual(r.returncode, 0, mod)
+                self.assertNotIn("Traceback", r.stderr, mod)
+                self.assertIn("--date 9999-12-31 is out of range",
+                              r.stderr, mod)
+
+
 if __name__ == "__main__":
     unittest.main()

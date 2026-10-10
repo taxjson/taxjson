@@ -11,6 +11,7 @@ same drift class as the radar's old private sort ladder (the repo's
 highest fix-ratio failure mode).
 """
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 
 def date_to_epoch(date_str: str) -> float:
@@ -35,6 +36,40 @@ def epoch_to_date(epoch: float) -> str:
     UTC to round-trip (local fromtimestamp would shift the date for TZs east
     of UTC+12/west of UTC-11 and mislabel deadlines)."""
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+# How far either side of an as-of date the planning views (wash radar,
+# safe-to-sell) look: the 30-day window, plus a settlement lag and
+# holidays, with room to spare.
+AS_OF_MARGIN_DAYS = 60
+
+
+def as_of_date_problem(text: str) -> Optional[str]:
+    """Why `text` cannot be a planning view's --date: not YYYY-MM-DD,
+    not a calendar date, or so close to year 1 or 9999 that the window
+    around it leaves the dates Python can hold (9999-12-31 crashed the
+    radar with "year 10000 is out of range", issue #54). None when it
+    is usable."""
+    import re
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text or ""):
+        return f"--date {text!r} is not a YYYY-MM-DD date"
+    try:
+        d = datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return f"--date {text} is not a real calendar date"
+    lo = datetime.min + timedelta(days=AS_OF_MARGIN_DAYS)
+    hi = datetime.max - timedelta(days=AS_OF_MARGIN_DAYS + 1)
+    if not lo <= d <= hi:
+        return (f"--date {text} is out of range: the view looks "
+                f"{AS_OF_MARGIN_DAYS} days either side of it; use a date "
+                f"from {_iso(lo)} to {_iso(hi)}")
+    return None
+
+
+def _iso(d: datetime) -> str:
+    """YYYY-MM-DD with a four-digit year (strftime prints year 1 as
+    "1")."""
+    return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
 
 
 def noon_utc(dt: datetime) -> datetime:

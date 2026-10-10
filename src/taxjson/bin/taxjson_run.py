@@ -21440,12 +21440,12 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         # Same shape+calendar validation as `list --date` — the
         # standalone fed the raw string straight into strptime, so a
         # typo'd date died with a traceback instead of a usage error.
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
-            _die("--date expects YYYY-MM-DD")
-        try:
-            datetime.strptime(args.date, "%Y-%m-%d")
-        except ValueError:
-            _die(f"--date {args.date} is not a real calendar date")
+        # A date whose 30-day window leaves the calendar Python can
+        # hold (9999-12-31) is refused too (issue #54).
+        from taxjson.lib.dates import as_of_date_problem
+        _bad = as_of_date_problem(args.date)
+        if _bad:
+            _die(_bad)
         cmd += ["--date", args.date]
     if args.verbose:
         cmd += ["--verbose"]

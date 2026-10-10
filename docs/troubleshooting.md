@@ -1370,3 +1370,10 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** upgrade. Re-run `tjs run` to rebuild a work file; for a file you wrote, complete the row. Dividend rows (`DIVIDEND`, `DIVIDEND_IN_LIEU`) need none of these, and an unknown-cost row flagged `tainted` needs only its date and units.
 - **Fixed in:** `v0.25.0`
 - **Code:** `src/taxjson/lib/json_input.py` — `require_gains_doc`, `check_gains_rows`, `gains_row_kind`; `src/taxjson/bin/taxjson_form_export.py` — `load_dispositions`; `src/taxjson/bin/taxjson_filed.py` — `aggregates_from_gains`; `src/taxjson/bin/taxjson_carryover.py` — `yearly_nets`
+
+### `tjs wash-radar --date 9999-12-31`: "error: --date 9999-12-31 is out of range: the view looks 60 days either side of it; use a date from 0001-03-02 to 9999-10-31"
+- **Check:** the date given to `tjs wash-radar` (or `taxjson-safe-to-sell`) is within 60 days of the first or last date Python can hold. On v0.28.1 and older it stopped with "ValueError: year 10000 is out of range" (issue #54).
+- **Cause:** the radar looks 30 days either side of the date (more with settlement days), and those dates do not exist.
+- **Fix:** give the date you meant (`--date YYYY-MM-DD`), or leave it out for today.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/dates.py` — `as_of_date_problem`; `src/taxjson/bin/taxjson_run.py` — `cmd_wash_radar`; `src/taxjson/bin/taxjson_wash_radar.py` — `main`; `src/taxjson/bin/taxjson_safe_to_sell.py` — `main`

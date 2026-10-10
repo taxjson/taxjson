@@ -498,7 +498,7 @@ use each market's holiday calendar and the T+3, T+2, T+1 history.
 - `src/taxjson/lib/markets.py` — `data`, `overrides`, `suffix_of`, `suffix_currency`, `is_canadian_listing`, `split_share_roots`, `contract_size`, `usd_unit_listing`: market reference data (and the convention for a Canadian-listed fund's US-dollar units).
 - `src/taxjson/data/markets.toml` — `venues`, `currency_suffix`, `usd_unit_class`, `ib_venues`, `kraken_assets`: the shipped defaults.
 - `src/taxjson/lib/market_calendar.py` — `add_settlement_days`, `is_settlement_day`, `is_trading_day`, `nyse_holidays`, `tsx_holidays`: settlement calendars.
-- `src/taxjson/lib/dates.py` — `settlement_date`, `settlement_lag_days`, `date_to_epoch`, `market_of`, `last_trade_date_settling_by`: date helpers for the radar and planning views.
+- `src/taxjson/lib/dates.py` — `settlement_date`, `settlement_lag_days`, `date_to_epoch`, `market_of`, `last_trade_date_settling_by`, `as_of_date_problem`: date helpers for the radar and planning views (a `--date` whose window leaves the calendar is refused).
 
 ## The fetch plugin
 
