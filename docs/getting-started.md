@@ -776,7 +776,8 @@ worth a look. A cost difference never changes the exit code.
 dividend whose description states its share count (`ON 500 SHS`, as RBC
 and Questrade write it) for more shares than the books held when it was
 earned — on its record date (the row's, or the `REC 09/26/25` its
-description prints), else at any time in the 45 days to the pay date. A
+description prints, under the ticker the shares had that day), else at
+any time in the 45 days to the pay date. A
 sale after the record date, the dividend paid later with the position
 at 0, is no finding. It is the sign of a purchase still missing.
 

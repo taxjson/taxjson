@@ -189,6 +189,65 @@ def _record_date_of(r: Dict[str, Any]) -> str:
         return ""
 
 
+def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
+            settled: bool = False, before: bool = False) -> float:
+    """The units the books held on `day` of the security `sym` names
+    now: its own position plus the units a later ticker change (a
+    rename SPLIT row into `sym` — a broker's corporate action, a dated
+    .tt RENAME, a ticker.map rename — dated after `day`) carried in from
+    the old symbol, at the change's ratio. A dividend paid under the new
+    ticker on a record date before the change was earned on the old
+    one's shares."""
+    rows = list(rows)
+    pos = positions_on(rows, day, settled=settled, before=before)
+    renames = []
+    for r in rows:
+        if r.get("action") != "SPLIT":
+            continue
+        new = str(r.get("symbol_new") or "").strip()
+        old = str(r.get("symbol") or "")
+        if not new or new == old:
+            continue
+        d = str((r.get("date_settle") if settled else None)
+                or r.get("date") or "")
+        later = (d >= day) if before else (d > day)
+        if later:
+            try:
+                ratio = float(r.get("quantity") or 0.0) or 1.0
+            except (TypeError, ValueError):
+                ratio = 1.0
+            renames.append((old, new, ratio))
+    factor = {sym: 1.0}
+    for _ in range(len(renames) + 1):
+        grew = False
+        for old, new, ratio in renames:
+            if new in factor and old not in factor:
+                factor[old] = factor[new] * ratio
+                grew = True
+        if not grew:
+            break
+    return sum(pos.get(s, 0.0) * f for s, f in factor.items())
+
+
+# North American markets moved from T+2 to T+1 settlement in May 2024
+# (Canada on the 27th, the US on the 28th): the last trade entitled to a
+# dividend settles by its record date.
+_T1_SINCE = {"US": "2024-05-28", "CA": "2024-05-27"}
+
+
+def last_entitled_trade_day(record: str, currency: str) -> Optional[str]:
+    """The last trading day whose trade settles by `record` on the
+    market's own calendar (the currency's: USD the US, CAD Canada) —
+    the eve of the ex-date. None for a bad date."""
+    from taxjson.lib.market_calendar import market_for, sub_settlement_days
+    mkt = market_for(currency) or "US"
+    n = 1 if record >= _T1_SINCE.get(mkt, "2024-05-28") else 2
+    try:
+        return sub_settlement_days(record, n, currency or "USD").isoformat()
+    except ValueError:
+        return None
+
+
 def _max_held(rows, sym: str, pay: str, days: int) -> Optional[float]:
     """The most shares of `sym` the rows held at the end of any day of
     the `days` before `pay` (pay day included); None for a bad date."""
@@ -200,7 +259,7 @@ def _max_held(rows, sym: str, pay: str, days: int) -> Optional[float]:
     best = 0.0
     for k in range(days + 1):
         day = (d0 - timedelta(days=k)).strftime("%Y-%m-%d")
-        best = max(best, positions_on(rows, day).get(sym, 0.0))
+        best = max(best, held_as(rows, sym, day))
     return best
 
 
@@ -213,7 +272,9 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
     0 by then) is no finding. With the record date (the row's, a .tt
     record=, or the "REC mm/dd/yy" its description prints) the books'
     SETTLED position that day is compared (T+1 / T+2 settlement: the
-    holder of record); with only the ex-date, the position at the end of
+    holder of record), or the shares traded by the eve of the ex-date
+    on the market's calendar (last_entitled_trade_day), whichever is
+    more; with only the ex-date, the position at the end of
     the day before it; with neither, the most the books held at the end
     of any day of the INCOME_WINDOW_DAYS before the pay date. Reported:
     a payment on more shares than that (on a symbol never held: 0) — a
@@ -241,14 +302,29 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
                 if not src or not t.get("source_account")
                 or t.get("source_account") == src]
         rec = _record_date_of(r)
+        # (the listing's market decides the calendar: a US share paid
+        # in CAD by a Canadian broker settles on US days)
+        cur = ("USD" if sym.endswith(".US") else
+               "CAD" if sym.rsplit(".", 1)[-1] in ("TO", "V", "CN", "NE")
+               and "." in sym else str(r.get("currency") or "").upper())
         exd = str(r.get("ex_date") or "")
         pay = str(r.get("date") or "")
 
         def _held(book):
+            # (through a ticker change after the date: the shares were
+            # held under the old symbol then — held_as)
             if rec:
-                return positions_on(book, rec, settled=True).get(sym, 0.0)
+                # The settled position on the record date, or the shares
+                # traded by the eve of the ex-date on the market's own
+                # calendar (a broker's settle date can follow another
+                # market's holiday), whichever is more.
+                h = held_as(book, sym, rec, settled=True)
+                eve = last_entitled_trade_day(rec, cur)
+                if eve:
+                    h = max(h, held_as(book, sym, eve))
+                return h
             if exd:
-                return positions_on(book, exd, before=True).get(sym, 0.0)
+                return held_as(book, sym, exd, before=True)
             return _max_held(book, sym, pay, INCOME_WINDOW_DAYS)
         held = _held(mine)
         if held is None:

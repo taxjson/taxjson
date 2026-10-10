@@ -479,6 +479,75 @@ class TestIncomeShareCount(unittest.TestCase):
                           ("SAMPC.TO", "2025-07-15", 100.0, 0.0)])
         self.assertEqual(out[0]["basis"], "45 days to the pay date")
 
+    def test_entitled_by_the_trade_date_on_the_markets_calendar(self):
+        # Bought Thursday 2022-07-28 (T+2 then: settles Monday 08-01 in
+        # the US, the record date) while the broker states the
+        # settlement on 08-02 (a Canadian holiday on 08-01): the 58
+        # shares were entitled.
+        rows = [
+            {"action": "BUYSELL", "date": "2022-07-12",
+             "date_settle": "2022-07-14", "symbol": "SAMPU.US",
+             "quantity": 233.0, "currency": "USD"},
+            {"action": "BUYSELL", "date": "2022-07-28",
+             "date_settle": "2022-08-02", "symbol": "SAMPU.US",
+             "quantity": 58.0, "currency": "USD"},
+            {"action": "DIVIDEND", "date": "2022-08-15", "symbol": "SAMPU.US",
+             "quantity": 291.0, "record_date": "2022-08-01",
+             "currency": "USD",
+             "description": "SAMPLE U CASH DIV ON 291 SHS"},
+            # bought on the ex-date (Tuesday 08-30, settling 09-01):
+            # not entitled to the 08-31 record date
+            {"action": "BUYSELL", "date": "2022-08-30",
+             "date_settle": "2022-09-01", "symbol": "SAMPU.US",
+             "quantity": 9.0, "currency": "USD"},
+            {"action": "DIVIDEND", "date": "2022-09-15", "symbol": "SAMPU.US",
+             "quantity": 300.0, "record_date": "2022-08-31",
+             "currency": "USD",
+             "description": "SAMPLE U CASH DIV ON 300 SHS"},
+        ]
+        out = PC.income_share_mismatches(rows, "margin")
+        self.assertEqual([(o["date"], o["books_shares"]) for o in out],
+                         [("2022-09-15", 291.0)])
+        self.assertEqual(PC.last_entitled_trade_day("2022-08-01", "USD"),
+                         "2022-07-28")
+        self.assertEqual(PC.last_entitled_trade_day("2025-08-01", "USD"),
+                         "2025-07-31")
+
+    def test_a_ticker_change_after_the_record_date(self):
+        # 100 held as SAMPO.TO on the record date; renamed SAMPQ.TO
+        # before the pay date, the dividend paid under the new ticker:
+        # no finding (the shares were held under the old symbol).
+        rows = [
+            {"action": "BUYSELL", "date": "2025-01-06",
+             "date_settle": "2025-01-07", "symbol": "SAMPO.TO",
+             "quantity": 100.0},
+            {"action": "SPLIT", "date": "2025-03-05",
+             "date_settle": "2025-03-05", "symbol": "SAMPO.TO",
+             "symbol_new": "SAMPQ.TO", "quantity": 1.0},
+            {"action": "DIVIDEND", "date": "2025-03-20", "symbol": "SAMPQ.TO",
+             "quantity": 100.0, "record_date": "2025-02-28",
+             "description": "DIV - SAMPLE Q CASH DIV ON 100 SHS"},
+            # a 2:1 change: 100 old are 200 new
+            {"action": "SPLIT", "date": "2025-06-05",
+             "date_settle": "2025-06-05", "symbol": "SAMPQ.TO",
+             "symbol_new": "SAMPR.TO", "quantity": 2.0},
+            {"action": "DIVIDEND", "date": "2025-06-20", "symbol": "SAMPR.TO",
+             "quantity": 200.0, "record_date": "2025-05-30",
+             "description": "DIV - SAMPLE R CASH DIV ON 200 SHS"},
+            # without a record date: the window sees the old symbol too
+            {"action": "DIVIDEND", "date": "2025-06-21", "symbol": "SAMPR.TO",
+             "quantity": 200.0,
+             "description": "DIV - SAMPLE R CASH DIV ON 200 SHS"},
+            # more than held through the change: still listed
+            {"action": "DIVIDEND", "date": "2025-06-22", "symbol": "SAMPR.TO",
+             "quantity": 300.0, "record_date": "2025-05-30",
+             "description": "DIV - SAMPLE R CASH DIV ON 300 SHS"},
+        ]
+        out = PC.income_share_mismatches(rows, "margin")
+        self.assertEqual([(o["symbol"], o["stated_shares"],
+                           o["books_shares"]) for o in out],
+                         [("SAMPR.TO", 300.0, 200.0)])
+
     def test_sanity_lists_it(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "p"

@@ -62,7 +62,9 @@
   the project folder whose lines apply.
 - `taxjson sanity`'s dividend share-count check follows the entitlement:
   the record date (the row's, a `.tt` `record=`, or the `REC mm/dd/yy` a
-  description prints), else any time in the 45 days to the pay date. A
+  description prints, followed back through a ticker change before the
+  pay date; shares traded by the eve of the ex-date on the market's own
+  calendar count), else any time in the 45 days to the pay date. A
   sale after the record date, the dividend paid later with the position
   at 0, is no longer listed; a payment on more shares than the books held
   then, or on a symbol never held, still is. Costs are compared for
