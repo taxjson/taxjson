@@ -35,7 +35,7 @@ unknown or path-shaped account names, and the country check (a command the
 other country owns is refused). Several commands on one line (`taxjson run sum`)
 are split into segments and run in order.
 
-- `src/taxjson/bin/taxjson_run.py` — `main`, `_main`, `_build_parser`, `_COMMAND_GROUPS`, `_GroupedHelpParser`, `_enforce_command_country`, `_refuse_unknown_account`, `_split_command_segments`, `_help_country`, `_failure_headline`, `_die`: the entry point, the parser and the grouped help page (the other country's commands hidden); the checks applied before every command; command chaining (`taxjson run sum`); how a failed stage or bad input becomes one short message.
+- `src/taxjson/bin/taxjson_run.py` — `main`, `_main`, `_build_parser`, `_COMMAND_GROUPS`, `_GroupedHelpParser`, `_dev_checkout_present`, `_enforce_command_country`, `_refuse_unknown_account`, `_split_command_segments`, `_help_country`, `_failure_headline`, `_die`: the entry point, the parser and the grouped help page (the other country's commands hidden, and the Maintainer group outside a development checkout); the checks applied before every command; command chaining (`taxjson run sum`); how a failed stage or bad input becomes one short message.
 - `src/taxjson/lib/cli_diag.py` — `guard_main`, `run_top_level`, `labelled_usage_errors`, `describe_input_error`, `tolerant_stdout`: the top-level wrapper every tool runs under (broken pipes, unreadable input, usage errors, the settling streams that print a multi-line message's blank line).
 - `src/taxjson/lib/country.py` — `COMMAND_COUNTRY`, `command_country_problem`, `flag_country_problems`, `given_flags`: which commands and flags belong to one country.
 
@@ -71,7 +71,7 @@ parser by its content (header signature), then by its name prefix, never by
 guessing. A file that matches two parsers or none stops the run with a
 message naming the file.
 
-- `src/taxjson/bin/taxjson_run.py` — `input_files`, `group_inputs_detailed`, `detect_broker`, `_report_detection`, `spreadsheet_inputs`, `_duplicate_input_files`, `_sweep_retired_exports`, `_warn_shared_broker_accounts`: the folder scan, the one line per file saying how it was read, and checks on duplicate, retired or shared exports.
+- `src/taxjson/bin/taxjson_run.py` — `input_files`, `group_inputs_detailed`, `detect_broker`, `_report_detection`, `spreadsheet_inputs`, `_duplicate_input_files`, `_sweep_retired_exports`, `_warn_shared_broker_accounts`, `_source_brokerages`: the folder scan, the one line per file saying how it was read, and checks on duplicate, retired or shared exports.
 - `src/taxjson/lib/brokerages/detect.py` — `detect`, `detect_broker`, `DETECTORS`, `Detection`, `AmbiguousBroker`, `content_matches`, `name_hint`, `looks_like_ib_text`, `same_broker_siblings`: content-first detection (each parser's header signature is in `DETECTORS`), then the file-name hint; IB statement sniffing and sibling files.
 - `src/taxjson/bin/taxjson_detect_brokerage.py` — `detect_brokerage`, `cannot_detect_message`, `main`: the `taxjson-detect-brokerage` tool, the same decision for one file.
 - `src/taxjson/bin/xlsx_to_csv.py` — `convert_xlsx_to_csv`, `read_sheet`, `_clean_numeric_commas`: turns an .xlsx export into CSV before parsing.
@@ -135,6 +135,7 @@ against a synthetic fixture.
 - `src/taxjson/bin/taxjson_convert_tt.py` — `tt_to_json`, `parse_tt_line`, `parse_opening_line`, `json_to_tt_lines`, `compute_tt_id`, `main`: the .tt format in both directions.
 - `src/taxjson/bin/taxjson_run.py` — `stage_account`, `_refuse_crypto_openings`: where an account's `.tt` files are converted; an OPENING line in a crypto account is refused.
 - `src/taxjson/lib/tt_totals.py` — `read_diag`, `project_mismatches`, `Mismatch`, `tolerance`, `source_line` (an ACQUIRED line quoted as written): a `.tt` line whose total is not qty x price +/- fee (booked as written), read back from the stage's .diag; `src/taxjson/bin/taxjson_run.py` — `_echo_tt_totals` shows each on the console on every run and `--strict` stops on it; `src/taxjson/lib/checklist.py` — `d_run_clean` lists them.
+- `src/taxjson/bin/taxjson_run.py` — `_echo_tt_bare_symbols`; `src/taxjson/bin/taxjson_convert_tt.py` — `_warn_bare_equity_symbol`, `_equity_account`: a `.tt` symbol without its market suffix on an equity account (the run passes `--equity`), shown on the console with file:line when the broker rows hold the suffixed listing.
 - `src/taxjson/bin/taxjson_generate_parser.py` — `main`, `identity_findings`, `_call_claude`, `_call_gemini`: maintainer tool that drafts a parser from a sample CSV.
 - `tests/parser_conformance.py` — `ParserConformance`, `FIXTURES`, `validate_transactions`: the harness every parser test subclasses (schema, golden output, determinism, row accounting).
 - `tests/test_parser_conformance.py` — `TestQuestradeConformance`, `TestIbConformance`, `TestKrakenConformance`, `UPDATE_GOLDEN`: one registration per parser.
@@ -211,6 +212,7 @@ rate. `stage_currency_rates` builds the project's rates file by calling
 the rates are cached in the home folder.
 
 - `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`, `_rates_coverage_stale`, `_raw_align_adjust_currency`, `_home_currency`: the run's rate file, its freshness, and ADJUST rows (and a purchase whose `listing_currency` is not its cash's, a Questrade REI) restated in the pool's currency for the raw holdings books.
+- `src/taxjson/bin/taxjson_run.py` — `_rates_inputs`, `RATES_START_STAMP`; `src/taxjson/lib/rates_window.py` — `window_start`, `earliest_in_text`, `PAD_DAYS`: the first date the rates must cover, from the earliest date written in the project's exports, `.tt` files, slips and positions snapshots (never later than January 1 of the year), recorded beside the rates file.
 - `src/taxjson/bin/to_base_curr.py` — `build_rates`, `fetch_boc`, `fetch_boc_noon`, `fetch_yahoo`, `refresh_boc`, `resolve_rows`, `CACHE_FILE`: daily rates for one currency pair.
 - `src/taxjson/bin/taxjson_convert_currency.py` — `main`, `convert_transaction`, `get_rate_for_date`, `load_exchange_rates`, `MissingRateError`, `abort_if_currency_uncovered`, `fallback_rows`, `emit_fallback_summary`, `rate_source_summary`, `default_rate_for`: converting a book; rows priced with a fallback rate, and the summary of rate sources.
 - `src/taxjson/lib/json_cache.py` — `save_json_cache`: atomic, locked saves of the shared price and rate caches.
@@ -430,7 +432,7 @@ closed year carried forward and checks that the next year's project starts
 from exactly that.
 
 - `src/taxjson/bin/taxjson_filed.py` — `write_snapshot`, `recompute_year`, `diff_snapshot`, `project_locks`, `lock_for_year`, `aggregates_from_gains`: the filed-year lock.
-- `src/taxjson/bin/taxjson_run.py` — `cmd_close_year`, `cmd_check_filed`, `_check_filed_years`, `_carryforwards_for_lock`, `_locked_year_flags`, `cmd_handoff`, `_prior_record_path`, `_handoff_gains_flags`: `close-year`, `check-filed` and `handoff`, and the drift check every run makes of each filed year.
+- `src/taxjson/bin/taxjson_run.py` — `cmd_close_year`, `_close_year_attention` (the checklist steps before the lock that need attention: asked on a terminal, refused without one unless `--yes`), `cmd_check_filed`, `_check_filed_years`, `_carryforwards_for_lock`, `_locked_year_flags`, `cmd_handoff`, `_prior_record_path`, `_handoff_gains_flags`: `close-year`, `check-filed` and `handoff`, and the drift check every run makes of each filed year.
 - `src/taxjson/lib/handoff.py` — `snapshot`, `check`, `render`, `validate_record`, `straddlers`, `load_filed_dispositions`: the year-to-year record and its check.
 
 ## Redact
@@ -450,7 +452,9 @@ a new project from a template; `format` re-renders an existing file into the
 template keeping the user's values; `migrate` folds an old project's separate
 files into ticker.map and taxjson.toml.
 
-- `src/taxjson/bin/taxjson_run.py` — `load_config`, `validate_config`, `_normalize_settings`, `_warn_config_tables`, `_refuse_bad_account_types`, `cmd_init`, `_render_init_config`, `cmd_format`, `_backup_config`, `cmd_migrate`: reading and checking taxjson.toml; `init`, `format` and `migrate`.
+- `src/taxjson/bin/taxjson_run.py` — `load_config`, `validate_config`, `_normalize_settings`, `_warn_config_tables`, `_refuse_bad_account_types`, `cmd_init`, `_render_init_config`, `_refuse_init_in_year_folder`, `_sibling_grant_since`, `cmd_format`, `_backup_config`, `cmd_migrate`: reading and checking taxjson.toml; `init` (refused in an empty folder named like a year; from January to April a line for filing last year; `option_grant_timing_since` left commented unless another year folder sets it), `format` and `migrate`.
+- `src/taxjson/lib/demo.py` — `ACCOUNTS`, `SCENARIOS`, `files`, `data_dir`, `settings`; `src/taxjson/bin/taxjson_run.py` — `_init_demo`: `taxjson init --demo`, a Canadian 2024 year folder of made-up exports (`src/taxjson/data/demo/<account>/`, the broker demos of `examples/` plus an IB statement with the getting-started scenarios and its saved spin-off election in `manifest.json`).
+- `src/taxjson/bin/taxjson_run.py` — `_grant_since_warning`, `_books_write_options`, `_grant_since_after_year`: the run's warnings about `option_grant_timing_since` (not set while the books hold a written option; later than `year`).
 - `src/taxjson/lib/config_check.py` — `settings_problems`, `account_type_problems`, `account_name_problem`, `ACCOUNT_TYPES`, `ACCOUNT_KEYS`, `RETIRED_SETTINGS`: the checks every config reader applies.
 - `src/taxjson/lib/config_template.py` — `SETTINGS_SPEC`, `ACCOUNT_SPEC`, `TABLES`, `render_init`, `format_config`, `scaffold_document`, `Key`: every key taxjson reads, documented per country.
 - `src/taxjson/lib/migrate.py` — `plan`, `apply`, `Plan`, `legacy_files`, `LEGACY_FILES`, `MigrateError`: moving old files into the new places.

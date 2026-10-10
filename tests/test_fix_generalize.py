@@ -78,7 +78,8 @@ class TestShippedData(unittest.TestCase):
     def test_data_file_is_package_data(self):
         self.assertTrue(markets.DATA_FILE.is_file())
         root = Path(__file__).resolve().parent.parent
-        self.assertIn('taxjson = ["data/*.toml"]',
+        # (data/demo/*/*: the `taxjson init --demo` exports, lib/demo)
+        self.assertIn('taxjson = ["data/*.toml", "data/demo/*/*"]',
                       (root / "pyproject.toml").read_text())
 
     def test_venue_tables(self):

@@ -43,7 +43,7 @@ class TestFiledYearLock(unittest.TestCase):
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)
             # Close the year.
-            r = _run_cli(root, "close-year")
+            r = _run_cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr)
             snap_path = root / "filed" / "2025.json"
             self.assertTrue(snap_path.exists())
@@ -55,7 +55,7 @@ class TestFiledYearLock(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("filed 2025: OK", r.stdout)
             # The lock refuses accidental overwrite.
-            r = _run_cli(root, "close-year")
+            r = _run_cli(root, "close-year", "--yes")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("--force", r.stderr)
 
@@ -76,7 +76,7 @@ class TestFiledYearLock(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("filed year(s) drifted", r.stderr)
             # Refreshing the lock clears everything.
-            r = _run_cli(root, "close-year", "--force")
+            r = _run_cli(root, "close-year", "--yes", "--force")
             self.assertEqual(r.returncode, 0, r.stderr)
             r = _run_cli(root, "check-filed")
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -226,7 +226,7 @@ class TestSingleAccountRunNeverPrintsFiledOk(unittest.TestCase):
             rrsp_csv.write_text(_QT_HEADER + self._RRSP_BEFORE)
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-            r = _run_cli(root, "close-year")
+            r = _run_cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr)
             snap = json.loads((root / "filed" / "2025.json").read_text())
             self.assertAlmostEqual(snap["totals"]["realized"], -200.0,

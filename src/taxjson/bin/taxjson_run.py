@@ -349,6 +349,50 @@ def _echo_tt_totals(account: str, tt: Path, out_path: Path,
              "warning above says how).")
 
 
+# convert-tt's warning for a bare symbol on an equity account's .tt line
+# (taxjson_convert_tt._warn_bare_equity_symbol), as its .diag keeps it.
+_TT_BARE_RE = re.compile(r"^warning: (?P<where>\S+:\d+): symbol (?P<sym>\S+) "
+                         r"has no market suffix")
+
+
+def _echo_tt_bare_symbols(account: str, tt_jsons: List[Path],
+                          parsed: List[Path]) -> None:
+    """A .tt line whose symbol has no market suffix (AAPL) while the
+    account's broker rows hold the suffixed listing (AAPL.US) opens a
+    separate pool: the broker's sale of AAPL.US then goes short. The
+    convert-tt warning reached only the .sum; the console gets one line
+    naming file:line and the listing the books hold. Read from the
+    persisted .diag on every run, cached or not."""
+    import json as _json
+    bare = []
+    for out in tt_jsons:
+        for line in _diag_lines(out):
+            m = _TT_BARE_RE.match(line)
+            if m:
+                bare.append((m["where"], m["sym"].upper()))
+    if not bare:
+        return
+    held: Dict[str, set] = {}
+    for p in parsed:
+        try:
+            rows = _json.loads(p.read_text(encoding="utf-8")).get(
+                "transactions") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        for t in rows:
+            sym = str((t or {}).get("symbol") or "").upper()
+            if "." in sym:
+                held.setdefault(sym.split(".", 1)[0], set()).add(sym)
+    for where, sym in bare:
+        listings = sorted(held.get(sym, ()))
+        if not listings:
+            continue
+        _say_once(("tt-bare", account, where), "warning",
+                  f"inputs/{account}/{where}: {sym} has no market suffix: "
+                  f"a pool of its own, apart from {' / '.join(listings)} "
+                  f"in the books", prog=_PROG)
+
+
 def _codes_note_head() -> str:
     from taxjson.lib.symbol_codes import NOTE_HEAD
     return NOTE_HEAD
@@ -1241,13 +1285,28 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Explain and check", ("audit", "wash-sales", "tax-logic", "edge-cases",
                            "check-dates", "sanity", "journals", "renames",
                            "spinoffs", "splits")),
-    ("Release", ("channels", "deploy", "promote")),
+    ("Maintainer", ("channels", "deploy", "promote")),
     ("Tools", ("redact", "help")),
 )
 
 # The release verbs read a git checkout, never a tax project: -C/--dir
 # and the project guards do not apply to them.
 _RELEASE_CMDS: Tuple[str, ...] = ("channels", "deploy", "promote")
+# The group of the maintainer's release commands: listed by `help --all`
+# and on a development checkout only (they stay runnable everywhere).
+_MAINTAINER_GROUP = "Maintainer"
+
+
+def _dev_checkout_present() -> bool:
+    """A development checkout taxjson is released from (lib/channels
+    .dev_checkout with scripts/promote.sh): the help page lists the
+    maintainer's commands there."""
+    from taxjson.lib import channels as ch
+    try:
+        dev = ch.dev_checkout()
+    except ch.ChannelsError:
+        return False
+    return dev is not None and (dev / "scripts" / "promote.sh").is_file()
 
 _TOP_DESCRIPTION = (
     "taxjson — capital gains, income and the superficial-loss / "
@@ -1286,7 +1345,8 @@ class _GroupedHelpParser(argparse.ArgumentParser):
     a closing line counts them; `help --all` (`show_all`) lists every
     command. Outside a project, or with --all, a one-country command is
     marked "(Canada)" / "(USA)". Running a hidden command still gets the
-    dispatcher's refusal naming why."""
+    dispatcher's refusal naming why. The Maintainer group (the release
+    commands) is listed with --all or on a development checkout only."""
 
     help_country: Optional[str] = None
     show_all: bool = False
@@ -1317,9 +1377,12 @@ class _GroupedHelpParser(argparse.ArgumentParser):
             by_name[a.dest] = a
         placed = set()
         sections = []
+        maintainer = self.show_all or _dev_checkout_present()
         for title, names in _COMMAND_GROUPS:
             acts = [by_name[n] for n in names if n in by_name]
             placed.update(n for n in names if n in by_name)
+            if title == _MAINTAINER_GROUP and not maintainer:
+                continue
             sections.append((title, acts))
         rest = [a for n, a in by_name.items() if n not in placed]
         if rest:
@@ -3110,13 +3173,42 @@ def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None,
                for k in keys)
 
 
-def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
+# work/to_base.csv's companion: the first date it was built from
+# (lib/rates_window). A file without one was built from 2000-01-01.
+RATES_START_STAMP = ".to_base.start"
+
+
+def _rates_inputs(root: Path, inputs_dir: Path,
+                  accounts: Dict[str, Any]) -> List[Path]:
+    """The files whose dates bound the FX window (lib/rates_window):
+    every account's exports and .tt files, the year's slips and its
+    positions snapshots. Read-only; a folder that cannot be listed
+    gives nothing (the run's own checks name it)."""
+    folders = [inputs_dir / n for n in sorted(accounts or {})]
+    folders += [_PL.slips_dir(root), _PL.holdings_folder(root)]
+    out: List[Path] = []
+    for d in folders:
+        try:
+            out += [p for p in sorted(d.iterdir())
+                    if p.is_file() and not p.name.startswith((".", "~$"))
+                    and p.suffix.lower() in (".csv", ".tt", ".toml",
+                                             ".txt", ".tsv")]
+        except OSError:
+            continue
+    return out
+
+
+def stage_currency_rates(settings: Dict[str, Any], cache: Path,
+                         inputs: Optional[List[Path]] = None) -> Path:
     """Build to_base.csv by appending taxjson-to-base-curr output for each
     configured source currency. Caches across runs while every source
     currency's rates reach the last few days: a refresh whose download
     failed for one currency (its block ends early) is refetched on the
     next run instead of being served for days behind another currency's
-    fresh last line (S046-06)."""
+    fresh last line (S046-06). `inputs`: the project's files
+    (_rates_inputs) — the window starts at the earliest date in them
+    (lib/rates_window), not 2000-01-01, and a file built from a later
+    start is rebuilt."""
     base = settings["base_currency"]
     sources = [c for c in settings.get("source_currencies", ["USD"]) if c != base]
     # Ensure the cache dir exists before any write — applies to both
@@ -3144,8 +3236,15 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # this, switching from CAD-base to USD-base silently reused the
     # old rates. The coverage check catches the inverse failure: an
     # mtime-fresh file whose data ends in the past.
+    start: Optional[str] = None
+    stamp = cache / RATES_START_STAMP
+    if inputs is not None:
+        from taxjson.lib.rates_window import window_start
+        start = window_start(settings.get("year"), inputs).isoformat()
+    built_from = (_read_work_stamp(stamp) or "").strip() or None
     if (not needs_rebuild(rates_path)
-            and not _rates_coverage_stale(rates_path, currencies=sources)):
+            and not _rates_coverage_stale(rates_path, currencies=sources)
+            and (start is None or built_from is None or built_from <= start)):
         return rates_path
     had_previous = rates_path.exists() and rates_path.stat().st_size > 0
     parts: List[bytes] = []
@@ -3155,7 +3254,9 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     try:
         for src in sources:
             _step(f"{_fetch} {src} → {base} rates")
-            parts.append(run_capture(_cmd("taxjson-to-base-curr") + [src, base]))
+            parts.append(run_capture(
+                _cmd("taxjson-to-base-curr") + [src, base]
+                + (["--start", start] if start else [])))
     except Exception as exc:
         # A refresh attempt (e.g. offline, yfinance hiccup) must not turn a
         # usable-if-aging rates file into a hard failure — but say so
@@ -3173,6 +3274,10 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # silently fall back to the default FX rate).
     from taxjson.lib.safe_write import write_atomic
     write_atomic(rates_path, b"".join(parts))
+    if start:
+        _write_work_stamp(stamp, start + "\n")
+    else:
+        _drop_work_file(stamp)
     return rates_path
 
 
@@ -4809,7 +4914,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # The name as the .tt warnings name it (_echo_tt_totals).
             from taxjson.lib.brokerages.base import shown_name as _shown
             _step(f"Reading {_shown(tt)}")
-            run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
+            run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name]
+                        + ([] if is_crypto else ["--equity"]) + [str(tt)],
                         out)
         # A line whose total is not its qty x price +/- fee: the total is
         # booked as written. Read from the persisted .diag on EVERY run,
@@ -4818,6 +4924,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # the .sum DIAGNOSTICS).
         _echo_tt_totals(name, tt, out, strict)
         tt_jsons.append(out)
+    _echo_tt_bare_symbols(name, tt_jsons, parsed)
 
     # Broker groups REMOVED from inputs/: their parsed JSON, .diag and
     # corp files would otherwise persist forever — stale .diag lines in
@@ -7070,24 +7177,47 @@ def _duplicate_crypto_exports(cache: Path, names: List[str]) -> List[str]:
     return out
 
 
+def _source_brokerages(doc: Dict[str, Any]) -> Dict[str, str]:
+    """{input file name: brokerage} of a merged book, from the merge's
+    metadata (sources[].original_metadata: input_files and
+    source_brokerage); a row's `source` is that file name."""
+    out: Dict[str, str] = {}
+    meta = doc.get("metadata") if isinstance(doc, dict) else None
+    for src in (meta or {}).get("sources") or ():
+        om = (src or {}).get("original_metadata") or {}
+        broker = str(om.get("source_brokerage") or "")
+        for f in om.get("input_files") or ():
+            out[Path(str(f)).name] = broker
+        for f in (om.get("source_accounts") or {}):
+            out.setdefault(Path(str(f)).name, broker)
+    return out
+
+
 def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
     """One broker account's export in TWO taxjson accounts books every
     row twice (audit A2-0293, A2-0630). The rows carry their broker
     account (hashed, `source_account`); name each pair of taxjson
-    accounts that share one, with the count of identical rows."""
+    accounts that share one, with the count of identical rows. The key
+    is (brokerage, account id): two brokers' accounts may carry the same
+    number (Questrade's, RBC's and Webull's 8-digit ids), and are two
+    accounts."""
     import json
-    seen: Dict[str, Dict[str, set]] = {}
+    seen: Dict[Tuple[str, str], Dict[str, set]] = {}
     for name, base in bases:
         try:
-            rows = json.loads(Path(base).read_text()).get("transactions")
+            doc = json.loads(Path(base).read_text())
+            rows = doc.get("transactions")
         except (OSError, ValueError, AttributeError):
             continue
-        per: Dict[str, set] = {}
+        brokers = _source_brokerages(doc)
+        per: Dict[Tuple[str, str], set] = {}
         for t in rows or ():
             if isinstance(t, dict) and t.get("source_account"):
                 # The id hashes the taxjson account label: compare the
                 # row's content instead.
-                per.setdefault(t["source_account"], set()).add(
+                key = (brokers.get(Path(str(t.get("source") or "")).name,
+                                   ""), str(t["source_account"]))
+                per.setdefault(key, set()).add(
                     (t.get("date"), t.get("action"), t.get("symbol"),
                      t.get("quantity"), t.get("net_amount")))
         seen[name] = per
@@ -7095,9 +7225,9 @@ def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
     shared = 0
     for i, a in enumerate(names):
         for b in names[i + 1:]:
-            for h in sorted(set(seen[a]) & set(seen[b])):
+            for _broker, h in sorted(set(seen[a]) & set(seen[b])):
                 shared += 1
-                same = len(seen[a][h] & seen[b][h])
+                same = len(seen[a][(_broker, h)] & seen[b][(_broker, h)])
                 _say("attention", f"the same broker account (#{h[:6]}) "
                      f"feeds two taxjson accounts, {a} and {b} ({same} "
                      f"identical row(s))",
@@ -7434,10 +7564,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
                   prog=_PROG,
                   short=f"{', '.join(_loose)} can be read by other users: "
                         f"`chmod -R go-rwx` it")
-    _since_warn = _grant_since_warning(settings, root, accounts)
-    if _since_warn:
-        # (a crypto-only project writes no options — nothing to warn about)
-        _say("warning", *_split_msg(_since_warn), prog=_PROG)
+    _late_since = _grant_since_after_year(settings)
+    if _late_since:
+        _say("warning", _late_since, prog=_PROG)
 
     # Orphaned artifacts from RENAMED/REMOVED accounts: work/ files
     # keep matching the discovery globs (resolve_gains_files, fees
@@ -7686,7 +7815,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
              "nothing was built.")
 
     _step("Loading currency rates")
-    rates = stage_currency_rates(settings, cache)
+    rates = stage_currency_rates(settings, cache,
+                                 _rates_inputs(root, inputs_dir, accounts))
 
     sheltered_items = [(n, c) for n, c in accounts.items()
                        if c.get("type", "sheltered") == "sheltered"]
@@ -8196,6 +8326,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
         settings.get("year"),
         [o["base"] for _, o in sheltered_outputs]
         + [o["base"] for _, o, _c in taxable_outputs])
+    # After the books: said only when they hold a written option (a
+    # crypto-only project writes none — nothing to warn about).
+    _since_warn = _grant_since_warning(settings, root, accounts)
+    if _since_warn:
+        _say("warning", *_split_msg(_since_warn), prog=_PROG)
 
     # Filed-year lock: recompute every closed year from the fresh books
     # and shout if a filed number moved (warn-only; --strict aborts).
@@ -8766,7 +8901,8 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
 # same one, so a fresh scaffold is already formatted).
 def _render_init_config(country_canon: str,
                         year: Optional[int] = None,
-                        extra: Optional[Dict[str, Any]] = None
+                        extra: Optional[Dict[str, Any]] = None,
+                        grant_since: Optional[int] = None
                         ) -> Tuple[str, Tuple[str, ...]]:
     """(toml_text, account_names) for `taxjson init` — the same tuple
     drives the inputs/ folder scaffold so config sections and input dirs
@@ -8775,7 +8911,7 @@ def _render_init_config(country_canon: str,
     then asks for it when the project has a crypto account)."""
     from taxjson.lib import config_template as CT
     return CT.render_init(country_canon, year, tz=CT.system_timezone(),
-                          extra=extra)
+                          extra=extra, grant_since=grant_since)
 
 
 # A commented `ticker.map` stub. The pipeline runs fine without this file, so
@@ -13012,7 +13148,7 @@ def cmd_tips(args: argparse.Namespace) -> None:
     a .TO line whose exchange name says CDR (Canadian Depositary Receipt
     — SAMPLR.TO over SAMPLR.US): the SAME issuer but NOT a listing
     equivalent (fractional, CAD-hedged, floating ratio) — never map it;
-    `DISTINCT SAMPLR.US SAMPLR.TO` records the ruling.
+    nothing to do: look-alike listings are never joined.
 
     The map's own hygiene is `taxjson ticker-map --suggest`: a loss on
     one listing with the other bought in its window (lib/
@@ -13367,8 +13503,8 @@ def cmd_tips(args: argparse.Namespace) -> None:
                         f"ticker.map pairs a CDR with its underlying "
                         f"({na!r} vs {nb!r}) — a CDR is a fractional "
                         f"CAD-hedged receipt whose ratio floats; "
-                        f"remove the entry and declare "
-                        f"`DISTINCT {old_} {new}` instead."))
+                        f"remove the entry (look-alike listings are "
+                        f"never joined: no DISTINCT line is needed)."))
                 elif na and nb and not _issuer_names_match(na, nb):
                     findings.append((
                         "MAP-BAD?", "-", f"{old_}->{new}",
@@ -13410,10 +13546,9 @@ def cmd_tips(args: argparse.Namespace) -> None:
                                 f"{names.get(c) or names.get(u)!r} "
                                 f"is a CDR over {u} — a fractional "
                                 f"CAD-hedged receipt, not a listing "
-                                f"equivalent; do NOT map them. Add "
-                                f"`DISTINCT {u} {c}` to ticker.map "
-                                f"to record this and silence the "
-                                f"pair."))
+                                f"equivalent; nothing to do: "
+                                f"look-alike listings are never "
+                                f"joined."))
                             continue
                         findings.append((
                             "MAP-GAP?", "-", f"{u}/{c}",
@@ -15912,6 +16047,61 @@ def _locked_grant_since(root: Path, settings: Dict[str, Any]
     return None
 
 
+def _books_write_options(root: Path, accounts: Dict[str, Any]
+                         ) -> Optional[bool]:
+    """Whether a taxable equity account's books (work/<acct>_base.json)
+    hold a written option (lib/option_boundary.write_lots): True /
+    False, or None when no such book can be read."""
+    import json as _json
+    from taxjson.lib.core import TaxTransaction
+    from taxjson.lib.option_boundary import write_lots
+    fields = TaxTransaction.__dataclass_fields__
+    seen = False
+    for name, acfg in sorted((accounts or {}).items()):
+        if not isinstance(acfg, dict) or acfg.get("type") != "taxable" \
+                or acfg.get("crypto"):
+            continue
+        try:
+            doc = _json.loads((Path(root) / "work" / f"{name}_base.json")
+                              .read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        raw = doc.get("transactions") if isinstance(doc, dict) else doc
+        txs = []
+        for r in raw if isinstance(raw, list) else []:
+            if isinstance(r, dict):
+                try:
+                    txs.append(TaxTransaction(
+                        **{k: v for k, v in r.items() if k in fields}))
+                except TypeError:
+                    continue
+        seen = True
+        if write_lots(txs):
+            return True
+    return False if seen else None
+
+
+def _grant_since_after_year(settings: Dict[str, Any]) -> Optional[str]:
+    """One line when a Canadian project's option_grant_timing_since is
+    later than its year: its written options are then taxed at the
+    close, not when written — usually `year` lowered (filing an earlier
+    year) with the key left as an earlier project wrote it."""
+    if _country(settings) in ("us", "usa"):
+        return None
+    since, yr = settings.get("option_grant_timing_since"), \
+        settings.get("year")
+    if not (isinstance(since, int) and isinstance(yr, int)) \
+            or isinstance(since, bool) or isinstance(yr, bool) \
+            or since <= yr:
+        return None
+    if str(settings.get("option_premium_timing", "grant")).strip() \
+            .lower() != "grant":
+        return None
+    return (f"option_grant_timing_since = {since} is after year = {yr}: "
+            f"{yr}'s written options are taxed at the close (right only "
+            f"if {yr} was filed that way)")
+
+
 def _grant_since_warning(settings: Dict[str, Any],
                          root: Optional[Path] = None,
                          accounts: Optional[Dict[str, Any]] = None
@@ -15935,6 +16125,11 @@ def _grant_since_warning(settings: Dict[str, Any],
             != "grant":
         return None
     if settings.get("option_grant_timing_since") not in (None, ""):
+        return None
+    if root is not None and accounts is not None \
+            and _books_write_options(root, accounts) is False:
+        # No written option in the books: the default (the project
+        # year) decides nothing (init leaves the key commented).
         return None
     yr = settings.get("year")
     if not isinstance(yr, int) or isinstance(yr, bool):
@@ -19663,6 +19858,24 @@ def _filed_run_gains(cmd_tail, out_path):
                 capture_diag=False)
 
 
+def _close_year_attention(root: Path, cfg: Dict[str, Any],
+                          year: int) -> List[Tuple[str, str]]:
+    """(step id, what it found) for each checklist step before the lock
+    (lib/checklist, the steps ahead of filed-lock) whose result, marks
+    applied, needs attention."""
+    from taxjson.lib import checklist as cl
+    ids = cl.item_ids()
+    only = ids[:ids.index("filed-lock")] if "filed-lock" in ids else ids
+    ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=date_cls.today(),
+                 run_sub=cl.default_run_sub(root))
+    try:
+        results = cl.evaluate(ctx, only=only, progress=cl.stderr_progress)
+    except cl.StateFileError as e:
+        return [("checklist.json", str(e))]
+    return [(r.id, " ".join(str(r.detail or "").split()))
+            for r in results if r.effective == "attention"]
+
+
 def cmd_close_year(args: argparse.Namespace) -> None:
     """`taxjson close-year`: snapshot the current tax year's per-account
     filing aggregates to filed/<year>.json (the filed-year lock)."""
@@ -19846,6 +20059,26 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         _out.warn(f"tax year {year} has not ended — locking a partial "
                   f"year (--force)", prog=_prog,
                   details=[f"Later trades in {year} will show as drift."])
+    # The checklist's steps before the lock that need attention: listed
+    # and confirmed on a terminal; without one, refused unless --yes
+    # (new-user walkthrough: a year was locked with them open).
+    if not getattr(args, "yes", False):
+        _attn = _close_year_attention(root, cfg, int(year))
+        if _attn:
+            _head = (f"{len(_attn)} checklist item(s) before the lock need "
+                     f"attention")
+            _items = [f"- {sid}: {detail}" for sid, detail in _attn]
+            if not sys.stdin.isatty():
+                _die(_head, *_items,
+                     f"Fix them (`{_PROG} checklist` says how), or pass "
+                     f"--yes to lock {year} anyway. {_nothing}")
+            _out.warn(_head, prog=_prog, details=_items)
+            try:
+                _ans = input(f"Lock {year} anyway? [y/N] ")
+            except EOFError:
+                _ans = ""
+            if not _ans.strip().lower().startswith("y"):
+                _die(f"{year} not locked", _nothing)
     print(f"Recording year-end positions and the {year} dispositions "
           f"for the {int(year) + 1} hand-off ...")
     try:
@@ -24147,6 +24380,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     shared by the year projects, and the year's folder (YYYY/), a
     complete project whose taxjson.toml names the shared folders
     (lib/project_layout); `--single`: one folder for one year."""
+    if getattr(args, "demo", False):
+        _init_demo(args)
+        return
+    if not args.country:
+        _die_input("--country is required (canada | ca | usa | us)",
+                   f"`{_PROG} init --demo` makes a project of made-up "
+                   f"data to try first.")
     country = _normalize_country(args.country)
     if country not in ("canada", "usa"):
         _die(f"unknown country {args.country!r} (expected canada | ca | "
@@ -24166,6 +24406,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     # The positional `path` (if given) overrides the global -C/--dir flag.
     target = getattr(args, "path", None) or args.dir
     top = Path(target).resolve()
+    if years:
+        _refuse_init_in_year_folder(top, country, _year)
     if years and (top / "taxjson.toml").is_file():
         _die(f"{top} is a single-folder project (it has a taxjson.toml)",
              "`taxjson migrate --to-years` there turns it into one folder "
@@ -24194,7 +24436,9 @@ def cmd_init(args: argparse.Namespace) -> None:
           _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
           # Canada: the interlisted pairs, one file every year reads.
           **({_PL.TOBASE_KEY: _PL.SHARED_TOBASE}
-             if country == "canada" else {})} if years else None))
+             if country == "canada" else {})} if years else None),
+        grant_since=(_sibling_grant_since(top, first_year)
+                     if years and country == "canada" else None))
     # The tree is checked BEFORE anything is written: inputs/ existing
     # as a file was a NotADirectoryError traceback after taxjson.toml
     # and ticker.map were already in place (re-audit A2-0781).
@@ -24256,7 +24500,9 @@ def cmd_init(args: argparse.Namespace) -> None:
     for acct in account_names:
         # The README also keeps the empty input dir present under git.
         # It says what to download from each broker (new-user study).
-        _stub(f"inputs/{acct}/README.txt", _readme(country, acct))
+        _stub(f"inputs/{acct}/README.txt", _readme(
+            country, acct, "YYYY/inputs/slips/"
+            if years else "inputs/slips/"))
 
     # Essentials first (docs/output-style.md): the project made and the
     # next steps, one line each; the files written, the layout and the
@@ -24344,12 +24590,146 @@ def cmd_init(args: argparse.Namespace) -> None:
         for _ln in _out_wrap(f"Next year: `taxjson -C "
                              f"{_shlex.quote(str(top))} new-year "
                              f"{first_year + 1}` copies this year's "
-                             f"taxjson.toml, ticker.map and tobase.map into "
-                             f"{first_year + 1}/.", indent="  ",
-                             hang="  "):
+                             f"taxjson.toml and ticker.map into "
+                             f"{first_year + 1}/"
+                             + (" (tobase.map is one file every year "
+                                "reads)" if country == "canada" else "")
+                             + ".", indent="  ", hang="  "):
             print(_ln)
+    if _year is None and date_cls.today().month <= 4:
+        # January to April: most people file the year that just ended
+        # (owner: the default stays the calendar year).
+        print(f"  Filing {first_year - 1} now? Run `{_PROG} init --country "
+              f"{country} --year {first_year - 1}`"
+              + (f" in {_shlex.quote(str(top))}" if years else "")
+              + " for its folder.")
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
+
+
+def _init_demo(args: argparse.Namespace) -> None:
+    """`taxjson init --demo [DIR]`: the demo project (lib/demo) — DIR
+    (new or empty) holding inputs/ with the made-up exports, tobase.map
+    and 2024/, a ready taxjson.toml — and the commands to try."""
+    import shlex as _shlex
+    import shutil
+    from taxjson.lib import config_template as CT
+    from taxjson.lib import demo as DM
+    from taxjson.lib import tobase_map as _TB
+    from taxjson.lib.safe_write import write_atomic
+    from taxjson.lib.ticker_map_format import init_template
+    if args.country and _normalize_country(args.country) != DM.COUNTRY:
+        _die_input("the demo is a Canadian project: leave out --country "
+                   "(or pass --country canada)")
+    if getattr(args, "year", None) not in (None, DM.YEAR):
+        _die_input(f"the demo's tax year is {DM.YEAR}: leave out --year")
+    if getattr(args, "single", False):
+        _die_input("the demo is one folder of exports for every year: "
+                   "leave out --single")
+    top = Path(getattr(args, "path", None) or args.dir).resolve()
+    _refuse_init_in_year_folder(top, DM.COUNTRY, DM.YEAR)
+    try:
+        busy = top.exists() and (not top.is_dir() or any(top.iterdir()))
+    except OSError as e:
+        _die_input(f"cannot read {top}: {e.strerror or e}")
+    if busy:
+        _die_input(f"{top} is not empty: the demo goes in a new folder",
+                   f"`{_PROG} init --demo ~/taxjson-demo` makes one. "
+                   f"Nothing was written.")
+    try:
+        top.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as e:
+        _die_input(f"cannot create {top}: {e.strerror or e}")
+    root = top / str(DM.YEAR)
+    doc = CT.scaffold_document(DM.COUNTRY, DM.YEAR)
+    doc["settings"].update(DM.settings())
+    doc["settings"].update({_PL.INPUTS_KEY: f"../{_PL.INPUTS}",
+                            _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
+                            _PL.TOBASE_KEY: _PL.SHARED_TOBASE})
+    doc["accounts"] = {n: dict(c) for n, c in DM.ACCOUNTS}
+    (root / _PL.HOLDINGS).mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_atomic(root / "taxjson.toml",
+                 CT.render_document(doc, DM.COUNTRY, DM.YEAR))
+    write_atomic(root / "ticker.map", init_template())
+    from taxjson.lib.holdings_dir import README as _HREADME
+    write_atomic(root / _PL.HOLDINGS / "README.txt", _HREADME)
+    write_atomic(top / _TB.TOBASE_MAP,
+                 _TB.render(_TB.load_master(), shared=True))
+    write_atomic(top / ".gitignore", _TEMPLATE_GITIGNORE
+                 + "# The newest year's positions and wash radar, for "
+                   "other tools (`taxjson run`).\nexports/\n")
+    for name, cfg in DM.ACCOUNTS:
+        d = top / _PL.INPUTS / name
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        kind = ("crypto" if cfg.get("crypto") else str(cfg["type"]))
+        write_atomic(d / "README.txt", CT.input_readme(
+            DM.COUNTRY, name, "YYYY/inputs/slips/", kind=kind))
+    for name, src in DM.files():
+        dst = top / _PL.INPUTS / name / src.name
+        shutil.copyfile(src, dst)
+        dst.chmod(0o600)
+    from taxjson.lib import out as _out
+    yd = _shlex.quote(str(root))
+    print(_out.fill(f"Made the taxjson demo in {top}: tax year {DM.YEAR}, "
+                    f"made-up exports of six accounts in inputs/ (two at "
+                    f"IB, Questrade, Webull, a TFSA at RBC, crypto at "
+                    f"Kraken and Coinbase) and the year's project in "
+                    f"{DM.YEAR}/."))
+    print("\nTry:")
+    print(f"  cd {yd}")
+    print(f"  {_PROG} run          # build the books")
+    print(f"  {_PROG} sum          # the year's gains, as on the return")
+    print(f"  {_PROG} checklist    # every step to filing, checked")
+    print("\nIt holds, to explore:")
+    for what, cmd in DM.SCENARIOS:
+        print(f"  {what}: `{_PROG} {cmd}`")
+
+
+def _refuse_init_in_year_folder(top: Path, country: str,
+                                year: Optional[int]) -> None:
+    """`taxjson init` makes the year's folder (YYYY/) inside the folder
+    it runs in: run inside an empty folder named like a year
+    (~/taxes/2026) it built ~/taxes/2026/2026/ without a word. Refuse,
+    with the command for the folder above it."""
+    import shlex as _shlex
+    if not re.fullmatch(r"(?:19|20)\d\d", top.name):
+        return
+    try:
+        empty = not any(top.iterdir()) if top.is_dir() else not top.exists()
+    except OSError:
+        return
+    if not empty:
+        return
+    y = year or int(top.name)
+    _die_input(
+        f"{top} is named like a tax year and is empty: `init` makes the "
+        f"year's folder itself, so this would build {top.name}/{y}/ in it",
+        f"Run it in the folder above: cd {_shlex.quote(str(top.parent))} "
+        f"&& {_PROG} init --country {country}"
+        + (f" --year {y}" if y != date_cls.today().year else "")
+        + f" && cd {y} (or `{_PROG} init --single --country {country}` for "
+        f"one folder for one year here). Nothing was written.")
+
+
+def _sibling_grant_since(top: Path, year: int) -> Optional[int]:
+    """option_grant_timing_since as another year folder of `top` sets
+    it (the nearest year's), so a new year keeps the first year filed
+    under grant timing; None when no year sets it."""
+    best: Optional[Tuple[int, int]] = None
+    for y, d in _PL.year_dirs(top):
+        if y == year:
+            continue
+        try:
+            doc = tomllib.loads((d / "taxjson.toml").read_bytes()
+                                .decode("utf-8-sig"))
+        except (OSError, ValueError, UnicodeError):
+            continue
+        v = (doc.get("settings") or {}).get("option_grant_timing_since")
+        if isinstance(v, int) and not isinstance(v, bool):
+            dist = abs(y - year)
+            if best is None or dist < best[0]:
+                best = (dist, v)
+    return best[1] if best else None
 
 
 def _years_folder(root: Path) -> Path:
@@ -25218,14 +25598,16 @@ def _build_parser(prog: str = "taxjson"
         "run",
         help="Build the books and every report from inputs/",
         description="Run the full pipeline: parse every broker file in "
-                    "inputs/, convert to the base currency, apply "
+                    "the accounts' folders (inputs/, or [settings] "
+                    "inputs_dir), convert to the base currency, apply "
                     "ticker.map, corporate actions and your elections, "
                     "compute the gains with the superficial-loss / "
                     "wash-sale pass across all your accounts, and write "
                     "reports/. Every stage is rebuilt by default; --fast "
                     "skips the stages whose inputs, config and code are "
                     "unchanged. The run ends with the broker positions "
-                    "cross-check when taxjson.toml names holdings files. "
+                    "cross-check when there are positions snapshots "
+                    "(holdings/, found without a setting). "
                     "Commands chain: `taxjson run sum`.")
     p_run.add_argument("--account", help="Process only one account")
     p_run.add_argument("--fast", action="store_true",
@@ -25370,9 +25752,10 @@ def _build_parser(prog: str = "taxjson"
                     "taxjson.toml (country, base currency, the usual "
                     "accounts for that country, inputs_dir = \"../inputs\" "
                     "and exports_dir = \"../exports\"), a commented "
-                    "ticker.map (in Canada also tobase.map, the "
-                    "interlisted pairs) and holdings/ for the broker's positions "
-                    "snapshots. Every other command runs in the year "
+                    "ticker.map and holdings/ for the broker's positions "
+                    "snapshots; in Canada also tobase.map (the interlisted "
+                    "pairs) beside the year folders, one file every year "
+                    "reads. Every other command runs in the year "
                     "folder (`taxjson -C DIR/YYYY run`); `taxjson new-year` "
                     "adds the next year's. --single scaffolds one folder "
                     "for one tax year instead (taxjson.toml, ticker.map "
@@ -25380,11 +25763,16 @@ def _build_parser(prog: str = "taxjson"
                     "existing taxjson.toml is kept unless --force (then it "
                     "is backed up first).")
     p_init.add_argument("path", nargs="?", help="Directory to initialize (default: cwd)")
-    p_init.add_argument("--country", required=True,
+    p_init.add_argument("--country",
                         choices=["canada", "ca", "usa", "us"],
                         help="Jurisdiction to scaffold for (required; shapes "
                              "the config's currencies, tax-date basis, and "
                              "account folders)")
+    p_init.add_argument("--demo", action="store_true",
+                        help="Make a project of made-up exports to try "
+                             "first (Canada, tax year 2024) in DIR, a new "
+                             "or empty folder, and print the commands to "
+                             "try")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing")
     p_init.add_argument("--year", type=int,
                         help="Tax year for the generated config "
@@ -25422,9 +25810,9 @@ def _build_parser(prog: str = "taxjson"
         description="Create the folder YYYY beside the other year folders "
                     "with the previous year's taxjson.toml (year set, "
                     "prior_year_record pointed at its lock, its [estimate] "
-                    "and [instalments] commented out), ticker.map and "
-                    "tobase.map, and an empty holdings/, and print the "
-                    "next steps.")
+                    "and [instalments] commented out) and ticker.map (the "
+                    "shared tobase.map is read, not copied), and an empty "
+                    "holdings/, and print the next steps.")
     p_ny.add_argument("year", type=int, help="The tax year (YYYY)")
     p_ny.set_defaults(func=cmd_new_year)
 
@@ -26652,6 +27040,10 @@ def _build_parser(prog: str = "taxjson"
     p_close.add_argument("--force", action="store_true",
                          help="Replace an existing lock (re-filed/"
                               "amended years only)")
+    p_close.add_argument("--yes", action="store_true",
+                         help="Lock even when checklist steps before the "
+                              "lock need attention (they are listed and, "
+                              "on a terminal, asked about)")
     p_close.add_argument("--filed-dispositions", metavar="CSV",
                          help="The dispositions the return actually "
                               "reported, when it was prepared with another "

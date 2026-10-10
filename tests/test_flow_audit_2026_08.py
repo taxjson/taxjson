@@ -422,7 +422,7 @@ class TestCombinedSidecarStaleness(unittest.TestCase):
             # close-year now refuses that without --force (S045-23); the
             # staleness guard under test is a hard stop either way.
             out, _ = _run_cmd(cmd_close_year, root, year=None,
-                              force=True)
+                              force=True, yes=True)
         self.assertIn("closed", out.lower())
 
 

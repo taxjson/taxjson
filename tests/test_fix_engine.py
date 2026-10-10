@@ -288,7 +288,7 @@ class TestCheckFiledSeesAccountsOutsideTheLock(unittest.TestCase):
                      extra_settings="option_grant_timing_since = 2025\n")
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-            r = _run_cli(root, "close-year")
+            r = _run_cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr)
             r = _run_cli(root, "check-filed")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

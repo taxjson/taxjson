@@ -278,7 +278,7 @@ class TestHandoffAppliesPhantoms(unittest.TestCase):
             p26.mkdir()
             _project(p25, 2025, tt)
             _run(self, p25)
-            c = _cli(p25, "close-year")
+            c = _cli(p25, "close-year", "--yes")
             self.assertEqual(c.returncode, 0, c.stderr[-1500:])
             _project(p26, 2026, tt + tt26,
                      settings=f'prior_year_record = '

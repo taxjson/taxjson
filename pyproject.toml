@@ -143,4 +143,5 @@ where = ["src"]
 # The shipped market reference data (lib/markets): venue suffixes,
 # currencies and the security lists a user's ticker.map can override.
 [tool.setuptools.package-data]
-taxjson = ["data/*.toml"]
+# The `taxjson init --demo` project (lib/demo): made-up exports.
+taxjson = ["data/*.toml", "data/demo/*/*"]

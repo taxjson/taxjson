@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `taxjson init --demo [DIR]`: a project of made-up exports to try first
+  (Canada, tax year 2024: two IB accounts, Questrade, Webull, a TFSA at
+  RBC, Kraken and Coinbase), ready to run offline once the rates are
+  cached, with the commands to try (`run`, `sum`, `checklist`). It holds
+  the getting-started scenarios: a sale with no purchase, a spin-off
+  with its election saved, a superficial loss and a written option open
+  at the year end. `--country` is no longer required with `--demo`.
+
 ### Changed
 
 - Essentials first: a command's default output is the essentials, said
@@ -89,6 +99,50 @@
   income-year note of an earlier year, a built-in list note) are one
   line each in the default view, and one said more than twice is folded
   into a count line at the end; `--details` shows each in full.
+- `taxjson help` lists the maintainer's release commands (`channels`,
+  `deploy`, `promote`, now under "Maintainer") only on a development
+  checkout; `taxjson help --all` lists them everywhere, and they still run.
+- A new `taxjson.toml` leaves `option_grant_timing_since` commented out
+  with a one-line explanation (it matters only once you write options),
+  unless another year folder beside it sets it. `taxjson run` warns that
+  it is not set only when the books hold a written option, and warns in
+  one line when it is later than `year`.
+- `taxjson init` from January to April adds one line: filing last year?
+  The command for its folder (the default stays the calendar year).
+
+### Fixed
+
+- `taxjson close-year` no longer locks a year while checklist steps
+  before the lock need attention: it lists them and asks on a terminal;
+  without one it refuses unless `--yes`.
+- The installer's closing recipe built `~/taxes/2026/2026/`: it is now
+  `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada && cd
+  2026`. `taxjson init` in an empty folder named like a year refuses,
+  naming the command for the folder above it (`--single` still works
+  there).
+- `taxjson run` no longer says "the same broker account feeds two taxjson
+  accounts" for two different brokers' exports that print the same
+  account number: the check keys on the broker and the number.
+- The broker demo exports (`examples/*_demo.csv`) each carry their own
+  synthetic account id; the Webull demo no longer settles on a Sunday and
+  the Questrade demo no longer trades on an NYSE holiday.
+- `taxjson run` downloads exchange rates only from a few days before the
+  earliest date in the project's files (never later than January 1 of the
+  year), not from 2000: a recent project no longer fetches decades of
+  Bank of Canada rates, nor Yahoo Finance for the years before the Bank's
+  series.
+- A `.tt` line whose symbol has no market suffix (`AAPL` where the broker
+  rows hold `AAPL.US`) is a pool of its own: `taxjson run` now says so on
+  the console, naming the file:line and the listing the books hold (the
+  warning reached only the `.sum`, and not even that with exports shared
+  by every year).
+- Text that contradicted v0.27.x: `tips --online` no longer advises a
+  `DISTINCT` line for a depositary receipt (look-alike listings are never
+  joined); `init` and `new-year` (help and output) say tobase.map is one
+  file beside the year folders, not copied per year (and a US project's
+  `init` no longer mentions it); `run -h` names `inputs_dir` and the
+  holdings/ snapshots found without a setting; the account folders'
+  README says each year's slips go in `YYYY/inputs/slips/`.
 
 
 ## v0.27.2 (2026-10-10)

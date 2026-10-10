@@ -321,10 +321,11 @@ cat <<DONE
 
 ✅ taxjson installed.
 
-   Next: make a folder for a tax year and scaffold it —
-     mkdir -p ~/taxes/$(date +%Y) && cd ~/taxes/$(date +%Y) && taxjson init --country canada   (or --country usa)
-   then drop your broker CSV exports into inputs/<account>/ and run
-     taxjson run
+   Next: make the folder for your taxes and this year's project in it —
+     mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada && cd $(date +%Y)   (or --country usa)
+   then drop your broker CSV exports into ~/taxes/inputs/<account>/ and run
+     tjs run
+   Try it first on made-up data: tjs init --demo ~/taxjson-demo
    Docs: https://taxjson.com  ·  https://github.com/taxjson/taxjson#readme
    Upgrade later by re-running this installer: it follows the $CHANNEL channel
    (--channel stable|beta|latest|dev|vX.Y.Z to switch).

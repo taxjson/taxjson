@@ -13,7 +13,7 @@ Website: **[taxjson.com](https://taxjson.com)** · one-line install below · eve
 New here? **[docs/getting-started.md](docs/getting-started.md)** walks a first project through, with worked examples. **`tjs checklist`** prints every step with its command; in a project folder it checks each step, marks it done or not and names the next one. In short:
 
 1. Install: `bash -c "$(curl -fsSL https://taxjson.com/install.sh)"` ([Install](#install)).
-2. Make a project for the year you file: `mkdir -p ~/taxes/2025 && cd ~/taxes/2025 && tjs init --country canada --year 2025` (or `--country usa`), then set your accounts in `taxjson.toml`.
+2. Make a project for the year you file: `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada --year 2025 && cd 2025` (or `--country usa`), then set your accounts in `taxjson.toml`. To try it first on made-up data: `tjs init --demo ~/taxjson-demo`.
 3. Download **all** the history each broker gives you into `inputs/<account>/`, and keep a positions report with book cost from the start of that history and from today.
 4. `tjs run`, then `tjs sum` and `tjs list`.
 5. **Fill the missing history.** Exports rarely reach back to every purchase: `tjs find-missing-history` finds sales with no purchase, `tjs sanity` (against the broker's positions) finds holdings with missing or partial history, `tjs transfers` lists shares moved in from another broker. Fix them with older exports, opening balances or purchases as `.tt` lines, and an `OPENING <date> <SYMBOL> <qty> cost=unknown` line only for what cannot be recovered.
@@ -446,7 +446,7 @@ use the installer above or a checkout.
 
 **Channels.** `stable` (the default) is the release that has held up; `beta` the one being tried; `latest` the newest release, as soon as it is tagged; `dev` the `main` branch, unreleased; `vX.Y.Z` exactly that release (a pin — also how you go back). `stable` and `beta` are named in [`channels.json`](channels.json) on `main`; `latest` is always the newest `vX.Y.Z` tag. Pick one with `--channel NAME` or `TAXJSON_CHANNEL=NAME`; the installer prints `channel stable → release v0.16.0` and remembers the choice in `~/.config/taxjson/channel`, so re-running it upgrades along the same channel. A channel never moves an install backwards (name a version to go back). Only an annotated release tag on `main`'s history is installed. `taxjson channels` shows where every channel points and what this machine runs; `TAXJSON_DRY_RUN=1` prints what the installer would pick and changes nothing. The installer leaves a `taxjson` or `tjs` in `~/.local/bin` that is not its own link alone, with a note.
 
-Then `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init --country canada` (or `--country usa`). See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.
+Then `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada && cd 2026` (or `--country usa`). See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.
 
 From source (development):
 
@@ -914,7 +914,10 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson spinoffs [ACCOUNT] [--json]` | Every spin-off in the books: parent and new security, ratio, the election (`taxable_deemed_dividend` is the Canadian default: a dividend equal to the new shares' fair market value, which is also their cost; `rollover_s_86_1` splits the parent's cost with no income, filed with the return, for spin-offs on CRA's list; you give the CAD cost moved to the new shares as `--hint allocated_acb_cad=`), the value per share used, what was booked (income and the new shares' cost), the broker's own value when it reported one (the default uses it when no value is given), and what is held now. In a US project the elections are `taxable_distribution_301` (§301 income at FMV) and `tax_free_355` (basis moved per Form 8937, `--hint allocated_acb=`). A sheltered account's spin-off booked without asking shows `sheltered_default` ($0 cost for the new shares). Flags a taxable spin-off booked at $0, a basis-allocating election with no allocated cost, a missing election or an ignored event; exit 1 when a taxable one needs attention. |
 | `taxjson splits [ACCOUNT] [--json]` | Every split, consolidation and rename with holdings just before and after. Flags a split recorded twice (two sources, close dates), a no-op row, a result with a fractional share (expect cash in lieu), and events that also mention a cash or return-of-capital leg. Exit 1 on a likely double application. |
 
-#### Release
+#### Maintainer
+
+The release commands, for the machine taxjson is developed on: `taxjson help`
+lists them only there (`taxjson help --all` everywhere).
 
 | Command | Purpose |
 | --- | --- |

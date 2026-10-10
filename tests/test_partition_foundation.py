@@ -151,7 +151,7 @@ class TestOneCountryResolver(unittest.TestCase):
                         ["estimate", "--other-income", "0"],
                         ["checklist", "--quick"], ["carryover"],
                         ["wash-radar"], ["instalments"],
-                        ["option-boundary"], ["close-year"]):
+                        ["option-boundary"], ["close-year", "--yes"]):
                 with self.subTest(cmd=cmd[0]):
                     r = cli(root, *cmd)
                     self.assertNotEqual(r.returncode, 0, r.stdout)

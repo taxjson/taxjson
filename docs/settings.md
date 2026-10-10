@@ -165,10 +165,10 @@ Where the project reads its exports and positions and writes files for other too
 
 #### `option_grant_timing_since`
 - **Meaning:** contracts written before this year keep close timing — the transition from books filed the old way.
-- **Default:** the project's `year` (warned).
+- **Default:** the project's `year` (warned when the books hold a written option; a value later than `year` is warned too).
 - **Country:** Canada only.
 - **Change it when:** set it once, to the first year you file under grant timing, and keep it unchanged in every later year's project (do not bump it with `year`: `taxjson handoff` flags a written option carried across under another timing, taxed twice or in no return).
-- **A new project:** `taxjson init` writes the project's own year, which is right when your earlier returns netted written options at the close (close timing). If last year's return already reported each premium in the year written (grant timing: a previous taxjson project, or your preparer's), set it to the first year filed that way instead: a contract written last year and bought back or expired this year would otherwise be taxed again at the close. `taxjson run` asks when such a contract exists (the premium at stake and the question); the setting, or `taxjson checklist --done option-boundary` when last year did not report the premiums, answers it — for the contracts asked then (a contract written before the setting and closed later is asked again).
+- **A new project:** `taxjson init` leaves it commented out (the default, the project's own year), or writes the value another year folder beside it sets; the default is right when your earlier returns netted written options at the close (close timing). If last year's return already reported each premium in the year written (grant timing: a previous taxjson project, or your preparer's), set it to the first year filed that way instead: a contract written last year and bought back or expired this year would otherwise be taxed again at the close. `taxjson run` asks when such a contract exists (the premium at stake and the question); the setting, or `taxjson checklist --done option-boundary` when last year did not report the premiums, answers it — for the contracts asked then (a contract written before the setting and closed later is asked again).
 - **Example:** `option_grant_timing_since = 2025`
 
 #### `option_buyback_loss_superficial`

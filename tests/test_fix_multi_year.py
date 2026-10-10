@@ -269,7 +269,7 @@ class TestFiledYearAndSharedInputs(unittest.TestCase):
         top = multi("canada", years=(2024, 2025))
         y24 = top / "2024"
         run_ok(self, y24)
-        r = tjs("-C", str(y24), "close-year")
+        r = tjs("-C", str(y24), "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         # A 2024 sale downloaded later, into the shared inputs.
         (top / "inputs" / "margin" / "late.tt").write_text(

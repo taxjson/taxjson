@@ -19,9 +19,16 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Error: no taxjson.toml in …/taxes/2025. Run `taxjson init` first."
 - **Check:** `ls taxjson.toml` in the folder you ran from; read-only commands say "no gains files, and no taxjson.toml in … — not a taxjson project".
 - **Cause:** taxjson runs on the project in the current folder (or the one `-C DIR` names), and this folder has no `taxjson.toml`.
-- **Fix:** `cd` into the project folder or pass `-C ~/taxes/2025`; for a new project, `tjs init --country canada --year 2025`.
+- **Fix:** `cd` into the project folder or pass `-C ~/taxes/2025`; for a new project, in the folder for your taxes (not a year folder): `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada --year 2025 && cd 2025`.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `load_config`, `no taxjson.toml in`
+
+### "Error: …/taxes/2026 is named like a tax year and is empty: `init` makes the year's folder itself, so this would build 2026/2026/ in it"
+- **Check:** you ran `tjs init` inside an empty folder named like a year (an older installer and README said `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init …`).
+- **Cause:** `init` makes the year's folder (`YYYY/`) inside the folder it runs in, beside the shared `inputs/`; run in `~/taxes/2026` it built `~/taxes/2026/2026/` without a word.
+- **Fix:** run it in the folder above, as the message says: `cd ~/taxes && tjs init --country canada && cd 2026`. A project already built nested works as it is; to tidy it, move `2026/2026/` up with its `inputs/` beside it. `tjs init --single` makes one folder for one year where you are.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_init_in_year_folder`, `cmd_init`
 
 ### "Error: `sum` works on one year's project, and this folder holds the year folders 2024, 2025 (with the exports they share)"
 - **Check:** `ls` shows `inputs/` and year folders (`2024/`, `2025/`) but no `taxjson.toml`: the folder of exports every year shares (`tjs init`'s layout). `tjs years` lists the years.
@@ -331,6 +338,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `DISTINCT_NOT_NEEDED`, `receipt_pairs`; `src/taxjson/lib/cross_listings.py` — `shown_apart`, `RECEIPT`; `src/taxjson/lib/checklist.py` — `s_tobase_map`
 
+### `tjs tips --online`: "CDR-PAIR … is a CDR over QZD.US … Add `DISTINCT QZD.US QZD.TO` to ticker.map to record this and silence the pair"
+- **Check:** `tjs --version`; the pair is a Canadian depositary receipt and the US share it is over.
+- **Cause:** the advice predates v0.27.1, which stopped joining listings because their letters match: a `DISTINCT` line for a receipt says nothing. `taxjson init` and `new-year` help and output also still said tobase.map is copied into each year folder (it is one file beside them), `run -h` said the holdings cross-check needs `holdings = [...]` (holdings/ is found without a setting), and the account folders' README put the slips in `inputs/slips/` (a year folder's own `YYYY/inputs/slips/`).
+- **Fix:** upgrade; nothing to do for the pair: look-alike listings are never joined. A `DISTINCT` line already written is harmless.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_tips`, `look-alike listings are never`; `src/taxjson/lib/config_template.py` — `input_readme`
+
 ### "Error: two tobase.map files for this year: [settings] tobase_map = '../tobase.map' names ../tobase.map (shared by every year), and this folder holds a tobase.map of its own"
 - **Check:** `ls 2025/tobase.map ../tobase.map` and `grep -n tobase_map 2025/taxjson.toml` (each year folder); `tjs years` (run in the folder holding the years) names the shared file and any year that keeps a copy.
 - **Cause:** since v0.27.1 the years of a multi-year project read one `tobase.map` beside the year folders (`[settings] tobase_map`). A year folder that has the setting and still holds a copy of its own would leave one of the two silently unread, so every command refuses it (a copy restored from git, or a setting copied with `tjs align` into a year that kept its copy).
@@ -374,11 +388,18 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/ticker_map_legacy.py` — `is_legacy_paragraph`, `near_legacy`, `corpus_tables`; `src/taxjson/lib/ticker_map_format.py` — `_scan_template`, `_legacy_spans`, `_dated_comment_blocks`; `src/taxjson/bin/taxjson_run.py` — `_format_map_header_notes`
 
 ### "Warning: [settings] option_grant_timing_since is not set, so grant timing (ITA s.49(1)) starts at the project year (2025)"
-- **Check:** shown by `tjs run` in a Canadian project with a taxable non-crypto account on grant timing (the default `option_premium_timing`).
+- **Check:** shown by `tjs run` (after the books are built) in a Canadian project on grant timing (the default `option_premium_timing`) whose taxable books hold a written option; a project without one is not warned (`tjs init` leaves the key commented).
 - **Cause:** without the key, grant timing starts at `year`, which moves when you bump `year` next spring: last year's year-straddling written options would go back to close timing and their premium would be taxed twice. See `tjs option-boundary` and `tjs tax-logic`.
 - **Fix:** add `option_grant_timing_since = 2025` (the first year you file under grant timing) to `[settings]` once, and keep it unchanged in every later year's project.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_warning`, `option_grant_timing_since is not set`
+
+### "Warning: option_grant_timing_since = 2026 is after year = 2025: 2025's written options are taxed at the close (right only if 2025 was filed that way)"
+- **Check:** `grep -n option_grant_timing_since taxjson.toml`: usually `year` was lowered (filing an earlier year) and the key kept the value an earlier `taxjson init` wrote.
+- **Cause:** contracts written before `option_grant_timing_since` keep close timing, so every option written in the project year is taxed when it closes, not when written (ITA s.49(1)). A `taxjson init` before this release wrote the key set to the init year in every new project.
+- **Fix:** set it to the first year you file under grant timing (or delete the line for the project year); keep it unchanged in later years. When the year was filed on close timing (a reconstruction of a return filed that way), the value is right: nothing to do.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_after_year`, `_books_write_options`, `_grant_since_warning`; `src/taxjson/lib/config_template.py` — `scaffold_document`
 
 ### "Warning: no transaction in any account's books is dated 2021 (the books run 2025-01-10 to 2025-12-31)"
 - **Check:** the next line says "Every 2021 filing total will be 0. Is [settings] year in taxjson.toml right?"; the run itself finishes.
@@ -480,6 +501,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.0`
 - **Code:** `src/taxjson/lib/tt_totals.py` — `read_diag`, `project_mismatches`, `tolerance`, `source_line`, `a .tt line's total`, `ACQUIRED has no fee column`; `src/taxjson/bin/taxjson_convert_tt.py` — `.tt line total`; `src/taxjson/bin/taxjson_run.py` — `_echo_tt_totals`; `src/taxjson/lib/checklist.py` — `d_run_clean`
 
+### "Warning: inputs/margin/extra.tt:2: QZA has no market suffix: a pool of its own, apart from QZA.US in the books"
+- **Check:** the `.tt` line names the share without its market suffix (`QZA`), while the broker's rows book it as `QZA.US` or `QZA.TO`; `tjs list` shows both, the broker's sale of the suffixed listing going short.
+- **Cause:** a share listing is spelled with its suffix in the books; a bare symbol is its own ACB pool (a coin's spelling). Before the fix the warning reached only the account's `.sum`, and with exports shared by every year (`inputs_dir`) not even that.
+- **Fix:** write the symbol as the warning names it (`QZA.US`) on that `.tt` line and `tjs run`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_echo_tt_bare_symbols`; `src/taxjson/bin/taxjson_convert_tt.py` — `_warn_bare_equity_symbol`, `--equity`
+
 ### Generic importer: "Error: generic_ws.csv: generic importer: no mapping for generic_ws.csv" or "Error: …: generic importer: generic_ws.csv: mapped column(s) not in the CSV header: action -> 'Transaction type'."
 - **Check:** a `generic_*.csv` (or a CSV with a `<file>.csv.toml` sidecar) is in `inputs/<account>/`. The second error lists the file's real header after `Header:`.
 - **Cause:** the generic importer reads only through a mapping: the CSV's own `<file>.csv.toml`, or the folder's shared `generic.toml` for `generic_*` files. Each `[columns]` value must be a header name exactly as the CSV spells it (case aside).
@@ -500,6 +528,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** keep each broker account's exports under ONE `inputs/<account>/` folder; delete the copy in the wrong folder. `tjs run --strict` stops on either.
 - **Fixed in:** `v0.17.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_shared_broker_accounts`, `_duplicate_input_files`, `the same export file sits in two accounts`
+
+### "Warning: the same broker account (#ab12cd) feeds two taxjson accounts, qt and wb (0 identical row(s))" for exports of two DIFFERENT brokers
+- **Check:** the two folders hold different brokers' exports (`tjs run` names the broker of each file) that print the same account number.
+- **Cause:** the check compared the account number alone; a Questrade, an RBC and a Webull account can carry the same 8-digit number.
+- **Fix:** upgrade: the check keys on the broker and the account number. Nothing to change in the inputs.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_shared_broker_accounts`, `_source_brokerages`
 
 ### "Warning: Duplicates: a.csv and b.csv both hold 1 identical row(s)" … "Booked ONCE (read as the same row exported twice)", or "Warning: Duplicates: margin_extra.tt line (…) repeats the exported row in ib_2025.csv" … "so BOTH are booked"
 - **Check:** the warning names both files and the row; `tjs trades` for that day shows what was booked.
@@ -1286,6 +1321,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_convert_currency.py` — `missing_rate_message`, `no exchange rate for`; `src/taxjson/bin/to_base_curr.py` — `resolve_rows`, `refresh_boc`, `using cached rates only`, `download failed —`; `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`
 
+### The first run of a recent project downloads rates back to 2000: "Info: FX USD→CAD: Bank of Canada Valet for 2,400 dates, Yahoo fallback for 1,322 (2003-…)"
+- **Check:** the project's exports start years later than those dates; `head -1 work/to_base.csv` shows the first date fetched.
+- **Cause:** the rates stage runs before the exports are parsed, so it asked for every date from 2000-01-01, and Yahoo Finance for the years before the Bank of Canada's series.
+- **Fix:** upgrade: the window starts a few days before the earliest date in the project's exports, `.tt` files, slips and positions snapshots (never later than January 1 of the year), recorded in `work/.to_base.start`; an export reaching further back widens it on the next run.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/rates_window.py` — `window_start`, `earliest_in_text`; `src/taxjson/bin/taxjson_run.py` — `_rates_inputs`, `RATES_START_STAMP`
+
 ### "taxjson-to-base-curr needs the [fx] extra for a USD target (Yahoo Finance)" then "Error: stopped at fetching currency rates (CAD, USD) (exit 1)", with `TAXJSON_OFFLINE=1`
 - **Check:** the project is `base_currency = "USD"` (a US project), `TAXJSON_OFFLINE` is set, and `pip show yfinance` finds nothing (taxjson installed without the `[fx]` extra). The run printed "Loading cached CAD → USD rates" just before.
 - **Cause:** a USD target's rates come from Yahoo Finance, so the rates helper refused to start without the `[fx]` extra, even offline, where it reads `~/.currency_price_cache.json` only and never calls Yahoo.
@@ -1296,7 +1338,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ## Options
 
 ### "Warning: 1 option contract you wrote in 2025 and closed in 2026 is on transition close timing: 400.00 of premium is taxed in 2026"
-- **Check:** `tjs option-boundary` lists the contract with "QUESTION: did your 2025 return report the … premium when the contract was written?"; `tjs checklist` shows `[!]` (or `[>]`, the next step) on option-boundary with the same question. The project's `[settings] option_grant_timing_since` is the project year (what `tjs init` writes) and no `filed/2025.json` lock (or `prior_year_record`) records how 2025 was filed.
+- **Check:** `tjs option-boundary` lists the contract with "QUESTION: did your 2025 return report the … premium when the contract was written?"; `tjs checklist` shows `[!]` (or `[>]`, the next step) on option-boundary with the same question. The project's `[settings] option_grant_timing_since` is the project year (the default: `tjs init` leaves the key commented) and no `filed/2025.json` lock (or `prior_year_record`) records how 2025 was filed.
 - **Cause:** grant timing (ITA s.49(1)) puts a written option's premium in the year written, but a contract written before `option_grant_timing_since` keeps close timing (the transition from books filed the old way): its premium is in this year's gain at the buy-back or expiry. That is right only if the write year's return did not report the premium; if it did (last year's return was on grant timing — a previous taxjson project, or your preparer's), the premium is taxed twice. Only you know which; nothing was said before (the checklist showed "no amendment required").
 - **Fix:** if last year's return reported these premiums when written, set `option_grant_timing_since = 2025` (the first year filed under grant timing) and keep it in every later project: the premium then stays in 2025 and only the buy-back is 2026's. If it did not, the transition is right: `tjs checklist --done option-boundary` (add `--note`) answers it, and the run says a note instead. A `filed/2025.json` lock that records the timing answers it too.
 - **Fixed in:** `v0.24.1`
@@ -1611,6 +1653,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** nothing: `tjs slip-audit` reads it. With only the report given, `reconcile-slips` stops with "no T5008 slip CSV to reconcile".
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_reconcile_slips`; `src/taxjson/lib/checklist.py` — `slip_files`
+
+### `tjs close-year`: "Error: 3 checklist item(s) before the lock need attention" followed by "- inputs-committed: not a git repository" and the like
+- **Check:** `tjs checklist` shows the same steps `[!]`.
+- **Cause:** the lock records the filed year; a step before it that needs attention (inputs not committed, missing history, an undecided send …) usually means the books are not final. Earlier releases locked the year without a word.
+- **Fix:** fix the items (the checklist says how), mark one `--done` or `--skip` when it truly does not apply, then close. To lock anyway: on a terminal answer `y`; in a script pass `--yes`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_close_year_attention`, `cmd_close_year`, `checklist item(s) before the lock need`
 
 ### `tjs handoff`: "Error: no prior-year record at filed/2024.json"
 - **Check:** `tjs checklist` step `handoff` says "no 2024 record".

@@ -33,11 +33,11 @@ backwards too). A fill never reaches further back than 7 days.
 
 WINDOW: --start (default 2000-01-01) .. --end (default today). The
 window used to be "today minus 2000 days", so any transaction older than
-~5.5 years silently converted at the 1.35 default rate. The rates stage
-runs before the inputs are parsed, so it cannot know the earliest
-transaction date; the fixed early floor covers any realistic ACB
-history, both sources are cached (one download each, ever), and a date
-the rates still don't cover is now a validation ERROR downstream.
+~5.5 years silently converted at the 1.35 default rate. `taxjson run`
+passes --start: the earliest date written in the project's files, less
+a few days (lib/rates_window) — a 2024 project no longer asks for 2000
+onwards, nor Yahoo for the years before the Bank's series. A date the
+rates still don't cover is a validation ERROR downstream.
 
 CACHE: ~/.currency_price_cache.json. The legacy Yahoo entries keep their
 `PAIR-YYYY-MM-DD` keys (forward-filled calendar dates); Bank of Canada

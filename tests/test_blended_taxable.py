@@ -153,7 +153,7 @@ class TestBlendIntegrationRegressions(unittest.TestCase):
             })
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)
-            self.assertEqual(_run_cli(root, "close-year").returncode, 0)
+            self.assertEqual(_run_cli(root, "close-year", "--yes").returncode, 0)
             snap = json.loads(
                 (root / "filed" / "2025.json").read_text())
             self.assertAlmostEqual(

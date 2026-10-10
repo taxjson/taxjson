@@ -205,8 +205,8 @@ ul { padding-left:18pt; margin:0 }
   <h2>Your first books in ten minutes</h2>
   <p><span class="cmdline">bash -c "$(curl -fsSL https://taxjson.com/install.sh)"</span></p>
   <p class="small" style="margin:8pt 0 14pt">Installs the latest release into its own Python environment and links <code>taxjson</code> and its short name <code>tjs</code> onto your PATH. Needs git and Python 3.9+, nothing else. Re-run to upgrade. The Questrade / IBKR auto-fetch plugin comes with it (add <code>_ --without-fetch</code> to leave it out).</p>
-  <pre class="term">mkdir -p ~/taxes/2026 &amp;&amp; cd ~/taxes/2026
-tjs init --country canada     <span class="d"># taxjson.toml, ticker.map, inputs/</span>
+  <pre class="term">mkdir -p ~/taxes &amp;&amp; cd ~/taxes
+tjs init --country canada &amp;&amp; cd 2026  <span class="d"># inputs/, 2026/taxjson.toml</span>
 <span class="d"># drop broker CSVs into inputs/margin/, inputs/rrsp/, …</span>
 tjs run                       <span class="d"># books, reports, wash pass, broker check</span>
 tjs sum                       <span class="d"># the year, by Schedule 3 line</span>

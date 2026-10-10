@@ -408,7 +408,7 @@ class TestCorruptWorkFiles(unittest.TestCase):
     _CMDS = {
         "margin_gains_wash.json": [
             ("sum",), ("winners",), ("shares",), ("wash-sales",), ("list",),
-            ("close-year",), ("audit", "--summary"), ("t1135",),
+            ("close-year", "--yes",), ("audit", "--summary"), ("t1135",),
             ("wash-radar",), ("buy-check", "XEI")],
         "margin_base.json": [
             ("option-boundary",), ("transfers",), ("roc-sum",),
@@ -739,7 +739,7 @@ class TestYearsAndLocks(unittest.TestCase):
                 f"BUYSELL {y}-01-10 09:30:00 XEI.TO 100 CAD 10.0 -1000.0 0\n"
                 f"BUYSELL {y}-01-20 09:30:00 XEI.TO -100 CAD 11.0 1100.0 0\n"),
                 config=_CONFIG.replace("2025", str(y)))
-            r = _run_cli(root, "close-year")
+            r = _run_cli(root, "close-year", "--yes")
             self.assertNotEqual(r.returncode, 0, r.stdout)
             self.assertIn("has not ended", r.stderr)
             self.assertFalse((root / "filed" / f"{y}.json").exists())
@@ -750,7 +750,7 @@ class TestYearsAndLocks(unittest.TestCase):
                 "year = 2025", "year = 2015").replace(
                 "option_grant_timing_since = 2025",
                 "option_grant_timing_since = 2015"))
-            r = _run_cli(root, "close-year")
+            r = _run_cli(root, "close-year", "--yes")
             self.assertNotEqual(r.returncode, 0, r.stdout)
             self.assertIn("no disposition and no income in 2015", r.stderr)
             self.assertFalse((root / "filed" / "2015.json").exists())
@@ -763,12 +763,12 @@ class TestYearsAndLocks(unittest.TestCase):
             # Without --force the run-state guard already stops it
             # (taxjson.toml changed since the run); --force waives that
             # one, never this.
-            r = _run_cli(root, "close-year", "--force")
+            r = _run_cli(root, "close-year", "--yes", "--force")
             self.assertNotEqual(r.returncode, 0, r.stdout)
             self.assertIn("another option timing", r.stderr)
             self.assertFalse((root / "filed" / "2025.json").exists())
             (root / "taxjson.toml").write_text(_CONFIG)
-            r = _run_cli(root, "close-year", "--force")
+            r = _run_cli(root, "close-year", "--yes", "--force")
             self.assertEqual(r.returncode, 0, r.stderr)
             lock = json.loads((root / "filed" / "2025.json").read_text())
             self.assertEqual(lock["option_timing"]["option_premium_timing"],
@@ -780,7 +780,7 @@ class TestYearsAndLocks(unittest.TestCase):
             for cmd in (("audit", "--summary", "--year", "2204"),
                         ("audit", "--year", "0"),
                         ("find-missing-history", "--year", "-5"),
-                        ("close-year", "--year", "0")):
+                        ("close-year", "--yes", "--year", "0")):
                 with self.subTest(cmd=cmd):
                     r = _run_cli(root, *cmd)
                     self.assertEqual(r.returncode, 2, r.stdout)

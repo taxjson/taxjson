@@ -777,7 +777,7 @@ class TestCloseYearCarry(unittest.TestCase):
             (root / "work").mkdir()
             _rates(root / "work" / "to_base.csv")
             self.assertEqual(_cli(root, "run", "--no-input").returncode, 0)
-            r = _cli(root, "close-year")
+            r = _cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             rec = json.loads((root / "filed" / "2025.json").read_text())
             # US$10,000 held at Dec 31, bought back at 1.40: cost 14,000.

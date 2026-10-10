@@ -2,6 +2,8 @@
 
 Synthetic data you can run end-to-end against each supported broker parser. All numbers are fabricated — no real account information.
 
+To try taxjson on a whole project instead, `tjs init --demo ~/taxjson-demo` makes one from these files (tax year 2024, Canada) and prints the commands to run.
+
 | File                       | Broker               | Asset class    | Suggested country flag |
 | -------------------------- | -------------------- | -------------- | ---------------------- |
 | `questrade_demo.csv`       | Questrade            | US + CA stocks | `ca`                   |

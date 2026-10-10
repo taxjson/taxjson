@@ -268,10 +268,9 @@ SETTINGS_SPEC: Tuple[Key, ...] = (
         "closing transaction instead. See `taxjson option-boundary`.",
         inline="grant | close"),
     Key("option_grant_timing_since", "{year}",
-        "Contracts written before this year keep close timing (default: "
-        "`year`). SET ONCE to the first year you FILE under grant timing "
-        "and keep it UNCHANGED in every later year's project (do not bump "
-        "it with `year`)."),
+        "Only if you write (sell to open) options: the first tax year you "
+        "file their premium in the year written. Set it once and keep it "
+        "in every later year (default: `year`)."),
     Key("option_buyback_loss_superficial", "false",
         "true: the strict s.54 reading — a loss on buying back a written "
         "option is superficial when identical options are bought within "
@@ -1223,8 +1222,11 @@ class _Renderer:
 # ------------------------------------------------------------ entry points
 
 def scaffold_document(country: str, year: int,
-                      tz: Optional[str] = None) -> Dict[str, Any]:
-    """The parsed config `taxjson init` writes for `country`."""
+                      tz: Optional[str] = None,
+                      grant_since: Optional[int] = None) -> Dict[str, Any]:
+    """The parsed config `taxjson init` writes for `country`;
+    `grant_since`: another year's option_grant_timing_since (Canada),
+    written as set (else the key is left commented)."""
     country = C.canonical_country(country)
     s: Dict[str, Any] = {
         "year": year, "country": country,
@@ -1237,10 +1239,13 @@ def scaffold_document(country: str, year: int,
         s["source_currencies"] = ["USD"]
     if tz:
         s["local_timezone"] = tz
-    if country == C.CANADA:
-        # s.49(1) grant timing from the first year filed under it: the
-        # scaffold sets it (a later project must keep the first value).
-        s["option_grant_timing_since"] = year
+    if country == C.CANADA and grant_since is not None:
+        # s.49(1) grant timing from the first year filed under it: kept
+        # from another year's project (a later project must keep the
+        # first value). Otherwise left commented: a new user who writes
+        # no options needs none, and `taxjson run` says when the books
+        # hold a written option and the key is not set.
+        s["option_grant_timing_since"] = int(grant_since)
     accounts: Dict[str, Any] = {}
     for name in SCAFFOLD_ACCOUNTS[country]:
         if name == "margin":
@@ -1279,14 +1284,20 @@ _CRYPTO_EXPORTS = (
 )
 
 
-def input_readme(country: str, name: str) -> str:
+def input_readme(country: str, name: str,
+                 slips: str = "inputs/slips/",
+                 kind: Optional[str] = None) -> str:
     """The README.txt `taxjson init` writes in inputs/<name>/: which
     export to download from each broker (all the history there is, plus
-    a positions report), for the scaffold account `name`."""
+    a positions report), for the scaffold account `name`. `slips`: where
+    the year's slips go (`YYYY/inputs/slips/` in a year folder: slips
+    belong to one year). `kind`: taxable | sheltered | crypto (default:
+    from the scaffold name)."""
     country = C.canonical_country(country)
-    crypto = name == "crypto"
-    sheltered = name not in ("margin", "crypto")
-    slips = "T5008" if country == C.CANADA else "1099-B"
+    crypto = kind == "crypto" if kind else name == "crypto"
+    sheltered = (kind == "sheltered" if kind
+                 else name not in ("margin", "crypto"))
+    slip = "T5008" if country == C.CANADA else "1099-B"
     loss_rule = ("superficial-loss" if country == C.CANADA
                  else "wash-sale")
     rows = _CRYPTO_EXPORTS if crypto else _EQUITY_EXPORTS
@@ -1342,8 +1353,9 @@ def input_readme(country: str, name: str) -> str:
     elif not crypto:
         lines += [
             "",
-            f"Your broker's {slips} slips are checked against the books by",
-            "`taxjson reconcile-slips` (keep them in inputs/slips/).",
+            f"Your broker's {slip} slips are checked against the books by",
+            *textwrap.wrap(f"`taxjson reconcile-slips` (keep each year's "
+                           f"in {slips}).", 72),
         ]
     lines += [
         "",
@@ -1355,13 +1367,15 @@ def input_readme(country: str, name: str) -> str:
 
 def render_init(country: str, year: Optional[int] = None,
                 tz: Optional[str] = None,
-                extra: Optional[Dict[str, Any]] = None
+                extra: Optional[Dict[str, Any]] = None,
+                grant_since: Optional[int] = None
                 ) -> Tuple[str, Tuple[str, ...]]:
     """(taxjson.toml text, account names) for `taxjson init`; `extra`:
-    [settings] values added (a year folder's inputs_dir ...)."""
+    [settings] values added (a year folder's inputs_dir ...);
+    `grant_since`: scaffold_document's."""
     country = C.canonical_country(country)
     yr = int(year) if year is not None else _date.today().year
-    doc = scaffold_document(country, yr, tz)
+    doc = scaffold_document(country, yr, tz, grant_since)
     doc["settings"].update(extra or {})
     return render_document(doc, country, yr), tuple(doc["accounts"])
 

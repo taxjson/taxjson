@@ -148,7 +148,7 @@ class TestBothCountries(unittest.TestCase):
             with self.subTest(country=country):
                 p = _copy(country)
                 self.addCleanup(shutil.rmtree, p._td, True)
-                c = p.run("close-year", "--force")
+                c = p.run("close-year", "--yes", "--force")
                 self.assertEqual(c.returncode, 0, c.stderr)
                 assert_styled(self, c.stdout)
                 assert_styled(self, c.stderr)

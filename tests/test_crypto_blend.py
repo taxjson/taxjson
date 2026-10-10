@@ -68,7 +68,7 @@ class TestCryptoBlend(unittest.TestCase):
             self.assertAlmostEqual(f["totals"]["denied"], 30000.0, places=2)
             a = _cli(root, "audit", "--summary")
             self.assertEqual(a.returncode, 0, a.stdout[-2000:] + a.stderr)
-            c = _cli(root, "close-year")
+            c = _cli(root, "close-year", "--yes")
             self.assertEqual(c.returncode, 0, c.stderr)
             k = _cli(root, "check-filed")
             self.assertEqual(k.returncode, 0, k.stdout + k.stderr)

@@ -123,7 +123,7 @@ class _Closed(unittest.TestCase):
                          {"q.csv": Y2025})
         r = _run_cli(cls.p, "run", "--no-input")
         assert r.returncode == 0, r.stderr
-        r = _run_cli(cls.p, "close-year")
+        r = _run_cli(cls.p, "close-year", "--yes")
         assert r.returncode == 0, r.stderr
 
     @classmethod

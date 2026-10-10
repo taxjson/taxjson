@@ -281,7 +281,7 @@ class _CaChain(unittest.TestCase):
                        "amt_carryover = { 2017 = 999, 2019 = 3000, "
                        "2023 = 5000 }\n",
                        province="ON")
-        _ok(cli(p25, "close-year"))
+        _ok(cli(p25, "close-year", "--yes"))
         cls.lock25 = json.loads((p25 / "filed" / "2025.json").read_text())
         _project(t / "ca26", "canada", 2026, _CA_BOOK_26,
                  "[estimate]\nother_income = 250000\n", province="ON",
@@ -414,7 +414,7 @@ class TestCaLossChain(unittest.TestCase):
                 "BUYSELL 2025-01-02 10:00:00 XYZ.TO 100 CAD 100 10000 0\n"
                 "BUYSELL 2025-03-03 10:00:00 XYZ.TO -100 CAD 40 4000 0\n",
                 "[estimate]\nother_losses = 1000\n")
-            _ok(cli(p25, "close-year"))
+            _ok(cli(p25, "close-year", "--yes"))
             ncl = json.loads((p25 / "filed" / "2025.json").read_text()
                              )["carryforwards"]["net_capital_loss"]
             self.assertEqual(ncl, {"opening": 1000.0, "opening_source":
@@ -507,8 +507,8 @@ class TestDualCountry(unittest.TestCase):
                           province="ON")
             us = _project(t / "us", "usa", 2025, _US_BOOK_25,
                           "[estimate]\nother_income = 40000\n")
-            _ok(cli(ca, "close-year"))
-            _ok(cli(us, "close-year"))
+            _ok(cli(ca, "close-year", "--yes"))
+            _ok(cli(us, "close-year", "--yes"))
             cf_ca = json.loads((ca / "filed" / "2025.json").read_text()
                                )["carryforwards"]
             cf_us = json.loads((us / "filed" / "2025.json").read_text()

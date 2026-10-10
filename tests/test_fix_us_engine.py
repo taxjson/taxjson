@@ -556,7 +556,7 @@ class TestOwnMoveFiledLock(unittest.TestCase):
                                country="usa")
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            r = _cli(root, home, "close-year")
+            r = _cli(root, home, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr[-2000:])
             k = _cli(root, home, "check-filed")
             self.assertEqual(k.returncode, 0, k.stdout + k.stderr[-2000:])

@@ -407,11 +407,11 @@ class TestRunStateSurfaced(unittest.TestCase):
                 self.assertIn("not the clean result", r.stderr, cmd)
             j = json.loads(_cli(root, "sum", "--json").stdout)
             self.assertTrue(j["run_state_problems"])
-            r = _cli(root, "close-year")
+            r = _cli(root, "close-year", "--yes")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("inputs changed", r.stderr)
             self.assertFalse((root / "filed").exists())
-            r = _cli(root, "close-year", "--force")
+            r = _cli(root, "close-year", "--yes", "--force")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("warning: locking books", r.stderr)
             r = _cli(root, "check-filed")
@@ -427,7 +427,7 @@ class TestRunStateSurfaced(unittest.TestCase):
                 self.assertEqual(
                     _cli(root, "run", "--account", a,
                          "--no-input").returncode, 0)
-            r = _cli(root, "close-year")
+            r = _cli(root, "close-year", "--yes")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("unblended", r.stderr)
 
@@ -508,6 +508,11 @@ class TestCarryoverAgainstLocks(unittest.TestCase):
             t = (root / "taxjson.toml").read_text()
             (root / "taxjson.toml").write_text(
                 t.replace("option_grant_timing_since = 2025\n", ""))
+            # A written option: the unset key is warned about only when
+            # the books hold one (a project with none needs no key).
+            with (root / "inputs" / "margin" / "m.tt").open("a") as f:
+                f.write("BUYSELL 2025-04-01 10:00:00 ZZZ250919C00050000.TO "
+                        "-1 CAD 2.00 200.00 0.00\n")
             self.assertEqual(_cli(root, "run", "--no-input").returncode, 0)
             (root / "filed").mkdir()
             (root / "filed" / "2025.json").write_text(json.dumps(
