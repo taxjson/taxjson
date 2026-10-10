@@ -1641,8 +1641,9 @@ this year:
   merges two companies' ACB pools; **CDR-PAIR**, a `.TO` line whose
   exchange name says CDR (Canadian Depositary Receipt, e.g. SAMPLR.TO
   over SAMPLR.US): the same issuer but NOT a listing equivalent
-  (fractional, CAD-hedged, floating ratio). Never map it; record
-  `DISTINCT SAMPLR.US SAMPLR.TO` in ticker.map to silence the pair.
+  (fractional, CAD-hedged, floating ratio). Never map it; nothing else
+  to do: look-alike listings are never joined, so it needs no
+  `DISTINCT` line.
 
 Registered-plan kinds are inferred from a plan word that is a whole
 token of the account name (`tfsa`, `rrsp2`, `my-tfsa`; not `admiral`);
