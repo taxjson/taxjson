@@ -7,7 +7,6 @@ text that contradicted v0.27.x, and option_grant_timing_since in a new
 taxjson.toml. Synthetic data only (account ids 999000xx)."""
 import contextlib
 import io
-import json
 import os
 import shutil
 import subprocess
