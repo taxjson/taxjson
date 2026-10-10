@@ -123,6 +123,25 @@ class TestTransfers(_Base):
                       _flat(r["usa"].stdout))
 
 
+class TestList(_Base):
+    def test_default_is_concise(self):
+        for args in (("list",), ("list", "--negative")):
+            for c, r in self.run_both(*args).items():
+                with self.subTest(country=c, args=args):
+                    assert_concise(self, r.stdout, r.stderr,
+                                   legend="COST: book cost in")
+        r = project("canada").run("list", **_W)
+        self.assertIn("! 2 short position(s) with no purchase", r.stdout)
+
+    def test_details_keep_the_notes(self):
+        r = self.run_both("list", "--negative", details=True)
+        self.assertIn("--write-missing-history --all-history",
+                      _flat(r["canada"].stdout))
+        r = self.run_both("list", details=True)
+        self.assertIn("recovered when sold without a rebuy",
+                      _flat(r["usa"].stdout))
+
+
 def _no_box_rules(text):
     # The audit's ══ / ── rules are rules (lib/out.classify counts only
     # ASCII rules as such).

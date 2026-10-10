@@ -275,6 +275,10 @@ class TestListMarksMissingHistory(unittest.TestCase):
         self.assertNotIn(f"QSHO{sx}", out[b:])
         for sym in suspects:
             self.assertIn(sym, out[b:])
+        # The fixes in full: --details (Essentials first); the default
+        # view names the command.
+        self.assertIn("tjs find-missing-history", out)
+        out = _tj(root, "list", "--negative", "--details").stdout
         self.assertIn("`taxjson find-missing-history --write-missing-history "
                       "--all-history`", " ".join(out.split()))
         # find-missing-history reports the same pairs, the real short

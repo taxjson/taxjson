@@ -18002,9 +18002,16 @@ def cmd_positions(args: argparse.Namespace) -> None:
             f"as of the latest data in the books"
             + (f" ({horizon})" if horizon else ""))
     _vprint(f"{title} — {base}, {when}")
-    _vprint(f"COST is book cost after ticker.map and the base-currency "
-            f"conversion, basis: {basis}.")
-    print()
+    _det = _details(args)
+    if _det:
+        _vprint(f"COST is book cost after ticker.map and the base-currency "
+                f"conversion, basis: {basis}.")
+        print()
+    else:
+        # The legend, before the table (docs/output-style.md).
+        _vprint(f"COST: book cost in {base} after ticker.map, basis: "
+                f"{basis}" + ("; DEFERRED: denied losses in it."
+                              if total_deferred > 0.005 else "."))
     from taxjson.lib.out import fit_table as _fit_table
     n_sus = sum(1 for r in out_rows if r[7] != "-")
 
@@ -18028,6 +18035,9 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 f"({n_sus}):")
         _table([r for r in out_rows if r[7] != "-"], note=False)
         print()
+    if negative_only and n_sus and not _det:
+        pass        # one `! ` line under the count (below)
+    elif negative_only and n_sus:
         _vprint("Each is a sale your files show nothing to close for: a "
                 "purchase before the data (or a transfer-in) is missing. "
                 "Supply it (`taxjson find-missing-history` lists the "
@@ -18043,6 +18053,25 @@ def cmd_positions(args: argparse.Namespace) -> None:
         print()
     _vprint(f"{n_pos} position(s), total book cost {money(total_cost)} "
             f"{base}")
+    if not _det:
+        from taxjson.lib.out import act as _act
+        if n_sus and not negative_only:
+            print(_act(f"{n_sus} short position(s) with no purchase in "
+                       f"your files (missing history?)",
+                       "tjs list --negative"))
+        elif n_sus:
+            # Essentials first: the fixes are find-missing-history's.
+            print(_act("supply each missing purchase, or record it as an "
+                       "opening with no cost", "tjs find-missing-history"))
+        if total_deferred > 0.005:
+            _us_l = _country(_soft_settings(root)) == "usa"
+            print(f"DEFERRED: {money(total_deferred)} {base} of the book "
+                  f"cost is "
+                  + ("disallowed wash-sale losses (§1091)." if _us_l
+                     else "denied superficial losses (s.54)."))
+        from taxjson.lib.out import details_hint as _dh
+        print(_dh("tjs list --details"))
+        return
     if n_sus and not negative_only:
         _vprint(f"{n_sus} short position(s) marked `missing history?`: a "
                 f"sale with no purchase in your files, not a real short — "
