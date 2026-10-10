@@ -10,6 +10,7 @@
 - `tjs sanity` and the end of `tjs run` accept a holdings snapshot of an account that holds nothing (a `[meta]` table and no `[[holding]]`, as the fetch plugin writes it once every position is closed) instead of stopping with "no [[holding]] array" (#46).
 - A holdings/ snapshot is matched to its account by `[meta] broker_account` before `[meta] account`, so a fetched snapshot whose `account` still names a renamed account is claimed by the account declaring its broker id (#47).
 - Two account names that differ only by letter case (`Margin` and `margin`) are refused with a message naming both: their folders and holdings snapshots could not be told apart, and one account received the other's positions (#48).
+- `tjs elect ACCOUNT` (and `--json`) no longer lists the sheltered-default events of a longer-named account whose name starts with ACCOUNT and `_` (#50).
 
 
 ## v0.28.1 (2026-10-10)

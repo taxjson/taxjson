@@ -318,5 +318,27 @@ class TestCaseOnlyAccountNames(unittest.TestCase):
         self.assertIn("differ only", " ".join(r.stderr.split()))
 
 
+class TestDefaultedEventsExactAccount(unittest.TestCase):
+    """#50: the election listing of account `a` reads a's corp files
+    only, never those of a longer-named sibling `a_more`."""
+
+    def test_sibling_files_are_not_read(self):
+        from taxjson.bin import taxjson_run as R
+        from taxjson.lib.corp_actions import SHELTERED_DEFAULT
+        work = _tmp(self)
+
+        def corp(fname, eid):
+            (work / fname).write_text(json.dumps({"transactions": [{
+                "action": "BUYSELL", "quantity": 1, "date": "2024-06-01",
+                "symbol": "QZZQ.TO", "corp_election": SHELTERED_DEFAULT,
+                "corp_event_id": eid}]}))
+        corp("a_more_ib_corp.json", "synthetic-child-event")
+        corp("a_questrade_corp.json", "synthetic-own-event")
+        self.assertEqual(sorted(R._defaulted_events(work, "a")),
+                         ["synthetic-own-event"])
+        self.assertEqual(sorted(R._defaulted_events(work, "a_more")),
+                         ["synthetic-child-event"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8957,9 +8957,13 @@ def _hint_text(hints: Dict[str, Any]) -> str:
 def _defaulted_events(cache: Path, name: str
                       ) -> Dict[str, Dict[str, str]]:
     """The account's events booked by the sheltered default, from its
-    corp stage files in work/ ({} before a run)."""
+    corp stage files in work/ ({} before a run): exactly
+    `<name>_<broker>_corp.json` for the brokers whose corporate actions
+    are staged — a `<name>_*` pattern also read a longer-named sibling's
+    (`a_more_ib_corp.json` for account `a`, #50)."""
     return _sheltered_default_events(sorted(
-        p for p in Path(cache).glob(f"{name}_*_corp.json") if p.is_file()))
+        p for p in (Path(cache) / f"{name}_{b}_corp.json"
+                    for b in CORP_ACTION_BROKERS) if p.is_file()))
 
 
 def _default_label(kind: str) -> str:

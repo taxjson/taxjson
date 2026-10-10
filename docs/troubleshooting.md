@@ -643,6 +643,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_note_sheltered_defaults`, `_sheltered_elections`; `src/taxjson/lib/corp_actions.py` — `sheltered_default_rows`, `sheltered_default_text`; `src/taxjson/bin/taxjson_corp_actions.py` — `--sheltered-elections`
 
+### `tjs elect lira` lists a "sheltered default ($0 cost for the distributed shares)" event of another account, one whose name starts with `lira_` (`lira_spouse`)
+- **Check:** `tjs spinoffs lira_spouse` shows the event; `tjs spinoffs lira` does not.
+- **Cause:** the election listing read the corporate-action files of every account whose name begins with the account's name and `_` (`work/lira_spouse_ib_corp.json` for `lira`), so a longer-named account's defaulted events were listed (and in `--json` counted) under the shorter one.
+- **Fix:** upgrade: the listing reads the account's own files only. Nothing in the books changed: each account's run booked its own events.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_defaulted_events`, `CORP_ACTION_BROKERS`
+
 ### "Warning: margin: spin-off SPNC.US on 2025-06-03 (event …) is booked at $0"
 - **Check:** `tjs spinoffs` shows the election, the value used and the cost booked.
 - **Cause:** the election has no `fmv_per_share` saved (a hand-edited or older manifest) and the broker reported no value: no dividend income is booked and the new shares cost $0, so a later sale overstates the gain. The same warning exists for a merger booked at $0 (there `fmv_per_share=0` still means "not known yet") and a spin-off with $0 allocated cost. A spin-off whose `fmv_per_share=0` you wrote yourself is a declared $0 cost: an Info ("… is booked at the $0 value you declared (fmv_per_share=0)"), nothing to do.
