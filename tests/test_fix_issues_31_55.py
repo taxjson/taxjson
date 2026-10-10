@@ -233,5 +233,21 @@ class TestYearsNamesADamagedLock(unittest.TestCase):
                           r.stdout)
 
 
+# ------------------------------------------------------------------ #53
+class TestOptionBoundaryDamagedBook(unittest.TestCase):
+
+    def test_book_without_rows_is_one_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(Path(td) / "p", 2024, ["margin"], {})
+            (root / "work").mkdir()
+            (root / "work" / "margin_base.json").write_text(
+                '{"accounts": []}')
+            r = _cli(root, "option-boundary")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn('work/margin_base.json has no "transactions" list',
+                      r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

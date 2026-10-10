@@ -16880,8 +16880,14 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         # A truncated, non-UTF-8 or wrong-shape book was a traceback
         # here (S042-18).
         doc = _load_json_or_die(base)
+        if not isinstance(doc.get("transactions"), list):
+            # An object without its rows ({"accounts": []}) iterated its
+            # keys as rows: an AttributeError traceback (issue #53).
+            _die_input(f'work/{base.name} has no "transactions" list — the '
+                 f'books are damaged or from an interrupted run',
+                 "Run `taxjson run` to rebuild them.")
         txs = []
-        for r in (doc.get("transactions", doc) if isinstance(doc, dict) else doc):
+        for r in doc["transactions"]:
             try:
                 txs.append(TaxTransaction(**{k: v for k, v in r.items()
                                              if k in TaxTransaction.__dataclass_fields__}))

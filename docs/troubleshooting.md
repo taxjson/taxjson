@@ -989,6 +989,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.17.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_warn_expired_open_options`, `the export is missing its expiry, `
 
+### `tjs option-boundary`: "error: work/margin_base.json has no "transactions" list — the books are damaged or from an interrupted run"
+- **Check:** `work/margin_base.json` is a JSON object without its `transactions` rows. On v0.28.1 and older the command stopped with an `AttributeError` traceback (issue #53).
+- **Cause:** an interrupted `tjs run`, a disk that filled up, or a hand-edited file.
+- **Fix:** `tjs run`, which rebuilds `work/`.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_option_boundary`
+
 ## Before you file
 
 ### `tjs sum`: "! FX on foreign cash (line 15300): not in the rows; its estimate is NOT RELIABLE — tjs fx-cash", or `tjs fx-cash`: "FX on foreign cash: NOT RELIABLE for 2025 — 3 in-year overdrafts; do not file this figure."
