@@ -205,6 +205,41 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/lib/tobase_map.py` — `until_findings`, `until_message`; `src/taxjson/bin/taxjson_run.py` — `_say_tobase_until`
 
+### "Warning: QZG.US has 3 row date(s) in the books and the ticker is reused: today it names QZ OTHER CO (tobase.map:41: `TOBASE QZG.US QZG.TO`)"
+- **Check:** the dates listed and the security name on each row (`tjs trades`, `tjs events`); the tobase.map line carries `reused_by="..."`.
+- **Cause:** the master knows the ended US ticker of the pair names another security today, so any row of it — before the end date too, if the books' history is ambiguous — may be that other company's. The line pools every row of it with the Canadian listing.
+- **Fix:** if the rows are the old company's, nothing. If some are the other company's, add `DISTINCT QZG.US QZG.TO` to ticker.map and book the old company's rows under a symbol of their own (a dated `.tt` `RENAME` line).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `until_findings`, `until_message`; `scripts/build_interlisted.py` — `check_reused`
+
+### `tjs update-tobase-map`: "Retracted: 1 line(s) the master no longer gives" naming `TOBASE QZG.US QZG.TO` (or "ATTENTION: … line(s) you edited name a listing the master RETRACTED")
+- **Check:** the reason printed beside the line; the master's entry in `src/taxjson/data/interlisted.toml` (its `retracted` list, found by the FIGI in the line's marker).
+- **Cause:** an earlier master shipped a wrong pair (for instance an ended pair's US ticker that was another company's). A correction retracts it for good; an unedited line is removed, an edited one kept and flagged.
+- **Fix:** `tjs update-tobase-map --write`, then `tjs run`. For a flagged edited line, check it and delete it if it was the master's mistake. Rows of the retracted ticker that were pooled before are no longer: check the year's gains.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `retracted_listings`, `is_edited`; `scripts/build_interlisted.py` — `merge_previous`, `load_history`
+
+### `tjs ticker-map --suggest` lists a pair to verify such as `TOBASE QZOR.US QZOR.TO` for a US share you hold
+- **Check:** `grep -n 'QZOR.TO' tobase.map`: a tobase.map line pools an OTC listing under a TSX Venture issuer with the same letters.
+- **Cause:** the listing-pair check read tobase.map's pairs (and their targets) as sightings of the TSX listing in the books, so a US company's shares looked like one side of an interlisting.
+- **Fix:** upgrade; the pair is no longer suggested. Never add such a line: it would pool two companies.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/map_hygiene.py` — `map_gaps`, `own_renames`; `src/taxjson/lib/tobase_map.py` — `own_map_text`
+
+### `tjs t1135` lists a TSX-held `BEP.UN` (booked as `BEP.US`) under the USA, or warns "`T1135 BEP.UN.TO` matches no symbol in the books"
+- **Check:** the tobase.map line `TOBASE BEP.UN.TO BEP.US … country=BMU`; `tjs t1135 --json` (`properties`, `country`).
+- **Cause:** tobase.map books a foreign-domiciled issuer's pair under its US listing (its dividends and T1135 status are foreign); older versions classified that symbol by its `.US` suffix (USA) and did not follow a `T1135` line naming the TSX listing through the `TOBASE` line.
+- **Fix:** upgrade, `tjs update-tobase-map --write` (the lines gain `country=`), `tjs run`, `tjs t1135`. A `T1135 SYMBOL COUNTRY` line still overrides.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `t1135_countries`, `issuer_country`; `src/taxjson/bin/taxjson_t1135.py` — `build_report`
+
+### `tjs update-tobase-map --write` added back a master line I deleted, or duplicated a line I edited
+- **Check:** the `## --- Master lines you removed` section of tobase.map; `tjs update-tobase-map` lists "Left as written" (your edits) and "Removed by you".
+- **Cause:** older versions could not tell a deleted line from a new one, nor an edited line (another target, the direction reversed) from a retracted one.
+- **Fix:** upgrade. A deleted master line is recorded as `# removed: master:<FIGI> TOBASE A B` and stays out (delete that line and copy the master's line back to have it again); a commented-out marked line is an opt-out too; an edited line is yours and the master's line for the same listing is not added beside it. Your comment lines are kept.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/tobase_map.py` — `plan_update`, `parse_tobase`, `line_hash`, `is_edited`
+
 ### `tjs update-tobase-map` lists no pair for a TSX class share or trust unit (`QZK.B.TO`, `QZR.UN.TO`) that trades over the counter in the US
 - **Check:** `grep -n 'QZR.UN.TO' tobase.map`; the master's entry in `src/taxjson/data/interlisted.toml` (`ca = ["QZR.UN.TO"]`).
 - **Cause:** the TMX issuer list the master is built from names an issuer by its bare root (`QZR`), and OpenFIGI knows the line only under its class or unit spelling, so masters before the first refresh left such issuers out (their US OTC line, and some exchange pairs, were missing).
