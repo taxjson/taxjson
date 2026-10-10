@@ -2757,8 +2757,9 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                   "stable (the default), beta, latest or dev"),
               Cmd(INSTALL + " _ --without-fetch",
                   "leave out the taxjson-fetch plugin"),
-              Cmd("tjs --version", "what is installed; `tjs channels`: "
-                  "where each channel points"),
+              Cmd("tjs --version", "what is installed; where each "
+                  "channel points: `tjs channels` (a maintainer command: "
+                  "`tjs help --all` lists it)"),
               Cmd("tjs help", "every command by group; `tjs COMMAND -h` "
                   "explains one"))),
         Item("init", "Set up", "Create the year's project",

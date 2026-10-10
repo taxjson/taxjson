@@ -31,7 +31,7 @@ Contents:
 - [Before you trade](#before-you-trade)
 - [Before you file](#before-you-file)
 - [Explain and check](#explain-and-check)
-- [Release](#release)
+- [Maintainer](#maintainer)
 - [Tools](#tools)
 - [Renames, non-cash distributions and capital-gains dividends](#renames-non-cash-distributions-and-capital-gains-dividends)
 - [Standalone analysis tools](#standalone-analysis-tools)
@@ -2448,10 +2448,12 @@ no-op row, a result with a fractional share (expect cash in lieu), and
 events that also mention a cash or return-of-capital leg. Exit 1 on a
 likely double application.
 
-### Release
+### Maintainer
 
-These read a git checkout of taxjson, never a tax project: `-C` does not
-apply to them.
+The release commands, for the machine taxjson is developed on: `taxjson
+help` lists them only on a development checkout (`taxjson help --all`
+lists them everywhere), and they run everywhere. They read a git
+checkout of taxjson, never a tax project: `-C` does not apply to them.
 
 #### taxjson channels
 
