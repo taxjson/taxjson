@@ -123,5 +123,102 @@ class TestSameNumberAtTwoBrokers(unittest.TestCase):
         self.assertIn("feeds two taxjson accounts, qt and wb", r.stdout)
 
 
+# ------------------------------------------------------ 8. the FX window
+class TestFxWindow(unittest.TestCase):
+    """The rates stage asks only for the dates the project's files
+    reach (lib/rates_window), never Yahoo for a 2024 project."""
+
+    def test_date_shapes(self):
+        from taxjson.lib.rates_window import earliest_in_text
+        cases = {
+            b"2024-03-05,x": date(2024, 3, 5),
+            b'"05-03-2023",x': date(2023, 3, 5),       # either order:
+            b"03/15/2022 x": date(2022, 3, 15),         # the valid one
+            b"Date Range: January 1, 2021 - x": date(2021, 1, 1),
+            b"x 1 Feb 2020 x": date(2020, 2, 1),
+            b"20190104;093000": date(2019, 1, 4),       # an IB Flex date
+            b"2024-01-02 and order 20010101": date(2024, 1, 2),
+            b"price 2003.45 qty 1999": None,
+        }
+        for text, want in cases.items():
+            self.assertEqual(earliest_in_text(text, 2027), want, text)
+
+    def test_window_start(self):
+        from taxjson.lib.rates_window import window_start
+        d = _tmp(self)
+        (d / "a.csv").write_text("2024-02-12,BUY\n2024-12-05,SELL\n")
+        (d / "b.tt").write_text("OPENING 2022-06-03 QZA.TO 10 "
+                                "cost=unknown\n")
+        self.assertEqual(window_start(2024, [d / "a.csv"]),
+                         date(2023, 12, 18))
+        self.assertEqual(window_start(2024, [d / "a.csv", d / "b.tt"]),
+                         date(2022, 5, 20))
+        self.assertEqual(window_start(2024, []), date(2023, 12, 18))
+
+    def test_a_2024_project_asks_the_bank_from_december_2023_only(self):
+        """A stubbed fetcher counts the requests: the Bank of Canada is
+        asked from the window's start, Yahoo never."""
+        from taxjson.bin import to_base_curr as T
+        from taxjson.lib.rates_window import window_start
+        d = _tmp(self)
+        shutil.copy(EXAMPLES / "questrade_demo.csv", d / "q.csv")
+        start = window_start(2024, [d / "q.csv"]).isoformat()
+        boc, yahoo, noon = [], [], []
+
+        def fake_boc(cur, a, b):
+            boc.append((a, b))
+            out, x = {}, a
+            while x <= b:
+                if date.fromisoformat(x).weekday() < 5:
+                    out[x] = "1.3500"
+                x = T._shift(x, 1)
+            return out
+
+        with mock.patch.object(T, "CACHE_FILE", str(d / "fx.json")):
+            rows, errors, _n = T.build_rates(
+                "USD", "CAD", start, "2026-10-09", today="2026-10-09",
+                fetch_boc_fn=fake_boc,
+                fetch_yahoo_fn=lambda *a: yahoo.append(a) or {},
+                fetch_noon_fn=lambda *a: noon.append(a) or {})
+        self.assertEqual(errors, [])
+        self.assertEqual(start, "2023-12-18")
+        self.assertTrue(boc)
+        self.assertGreaterEqual(min(a for a, _b in boc), start)
+        self.assertEqual(yahoo, [])
+        self.assertEqual(rows[0][0], start)
+
+    def test_the_stage_passes_the_window_and_records_it(self):
+        from taxjson.bin import taxjson_run as R
+        d = _tmp(self)
+        cache = d / "work"
+        (d / "inputs" / "qt").mkdir(parents=True)
+        shutil.copy(EXAMPLES / "questrade_demo.csv",
+                    d / "inputs" / "qt" / "q.csv")
+        seen = []
+
+        def capture(argv, *a, **k):
+            seen.append(argv)
+            return b"2023-12-18 12:00:00 USD CAD 1.35 boc\n"
+        settings = {"base_currency": "CAD", "source_currencies": ["USD"],
+                    "year": 2024}
+        files = R._rates_inputs(d, d / "inputs", {"qt": {}})
+        with mock.patch.object(R, "run_capture", capture):
+            R.stage_currency_rates(settings, cache, files)
+        self.assertEqual(seen[0][-2:], ["--start", "2023-12-18"])
+        self.assertEqual((cache / R.RATES_START_STAMP).read_text().strip(),
+                         "2023-12-18")
+        # An export reaching further back rebuilds from its date.
+        (d / "inputs" / "qt" / "old.tt").write_text(
+            "OPENING 2021-03-01 QZA.TO 10 cost=unknown\n")
+        files = R._rates_inputs(d, d / "inputs", {"qt": {}})
+        with mock.patch.object(R, "run_capture", capture), \
+                mock.patch.object(R, "_rates_coverage_stale",
+                                  lambda *a, **k: False), \
+                mock.patch.object(R, "needs_rebuild", lambda *a: False):
+            R.stage_currency_rates(settings, cache, files)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[1][-2:], ["--start", "2021-02-15"])
+
+
 if __name__ == "__main__":
     unittest.main()

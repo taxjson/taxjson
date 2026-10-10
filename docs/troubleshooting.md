@@ -1293,6 +1293,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_convert_currency.py` — `missing_rate_message`, `no exchange rate for`; `src/taxjson/bin/to_base_curr.py` — `resolve_rows`, `refresh_boc`, `using cached rates only`, `download failed —`; `src/taxjson/bin/taxjson_run.py` — `stage_currency_rates`
 
+### The first run of a recent project downloads rates back to 2000: "Info: FX USD→CAD: Bank of Canada Valet for 2,400 dates, Yahoo fallback for 1,322 (2003-…)"
+- **Check:** the project's exports start years later than those dates; `head -1 work/to_base.csv` shows the first date fetched.
+- **Cause:** the rates stage runs before the exports are parsed, so it asked for every date from 2000-01-01, and Yahoo Finance for the years before the Bank of Canada's series.
+- **Fix:** upgrade: the window starts a few days before the earliest date in the project's exports, `.tt` files, slips and positions snapshots (never later than January 1 of the year), recorded in `work/.to_base.start`; an export reaching further back widens it on the next run.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/rates_window.py` — `window_start`, `earliest_in_text`; `src/taxjson/bin/taxjson_run.py` — `_rates_inputs`, `RATES_START_STAMP`
+
 ### "taxjson-to-base-curr needs the [fx] extra for a USD target (Yahoo Finance)" then "Error: stopped at fetching currency rates (CAD, USD) (exit 1)", with `TAXJSON_OFFLINE=1`
 - **Check:** the project is `base_currency = "USD"` (a US project), `TAXJSON_OFFLINE` is set, and `pip show yfinance` finds nothing (taxjson installed without the `[fx]` extra). The run printed "Loading cached CAD → USD rates" just before.
 - **Cause:** a USD target's rates come from Yahoo Finance, so the rates helper refused to start without the `[fx]` extra, even offline, where it reads `~/.currency_price_cache.json` only and never calls Yahoo.

@@ -10,6 +10,11 @@
 - The broker demo exports (`examples/*_demo.csv`) each carry their own
   synthetic account id; the Webull demo no longer settles on a Sunday and
   the Questrade demo no longer trades on an NYSE holiday.
+- `taxjson run` downloads exchange rates only from a few days before the
+  earliest date in the project's files (never later than January 1 of the
+  year), not from 2000: a recent project no longer fetches decades of
+  Bank of Canada rates, nor Yahoo Finance for the years before the Bank's
+  series.
 
 
 ## v0.27.2 (2026-10-10)

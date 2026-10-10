@@ -3035,13 +3035,42 @@ def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None,
                for k in keys)
 
 
-def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
+# work/to_base.csv's companion: the first date it was built from
+# (lib/rates_window). A file without one was built from 2000-01-01.
+RATES_START_STAMP = ".to_base.start"
+
+
+def _rates_inputs(root: Path, inputs_dir: Path,
+                  accounts: Dict[str, Any]) -> List[Path]:
+    """The files whose dates bound the FX window (lib/rates_window):
+    every account's exports and .tt files, the year's slips and its
+    positions snapshots. Read-only; a folder that cannot be listed
+    gives nothing (the run's own checks name it)."""
+    folders = [inputs_dir / n for n in sorted(accounts or {})]
+    folders += [_PL.slips_dir(root), _PL.holdings_folder(root)]
+    out: List[Path] = []
+    for d in folders:
+        try:
+            out += [p for p in sorted(d.iterdir())
+                    if p.is_file() and not p.name.startswith((".", "~$"))
+                    and p.suffix.lower() in (".csv", ".tt", ".toml",
+                                             ".txt", ".tsv")]
+        except OSError:
+            continue
+    return out
+
+
+def stage_currency_rates(settings: Dict[str, Any], cache: Path,
+                         inputs: Optional[List[Path]] = None) -> Path:
     """Build to_base.csv by appending taxjson-to-base-curr output for each
     configured source currency. Caches across runs while every source
     currency's rates reach the last few days: a refresh whose download
     failed for one currency (its block ends early) is refetched on the
     next run instead of being served for days behind another currency's
-    fresh last line (S046-06)."""
+    fresh last line (S046-06). `inputs`: the project's files
+    (_rates_inputs) — the window starts at the earliest date in them
+    (lib/rates_window), not 2000-01-01, and a file built from a later
+    start is rebuilt."""
     base = settings["base_currency"]
     sources = [c for c in settings.get("source_currencies", ["USD"]) if c != base]
     # Ensure the cache dir exists before any write — applies to both
@@ -3069,8 +3098,15 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # this, switching from CAD-base to USD-base silently reused the
     # old rates. The coverage check catches the inverse failure: an
     # mtime-fresh file whose data ends in the past.
+    start: Optional[str] = None
+    stamp = cache / RATES_START_STAMP
+    if inputs is not None:
+        from taxjson.lib.rates_window import window_start
+        start = window_start(settings.get("year"), inputs).isoformat()
+    built_from = (_read_work_stamp(stamp) or "").strip() or None
     if (not needs_rebuild(rates_path)
-            and not _rates_coverage_stale(rates_path, currencies=sources)):
+            and not _rates_coverage_stale(rates_path, currencies=sources)
+            and (start is None or built_from is None or built_from <= start)):
         return rates_path
     had_previous = rates_path.exists() and rates_path.stat().st_size > 0
     parts: List[bytes] = []
@@ -3080,7 +3116,9 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     try:
         for src in sources:
             _step(f"{_fetch} {src} → {base} rates")
-            parts.append(run_capture(_cmd("taxjson-to-base-curr") + [src, base]))
+            parts.append(run_capture(
+                _cmd("taxjson-to-base-curr") + [src, base]
+                + (["--start", start] if start else [])))
     except Exception as exc:
         # A refresh attempt (e.g. offline, yfinance hiccup) must not turn a
         # usable-if-aging rates file into a hard failure — but say so
@@ -3098,6 +3136,10 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # silently fall back to the default FX rate).
     from taxjson.lib.safe_write import write_atomic
     write_atomic(rates_path, b"".join(parts))
+    if start:
+        _write_work_stamp(stamp, start + "\n")
+    else:
+        _drop_work_file(stamp)
     return rates_path
 
 
@@ -7582,7 +7624,8 @@ def cmd_run(args: argparse.Namespace) -> None:
              "nothing was built.")
 
     _step("Loading currency rates")
-    rates = stage_currency_rates(settings, cache)
+    rates = stage_currency_rates(settings, cache,
+                                 _rates_inputs(root, inputs_dir, accounts))
 
     sheltered_items = [(n, c) for n, c in accounts.items()
                        if c.get("type", "sheltered") == "sheltered"]
