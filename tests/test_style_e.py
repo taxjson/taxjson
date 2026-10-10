@@ -61,7 +61,9 @@ class TestStyledNonZeroExits(unittest.TestCase):
                            "cost)"}[country])
 
     def test_checklist(self):
-        r = project("canada").run("checklist")
+        # The full list (--all; the default view is the counts per
+        # section, docs/output-style.md Essentials first).
+        r = project("canada").run("checklist", "--all")
         self.assertEqual(r.returncode, 1, r.stderr)
         assert_styled(self, r.stdout)
         lines = r.stdout.splitlines()
