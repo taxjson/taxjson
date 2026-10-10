@@ -490,6 +490,27 @@ class TestTransferInBookValue(unittest.TestCase):
             self.assertEqual([x["arrival"] for x in t["transfers"]],
                              ["missing history"])
 
+    @rule("CA-ACB-11")
+    def test_migrate_keeps_the_entry_that_covers_a_booked_arrival(self):
+        # Books built without missing_history.json (the run refuses it:
+        # moved aside) booked the arrival at its book value, so its sale
+        # never goes short there; the entry covered that arrival —
+        # migrate sizes it as the run WITH the file did (100 units),
+        # never "no opening needed".
+        with tempfile.TemporaryDirectory() as td:
+            root = _bv_project(td, "canada")
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            (root / "missing_history.json").write_text(json.dumps(
+                [{"symbol": "XYZ.TO", "account": "margin"}]))
+            r = cli(root, "migrate")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            tt = (root / "inputs" / "margin" /
+                  "missing_history.tt").read_text()
+            self.assertIn(" XYZ.TO 100 cost=unknown", tt)
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            j = json.loads(cli(root, "sum", "--json").stdout)
+            self.assertEqual(j["unknown_cost_routed"], 1)
+
     @rule("CA-ACB-TRANSFER-BV")
     def test_canada_own_account_move_is_not_booked(self):
         with tempfile.TemporaryDirectory() as td:

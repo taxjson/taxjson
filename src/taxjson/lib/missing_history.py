@@ -2585,6 +2585,42 @@ def _log_of(cache: Path, account: str, mh_file: Path
     return log if isinstance(log, list) else None
 
 
+def _gains_stage_rows(root: Path, account: str,
+                      txs: List[TaxTransaction],
+                      listed: Set[Tuple[str, str]]) -> List[TaxTransaction]:
+    """The rows the account's gains stage sizes its openings on when the
+    books were built WITHOUT the file (a run with it moved aside): its
+    merged books less the transfer-in arrivals booked at the broker's
+    book value for a listed pair (with the file, the entry covers the
+    arrival and nothing is booked — transfer_in.mark_missing_history),
+    after the same transfer handling (pipeline.prepare_books), so a
+    converted entry opens what the run with the file opened."""
+    txs = [t for t in txs
+           if not (str(getattr(t, 'type', '') or '') == 'transfer_book_value'
+                   and (str(t.symbol), str(t.account)) in listed)]
+    import contextlib
+    import io
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.pipeline import prepare_books
+    doc = _PL.read_config_soft(root)
+    acfg = (doc.get("accounts") or {}).get(account) or {}
+    st = doc.get("settings") or {}
+    try:
+        from taxjson.lib.country import settings_country
+        country = settings_country(st)
+    except Exception:                                   # noqa: BLE001
+        country = None
+    with contextlib.redirect_stderr(io.StringIO()):
+        out, _sh, _af, _log = prepare_books(
+            txs, [], [], taxable=acfg.get("type") == "taxable",
+            phantom_hint=False, country=country,
+            base_currency=st.get("base_currency"),
+            spot_crypto=bool(acfg.get("crypto")),
+            transfers_as_acquisitions=bool(
+                st.get("transfers_as_acquisitions")))
+    return out
+
+
 def project_view(root: Any) -> Optional[ProjectView]:
     """The ProjectView of project `root`'s missing_history.json (None
     without one). Each entry is sized as the project's run sized it: its
@@ -2622,7 +2658,8 @@ def project_view(root: Any) -> Optional[ProjectView]:
                     f"aside (`mv {mh.name} {mh.name}.hold`), `taxjson "
                     f"run` there, move it back and run `taxjson migrate` "
                     f"again")
-            txs = load_transactions(base)
+            txs = _gains_stage_rows(root, acct, load_transactions(base),
+                                    mine)
             _o, log = synthesize_openings(txs, mine, flag_stale=False,
                                           until=until)
         for e in log:
