@@ -168,16 +168,59 @@ def roc_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
 
 # ------------------------------------------------------------------ income
 
+# The window before a pay date in which the shares a dividend states must
+# have been held when the row gives no record or ex-date: the record
+# date of a monthly or quarterly payer sits in it (a quarterly payer's
+# pay date can trail its record date by several weeks).
+INCOME_WINDOW_DAYS = 45
+
+
+def _record_date_of(r: Dict[str, Any]) -> str:
+    """The row's record date: its `record_date` (a parser's, a .tt
+    record=), else the one its description prints ("REC 09/26/25")."""
+    rec = str(r.get("record_date") or "")
+    if rec:
+        return rec
+    from taxjson.lib.brokerages.base import income_facts_from_description
+    try:
+        return str(income_facts_from_description(
+            str(r.get("description") or "")).get("record_date") or "")
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
+def _max_held(rows, sym: str, pay: str, days: int) -> Optional[float]:
+    """The most shares of `sym` the rows held at the end of any day of
+    the `days` before `pay` (pay day included); None for a bad date."""
+    from datetime import datetime, timedelta
+    try:
+        d0 = datetime.strptime(pay, "%Y-%m-%d")
+    except ValueError:
+        return None
+    best = 0.0
+    for k in range(days + 1):
+        day = (d0 - timedelta(days=k)).strftime("%Y-%m-%d")
+        best = max(best, positions_on(rows, day).get(sym, 0.0))
+    return best
+
+
 def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
                             tol: float = 1e-4) -> List[Dict[str, Any]]:
     """Dividend rows whose description STATES the share count ("ON 500
-    SHS") while the books hold another number of shares on the record
-    date (the settled position; the ex-date's eve when only that is
-    known). With only the pay date, a count the books held at any time
-    in the 45 days before it is accepted (the record date sits in that
-    span). Rows of one broker account are compared with that account's
-    rows (and the hand-written ones): one taxjson account may hold two
-    brokers' accounts (a count the whole account held is
+    SHS") for more shares than the books held when the payment was
+    earned. Entitlement is fixed at the record date, not the pay date:
+    a sale after it (the dividend paid days or weeks later, the position
+    0 by then) is no finding. With the record date (the row's, a .tt
+    record=, or the "REC mm/dd/yy" its description prints) the books'
+    SETTLED position that day is compared (T+1 / T+2 settlement: the
+    holder of record); with only the ex-date, the position at the end of
+    the day before it; with neither, the most the books held at the end
+    of any day of the INCOME_WINDOW_DAYS before the pay date. Reported:
+    a payment on more shares than that (on a symbol never held: 0) — a
+    payment on fewer shares (another broker account's part, a partial
+    entitlement) is not. Rows of one broker account are compared with
+    that account's rows (and the hand-written ones): one taxjson account
+    may hold two brokers' accounts (a count the whole account held is
     accepted too)."""
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -197,42 +240,34 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
         mine = [t for t in rows
                 if not src or not t.get("source_account")
                 or t.get("source_account") == src]
-        rec = str(r.get("record_date") or "")
+        rec = _record_date_of(r)
         exd = str(r.get("ex_date") or "")
         pay = str(r.get("date") or "")
+
+        def _held(book):
+            if rec:
+                return positions_on(book, rec, settled=True).get(sym, 0.0)
+            if exd:
+                return positions_on(book, exd, before=True).get(sym, 0.0)
+            return _max_held(book, sym, pay, INCOME_WINDOW_DAYS)
+        held = _held(mine)
+        if held is None:
+            continue
         if rec:
-            held = positions_on(mine, rec, settled=True).get(sym, 0.0)
             when, basis = rec, "record date"
         elif exd:
-            held = positions_on(mine, exd, before=True).get(sym, 0.0)
             when, basis = exd, "ex-date"
         else:
-            from datetime import datetime, timedelta
-            try:
-                d0 = datetime.strptime(pay, "%Y-%m-%d")
-            except ValueError:
-                continue
-            seen = set()
-            for k in range(46):
-                day = (d0 - timedelta(days=k)).strftime("%Y-%m-%d")
-                seen.add(round(positions_on(mine, day).get(sym, 0.0), 6))
-            if any(abs(q - stated) <= tol for q in seen):
-                continue
-            held = positions_on(mine, pay).get(sym, 0.0)
-            when, basis = pay, "pay date"
-        if abs(held - stated) <= tol:
+            when = pay
+            basis = f"{INCOME_WINDOW_DAYS} days to the pay date"
+        if held + tol >= stated:
             continue
         if mine is not rows and len(mine) != len(rows):
-            # The whole account's position on that day (a holding moved
-            # between the account's brokers, rows stamped with another
-            # broker account): a match there is no finding.
-            if rec:
-                alt = positions_on(rows, rec, settled=True).get(sym, 0.0)
-            elif exd:
-                alt = positions_on(rows, exd, before=True).get(sym, 0.0)
-            else:
-                alt = positions_on(rows, pay).get(sym, 0.0)
-            if abs(alt - stated) <= tol:
+            # The whole account's position (a holding moved between the
+            # account's brokers, rows stamped with another broker
+            # account): enough there is no finding.
+            alt = _held(rows)
+            if alt is not None and alt + tol >= stated:
                 continue
         out.append({"account": account, "symbol": sym, "date": pay,
                     "on": when, "basis": basis, "stated_shares": stated,

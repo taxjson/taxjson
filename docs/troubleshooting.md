@@ -540,6 +540,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/lib/holdings_dir.py` — `discover`, `listed_files`, `claims it`
 
+### `tjs sanity`: "INCOME ON SHARES THE BOOKS DO NOT HOLD" for a dividend paid after you sold, or "Info: cost not compared for registered accounts (tfsa): book cost there is not tax cost"
+- **Check:** the dividend's record date (its `REC mm/dd/yy`, or the payer's notice) against your sale's settlement date; for the cost line, the account's `type = "sheltered"` in taxjson.toml.
+- **Cause:** the check compared the share count a dividend states with the books' position on the pay date (or required an exact match), so a sale after the record date — the dividend paid weeks later with the position at 0 — read as income on shares not held. A registered account's broker book cost was compared with the books' cost, but there it is not a tax cost (an in-kind transfer in resets it to the market value).
+- **Fix:** upgrade: entitlement is the record date (the row's, a `.tt` `record=`, or the description's `REC`), else any time in the 45 days to the pay date; only a payment on more shares than the books held then (or on a symbol never held) is listed. Costs are compared for taxable accounts only; a registered account's quantities are still compared.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/positions_check.py` — `income_share_mismatches`, `INCOME_WINDOW_DAYS`, `_record_date_of`, `_max_held`; `src/taxjson/bin/taxjson_run.py` — `cmd_sanity`, `cost not compared for registered accounts`
+
 ### `tjs sanity`: "VQQ.US MISSING_IN_HOLDINGS -500 0" for a position whose shares bought before the data were sold (covered by missing history)
 - **Check:** `tjs find-missing-history` lists the symbol as covered (a `.tt` `OPENING ... cost=unknown` line); the holdings snapshot is dated before the books' last row (sanity compares the books' positions on its date); the dividend check may also list a dividend "on a share count the books did not hold".
 - **Cause:** sanity rebuilt the books' positions on the snapshot's date from the merged rows only (work/<account>_base.json), without the missing-history openings the gains run adds, so the sale of those units read as a short.

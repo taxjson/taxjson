@@ -729,7 +729,7 @@ The broker's positions files for the tax year, as a download tool writes them (o
 
 ## Holdings TOML
 
-A broker's positions on a date, read by `taxjson sanity` (and `[accounts.NAME] holdings`) and `taxjson opening`; `taxjson fetch --positions` writes one for Questrade. Never booked by `taxjson run`. Both countries. Reader: `src/taxjson/lib/positions_reports.py` — `_read_toml`.
+A broker's positions on a date, read by `taxjson sanity` (and `[accounts.NAME] holdings`) and `taxjson opening`; sanity compares the quantities of every account and the costs of TAXABLE accounts only (a sheltered account's book cost — RRSP, TFSA, IRA, 401(k), HSA — is not a tax cost: one `Info:` line says so; `accounts_not_compared` in `--json`), and lists a dividend stating more shares than the books held on its record date (else at any time in the 45 days to the pay date: `src/taxjson/lib/positions_check.py` — `income_share_mismatches`, `INCOME_WINDOW_DAYS`); `taxjson fetch --positions` writes one for Questrade. Never booked by `taxjson run`. Both countries. Reader: `src/taxjson/lib/positions_reports.py` — `_read_toml`.
 
 | Key | Meaning |
 | --- | --- |

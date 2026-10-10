@@ -60,6 +60,14 @@
   (never twice; another quantity is a Warning and your line is kept); it
   no longer takes a FILE. The stages' `--incomplete-history` now names
   the project folder whose lines apply.
+- `taxjson sanity`'s dividend share-count check follows the entitlement:
+  the record date (the row's, a `.tt` `record=`, or the `REC mm/dd/yy` a
+  description prints), else any time in the 45 days to the pay date. A
+  sale after the record date, the dividend paid later with the position
+  at 0, is no longer listed; a payment on more shares than the books held
+  then, or on a symbol never held, still is. Costs are compared for
+  taxable accounts only: a registered account's book cost is not a tax
+  cost (one Info line says so); its quantities are still compared.
 - Every positions view holds the units bought before the data: `taxjson
   sanity` (and the run's holdings check, and its dividend share-count
   check) compared the broker's snapshot with positions rebuilt without the

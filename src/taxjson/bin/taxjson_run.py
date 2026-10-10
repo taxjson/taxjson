@@ -16873,10 +16873,21 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _nat_inv[acct] = PC.load_inventory(cache / f"{acct}_raw_gains.json")
     cost_all: List[Dict[str, Any]] = []
     income_all: List[Dict[str, Any]] = []
+    # Cost is compared for taxable accounts only: a registered account's
+    # broker book cost is not a tax cost (an in-kind transfer in resets
+    # it to the market value; none is reported) — Canada's RRSP/TFSA...
+    # and the US IRA/401(k)/HSA alike (type = "sheltered"). Its
+    # quantities are compared as every account's are.
+    cost_skipped: List[str] = []
     for grp in ordered if _ctry else ():
         qty_bad = {r["symbol"] for r in grp["rows"]}
         ext_cost: Dict[str, Dict[str, Any]] = {}
-        for _p in grp["files"]:
+        _shel = sorted(a for a in grp["accounts"]
+                       if (_cfg_accts.get(a) or {}).get("type")
+                       == "sheltered")
+        if _shel:
+            cost_skipped.extend(_shel)
+        for _p in (grp["files"] if not _shel else ()):
             _rp = reports_of.get(_p)
             if _rp is None:
                 continue
@@ -16946,6 +16957,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         for a in grp["accounts"]:
             income_all.extend(PC.income_share_mismatches(_rows_of(a), a,
                                                          tol))
+    if cost_skipped:
+        _sanity_note(f"cost not compared for registered accounts "
+                     f"({', '.join(sorted(set(cost_skipped)))}): book cost "
+                     f"there is not tax cost (quantities are compared).")
     cost_diffs = [c for c in cost_all if c.get("status") == "differs"]
     cost_matched = sum(1 for c in cost_all if c.get("status") == "match")
     cost_na = sum(1 for c in cost_all if c.get("status") == "n/a")
@@ -16981,6 +16996,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             "cost": {"compared": cost_matched + len(cost_diffs),
                      "matched": cost_matched,
                      "not_compared": cost_na,
+                     # (registered accounts: book cost is not tax cost)
+                     "accounts_not_compared": sorted(set(cost_skipped)),
                      "tolerance": cost_tol,
                      "rows": cost_all},
             "cost_differences": cost_diffs,
@@ -17452,11 +17469,15 @@ def _sanity_print_extras(groups, cost_all, cost_diffs, cost_matched,
             f"{c['symbol']} ({c.get('note') or 'n/a'})" for c in na[:8])
             + (f"; +{len(na) - 8} more" if len(na) > 8 else ""))
     if income_all:
+        from taxjson.lib.positions_check import (
+            INCOME_WINDOW_DAYS as _INCOME_WINDOW_DAYS)
         print()
         _p(f"INCOME ON SHARES THE BOOKS DO NOT HOLD — {len(income_all)} "
-           f"dividend row(s) state a share count the books did not "
-           f"hold (missing history or a missing trade is the usual "
-           f"cause; informational):")
+           f"dividend row(s) state more shares than the books held when "
+           f"it was earned (on the record date; without one, at any "
+           f"time in the {_INCOME_WINDOW_DAYS} days to the pay date) — "
+           f"missing history or a missing trade is the usual cause; "
+           f"informational:")
         lines = ["ACCOUNT SYMBOL PAID ON STATED BOOKS"]
         for m in income_all:
             lines.append(f"{m['account']} {m['symbol']} {m['date']} "
