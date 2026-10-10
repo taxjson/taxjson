@@ -408,7 +408,14 @@ class TestEstimateCommand(unittest.TestCase):
     def test_estimate_prints_the_summary_then_the_estimate(self):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
-            r = self._cli(self._project(td), "estimate")
+            # The summary first: --details; the default view is the
+            # estimate alone (Essentials first, docs/output-style.md).
+            root = self._project(td)
+            b = self._cli(root, "estimate")
+            r = self._cli(root, "estimate", "--details")
+        self.assertEqual(b.returncode, 0, b.stderr)
+        self.assertTrue(b.stdout.startswith("TAX ESTIMATE"), b.stdout)
+        self.assertIn("AMT CHECK", b.stdout)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("REALIZED-GAINS SUMMARY", r.stdout)
         self.assertIn("TAX ESTIMATE", r.stdout)

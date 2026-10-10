@@ -215,11 +215,15 @@ class TestInstalmentsCli(unittest.TestCase):
             # At the house width (the suite runs unwrapped).
             with mock.patch.dict(os.environ):
                 os.environ.pop("TAXJSON_WIDTH", None)
-                r = _cli(root, "instalments")
+                r = _cli(root, "instalments", "--details")
+                b = _cli(root, "instalments")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("TAX INSTALMENTS", r.stdout)
             self.assertIn("2026-03-16", r.stdout)
             self.assertIn("INTEREST (offset method", r.stdout)
+            # The default view: the schedule and the interest figures.
+            self.assertIn("2026-03-16", b.stdout)
+            self.assertIn("Net instalment interest", b.stdout)
             for line in r.stdout.splitlines():
                 # The house width, piped (docs/output-style.md).
                 self.assertLessEqual(len(line), out.WIDTH, repr(line))

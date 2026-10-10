@@ -648,9 +648,14 @@ class TestRunNoteWording(unittest.TestCase):
                       'checked)', ' '.join(r.stdout.split()))
 
     def test_us_estimate_assumptions_exclude_section_988(self):
+        from unittest import mock
+
+        import taxjson.bin.taxjson_run as R
         from taxjson.bin.taxjson_run import _print_tax_estimate
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        # The assumptions are printed with --details (Essentials first).
+        with contextlib.redirect_stdout(out), \
+                mock.patch.object(R, "_CURRENT_DETAILS", True):
             _print_tax_estimate(
                 {'settings': {'country': 'usa', 'year': 2025}},
                 {'realized': 1000.0, 'st': 1000.0, 'lt': 0.0, 'div_ca': 0.0,

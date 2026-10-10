@@ -280,8 +280,10 @@ class TestStakingIsOrdinaryIncome(unittest.TestCase):
             self.assertAlmostEqual(est["ftc_assumed"], 75.0)
             t = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
-                 str(root), "estimate", "--other-income", "200000"],
+                 str(root), "estimate", "--other-income", "200000",
+                 "--details"],
                 cwd=REPO_ROOT, capture_output=True, text=True)
+        # (the assumptions and notes: --details, Essentials first)
         self.assertRegex(t.stdout, r"Foreign dividends\s+500\.00")
         self.assertRegex(t.stdout, r"Crypto staking \(ordinary\)\s+"
                                    r"1,000\.00")

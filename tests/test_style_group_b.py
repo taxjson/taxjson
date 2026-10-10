@@ -65,9 +65,10 @@ class TestCanadaOnlyViews(unittest.TestCase):
             t = p.root / "taxjson.toml"
             t.write_text(re.sub(r'^(country\s*=.*)$', r'\1\nprovince = "ON"',
                                 t.read_text(), count=1, flags=re.M))
-        r = p.run("instalments")
+        r = p.run("instalments", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         assert_styled(self, r.stdout)
+        assert_styled(self, p.run("instalments").stdout)
         self.assertIn("Not modelled - CPP/EI payable", _flat(r.stdout))
         self.assertNotIn("NOTE:", r.stdout)
         a = p.run("amt")
@@ -87,7 +88,9 @@ class TestCanadaOnlyViews(unittest.TestCase):
 
 class TestBothCountries(unittest.TestCase):
     def test_estimate(self):
-        for country, args in (("canada", ("estimate", "--province", "ON")),
+        # The assumptions list: --details or --verbose (Essentials first).
+        for country, args in (("canada", ("estimate", "--province", "ON",
+                                          "--details")),
                               ("usa", ("estimate", "--verbose"))):
             with self.subTest(country=country):
                 r = project(country).run(*args)

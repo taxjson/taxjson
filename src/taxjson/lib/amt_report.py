@@ -47,15 +47,25 @@ def _amt_note(n: str) -> bool:
                                   "rate vintage", "tax year", "tables"))
 
 
-def _row(label: str, amount: Optional[float], note: str = "") -> str:
+def _row_line(label: str, amount: Optional[float], note: str = "",
+              details: bool = True) -> str:
     """`  label  amount  [note]`; a note too long for the width wraps
-    under itself (the result may hold several lines)."""
+    under itself (the result may hold several lines). Not `details`
+    (the default view): a note that does not fit the line is left out
+    (--details shows it)."""
     amt = "" if amount is None else m(amount)
     head = f"  {label:<46}{amt:>14}"
+    if note and not details:
+        w = _out.width()
+        if w and len(head) + 2 + len(note) > w:
+            note = ""
     if not note:
         return head.rstrip()
     return "\n".join(_out.wrap(note, None, head + "  ",
                                " " * (len(head) + 2)))
+
+
+_row = _row_line
 
 
 def _notes(notes: List[str]) -> List[str]:
@@ -66,16 +76,25 @@ def _notes(notes: List[str]) -> List[str]:
     return L
 
 
-def render(doc: Dict[str, Any]) -> List[str]:
+def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
+    """The `taxjson amt` report. Not `details` (the default view, docs/
+    output-style.md, Essentials first): the law line, notes that do
+    not fit a row and the NOTES move to --details."""
+    import functools
+    _row = functools.partial(_row_line, details=details)
     a = doc["amt"]
     prov = doc.get("province") or "?"
     cur = doc.get("currency") or "CAD"
     L = [f"MINIMUM TAX (AMT) — canada/{prov}, tax year {doc['year']}, "
          f"{cur}"]
-    L += _out.wrap(f"ESTIMATE ONLY, not filing numbers: the taxable "
-                   f"accounts plus your other income, rates vintage "
-                   f"{doc.get('vintage')}.")
-    L += _out.wrap(f"Law: {LAW}.")
+    if details:
+        L += _out.wrap(f"ESTIMATE ONLY, not filing numbers: the taxable "
+                       f"accounts plus your other income, rates vintage "
+                       f"{doc.get('vintage')}.")
+        L += _out.wrap(f"Law: {LAW}.")
+    else:
+        L.append(f"ESTIMATE ONLY, not filing numbers: rates vintage "
+                 f"{doc.get('vintage')}; [ ] the law or the source.")
     L.append("")
     reg = doc.get("tax_regular") or {}
     L.append("REGULAR TAX")
@@ -85,14 +104,17 @@ def render(doc: Dict[str, Any]) -> List[str]:
     if reg:
         L.append(_row(f"{prov} tax", reg.get("provincial")))
     L.append("")
-    L.append("ADJUSTED TAXABLE INCOME (s.127.52)")
+    L.append("ADJUSTED TAXABLE INCOME (s.127.52)" if details
+             else "ADJUSTED TAXABLE INCOME — s.127.52")
     for ln in a.get("ati_lines") or []:
         if abs(float(ln["amount"])) < 0.005 and "Other income" not in \
                 ln["label"] and "Capital gains" not in ln["label"]:
             continue
         L.append(_row(ln["label"], ln["amount"], ln.get("ref") or ""))
-    L.append(_row("Donations, stock-option deduction", None,
-                  "not modelled (the estimate has no input for them)"))
+    if details:
+        L.append(_row("Donations, stock-option deduction", None,
+                      "not modelled (the estimate has no input for "
+                      "them)"))
     shown = sum(float(ln["amount"]) for ln in a.get("ati_lines") or [])
     L.append(_row("= Adjusted taxable income", a["adjusted_income"],
                   "[floored at zero]" if shown < -0.005 else ""))
@@ -127,7 +149,8 @@ def render(doc: Dict[str, Any]) -> List[str]:
                       "[the room a carryover can use]"))
     L.append("")
     c = a.get("carryover") or {}
-    L.append("MINIMUM TAX CARRYOVER (s.120.2)")
+    L.append("MINIMUM TAX CARRYOVER (s.120.2)" if details
+             else "MINIMUM TAX CARRYOVER — s.120.2")
     src = (doc.get("carry_sources") or {}).get("amt_carryover")
     L += _out.wrap(src or "nothing entered ([estimate] amt_carryover) "
                           "and no earlier close-year record", None,
@@ -180,8 +203,12 @@ def render(doc: Dict[str, Any]) -> List[str]:
     L.append(_row("  with AMT and carryover", doc.get(
         "estimated_tax_with_amt")))
     notes = doc.get("notes") or []
-    if notes:
+    if notes and details:
         L += _notes(notes)
+    elif not details:
+        L.append(f"Not modelled: donations, the stock-option deduction"
+                 + (f"; {len(notes)} note(s)" if notes else "")
+                 + " — tjs amt --details")
     return L
 
 

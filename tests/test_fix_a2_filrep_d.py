@@ -494,7 +494,9 @@ class TestUsEstimateSection1256(unittest.TestCase):
                                    places=2)
             self.assertTrue(any("60/40" in n for n in est["notes"]),
                             est["notes"])
-            t = _taxjson(root, "estimate", "--other-income", "100000")
+            # The estimate's notes: --details (Essentials first).
+            t = _taxjson(root, "estimate", "--other-income", "100000",
+                         "--details")
             self.assertEqual(t.returncode, 0, t.stderr[-2000:])
             self.assertIn("§1256", t.stdout)
             self.assertIn("60/40", t.stdout)

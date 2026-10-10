@@ -384,15 +384,19 @@ class TestInstalmentInputs(unittest.TestCase):
                 _CONFIG.replace('country = "canada"',
                                 'country = "canada"\nprovince = "ON"')
                 + '\n[instalments]\nbasis = "current_year"\n')
-            r = _run_cli(root, "instalments")
+            # The list in full: --details (Essentials first).
+            r = _run_cli(root, "instalments", "--details")
             self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("Not modelled: self-employed CPP/EI",
+                          _run_cli(root, "instalments").stdout)
             flat = " ".join(r.stdout.split())
             self.assertIn("Not modelled - CPP/EI payable on "
                           "self-employment", flat)
             self.assertIn("line 15300", flat)
             j = json.loads(_run_cli(root, "instalments", "--json").stdout)
             self.assertEqual(len(j["not_modelled"]), 2)
-            e = _run_cli(root, "estimate", "--province", "ON")
+            # The assumptions in full: --details (Essentials first).
+            e = _run_cli(root, "estimate", "--province", "ON", "--details")
             self.assertIn("line 15300", " ".join(e.stdout.split()))
 
 
