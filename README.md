@@ -914,7 +914,10 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson spinoffs [ACCOUNT] [--json]` | Every spin-off in the books: parent and new security, ratio, the election (`taxable_deemed_dividend` is the Canadian default: a dividend equal to the new shares' fair market value, which is also their cost; `rollover_s_86_1` splits the parent's cost with no income, filed with the return, for spin-offs on CRA's list; you give the CAD cost moved to the new shares as `--hint allocated_acb_cad=`), the value per share used, what was booked (income and the new shares' cost), the broker's own value when it reported one (the default uses it when no value is given), and what is held now. In a US project the elections are `taxable_distribution_301` (§301 income at FMV) and `tax_free_355` (basis moved per Form 8937, `--hint allocated_acb=`). A sheltered account's spin-off booked without asking shows `sheltered_default` ($0 cost for the new shares). Flags a taxable spin-off booked at $0, a basis-allocating election with no allocated cost, a missing election or an ignored event; exit 1 when a taxable one needs attention. |
 | `taxjson splits [ACCOUNT] [--json]` | Every split, consolidation and rename with holdings just before and after. Flags a split recorded twice (two sources, close dates), a no-op row, a result with a fractional share (expect cash in lieu), and events that also mention a cash or return-of-capital leg. Exit 1 on a likely double application. |
 
-#### Release
+#### Maintainer
+
+The release commands, for the machine taxjson is developed on: `taxjson help`
+lists them only there (`taxjson help --all` everywhere).
 
 | Command | Purpose |
 | --- | --- |

@@ -549,8 +549,9 @@ class TestReleaseGroup(unittest.TestCase):
         from taxjson.bin.taxjson_run import _COMMAND_GROUPS
         from taxjson.lib.country import COMMAND_COUNTRY
         groups = dict(_COMMAND_GROUPS)
-        self.assertEqual(groups["Release"], ("channels", "deploy", "promote"))
-        for c in groups["Release"]:
+        self.assertEqual(groups["Maintainer"],
+                         ("channels", "deploy", "promote"))
+        for c in groups["Maintainer"]:
             self.assertNotIn(c, COMMAND_COUNTRY)
 
     def test_channels_sh_runs_the_same_page(self):

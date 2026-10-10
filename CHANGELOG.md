@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- `taxjson help` lists the maintainer's release commands (`channels`,
+  `deploy`, `promote`, now under "Maintainer") only on a development
+  checkout; `taxjson help --all` lists them everywhere, and they still run.
+
 ### Fixed
 
 - `taxjson run` no longer says "the same broker account feeds two taxjson

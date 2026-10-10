@@ -159,6 +159,46 @@ class TestBareTtSymbolOnTheConsole(unittest.TestCase):
                     "books\n", r.stderr)
 
 
+# ------------------------------------- 6. maintainer commands in help
+class TestMaintainerCommandsHidden(unittest.TestCase):
+    MAINT = ("channels", "deploy", "promote")
+
+    def _env_user_install(self):
+        """This checkout as the production copy (the installer's clone):
+        no development checkout, as on a user's machine."""
+        env = _env(TAXJSON_PROD_DIR=str(REPO))
+        env.pop("TAXJSON_DEV_DIR", None)
+        return env
+
+    def _listed(self, out):
+        import re
+        return re.findall(r"(?m)^  ([a-z][a-z0-9-]+)\s{2,}", out)
+
+    def test_user_help_hides_them_and_all_lists_them(self):
+        env = self._env_user_install()
+        d = _tmp(self)
+        out = _cli("help", cwd=d, env=env).stdout
+        listed = self._listed(out)
+        for c in self.MAINT:
+            self.assertNotIn(c, listed)
+        self.assertNotIn("\nMaintainer:\n", out)
+        self.assertIn("redact", listed)
+        every = _cli("help", "--all", cwd=d, env=env).stdout
+        self.assertIn("\nMaintainer:\n", every)
+        for c in self.MAINT:
+            self.assertIn(c, self._listed(every))
+        # Still runnable.
+        r = _cli("channels", "--offline", "--json", cwd=d, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_dev_checkout_lists_them(self):
+        env = _env(TAXJSON_DEV_DIR=str(REPO))
+        out = _cli("help", cwd=_tmp(self), env=env).stdout
+        self.assertIn("\nMaintainer:\n", out)
+        for c in self.MAINT:
+            self.assertIn(c, self._listed(out))
+
+
 # ---------------------------------- 9. text that contradicted v0.27.x
 class TestProductText(unittest.TestCase):
 

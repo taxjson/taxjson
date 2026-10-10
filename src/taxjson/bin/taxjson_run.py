@@ -1216,13 +1216,28 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Explain and check", ("audit", "wash-sales", "tax-logic", "edge-cases",
                            "check-dates", "sanity", "journals", "renames",
                            "spinoffs", "splits")),
-    ("Release", ("channels", "deploy", "promote")),
+    ("Maintainer", ("channels", "deploy", "promote")),
     ("Tools", ("redact", "help")),
 )
 
 # The release verbs read a git checkout, never a tax project: -C/--dir
 # and the project guards do not apply to them.
 _RELEASE_CMDS: Tuple[str, ...] = ("channels", "deploy", "promote")
+# The group of the maintainer's release commands: listed by `help --all`
+# and on a development checkout only (they stay runnable everywhere).
+_MAINTAINER_GROUP = "Maintainer"
+
+
+def _dev_checkout_present() -> bool:
+    """A development checkout taxjson is released from (lib/channels
+    .dev_checkout with scripts/promote.sh): the help page lists the
+    maintainer's commands there."""
+    from taxjson.lib import channels as ch
+    try:
+        dev = ch.dev_checkout()
+    except ch.ChannelsError:
+        return False
+    return dev is not None and (dev / "scripts" / "promote.sh").is_file()
 
 _TOP_DESCRIPTION = (
     "taxjson — capital gains, income and the superficial-loss / "
@@ -1261,7 +1276,8 @@ class _GroupedHelpParser(argparse.ArgumentParser):
     a closing line counts them; `help --all` (`show_all`) lists every
     command. Outside a project, or with --all, a one-country command is
     marked "(Canada)" / "(USA)". Running a hidden command still gets the
-    dispatcher's refusal naming why."""
+    dispatcher's refusal naming why. The Maintainer group (the release
+    commands) is listed with --all or on a development checkout only."""
 
     help_country: Optional[str] = None
     show_all: bool = False
@@ -1292,9 +1308,12 @@ class _GroupedHelpParser(argparse.ArgumentParser):
             by_name[a.dest] = a
         placed = set()
         sections = []
+        maintainer = self.show_all or _dev_checkout_present()
         for title, names in _COMMAND_GROUPS:
             acts = [by_name[n] for n in names if n in by_name]
             placed.update(n for n in names if n in by_name)
+            if title == _MAINTAINER_GROUP and not maintainer:
+                continue
             sections.append((title, acts))
         rest = [a for n, a in by_name.items() if n not in placed]
         if rest:
