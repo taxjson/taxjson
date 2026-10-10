@@ -19,9 +19,16 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ### "Error: no taxjson.toml in …/taxes/2025. Run `taxjson init` first."
 - **Check:** `ls taxjson.toml` in the folder you ran from; read-only commands say "no gains files, and no taxjson.toml in … — not a taxjson project".
 - **Cause:** taxjson runs on the project in the current folder (or the one `-C DIR` names), and this folder has no `taxjson.toml`.
-- **Fix:** `cd` into the project folder or pass `-C ~/taxes/2025`; for a new project, `tjs init --country canada --year 2025`.
+- **Fix:** `cd` into the project folder or pass `-C ~/taxes/2025`; for a new project, in the folder for your taxes (not a year folder): `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada --year 2025 && cd 2025`.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `load_config`, `no taxjson.toml in`
+
+### "Error: …/taxes/2026 is named like a tax year and is empty: `init` makes the year's folder itself, so this would build 2026/2026/ in it"
+- **Check:** you ran `tjs init` inside an empty folder named like a year (an older installer and README said `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init …`).
+- **Cause:** `init` makes the year's folder (`YYYY/`) inside the folder it runs in, beside the shared `inputs/`; run in `~/taxes/2026` it built `~/taxes/2026/2026/` without a word.
+- **Fix:** run it in the folder above, as the message says: `cd ~/taxes && tjs init --country canada && cd 2026`. A project already built nested works as it is; to tidy it, move `2026/2026/` up with its `inputs/` beside it. `tjs init --single` makes one folder for one year where you are.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_refuse_init_in_year_folder`, `cmd_init`
 
 ### "Error: `sum` works on one year's project, and this folder holds the year folders 2024, 2025 (with the exports they share)"
 - **Check:** `ls` shows `inputs/` and year folders (`2024/`, `2025/`) but no `taxjson.toml`: the folder of exports every year shares (`tjs init`'s layout). `tjs years` lists the years.
@@ -381,11 +388,18 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `src/taxjson/lib/ticker_map_legacy.py` — `is_legacy_paragraph`, `near_legacy`, `corpus_tables`; `src/taxjson/lib/ticker_map_format.py` — `_scan_template`, `_legacy_spans`, `_dated_comment_blocks`; `src/taxjson/bin/taxjson_run.py` — `_format_map_header_notes`
 
 ### "Warning: [settings] option_grant_timing_since is not set, so grant timing (ITA s.49(1)) starts at the project year (2025)"
-- **Check:** shown by `tjs run` in a Canadian project with a taxable non-crypto account on grant timing (the default `option_premium_timing`).
+- **Check:** shown by `tjs run` (after the books are built) in a Canadian project on grant timing (the default `option_premium_timing`) whose taxable books hold a written option; a project without one is not warned (`tjs init` leaves the key commented).
 - **Cause:** without the key, grant timing starts at `year`, which moves when you bump `year` next spring: last year's year-straddling written options would go back to close timing and their premium would be taxed twice. See `tjs option-boundary` and `tjs tax-logic`.
 - **Fix:** add `option_grant_timing_since = 2025` (the first year you file under grant timing) to `[settings]` once, and keep it unchanged in every later year's project.
 - **Fixed in:** —
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_warning`, `option_grant_timing_since is not set`
+
+### "Warning: option_grant_timing_since = 2026 is after year = 2025: 2025's written options are taxed at the close"
+- **Check:** `grep -n option_grant_timing_since taxjson.toml`: usually `year` was lowered (filing an earlier year) and the key kept the value an earlier `taxjson init` wrote.
+- **Cause:** contracts written before `option_grant_timing_since` keep close timing, so every option written in the project year is taxed when it closes, not when written (ITA s.49(1)). A `taxjson init` before this release wrote the key set to the init year in every new project.
+- **Fix:** set it to the first year you file under grant timing (or delete the line for the project year); keep it unchanged in later years.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_run.py` — `_grant_since_after_year`, `_books_write_options`, `_grant_since_warning`; `src/taxjson/lib/config_template.py` — `scaffold_document`
 
 ### "Warning: no transaction in any account's books is dated 2021 (the books run 2025-01-10 to 2025-12-31)"
 - **Check:** the next line says "Every 2021 filing total will be 0. Is [settings] year in taxjson.toml right?"; the run itself finishes.
@@ -1324,7 +1338,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 ## Options
 
 ### "Warning: 1 option contract you wrote in 2025 and closed in 2026 is on transition close timing: 400.00 of premium is taxed in 2026"
-- **Check:** `tjs option-boundary` lists the contract with "QUESTION: did your 2025 return report the … premium when the contract was written?"; `tjs checklist` shows `[!]` (or `[>]`, the next step) on option-boundary with the same question. The project's `[settings] option_grant_timing_since` is the project year (what `tjs init` writes) and no `filed/2025.json` lock (or `prior_year_record`) records how 2025 was filed.
+- **Check:** `tjs option-boundary` lists the contract with "QUESTION: did your 2025 return report the … premium when the contract was written?"; `tjs checklist` shows `[!]` (or `[>]`, the next step) on option-boundary with the same question. The project's `[settings] option_grant_timing_since` is the project year (the default: `tjs init` leaves the key commented) and no `filed/2025.json` lock (or `prior_year_record`) records how 2025 was filed.
 - **Cause:** grant timing (ITA s.49(1)) puts a written option's premium in the year written, but a contract written before `option_grant_timing_since` keeps close timing (the transition from books filed the old way): its premium is in this year's gain at the buy-back or expiry. That is right only if the write year's return did not report the premium; if it did (last year's return was on grant timing — a previous taxjson project, or your preparer's), the premium is taxed twice. Only you know which; nothing was said before (the checklist showed "no amendment required").
 - **Fix:** if last year's return reported these premiums when written, set `option_grant_timing_since = 2025` (the first year filed under grant timing) and keep it in every later project: the premium then stays in 2025 and only the buy-back is 2026's. If it did not, the transition is right: `tjs checklist --done option-boundary` (add `--note`) answers it, and the run says a note instead. A `filed/2025.json` lock that records the timing answers it too.
 - **Fixed in:** `v0.24.1`

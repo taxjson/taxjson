@@ -504,6 +504,11 @@ class TestCarryoverAgainstLocks(unittest.TestCase):
             t = (root / "taxjson.toml").read_text()
             (root / "taxjson.toml").write_text(
                 t.replace("option_grant_timing_since = 2025\n", ""))
+            # A written option: the unset key is warned about only when
+            # the books hold one (a project with none needs no key).
+            with (root / "inputs" / "margin" / "m.tt").open("a") as f:
+                f.write("BUYSELL 2025-04-01 10:00:00 ZZZ250919C00050000.TO "
+                        "-1 CAD 2.00 200.00 0.00\n")
             self.assertEqual(_cli(root, "run", "--no-input").returncode, 0)
             (root / "filed").mkdir()
             (root / "filed" / "2025.json").write_text(json.dumps(

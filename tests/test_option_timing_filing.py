@@ -97,7 +97,11 @@ class TestCarryoverTiming(unittest.TestCase):
 
 
 class TestGrantSince(unittest.TestCase):
-    def test_init_writes_since_uncommented(self):
+    def test_init_writes_since_commented_unless_a_year_sets_it(self):
+        """New-user walkthrough (2026-10): a new taxjson.toml leaves the
+        key commented with its one-line explanation (the run warns when
+        the books hold a written option and it is not set); a year
+        folder added beside one that sets it keeps that value."""
         from taxjson.bin.taxjson_run import cmd_init
         from taxjson.lib.tomlcompat import tomllib
         with tempfile.TemporaryDirectory() as td:
@@ -106,9 +110,27 @@ class TestGrantSince(unittest.TestCase):
                 cmd_init(argparse.Namespace(single=True, path=str(root), dir=".",
                                             force=False, country="canada",
                                             year=2025))
-            doc = tomllib.loads((root / "taxjson.toml").read_text())
+            text = (root / "taxjson.toml").read_text()
+            doc = tomllib.loads(text)
+            self.assertNotIn("option_grant_timing_since", doc["settings"])
+            self.assertIn("# option_grant_timing_since", text)
+            top = Path(td) / "taxes"
+            with redirect_stdout(io.StringIO()):
+                cmd_init(argparse.Namespace(single=False, path=str(top),
+                                            dir=".", force=False,
+                                            country="canada", year=2025))
+            cfg = top / "2025" / "taxjson.toml"
+            import re
+            cfg.write_text(re.sub(r"(?m)^# option_grant_timing_since\s+= "
+                                  r"2025$", "option_grant_timing_since = 2024",
+                                  cfg.read_text()))
+            with redirect_stdout(io.StringIO()):
+                cmd_init(argparse.Namespace(single=False, path=str(top),
+                                            dir=".", force=False,
+                                            country="canada", year=2026))
+            doc = tomllib.loads((top / "2026" / "taxjson.toml").read_text())
             self.assertEqual(doc["settings"]["option_grant_timing_since"],
-                             2025)
+                             2024)
             root2 = Path(td) / "u"
             with redirect_stdout(io.StringIO()), \
                     redirect_stderr(io.StringIO()):

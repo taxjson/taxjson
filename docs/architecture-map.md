@@ -452,7 +452,8 @@ a new project from a template; `format` re-renders an existing file into the
 template keeping the user's values; `migrate` folds an old project's separate
 files into ticker.map and taxjson.toml.
 
-- `src/taxjson/bin/taxjson_run.py` — `load_config`, `validate_config`, `_normalize_settings`, `_warn_config_tables`, `_refuse_bad_account_types`, `cmd_init`, `_render_init_config`, `cmd_format`, `_backup_config`, `cmd_migrate`: reading and checking taxjson.toml; `init`, `format` and `migrate`.
+- `src/taxjson/bin/taxjson_run.py` — `load_config`, `validate_config`, `_normalize_settings`, `_warn_config_tables`, `_refuse_bad_account_types`, `cmd_init`, `_render_init_config`, `_refuse_init_in_year_folder`, `_sibling_grant_since`, `cmd_format`, `_backup_config`, `cmd_migrate`: reading and checking taxjson.toml; `init` (refused in an empty folder named like a year; from January to April a line for filing last year; `option_grant_timing_since` left commented unless another year folder sets it), `format` and `migrate`.
+- `src/taxjson/bin/taxjson_run.py` — `_grant_since_warning`, `_books_write_options`, `_grant_since_after_year`: the run's warnings about `option_grant_timing_since` (not set while the books hold a written option; later than `year`).
 - `src/taxjson/lib/config_check.py` — `settings_problems`, `account_type_problems`, `account_name_problem`, `ACCOUNT_TYPES`, `ACCOUNT_KEYS`, `RETIRED_SETTINGS`: the checks every config reader applies.
 - `src/taxjson/lib/config_template.py` — `SETTINGS_SPEC`, `ACCOUNT_SPEC`, `TABLES`, `render_init`, `format_config`, `scaffold_document`, `Key`: every key taxjson reads, documented per country.
 - `src/taxjson/lib/migrate.py` — `plan`, `apply`, `Plan`, `legacy_files`, `LEGACY_FILES`, `MigrateError`: moving old files into the new places.

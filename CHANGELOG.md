@@ -7,9 +7,21 @@
 - `taxjson help` lists the maintainer's release commands (`channels`,
   `deploy`, `promote`, now under "Maintainer") only on a development
   checkout; `taxjson help --all` lists them everywhere, and they still run.
+- A new `taxjson.toml` leaves `option_grant_timing_since` commented out
+  with a one-line explanation (it matters only once you write options),
+  unless another year folder beside it sets it. `taxjson run` warns that
+  it is not set only when the books hold a written option, and warns in
+  one line when it is later than `year`.
+- `taxjson init` from January to April adds one line: filing last year?
+  The command for its folder (the default stays the calendar year).
 
 ### Fixed
 
+- The installer's closing recipe built `~/taxes/2026/2026/`: it is now
+  `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada && cd
+  2026`. `taxjson init` in an empty folder named like a year refuses,
+  naming the command for the folder above it (`--single` still works
+  there).
 - `taxjson run` no longer says "the same broker account feeds two taxjson
   accounts" for two different brokers' exports that print the same
   account number: the check keys on the broker and the number.

@@ -85,6 +85,134 @@ def _webull(acct, rows):
             '"Type Code","Quantity","Price","Proceeds"\n' + rows)
 
 
+def _pinned(day):
+    class _Today(date):
+        @classmethod
+        def today(cls):
+            return day
+    return mock.patch("taxjson.bin.taxjson_run.date_cls", _Today)
+
+
+def _init(path, year=None, country="canada", single=False):
+    import argparse
+    from taxjson.bin.taxjson_run import cmd_init
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), \
+            contextlib.redirect_stderr(io.StringIO()):
+        cmd_init(argparse.Namespace(single=single, path=str(path), dir=".",
+                                    force=False, country=country, year=year,
+                                    demo=False))
+    return out.getvalue()
+
+
+# ------------------------------------------- 1. init in a YYYY folder
+class TestInitInAYearFolder(unittest.TestCase):
+
+    def test_empty_year_folder_is_refused_with_the_right_command(self):
+        top = _tmp(self)
+        y = top / "taxes" / "2025"
+        y.mkdir(parents=True)
+        r = _cli("init", "--country", "canada", cwd=y)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        flat = " ".join(r.stderr.split())
+        self.assertIn("is named like a tax year and is empty", flat)
+        self.assertIn("this would build 2025/2025/ in it", flat)
+        self.assertIn(f"cd {top / 'taxes'} && taxjson init --country "
+                      f"canada --year 2025 && cd 2025", flat)
+        self.assertEqual(list(y.iterdir()), [])
+        # --single is one folder for one year: fine there.
+        r = _cli("init", "--single", "--country", "canada", cwd=y)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((y / "taxjson.toml").is_file())
+
+    def test_the_folder_for_your_taxes_is_fine(self):
+        top = _tmp(self)
+        r = _cli("init", "--country", "canada", "--year", "2025",
+                 cwd=top)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((top / "2025" / "taxjson.toml").is_file())
+
+    def test_installer_recipe(self):
+        text = (REPO / "install.sh").read_text()
+        self.assertIn("mkdir -p ~/taxes && cd ~/taxes && tjs init "
+                      "--country canada && cd $(date +%Y)", text)
+        self.assertNotIn("mkdir -p ~/taxes/$(date", text)
+
+
+# ------------------------------------------ 2. January to April hint
+class TestFilingLastYearHint(unittest.TestCase):
+
+    def test_hint_from_january_to_april_only(self):
+        for day, shown in ((date(2026, 1, 1), True),
+                           (date(2026, 4, 30), True),
+                           (date(2026, 5, 1), False),
+                           (date(2026, 12, 31), False)):
+            with self.subTest(day=day):
+                top = _tmp(self)
+                with _pinned(day):
+                    out = _init(top)
+                self.assertTrue((top / "2026" / "taxjson.toml").is_file())
+                flat = " ".join(out.split())
+                hint = ("Filing 2025 now? Run `taxjson init --country "
+                        f"canada --year 2025` in {top} for its folder.")
+                self.assertEqual(hint in flat, shown, out)
+
+    def test_no_hint_when_the_year_is_given(self):
+        with _pinned(date(2026, 2, 10)):
+            out = _init(_tmp(self), year=2026)
+        self.assertNotIn("Filing 2025 now?", out)
+
+
+# ------------------------------------- 10. option_grant_timing_since
+class TestGrantSinceInANewProject(unittest.TestCase):
+
+    def test_init_leaves_it_commented_with_one_line(self):
+        top = _tmp(self)
+        _init(top, year=2025)
+        text = (top / "2025" / "taxjson.toml").read_text()
+        import re
+        m = re.search(r"(?m)^## (.*)\n(?:## (.*)\n)?# option_grant_timing"
+                      r"_since\s+= 2025$", text)
+        self.assertTrue(m, text)
+        self.assertIn("Only if you write (sell to open) options", m[1])
+
+    def _project(self, since=None, written=False):
+        root = _tmp(self)
+        (root / "inputs" / "margin").mkdir(parents=True)
+        tt = "BUYSELL 2025-02-03 10:00:00 QZA.TO 100 CAD 10 -1000.00 0.00\n"
+        if written:
+            tt += ("BUYSELL 2025-04-01 10:00:00 QZA251219C00012000.TO -1 "
+                   "CAD 2.00 200.00 0.00\n")
+        (root / "inputs" / "margin" / "m.tt").write_text(tt)
+        (root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            'base_currency = "CAD"\nsource_currencies = []\n'
+            + (f"option_grant_timing_since = {since}\n" if since else "")
+            + '\n[accounts.margin]\ntype = "taxable"\n')
+        return root
+
+    def test_unset_key_is_quiet_without_written_options(self):
+        r = _cli("-C", str(self._project()), "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("option_grant_timing_since", r.stdout + r.stderr)
+
+    def test_unset_key_is_warned_with_a_written_option(self):
+        r = _cli("-C", str(self._project(written=True)), "run",
+                 "--no-input")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("option_grant_timing_since is not set",
+                      r.stdout + r.stderr)
+
+    def test_a_since_later_than_the_year_is_one_line(self):
+        r = _cli("-C", str(self._project(since=2026)), "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("warning: option_grant_timing_since = 2026 is after "
+                      "year = 2025: 2025's written options are taxed at "
+                      "the close\n", r.stderr)
+        r = _cli("-C", str(self._project(since=2025)), "run", "--no-input")
+        self.assertNotIn("is after year", r.stdout + r.stderr)
+
+
 # ------------------------------------------------ 4. one number, two brokers
 class TestSameNumberAtTwoBrokers(unittest.TestCase):
     """A Questrade and a Webull export that print the same account

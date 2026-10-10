@@ -7437,10 +7437,9 @@ def cmd_run(args: argparse.Namespace) -> None:
                   f"program; new files are owner-only)",
                   f"Tighten it once: chmod -R go-rwx {_shell_quote(root)}",
                   prog=_PROG)
-    _since_warn = _grant_since_warning(settings, root, accounts)
-    if _since_warn:
-        # (a crypto-only project writes no options — nothing to warn about)
-        _say("warning", *_split_msg(_since_warn), prog=_PROG)
+    _late_since = _grant_since_after_year(settings)
+    if _late_since:
+        _say("warning", _late_since, prog=_PROG)
 
     # Orphaned artifacts from RENAMED/REMOVED accounts: work/ files
     # keep matching the discovery globs (resolve_gains_files, fees
@@ -8200,6 +8199,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         settings.get("year"),
         [o["base"] for _, o in sheltered_outputs]
         + [o["base"] for _, o, _c in taxable_outputs])
+    # After the books: said only when they hold a written option (a
+    # crypto-only project writes none — nothing to warn about).
+    _since_warn = _grant_since_warning(settings, root, accounts)
+    if _since_warn:
+        _say("warning", *_split_msg(_since_warn), prog=_PROG)
 
     # Filed-year lock: recompute every closed year from the fresh books
     # and shout if a filed number moved (warn-only; --strict aborts).
@@ -8768,7 +8772,8 @@ def _first_run_summary(root: Path, cfg: Dict[str, Any], cache: Path,
 # same one, so a fresh scaffold is already formatted).
 def _render_init_config(country_canon: str,
                         year: Optional[int] = None,
-                        extra: Optional[Dict[str, Any]] = None
+                        extra: Optional[Dict[str, Any]] = None,
+                        grant_since: Optional[int] = None
                         ) -> Tuple[str, Tuple[str, ...]]:
     """(toml_text, account_names) for `taxjson init` — the same tuple
     drives the inputs/ folder scaffold so config sections and input dirs
@@ -8777,7 +8782,7 @@ def _render_init_config(country_canon: str,
     then asks for it when the project has a crypto account)."""
     from taxjson.lib import config_template as CT
     return CT.render_init(country_canon, year, tz=CT.system_timezone(),
-                          extra=extra)
+                          extra=extra, grant_since=grant_since)
 
 
 # A commented `ticker.map` stub. The pipeline runs fine without this file, so
@@ -15589,6 +15594,60 @@ def _locked_grant_since(root: Path, settings: Dict[str, Any]
     return None
 
 
+def _books_write_options(root: Path, accounts: Dict[str, Any]
+                         ) -> Optional[bool]:
+    """Whether a taxable equity account's books (work/<acct>_base.json)
+    hold a written option (lib/option_boundary.write_lots): True /
+    False, or None when no such book can be read."""
+    import json as _json
+    from taxjson.lib.core import TaxTransaction
+    from taxjson.lib.option_boundary import write_lots
+    fields = TaxTransaction.__dataclass_fields__
+    seen = False
+    for name, acfg in sorted((accounts or {}).items()):
+        if not isinstance(acfg, dict) or acfg.get("type") != "taxable" \
+                or acfg.get("crypto"):
+            continue
+        try:
+            doc = _json.loads((Path(root) / "work" / f"{name}_base.json")
+                              .read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        raw = doc.get("transactions") if isinstance(doc, dict) else doc
+        txs = []
+        for r in raw if isinstance(raw, list) else []:
+            if isinstance(r, dict):
+                try:
+                    txs.append(TaxTransaction(
+                        **{k: v for k, v in r.items() if k in fields}))
+                except TypeError:
+                    continue
+        seen = True
+        if write_lots(txs):
+            return True
+    return False if seen else None
+
+
+def _grant_since_after_year(settings: Dict[str, Any]) -> Optional[str]:
+    """One line when a Canadian project's option_grant_timing_since is
+    later than its year: its written options are then taxed at the
+    close, not when written — usually `year` lowered (filing an earlier
+    year) with the key left as an earlier project wrote it."""
+    if _country(settings) in ("us", "usa"):
+        return None
+    since, yr = settings.get("option_grant_timing_since"), \
+        settings.get("year")
+    if not (isinstance(since, int) and isinstance(yr, int)) \
+            or isinstance(since, bool) or isinstance(yr, bool) \
+            or since <= yr:
+        return None
+    if str(settings.get("option_premium_timing", "grant")).strip() \
+            .lower() != "grant":
+        return None
+    return (f"option_grant_timing_since = {since} is after year = {yr}: "
+            f"{yr}'s written options are taxed at the close")
+
+
 def _grant_since_warning(settings: Dict[str, Any],
                          root: Optional[Path] = None,
                          accounts: Optional[Dict[str, Any]] = None
@@ -15612,6 +15671,11 @@ def _grant_since_warning(settings: Dict[str, Any],
             != "grant":
         return None
     if settings.get("option_grant_timing_since") not in (None, ""):
+        return None
+    if root is not None and accounts is not None \
+            and _books_write_options(root, accounts) is False:
+        # No written option in the books: the default (the project
+        # year) decides nothing (init leaves the key commented).
         return None
     yr = settings.get("year")
     if not isinstance(yr, int) or isinstance(yr, bool):
@@ -23563,6 +23627,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     # The positional `path` (if given) overrides the global -C/--dir flag.
     target = getattr(args, "path", None) or args.dir
     top = Path(target).resolve()
+    if years:
+        _refuse_init_in_year_folder(top, country, _year)
     if years and (top / "taxjson.toml").is_file():
         _die(f"{top} is a single-folder project (it has a taxjson.toml)",
              "`taxjson migrate --to-years` there turns it into one folder "
@@ -23591,7 +23657,9 @@ def cmd_init(args: argparse.Namespace) -> None:
           _PL.EXPORTS_KEY: f"../{_PL.EXPORTS}",
           # Canada: the interlisted pairs, one file every year reads.
           **({_PL.TOBASE_KEY: _PL.SHARED_TOBASE}
-             if country == "canada" else {})} if years else None))
+             if country == "canada" else {})} if years else None),
+        grant_since=(_sibling_grant_since(top, first_year)
+                     if years and country == "canada" else None))
     # The tree is checked BEFORE anything is written: inputs/ existing
     # as a file was a NotADirectoryError traceback after taxjson.toml
     # and ticker.map were already in place (re-audit A2-0781).
@@ -23717,8 +23785,62 @@ def cmd_init(args: argparse.Namespace) -> None:
                                 "reads)" if country == "canada" else "")
                              + ".", indent="  ", hang="  "):
             print(_ln)
+    if _year is None and date_cls.today().month <= 4:
+        # January to April: most people file the year that just ended
+        # (owner: the default stays the calendar year).
+        print(f"  Filing {first_year - 1} now? Run `{_PROG} init --country "
+              f"{country} --year {first_year - 1}`"
+              + (f" in {_shlex.quote(str(top))}" if years else "")
+              + " for its folder.")
     if country == "usa":
         _say("note", *_US_EXPERIMENTAL_NOTE, prog=f"{_PROG} init")
+
+
+def _refuse_init_in_year_folder(top: Path, country: str,
+                                year: Optional[int]) -> None:
+    """`taxjson init` makes the year's folder (YYYY/) inside the folder
+    it runs in: run inside an empty folder named like a year
+    (~/taxes/2026) it built ~/taxes/2026/2026/ without a word. Refuse,
+    with the command for the folder above it."""
+    import shlex as _shlex
+    if not re.fullmatch(r"(?:19|20)\d\d", top.name):
+        return
+    try:
+        empty = not any(top.iterdir()) if top.is_dir() else not top.exists()
+    except OSError:
+        return
+    if not empty:
+        return
+    y = year or int(top.name)
+    _die_input(
+        f"{top} is named like a tax year and is empty: `init` makes the "
+        f"year's folder itself, so this would build {top.name}/{y}/ in it",
+        f"Run it in the folder above: cd {_shlex.quote(str(top.parent))} "
+        f"&& {_PROG} init --country {country}"
+        + (f" --year {y}" if y != date_cls.today().year else "")
+        + f" && cd {y} (or `{_PROG} init --single --country {country}` for "
+        f"one folder for one year here). Nothing was written.")
+
+
+def _sibling_grant_since(top: Path, year: int) -> Optional[int]:
+    """option_grant_timing_since as another year folder of `top` sets
+    it (the nearest year's), so a new year keeps the first year filed
+    under grant timing; None when no year sets it."""
+    best: Optional[Tuple[int, int]] = None
+    for y, d in _PL.year_dirs(top):
+        if y == year:
+            continue
+        try:
+            doc = tomllib.loads((d / "taxjson.toml").read_bytes()
+                                .decode("utf-8-sig"))
+        except (OSError, ValueError, UnicodeError):
+            continue
+        v = (doc.get("settings") or {}).get("option_grant_timing_since")
+        if isinstance(v, int) and not isinstance(v, bool):
+            dist = abs(y - year)
+            if best is None or dist < best[0]:
+                best = (dist, v)
+    return best[1] if best else None
 
 
 def _years_folder(root: Path) -> Path:

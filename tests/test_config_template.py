@@ -170,7 +170,11 @@ class TestInitScaffold(unittest.TestCase):
                     "tax_date": C.default_tax_date(country),
                     "local_timezone": "Europe/Paris"}
             if country == "canada":
-                want["option_grant_timing_since"] = 2025
+                # option_grant_timing_since is left commented (a new
+                # user writes no options yet; `taxjson run` says when
+                # the books hold one and the key is not set).
+                self.assertRegex(text, r"(?m)^# option_grant_timing_since"
+                                       r"\s+= 2025$")
                 # A US scaffold fetches no foreign rates by default
                 # (an all-USD project needs none).
                 want["source_currencies"] = ["USD"]
