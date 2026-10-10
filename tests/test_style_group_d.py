@@ -80,7 +80,9 @@ class TestFitted(unittest.TestCase):
                     if ln.startswith("CLASS"))
         self.assertNotIn("LARGEST_WIN", head)
         self.assertIn("PROFIT_FACTOR", head)
-        self.assertIn("How the trades are counted", r.stdout)
+        # The counting notes: --details (Essentials first).
+        self.assertIn("How the trades are counted",
+                      project("canada").run("stats", "--details").stdout)
         # Unwrapped (captured), every column stays.
         r = project("canada").run("stats", TAXJSON_WIDTH=0)
         head = next(ln for ln in r.stdout.splitlines()
@@ -88,7 +90,8 @@ class TestFitted(unittest.TestCase):
         self.assertIn("LARGEST_WIN", head)
 
     def test_fees_sum_sections(self):
-        r = project("canada").run("fees-sum")
+        # The Definitions: --details (Essentials first).
+        r = project("canada").run("fees-sum", "--details")
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.splitlines()
         self.assertTrue(lines[0].startswith(

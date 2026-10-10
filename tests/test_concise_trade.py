@@ -142,6 +142,19 @@ class TestList(_Base):
                       _flat(r["usa"].stdout))
 
 
+class TestStatsFeesSum(_Base):
+    def test_default_is_concise(self):
+        for args, legend, moved in (
+                (("stats",), "WIN_RATE = wins", "How the trades are counted"),
+                (("fees-sum",), "%NOTNL: fees", "Definitions")):
+            for c, r in self.run_both(*args).items():
+                with self.subTest(country=c, args=args):
+                    assert_concise(self, r.stdout, r.stderr, legend=legend)
+                    self.assertNotIn(moved, r.stdout)
+            d = self.run_both(*args, details=True)
+            self.assertIn(moved, d["canada"].stdout)
+
+
 def _no_box_rules(text):
     # The audit's ══ / ── rules are rules (lib/out.classify counts only
     # ASCII rules as such).

@@ -11564,9 +11564,17 @@ def cmd_stats(args: argparse.Namespace) -> None:
            f"taxable accounts: {', '.join(sorted(resolved))}")
     from taxjson.lib.out import Doc
     doc = Doc(f"CLOSED-TRADE STATISTICS — {scope} ({base}; {who})")
+    _det = _details(args)
     doc.para(f"Economic P/L in {base} before any {rule} denial — a view "
-             f"of how the trades went, not a filing number.")
-    doc.blank()
+             f"of how the trades went, not a filing number." if _det else
+             f"Economic P/L in {base} before any {rule} denial: how the "
+             f"trades went, not a filing number.")
+    if _det:
+        doc.blank()
+    else:
+        # The legend, before the table (docs/output-style.md).
+        doc.para("WIN_RATE = wins / trades; PROFIT_FACTOR = gross wins / "
+                 "gross losses.")
     # Too wide: the largest win/loss go first, then the averages (the
     # --json output keeps them all).
     doc.table(["CLASS", "TRADES", "WINS", "LOSSES", "WIN_RATE", "NET_P/L",
@@ -11579,6 +11587,15 @@ def cmd_stats(args: argparse.Namespace) -> None:
     doc.para(f"Denied by the {rule} rule (NOT subtracted above): "
              f"{money(res['denied_total'])} {base} over "
              f"{res['denied_count']} disposition(s).")
+    if not _det:
+        if res["tainted_skipped"]:
+            doc.para(f"{res['tainted_skipped']} disposition(s) with an "
+                     f"unknown cost are not counted — tjs "
+                     f"find-missing-history")
+        from taxjson.lib.out import details_hint as _dh
+        doc.para(_dh("tjs stats --details", "how the trades are counted"))
+        doc.print()
+        return
     doc.section("How the trades are counted")
     doc.items([
         "WIN_RATE = wins / trades (a break-even trade is neither); "
@@ -23111,6 +23128,9 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
         cmd += ["--ticker-map", str(_PL.ticker_map_path(root))]
     if args.json:
         cmd += ["--json"]
+    elif not _details(args):
+        # Essentials first (docs/output-style.md).
+        cmd += ["--brief"]
     _exec_tool(cmd)
 
 
