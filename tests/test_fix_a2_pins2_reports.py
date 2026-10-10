@@ -282,6 +282,8 @@ def _run_gains(country):
         ph = Path(td) / "missing_history.json"
         ph.write_text(json.dumps([{"symbol": "PHM" + sym[3:],
                                    "account": "m"}]))
+        from _mh import from_json
+        ph = from_json(ph, _book(sym, cur), until="2025-12-31")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             r = run_gains(_book(sym, cur), (), (), GainsRequest(

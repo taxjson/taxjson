@@ -36,8 +36,13 @@ def _project(root, accounts, inputs, phantoms=None, extra_settings=''):
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{a}_hist.tt").write_text("\n".join(lines) + "\n")
     if phantoms is not None:
-        (root / "missing_history.json").write_text(json.dumps(
-            [{"symbol": s, "account": a} for s, a in phantoms]))
+        # (the .tt OPENING cost=unknown lines the pairs convert to)
+        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from _mh import tt_lines, write_lines
+        rows = [parse_tt_line(ln, a) for a, lines in inputs.items()
+                for ln in lines]
+        write_lines(root / "inputs", tt_lines(
+            [r for r in rows if r], phantoms, until="2025-12-31"))
 
 
 def _tx(**kw):
@@ -252,22 +257,9 @@ class TestSameStampTaxableBeforeRegistered(unittest.TestCase):
 
 class TestPhantomsNameUnknownAccount(unittest.TestCase):
     """S021-05: renaming an account silently dropped its missing_history.json
-    openings (keyed by the account label) and changed the filed gain."""
-
-    def test_run_refuses_a_phantom_entry_for_an_unknown_account(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _project(root, {"taxA": "taxable"}, {"taxA": [
-                "BUYSELL 2025-02-03 10:00:00 XEI.TO 50 CAD 20.00 1000.00 0",
-                "BUYSELL 2025-05-01 10:00:00 XEI.TO -150 CAD 25.00 3750.00 0",
-            ]}, phantoms=[("XEI.TO", "margin")])
-            r = _run_cli(root, "run", "--no-input")
-        self.assertNotEqual(r.returncode, 0,
-                            "a stale missing_history.json account label must "
-                            "stop the run")
-        self.assertIn("missing_history.json", r.stderr)
-        self.assertIn("'margin'", r.stderr)
-        self.assertIn("taxA", r.stderr)
+    openings (keyed by the account label) and changed the filed gain. The
+    .tt OPENING cost=unknown lines live in the account's own folder, so
+    they move with it."""
 
     def test_known_accounts_still_run(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -347,9 +339,8 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
             _t('BUYSELL', '2025-03-13', 50, 'tfsa', price=20.0),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            ph = Path(tmp) / "missing_history.json"
-            ph.write_text(json.dumps([{"symbol": "XYZ.TO",
-                                       "account": "tfsa"}]))
+            from _mh import mh_dir
+            ph = mh_dir(tfsa, [("XYZ.TO", "tfsa")])
             g, dis, perm = _gains(margin, tfsa, incomplete_history=ph)
         self.assertEqual((g, dis, perm), (-500.0, 500.0, 500.0))
 
@@ -359,9 +350,8 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
         import io
         aff = [_t('BUYSELL', '2025-01-16', -100, 'spouse', price=29.0)]
         with tempfile.TemporaryDirectory() as tmp:
-            ph = Path(tmp) / "missing_history.json"
-            ph.write_text(json.dumps([{"symbol": "XYZ.TO",
-                                       "account": "spouse"}]))
+            from _mh import mh_dir
+            ph = mh_dir(aff, [("XYZ.TO", "spouse")])
             with contextlib.redirect_stderr(io.StringIO()):
                 _m, _s, a, log = prepare_books(
                     [], [], aff, taxable=True, incomplete_history=ph)
@@ -379,7 +369,7 @@ class TestDistributionsSizedWithPhantoms(unittest.TestCase):
     got the wrong ACB change (or none: 'no shares held')."""
 
     BOOK = {"transactions": [
-        # 100 pre-window shares (missing_history.json) sold in February.
+        # 100 pre-window shares (missing history) sold in February.
         {"action": "BUYSELL", "date": "2025-02-03",
          "date_settle": "2025-02-04", "time": "10:00:00",
          "symbol": "XAW.TO", "quantity": -100.0, "price": 30.0,
@@ -420,9 +410,8 @@ class TestDistributionsSizedWithPhantoms(unittest.TestCase):
             mp = Path(tmp) / "taxjson.toml"
             mp.write_text('[[distributions]]\nsymbol = "XAW.TO"\n'
                           'record_date = 2025-12-29\nper_share = 0.5\n')
-            ph = Path(tmp) / "missing_history.json"
-            ph.write_text(json.dumps([{"symbol": "XAW.TO",
-                                       "account": "margin"}]))
+            from _mh import mh_dir
+            ph = mh_dir(self.BOOK["transactions"], [("XAW.TO", "margin")])
             with contextlib.redirect_stderr(io.StringIO()):
                 rc = main([str(base), "--config", str(mp), "--account",
                            "margin", "--incomplete-history", str(ph)])

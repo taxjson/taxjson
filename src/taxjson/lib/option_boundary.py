@@ -178,7 +178,7 @@ def write_lots(transactions: List[TaxTransaction],
         p = pos.get(sym, 0.0)
         p_order = orders.prev(sym, t, p)
         if t.action == "OPENING_BALANCE":
-            # A missing-history opening (missing_history.json,
+            # A missing-history opening (a .tt OPENING cost=unknown line,
             # --include-options): the
             # contracts were held LONG before the history starts, so the
             # sale that follows closes them — it is not a write (S044-09;
@@ -610,7 +610,7 @@ def project_question_rows(root, cfg: Dict[str, Any],
     mh_pairs = None
     try:
         from taxjson.lib.missing_history import project_missing_history
-        mh_pairs = project_missing_history(root, note=False) or None
+        mh_pairs = project_missing_history(root) or None
     except Exception:                                   # noqa: BLE001
         mh_pairs = None
     fields = TaxTransaction.__dataclass_fields__

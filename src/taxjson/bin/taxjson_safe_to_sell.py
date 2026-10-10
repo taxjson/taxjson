@@ -62,8 +62,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         metavar="FILE",
                         help="The engine's gains files (passed to the radar: "
                              "the engine decides which sales were losses)")
-    parser.add_argument("--incomplete-history", metavar="FILE", default=None,
-                        help="missing_history.json (passed to the radar)")
+    parser.add_argument("--incomplete-history", metavar="DIR", default=None,
+                        help="the project folder, for its .tt OPENING "
+                             "cost=unknown lines (passed to the radar)")
     add_country_argument(parser, help="Project country (required; passed "
                                       "to the radar)")
     args = parser.parse_args(argv)

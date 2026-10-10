@@ -118,9 +118,9 @@ def parse_args():
         help="Filter to wash-sale gains only (each block now includes its trigger lot inline).",
     )
     parser.add_argument(
-        "--incomplete-history", metavar="FILE",
-        help="missing_history.json: (symbol, account) pairs sold with no "
-             "purchase in the files (bought before the data) — applied "
+        "--incomplete-history", metavar="DIR",
+        help="the project folder: its accounts' .tt OPENING cost=unknown "
+             "lines (units bought before the data) — applied "
              "exactly like taxjson-gains, so traces match the pipeline's "
              "books.")
     parser.add_argument("--option-premium-timing", choices=["grant", "close"],

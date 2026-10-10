@@ -479,6 +479,8 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
             ph = Path(td) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "NNN.US",
                                        "account": "margin"}]))
+            from _mh import from_json
+            ph = from_json(ph, book, until="2025-12-31")
             return gains_both(book, year=2025, incomplete_history=ph, **kw)
 
     # Not a @rule_absent pair (A2-0830): US FIFO never reaches the
@@ -601,6 +603,8 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
             ph = Path(td) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "NNN.US",
                                        "account": "margin"}]))
+            from _mh import from_json
+            ph = from_json(ph, book, until="2025-12-31")
             res = {nw: run_gains(list(book), req=GainsRequest(
                 country="usa", taxable=True, year=2025, no_wash=nw,
                 incomplete_history=ph)) for nw in (False, True)}

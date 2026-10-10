@@ -136,7 +136,7 @@ def load_json(path: Path) -> Any:
 def load_transactions(paths: List[Path],
                       phantoms: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Every row of the base files. With `phantoms` (the project's
-    missing_history.json; the parameter keeps its pre-rename name) each
+    the project folder of the .tt OPENING cost=unknown lines; the parameter keeps its pre-rename name) each
     file first gets the missing-history OPENING_BALANCE rows the gains
     stage synthesizes for it (missing_history.
     synthesize_openings, per book like pipeline.prepare_books) — without
@@ -1327,11 +1327,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "gain column and the year-end position "
                              "follow it (default: settle, CRA).")
     parser.add_argument("--incomplete-history", type=Path, default=None,
-                        metavar="MISSING_HISTORY_JSON",
-                        help="missing_history.json: add the same "
+                        metavar="DIR",
+                        help="the project folder (its .tt OPENING "
+                             "cost=unknown lines): add the same "
                              "missing-history openings the gains stage "
-                             "adds (the project wrapper passes the "
-                             "project's file)")
+                             "adds (the project wrapper passes it)")
     # The full-history superficial-loss pass (S008-07) needs the same
     # inputs the filing pipeline's wash pass has; the wrapper passes the
     # project's.

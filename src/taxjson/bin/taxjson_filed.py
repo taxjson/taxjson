@@ -478,8 +478,8 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     # The filing positions the books took (.tt ALLOWLOSS lines).
     from taxjson.lib.loss_overrides import flags as _lo_flags
     cmd += _lo_flags(cache)
-    # missing_history.json (or its old name phantoms.json) lives at the
-    # PROJECT ROOT (cache is <root>/work) — looking in work/ made
+    # The missing-history .tt lines are read through the PROJECT
+    # ROOT (cache is <root>/work) — looking in work/ made
     # close-year snapshot WITH the missing-history openings and
     # check-filed recompute WITHOUT them: a guaranteed false DRIFT on
     # every such project (2026-09 audit).
@@ -534,7 +534,7 @@ def recompute_year(cache: Path, account: str, year: int,
     # The filing positions the books took (.tt ALLOWLOSS lines).
     from taxjson.lib.loss_overrides import flags as _lo_flags
     cmd += _lo_flags(cache)
-    # missing_history.json (or its old name) lives at the PROJECT ROOT
+    # The missing-history .tt lines are read through the PROJECT ROOT
     # (see _recompute_blended above).
     from taxjson.lib.missing_history import missing_history_arg
     mh_file = missing_history_arg(cache.parent)

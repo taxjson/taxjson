@@ -265,9 +265,9 @@ class TestConfigTables(unittest.TestCase):
         from taxjson.bin import taxjson_run as R
         # tobase.map (the interlisted pairs, read with ticker.map) is an
         # input of the books too.
-        self.assertEqual(cl.PROJECT_ROOT_MAPS,
-                         ("ticker.map", "tobase.map", "missing_history.json",
-                          "phantoms.json"))
+        # (missing_history.json is no longer read: its .tt lines are
+        # account inputs.)
+        self.assertEqual(cl.PROJECT_ROOT_MAPS, ("ticker.map", "tobase.map"))
         self.assertEqual(R._PROJECT_ROOT_INPUTS, cl.PROJECT_ROOT_MAPS)
 
 

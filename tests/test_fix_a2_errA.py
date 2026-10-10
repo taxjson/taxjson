@@ -438,7 +438,9 @@ class TestBomJson(unittest.TestCase):
     def test_loaders_accept_a_bom(self):
         from taxjson.lib.core import load_transactions
         from taxjson.lib.json_input import read_json_doc
-        from taxjson.lib.missing_history import load_missing_history
+        # (migrate's reader of an old missing_history.json)
+        from taxjson.lib.missing_history import (
+            read_legacy_entries as load_missing_history)
         from taxjson.lib.report_model import load_report_json
         with tempfile.TemporaryDirectory() as td:
             book = self._bom(td, "b.json", {"transactions": [_base_row()]})

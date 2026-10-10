@@ -986,12 +986,12 @@ class TestMoreViews(unittest.TestCase):
     def test_missing_history_lists_phantom_covered_pairs_apart(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, csv=_zzz_short_csv())
-            (root / "missing_history.json").write_text(
-                '[{"symbol": "ZZZ.TO", "account": "margin"}]')
+            (root / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2025-02-02 ZZZ.TO 100 cost=unknown\n")
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)
             r = _run_cli(root, "find-missing-history")
-            self.assertIn("COVERED by missing_history.json", r.stdout)
+            self.assertIn("COVERED by missing_history.tt", r.stdout)
             self.assertNotIn("AFFECTS 2025", r.stdout)
             self.assertNotIn("--suggest-missing-history", r.stdout)
             from taxjson.lib import checklist

@@ -69,7 +69,7 @@ def load_base_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
 def book_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
     """The rows the account's books hold positions from: its merged rows
     (load_base_rows) plus the missing-history openings its gains run
-    booked (missing_history.json entries and .tt OPENING cost=unknown
+    booked (the .tt OPENING cost=unknown
     lines: units bought before the data, which no row of the merged
     books carries — lib/missing_history.openings_from_log). Every view
     of the books' positions on a date reads these, so it holds the

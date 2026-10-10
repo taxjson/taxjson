@@ -40,23 +40,26 @@
 
 ### Changed
 
-- Missing history is a dated event in the account's inputs: a `.tt` line
+- **Breaking:** missing history is a dated event in the account's
+  inputs, and `missing_history.json` is no longer read. A `.tt` line
   `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` opens that
-  many units at an unknown cost on that date, the opening a
-  `missing_history.json` entry gives (sales drawing on it are reported by
-  hand), with the quantity and date fixed: no sizing from the rows, no
-  year window. With one folder of exports for every year the line is one
-  record for every year. Both countries (tax-logic CA-ACB-11 /
-  US-BASIS-04). `taxjson find-missing-history --write-missing-history`
-  writes these lines into `inputs/<account>/missing_history.tt`, merged
-  with the lines there (never twice; another quantity is a Warning and
-  your line is kept); with a FILE it still writes the JSON for review.
-  `missing_history.json` is still read (a symbol a line also opens is the
-  line's, with an Info line), and the run says once that `taxjson
-  migrate` converts it: each entry sized as that project's run sizes it;
-  in the shared layout the year folders' files are merged — entries the
+  many units at an unknown cost on that date (sales drawing on it are
+  reported by hand), its quantity and date fixed: no sizing from the
+  rows, no year window. With one folder of exports for every year the
+  line is one record for every year. Both countries (tax-logic CA-ACB-11
+  / US-BASIS-04). A project that still has `missing_history.json` (or
+  `phantoms.json`) is refused by every command, naming `taxjson migrate`
+  (the checklist shows it as its configure item). `taxjson migrate`
+  converts it: each entry sized as that project's last run opened it; in
+  the shared layout the year folders' files are merged — entries the
   years disagree on are listed, and written only with `migrate --write`
-  (the newest year's view); entries that open nothing are dropped.
+  (the newest year's view); entries that open nothing are dropped — and
+  each file is renamed `missing_history.json.migrated`. `taxjson
+  find-missing-history --write-missing-history` writes only these lines,
+  into `inputs/<account>/missing_history.tt`, merged with the lines there
+  (never twice; another quantity is a Warning and your line is kept); it
+  no longer takes a FILE. The stages' `--incomplete-history` now names
+  the project folder whose lines apply.
 - Every positions view holds the units bought before the data: `taxjson
   sanity` (and the run's holdings check, and its dividend share-count
   check) compared the broker's snapshot with positions rebuilt without the

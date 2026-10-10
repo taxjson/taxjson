@@ -1,7 +1,7 @@
 """Where a project's files are: one folder of exports for every year.
 
 A project is a folder holding taxjson.toml (the tax year, the accounts,
-the settings), ticker.map, missing_history.json, work/, reports/,
+the settings), ticker.map, work/, reports/,
 filed/ and checklist.json. Its broker exports are in inputs/<account>/
 inside it — or, with `[settings] inputs_dir`, in a folder shared by the
 projects of every year:
@@ -272,7 +272,7 @@ def ticker_map_path(root) -> Path:
 
 
 def data_file(root, name: str) -> Path:
-    """A project-root file (missing_history.json, a legacy map)."""
+    """A project-root file (a legacy map)."""
     return Path(root) / name
 
 

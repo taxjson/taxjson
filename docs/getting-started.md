@@ -154,7 +154,7 @@ Info: activity.csv: 6 tax objects
 ...
 ==> Done. Reports are in reports/
 ==> Before you trust these numbers (docs/getting-started.md, step 5)
-Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.json: SAMPA.TO (margin),
+Warning: 2 positions sold in 2025 with no purchase in your files, not in missing_history.tt: SAMPA.TO (margin),
 SAMPK.TO (margin). Those sales are NOT in `taxjson sum`; run `taxjson find-missing-history`.
 
 Warning: 1 transfer-in from outside your books kept out with no cost: SAMPK.TO (margin). Run `taxjson transfers`.
@@ -233,7 +233,9 @@ accounts' books (`==> Checking for missing purchase history`) and in its
 closing list, and `tjs sum` warns:
 
 ```
-Warning: 2 position(s) sold in 2025 with no purchase in your files, not in missing_history.json: their gain is NOT in these totals (SAMPA.TO (margin), SAMPK.TO (margin)). `taxjson find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).
+Warning: 2 position(s) sold in 2025 with no purchase in your files: their gain is NOT in these totals
+No .tt OPENING cost=unknown line: SAMPA.TO (margin), SAMPK.TO (margin).
+`taxjson find-missing-history` lists them and the fixes (docs/getting-started.md, step 5).
 ```
 
 A position that went short in an earlier year and has nothing in 2025 (no
@@ -357,8 +359,8 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
   purchase (5c below).
 - `.tt_covers`: your `.tt` purchase covers the row (5c). Nothing more is
   said.
-- `missing_history`: `missing_history.json` lists the stock for that
-  account (5b, step 4): its cost stays unknown and its sales are
+- `missing_history`: an `OPENING ... cost=unknown` line opens the stock
+  in that account (5b, step 4): its cost stays unknown and its sales are
   reported by hand, as you declared; the book value is not used.
 - `in-kind_contribution` / `in-kind_withdrawal`: shares moved between a
   taxable account and one of your registered accounts (RRSP, TFSA ...;
@@ -591,10 +593,11 @@ tjs sum
 Running it again never writes a line twice; a symbol a line already
 opens with another quantity is a Warning, and your line stays as it is.
 With one folder of exports for every year the file is in the shared
-`inputs/<account>/`, so one line serves every year. (Older projects
-list these in `missing_history.json` at the project root: it is still
-read, and `tjs migrate` converts it — docs/troubleshooting.md, "Moving
-from missing_history.json to .tt lines".)
+`inputs/<account>/`, so one line serves every year. (Projects of
+taxjson before v0.27.0 listed these in `missing_history.json` at the
+project root: it is no longer read — every command stops until `tjs
+migrate` converts it; docs/troubleshooting.md, "Error: missing_history.json
+is no longer read".)
 
 ```
 Warning: 1 disposition(s) with an unknown cost (no purchase in your files) were routed to manual reporting — these totals EXCLUDE them (`taxjson form-export` lists them in its MANUAL REPORTING section; report them by hand).
@@ -604,7 +607,7 @@ The sale stays out of the totals, and `tjs form-export` lists it for
 you:
 
 ```
-MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files (unknown cost, missing_history.json), proceeds 795.05 CAD: NOT in the rows or totals above. Report each by hand once its cost is known (`taxjson find-missing-history`).
+MANUAL REPORTING REQUIRED — 1 sale(s) with no purchase in your files (unknown cost, .tt OPENING cost=unknown), proceeds 795.05 CAD: NOT in the rows or totals above. Report each by hand once its cost is known (`taxjson find-missing-history`).
 SYMBOL   | DATE       | UNITS | PROCEEDS | ACCOUNT
 ---------+------------+-------+----------+--------
 SAMPA.TO | 2025-03-10 |    20 |   795.05 | margin
@@ -641,11 +644,11 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
 - Do not use IB's transfer `VALUE`: it is the market value, not your
   cost.
 - A transfer-in that missing history covers (`missing_history`
-  in `tjs transfers`: an `OPENING ... cost=unknown` line or a
-  `missing_history.json` entry): `tjs find-missing-history --write-purchases`
+  in `tjs transfers`: an `OPENING ... cost=unknown` line):
+  `tjs find-missing-history --write-purchases`
   drafts its purchase line from the broker's book value (Questrade,
   RBC), with the purchase date left for you to fill in (see (3) above).
-  Once you add it, remove the opening line (or entry).
+  Once you add it, remove the opening line.
 - If you held the same stock at both brokers, both purchases go into one
   ACB.
 - For a sheltered account (`transfers = true`) the transfer is booked
@@ -874,7 +877,7 @@ and a complete project per tax year beside them.
   or an answer at the run's prompt — is saved there, and it applies to
   every year — and so do the `OPENING ... cost=unknown` lines of
   missing history (step 5). The year's own, in its folder: `taxjson.toml`,
-  `ticker.map`, `missing_history.json` (older projects), `inputs/slips/`, `holdings/`,
+  `ticker.map`, `inputs/slips/`, `holdings/`,
   `checklist.json`, `work/` (where it generates its `crypto_sends.tt`
   from `sends.json` and its own map), `reports/` and `filed/`.
 - **Downloads go into `inputs/<account>/`**, all years together (file
@@ -890,12 +893,9 @@ and a complete project per tax year beside them.
   set, `prior_year_record` pointed at `../2025/filed/2025.json`, 2025's
   `[estimate]` and `[instalments]` commented out for reference, and each
   account's `holdings` list commented out: those are 2025's snapshots),
-  `ticker.map`, `tobase.map` and `missing_history.json` (if any) copied,
-  and an empty `holdings/`. An entry of `missing_history.json` without a
-  `quantity` is sized from the rows through each year's own December 31,
-  so a later year's short never changes an earlier year; a `.tt` line's
-  quantity is fixed, the same in every year (`tjs migrate` merges the
-  year folders' files into those lines).
+  `ticker.map` and `tobase.map` copied, and an empty `holdings/`. The
+  missing-history lines are in the shared inputs: the same in every
+  year, their quantities fixed.
 - **Keeping the years aligned:** a map line or setting added in one year
   is not in the others. `tjs years` lists each year with its state (filed
   or open, last run, whether its inputs changed since) and says when its
@@ -929,7 +929,7 @@ and a complete project per tax year beside them.
 
 **From a single-folder project.** `tjs migrate --to-years` in it (with
 `--dry-run` first) keeps `inputs/` where it is and moves the project's
-own files (`taxjson.toml`, `ticker.map`, `missing_history.json`,
+own files (`taxjson.toml`, `ticker.map`,
 `checklist.json`, `work/`, `reports/`, `filed/`, `inputs/slips/` as
 `inputs/slips/`, `holdings/`) into a folder named for its year, setting
 `inputs_dir` and `exports_dir`; a relative `holdings` or

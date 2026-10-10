@@ -5,7 +5,7 @@ reports/wash_radar_*) and `taxjson redact`.
   R1-225  trades made but not yet settled are in the books
   R1-226  loss detection comes from the engine's gains (s.47 blend,
           denied-loss bump), not the radar's own per-account pool
-  S006-09 missing_history.json openings are applied like the gains pass does
+  S006-09 missing-history openings (.tt OPENING cost=unknown) are applied like the gains pass does
   R1-250  redact removes holder names in Coinbase / IB Flex / IB HTML
           layouts and every IB id occurrence
 
@@ -54,6 +54,8 @@ def _radar(tmp, taxable, as_of, sheltered=None, gains=None,
     if phantoms is not None:
         pp = tmp / "missing_history.json"
         pp.write_text(json.dumps(phantoms))
+        from _mh import from_json
+        pp = from_json(pp, taxable)
         cmd += ["--incomplete-history", str(pp)]
     r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -303,8 +305,8 @@ class TestChecksEndToEnd(unittest.TestCase):
                 _config(2025, [("margin", "taxable")]))
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "inputs" / "margin" / "m.tt").write_text(tt)
-            (root / "missing_history.json").write_text(
-                '[{"symbol": "ZZZ.TO", "account": "margin"}]')
+            (root / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2025-01-09 ZZZ.TO 100 cost=unknown\n")
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             radar = json.loads(

@@ -217,13 +217,17 @@ class TestCheckFiledErrors(_Closed):
         # A2-0676
         with tempfile.TemporaryDirectory() as td:
             q = self._copy(td)
-            (q / "missing_history.json").write_text('{"x": [')
+            # (a malformed missing-history line the recompute reads)
+            acct = sorted(p for p in (q / "inputs").iterdir()
+                          if p.is_dir() and p.name != "slips")[0]
+            (acct / "missing_history.tt").write_text(
+                "OPENING 2025-01-01 QZQ.TO 0 cost=unknown\n")
             r = _run_cli(q, "check-filed")
             self.assertNotEqual(r.returncode, 0)
             self.assertNotIn("CalledProcessError", r.stderr)
             self.assertNotIn("Command '[", r.stderr)
             self.assertIn("could not be checked", r.stderr)
-            self.assertIn("missing_history.json", r.stderr)
+            self.assertIn("missing_history.tt", r.stderr)
 
 
 class TestDamagedBaseNamed(unittest.TestCase):

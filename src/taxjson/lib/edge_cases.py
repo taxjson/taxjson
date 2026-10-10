@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 WINDOW = 30
-# Rows that change a position (OPENING_BALANCE: a missing_history.json opening
+# Rows that change a position (OPENING_BALANCE: a missing-history opening
 # or a broker's opening position, A2-0389). SPLIT rows scale it (_walk).
 ACQ_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'OPENING_BALANCE')
 # The engine's income actions (it has no 'PIL' or 'ROC' action: a
@@ -225,9 +225,10 @@ class Book:
                 self.inventory.append(h)
 
     def _missing_history(self):
-        """missing_history.json's (symbol, account) pairs (or the legacy
-        phantoms.json's), as every twin view applies them (A2-1208);
-        None without the file. Both names present: ValueError."""
+        """The (symbol, account) pairs the accounts' .tt OPENING
+        cost=unknown lines open, as every twin view applies them
+        (A2-1208); None without any. A line that cannot be read:
+        ValueError."""
         from taxjson.lib.missing_history import (load_missing_history,
                                                   missing_history_arg)
         p = missing_history_arg(self.root)
@@ -236,7 +237,8 @@ class Book:
         try:
             return load_missing_history(p) or None
         except (OSError, ValueError) as e:
-            raise ValueError(f"{p.name} cannot be read ({e})") from None
+            raise ValueError(f"the .tt OPENING cost=unknown lines cannot "
+                             f"be read ({e})") from None
 
     def _openings(self, rows: List[Dict[str, Any]], mh_pairs
                   ) -> List[Dict[str, Any]]:
@@ -326,7 +328,7 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
     """Trades whose trade date and settlement date fall in different
     years, around this project's two year ends."""
     y = book.year
-    # Opening balances (missing_history.json, a broker's opening position) and
+    # Opening balances (missing history, a broker's opening position) and
     # splits count (A2-0389, A2-1208): Book.pre_pos.
     pre_pos = book.pre_pos
     gains_by_key: Dict[Tuple, List[Dict[str, Any]]] = {}

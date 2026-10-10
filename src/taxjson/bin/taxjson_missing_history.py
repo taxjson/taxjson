@@ -32,15 +32,14 @@ To fix an AFFECTS row, add the purchase. When the broker states its cost
 run does not read (inputs/<account>/purchases_draft.tt.txt in a project):
   taxjson find-missing-history --write-purchases
   # fill in each YYYY-MM-DD / COST, then rename the file to .tt
-Only when a purchase cannot be recovered, list the sale in a
-missing-history file and re-run. In a project:
-  taxjson find-missing-history --write-missing-history   # writes missing_history.json
+Only when a purchase cannot be recovered, open the units held before
+the data at an unknown cost (a .tt line `OPENING <date> <SYMBOL> <qty>
+cost=unknown`) and re-run. In a project:
+  taxjson find-missing-history --write-missing-history   # writes inputs/<account>/missing_history.tt
   # then prune any real shorts from it, and: taxjson run
-Standalone:
-  taxjson-gains --country canada --year <year> \
-      --suggest-missing-history missing_history.json <base.json>
-  # review/prune, then: taxjson-gains --country canada \
-  #     --incomplete-history missing_history.json ...   (usa for a US project)
+Standalone, the engine reads a project's lines:
+  taxjson-gains --country canada --incomplete-history <project> ...
+  (usa for a US project)
 """
 
 import argparse
@@ -215,7 +214,7 @@ def _listed_pairs(mh_path):
 
 
 def _opening_sizes(txs, mh_path, year):
-    """What `taxjson run` opens for each missing_history.json entry —
+    """What `taxjson run` opens for each .tt OPENING cost=unknown line —
     the same synthesize_openings call, sized from the rows through
     `year`'s end (or the project's): (symbol, account) -> its applied-
     log entry. {} when the file cannot be read."""
@@ -578,12 +577,12 @@ def main(argv=None):
                     help="an account the caller could not supply a book "
                          "for (repeatable): reported as NOT checked, so "
                          "the run never ends in an all-clear")
-    ap.add_argument("--missing-history", metavar="FILE",
-                    help="the project's missing_history.json: pairs it "
-                         "covers (the run applies them) are listed apart, "
-                         "not as work still to do")
-    # The flag's old name (the file was phantoms.json): hidden, still
-    # accepted with a note.
+    ap.add_argument("--missing-history", metavar="DIR",
+                    help="the project folder: the pairs its accounts' .tt "
+                         "OPENING cost=unknown lines cover (the run "
+                         "applies them) are listed apart, not as work "
+                         "still to do")
+    # The flag's old name (the file was phantoms.json): hidden.
     ap.add_argument("--phantoms", metavar="FILE", dest="phantoms_old",
                     help=argparse.SUPPRESS)
     ap.add_argument("--include-options", action="store_true",
@@ -621,22 +620,10 @@ def main(argv=None):
     args = ap.parse_args(argv)
     global _P
     _P = _Printer()
-    if args.phantoms_old:
-        _diag("taxjson-missing-history: note: --phantoms is now "
-              "--missing-history (the old flag still works).",
-              file=sys.stderr)
-        if not args.missing_history:
-            args.missing_history = args.phantoms_old
-    # The file's name as the user has it (missing_history.json, or the
-    # legacy phantoms.json), for the report's wording.
-    mh_name = (Path(args.missing_history).name if args.missing_history
-               else "missing_history.json")
-    if args.missing_history and not Path(args.missing_history).exists():
-        # (only the accounts' .tt OPENING cost=unknown lines)
-        try:
-            mh_name = _listed_pairs(args.missing_history).source_name
-        except (OSError, ValueError):
-            pass
+    if args.phantoms_old and not args.missing_history:
+        args.missing_history = args.phantoms_old
+    # What the report names the lines by.
+    mh_name = "missing_history.tt"
 
     txs, failed = _load_all(args.files)
     if not txs:
@@ -1110,17 +1097,12 @@ def main(argv=None):
                     "value, for you to review.",
                     "3. Only when it cannot be recovered: `taxjson "
                     "find-missing-history --write-missing-history` in the "
-                    "project writes missing_history.json — review it, then "
-                    "`taxjson run` (it picks missing_history.json up); those "
-                    "sales are then left out of the totals and must be "
-                    "reported by hand."):
+                    "project writes .tt OPENING cost=unknown lines into "
+                    "inputs/<account>/missing_history.tt — review them, "
+                    "then `taxjson run` (it reads them); those sales are "
+                    "then left out of the totals and must be reported by "
+                    "hand."):
                 _P.para(item, "  ", "     ")
-            _P.line("Standalone (outside a project), then review the file "
-                    "and pass it with --incomplete-history:")
-            _P.line(f"  taxjson-gains --country {country or 'canada|usa'} "
-                    f"--year {yr} \\")
-            _P.line("      --suggest-missing-history missing_history.json "
-                    "<base.json>")
         if _zero_open:
             _print_zero_fix(country, _cost)
         _P.gap()

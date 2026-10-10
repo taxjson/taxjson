@@ -951,7 +951,7 @@ def parse_args(argv=None):
                    help="sheltered_base.json for the wash/superficial-loss "
                         "context; repeatable, as in taxjson-gains.")
     p.add_argument("--affiliated")
-    p.add_argument("--incomplete-history", metavar="FILE")
+    p.add_argument("--incomplete-history", metavar="DIR")
     # None -> the country default (GainsRequest): per-account FIFO on a
     # US book (US-BASIS-01), as taxjson-gains does — the standalone
     # audit pooled every account's lots (re-audit A2-0318).

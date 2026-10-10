@@ -234,7 +234,7 @@ whose stage is cached under `--fast` is not shown):
 | --- | --- |
 | `==> Checking the project` | always: the checks before the first stage (config warnings, a $0 election, a leftover file) are under it |
 | `==> Rebuilding everything: taxjson's code changed ...` | `--fast` after an upgrade |
-| `==> Reading missing_history.json (openings for sales with no purchase in the files)` | the project has one |
+| `==> Reading 3 .tt OPENING cost=unknown lines (openings for sales with no purchase in the files)` | an account's .tt files have such lines |
 | `==> Loading currency rates` | always |
 | `==> Downloading USD → CAD rates` | a rate refresh (`Loading cached USD → CAD rates` with TAXJSON_OFFLINE=1: the cache only) |
 | `==> margin  (taxable, first pass: transfers between your accounts)` | accounts read first so transfers (crypto: sends) pair across them — every equity account, sheltered too, when there are two or more (a transfer journal joins two listings in every account's books); the account's books later take this read (same command, same files), so its `Reading` step and messages are shown once, here |

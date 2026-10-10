@@ -22,7 +22,7 @@ This module finds them and decides what the run does with each:
 * such an arrival is COVERED when the receiving account's .tt files
   already hold purchases of that security, dated on or before the
   arrival, for its quantity (the documented fix: the original purchase
-  as a .tt line), or when missing_history.json lists the security for
+  as a .tt line), or when a .tt OPENING cost=unknown line opens the security for
   that account (you declared its cost unknown, to be reported by hand)
   — nothing more is said or booked;
 * otherwise, when the broker STATES the book value on the row
@@ -69,7 +69,7 @@ class Arrival:
     source: str                 # the input file the row came from
     description: str
     covered: bool = False       # the account's .tt lines cover it, or
-    #                             missing_history.json lists the pair
+    #                             a .tt OPENING cost=unknown line opens the pair
     covered_by: str = ""        # "tt" | "missing_history"
     row: Dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -349,7 +349,7 @@ def mark_covered(found: List[Arrival],
 def mark_missing_history(found: List[Arrival],
                          pairs: Iterable[Tuple[str, str]]) -> None:
     """Cover each uncovered arrival whose (security, account)
-    missing_history.json lists: the user declared that position's cost
+    a .tt OPENING cost=unknown line opens: the user declared that position's cost
     unknown (its sales are reported by hand), and a booking at the
     broker's book value would silently replace that declaration."""
     listed = {(str(s).upper(), str(a)) for s, a in pairs}

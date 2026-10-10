@@ -144,7 +144,7 @@ class TestSharedInputsNote(unittest.TestCase):
 
 
 class TestNewYear(unittest.TestCase):
-    def test_holdings_lists_commented_and_missing_history_copied(self):
+    def test_holdings_lists_commented(self):
         from taxjson.lib.tomlcompat import tomllib
         top = multi("canada", years=(2024,))
         y = top / "2024"
@@ -153,18 +153,15 @@ class TestNewYear(unittest.TestCase):
             '[accounts.margin]\ntype = "taxable"\nholdings = [\n'
             '  "holdings/margin_2024.toml",\n]\n')
         (y / "taxjson.toml").write_text(t)
-        (y / "missing_history.json").write_text(
-            '[{"symbol": "QZQ.TO", "account": "margin"}]\n')
         r = tjs("-C", str(top), "new-year", "2025")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         doc = tomllib.loads((top / "2025" / "taxjson.toml").read_text())
         self.assertNotIn("holdings", doc["accounts"]["margin"])
         self.assertIn("# holdings = [", (top / "2025" / "taxjson.toml")
                       .read_text())
-        self.assertEqual((top / "2025" / "missing_history.json")
-                         .read_text(), (y / "missing_history.json")
-                         .read_text())
-        self.assertIn("missing_history.json", r.stdout)
+        # (missing history is .tt lines of the shared inputs: nothing
+        # to copy)
+        self.assertFalse((top / "2025" / "missing_history.json").exists())
 
 
 class TestCompare(unittest.TestCase):

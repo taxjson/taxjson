@@ -197,20 +197,23 @@ class TestShortsScopedToTheYear(unittest.TestCase):
         # The year's numbers do not move.
         self.assertEqual(before, _tj(root, "sum", "--json").stdout)
 
-    def test_outside_year_keeps_a_reviewed_file(self):
+    def test_outside_year_keeps_your_lines(self):
         tmp, root = _make("canada")
         self.addCleanup(shutil.rmtree, tmp, True)
         self.assertEqual(_tj(root, "run", "--no-input").returncode, 0)
-        mine = [{"symbol": "QHAND.TO", "account": "margin",
-                 "_note": "added by hand"}]
-        (root / "missing_history.json").write_text(json.dumps(mine))
+        f = root / "inputs" / "margin" / "missing_history.tt"
+        mine = "OPENING 2020-01-01 QHAND.TO 5 cost=unknown  # by hand\n"
+        f.write_text(mine)
         r = _tj(root, "find-missing-history", "--write-missing-history",
-                str(root / "missing_history.json"), "--outside-year")
+                "--outside-year")
         self.assertEqual(r.returncode, 0, r.stderr)
-        doc = json.loads((root / "missing_history.json").read_text())
-        self.assertEqual(doc[0], mine[0])
-        self.assertEqual(len(doc), 4)
-        self.assertTrue(list(root.glob("missing_history.json.bak*")))
+        text = f.read_text()
+        self.assertTrue(text.startswith(mine), text)
+        def n(t):
+            return sum(1 for ln in t.splitlines() if ln.startswith("OPENING "))
+        self.assertEqual(n(text), 3)
+        self.assertEqual(n((root / "inputs" / "rrsp" / "missing_history.tt")
+                           .read_text()), 1)
 
     def test_outside_year_needs_write(self):
         tmp, root = _make("canada")

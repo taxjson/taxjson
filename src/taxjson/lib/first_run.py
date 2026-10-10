@@ -5,7 +5,8 @@ broker's download rarely reaches back to every one). The summary counts
 what the books themselves show is incomplete, each with the command
 that lists and fixes it (docs/getting-started.md, step 5):
 
-  * sales with no purchase in the files that missing_history.json does
+  * sales with no purchase in the files that missing history (.tt
+    OPENING cost=unknown lines) does
     not cover and that fall in the tax year (taxable accounts) —
     `taxjson find-missing-history`;
   * positions at a $0 cost: sold in the tax year, or still held —
@@ -68,10 +69,9 @@ def load_books(cache: Path) -> Tuple[List[TaxTransaction], List[str]]:
 
 
 def read_missing_history_pairs(path: Optional[Path]) -> Set[Tuple[str, str]]:
-    """{(SYMBOL, account)} the project's missing_history.json lists,
-    with the accounts' .tt OPENING cost=unknown lines when `path` is the
-    project's own file (lib/missing_history.load_missing_history; empty
-    when there is none or it cannot be read)."""
+    """{(SYMBOL, account)} the .tt OPENING cost=unknown lines of the
+    project folder `path` open (lib/missing_history.load_missing_history;
+    empty when there are none or they cannot be read)."""
     if not path:
         return set()
     from taxjson.lib.missing_history import load_missing_history
@@ -89,7 +89,7 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
                           country: Optional[str] = None,
                           ) -> List[MissingHistoryRow]:
     """The tax year's sales with no purchase in the files, in taxable
-    accounts, that missing_history.json does not cover — the AFFECTS
+    accounts, that no .tt OPENING cost=unknown line covers — the AFFECTS
     rows of `taxjson find-missing-history` (broker-marked real shorts,
     registered accounts and the old leg of a reconstructed merger are
     left out, as there)."""
@@ -262,7 +262,7 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
     sees it). A payment in the first 60 days of the account's data is
     left out (shares sold just before the data starts are paid after
     it), as are options, the given accounts (crypto staking) and the
-    `declared` (SYMBOL, account) pairs — missing_history.json's, whose
+    `declared` (SYMBOL, account) pairs — the .tt OPENING cost=unknown lines', whose
     holding the user has already declared."""
     skip = set(skip_accounts)
     known = {(str(sy).upper(), str(a)) for sy, a in declared}
@@ -483,7 +483,7 @@ def _n(count: int, one: str, many: str) -> str:
     return f"{count} {one if count == 1 else many}"
 
 
-def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.json",
+def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.tt",
            width_: Optional[int] = None) -> List[str]:
     """The summary's lines (none when clean), on the run's console
     (docs/output-style.md, The run's console): a `==> ` heading, one
@@ -497,7 +497,7 @@ def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.json",
 
 
 def render_blocks(doc: Dict[str, Any], *,
-                  mh_name: str = "missing_history.json",
+                  mh_name: str = "missing_history.tt",
                   width_: Optional[int] = None) -> List[List[str]]:
     """render() as its entries (the heading, each finding, the closing
     line), each a list of lines: lib/out.show_blocks prints them with a

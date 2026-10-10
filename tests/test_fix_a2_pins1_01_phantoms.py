@@ -1,4 +1,5 @@
-"""Re-audit-2 tests-pins-01: missing_history.json reaches every command that
+"""Re-audit-2 tests-pins-01: missing history (.tt OPENING cost=unknown
+lines; missing_history.json before v0.27.0) reaches every command that
 rebuilds the books (CA-ACB-11). Each test fails when its command's
 --incomplete-history / phantom wiring is dropped:
 
@@ -47,7 +48,13 @@ def _project(root, year, tt, *, settings="", phantoms=_PHANTOM):
     (root / "inputs" / "margin").mkdir(parents=True)
     (root / "inputs" / "margin" / "m.tt").write_text(tt)
     if phantoms is not None:
-        (root / "missing_history.json").write_text(phantoms)
+        # (the .tt OPENING cost=unknown lines the entries convert to)
+        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from _mh import tt_lines, write_lines
+        rows = [r for r in (parse_tt_line(ln, "margin")
+                            for ln in tt.splitlines()) if r]
+        write_lines(root / "inputs", tt_lines(
+            rows, json.loads(phantoms), until=f"{year}-12-31"))
 
 
 def _run(tc, root):
@@ -246,8 +253,9 @@ class TestOptionBoundaryAppliesPhantoms(unittest.TestCase):
                     "symbol": opt, "quantity": -2, "net_amount": 900.0,
                     "price": 4.5, "currency": "CAD", "account": "margin",
                     "id": "o1"}]}))
-            (root / "missing_history.json").write_text(json.dumps(
-                [{"symbol": opt, "account": "margin"}]))
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (root / "inputs" / "margin" / "missing_history.tt").write_text(
+                f"OPENING 2025-12-14 {opt} 2 cost=unknown\n")
             r = _cli(root, "option-boundary", "--json")
         self.assertEqual(r.returncode, 0, r.stderr[-1500:])
         self.assertEqual(json.loads(r.stdout)["rows"], [])

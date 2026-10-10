@@ -498,7 +498,7 @@ def parse_journal_line(line: str, source: str = ''):
 _MAX_EVENT_QTY = 1e12
 
 # Units held before the data starts, cost unknown (lib/missing_history:
-# the dated form of a missing_history.json entry).
+# missing history, read by `taxjson run`).
 UNKNOWN_OPENING_FORM = ('OPENING <date> <SYMBOL> <qty> cost=unknown '
                         '[reason="..."]')
 
@@ -519,7 +519,7 @@ def parse_unknown_opening_line(line: str, source: str = ''):
     """`OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` ->
     {date, symbol, quantity, reason, line}: <qty> units of SYMBOL held
     on <date>, bought before the data starts at a cost the files do not
-    give — the dated form of a missing_history.json entry (tax-logic
+    give — missing history (tax-logic
     CA-ACB-11 / US-BASIS-04). None when the line is not an OPENING line
     with a `cost=` word (a positions-report OPENING line has a currency
     and a total instead). `taxjson run` reads it from the account's .tt

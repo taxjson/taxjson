@@ -770,8 +770,7 @@ def d_roc_entered(ctx: Ctx) -> Result:
 def d_inputs_committed(ctx: Ctx) -> Result:
     if not _is_git_repo(ctx.root):
         return Result("inputs-committed", "attention", "not a git repository")
-    paths = ["inputs", "taxjson.toml", "ticker.map", "tobase.map",
-             "missing_history.json", "phantoms.json"]
+    paths = ["inputs", "taxjson.toml", "ticker.map", "tobase.map"]
     paths = [p for p in paths if (ctx.root / p).exists()]
     refused = _git_refusal(ctx.root)
     if refused:
@@ -975,11 +974,10 @@ FINGERPRINT_FILE = ".inputs_fingerprint.json"     # in work/
 FINGERPRINT_VERSION = 2
 # Project-root maps `taxjson run` reads (taxjson_run._PROJECT_ROOT_INPUTS
 # is the same list; a test keeps the two equal — A2-0363, A2-1158).
-PROJECT_ROOT_MAPS = ("ticker.map", "tobase.map", "missing_history.json",
-                     "phantoms.json")
-# phantoms.json is the old name of missing_history.json (still read): a
-# fingerprint keys it by the new name, so renaming the file is not an
-# input change (_canon_fingerprint).
+PROJECT_ROOT_MAPS = ("ticker.map", "tobase.map")
+# phantoms.json is the old name of missing_history.json (neither is read
+# since v0.27.0): a record an older taxjson wrote keys it by the new name
+# (_canon_fingerprint).
 _LEGACY_INPUT_NAMES = {"phantoms.json": "missing_history.json"}
 _ROOT_INPUTS = ("taxjson.toml",) + PROJECT_ROOT_MAPS
 _LEGACY_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
@@ -1262,16 +1260,9 @@ def d_sanity(ctx: Ctx) -> Result:
 
 
 def _mh_name(ctx) -> str:
-    """The project's missing-history file name as the user has it
-    (missing_history.json, or the legacy phantoms.json)."""
-    from taxjson.lib.missing_history import (MISSING_HISTORY_FILE,
-                                              project_missing_history_file)
-    root = getattr(ctx, "root", None)
-    try:
-        p = project_missing_history_file(root, note=False) if root else None
-    except ValueError:
-        p = None
-    return p.name if p is not None else MISSING_HISTORY_FILE
+    """What the missing-history step names the lines by."""
+    from taxjson.lib.missing_history import MISSING_HISTORY_TT
+    return MISSING_HISTORY_TT
 
 
 def d_missing_history(ctx: Ctx) -> Result:
@@ -1295,9 +1286,7 @@ def d_missing_history(ctx: Ctx) -> Result:
             in_affects = True
             continue
         # missing-history entries on a real short / a written option
-        # (A2-0639): the run applies them, so they are work to do. (The
-        # file is named as the user has it: missing_history.json or the
-        # legacy phantoms.json.)
+        # (A2-0639): the run applies them, so they are work to do.
         if ln.startswith("REMOVE from "):
             in_remove = True
             continue
@@ -1329,25 +1318,8 @@ def d_missing_history(ctx: Ctx) -> Result:
         shown = ", ".join(syms[:4]) + (" ..." if len(syms) > 4 else "")
         return Result("missing-history", "attention",
                       f"{len(syms)} position(s) with missing basis affect "
-                      f"{ctx.year}: {shown}" + _mh_migrate_hint(ctx))
-    return Result("missing-history", "done",
-                  "nothing affects the year" + _mh_migrate_hint(ctx))
-
-
-def _mh_migrate_hint(ctx) -> str:
-    """The step's note while the project keeps a missing_history.json:
-    `taxjson migrate` moves it into dated .tt lines (OPENING ...
-    cost=unknown; lib/missing_history)."""
-    from taxjson.lib.missing_history import project_missing_history_file
-    root = getattr(ctx, "root", None)
-    try:
-        p = project_missing_history_file(root, note=False) if root else None
-    except ValueError:
-        p = None
-    if p is None:
-        return ""
-    return (f"; {p.name} can move into dated .tt lines (OPENING <date> "
-            f"<SYMBOL> <qty> cost=unknown): `taxjson migrate`")
+                      f"{ctx.year}: {shown}")
+    return Result("missing-history", "done", "nothing affects the year")
 
 
 def _zero_value_elections(ctx: Ctx) -> int:

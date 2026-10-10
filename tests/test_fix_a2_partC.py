@@ -588,8 +588,7 @@ class TestStandaloneTimingDefaults(unittest.TestCase):
                     "quantity": -10, "price": 10.0, "net_amount": 100.0,
                     "currency": "CAD", "account": "margin"}]}))
             r = _module("taxjson.bin.taxjson_run", "-C", str(root),
-                        "find-missing-history", "--write-missing-history",
-                        str(root / "phantoms.new.json"))
+                        "find-missing-history", "--write-missing-history")
         self.assertNotIn("--option-premium-timing not given", r.stderr,
                          r.stdout + r.stderr)
 

@@ -3,18 +3,18 @@
 Owner decisions (v0.27.0), synthetic data only:
 
 A. `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` in an
-   account's .tt file opens <qty> units at UNKNOWN cost on <date> — the
-   opening a missing_history.json entry gets, with its date and quantity
-   the user's (never sized from the rows, no year window). Sales that
-   draw on them go to manual reporting in both countries (CA-ACB-11 /
-   US-BASIS-04). `find-missing-history --write-missing-history` writes
-   the lines into inputs/<account>/missing_history.tt (merged: never
-   twice; another quantity flagged, never replaced). missing_history.json
-   is still read; a pair both give is the .tt line's (Info). `taxjson
-   migrate` converts the file — in the shared layout merging the year
-   folders' files (agreeing entries one line; disagreeing ones listed,
-   written with --write as the newest year sizes them; entries that open
-   nothing dropped) — and the books stay the same.
+   account's .tt file opens <qty> units at UNKNOWN cost on <date>, with
+   its date and quantity the user's (never sized from the rows, no year
+   window). Sales that draw on them go to manual reporting in both
+   countries (CA-ACB-11 / US-BASIS-04). It is the only form:
+   missing_history.json (and phantoms.json) is no longer read — every
+   command refuses a project that has one, naming `taxjson migrate`,
+   which converts it (in the shared layout merging the year folders'
+   files: agreeing entries one line; disagreeing ones listed, written
+   with --write as the newest year sizes them; entries that open nothing
+   dropped) and renames it *.migrated. `find-missing-history
+   --write-missing-history` writes only these lines (merged: never
+   twice; another quantity flagged, never replaced) and takes no FILE.
 B. `taxjson sanity` compares the broker's positions with the books'
    positions INCLUDING the missing-history units (lib/positions_check.
    book_rows): a pre-history sale covered by missing history is no
@@ -226,29 +226,30 @@ class TestTheOpening(unittest.TestCase):
 
 
 class TestBothCountries(unittest.TestCase):
-    """A .tt line books exactly what the same missing_history.json entry
-    books (its recorded quantity), in each country's engine."""
+    """A .tt line in each country's engine: the sales drawing on the
+    units go to manual reporting."""
 
     def _check(self, country):
         sym = f"QZQ.{_SFX[country]}"
-        with_json = project(country, mh=[{"symbol": sym, "account":
-                                          "margin", "quantity": 100}])
-        with_tt = project(country, tt_extra=(
+        d = project(country, tt_extra=(
             f"OPENING 2023-12-31 {sym} 100 cost=unknown "
             f'reason="bought at the old broker"\n'))
-        for d in (with_json, with_tt):
-            _ok(self, tjs("-C", str(d), "run", "--no-input"))
-        a, b = _filing(with_json), _filing(with_tt)
-        self.assertEqual(a, b)
+        r = _ok(self, tjs("-C", str(d), "run", "--no-input"))
+        self.assertIn("Reading 1 .tt OPENING cost=unknown line",
+                      r.stdout + r.stderr)
         # Canada: the pool held unknown-cost units through both QZQ
         # sales, only the complete ZZB sale is in the totals. US: FIFO
         # lots — the second sale's 100 units from the known purchase
         # are in them too, its 40 opening units are not.
-        doc = json.loads(_ok(self, tjs("-C", str(with_tt), "sum",
+        doc = json.loads(_ok(self, tjs("-C", str(d), "sum",
                                        "--json")).stdout)
         self.assertEqual(doc["filing"]["accounts"][0]["dispositions"],
                          {"canada": 1, "usa": 2}[country])
-        return with_tt
+        log = json.loads((d / "work" / "margin_gains.json").read_text())[
+            "missing_history_log"]
+        self.assertEqual([(e["anchor_date"], e["opening_qty"])
+                          for e in log if e["inserted"]],
+                         [("2023-12-31", 100.0)])
 
     @rule("CA-ACB-11")
     def test_canada(self):
@@ -258,20 +259,37 @@ class TestBothCountries(unittest.TestCase):
     def test_usa(self):
         self._check("usa")
 
-    def test_both_give_it_the_tt_line_wins(self):
-        d = project("usa", mh=[{"symbol": "QZQ.US", "account": "margin",
-                                "quantity": 30}],
-                    tt_extra="OPENING 2023-12-31 QZQ.US 100 cost=unknown\n")
-        r = _ok(self, tjs("-C", str(d), "run", "--no-input"))
-        out = r.stdout + r.stderr
-        self.assertIn("a .tt OPENING cost=unknown line both open QZQ.US / "
-                      "margin", out)
-        self.assertIn("`taxjson migrate` converts them", out)
-        self.assertNotIn("goes short again", out)
-        log = json.loads((d / "work" / "margin_gains.json").read_text())[
-            "missing_history_log"]
-        self.assertEqual([e["opening_qty"] for e in log if e["inserted"]],
-                         [100.0])
+
+class TestTheJsonIsRefused(unittest.TestCase):
+    """missing_history.json (or phantoms.json): every command stops,
+    naming `taxjson migrate`; the checklist shows it."""
+
+    def test_refused_with_the_migrate_hint(self):
+        for name in ("missing_history.json", "phantoms.json"):
+            with self.subTest(name=name):
+                d = project("usa")
+                (d / name).write_text(json.dumps(
+                    [{"symbol": "QZQ.US", "account": "margin"}]))
+                for cmd in (("run", "--no-input"), ("sum",),
+                            ("find-missing-history",)):
+                    r = tjs("-C", str(d), *cmd)
+                    self.assertEqual(r.returncode, 2, cmd)
+                    flat = " ".join(r.stderr.split())
+                    self.assertIn(f"{name} is no longer read", flat)
+                    self.assertIn("run `taxjson migrate` to convert it",
+                                  flat)
+                r = tjs("-C", str(d), "checklist", "--json")
+                self.assertIn(f"{name} is no longer read", r.stdout)
+
+    def test_a_stage_refuses_the_file(self):
+        from taxjson.lib.missing_history import (
+            MissingHistoryNoLongerRead, load_missing_history)
+        d = Path(private_dir())
+        f = d / "missing_history.json"
+        f.write_text("[]")
+        with self.assertRaises(MissingHistoryNoLongerRead) as cm:
+            load_missing_history(f)
+        self.assertIn("taxjson migrate", str(cm.exception))
 
 
 class TestWriteMissingHistory(unittest.TestCase):
@@ -309,38 +327,53 @@ class TestWriteMissingHistory(unittest.TestCase):
         r = _ok(self, tjs("-C", str(d), "run", "--no-input"))
         self.assertIn("Reading 1 .tt OPENING cost=unknown line",
                       r.stdout + r.stderr)
+        # The JSON FILE form is gone.
+        r = tjs("-C", str(d), "find-missing-history",
+                "--write-missing-history", str(d / "new.json"))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("--write-missing-history takes no FILE",
+                      " ".join(r.stderr.split()))
+        self.assertFalse((d / "new.json").exists())
 
 
 class TestMigrate(unittest.TestCase):
-    """`taxjson migrate`: missing_history.json -> .tt lines."""
+    """`taxjson migrate`: missing_history.json -> .tt lines, sized from
+    the project's books (a run with the file moved aside built them)."""
 
-    def test_single_folder_books_unchanged(self):
-        d = project("canada", mh=[{"symbol": "QZQ.TO",
-                                   "account": "margin"}])
+    def test_single_folder(self):
+        d = project("canada")
         _ok(self, tjs("-C", str(d), "run", "--no-input"))
-        before = _filing(d)
-        r = _ok(self, tjs("-C", str(d), "migrate"))
+        (d / "missing_history.json").write_text(json.dumps(
+            [{"symbol": "QZQ.TO", "account": "margin"}]))
+        r = _ok(self, tjs("-C", str(d), "migrate", "--dry-run"))
         self.assertIn("QZQ.TO 100", r.stdout)
+        self.assertTrue((d / "missing_history.json").exists())
+        r = _ok(self, tjs("-C", str(d), "migrate"))
         self.assertFalse((d / "missing_history.json").exists())
         self.assertTrue((d / "missing_history.json.migrated").exists())
         tt = (d / "inputs" / "margin" / "missing_history.tt").read_text()
         self.assertIn("OPENING 2024-01-09 QZQ.TO 100 cost=unknown", tt)
         _ok(self, tjs("-C", str(d), "run", "--no-input"))
-        self.assertEqual(_filing(d), before)
+        # The same books as the line written by hand.
+        by_hand = project("canada", tt_extra=(
+            "OPENING 2024-01-09 QZQ.TO 100 cost=unknown\n"))
+        _ok(self, tjs("-C", str(by_hand), "run", "--no-input"))
+        self.assertEqual(_filing(d), _filing(by_hand))
 
     @rule("CA-ACB-11")
     def test_year_folders_merged(self):
         sym = "QZQ.TO"
+        top = project("canada", shared_years=(2024, 2025))
+        for y in (2024, 2025):
+            _ok(self, tjs("-C", str(top / str(y)), "run", "--no-input"))
         mh = {2024: [{"symbol": sym, "account": "margin"},
                      {"symbol": "ZZB.TO", "account": "margin"},
                      {"symbol": "NOPE.TO", "account": "margin"}],
               2025: [{"symbol": sym, "account": "margin",
                       "quantity": 120}]}
-        top = project("canada", mh=mh, shared_years=(2024, 2025))
-        before = {}
-        for y in (2024, 2025):
-            _ok(self, tjs("-C", str(top / str(y)), "run", "--no-input"))
-            before[y] = _filing(top / str(y))
+        for y, entries in mh.items():
+            (top / str(y) / "missing_history.json").write_text(
+                json.dumps(entries))
         r = tjs("-C", str(top / "2025"), "migrate")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn(f"{sym} / margin: 2024: 100, 2025: 120 — written: "
@@ -351,7 +384,7 @@ class TestMigrate(unittest.TestCase):
         self.assertFalse((top / "inputs" / "margin" /
                           "missing_history.tt").exists())
         self.assertTrue((top / "2024" / "missing_history.json").exists())
-        r = _ok(self, tjs("-C", str(top / "2025"), "migrate", "--write"))
+        _ok(self, tjs("-C", str(top / "2025"), "migrate", "--write"))
         tt = (top / "inputs" / "margin" / "missing_history.tt").read_text()
         self.assertIn(f"OPENING 2024-01-09 {sym} 120 cost=unknown", tt)
         self.assertIn("apply to every year", tt)
@@ -360,10 +393,11 @@ class TestMigrate(unittest.TestCase):
             self.assertFalse((top / str(y) /
                               "missing_history.json").exists())
             _ok(self, tjs("-C", str(top / str(y)), "run", "--no-input"))
-        # Every QZQ sale stays out of the totals either way (the pool
-        # holds unknown-cost units through both): the books are the same.
-        for y in (2024, 2025):
-            self.assertEqual(_filing(top / str(y)), before[y])
+            # Every QZQ sale draws on a pool holding unknown-cost units.
+            doc = json.loads(_ok(self, tjs("-C", str(top / str(y)), "sum",
+                                           "--json")).stdout)
+            self.assertEqual(doc["filing"]["accounts"][0]["dispositions"],
+                             {2024: 1, 2025: 0}[y])
 
 
 class TestSanityHoldsTheUnits(unittest.TestCase):

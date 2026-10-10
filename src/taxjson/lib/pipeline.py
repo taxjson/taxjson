@@ -1054,8 +1054,8 @@ def prepare_books(transactions, sheltered_transactions=(),
     missing_history_log: list = []
     if incomplete_history:
         mh_pairs = load_missing_history(Path(incomplete_history))
-        # Sized from the rows through the tax year's end (the request's
-        # year, else the project's: MissingHistoryPairs.size_until).
+        # (A pair without a .tt line — none here: every pair is a
+        # line, opened as written — would be sized through the year end.)
         from taxjson.lib.missing_history import sizing_until
         _until = sizing_until(year)
         transactions, missing_history_log = synthesize_openings(
@@ -1134,8 +1134,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                     f"position to close",
                     ["It is booked as a new short until the missing "
                      "purchase is supplied (`taxjson find-missing-history "
-                     "--write-missing-history` writes "
-                     "missing_history.json)."],
+                     "--write-missing-history` writes its .tt OPENING "
+                     "cost=unknown line)."],
                     legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
                     f"broker codes the sale on {c.first_negative_date} "
                     f"CLOSING (IB code C" + _basis
@@ -1143,7 +1143,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                       f"it is booked as a new short until the missing "
                       f"purchase is supplied (`taxjson "
                       f"find-missing-history --write-missing-history` "
-                      f"writes missing_history.json).")
+                      f"writes its .tt OPENING cost=unknown line).")
         # A short where none can exist (A2-0395 / A2-0137): the main
         # book's own accounts only — a context book's account says it in
         # its own stage. A listed pair that goes short only after the
@@ -1179,7 +1179,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                  f"purchase before the data). Until it is supplied, "
                  f"{tail}. Supply it (the transfer or purchase rows, or "
                  f"`taxjson find-missing-history --write-missing-history`, "
-                 f"which writes missing_history.json)."],
+                 f"which writes .tt OPENING cost=unknown lines)."],
                 legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): {why} — "
                 f"it sells {abs(c.peak_short):g} more than the data "
                 f"holds from {c.first_negative_date}: history is missing "
@@ -1187,7 +1187,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                 f"data). Until it is supplied, {tail}. Supply it (the "
                 f"transfer or purchase rows, or `taxjson "
                 f"find-missing-history --write-missing-history`, which "
-                f"writes missing_history.json).")
+                f"writes .tt OPENING cost=unknown lines).")
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
@@ -1197,22 +1197,20 @@ def prepare_books(transactions, sheltered_transactions=(),
                 [f"{n_reg} are in {_book_words(country)['reg']}. If any of "
                  f"these are sales of shares bought before your files "
                  f"start (no purchase in the data) rather than real short "
-                 f"trades, list them in missing_history.json: `taxjson "
+                 f"trades, open the units held before the data with .tt "
+                 f"OPENING cost=unknown lines: `taxjson "
                  f"find-missing-history --write-missing-history` in a "
-                 f"project (`taxjson run` picks the file up), or "
-                 f"`taxjson-gains --country canada|usa "
-                 f"--suggest-missing-history FILE` standalone."],
+                 f"project writes them (`taxjson run` reads them)."],
                 legacy=f"NOTE: {len(candidates)} (symbol, account) pair(s) "
                 f"go short in this data: "
                 f"{preview}{more}. {n_reg} are in "
                 f"{_book_words(country)['reg']}. "
                 f"If any of these are sales of shares bought before your "
                 f"files start (no purchase in the data) rather than real "
-                f"short trades, list them in missing_history.json: "
-                f"`taxjson find-missing-history --write-missing-history` "
-                f"in a project (`taxjson run` picks the file up), or "
-                f"`taxjson-gains --country canada|usa "
-                f"--suggest-missing-history FILE` standalone.")
+                f"short trades, open the units held before the data with "
+                f".tt OPENING cost=unknown lines: `taxjson "
+                f"find-missing-history --write-missing-history` in a "
+                f"project writes them (`taxjson run` reads them).")
     return (transactions, sheltered_transactions, affiliated_transactions,
             missing_history_log)
 

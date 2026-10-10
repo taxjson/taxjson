@@ -2063,7 +2063,7 @@ def _write_tree(dst: Path, dirs: List[Path], files: List[_TreeFile],
 
 # A year's own files the redacted copy of a multi-year project carries,
 # beside its inputs/ and holdings/.
-_PROJECT_FILES = (_PL.CONFIG, _PL.TICKER_MAP, "missing_history.json")
+_PROJECT_FILES = (_PL.CONFIG, _PL.TICKER_MAP)
 
 
 def _project_tree(root: Path, inputs: Path

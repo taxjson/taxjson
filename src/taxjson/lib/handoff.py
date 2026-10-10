@@ -259,7 +259,7 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
     """{group: {symbol: {qty, acb, deferred}}} for the taxable pools as
     of the end of `as_of` (the engine's date basis). `phantoms`: the
     project's missing-history path (lib/missing_history.
-    missing_history_arg: missing_history.json and the accounts' .tt
+    missing_history_arg: the project folder, for the accounts' .tt
     OPENING cost=unknown lines), None without either (the parameter
     keeps its pre-rename name)."""
     settings = cfg.get("settings", {}) or {}

@@ -3,10 +3,11 @@
 When a user's data window doesn't reach back to when a position was opened
 (the shares were bought before the broker files start), the engine sees
 only the disposition and concludes the user is short. This module detects
-those cases and lets the user list them in the project's
-missing_history.json (formerly phantoms.json) so the engine can:
+those cases and lets the user declare the units held before the data as
+dated lines in the account's .tt files (`OPENING <date> <SYMBOL> <qty>
+cost=unknown`, read_tt_openings) so the engine can:
 
-  - Insert a synthetic OPENING_BALANCE transaction at the data-window start
+  - Insert a synthetic OPENING_BALANCE transaction on the line's date
     to keep position math non-negative.
   - Tag the ACB pool as tainted while those shares (unknown cost) remain.
     Dispositions drawing from a tainted pool are excluded from the gains
@@ -17,9 +18,13 @@ missing_history.json (formerly phantoms.json) so the engine can:
 This is the gains-side counterpart to the user's old TRANSFER-in approach,
 without the unsafe leak of fabricated ACB into the gain calculation.
 
-The module was called phantom_holdings (and the file phantoms.json) until
-2026-10; taxjson.lib.phantom_holdings is a shim for this module, and the
-old function and class names are aliases at the end of this file.
+The project file missing_history.json (formerly phantoms.json) that
+listed them until v0.27.0 is no longer read: a project that still has
+one is refused (lib/migrate.legacy_files) and `taxjson migrate` converts
+it (plan_missing_history_migration). The module was called
+phantom_holdings until 2026-10; taxjson.lib.phantom_holdings is a shim
+for this module, and the old function and class names are aliases at
+the end of this file.
 """
 from __future__ import annotations
 
@@ -38,78 +43,50 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                              normalize_symbol_new)
 
 
-# The project-root file listing (symbol, account) pairs whose purchase
-# is not in the broker files. It was called phantoms.json until 2026-10:
-# a project that still has only the old name keeps working (one NOTE per
-# run asks to rename it); a project with BOTH names is refused — which
-# one is current cannot be guessed. taxjson never renames or edits the
-# user's file itself.
+# The project-root file that listed (symbol, account) pairs whose
+# purchase is not in the broker files until v0.27.0 (phantoms.json before
+# 2026-10). It is no longer read: every command refuses a project that
+# still has one (lib/migrate.legacy_files) and `taxjson migrate`
+# converts it into .tt lines (plan_missing_history_migration).
 MISSING_HISTORY_FILE = "missing_history.json"
 LEGACY_MISSING_HISTORY_FILE = "phantoms.json"
-# Set once the rename NOTE was printed: child processes inherit it, so
-# one `taxjson run` (and the commands it spawns) says it once.
-_LEGACY_NOTE_ENV = "TAXJSON_MISSING_HISTORY_NOTED"
+MISSING_HISTORY_FILES = (MISSING_HISTORY_FILE, LEGACY_MISSING_HISTORY_FILE)
 
 
 class MissingHistoryFileConflict(ValueError):
     """Both missing_history.json and the legacy phantoms.json exist."""
 
 
+class MissingHistoryNoLongerRead(ValueError):
+    """A missing_history.json named where the .tt lines are read."""
+
+
 class MissingHistoryPairs(set):
-    """The (symbol, account) pairs load_missing_history read, carrying
-    the file's name as the user has it on disk (missing_history.json, or
-    the legacy phantoms.json) so every note and warning names it, and
-    each entry's recorded `quantity` (`quantities`: the opening it sets,
-    exactly; an entry without one is sized from the rows through the
-    tax year's end — synthesize_openings)."""
-    source_name = MISSING_HISTORY_FILE
+    """The (symbol, account) pairs of a project's missing history, with
+    each pair's .tt line (`fixed`: its date and quantity are the
+    opening). `quantities` gives a pair without a line the opening it
+    sets, exactly (`taxjson migrate` sizing a converted entry); a pair
+    with neither is sized from the rows (synthesize_openings: the
+    suggestions of find-missing-history)."""
+    source_name = "missing_history.tt"
 
     def __init__(self, *args):
         super().__init__(*args)
         self.quantities: Dict[Tuple[str, str], float] = {}
-        # The last date whose rows size an opening ('YYYY-12-31', the
-        # project's year end: _size_until_for), None for every row.
-        self.size_until: Optional[str] = None
         # The dated openings of the accounts' .tt files (`OPENING <date>
-        # <SYMBOL> <qty> cost=unknown`, read_tt_openings): their date
-        # and quantity are the user's, never sized from the rows.
+        # <SYMBOL> <qty> cost=unknown`, read_tt_openings).
         self.fixed: Dict[Tuple[str, str], "TtOpening"] = {}
-        # missing_history.json entries a .tt line replaces: [(pair,
-        # the line's place)] (said once as an Info line).
-        self.overridden: List[Tuple[Tuple[str, str], str]] = []
 
 
-# The entry key that records how many shares (units) an opening fills:
-# written by `find-missing-history --write-missing-history`.
+# The entry key a converted missing_history.json entry recorded the
+# units of its opening under (written by find-missing-history before
+# v0.27.0; `taxjson migrate` reads it).
 QUANTITY_KEY = "quantity"
-
-# The tax year an opening is sized for: an entry without a `quantity`
-# fills the deepest shortage of its rows dated up to Dec 31 of that year
-# (synthesize_openings). `taxjson` names the project's year and folder
-# here for every command and stage (taxjson_run.load_config:
-# sizing_env_value); load_missing_history gives a file IN that folder
-# the window (MissingHistoryPairs.size_until), so a file of another
-# folder — a standalone tool, a test — never picks up a stray year. A
-# gains stage's own --year sets it too (pipeline.prepare_books).
-# Without either, every row counts.
-ENV_SIZING_YEAR = "TAXJSON_MISSING_HISTORY_YEAR"
-
-
-def sizing_env_value(root: Any, year: Any) -> Optional[str]:
-    """ENV_SIZING_YEAR's value for project `root` of tax year `year`
-    ("YEAR<TAB>folder"), None without a year."""
-    if sizing_until(year) is None:
-        return None
-    try:
-        folder = Path(root).resolve()
-    except (OSError, RuntimeError):
-        folder = Path(root).absolute()
-    return f"{int(year)}\t{folder}"
 
 
 def sizing_until(year: Any = None) -> Optional[str]:
-    """The last date ('YYYY-12-31') whose rows size a missing-history
-    opening for tax year `year`; None (every row) without one."""
+    """The last date ('YYYY-12-31') whose rows size a suggested opening
+    for tax year `year`; None (every row) without one."""
     if year in (None, '') or isinstance(year, bool):
         return None
     try:
@@ -119,41 +96,13 @@ def sizing_until(year: Any = None) -> Optional[str]:
     return f"{y:04d}-12-31" if 1000 <= y <= 9999 else None
 
 
-def _size_until_for(path: Path) -> Optional[str]:
-    """The window ENV_SIZING_YEAR gives a missing-history file at
-    `path`: its project's year end when the file sits in the folder the
-    variable names, else None."""
-    raw = (os.environ.get(ENV_SIZING_YEAR) or "").strip()
-    if "\t" not in raw:
-        return None
-    year, folder = raw.split("\t", 1)
-    try:
-        here = Path(path).resolve().parent
-    except (OSError, RuntimeError):
-        return None
-    return sizing_until(year) if str(here) == folder else None
-
-
 def _source_name(pairs) -> str:
-    """The file name a pairs set came from (MISSING_HISTORY_FILE for a
-    plain set)."""
-    return getattr(pairs, "source_name", None) or MISSING_HISTORY_FILE
-
-
-def legacy_rename_note(path: Path) -> None:
-    """Print the rename NOTE for a legacy phantoms.json — once per run
-    (an environment marker the run's child processes inherit)."""
-    if os.environ.get(_LEGACY_NOTE_ENV):
-        return
-    os.environ[_LEGACY_NOTE_ENV] = "1"
-    emit_line(f"NOTE: {path} uses the old name of {MISSING_HISTORY_FILE} — it "
-              f"is still read, but please rename it: `mv "
-              f"{LEGACY_MISSING_HISTORY_FILE} {MISSING_HISTORY_FILE}` in "
-              f"{path.parent}", file=sys.stderr)
+    """The name a pairs set's messages use."""
+    return getattr(pairs, "source_name", None) or "missing_history.tt"
 
 
 def missing_history_conflict(root) -> Optional[str]:
-    """The refusal text when the project has BOTH file names, else None."""
+    """The refusal text when the project has BOTH old file names."""
     root = Path(root)
     new = root / MISSING_HISTORY_FILE
     old = root / LEGACY_MISSING_HISTORY_FILE
@@ -165,35 +114,20 @@ def missing_history_conflict(root) -> Optional[str]:
             f"of {MISSING_HISTORY_FILE}, and which one is current cannot be "
             f"guessed. Keep one: merge any entries you need into "
             f"{MISSING_HISTORY_FILE} and delete (or move away) "
-            f"{LEGACY_MISSING_HISTORY_FILE}.")
+            f"{LEGACY_MISSING_HISTORY_FILE}, then `taxjson migrate`.")
 
 
-def missing_history_path(root, *, note: bool = True) -> Path:
-    """Like project_missing_history_file, but always a path: the new
-    name when neither file exists (callers test .exists() and some use
-    its parent as the project root)."""
-    p = project_missing_history_file(root, note=note)
-    return p if p is not None else Path(root) / MISSING_HISTORY_FILE
-
-
-def project_missing_history_file(root, *, note: bool = True
-                                 ) -> Optional[Path]:
-    """The project's missing-history file under `root`:
-    missing_history.json, else the legacy phantoms.json (with the rename
-    NOTE once per run unless note=False), else None. Raises
-    MissingHistoryFileConflict when both names exist."""
+def legacy_missing_history_file(root) -> Optional[Path]:
+    """The project's old missing-history file (missing_history.json, else
+    phantoms.json) — no longer read: `taxjson migrate` converts it —
+    or None. Raises MissingHistoryFileConflict when both names exist."""
     root = Path(root)
     why = missing_history_conflict(root)
     if why:
         raise MissingHistoryFileConflict(why)
-    new = root / MISSING_HISTORY_FILE
-    if new.exists():
-        return new
-    old = root / LEGACY_MISSING_HISTORY_FILE
-    if old.exists():
-        if note:
-            legacy_rename_note(old)
-        return old
+    for name in MISSING_HISTORY_FILES:
+        if os.path.lexists(root / name):
+            return root / name
     return None
 
 
@@ -1312,7 +1246,7 @@ def detect_unbacked_covers(
 
 @dataclass
 class StaleMissingHistoryEntry:
-    """A missing_history.json entry today's detection would NOT propose: the
+    """A missing-history line today's detection would NOT propose: the
     broker marks the sales that took it short as short sales (a real
     short), or it is an option / future whose short side the broker
     never coded CLOSING (a written contract). Applying it moves a real
@@ -1323,7 +1257,7 @@ class StaleMissingHistoryEntry:
     account: str
     reason: str               # 'broker-short' | 'derivative' | 'complete'
     marker: str = ''          # how the broker marks the short
-    file_name: str = MISSING_HISTORY_FILE   # the file that lists it
+    file_name: str = "missing_history.tt"  # the file that lists it
 
 
 def stale_missing_history_entries(
@@ -1402,7 +1336,7 @@ def stale_missing_history_entries(
 
 
 def complete_entry_message(symbol: str, account: str,
-                           file_name: str = MISSING_HISTORY_FILE, *,
+                           file_name: str = "missing_history.tt", *,
                            more: Sequence[Tuple[str, str]] = ()) -> str:
     """A missing-history entry whose position never goes short: the
     purchase is in the books now (an older export or a .tt line was
@@ -2149,7 +2083,7 @@ def detect_corp_action_links(
 
 def report_missing_history_log(logs: List[List[Dict[str, Any]]],
                                accounts: Set[str],
-                               file_name: str = MISSING_HISTORY_FILE
+                               file_name: str = "missing_history.tt"
                                ) -> None:
     """One stderr line per missing-history file entry that did nothing in these
     books (whose account they belong to): a spelling mismatch (no rows),
@@ -2234,51 +2168,48 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
 
 
 def load_missing_history(path: Path) -> MissingHistoryPairs:
-    """Load a missing-history file (missing_history.json, or the legacy
-    phantoms.json). Returns a set of (symbol, account) pairs that knows
-    the file's name (MissingHistoryPairs.source_name), each entry's
-    `quantity` and, for the project's own file, its year end
-    (size_until). Underscore-prefixed metadata fields are ignored. A leading BOM
-    (an editor's UTF-8 save) is dropped, as for every other user-edited
-    file (re-audit A2-1453).
-
-    The project's own file (missing_history.json at the root of a
-    project: a folder with taxjson.toml) also carries the accounts'
-    `.tt` OPENING cost=unknown lines (read_tt_openings, in `fixed`):
-    a pair both list is the .tt line's (one Info line per run); the
-    file may then be absent (only .tt lines)."""
+    """The missing history of project folder `path` (what a stage's
+    --incomplete-history names): its accounts' .tt `OPENING <date>
+    <SYMBOL> <qty> cost=unknown` lines (read_tt_openings), as pairs
+    carrying each line (`fixed`). A missing_history.json (or any .json
+    file) is refused: it is no longer read — `taxjson migrate` converts
+    it (MissingHistoryNoLongerRead). Raises TtOpeningError on a line
+    that cannot be used."""
     path = Path(path)
-    tts = _project_tt_openings(path)
-    if tts and not path.is_file():
-        data: Any = []
-    else:
-        data = _read_json_entries(path)
-    out = _pairs_from_entries(path, data)
-    if tts:
-        _merge_tt(out, tts)
-    return out
+    if path.is_dir():
+        out = MissingHistoryPairs()
+        for t in read_tt_openings(path):
+            pair = (t.symbol, t.account)
+            out.add(pair)
+            out.fixed[pair] = t
+        return out
+    if path.suffix.lower() == ".json" or path.name in MISSING_HISTORY_FILES:
+        raise MissingHistoryNoLongerRead(
+            f"{path}: {path.name} is no longer read — missing history is "
+            f"dated .tt lines (OPENING <date> <SYMBOL> <qty> cost=unknown "
+            f"in inputs/<account>/{MISSING_HISTORY_TT}); `taxjson migrate` "
+            f"converts the file")
+    raise ValueError(f"{path}: not a project folder — the missing history "
+                     f"is the project's accounts' .tt OPENING cost=unknown "
+                     f"lines: name the project folder")
 
 
-def _read_json_entries(path: Path) -> Any:
+def read_legacy_entries(path: Path) -> MissingHistoryPairs:
+    """The (symbol, account) pairs of an old missing_history.json (or
+    phantoms.json) with each entry's recorded `quantity` — read by
+    `taxjson migrate` only, to convert it. Underscore-prefixed fields are
+    ignored; a leading BOM is dropped."""
     with open(path, 'r', encoding='utf-8-sig') as f:
         try:
-            return json.load(f)
+            data = json.load(f)
         except json.JSONDecodeError as e:
-            # Name the file: it is hand-edited, and the bare decoder
-            # message gave no hint which input was bad (audit S076-01).
             raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc,
                                        e.pos) from None
-
-
-def _pairs_from_entries(path: Path, data: Any) -> MissingHistoryPairs:
     if not isinstance(data, list):
         raise ValueError(f"{path}: expected a JSON array of missing-history "
                          f"entries")
     out = MissingHistoryPairs()
     out.source_name = Path(path).name or MISSING_HISTORY_FILE
-    # The project's year end when this is the file of the project the
-    # run names (ENV_SIZING_YEAR): its openings are sized through it.
-    out.size_until = _size_until_for(Path(path))
     for i, entry in enumerate(data):
         if not isinstance(entry, dict):
             raise ValueError(f"{path}[{i}]: expected an object")
@@ -2288,9 +2219,6 @@ def _pairs_from_entries(path: Path, data: Any) -> MissingHistoryPairs:
             raise ValueError(
                 f"{path}[{i}]: 'symbol' and 'account' are both required"
             )
-        # Book symbols are upper-case: a hand-typed 'xyz.to' used to
-        # match nothing and read as "data does not go negative" (audit
-        # S075-24 / S076-00).
         pair = (str(symbol).strip().upper(), str(account).strip())
         out.add(pair)
         q = entry.get(QUANTITY_KEY)
@@ -2309,19 +2237,15 @@ def _pairs_from_entries(path: Path, data: Any) -> MissingHistoryPairs:
 # `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` in any .tt
 # file of inputs/<account>/ (taxjson_convert_tt.parse_unknown_opening_
 # line): <qty> units of SYMBOL held on <date>, bought before the data at
-# a cost the files do not give. The same opening a missing_history.json
-# entry gets (an OPENING_BALANCE row: sales drawing on it go to manual
-# reporting, CA-ACB-11 / US-BASIS-04) with its date and quantity the
-# user's: never sized from the rows, no tax-year window. With exports
+# a cost the files do not give: an OPENING_BALANCE row (sales drawing on
+# it go to manual reporting, CA-ACB-11 / US-BASIS-04), its date and
+# quantity the user's: never sized from the rows, no tax-year window. With exports
 # shared by every year (`inputs_dir`) the lines are shared too: one
 # record for every year. `find-missing-history --write-missing-history`
 # writes them into inputs/<account>/MISSING_HISTORY_TT; `taxjson
 # migrate` converts a missing_history.json (merging the year folders').
 
 MISSING_HISTORY_TT = "missing_history.tt"
-# Set once the "a .tt line replaces the entry" Info line was printed
-# (child processes inherit it: one per `taxjson run`).
-_TT_WINS_ENV = "TAXJSON_MISSING_HISTORY_TT_NOTED"
 
 
 @dataclass
@@ -2395,47 +2319,6 @@ def read_tt_openings(root: Any, accounts: Optional[Iterable[str]] = None
     return out
 
 
-def _is_project_file(path: Path) -> bool:
-    """`path` is a project's own missing-history file name at the root
-    of a project (a folder with taxjson.toml)."""
-    return (path.name in (MISSING_HISTORY_FILE, LEGACY_MISSING_HISTORY_FILE)
-            and (path.parent / "taxjson.toml").is_file())
-
-
-def _project_tt_openings(path: Path) -> List[TtOpening]:
-    """The .tt openings of the project whose missing-history file
-    `path` is ([] for any other file)."""
-    if not _is_project_file(path):
-        return []
-    return read_tt_openings(path.parent)
-
-
-def _merge_tt(out: MissingHistoryPairs, tts: Sequence[TtOpening]) -> None:
-    """Add the .tt openings to the pairs a missing-history file listed:
-    a pair both list is the .tt line's (Info once per run)."""
-    for t in tts:
-        pair = (t.symbol, t.account)
-        if pair in out and pair not in out.fixed:
-            out.overridden.append((pair, t.where))
-        out.quantities.pop(pair, None)
-        out.add(pair)
-        out.fixed[pair] = t
-    if not out.quantities and len(out.fixed) == len(out):
-        out.source_name = MISSING_HISTORY_TT
-    if out.overridden and not os.environ.get(_TT_WINS_ENV):
-        os.environ[_TT_WINS_ENV] = "1"
-        shown = ", ".join(f"{s} / {a} ({w})" for (s, a), w
-                          in out.overridden[:4]) + (
-            f" +{len(out.overridden) - 4} more"
-            if len(out.overridden) > 4 else "")
-        emit_line(f"NOTE: {_source_name(out)} and a .tt OPENING cost=unknown "
-                  f"line both open {shown} — the .tt line is used (its "
-                  f"date and quantity); remove the entr"
-                  f"{'y' if len(out.overridden) == 1 else 'ies'} from "
-                  f"{_source_name(out)} (`taxjson migrate` moves them all).",
-                  file=sys.stderr)
-
-
 def has_tt_openings(root: Any) -> bool:
     """The project's accounts have an `OPENING ... cost=unknown` .tt
     line (a malformed one counts: the run names it)."""
@@ -2445,27 +2328,18 @@ def has_tt_openings(root: Any) -> bool:
         return True
 
 
-def missing_history_arg(root: Any, *, note: bool = True
-                        ) -> Optional[Path]:
-    """The path a stage's --incomplete-history gets for project `root`:
-    its missing_history.json (or the legacy phantoms.json) when it
-    exists or when the accounts' .tt files open units at unknown cost
-    (load_missing_history reads both through it); None without either.
-    Raises MissingHistoryFileConflict as project_missing_history_file."""
-    p = project_missing_history_file(root, note=note)
-    if p is not None:
-        return p
-    if has_tt_openings(root):
-        return Path(root) / MISSING_HISTORY_FILE
-    return None
+def missing_history_arg(root: Any) -> Optional[Path]:
+    """What a stage's --incomplete-history gets for project `root`: the
+    project folder when its accounts' .tt files open units at unknown
+    cost (`OPENING ... cost=unknown`; load_missing_history reads them
+    through it), None without any."""
+    return Path(root) if has_tt_openings(root) else None
 
 
-def project_missing_history(root: Any, *, note: bool = True
-                            ) -> Optional[MissingHistoryPairs]:
-    """The project's missing history — missing_history.json and the
-    accounts' .tt OPENING cost=unknown lines — or None without either.
-    Raises what load_missing_history raises."""
-    p = missing_history_arg(root, note=note)
+def project_missing_history(root: Any) -> Optional[MissingHistoryPairs]:
+    """The project's missing history (its accounts' .tt OPENING
+    cost=unknown lines), or None without any. Raises TtOpeningError."""
+    p = missing_history_arg(root)
     return load_missing_history(p) if p is not None else None
 
 
@@ -2720,12 +2594,10 @@ def project_view(root: Any) -> Optional[ProjectView]:
     not built; what load_missing_history raises."""
     from taxjson.lib.core import load_transactions
     root = Path(root)
-    mh = project_missing_history_file(root, note=False)
+    mh = legacy_missing_history_file(root)
     if mh is None:
         return None
-    pairs = MissingHistoryPairs()
-    data = _read_json_entries(mh)
-    pairs = _pairs_from_entries(mh, data)
+    pairs = read_legacy_entries(mh)
     year = _project_year(root)
     until = sizing_until(year)
     v = ProjectView(root, year, mh)
@@ -2735,13 +2607,21 @@ def project_view(root: Any) -> Optional[ProjectView]:
         mine.quantities = {k: q for k, q in pairs.quantities.items()
                            if k[1] == acct}
         log = _log_of(cache, acct, mh)
+        if log is not None and not mine <= {
+                (str(e.get('symbol') or ''), str(e.get('account') or ''))
+                for e in log if isinstance(e, dict)}:
+            # (that run did not apply this file — a run with it moved
+            # aside: sized from the books instead)
+            log = None
         if log is None:
             base = cache / f"{acct}_base.json"
             if not base.is_file():
                 raise MigrationNeedsRun(
-                    f"{root}: no work/{acct}_base.json — run `taxjson run` "
-                    f"there first (its {mh.name} entries are sized from "
-                    f"its books)")
+                    f"{root}: no work/{acct}_base.json — its {mh.name} "
+                    f"entries are sized from its books: move the file "
+                    f"aside (`mv {mh.name} {mh.name}.hold`), `taxjson "
+                    f"run` there, move it back and run `taxjson migrate` "
+                    f"again")
             txs = load_transactions(base)
             _o, log = synthesize_openings(txs, mine, flag_stale=False,
                                           until=until)
@@ -2870,26 +2750,8 @@ def apply_missing_history_migration(m: MissingHistoryMigration
     return written, renamed
 
 
-def window_sized_entries(logs: Iterable[Iterable[Dict[str, Any]]]
-                         ) -> List[Dict[str, Any]]:
-    """The applied-log entries (synthesize_openings) whose size the tax
-    year's end decided: no recorded `quantity`, and the rows after the
-    year end go shorter than the rows up to it (sizing over every row
-    would have opened more). One per (symbol, account)."""
-    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for log in logs:
-        for e in log or ():
-            if (isinstance(e, dict) and e.get('sized_through')
-                    and e.get('recorded_quantity') is None
-                    and float(e.get('opening_all_rows') or 0.0)
-                    > float(e.get('opening_qty') or 0.0) + 1e-6):
-                out.setdefault((e.get('symbol', ''), e.get('account', '')),
-                               e)
-    return [out[k] for k in sorted(out)]
-
-
 def short_again_message(entry: Dict[str, Any],
-                        file_name: str = MISSING_HISTORY_FILE) -> str:
+                        file_name: str = "missing_history.tt") -> str:
     """One ATTENTION line for a listed position that goes short again
     once its opening is used up (synthesize_openings `short_again`)."""
     sym, acct = entry.get('symbol'), entry.get('account')
@@ -3164,13 +3026,14 @@ def synthesize_openings(
 ) -> Tuple[List[TaxTransaction], List[Dict[str, Any]]]:
     """For each (symbol, account) in pairs, compute the minimum running
     position over the rows dated up to `until` (the tax year's end,
-    'YYYY-12-31'; default the loaded file's project year end,
-    MissingHistoryPairs.size_until, else every row) and prepend an OPENING_BALANCE transaction
-    with quantity = abs(min) — or exactly the entry's recorded
-    `quantity` (pairs.quantities), raising or lowering it. Rows after
-    the year end never size it: with exports shared by every year, a
-    later year's short or gap would otherwise grow an earlier year's
-    opening (tax-logic CA-ACB-11 / US-BASIS-04). Returns (new_tx_list,
+    'YYYY-12-31', else every row) and prepend an OPENING_BALANCE
+    transaction with quantity = abs(min) — or exactly the pair's
+    `quantity` (pairs.quantities: a converted missing_history.json
+    entry), raising or lowering it. A pair with a .tt OPENING
+    cost=unknown line (pairs.fixed) opens the line's quantity on its
+    date instead, never sized (tax-logic CA-ACB-11 / US-BASIS-04): the
+    sizing serves find-missing-history's suggestions and `taxjson
+    migrate`. Returns (new_tx_list,
     applied) where `applied` is a per-entry log of what was inserted (or
     skipped, when the data didn't actually need an opening balance —
     useful for surfacing mis-classified entries the user can prune).
@@ -3201,8 +3064,6 @@ def synthesize_openings(
         return list(transactions), []
     label = _source_name(pairs)
     pairs_in = pairs
-    if until is None:
-        until = getattr(pairs, "size_until", None)
 
     # Compute min running position per LISTED pair — same walk as
     # detect_missing_history but restricted to listed pairs (expanded to their
@@ -3214,7 +3075,7 @@ def synthesize_openings(
 
     # --- Rename-chain expansion. detect_missing_history migrates the running
     # balance across SPLIT-renames and reports candidates under the NEW
-    # ticker, so missing_history.json lists (NEW, account) — but the deficit's
+    # ticker, so the pairs name (NEW, account) — but the deficit's
     # history (and the correct anchor for the opening) may live on the OLD
     # ticker. Walking only the listed symbol skipped the pre-rename rows
     # entirely, oversizing the opening (taint never cleared). Expand each
@@ -3292,8 +3153,8 @@ def synthesize_openings(
     # silently dropped from gains.)
     # min_running: the deepest shortage of the rows dated up to `until`
     # (the tax year's end) — what the opening fills. min_all: over every
-    # row (what it would be without the year end; said when it differs,
-    # window_sized_entries). path: each row's running position, to find
+    # row (what it would be without the year end: a pair short only
+    # after it, `taxjson migrate` lists it). path: each row's running position, to find
     # where the position goes short again once the opening is used up.
     min_running: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
     min_all: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
@@ -3848,8 +3709,8 @@ def draft_purchases(
         if pair_drafts and (str(symbol).upper(), account) in listed:
             for dr in pair_drafts:
                 dr.comments += ("once these lines are in a .tt file, "
-                                "remove " + f"{symbol} / {account} from "
-                                "missing_history.json.",)
+                                "remove the OPENING cost=unknown line of "
+                                + f"{symbol} / {account}.",)
         drafts += pair_drafts
         gaps += pair_gaps
 
@@ -3866,8 +3727,8 @@ def draft_purchases(
         delivered[k] = delivered.get(k, 0.0) + dr.quantity
         if (str(k[0]).upper(), dr.account) in listed:
             dr.comments += ("once this line is in a .tt file, remove "
-                            f"{k[0]} / {dr.account} from "
-                            "missing_history.json.",)
+                            f"the OPENING cost=unknown line of {k[0]} / "
+                            f"{dr.account}.",)
     kept: List[DraftGap] = []
     for g in gaps:
         left = delivered.get((g.symbol, g.account), 0.0)

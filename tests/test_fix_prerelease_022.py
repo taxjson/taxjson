@@ -448,60 +448,49 @@ class TestL4OutsideYearWrites(unittest.TestCase):
         return root
 
     def _outside(self, root):
-        # (with FILE: the JSON form, for review; without it the lines
-        # go to the accounts' .tt files — test_fix_missing_history_tt)
         return self.M._tj(root, "find-missing-history",
-                          "--write-missing-history",
-                          str(root / "missing_history.json"),
-                          "--outside-year")
+                          "--write-missing-history", "--outside-year")
 
-    def test_counts_only_this_runs_entries(self):
+    def _tt(self, root, acct="margin"):
+        return root / "inputs" / acct / "missing_history.tt"
+
+    def test_your_lines_are_kept(self):
         root = self._copy()
-        prev = [{"symbol": "QPAS.TO", "account": "margin",
-                 "_outside_year": 2025, "_note": "earlier run"}]
-        (root / "missing_history.json").write_text(json.dumps(prev))
+        mine = "OPENING 2020-01-02 QPAS.TO 999 cost=unknown\n"
+        self._tt(root).write_text(mine)
         r = self._outside(root)
         self.assertEqual(r.returncode, 0, r.stderr)
         flat = " ".join(r.stderr.split())
-        self.assertIn("added 2 position(s)", flat)
-        self.assertIn("1 entry already there kept", flat)
-
-    def test_non_object_entry_refused_before_writing(self):
-        root = self._copy()
-        text = json.dumps([{"symbol": "QHAND.TO", "account": "margin"},
-                           "QPAS.TO", 7])
-        (root / "missing_history.json").write_text(text)
-        r = self._outside(root)
-        self.assertEqual(r.returncode, 2, r.stderr)
-        self.assertIn("are not JSON objects", " ".join(r.stderr.split()))
-        self.assertNotIn("Traceback", r.stderr)
-        self.assertEqual((root / "missing_history.json").read_text(), text)
-        self.assertFalse(list(root.glob("missing_history.json.bak*")))
+        self.assertIn("opens 999, the books size", flat)
+        text = self._tt(root).read_text()
+        self.assertTrue(text.startswith(mine))
+        self.assertEqual([ln.split()[2] for ln in text.splitlines()
+                          if ln.startswith("OPENING ")],
+                         ["QPAS.TO", "QOPN.TO"])
 
     def test_symlinked_file_stays_a_link(self):
         root = self._copy()
         (root / "data").mkdir()
-        real = root / "data" / "mh.json"
-        real.write_text(json.dumps([{"symbol": "QHAND.TO",
-                                     "account": "margin"}]))
+        real = root / "data" / "mh.tt"
+        real.write_text("OPENING 2020-01-02 QHAND.TO 5 cost=unknown\n")
         os.chmod(real, 0o644)
-        (root / "missing_history.json").symlink_to("data/mh.json")
+        self._tt(root).symlink_to("../../data/mh.tt")
         r = self._outside(root)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((root / "missing_history.json").is_symlink())
-        self.assertEqual(len(json.loads(real.read_text())), 4)
+        self.assertTrue(self._tt(root).is_symlink())
+        self.assertEqual(sum(1 for ln in real.read_text().splitlines()
+                             if ln.startswith("OPENING ")), 3)
         self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o644)
-        self.assertTrue(list((root / "data").glob("mh.json.bak*")))
 
     def test_symlink_leaving_the_project_is_refused(self):
         root = self._copy()
-        outside = root.parent / "elsewhere.json"
-        outside.write_text("[]")
-        (root / "missing_history.json").symlink_to(outside)
+        outside = root.parent / "elsewhere.tt"
+        outside.write_text("")
+        self._tt(root).symlink_to(outside)
         r = self._outside(root)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("outside the project", " ".join(r.stderr.split()))
-        self.assertEqual(outside.read_text(), "[]")
+        self.assertEqual(outside.read_text(), "")
 
 
 class TestL5RadarTransferPolicy(unittest.TestCase):
@@ -546,7 +535,7 @@ class TestL5RadarTransferPolicy(unittest.TestCase):
                 (root / "taxjson.toml").write_text(
                     f'[settings]\ncountry = "canada"\nyear = 2025\n'
                     f'transfers_as_acquisitions = {val}\n')
-                args = _radar_engine_args([], root / "missing_history.json",
+                args = _radar_engine_args([], root,
                                           "canada")
                 self.assertEqual("--transfers-as-acquisitions" in args, want)
 

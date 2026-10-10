@@ -1,11 +1,13 @@
-"""phantoms.json -> missing_history.json (owner-approved rename, 2026-10).
+"""phantoms.json and missing_history.json: no longer read (v0.27.0).
 
-The project file listing sales whose purchase is not in the broker files
-(bought before the data starts) is now missing_history.json. An existing
-phantoms.json keeps working — read, with one rename NOTE per run — and a
-project holding both names is refused. The old flags (--gen-phantoms,
---suggest-phantoms, --phantoms) still work and print a note; the old
-module name (taxjson.lib.phantom_holdings) is a shim.
+The project file that listed sales whose purchase is not in the broker
+files (bought before the data starts) — phantoms.json, renamed
+missing_history.json in 2026-10 — is replaced by dated .tt lines
+(`OPENING <date> <SYMBOL> <qty> cost=unknown`). Either name stops every
+command naming `taxjson migrate`, which converts it; a project holding
+both is refused by migrate too. --gen-phantoms FILE is refused like
+--write-missing-history FILE; --suggest-phantoms and --phantoms still
+work; the old module name (taxjson.lib.phantom_holdings) is a shim.
 
 Synthetic data only: fake account numbers (55500001 # pii-ok), all-CAD
 Questrade books, no FX fetch.
@@ -24,14 +26,11 @@ from unittest import mock
 from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-NOTE_ENV = "TAXJSON_MISSING_HISTORY_NOTED"
-RENAME_NOTE = "mv phantoms.json missing_history.json"
 
 
 def _env():
     e = dict(os.environ)
     e["TAXJSON_OFFLINE"] = "1"
-    e.pop(NOTE_ENV, None)           # each subprocess is its own run
     return e
 
 
@@ -97,167 +96,66 @@ def _gains(root):
     return json.loads((root / "work" / "margin_gains.json").read_text())
 
 
-class TestLegacyFileName(unittest.TestCase):
-    """Only phantoms.json: read exactly like missing_history.json, with
-    one rename NOTE per run; the file is never renamed or edited."""
+class TestOldFileNamesRefused(unittest.TestCase):
+    """phantoms.json (or missing_history.json): every command stops,
+    naming `taxjson migrate`, which converts it; both names: migrate
+    refuses too (which one is current cannot be guessed)."""
 
     @rule("CA-ACB-11")
-    def test_run_reads_phantoms_json_with_one_note(self):
-        with tempfile.TemporaryDirectory() as t_new, \
-                tempfile.TemporaryDirectory() as t_old:
-            new = _project(t_new, ["missing_history.json"])
-            old = _project(t_old, ["phantoms.json"])
-            before = (old / "phantoms.json").read_bytes()
-            r_new = _run_cli(new, "run", "--no-input")
-            r_old = _run_cli(old, "run", "--no-input")
-            self.assertEqual(r_new.returncode, 0, r_new.stderr[-2000:])
-            self.assertEqual(r_old.returncode, 0, r_old.stderr[-2000:])
-            both = r_old.stdout + r_old.stderr
-            self.assertEqual(both.count(RENAME_NOTE), 1, both[-3000:])
-            self.assertNotIn(RENAME_NOTE, r_new.stdout + r_new.stderr)
-            # The same books: the sale with no purchase is routed to
-            # manual reporting either way.
-            g_new, g_old = _gains(new), _gains(old)
-            self.assertEqual(
-                [m["symbol"] for m in g_old["manual_reporting_required"]],
-                ["ZZZ.TO"])
-            self.assertEqual(g_new["manual_reporting_required"],
-                             g_old["manual_reporting_required"])
-            self.assertEqual(g_new["summary"], g_old["summary"])
-            # Never renamed or edited by taxjson.
-            self.assertTrue((old / "phantoms.json").exists())
-            self.assertFalse((old / "missing_history.json").exists())
-            self.assertEqual((old / "phantoms.json").read_bytes(), before)
-            # The gains file writes the log's new key.
-            self.assertIn("missing_history_log", g_old)
-            self.assertNotIn("phantom_application_log", g_old)
-
-    def test_resolver_and_note_once(self):
-        from taxjson.lib import missing_history as mh
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.assertIsNone(mh.project_missing_history_file(root))
-            self.assertEqual(mh.missing_history_path(root),
-                             root / "missing_history.json")
-            (root / "phantoms.json").write_text("[]")
-            err = io.StringIO()
-            with mock.patch.dict(os.environ), \
-                    contextlib.redirect_stderr(err):
-                os.environ.pop(NOTE_ENV, None)
-                p1 = mh.project_missing_history_file(root)
-                p2 = mh.project_missing_history_file(root)
-            self.assertEqual(p1, root / "phantoms.json")
-            self.assertEqual(p2, p1)
-            self.assertEqual(err.getvalue().count(RENAME_NOTE), 1)
-            (root / "phantoms.json").rename(root / "missing_history.json")
-            with mock.patch.dict(os.environ), \
-                    contextlib.redirect_stderr(io.StringIO()) as e2:
-                os.environ.pop(NOTE_ENV, None)
-                self.assertEqual(mh.project_missing_history_file(root),
-                                 root / "missing_history.json")
-            self.assertEqual(e2.getvalue(), "")
-
-    def test_messages_name_the_file_the_user_has(self):
-        from taxjson.lib.missing_history import (load_missing_history,
-                                                  synthesize_openings)
-        from taxjson.lib.core import TaxTransaction
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "phantoms.json"
-            p.write_text(json.dumps([{"symbol": "NOPE.TO",
-                                      "account": "margin"}]))
-            pairs = load_missing_history(p)
-        self.assertEqual(pairs, {("NOPE.TO", "margin")})
-        tx = TaxTransaction(action="BUYSELL", date="2025-01-10",
-                            time="09:30:00", symbol="ABC.TO",
-                            quantity=-1, price=1.0, net_amount=1.0,
-                            account="margin", currency="CAD",
-                            date_settle="2025-01-13")
-        _new, log = synthesize_openings([tx], pairs)
-        self.assertIn("check the spelling in phantoms.json",
-                      log[0]["note"])
-        _new, log = synthesize_openings([tx], {("NOPE.TO", "margin")})
-        self.assertIn("check the spelling in missing_history.json",
-                      log[0]["note"])
-
-    def test_renaming_the_file_is_not_an_input_change(self):
-        from taxjson.lib import checklist
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp, ["phantoms.json"])
-            cfg = {"settings": {"year": 2025, "country": "canada"},
-                   "accounts": {"margin": {"type": "taxable"}}}
-            checklist.record_input_fingerprint(root, cfg)
-            self.assertEqual(checklist.inputs_changed(root, cfg), "")
-            (root / "phantoms.json").rename(root / "missing_history.json")
-            self.assertEqual(checklist.inputs_changed(root, cfg), "")
-            (root / "missing_history.json").write_text("[]")
-            self.assertIn("missing_history.json",
-                          checklist.inputs_changed(root, cfg))
-
-    def test_old_applied_marker_still_invalidates(self):
-        # A work/ dir an older taxjson built with phantoms.json carries
-        # .phantoms_applied: removing the file still rebuilds the gains.
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp, ["missing_history.json"])
-            r = _run_cli(root, "run", "--no-input")
-            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            marker = root / "work" / ".missing_history_applied"
-            self.assertTrue(marker.exists())
-            marker.rename(root / "work" / ".phantoms_applied")
-            (root / "missing_history.json").unlink()
-            r = _run_cli(root, "run", "--no-input", "--fast")
-            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            self.assertIn("missing_history.json removed", r.stdout)
-            self.assertFalse((root / "work" / ".phantoms_applied").exists())
-            self.assertFalse(_gains(root).get("manual_reporting_required"))
-
-
-class TestBothFileNamesRefused(unittest.TestCase):
-    """missing_history.json and phantoms.json together: which one is
-    current cannot be guessed — every command refuses (exit 2)."""
-
-    def test_run_refuses(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp, ["missing_history.json", "phantoms.json"])
-            r = _run_cli(root, "run", "--no-input")
-            self.assertEqual(r.returncode, 2, r.stderr[-2000:])
-            self.assertIn("both missing_history.json and phantoms.json",
-                          r.stderr)
-            self.assertIn("Keep one", r.stderr)
-            self.assertFalse((root / "work" / "margin_gains.json").exists())
-            # Neither file was touched.
-            self.assertTrue((root / "phantoms.json").exists())
-            self.assertTrue((root / "missing_history.json").exists())
-
-    def test_find_missing_history_refuses(self):
+    def test_phantoms_json_refused_then_migrated(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
                              0)
-            for n in ("missing_history.json", "phantoms.json"):
-                (root / n).write_text(json.dumps(_ENTRY))
-            r = _run_cli(root, "find-missing-history")
+            (root / "phantoms.json").write_text(json.dumps(_ENTRY))
+            r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 2, r.stderr[-2000:])
+            self.assertIn("phantoms.json is no longer read",
+                          " ".join(r.stderr.split()))
+            r = _run_cli(root, "migrate")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertFalse((root / "phantoms.json").exists())
+            self.assertTrue((root / "phantoms.json.migrated").exists())
+            tt = (root / "inputs" / "margin" /
+                  "missing_history.tt").read_text()
+            self.assertIn("OPENING 2025-01-09 ZZZ.TO 100 cost=unknown", tt)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            man = _gains(root).get("manual_reporting_required") or []
+            self.assertEqual([m["symbol"] for m in man], ["ZZZ.TO"])
+
+    def test_both_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, ["missing_history.json", "phantoms.json"])
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 2, r.stderr[-2000:])
+            self.assertIn("missing_history.json", r.stderr)
+            self.assertIn("phantoms.json", r.stderr)
+            self.assertIn("taxjson migrate", r.stderr)
+            r = _run_cli(root, "migrate")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("both missing_history.json and phantoms.json",
-                          r.stderr)
+                          " ".join(r.stderr.split()))
+            # Neither file was touched.
+            self.assertTrue((root / "phantoms.json").exists())
+            self.assertTrue((root / "missing_history.json").exists())
 
     def test_library_raises(self):
         from taxjson.lib.missing_history import (MissingHistoryFileConflict,
-                                                  project_missing_history_file)
+                                                  legacy_missing_history_file)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "missing_history.json").write_text("[]")
             (root / "phantoms.json").write_text("[]")
             with self.assertRaises(MissingHistoryFileConflict):
-                project_missing_history_file(root)
+                legacy_missing_history_file(root)
 
 
 class TestWriteMissingHistory(unittest.TestCase):
-    """find-missing-history --write-missing-history [FILE] (formerly
-    --gen-phantoms FILE)."""
+    """find-missing-history --write-missing-history: .tt lines; a FILE
+    (and the old --gen-phantoms FILE) is refused."""
 
     def test_default_is_the_accounts_tt_lines(self):
-        # (owner decision v0.27.0: dated OPENING ... cost=unknown lines
-        # in inputs/<account>/missing_history.tt; FILE keeps the JSON)
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
@@ -274,30 +172,16 @@ class TestWriteMissingHistory(unittest.TestCase):
             self.assertIn("no purchase in your", r.stderr)
             self.assertNotIn("phantom", r.stderr.lower())
 
-    def test_refuses_to_write_beside_the_old_name(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp, ["phantoms.json"])
-            self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
-                             0)
-            r = _run_cli(root, "find-missing-history",
-                         "--write-missing-history",
-                         str(root / "missing_history.json"))
-            self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn(RENAME_NOTE, r.stderr)
-            self.assertFalse((root / "missing_history.json").exists())
-
-    def test_deprecated_gen_phantoms_still_works(self):
+    def test_gen_phantoms_file_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
             self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
                              0)
             out = root / "cand.json"
             r = _run_cli(root, "find-missing-history", "--gen-phantoms", out)
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("--gen-phantoms is now --write-missing-history",
-                          r.stderr)
-            self.assertEqual([e["symbol"] for e in
-                              json.loads(out.read_text())], ["ZZZ.TO"])
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("takes no FILE", " ".join(r.stderr.split()))
+            self.assertFalse(out.exists())
             h = _run_cli(root, "find-missing-history", "--help")
             self.assertIn("--write-missing-history", h.stdout)
             self.assertNotIn("--gen-phantoms", h.stdout)
@@ -341,17 +225,19 @@ class TestDeprecatedStandaloneFlags(unittest.TestCase):
     def test_missing_history_tool_phantoms_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _base_file(tmp)
-            f = Path(tmp) / "missing_history.json"
-            f.write_text(json.dumps(_ENTRY))
+            proj = Path(tmp) / "p"
+            (proj / "inputs" / "margin").mkdir(parents=True)
+            (proj / "taxjson.toml").write_text(_CONFIG)
+            (proj / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2025-01-09 ZZZ.TO 100 cost=unknown\n")
             r1 = _run_mod("taxjson.bin.taxjson_missing_history",
-                          "--year", "2025", "--missing-history", f, base)
+                          "--year", "2025", "--missing-history", proj, base)
             r2 = _run_mod("taxjson.bin.taxjson_missing_history",
-                          "--year", "2025", "--phantoms", f, base)
+                          "--year", "2025", "--phantoms", proj, base)
             self.assertEqual(r1.returncode, 0, r1.stderr)
             self.assertEqual(r2.returncode, 0, r2.stderr)
-            self.assertIn("COVERED by missing_history.json", r1.stdout)
+            self.assertIn("COVERED by missing_history.tt", r1.stdout)
             self.assertEqual(r1.stdout, r2.stdout)
-            self.assertIn("--phantoms is now --missing-history", r2.stderr)
 
 
 class TestOldModuleName(unittest.TestCase):

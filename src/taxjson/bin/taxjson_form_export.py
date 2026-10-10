@@ -60,7 +60,7 @@ return reports). Column conventions:
          Crypto is known by account: pass crypto books with --crypto.
 
 Tainted dispositions (sales with no purchase in the files, cost unknown —
-listed in missing_history.json) have no computable gain: the
+opened by a .tt OPENING cost=unknown line) have no computable gain: the
 pipeline routes them to `manual_reporting_required`. They are left out of the
 rows and totals above (which are the allowed, computed numbers), but NEVER
 silently: every one is listed in a MANUAL REPORTING section of the report
@@ -180,7 +180,7 @@ def manual_section(rows: List[Dict[str, Any]], cur: str) -> List[str]:
         return []
     total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
     lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} sale(s) with no "
-             f"purchase in your files (unknown cost, missing_history.json), "
+             f"purchase in your files (unknown cost, .tt OPENING cost=unknown), "
              f"proceeds "
              f"{total:,.2f} {cur}: NOT in the rows or totals above. "
              f"Report each by hand once its cost is known "
@@ -1080,7 +1080,7 @@ def _manual_console(rows: List[Dict[str, Any]], cur: str) -> List[str]:
     total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
     lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} sale(s) with no "
              f"purchase in your files"]
-    lines += _para(f"Unknown cost (missing_history.json), proceeds "
+    lines += _para(f"Unknown cost (.tt OPENING cost=unknown), proceeds "
                    f"{total:,.2f} {cur}: NOT in the rows or totals above. "
                    f"Report each by hand once its cost is known "
                    f"(`taxjson find-missing-history`).")
@@ -1395,7 +1395,7 @@ def _rows_csv(rep: Dict[str, Any], f) -> None:
                         round(abs(float(m.get("proceeds") or 0.0)), 2),
                         "", "", "", "",
                         "no purchase in your files, cost unknown "
-                        "(missing_history.json) - report by hand"])
+                        "(.tt OPENING cost=unknown) - report by hand"])
 
 
 @guard_main("taxjson-form-export")

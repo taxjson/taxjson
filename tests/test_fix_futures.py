@@ -199,17 +199,19 @@ class TestT1135Futures(unittest.TestCase):
 
 @rule("CA-RPT-12", "CA-ACB-11")
 class TestT1135Phantoms(unittest.TestCase):
-    """R1-321: `taxjson t1135` applies missing_history.json like the gains pass."""
+    """R1-321: `taxjson t1135` applies the missing-history lines (.tt
+    OPENING cost=unknown) like the gains pass."""
 
-    def _books(self, td):
-        base = Path(td) / "margin_base.json"
+    def _books(self, td, account="IB"):
+        from _mh import mh_dir
+        base = Path(td) / f"{account}_base.json"
         # A sale with no history (cut-off books), then a real purchase.
-        base.write_text(json.dumps({"transactions": [
-            _tx(date="2023-05-01", qty=-100, net=900.0),
-            _tx(date="2024-03-01", qty=150, net=1500.0)]}))
-        phantoms = Path(td) / "missing_history.json"
-        phantoms.write_text(json.dumps([
-            {"symbol": "AAA.US", "account": "IB"}]))
+        rows = [_tx(date="2023-05-01", qty=-100, net=900.0,
+                    account=account),
+                _tx(date="2024-03-01", qty=150, net=1500.0,
+                    account=account)]
+        base.write_text(json.dumps({"transactions": rows}))
+        phantoms = mh_dir(rows, [("AAA.US", account)])
         return base, phantoms
 
     def test_phantom_opening_restores_real_purchase_cost(self):
@@ -237,9 +239,9 @@ class TestT1135Phantoms(unittest.TestCase):
             base.write_text(json.dumps({"transactions": [
                 _tx(date="2023-01-10", qty=10, net=100.0),
                 _tx(date="2024-05-01", qty=-100, net=900.0)]}))
-            phantoms = Path(td) / "missing_history.json"
-            phantoms.write_text(json.dumps([
-                {"symbol": "AAA.US", "account": "IB"}]))
+            from _mh import mh_dir
+            rows = json.loads(base.read_text())["transactions"]
+            phantoms = mh_dir(rows, [("AAA.US", "IB")])
             rep = build_report([base], [], 2023, {}, "CAD",
                                phantoms=phantoms)
         self.assertIn("AAA.US", rep["unknown_acb_symbols"])
@@ -255,8 +257,11 @@ class TestT1135Phantoms(unittest.TestCase):
                 'base_currency = "CAD"\n\n'
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "work").mkdir()
-            base, _ph = self._books(root / "work")
-            (root / "work" / "missing_history.json").rename(root / "missing_history.json")
+            base, _ph = self._books(root / "work", account="margin")
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (root / "inputs" / "margin" / "missing_history.tt").write_text(
+                (_ph / "inputs" / "margin" / "missing_history.tt")
+                .read_text())
             out, err = io.StringIO(), io.StringIO()
             with redirect_stdout(out), redirect_stderr(err):
                 with self.assertRaises(SystemExit) as cm:
