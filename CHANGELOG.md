@@ -19,6 +19,11 @@
   it reads `+++ …`, and it was taken for a file header and skipped by
   every pattern. Only a `+++ ` line in a file's header block, before its
   first hunk, is a header now.
+- `scripts/promote.sh` no longer skips the pre-push PII gate when
+  `scripts/hooks/pre-push` is not executable: it runs the hook through
+  `bash`, and refuses before changing anything when the hook or
+  `scripts/check-pii.sh` is missing. `scripts/release.sh` refuses the
+  same way up front and runs the hook through `bash` too.
 
 
 ## v0.28.1 (2026-10-10)

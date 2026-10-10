@@ -69,6 +69,12 @@ class _Repos(unittest.TestCase):
         (self.dev / "scripts").mkdir()
         shutil.copy(REPO / "scripts" / "promote.sh",
                     self.dev / "scripts" / "promote.sh")
+        # promote.sh refuses to run without its pre-push PII gate.
+        (self.dev / "scripts" / "hooks").mkdir()
+        shutil.copy(REPO / "scripts" / "check-pii.sh",
+                    self.dev / "scripts" / "check-pii.sh")
+        shutil.copy(REPO / "scripts" / "hooks" / "pre-push",
+                    self.dev / "scripts" / "hooks" / "pre-push")
         shutil.copy(REPO / "install.sh", self.dev / "install.sh")
         for i, tag in enumerate(("v0.1.0", "v0.2.0", "v0.3.0")):
             (self.dev / "f.txt").write_text(f"{i}\n")

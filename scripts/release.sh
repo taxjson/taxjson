@@ -64,6 +64,11 @@ TAG="v$V"
 PY="${PYTHON:-$PWD/venv/bin/python3}"
 
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "release from main only"; exit 1; }
+# The pre-push PII gate below must run: a checkout without it (or
+# without the scanner it calls) is refused before anything is changed.
+for f in scripts/hooks/pre-push scripts/check-pii.sh; do
+  [ -f "$f" ] || { echo "$f is missing from this checkout — the pre-push PII gate cannot run, so nothing is released"; exit 1; }
+done
 if [ -n "$(git status --porcelain)" ]; then
   echo "working tree is not clean — commit or stash first:"; git status --porcelain | sed 's/^/    /'; exit 1
 fi
@@ -176,12 +181,13 @@ git diff --cached --quiet || git commit -q -m "release $TAG"
 git tag -a "$TAG" -m "taxjson $TAG"
 # The pre-push PII gate (commit and tag messages, identities, ref names,
 # binary files) runs here whether or not this clone has the hook
-# installed: ci.sh's tree scan never sees messages or identities (S025-06).
+# installed (through bash: a lost executable bit does not skip it):
+# ci.sh's tree scan never sees messages or identities (S025-06).
 Z=0000000000000000000000000000000000000000
 printf 'refs/heads/main %s refs/heads/main %s\nrefs/tags/%s %s refs/tags/%s %s\n' \
     "$(git rev-parse HEAD)" "$(git rev-parse origin/main)" \
     "$TAG" "$(git rev-parse "$TAG")" "$TAG" "$Z" \
-  | scripts/hooks/pre-push origin "$(git remote get-url origin)" \
+  | bash scripts/hooks/pre-push origin "$(git remote get-url origin)" \
   || { echo "pre-push PII gate refused — nothing pushed (the commit and tag $TAG are local; fix, then delete the tag and re-run)"; exit 1; }
 # One tag, by name — never `git push --tags` (a checkout can hold tags
 # that must not be public; the pre-push hook refuses any other tag).

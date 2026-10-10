@@ -284,6 +284,35 @@ class TestReleaseNotes(_ReleaseRepo):
         self.assertFalse([c for c in self.gh_calls() if c[0] == "release"])
 
 
+class TestReleaseNeedsItsGate(_ReleaseRepo):
+    """release.sh refuses a checkout without its pre-push PII gate, and
+    runs the hook through bash (a lost executable bit does not skip it)."""
+
+    def test_missing_gate_refuses_before_anything(self):
+        for f in ("hooks/pre-push", "check-pii.sh"):
+            with self.subTest(missing=f):
+                p = self.dev / "scripts" / f
+                saved = p.read_bytes()
+                p.unlink()
+                r = self.release("v0.2.0")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn(f"scripts/{f} is missing", r.stdout)
+                self.assertEqual(self.git(self.dev, "tag", "-l", "v0.2.0"), "")
+                self.assertFalse(self.origin_tags())
+                p.write_bytes(saved)
+
+    def test_gate_runs_without_its_executable_bit(self):
+        hook = self.dev / "scripts" / "hooks" / "pre-push"
+        hook.write_text("echo 'stub gate ran' >&2\nexit 1\n")
+        hook.chmod(0o644)
+        self.git(self.dev, "commit", "-q", "-am", "non-executable hook")
+        r = self.release("v0.2.0")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("stub gate ran", r.stderr)
+        self.assertIn("pre-push PII gate refused", r.stdout)
+        self.assertFalse(self.origin_tags())
+
+
 class TestTagGuard(_Sandbox):
     """scripts/hooks/pre-push refuses any pushed tag that is not an
     annotated vX.Y.Z on main, and every tag delete or move."""
@@ -414,8 +443,9 @@ class _PromoteRepo(_Sandbox):
         self.dev = self.d / "dev"
         self.git(self.d, "clone", "-q", str(self.origin), str(self.dev))
         self.git(self.dev, "symbolic-ref", "HEAD", "refs/heads/main")
-        (self.dev / "scripts").mkdir()
-        for f in ("promote.sh", "check-public.sh", "check-pii.sh"):
+        (self.dev / "scripts" / "hooks").mkdir(parents=True)
+        for f in ("promote.sh", "check-public.sh", "check-pii.sh",
+                  "hooks/pre-push"):
             shutil.copy(REPO / "scripts" / f, self.dev / "scripts" / f)
         for i, tag in enumerate(("v0.1.0", "v0.2.0", "v0.3.0")):
             (self.dev / "f.txt").write_text(f"{i}\n")
@@ -572,6 +602,31 @@ class TestPromoteGates(_PromoteRepo):
                          "M  f.txt", "other work is left alone")
         self.assertEqual(json.loads((self.dev / "channels.json").read_text()),
                          {"stable": "v0.2.0", "beta": "v0.3.0"})
+
+    def test_missing_pre_push_gate_refuses_before_anything(self):
+        # A checkout without the hook (or its scanner) used to skip the
+        # PII gate silently and push.
+        self.api(self.runs(("completed", "success")))
+        h = self.head()
+        for f in ("hooks/pre-push", "check-pii.sh"):
+            with self.subTest(missing=f):
+                p = self.dev / "scripts" / f
+                saved = p.read_bytes()
+                p.unlink()
+                self.assertRefused(self.promote("v0.3.0"),
+                                   f"scripts/{f} is missing", h)
+                self.assertFalse(self.api_paths(), "refused before any check")
+                p.write_bytes(saved)
+
+    def test_pre_push_gate_runs_without_its_executable_bit(self):
+        self.api(self.runs(("completed", "success")))
+        hook = self.dev / "scripts" / "hooks" / "pre-push"
+        hook.write_text("echo 'stub gate ran' >&2\nexit 1\n")
+        hook.chmod(0o644)
+        h = self.head()
+        r = self.promote("v0.3.0")
+        self.assertRefused(r, "pre-push gate refused", h)
+        self.assertIn("stub gate ran", r.stderr)
 
 
 class TestDevSetupHook(_Sandbox):
