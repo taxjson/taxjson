@@ -93,6 +93,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** unreleased
 - **Code:** `src/taxjson/bin/taxjson_redact.py` — `redact_project_text`, `config_ids`, `redact_tree`
 
+### `tjs redact`: "Error: inputs/rrsp/questrade_2026.csv: a number would change in the redacted copy — … row 3 of what the parser reads (…): price changed; nothing written"; or, on an older release, `tjs run` on the redacted copy stops with "|Gross Amount| 280.00 is not |Quantity| 2 x Price 1.4 x 1 = 2.80 ('CALL QZP 09/18/26 REDACTED …')"
+- **Check:** the error names the file and the row (or the parser's refusal of the copy). On an older release, the redacted copy's option description reads `REDACTED` where the original had the strike and the issuer's name.
+- **Cause:** redaction must never change what the parser reads, but a pattern can hit a field it reads: the street-address pattern took a Questrade option description's strike and issuer (`40 QZERO SQUARE`) for a house number and street, and a denylist or `--also` pattern can match part of a number. The copy then booked differently or not at all.
+- **Fix:** upgrade: a number right after an option's expiry date is not read as an address, and every redacted export is read by its parser beside the original's text and compared number by number; a difference refuses the whole copy. With the new error, narrow the denylist / `--also` pattern it names; if none is given, report the row's shape (made-up values) as a bug.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_redact.py` — `numbers_changed`, `_sub_address`, `_EXPIRY_BEFORE`
+
 ### `tjs redact` in a year folder: "Error: the redacted taxjson.toml would not read as TOML (…) — nothing written"; or, on an older release, a copy (or an `align --write`, `migrate --to-years` result) whose taxjson.toml stops `tjs run` after a `holdings = [` list written over several lines
 - **Check:** the project's taxjson.toml has a value over several lines (`holdings = [` with one file per line, a `"""` string). On an older release the written file shows the new first line followed by the old value's remaining lines.
 - **Cause:** the editor of taxjson.toml lines (`src/taxjson/lib/project_layout.py` — `set_key_text`: redact's holdings lists and folder settings, `align --write`, `migrate --to-years`) replaced or commented out only the first line of a value.

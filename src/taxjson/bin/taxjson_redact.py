@@ -863,14 +863,38 @@ def _mapper(shared: Dict[str, str], mine: Dict[str, str],
     return repl
 
 
+# An option's expiry right before a "house number": the number is the
+# strike and the words after it the issuer ("CALL QZP 09/18/26 40 QZERO
+# SQUARE ..." — Questrade's option description; "QZP 18SEP26 40 ..."),
+# never a street address. Redacting it took the strike out of the
+# description and the parser read the option as shares (a price x
+# quantity mismatch stopped the copy's run).
+_EXPIRY_BEFORE = re.compile(
+    r"(?:\b\d{1,2}/\d{1,2}/\d{2,4}|\b\d{1,2}[A-Za-z]{3}\d{2,4})[ \t]+$")
+
+
+def _sub_address(rx: re.Pattern, line: str) -> Tuple[str, int]:
+    """`rx`'s street addresses in `line` replaced (and counted), except
+    a match that starts right after an option's expiry date."""
+    n = 0
+
+    def sub(m: re.Match) -> str:
+        nonlocal n
+        if _EXPIRY_BEFORE.search(line, 0, m.start()):
+            return m.group(0)
+        n += 1
+        return "REDACTED"
+    return rx.sub(sub, line), n
+
+
 def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     """Phones, postal codes, street addresses, SIN/SSN, honorific /
     initiated-by names — anywhere on the line. A candidate name that
     mixes a statement word with other words ("FROM BILL SAMPLE") is
     kept but its line is listed for REVIEW."""
-    line, k = _STREET.subn("REDACTED", line)
+    line, k = _sub_address(_STREET, line)
     rep.addresses += k
-    line, k = _STREET_FR.subn("REDACTED", line)
+    line, k = _sub_address(_STREET_FR, line)
     rep.addresses += k
     line, k = _PO_BOX.subn("REDACTED", line)
     rep.addresses += k
@@ -1602,6 +1626,13 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     if enc != "utf-8":
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
                          f"(the strict UTF-8 parsers would refuse the original — say so in the report)")
+    why = numbers_changed(src, text, new, bool(bom), redacted_name(
+        src, rep.accounts, rep.name_patterns, rep.known_ids)) \
+        if new != text else None
+    if why:
+        raise InputRefused(f"{src.name}: a number would change in the "
+                           f"redacted copy — {why}; nothing written. "
+                           + _NUMBERS_HINT)
     if check_only:
         return None, rep
     dst_dir = out_dir or src.parent
@@ -1644,6 +1675,112 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     if written is not None:
         written.add(dst.resolve())
     return dst, rep
+
+
+def _parse_quiet(broker: str, path: Path) -> List[Dict[str, Any]]:
+    """`path` read by the parser `broker` (its messages swallowed)."""
+    import contextlib
+    from taxjson.bin import taxjson_brokerage  # noqa: F401  (registers)
+    from taxjson.lib.core import load_brokerage
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        rows = load_brokerage(broker)().parse_file(path)
+    return [r if isinstance(r, dict) else getattr(r, "__dict__", {})
+            for r in rows]
+
+
+def _number_diff(a: Any, b: Any, key: str = "") -> List[str]:
+    """The fields of two parsed rows whose numbers differ (a number on
+    one side only included); text (ids, names, descriptions) is not
+    compared."""
+    if isinstance(a, dict) or isinstance(b, dict):
+        a = a if isinstance(a, dict) else {}
+        b = b if isinstance(b, dict) else {}
+        out: List[str] = []
+        for k in list(a) + [k for k in b if k not in a]:
+            out += _number_diff(a.get(k), b.get(k),
+                                f"{key}.{k}" if key else str(k))
+        return out
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        if len(a) != len(b):
+            return [key]
+        out = []
+        for i, (x, y) in enumerate(zip(a, b)):
+            out += _number_diff(x, y, f"{key}[{i}]")
+        return out
+
+    def num(v: Any) -> bool:
+        from decimal import Decimal
+        return isinstance(v, (int, float, Decimal)) \
+            and not isinstance(v, bool)
+    if (num(a) or num(b)) and a != b:
+        return [key]
+    return []
+
+
+class _Unreadable(Exception):
+    """A text the parser refuses (numbers_changed)."""
+
+
+def numbers_changed(src: Path, orig: str, text: str, bom: bool,
+                    name: str) -> Optional[str]:
+    """Why the redacted `text` of the export `src` (its text `orig`;
+    the copy named `name`) would not book as the original does, or
+    None: each is written alone in a temporary folder under `name` (the
+    same context: a sibling file the parser would also read is in
+    neither) and read by the parser the run uses (detected from `src`'s
+    content), and every number of every row is compared — the row
+    count, quantities, prices, amounts. Ids, names and descriptions may
+    differ; numbers must not.
+    An export no parser reads on its own (a generic mapping, a name-
+    routed or undetected file, one the parser refuses as it is) is not
+    checked."""
+    import tempfile
+    from taxjson.lib.brokerages.detect import detect
+    try:
+        det = detect(src)
+    except Exception:                                   # noqa: BLE001
+        return None
+    if not det.broker or det.broker == "generic" or det.positions \
+            or det.how != "content":
+        return None
+    def parse(body: str) -> List[Dict[str, Any]]:
+        with tempfile.TemporaryDirectory(prefix="taxjson-redact-") as d:
+            from taxjson.lib import safe_write
+            p = Path(d) / name
+            with safe_write.open_new(p, encoding="utf-8",
+                                     newline="") as fh:
+                fh.write(("\ufeff" if bom else "") + body)
+            try:
+                return _parse_quiet(det.broker, p)
+            except (Exception, SystemExit) as e:        # noqa: BLE001
+                raise _Unreadable(" ".join(str(e).replace(
+                    str(p), name).split()) or type(e).__name__) from None
+    try:
+        before = parse(orig)
+    except _Unreadable:
+        return None
+    try:
+        after = parse(text)
+    except _Unreadable as e:
+        return f"the parser refuses the redacted copy ({e})"
+    if len(after) != len(before):
+        return (f"the redacted copy reads as {len(after)} row(s), the "
+                f"original as {len(before)}")
+    for i, (a, b) in enumerate(zip(before, after), start=1):
+        diff = _number_diff(a, b)
+        if diff:
+            what = " ".join(str(a.get(k) or "") for k in
+                            ("date", "action", "symbol")).strip()
+            return (f"row {i} of what the parser reads ({what}): "
+                    f"{', '.join(diff)} changed")
+    return None
+
+
+_NUMBERS_HINT = ("A denylist / --also pattern, or a redaction heuristic, "
+                 "matched part of a field the parser reads: narrow the "
+                 "pattern, or report the row's shape (made-up values) as "
+                 "a bug.")
 
 
 _REVIEW_SHOWN = 25
@@ -1779,6 +1916,8 @@ class _TreeFile:
         self.rep: Optional[Report] = None
         self.skip: Optional[str] = None
         self.swept = 0
+        # An export's text before redaction (its numbers are checked).
+        self.orig: Optional[str] = None
 
 
 def _inside(p: Path, folder: Path) -> bool:
@@ -2386,6 +2525,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                 text, compiled, known_ids,
                 cfg_ids if f.rel == Path(_PL.CONFIG) else ([], []))
             continue
+        f.orig = text
         f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms)
         f.rep.patterns += sum(len(p.findall(f.rel.stem)) for p in compiled)
         if enc != "utf-8":
@@ -2407,6 +2547,25 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                    "that the project's own taxjson.toml reads (`taxjson "
                    "run` says where it does not)."])
             return 2
+    # Every redacted export must book as the original does: the parser
+    # reads both and every number is compared; any difference refuses
+    # the whole copy.
+    changed = []
+    for f in files:
+        if f.text is None or f.orig is None or f.text == f.orig:
+            continue
+        src = f.src if f.src is not None else inputs / f.rel
+        why = numbers_changed(src, f.orig, f.text, bool(f.bom),
+                              names[f.rel].name)
+        if why:
+            changed.append((f, why))
+    sys.stdout.flush()          # the step lines above the errors
+    for f, why in changed:
+        _diag("error", f"{'' if shared else 'inputs/'}{f.rel.as_posix()}: "
+                       f"a number would change in the redacted copy — "
+                       f"{why}; nothing written", [_NUMBERS_HINT])
+    if changed:
+        return 2
     text_files = [f for f in files if f.text is not None]
     step(f"Redacting {_plural(len(text_files), 'file')}")
     found = False

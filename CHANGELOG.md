@@ -13,6 +13,14 @@
   the exports, so the copy still runs) and counted; in a single-folder
   project an id only taxjson.toml names is replaced in the exports too
   (#22).
+- `taxjson redact` read a Questrade option description such as `CALL QZP
+  09/18/26 40 QZERO SQUARE ...` as a street address and replaced the strike
+  and issuer, so the copy's run read the option as shares and stopped on
+  a price × quantity mismatch. A number right after an option's expiry is
+  no house number now. And every redacted export is read again by its
+  parser and compared with the original: if any row count, quantity,
+  price or amount would differ, nothing is written (exit 2, naming the
+  file and the row).
 - A taxjson.toml value written over several lines (a `holdings = [...]`
   list with one file per line, a multi-line string) was only partly
   rewritten by `taxjson redact`, `align --write` and `migrate --to-years`:

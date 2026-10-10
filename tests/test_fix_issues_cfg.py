@@ -168,6 +168,90 @@ class TestRedactProjectFiles(unittest.TestCase):
         self.assertFalse((y / "inputs_redact").exists())
 
 
+_QT_HEAD = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+            "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+            "Activity Type,Account #,Account Type\n")
+# A Questrade option row whose description reads like a street address
+# ("<strike> <NAME> SQUARE"): synthetic.
+_QT_ROWS = (
+    "2026-03-02,2026-03-03,Buy,,CALL QZP 09/18/26 40 QZERO SQUARE TONTINE "
+    "WE ACTED AS AGENT,2,1.40,-280.00,-9.95,-289.95,USD,Trades,"
+    "55500001,Individual RRSP\n"                       # pii-ok
+    "2026-06-01,2026-06-02,Sell,,CALL QZP 09/18/26 40 QZERO SQUARE TONTINE "
+    "WE ACTED AS AGENT,-2,2.00,400.00,-9.95,390.05,USD,Trades,"
+    "55500001,Individual RRSP\n")                      # pii-ok
+
+
+def _qt_parse(path: Path):
+    import contextlib
+    import io
+    from taxjson.bin import taxjson_brokerage  # noqa: F401  (registers)
+    from taxjson.lib.core import load_brokerage
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        return load_brokerage("questrade")().parse_file(path)
+
+
+class TestRedactKeepsNumbers(unittest.TestCase):
+    """The coordinator's follow-up to #22: an option description that
+    looks like an address is not one, and a redacted export whose
+    parsed numbers differ from the original's is never published."""
+
+    def _project(self) -> Path:
+        root = single("canada", 2026)
+        (root / "inputs" / "margin" / "questrade.csv").write_text(
+            _QT_HEAD + _QT_ROWS)
+        return root
+
+    def test_strike_and_name_are_not_an_address(self):
+        from taxjson.bin import taxjson_redact as R
+        rep = R.Report()
+        line = "CALL QZP 09/18/26 40 QZERO SQUARE TONTINE WE ACTED AS AGENT"
+        self.assertEqual(R._redact_contact(line, rep), line)
+        self.assertEqual(rep.addresses, 0)
+        self.assertEqual(R._redact_contact("QZP 18SEP26 40 Pine Square",
+                                           R.Report()),
+                         "QZP 18SEP26 40 Pine Square")
+        # A real address is still one.
+        rep = R.Report()
+        self.assertEqual(R._redact_contact("Mail: 40 Pine Square", rep),
+                         "Mail: REDACTED")
+        self.assertEqual(rep.addresses, 1)
+
+    def test_redacted_copy_parses_to_the_same_numbers(self):
+        root = self._project()
+        r = tjs("-C", str(root), "redact")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        red = root / "inputs_redact" / "margin" / "questrade.csv"
+        self.assertIn("40 QZERO SQUARE", red.read_text())
+        a = _qt_parse(root / "inputs" / "margin" / "questrade.csv")
+        b = _qt_parse(red)
+        self.assertEqual(len(a), len(b))
+        for x, y in zip(a, b):
+            for k in ("quantity", "price", "net_amount", "multiplier",
+                      "symbol"):
+                self.assertEqual(x.get(k), y.get(k), k)
+
+    def test_a_changed_number_is_refused(self):
+        root = self._project()
+        r = tjs("-C", str(root), "redact", "--also", r"1\.40")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("margin/questrade.csv", r.stderr)
+        self.assertIn("nothing written", r.stderr)
+        self.assertFalse((root / "inputs_redact").exists())
+        r = tjs("-C", str(root), "redact", "--check", "--also", r"1\.40")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        # One FILE too.
+        src = root / "inputs" / "margin" / "questrade.csv"
+        r = tjs("redact", str(src), "--also", r"1\.40")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("questrade.csv", r.stderr)
+        self.assertFalse(list(src.parent.glob("*.redacted.*")))
+        # A rate in a description is no number the parser reads: fine.
+        r = tjs("redact", str(src), "--also", "TONTINE")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 _MULTI = """\
 [settings]
 year = 2024  # the tax year
