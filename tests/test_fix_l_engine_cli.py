@@ -151,12 +151,17 @@ class TestEngineErrorsAreOneLine(_Tmp):
 
 class TestBadPhantomsJsonIsOneLine(_Tmp):
     """S076-01: a hand-edited missing_history.json with a trailing comma gave
-    audit and carryover a raw JSONDecodeError traceback."""
+    audit and carryover a raw JSONDecodeError traceback. Its successor, a
+    malformed .tt OPENING cost=unknown line, is one line naming it."""
 
     def test_trailing_comma(self):
         b = _book(self.tmp / "b.json", _plain_rows())
-        ph = self.tmp / "missing_history.json"
-        ph.write_text('[{"symbol": "XYZ.TO", "account": "margin"},]')
+        ph = self.tmp / "proj"
+        (ph / "inputs" / "margin").mkdir(parents=True)
+        (ph / "taxjson.toml").write_text(
+            '[accounts.margin]\ntype = "taxable"\n')
+        (ph / "inputs" / "margin" / "missing_history.tt").write_text(
+            "OPENING 2025-01-01 XYZ.TO 0 cost=unknown\n")
         runs = {
             "taxjson-explain": _run("taxjson_explain", "--country",
                                     "canada", "--incomplete-history", ph,
@@ -173,8 +178,7 @@ class TestBadPhantomsJsonIsOneLine(_Tmp):
         for prog, p in runs.items():
             with self.subTest(prog=prog):
                 _one_line_error(self, p, prog)
-                self.assertIn("missing_history.json", p.stderr)
-                self.assertIn("line 1", p.stderr)
+                self.assertIn("missing_history.tt:1", p.stderr)
 
 
 class TestYearFlagValidated(_Tmp):

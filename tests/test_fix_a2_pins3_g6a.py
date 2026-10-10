@@ -463,10 +463,10 @@ class TestOptionTimingForwarded(unittest.TestCase):
         self.assertAlmostEqual(row["deferred_wash"], 5000.0, 2)
 
 
-# --------------------------------------------- missing_history.json in the wrappers
-# margin sells 100 ZZZ.TO it has no purchase for (missing_history.json declares
-# the opening, cost 2,500), buys 100, sells at a 500 loss and rebuys
-# (superficial); cash buys 50 in the window. Without missing_history.json the
+# --------------------------------------------- missing history in the wrappers
+# margin sells 100 ZZZ.TO it has no purchase for (a .tt OPENING cost=unknown
+# line declares the opening), buys 100, sells at a 500 loss and rebuys
+# (superficial); cash buys 50 in the window. Without the line the
 # first sale opens a short instead.
 _PH_BOOKS = {
     "margin": ("BUYSELL 2025-01-10 10:00:00 ZZZ.TO -100 CAD 30 3000 0\n"
@@ -475,8 +475,8 @@ _PH_BOOKS = {
                "BUYSELL 2025-03-20 10:00:00 ZZZ.TO 100 CAD 16 1600 0\n"),
     "cash": "BUYSELL 2025-03-12 10:00:00 ZZZ.TO 50 CAD 15 750 0\n",
 }
-_PHANTOMS = ('[{"symbol": "ZZZ.TO", "account": "margin", "quantity": 100,'
-             ' "total_cost": 2500}]')
+_PHANTOMS = "OPENING 2025-01-09 ZZZ.TO 100 cost=unknown\n"
+_PH_FILE = "inputs/margin/missing_history.tt"
 
 
 @rule("CA-ACB-11")
@@ -491,7 +491,7 @@ class TestPhantomsForwarded(unittest.TestCase):
         cls._td = tempfile.mkdtemp(prefix="tj_g6a_ph_")
         cls.root = _project(Path(cls._td) / "p", ["margin", "cash"],
                             _PH_BOOKS,
-                            extra_files={"missing_history.json": _PHANTOMS,
+                            extra_files={_PH_FILE: _PHANTOMS,
                                          "ticker.map": ""})
         r = _cli(cls.root, "run", "--no-input")
         assert r.returncode == 0, r.stderr[-2000:]
@@ -533,7 +533,7 @@ class TestPhantomsForwarded(unittest.TestCase):
                                       fake=("taxjson_wash_radar",))
         (cmd,) = _calls(seen, "taxjson_wash_radar")
         self.assertEqual(_flag_values(cmd, "--incomplete-history"),
-                         [str(self.root / "missing_history.json")])
+                         [str(self.root)])
 
     def test_harvest_passes_phantoms_and_ticker_map(self):
         with tempfile.TemporaryDirectory() as td:
@@ -549,7 +549,7 @@ class TestPhantomsForwarded(unittest.TestCase):
             (radar,) = _calls(seen, "taxjson_wash_radar")
             (harvest,) = _calls(seen, "taxjson_harvest")
             self.assertEqual(_flag_values(radar, "--incomplete-history"),
-                             [str(root / "missing_history.json")])
+                             [str(root)])
             self.assertEqual(_flag_values(harvest, "--ticker-map"),
                              [str(root / "ticker.map")])
 
@@ -567,7 +567,7 @@ class TestHandoffAppliesPhantoms(unittest.TestCase):
                 "BUYSELL 2025-05-03 10:00:00 YYY.TO -10 CAD 25 250 0\n")
         with tempfile.TemporaryDirectory() as td:
             p25 = _project(Path(td) / "p25", ["margin"], {"margin": book},
-                           extra_files={"missing_history.json": _PHANTOMS})
+                           extra_files={_PH_FILE: _PHANTOMS})
             self.assertEqual(_cli(p25, "run", "--no-input").returncode, 0)
             r = _cli(p25, "close-year")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
@@ -575,7 +575,7 @@ class TestHandoffAppliesPhantoms(unittest.TestCase):
                 Path(td) / "p26", ["margin"], {"margin": book + (
                     "BUYSELL 2026-02-03 10:00:00 ZZZ.TO -50 CAD 25 1250 0\n")},
                 settings=f'prior_year_record = "{p25}/filed/2025.json"\n',
-                extra_files={"missing_history.json": _PHANTOMS}, year=2026)
+                extra_files={_PH_FILE: _PHANTOMS}, year=2026)
             self.assertEqual(_cli(p26, "run", "--no-input").returncode, 0)
             r = _cli(p26, "handoff")
         out = r.stdout + r.stderr

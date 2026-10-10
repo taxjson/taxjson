@@ -283,7 +283,7 @@ class OutsideLinkError(ValueError):
 def write_user_file(path: Union[str, Path], data: Union[str, bytes],
                     root: Union[str, Path], *, suffix: str = ".part",
                     backup: bool = True) -> Optional[Path]:
-    """Rewrite a file the user maintains (ticker.map, missing_history.json)
+    """Rewrite a file the user maintains (ticker.map, a .tt file)
     the way migrate and format do: a symlink leaving `root` is refused
     (OutsideLinkError, nothing written); a link inside it is followed —
     the link stays and its target is replaced; the previous contents are

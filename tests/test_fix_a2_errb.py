@@ -367,11 +367,14 @@ class TestBomUserFiles(_Built):
         self.assertIn("ABC.TO", r.stdout)
 
     def test_phantoms_with_bom(self):
+        # (the .tt OPENING cost=unknown lines, as an editor saves them)
         from taxjson.lib.missing_history import load_missing_history
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "missing_history.json"
-            p.write_bytes(b"\xef\xbb\xbf" + json.dumps(
-                [{"symbol": "ABC.TO", "account": "m"}]).encode())
+            p = Path(td)
+            (p / "taxjson.toml").write_text('[accounts.m]\ntype = "taxable"\n')
+            (p / "inputs" / "m").mkdir(parents=True)
+            (p / "inputs" / "m" / "missing_history.tt").write_bytes(
+                b"\xef\xbb\xbfOPENING 2025-01-01 ABC.TO 5 cost=unknown\n")
             self.assertEqual(load_missing_history(p), {("ABC.TO", "m")})
 
 

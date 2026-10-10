@@ -986,7 +986,8 @@ class TestAuditAndMissingHistory(unittest.TestCase):
         self.assertIn(r.returncode, (0, 1), r.stderr)
         return root
 
-    def test_write_missing_history_hint_resolves_the_path(self):
+    def test_write_missing_history_takes_no_file(self):
+        # (a FILE was the JSON form before v0.27.0: refused, said)
         with tempfile.TemporaryDirectory() as tmp:
             root = self._short_project(tmp)
             e = dict(os.environ, TAXJSON_OFFLINE="1")
@@ -995,10 +996,9 @@ class TestAuditAndMissingHistory(unittest.TestCase):
                  str(root), "find-missing-history", "--write-missing-history",
                  "missing_history.json"], cwd=root, capture_output=True,
                 text=True, env=e, stdin=subprocess.DEVNULL)
-            self.assertTrue((root / "missing_history.json").exists(),
-                            r.stderr)
-            self.assertIn("`taxjson run` auto-detects it", r.stderr)
-            self.assertNotIn("save it as", r.stderr)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertFalse((root / "missing_history.json").exists())
+            self.assertIn("takes no FILE", " ".join(r.stderr.split()))
 
     def test_renamed_short_names_the_broker_ticker(self):
         with tempfile.TemporaryDirectory() as tmp:

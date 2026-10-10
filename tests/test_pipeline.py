@@ -202,6 +202,8 @@ class TestPrepareBooks(unittest.TestCase):
                 [{"symbol": "AAA.TO", "account": "margin"}]))
             # Sell with no prior buy — the phantom file covers it.
             main = [self._t(qty=-100, net=1500.0)]
+            from _mh import from_json
+            ph = from_json(ph, main)
             with redirect_stderr(io.StringIO()):
                 out, _, _, log = prepare_books(main, [], taxable=True,
                                                incomplete_history=ph,

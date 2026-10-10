@@ -42,7 +42,7 @@ accounts whenever taxjson.toml has [[distributions]]; run it manually as:
 
     taxjson-apply-distributions work/margin_base.json --config taxjson.toml
 
-With `--incomplete-history missing_history.json` (the pipeline passes it
+With `--incomplete-history <project folder>` (the pipeline passes it
 when the project has one) the record-date balance includes the
 missing-history openings the gains stage will synthesize, so a position
 bought before the data gets the right share count.
@@ -343,7 +343,7 @@ def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
 
 def _missing_history_openings(txs: List[dict], phantoms) -> List[dict]:
     """The OPENING_BALANCE rows the gains stage will synthesize from
-    missing_history.json for this book — the SAME synthesize_openings call, so
+    .tt OPENING cost=unknown lines for this book — the SAME synthesize_openings call, so
     the record-date balance here agrees with the position the engine
     books. Used for sizing only; never written to the base book (the
     gains stage adds its own)."""
@@ -369,7 +369,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
                         date_basis: str = "settle",
                         phantoms=None, renames=None,
                         country: Optional[str] = None) -> Tuple[dict, int]:
-    """`phantoms` — the (symbol, account) set from missing_history.json
+    """`phantoms` — the (symbol, account) set of the .tt OPENING cost=unknown lines
     (the parameter keeps its pre-rename name). The record-date balance
     must include the missing-history openings the gains stage
     synthesizes (audit S000-08: sized on the book without them, a
@@ -502,8 +502,9 @@ def main(argv=None) -> int:
                          "JOURNAL) before the lookup (`taxjson run` "
                          "passes it).")
     ap.add_argument("--incomplete-history", type=Path, default=None,
-                    metavar="MISSING_HISTORY_JSON",
-                    help="missing_history.json: size each record-date "
+                    metavar="DIR",
+                    help="the project folder (its .tt OPENING cost=unknown "
+                         "lines): size each record-date "
                          "balance with the missing-history openings the "
                          "gains stage will synthesize (`taxjson run` "
                          "passes it).")

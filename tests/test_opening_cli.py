@@ -287,6 +287,53 @@ def _gains(root, acct, inv, name=None):
                        for s, (q, c, cur, dw) in inv.items()]}))
 
 
+class TestSanityCostRegisteredSkipped(unittest.TestCase):
+    """S2: a registered account's broker book cost is not tax cost (an
+    in-kind transfer in resets it to the market value): its cost is not
+    compared (one Info line), its quantities are. Both countries."""
+
+    def _check(self, country, sheltered):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "p"
+            root.mkdir()
+            cur = "CAD" if country == "canada" else "USD"
+            sym = "SAMPC.TO" if country == "canada" else "SAMPC.US"
+            (root / "taxjson.toml").write_text(
+                f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+                f'base_currency = "{cur}"\nsource_currencies = []\n'
+                f'[accounts.{sheltered}]\ntype = "sheltered"\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            for acct in (sheltered, "margin"):
+                _gains(root, acct, {sym: (10, 100.0, cur, 0.0)})
+            pos = {a: _toml(Path(td) / f"{a}.toml", [
+                {"symbol": sym, "quantity": q, "currency": cur,
+                 "total_cost": 250.0}]) for a, q in ((sheltered, 10),
+                                                    ("margin", 10))}
+            r = cli(root, "sanity", f"{sheltered}={pos[sheltered]}",
+                    f"margin={pos['margin']}", "--json")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            doc = json.loads(r.stdout)
+            self.assertEqual(doc["cost"]["accounts_not_compared"],
+                             [sheltered])
+            self.assertEqual([d["accounts"] for d in
+                              doc["cost_differences"]], [["margin"]])
+            self.assertIn(f"cost not compared for registered accounts "
+                          f"({sheltered}): book cost there is not tax "
+                          f"cost", " ".join(r.stderr.split()))
+            # Quantities still compared for the registered account.
+            bad = _toml(Path(td) / "bad.toml", [
+                {"symbol": sym, "quantity": 7, "currency": cur,
+                 "total_cost": 250.0}])
+            r = cli(root, "sanity", f"{sheltered}={bad}", "--json")
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_canada_tfsa(self):
+        self._check("canada", "tfsa")
+
+    def test_usa_ira(self):
+        self._check("usa", "ira")
+
+
 class TestSanityCostCanada(unittest.TestCase):
     """The books' s.47 ACB (pooled over taxable accounts, superficial
     losses added) against one account's broker book value."""
@@ -389,6 +436,117 @@ class TestIncomeShareCount(unittest.TestCase):
         self.assertEqual((out[0]["stated_shares"], out[0]["books_shares"]),
                          (500.0, 400.0))
         self.assertEqual(out[0]["basis"], "record date")
+
+    def test_entitlement_is_the_record_date(self):
+        # S1: 100 held, sold after the record date, paid weeks later
+        # with the position 0: no finding. A dividend on a symbol never
+        # held, and one on more shares than the books ever held in the
+        # window before the pay date (no record date), are.
+        rows = [
+            {"action": "BUYSELL", "date": "2025-01-06",
+             "date_settle": "2025-01-07", "symbol": "SAMPC.TO",
+             "quantity": 100.0},
+            {"action": "BUYSELL", "date": "2025-03-03",
+             "date_settle": "2025-03-04", "symbol": "SAMPC.TO",
+             "quantity": -100.0},
+            # record date in the description only (RBC / Questrade)
+            {"action": "DIVIDEND", "date": "2025-03-25", "symbol": "SAMPC.TO",
+             "quantity": 100.0, "description":
+                 "DIV - SAMPLE C CASH DIV ON 100 SHS REC 02/28/25 PAY "
+                 "03/25/25"},
+            # no record date: held 100 in the 45 days before the pay date
+            {"action": "DIVIDEND", "date": "2025-04-10", "symbol": "SAMPC.TO",
+             "quantity": 100.0, "description":
+                 "DIV - SAMPLE C CASH DIV ON 100 SHS"},
+            # never held
+            {"action": "DIVIDEND", "date": "2025-04-10", "symbol": "SAMPN.TO",
+             "quantity": 50.0, "description":
+                 "DIV - SAMPLE N CASH DIV ON 50 SHS"},
+            # more than ever held in the window
+            {"action": "DIVIDEND", "date": "2025-04-11", "symbol": "SAMPC.TO",
+             "quantity": 150.0, "description":
+                 "DIV - SAMPLE C CASH DIV ON 150 SHS"},
+            # long after the sale (outside the window): reported
+            {"action": "DIVIDEND", "date": "2025-07-15", "symbol": "SAMPC.TO",
+             "quantity": 100.0, "description":
+                 "DIV - SAMPLE C CASH DIV ON 100 SHS"},
+        ]
+        out = PC.income_share_mismatches(rows, "margin")
+        self.assertEqual([(o["symbol"], o["date"], o["stated_shares"],
+                           o["books_shares"]) for o in out],
+                         [("SAMPN.TO", "2025-04-10", 50.0, 0.0),
+                          ("SAMPC.TO", "2025-04-11", 150.0, 100.0),
+                          ("SAMPC.TO", "2025-07-15", 100.0, 0.0)])
+        self.assertEqual(out[0]["basis"], "45 days to the pay date")
+
+    def test_entitled_by_the_trade_date_on_the_markets_calendar(self):
+        # Bought Thursday 2022-07-28 (T+2 then: settles Monday 08-01 in
+        # the US, the record date) while the broker states the
+        # settlement on 08-02 (a Canadian holiday on 08-01): the 58
+        # shares were entitled.
+        rows = [
+            {"action": "BUYSELL", "date": "2022-07-12",
+             "date_settle": "2022-07-14", "symbol": "SAMPU.US",
+             "quantity": 233.0, "currency": "USD"},
+            {"action": "BUYSELL", "date": "2022-07-28",
+             "date_settle": "2022-08-02", "symbol": "SAMPU.US",
+             "quantity": 58.0, "currency": "USD"},
+            {"action": "DIVIDEND", "date": "2022-08-15", "symbol": "SAMPU.US",
+             "quantity": 291.0, "record_date": "2022-08-01",
+             "currency": "USD",
+             "description": "SAMPLE U CASH DIV ON 291 SHS"},
+            # bought on the ex-date (Tuesday 08-30, settling 09-01):
+            # not entitled to the 08-31 record date
+            {"action": "BUYSELL", "date": "2022-08-30",
+             "date_settle": "2022-09-01", "symbol": "SAMPU.US",
+             "quantity": 9.0, "currency": "USD"},
+            {"action": "DIVIDEND", "date": "2022-09-15", "symbol": "SAMPU.US",
+             "quantity": 300.0, "record_date": "2022-08-31",
+             "currency": "USD",
+             "description": "SAMPLE U CASH DIV ON 300 SHS"},
+        ]
+        out = PC.income_share_mismatches(rows, "margin")
+        self.assertEqual([(o["date"], o["books_shares"]) for o in out],
+                         [("2022-09-15", 291.0)])
+        self.assertEqual(PC.last_entitled_trade_day("2022-08-01", "USD"),
+                         "2022-07-28")
+        self.assertEqual(PC.last_entitled_trade_day("2025-08-01", "USD"),
+                         "2025-07-31")
+
+    def test_a_ticker_change_after_the_record_date(self):
+        # 100 held as SAMPO.TO on the record date; renamed SAMPQ.TO
+        # before the pay date, the dividend paid under the new ticker:
+        # no finding (the shares were held under the old symbol).
+        rows = [
+            {"action": "BUYSELL", "date": "2025-01-06",
+             "date_settle": "2025-01-07", "symbol": "SAMPO.TO",
+             "quantity": 100.0},
+            {"action": "SPLIT", "date": "2025-03-05",
+             "date_settle": "2025-03-05", "symbol": "SAMPO.TO",
+             "symbol_new": "SAMPQ.TO", "quantity": 1.0},
+            {"action": "DIVIDEND", "date": "2025-03-20", "symbol": "SAMPQ.TO",
+             "quantity": 100.0, "record_date": "2025-02-28",
+             "description": "DIV - SAMPLE Q CASH DIV ON 100 SHS"},
+            # a 2:1 change: 100 old are 200 new
+            {"action": "SPLIT", "date": "2025-06-05",
+             "date_settle": "2025-06-05", "symbol": "SAMPQ.TO",
+             "symbol_new": "SAMPR.TO", "quantity": 2.0},
+            {"action": "DIVIDEND", "date": "2025-06-20", "symbol": "SAMPR.TO",
+             "quantity": 200.0, "record_date": "2025-05-30",
+             "description": "DIV - SAMPLE R CASH DIV ON 200 SHS"},
+            # without a record date: the window sees the old symbol too
+            {"action": "DIVIDEND", "date": "2025-06-21", "symbol": "SAMPR.TO",
+             "quantity": 200.0,
+             "description": "DIV - SAMPLE R CASH DIV ON 200 SHS"},
+            # more than held through the change: still listed
+            {"action": "DIVIDEND", "date": "2025-06-22", "symbol": "SAMPR.TO",
+             "quantity": 300.0, "record_date": "2025-05-30",
+             "description": "DIV - SAMPLE R CASH DIV ON 300 SHS"},
+        ]
+        out = PC.income_share_mismatches(rows, "margin")
+        self.assertEqual([(o["symbol"], o["stated_shares"],
+                           o["books_shares"]) for o in out],
+                         [("SAMPR.TO", 300.0, 200.0)])
 
     def test_sanity_lists_it(self):
         with tempfile.TemporaryDirectory() as td:

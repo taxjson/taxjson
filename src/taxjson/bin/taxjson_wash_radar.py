@@ -329,9 +329,10 @@ def main():
                              "folded on exercise), not by the radar's own "
                              "per-account pool. Dispositions outside the "
                              "files' tax year fall back to the radar's pool.")
-    parser.add_argument("--incomplete-history", metavar="FILE",
+    parser.add_argument("--incomplete-history", metavar="DIR",
                         default=None,
-                        help="missing_history.json: synthesize the same "
+                        help="the project folder (its .tt OPENING "
+                             "cost=unknown lines): synthesize the same "
                              "opening balances the gains engine applies, "
                              "so positions bought before the data are not "
                              "shown as shorts")
@@ -548,7 +549,7 @@ def main():
         _t._own_move = True
     _shl_rows = _shl_rows + _own_moves
 
-    # Missing-history openings (missing_history.json): the SAME
+    # Missing-history openings (.tt OPENING cost=unknown lines): the SAME
     # OPENING_BALANCE rows the gains pass synthesizes
     # (lib/pipeline.prepare_books), or a position bought before the data
     # walks negative here — shown as a short,

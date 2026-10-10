@@ -677,8 +677,8 @@ class TestListAsOf(unittest.TestCase):
             "Individual\n")
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, csv=csv)
-            (root / "missing_history.json").write_text(
-                '[{"symbol": "ZZZ.TO", "account": "margin"}]')
+            (root / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2025-06-19 ZZZ.TO 100 cost=unknown\n")
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)
             _doc, rows = self._rows(root, "--date", "2025-12-31")

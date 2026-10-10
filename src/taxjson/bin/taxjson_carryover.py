@@ -40,7 +40,7 @@ passes as --claimed-year YEAR=AMOUNT.
 Usage:
     taxjson-carryover margin_base.json [more_base.json ...]
         --country canada [--sheltered sheltered_base.json]
-        [--incomplete-history missing_history.json] [--claimed FILE | --claimed-year YEAR=AMOUNT ...]
+        [--incomplete-history PROJECT_DIR] [--claimed FILE | --claimed-year YEAR=AMOUNT ...]
         [--tax-date settle|trade] [--base-currency CAD] [--json]
 
 Or through the project wrapper: `taxjson carryover`.
@@ -746,8 +746,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=None,
                         help="Year-attribution basis (default: country-aware)")
     parser.add_argument("--incomplete-history", type=Path, default=None,
-                        help="missing_history.json: sales with no purchase "
-                             "in the files (truncated-history openings)")
+                        metavar="DIR",
+                        help="the project folder: its accounts' .tt "
+                             "OPENING cost=unknown lines (truncated-history "
+                             "openings)")
     parser.add_argument("--claimed", type=Path, default=None,
                         help="`YEAR AMOUNT` lines: losses actually applied "
                              "on filed returns. Canada: the 100%% capital "

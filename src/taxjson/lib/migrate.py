@@ -51,9 +51,18 @@ LEGACY_DATA_FILES = {
     "capital_gains_dividends.map": "[[capital_gains_dividends]]",
     "distributions.map": "[[distributions]]",
 }
+# The old missing-history file (and its older name): converted into the
+# accounts' .tt OPENING cost=unknown lines by `taxjson migrate`
+# (lib/missing_history.plan_missing_history_migration), not by plan().
+MISSING_HISTORY_FILES = {
+    "missing_history.json": "OPENING <date> <SYMBOL> <qty> cost=unknown "
+                            "lines in inputs/<account>/missing_history.tt",
+    "phantoms.json": "OPENING <date> <SYMBOL> <qty> cost=unknown lines in "
+                     "inputs/<account>/missing_history.tt",
+}
 # Files whose contents still matter: commands stop while one is here.
 _GUARDED_FILES: Tuple[str, ...] = tuple(LEGACY_MAP_FILES) + tuple(
-    LEGACY_DATA_FILES)
+    LEGACY_DATA_FILES) + tuple(MISSING_HISTORY_FILES)
 # Every file migrate handles: the guarded ones plus the retired ones
 # (renamed only).
 LEGACY_FILES: Tuple[str, ...] = _GUARDED_FILES + tuple(RETIRED_MAP_FILES)
@@ -91,17 +100,29 @@ def retired_file_note(names: List[str]) -> str:
 def legacy_message(names: List[str]) -> str:
     """The one message every command stops with while old files sit in
     the project."""
+    mh = [n for n in names if n in MISSING_HISTORY_FILES]
+    rest = [n for n in names if n not in MISSING_HISTORY_FILES]
+    if mh and not rest:
+        return (f"{' and '.join(mh)} "
+                f"{'is' if len(mh) == 1 else 'are'} no longer read — "
+                f"missing history is dated "
+                f".tt lines (OPENING <date> <SYMBOL> <qty> cost=unknown in "
+                f"inputs/<account>/missing_history.tt): run `taxjson "
+                f"migrate` to convert it (preview with `taxjson migrate "
+                f"--dry-run`; in a year folder it merges every year's "
+                f"file); nothing was run.")
     where = []
     for n in names:
         target = (f"ticker.map {LEGACY_MAP_FILES[n]} lines"
                   if n in LEGACY_MAP_FILES
+                  else MISSING_HISTORY_FILES[n] if n in MISSING_HISTORY_FILES
                   else f"taxjson.toml {LEGACY_DATA_FILES[n]}")
         where.append(f"{n} (now {target})")
     return ("this project still has " + ", ".join(where)
             + " — these files are no longer read, so their contents "
               "would be silently ignored. Run `taxjson migrate` to move "
-              "them into ticker.map / taxjson.toml (preview with "
-              "`taxjson migrate --dry-run`); nothing was run.")
+              "them (preview with `taxjson migrate --dry-run`); nothing "
+              "was run.")
 
 
 # ------------------------------------------------------------------ helpers
@@ -553,7 +574,9 @@ def plan(root) -> Plan:
     from taxjson.lib.tomlcompat import tomllib
     root = Path(root).resolve()
     pl = Plan(root)
-    pl.names = legacy_files(root, retired=True)
+    # (missing_history.json: its own converter, cmd_migrate)
+    pl.names = [n for n in legacy_files(root, retired=True)
+                if n not in MISSING_HISTORY_FILES]
     if not pl.names:
         return pl
     for n in pl.names:

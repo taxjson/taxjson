@@ -403,10 +403,8 @@ class TestS07619Messages(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("`taxjson find-missing-history "
                       "--write-missing-history` in the project", text)
-        self.assertIn("then `taxjson run` (it picks missing_history.json "
-                      "up)", text)
-        self.assertIn("Standalone (outside a project)", text)
-        self.assertIn("  taxjson-gains --country", text)
+        self.assertIn("into inputs/<account>/missing_history.tt", text)
+        self.assertIn("then `taxjson run` (it reads them)", text)
 
     def test_transfer_rewrite_note_scopes_the_flag(self):
         from taxjson.lib.core import TaxTransaction

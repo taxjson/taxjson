@@ -161,6 +161,8 @@ class TestExplainParity(unittest.TestCase):
                  "account": "m"}]}))
             ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "PHX.TO", "account": "m"}]))
+            from _mh import from_json
+            ph = from_json(ph, json.loads(base.read_text())["transactions"])
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_explain",
                  "--country", "canada", "--list",
@@ -188,6 +190,8 @@ class TestPartialTaintWarning(unittest.TestCase):
                  "net_amount": 20000.0, "currency": "CAD", "account": "m"}]}))
             ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "PT.TO", "account": "m"}]))
+            from _mh import from_json
+            ph = from_json(ph, json.loads(base.read_text())["transactions"])
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                  "--country", "canada", "--year", "2026", "--taxable",

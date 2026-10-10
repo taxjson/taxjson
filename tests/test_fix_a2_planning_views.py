@@ -243,8 +243,9 @@ class TestHoldingsTomlAppliesPhantoms(unittest.TestCase):
         from taxjson.lib.tomlcompat import tomllib
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, [("margin", "taxable")], {"margin": self.TT})
-            (root / "missing_history.json").write_text(json.dumps(
-                [{"symbol": "ZZZ.TO", "account": "margin"}]))
+            (root / "inputs" / "margin").mkdir(parents=True, exist_ok=True)
+            (root / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2024-03-09 ZZZ.TO 100 cost=unknown\n")
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             doc = tomllib.loads(

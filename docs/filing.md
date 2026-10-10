@@ -57,9 +57,9 @@ steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson sanity` — every account ties to the broker holdings, or the
       only differences are trades after the last export.
 - [ ] `taxjson find-missing-history` — nothing marked **AFFECTS <year>**.
-      Import real confirmations first (`.tt` lines); list in
-      `missing_history.json` (`find-missing-history
-      --write-missing-history`) only the sales whose purchase is
+      Import real confirmations first (`.tt` lines); open at an unknown
+      cost (`.tt` `OPENING ... cost=unknown` lines: `find-missing-history
+      --write-missing-history`) only the units whose purchase is
       unrecoverable.
 - [ ] `taxjson renames` — every ticker change is a dated event, and no
       trade in an old ticker after its rename date is left undeclared

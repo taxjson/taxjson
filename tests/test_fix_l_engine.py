@@ -753,11 +753,11 @@ class TestTraceColumns(unittest.TestCase):
 
 
 class TestMissingHistoryFileDiagnostics(unittest.TestCase):
-    """S076-05: a stale or mistyped missing_history.json entry was noted
-    only in the gains JSON, and any such file switched the go-short hint
-    off.
-    Also: every stage handed the whole project file printed a 'no rows'
-    warning for every other account's entry."""
+    """S076-05: a mistyped missing-history entry (now a .tt OPENING
+    cost=unknown line) was noted only in the gains JSON, and any such
+    file switched the go-short hint off. Also: every stage handed the
+    whole project's lines printed a 'no rows' warning for every other
+    account's line."""
 
     def _books(self):
         main = [_cx("2025-02-03", "ABC.TO", -10, 100.0),
@@ -771,20 +771,24 @@ class TestMissingHistoryFileDiagnostics(unittest.TestCase):
         from taxjson.lib.pipeline import prepare_books
         main, sh = self._books()
         with tempfile.TemporaryDirectory() as td:
-            ph = Path(td) / "missing_history.json"
-            ph.write_text(json.dumps([
-                {"symbol": "ABC.TO", "account": "margin"},
-                {"symbol": "XYZ.TO", "account": "margin"},
-                {"symbol": "ABCD.TO", "account": "margin"},
-                {"symbol": "ZZZ.TO", "account": "rrsp"}]))
+            ph = Path(td)
+            (ph / "taxjson.toml").write_text(
+                '[accounts.margin]\ntype = "taxable"\n\n'
+                '[accounts.rrsp]\ntype = "sheltered"\n')
+            for acct, lines in (("margin", ["ABC.TO 10", "ABCD.TO 5"]),
+                                ("rrsp", ["ZZZ.TO 5"])):
+                (ph / "inputs" / acct).mkdir(parents=True)
+                (ph / "inputs" / acct / "missing_history.tt").write_text(
+                    "".join(f"OPENING 2025-01-01 {x} cost=unknown\n"
+                            for x in lines))
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 prepare_books(main, sh, [], taxable=True,
                               incomplete_history=ph)
         e = err.getvalue()
-        self.assertEqual(e.count("ABCD.TO / margin, but no row"), 1)
-        self.assertIn("XYZ.TO / margin, but its rows never go short", e)
-        self.assertNotIn("ZZZ.TO", e)       # another account's entry
+        self.assertEqual(e.count("missing_history.tt:2 opens ABCD.TO / "
+                                 "margin, but no row"), 1)
+        self.assertNotIn("ZZZ.TO", e)       # another account's line
         self.assertNotIn("ABC.TO / margin", e)
         # The go-short hint still names the pair the file does not list.
         self.assertIn("go short in this data: DEF.TO/margin", e)

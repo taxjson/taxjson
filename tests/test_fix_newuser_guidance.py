@@ -1,7 +1,7 @@
 """New-user guidance (owner-approved gaps from the getting-started study).
 
 1. A closing summary at the end of `taxjson run`: sales with no purchase
-   not covered by missing_history.json, $0-cost positions (sold or still
+   not covered by missing history, $0-cost positions (sold or still
    held), transfer-ins kept out with no cost, accounts with open
    positions and no holdings check, income on a security the books do
    not hold — each with its command; silent when clean; the counts in
@@ -13,7 +13,7 @@
    value as its cost (never a market value), with an ATTENTION that a
    covering .tt line silences (CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
 4. Messages: the crypto time-zone refusal, the sanity mismatch hint, the
-   stage-failure line, a stale missing_history.json entry, the inputs/
+   stage-failure line, a stale missing-history line, the inputs/
    README per broker.
 5. A US scaffold fetches no CAD rates.
 
@@ -104,7 +104,7 @@ class TestFirstRunSummary(unittest.TestCase):
             tail = out[out.index("Done. Reports"):]
             self.assertIn("Before you trust these numbers", tail)
             self.assertIn("1 position sold in 2025 with no purchase in "
-                          "your files, not in missing_history.json", tail)
+                          "your files, not in missing_history.tt", tail)
             self.assertIn("SMA.TO (margin)", tail)
             self.assertIn("`taxjson find-missing-history`", tail)
             # $0 cost: still held, which the detector used to ignore.
@@ -163,8 +163,8 @@ class TestFirstRunSummary(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, files={
                 "inputs/margin/questrade.csv": _CA_QT,
-                "missing_history.json": json.dumps(
-                    [{"symbol": "SMA.TO", "account": "margin"}])})
+                "inputs/margin/missing_history.tt":
+                    "OPENING 2025-01-01 SMA.TO 20 cost=unknown\n"})
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             self.assertNotIn("sold in 2025 with no purchase", r.stdout)
@@ -278,8 +278,8 @@ class TestSumWarnsUncoveredSales(unittest.TestCase):
             self.assertIn("taxjson sum: warning: 1 position(s) sold in "
                           "2025 with no purchase in your files: their gain "
                           "is NOT in these totals", r.stderr)
-            self.assertIn("Not in missing_history.json: SMA.TO (margin)",
-                          r.stderr)
+            self.assertIn("No .tt OPENING cost=unknown line: SMA.TO "
+                          "(margin)", r.stderr)
             self.assertIn("taxjson find-missing-history", r.stderr)
             j = json.loads(cli(root, "sum", "--json").stdout)
             self.assertEqual(j["no_purchase_uncovered"],
@@ -478,8 +478,8 @@ class TestTransferInBookValue(unittest.TestCase):
             self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
             self.assertTrue((root / "work" / "margin_transfer_costs.json")
                             .exists())
-            (root / "missing_history.json").write_text(json.dumps(
-                [{"symbol": "XYZ.TO", "account": "margin"}]))
+            (root / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2025-03-02 XYZ.TO 100 cost=unknown\n")
             # --fast too: the bookings going away must re-merge the books.
             r = cli(root, "run", "--no-input", "--fast")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
@@ -489,6 +489,27 @@ class TestTransferInBookValue(unittest.TestCase):
             t = json.loads(cli(root, "transfers", "--json").stdout)
             self.assertEqual([x["arrival"] for x in t["transfers"]],
                              ["missing history"])
+
+    @rule("CA-ACB-11")
+    def test_migrate_keeps_the_entry_that_covers_a_booked_arrival(self):
+        # Books built without missing_history.json (the run refuses it:
+        # moved aside) booked the arrival at its book value, so its sale
+        # never goes short there; the entry covered that arrival —
+        # migrate sizes it as the run WITH the file did (100 units),
+        # never "no opening needed".
+        with tempfile.TemporaryDirectory() as td:
+            root = _bv_project(td, "canada")
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            (root / "missing_history.json").write_text(json.dumps(
+                [{"symbol": "XYZ.TO", "account": "margin"}]))
+            r = cli(root, "migrate")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            tt = (root / "inputs" / "margin" /
+                  "missing_history.tt").read_text()
+            self.assertIn(" XYZ.TO 100 cost=unknown", tt)
+            self.assertEqual(cli(root, "run", "--no-input").returncode, 0)
+            j = json.loads(cli(root, "sum", "--json").stdout)
+            self.assertEqual(j["unknown_cost_routed"], 1)
 
     @rule("CA-ACB-TRANSFER-BV")
     def test_canada_own_account_move_is_not_booked(self):
@@ -593,7 +614,7 @@ class TestMessages(unittest.TestCase):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             report_missing_history_log([log], {"margin"})
-        self.assertIn("warning: ATTENTION: missing_history.json lists "
+        self.assertIn("warning: ATTENTION: missing_history.tt lists "
                       "CMP.TO / margin, but its rows never go short any "
                       "more — the purchase is in the books now",
                       err.getvalue())
@@ -617,14 +638,12 @@ class TestMessages(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, files={
                 "inputs/margin/start.tt": _CLEAN_TT,
-                "missing_history.json": json.dumps(
-                    [{"symbol": "ABC.TO", "account": "margin"}])})
+                "inputs/margin/missing_history.tt":
+                    "OPENING 2025-01-09 ABC.TO 10 cost=unknown\n"})
             r = cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            self.assertIn("ATTENTION: missing_history.json lists ABC.TO / "
-                          "margin, but its rows never go short", r.stdout)
             f = cli(root, "find-missing-history")
-            self.assertIn("STALE in missing_history.json", f.stdout)
+            self.assertIn("STALE in missing_history.tt", f.stdout)
             self.assertIn("ABC.TO margin", f.stdout)
 
     def test_init_readme_says_what_to_download(self):

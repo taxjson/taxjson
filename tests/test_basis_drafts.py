@@ -340,7 +340,7 @@ class TestCanadaDrafts(unittest.TestCase):
             symbol_key=lambda s: {'QZW.US': 'QZW.TO'}.get(s, s),
             listed_pairs={('QZW.TO', 'margin')})
         d, = drafts
-        self.assertIn('remove QZW.TO / margin from missing_history.json',
+        self.assertIn('remove the OPENING cost=unknown line of QZW.TO / margin',
                       ' '.join(d.comments))
         self.assertEqual(d.tt_line().split()[3:8:2], ['QZW.US', 'USD',
                                                       '480.00'])

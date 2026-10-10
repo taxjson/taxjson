@@ -439,8 +439,10 @@ def _mh_open(txs, until, quantity=None, pair=("QZQ.TO", "margin")):
 
 
 class TestMissingHistoryYearWindow(unittest.TestCase):
-    """A missing_history.json entry with no `quantity` fills the deepest
-    shortage of the rows dated up to the project year's end — main's
+    """A pair with no .tt line (a find-missing-history suggestion, an old
+    missing_history.json entry `taxjson migrate` converts) with no
+    `quantity` fills the deepest shortage of the rows dated up to the
+    project year's end — main's
     peak-short sizing within that window; rows after the year end
     (later years' exports, shared by every year) never size it. A
     recorded `quantity` sets the opening exactly. A position that goes
@@ -476,12 +478,10 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
         # ... and the 2025 shortage beyond it is said, not silent.
         self.assertEqual(e24["short_again"],
                          {"date": "2025-11-03", "qty": 70.0})
-        from taxjson.lib.missing_history import (short_again_message,
-                                                 window_sized_entries)
+        from taxjson.lib.missing_history import short_again_message
         msg = short_again_message(e24)
         self.assertIn("goes short again on 2025-11-03", msg)
         self.assertIn("does not change 2024", msg)
-        self.assertEqual(len(window_sized_entries([[e24]])), 1)
         # The 2025 year sizes its own (the 2025 shortage included).
         self.assertEqual(_mh_open(txs, "2025-12-31")["opening_qty"], 80)
         # No tax year (a standalone tool): every row, as before.
@@ -500,34 +500,8 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
         # Lowered below the shortage: the position goes short again.
         self.assertEqual(lowered["short_again"],
                          {"date": "2024-09-01", "qty": 20.0})
-        from taxjson.lib.missing_history import (short_again_message,
-                                                 window_sized_entries)
+        from taxjson.lib.missing_history import short_again_message
         self.assertIn("Raise `quantity`", short_again_message(lowered))
-        # A recorded quantity is never "sized by the year end".
-        self.assertEqual(window_sized_entries([[lowered]]), [])
-
-    def test_the_window_follows_the_projects_own_file(self):
-        import os
-        from taxjson.lib.missing_history import (
-            ENV_SIZING_YEAR, load_missing_history, sizing_env_value)
-        a, b = Path(private_dir()), Path(private_dir())
-        for d in (a, b):
-            (d / "missing_history.json").write_text(
-                '[{"symbol": "QZQ.TO", "account": "margin"}]')
-        old = os.environ.get(ENV_SIZING_YEAR)
-        os.environ[ENV_SIZING_YEAR] = sizing_env_value(a, 2024)
-        try:
-            self.assertEqual(load_missing_history(
-                a / "missing_history.json").size_until, "2024-12-31")
-            # Another folder's file (a later test, a standalone tool)
-            # never picks the year up.
-            self.assertIsNone(load_missing_history(
-                b / "missing_history.json").size_until)
-        finally:
-            if old is None:
-                os.environ.pop(ENV_SIZING_YEAR, None)
-            else:
-                os.environ[ENV_SIZING_YEAR] = old
 
     def test_the_alert_is_printed(self):
         import contextlib
@@ -540,7 +514,7 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
         with contextlib.redirect_stderr(err):
             synthesize_openings(txs, MissingHistoryPairs(
                 {("QZQ.TO", "margin")}), until="2024-12-31")
-        self.assertIn("warning: ATTENTION: missing_history.json lists "
+        self.assertIn("warning: ATTENTION: missing_history.tt lists "
                       "QZQ.TO / margin: the position goes short again on "
                       "2025-02-01 (20 units)", err.getvalue())
 
@@ -562,7 +536,13 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
             + f'base_currency = "{cur}"\n\n[accounts.{acct}]\n'
             + ('type = "sheltered"\n' if sheltered
                else 'type = "taxable"\n'))
-        (d / "missing_history.json").write_text(json.dumps([entry]))
+        # (the .tt OPENING cost=unknown line the entry converts to, sized
+        # as `taxjson migrate` sizes it)
+        from taxjson.bin.taxjson_convert_tt import parse_tt_line
+        from _mh import tt_lines, write_lines
+        rows = [r for r in (parse_tt_line(ln, acct)
+                            for ln in (tt or _MH_TT).splitlines()) if r]
+        write_lines(ins, tt_lines(rows, [entry], until=f"{year}-12-31"))
         return d
 
     @rule("US-BASIS-04")
@@ -570,10 +550,10 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
         d = self._project(2024, {"symbol": "QZQ.US", "account": "margin"})
         r = run_ok(self, d)
         out = r.stdout + r.stderr
-        # Said where the year end decided the size ...
-        self.assertIn("1 entry records no quantity and later rows go "
-                      "shorter (QZQ.US/margin 10)", out)
-        self.assertIn("goes short again on 2025-11-03", out)
+        # The line opens 10 (the shortage through 2024-12-31, as
+        # migrate sized the entry); the 2025 short beyond it is said.
+        self.assertIn("missing_history.tt:1 opens 10 QZQ.US / margin: the "
+                      "position goes short again on 2025-11-03", out)
         doc = tjs("-C", str(d), "sum", "--json")
         acct = json.loads(doc.stdout)["filing"]["accounts"][0]
         # The 2024 sale of 20 is matched to the 2023 purchase, not to
@@ -583,8 +563,8 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
         self.assertAlmostEqual(acct["proceeds"], 499.00, places=2)
         # find-missing-history reports the size the run applies.
         r = tjs("-C", str(d), "find-missing-history")
-        self.assertIn("the run opens 10 units, the deepest shortage of "
-                      "the rows through 2024-12-31", r.stdout)
+        self.assertIn("the run opens the 10 units its line states",
+                      r.stdout)
 
     @rule("CA-ACB-11")
     def test_single_folder_keeps_every_sale_unknown_cost(self):
@@ -620,16 +600,15 @@ class TestMissingHistoryYearWindow(unittest.TestCase):
 
     def test_find_missing_history_records_the_quantity(self):
         d = self._project(2024, {"symbol": "QZQ.US", "account": "margin"})
-        (d / "missing_history.json").unlink()
+        f = d.parent / "inputs" / "margin" / "missing_history.tt"
+        f.unlink()
         run_ok(self, d)
         r = tjs("-C", str(d), "find-missing-history", "--all-history",
-                "--write-missing-history", str(d / "new.json"))
+                "--write-missing-history")
         self.assertEqual(r.returncode, 0, r.stderr)
-        rows = json.loads((d / "new.json").read_text())
-        q = {(e["symbol"], e["account"]): (e.get("quantity"),
-                                           e.get("_sized_through"))
-             for e in rows}
-        self.assertEqual(q.get(("QZQ.US", "margin")), (10, "2024-12-31"))
+        self.assertIn("OPENING 2023-02-28 QZQ.US 10 cost=unknown reason="
+                      "\"find-missing-history: the shortage of the rows "
+                      "through 2024-12-31\"", f.read_text())
 
 
 class TestRedactAYearFolder(unittest.TestCase):

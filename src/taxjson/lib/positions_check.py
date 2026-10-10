@@ -66,6 +66,27 @@ def load_base_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
     return [r for r in (rows or []) if isinstance(r, dict)]
 
 
+def book_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
+    """The rows the account's books hold positions from: its merged rows
+    (load_base_rows) plus the missing-history openings its gains run
+    booked (the .tt OPENING cost=unknown
+    lines: units bought before the data, which no row of the merged
+    books carries — lib/missing_history.openings_from_log). Every view
+    of the books' positions on a date reads these, so it holds the
+    same units the books do."""
+    from taxjson.lib.missing_history import openings_from_log
+    rows = load_base_rows(cache, account)
+    for name in (f"{account}_gains.json", f"{account}_gains_wash.json"):
+        p = Path(cache) / name
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            return rows + openings_from_log(doc, account)
+    return rows
+
+
 def load_inventory(path: Path) -> Dict[str, Dict[str, Any]]:
     """{symbol: inventory entry} of a gains file (summed per symbol)."""
     try:
@@ -147,16 +168,120 @@ def roc_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
 
 # ------------------------------------------------------------------ income
 
+# The window before a pay date in which the shares a dividend states must
+# have been held when the row gives no record or ex-date: the record
+# date of a monthly or quarterly payer sits in it (a quarterly payer's
+# pay date can trail its record date by several weeks).
+INCOME_WINDOW_DAYS = 45
+
+
+def _record_date_of(r: Dict[str, Any]) -> str:
+    """The row's record date: its `record_date` (a parser's, a .tt
+    record=), else the one its description prints ("REC 09/26/25")."""
+    rec = str(r.get("record_date") or "")
+    if rec:
+        return rec
+    from taxjson.lib.brokerages.base import income_facts_from_description
+    try:
+        return str(income_facts_from_description(
+            str(r.get("description") or "")).get("record_date") or "")
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
+def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
+            settled: bool = False, before: bool = False) -> float:
+    """The units the books held on `day` of the security `sym` names
+    now: its own position plus the units a later ticker change (a
+    rename SPLIT row into `sym` — a broker's corporate action, a dated
+    .tt RENAME, a ticker.map rename — dated after `day`) carried in from
+    the old symbol, at the change's ratio. A dividend paid under the new
+    ticker on a record date before the change was earned on the old
+    one's shares."""
+    rows = list(rows)
+    pos = positions_on(rows, day, settled=settled, before=before)
+    renames = []
+    for r in rows:
+        if r.get("action") != "SPLIT":
+            continue
+        new = str(r.get("symbol_new") or "").strip()
+        old = str(r.get("symbol") or "")
+        if not new or new == old:
+            continue
+        d = str((r.get("date_settle") if settled else None)
+                or r.get("date") or "")
+        later = (d >= day) if before else (d > day)
+        if later:
+            try:
+                ratio = float(r.get("quantity") or 0.0) or 1.0
+            except (TypeError, ValueError):
+                ratio = 1.0
+            renames.append((old, new, ratio))
+    factor = {sym: 1.0}
+    for _ in range(len(renames) + 1):
+        grew = False
+        for old, new, ratio in renames:
+            if new in factor and old not in factor:
+                factor[old] = factor[new] * ratio
+                grew = True
+        if not grew:
+            break
+    return sum(pos.get(s, 0.0) * f for s, f in factor.items())
+
+
+# North American markets moved from T+2 to T+1 settlement in May 2024
+# (Canada on the 27th, the US on the 28th): the last trade entitled to a
+# dividend settles by its record date.
+_T1_SINCE = {"US": "2024-05-28", "CA": "2024-05-27"}
+
+
+def last_entitled_trade_day(record: str, currency: str) -> Optional[str]:
+    """The last trading day whose trade settles by `record` on the
+    market's own calendar (the currency's: USD the US, CAD Canada) —
+    the eve of the ex-date. None for a bad date."""
+    from taxjson.lib.market_calendar import market_for, sub_settlement_days
+    mkt = market_for(currency) or "US"
+    n = 1 if record >= _T1_SINCE.get(mkt, "2024-05-28") else 2
+    try:
+        return sub_settlement_days(record, n, currency or "USD").isoformat()
+    except ValueError:
+        return None
+
+
+def _max_held(rows, sym: str, pay: str, days: int) -> Optional[float]:
+    """The most shares of `sym` the rows held at the end of any day of
+    the `days` before `pay` (pay day included); None for a bad date."""
+    from datetime import datetime, timedelta
+    try:
+        d0 = datetime.strptime(pay, "%Y-%m-%d")
+    except ValueError:
+        return None
+    best = 0.0
+    for k in range(days + 1):
+        day = (d0 - timedelta(days=k)).strftime("%Y-%m-%d")
+        best = max(best, held_as(rows, sym, day))
+    return best
+
+
 def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
                             tol: float = 1e-4) -> List[Dict[str, Any]]:
     """Dividend rows whose description STATES the share count ("ON 500
-    SHS") while the books hold another number of shares on the record
-    date (the settled position; the ex-date's eve when only that is
-    known). With only the pay date, a count the books held at any time
-    in the 45 days before it is accepted (the record date sits in that
-    span). Rows of one broker account are compared with that account's
-    rows (and the hand-written ones): one taxjson account may hold two
-    brokers' accounts (a count the whole account held is
+    SHS") for more shares than the books held when the payment was
+    earned. Entitlement is fixed at the record date, not the pay date:
+    a sale after it (the dividend paid days or weeks later, the position
+    0 by then) is no finding. With the record date (the row's, a .tt
+    record=, or the "REC mm/dd/yy" its description prints) the books'
+    SETTLED position that day is compared (T+1 / T+2 settlement: the
+    holder of record), or the shares traded by the eve of the ex-date
+    on the market's calendar (last_entitled_trade_day), whichever is
+    more; with only the ex-date, the position at the end of
+    the day before it; with neither, the most the books held at the end
+    of any day of the INCOME_WINDOW_DAYS before the pay date. Reported:
+    a payment on more shares than that (on a symbol never held: 0) — a
+    payment on fewer shares (another broker account's part, a partial
+    entitlement) is not. Rows of one broker account are compared with
+    that account's rows (and the hand-written ones): one taxjson account
+    may hold two brokers' accounts (a count the whole account held is
     accepted too)."""
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -176,42 +301,49 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
         mine = [t for t in rows
                 if not src or not t.get("source_account")
                 or t.get("source_account") == src]
-        rec = str(r.get("record_date") or "")
+        rec = _record_date_of(r)
+        # (the listing's market decides the calendar: a US share paid
+        # in CAD by a Canadian broker settles on US days)
+        cur = ("USD" if sym.endswith(".US") else
+               "CAD" if sym.rsplit(".", 1)[-1] in ("TO", "V", "CN", "NE")
+               and "." in sym else str(r.get("currency") or "").upper())
         exd = str(r.get("ex_date") or "")
         pay = str(r.get("date") or "")
+
+        def _held(book):
+            # (through a ticker change after the date: the shares were
+            # held under the old symbol then — held_as)
+            if rec:
+                # The settled position on the record date, or the shares
+                # traded by the eve of the ex-date on the market's own
+                # calendar (a broker's settle date can follow another
+                # market's holiday), whichever is more.
+                h = held_as(book, sym, rec, settled=True)
+                eve = last_entitled_trade_day(rec, cur)
+                if eve:
+                    h = max(h, held_as(book, sym, eve))
+                return h
+            if exd:
+                return held_as(book, sym, exd, before=True)
+            return _max_held(book, sym, pay, INCOME_WINDOW_DAYS)
+        held = _held(mine)
+        if held is None:
+            continue
         if rec:
-            held = positions_on(mine, rec, settled=True).get(sym, 0.0)
             when, basis = rec, "record date"
         elif exd:
-            held = positions_on(mine, exd, before=True).get(sym, 0.0)
             when, basis = exd, "ex-date"
         else:
-            from datetime import datetime, timedelta
-            try:
-                d0 = datetime.strptime(pay, "%Y-%m-%d")
-            except ValueError:
-                continue
-            seen = set()
-            for k in range(46):
-                day = (d0 - timedelta(days=k)).strftime("%Y-%m-%d")
-                seen.add(round(positions_on(mine, day).get(sym, 0.0), 6))
-            if any(abs(q - stated) <= tol for q in seen):
-                continue
-            held = positions_on(mine, pay).get(sym, 0.0)
-            when, basis = pay, "pay date"
-        if abs(held - stated) <= tol:
+            when = pay
+            basis = f"{INCOME_WINDOW_DAYS} days to the pay date"
+        if held + tol >= stated:
             continue
         if mine is not rows and len(mine) != len(rows):
-            # The whole account's position on that day (a holding moved
-            # between the account's brokers, rows stamped with another
-            # broker account): a match there is no finding.
-            if rec:
-                alt = positions_on(rows, rec, settled=True).get(sym, 0.0)
-            elif exd:
-                alt = positions_on(rows, exd, before=True).get(sym, 0.0)
-            else:
-                alt = positions_on(rows, pay).get(sym, 0.0)
-            if abs(alt - stated) <= tol:
+            # The whole account's position (a holding moved between the
+            # account's brokers, rows stamped with another broker
+            # account): enough there is no finding.
+            alt = _held(rows)
+            if alt is not None and alt + tol >= stated:
                 continue
         out.append({"account": account, "symbol": sym, "date": pay,
                     "on": when, "basis": basis, "stated_shares": stated,

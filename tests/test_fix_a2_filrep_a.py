@@ -57,6 +57,8 @@ class _Books:
         if phantoms is not None:
             self.phantoms = tmp / "missing_history.json"
             self.phantoms.write_text(json.dumps(phantoms), encoding="utf-8")
+            from _mh import from_json
+            self.phantoms = from_json(self.phantoms, rows)
         greq = GainsRequest(year=year, taxable=True,
                             incomplete_history=self.phantoms, **req)
         err = io.StringIO()

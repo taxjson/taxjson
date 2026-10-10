@@ -49,17 +49,11 @@ def _mh_log(doc: Dict[str, Any]) -> List[dict]:
 
 def _missing_history_openings(combined: Dict[str, Any],
                               account: str) -> List[dict]:
-    out = []
-    for e in _mh_log(combined):
-        if (e.get("account") == account and e.get("inserted")
-                and float(e.get("opening_qty") or 0.0) > 0):
-            d = e.get("anchor_date") or "1970-01-01"
-            out.append({"action": "OPENING_BALANCE", "date": d,
-                        "date_settle": d, "time": "00:00:00",
-                        "symbol": e.get("anchor_symbol") or e.get("symbol"),
-                        "quantity": float(e["opening_qty"]),
-                        "net_amount": 0.0, "account": account})
-    return out
+    """The blended pass's missing-history openings of `account`
+    (lib/missing_history.openings_from_log, the one reader every
+    positions view shares)."""
+    from taxjson.lib.missing_history import openings_from_log
+    return openings_from_log(combined, account)
 
 
 def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
@@ -126,7 +120,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
             or w.get("loss_tx_id") in _entry_ids]
 
     # Missing-history openings the blended pass synthesized for THIS
-    # account (missing_history.json): they are in the pool but not in the
+    # account (.tt OPENING cost=unknown lines): they are in the pool but not in the
     # base book
     # (audit R1-275 / R1-322 — a pool showed negative shares at a
     # negative cost, another vanished).

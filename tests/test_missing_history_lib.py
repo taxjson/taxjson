@@ -26,7 +26,7 @@ from taxjson.lib.missing_history import (
     detect_superficial_loss_warnings,
     format_suggestions,
     is_registered_account,
-    load_missing_history,
+    read_legacy_entries as load_missing_history,  # (migrate's reader)
     synthesize_openings,
 )
 from tax_rules import rule

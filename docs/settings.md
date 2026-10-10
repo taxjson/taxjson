@@ -14,7 +14,7 @@ A project is a folder:
 | `inputs/<account>/generic_*.csv` + mapping | any other broker's CSV | [Generic importer mapping](#generic-importer-mapping) |
 | `inputs/<account>/manifest.json` | your corporate-action elections | [manifest.json](#inputsaccountmanifestjson-corporate-action-elections) |
 | `inputs/<crypto account>/sends.json`, `crypto_sends.tt` | your crypto-send decisions and the sales generated from them | [sends.json](#inputscrypto-accountsendsjson-and-crypto_sendstt) |
-| `missing_history.json` | sales whose purchase is not in your files | [missing_history.json](#missing_historyjson) |
+| `inputs/<account>/missing_history.tt` | units held before your files start, cost unknown: `OPENING <date> <SYMBOL> <qty> cost=unknown` lines | [OPENING ... cost=unknown](#opening--costunknown) |
 | holdings TOML (anywhere) | a broker's positions, for `taxjson sanity` / `taxjson opening` | [Holdings TOML](#holdings-toml) |
 | `inputs/slips/slips.toml`, `inputs/slips/U*.YYYY.dividends.csv` | your T5 / T3 slips and IB's dividends reports, for `taxjson slip-audit` (the project's own, also when `inputs_dir` names a shared folder) | [inputs/slips/](#inputsslips-slipstoml-and-ibs-dividends-reports) |
 | `inputs/slips/*.csv` | T5008 / 1099-B slips, for `taxjson reconcile-slips` | — |
@@ -22,7 +22,7 @@ A project is a folder:
 | `filed/<year>.json` | close-year locks | [filed/YEAR.json](#filedyearjson-close-year-locks) |
 | `work/`, `reports/` | rebuilt by every `taxjson run`; never edited | — |
 
-The exports can live in a folder every year's project shares: `taxjson init` makes that layout by default — `inputs/<account>/` beside the year folders (`2025/`), each a complete project whose `taxjson.toml` names the shared folder with `inputs_dir = "../inputs"` (see [Folders](#folders); docs/getting-started.md, "One folder of exports for every year"). Each year still has its own `taxjson.toml`, `ticker.map`, `tobase.map` (Canada), `missing_history.json` and results; only the exports are shared.
+The exports can live in a folder every year's project shares: `taxjson init` makes that layout by default — `inputs/<account>/` beside the year folders (`2025/`), each a complete project whose `taxjson.toml` names the shared folder with `inputs_dir = "../inputs"` (see [Folders](#folders); docs/getting-started.md, "One folder of exports for every year"). Each year still has its own `taxjson.toml`, `ticker.map`, `tobase.map` (Canada), and results; only the exports are shared — with them the `.tt` files, so a `missing_history.tt` line is one record for every year.
 
 Rules every reader applies:
 
@@ -630,6 +630,11 @@ Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated l
 - **Meaning:** an opening balance from a positions report: sets the position and its book cost on the snapshot day, is not a purchase, and replaces the account's earlier rows of that symbol. Long positions only. A US line needs its lot date and a USD cost. `taxjson opening` writes these lines.
 - **Example:** `OPENING 2023-12-29 ZZB.TO 20 CAD 204.95`
 
+#### `OPENING ... cost=unknown`
+- **Form:** `OPENING DATE SYMBOL QTY cost=unknown [reason="TEXT"]` (no time column; the reason, in double quotes, is yours and may hold a `#`).
+- **Meaning:** QTY units of SYMBOL held on DATE, bought before your files start at a cost they do not give — missing history, as a dated event. Sales that draw on them have an unknown cost: listed for manual reporting and left out of the totals (Canada: with no superficial-loss test, until the position is fully sold; US: FIFO, the opening lot first). The line's quantity and date are the opening, exactly: never sized from the rows, no tax-year window. Date it before the first sale it covers (the day before the account's first row is always early enough); a position already short before the date, or short again once the units are used up, is an ATTENTION line naming the line. A line naming a ticker's new symbol, dated before the change, opens the old symbol (the units the account held that day). One line per symbol per account (two stop the run). In the shared layout (`inputs_dir`) the line is read by every year's project. `taxjson find-missing-history --write-missing-history` writes these lines into `inputs/<account>/missing_history.tt` — dated the day before the account's first row, the quantity the units the run opens — merged with the lines the account's .tt files have: never written twice; a symbol a line already opens with another quantity is a Warning and the line is left as it is. It is never a row of the books: `taxjson run` and every command that applies missing history read it (`src/taxjson/lib/missing_history.py` — `read_tt_openings`, `load_missing_history`, `synthesize_openings`; the parser is `parse_unknown_opening_line`). Both countries (tax-logic `CA-ACB-11` / `US-BASIS-04`). This line is the only form of missing history: the project-root `missing_history.json` (and its older name `phantoms.json`) of taxjson before v0.27.0 is no longer read — a project that still has one is refused, naming `taxjson migrate`, which converts it: each entry becomes a line with the units that project's run opened for it (sized through its year's end, or its recorded `quantity`), dated the day before the account's first row; in a year folder of the shared layout it merges every year folder's file into one record (entries the years size the same are one line; entries they disagree on — another quantity, listed in only some years — are listed and written only with `taxjson migrate --write`, each as the newest year listing it sizes it; entries that open nothing in any year are dropped, said), then renames each file `missing_history.json.migrated` (`--dry-run` shows the plan). The converter is `plan_missing_history_migration`.
+- **Example:** `OPENING 2021-12-31 ZZQ.US 10 cost=unknown reason="bought at the old broker in 2015"`
+
 #### `INKIND`
 - **Form:** `INKIND DATE SYMBOL QTY CUR PRICE [TOTAL] [plan=KIND]` (no time column), in a taxable account's folder; or `INKIND DATE SYMBOL QTY plan=own` (no value).
 - **Meaning:** declares and values an in-kind move between this taxable account and a registered plan (an RRSP or TFSA contribution, a withdrawal; US: an IRA distribution). QTY is signed as the shares move in this account: negative = out to the plan, positive = back from it. PRICE is the value per share in CUR; give `0` and a TOTAL to state the whole value. The line names this account's transfer row of that security and quantity nearest DATE (within 10 days) and books it as in kind, dated DATE: with the plan's transfer row of the same quantity (it settles an ambiguous pair the run would not book on its own; `plan=` picks the plan's leg), else the plan's rows that add up to it (a delivery in parts), else as a move to a plan outside the project — `plan=` names that plan (`rrsp`, `tfsa`, `ira` ...). `plan=own` declares the row a move of your own: never in kind, and it no longer makes another pair ambiguous or a delivery in parts suspect. `plan=` needs a value; a value that is not a finite amount is refused. It is never a row of the books; a line matching no transfer row is listed in the run's in-kind warning. The parser is `parse_inkind_line`.
@@ -681,20 +686,6 @@ Hand-entered rows, any `*.tt` file in `inputs/<account>/`. One space-separated l
 
 ---
 
-## missing_history.json
-
-At the project root (the old name `phantoms.json` is still read, with a note; both names at once is refused); each year's project keeps its own. A JSON array of `{ "symbol", "account" }` objects, with an optional `"quantity"` (the shares, or units, held before the data: the opening, exactly; `find-missing-history --write-missing-history` writes it); keys starting with `_` are ignored. Each entry gives the account a missing-history opening with no cost: sales drawing on it are listed for manual reporting and left out of the totals. Without `quantity` the opening is the deepest shortage of the position's rows dated up to December 31 of the project's `year`: rows after it (a later year's exports) never size it — that year's project sizes its own (tax-logic `CA-ACB-11` / `US-BASIS-04`). A position that goes short again once its opening is used up is an ATTENTION line; one `Info:` line per run names the entries whose size the year end decided. `taxjson find-missing-history --write-missing-history` writes candidates (never over an existing file without `--force`). An entry whose position no longer goes short is reported STALE; delete it. Both countries. Read by `src/taxjson/lib/missing_history.py` — `load_missing_history`, `project_missing_history_file`.
-
-```json
-[
-  {"symbol": "ZZQ.US", "account": "margin", "quantity": 10, "_note": "bought before 2019"}
-]
-```
-
-When to use it: only for what is left after importing the real purchases (`.tt` BUYSELL lines, an opening balance).
-
----
-
 ## Generic importer mapping
 
 For a broker taxjson has no parser for: name the export `generic_<anything>.csv` and describe its columns in `generic_<anything>.csv.toml` (wins) or one shared `generic.toml` in the same folder. Unknown sections and keys are refused with a did-you-mean. Securities only (no crypto). Both countries. Parser: `src/taxjson/lib/brokerages/generic.py` — `_load_mapping`, `_COLUMN_KEYS`, `_FORMAT_KEYS`, `_DEFAULT_KEYS`, `_BROKER_KEYS`, `_OPTIONS`, `_VALID_TARGETS`. Template: `examples/generic_wealthsimple.toml`.
@@ -741,7 +732,7 @@ The broker's positions files for the tax year, as a download tool writes them (o
 
 ## Holdings TOML
 
-A broker's positions on a date, read by `taxjson sanity` (and `[accounts.NAME] holdings`) and `taxjson opening`; `taxjson fetch --positions` writes one for Questrade. Never booked by `taxjson run`. Both countries. Reader: `src/taxjson/lib/positions_reports.py` — `_read_toml`.
+A broker's positions on a date, read by `taxjson sanity` (and `[accounts.NAME] holdings`) and `taxjson opening`; sanity compares the quantities of every account and the costs of TAXABLE accounts only (a sheltered account's book cost — RRSP, TFSA, IRA, 401(k), HSA — is not a tax cost: one `Info:` line says so; `accounts_not_compared` in `--json`), and lists a dividend stating more shares than the books held on its record date (settled that day, or traded by the eve of the ex-date on the market's calendar; through a ticker change before the pay date) (else at any time in the 45 days to the pay date: `src/taxjson/lib/positions_check.py` — `income_share_mismatches`, `INCOME_WINDOW_DAYS`); `taxjson fetch --positions` writes one for Questrade. Never booked by `taxjson run`. Both countries. Reader: `src/taxjson/lib/positions_reports.py` — `_read_toml`.
 
 | Key | Meaning |
 | --- | --- |
@@ -988,6 +979,5 @@ The slip audit as one document: a stable schema for programs (new keys may be ad
 - Old per-purpose files are no longer read and stop every command until `taxjson migrate` folds them in: `yf_ticker.map` (QUOTE lines), `crypto_ticker.map` (CRYPTO), `ticker_extraction_overrides.txt` (EXTRACT), `t1135.map` (T1135), `amt_carryover.txt` (`[estimate] amt_carryover`), `claimed_losses.txt` (`[carryover] claimed`), `capital_gains_dividends.map` (`[[capital_gains_dividends]]`), `distributions.map` (`[[distributions]]`). `tv_exchange.map` is only renamed. Code: `src/taxjson/lib/migrate.py` — `legacy_files`.
 - `TAXJSON_LOCAL_TZ`: the crypto time zone outside a project (the setting wins).
 - `TAXJSON_TICKER_MAP`: set by `taxjson` for every stage; the ticker.map a stand-alone tool reads.
-- `TAXJSON_MISSING_HISTORY_YEAR`: set by `taxjson` for every stage (the project's year and folder); a stage that loads that project's `missing_history.json` sizes each opening from the rows through the year's end. Code: `src/taxjson/lib/missing_history.py` — `sizing_env_value`, `_size_until_for`.
 - `TAXJSON_PROJECT_ROOT`: set by `taxjson` for every stage; the project an input file in its (possibly shared, `inputs_dir`) inputs folder belongs to — the IB parse reads that project's `.tt` RENAME lines and ticker.map. Code: `src/taxjson/lib/project_layout.py` — `project_of_input`.
 - `TAXJSON_WIDTH`: the column width text wraps at, for a person. Unset: the terminal's full width (at most 160, never under 40), or 120 when the output is piped or redirected; `0`: no wrapping (what the run writes to `work/` and `reports/` is always unwrapped). Code: `src/taxjson/lib/out.py` — `width`.

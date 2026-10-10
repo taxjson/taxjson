@@ -676,7 +676,9 @@ class TestAuditPhantomBasis(unittest.TestCase):
             p = make_project(Path(td), book=(
                 "BUYSELL 2025-03-03 10:00:00 XYZ.TO -100.00000000 CAD 14.48900000 1448.90000 0.00000\n"),
                 run=False)
-            (p / "missing_history.json").write_text('[{"symbol": "XYZ.TO", "account": "margin"}]')
+            (p / "inputs" / "margin").mkdir(parents=True, exist_ok=True)
+            (p / "inputs" / "margin" / "missing_history.tt").write_text(
+                "OPENING 2025-03-02 XYZ.TO 100 cost=unknown\n")
             tj(p, "run", "--no-input")
             g = json.loads((p / "work" / "margin_gains.json").read_text())
             self.assertTrue(g.get("manual_reporting_required"))

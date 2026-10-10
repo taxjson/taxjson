@@ -71,6 +71,42 @@
 
 ### Changed
 
+- **Breaking:** missing history is a dated event in the account's
+  inputs, and `missing_history.json` is no longer read. A `.tt` line
+  `OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` opens that
+  many units at an unknown cost on that date (sales drawing on it are
+  reported by hand), its quantity and date fixed: no sizing from the
+  rows, no year window. With one folder of exports for every year the
+  line is one record for every year. Both countries (tax-logic CA-ACB-11
+  / US-BASIS-04). A project that still has `missing_history.json` (or
+  `phantoms.json`) is refused by every command, naming `taxjson migrate`
+  (the checklist shows it as its configure item). `taxjson migrate`
+  converts it: each entry sized as that project's last run opened it; in
+  the shared layout the year folders' files are merged — entries the
+  years disagree on are listed, and written only with `migrate --write`
+  (the newest year's view); entries that open nothing are dropped — and
+  each file is renamed `missing_history.json.migrated`. `taxjson
+  find-missing-history --write-missing-history` writes only these lines,
+  into `inputs/<account>/missing_history.tt`, merged with the lines there
+  (never twice; another quantity is a Warning and your line is kept); it
+  no longer takes a FILE. The stages' `--incomplete-history` now names
+  the project folder whose lines apply.
+- `taxjson sanity`'s dividend share-count check follows the entitlement:
+  the record date (the row's, a `.tt` `record=`, or the `REC mm/dd/yy` a
+  description prints, followed back through a ticker change before the
+  pay date; shares traded by the eve of the ex-date on the market's own
+  calendar count), else any time in the 45 days to the pay date. A
+  sale after the record date, the dividend paid later with the position
+  at 0, is no longer listed; a payment on more shares than the books held
+  then, or on a symbol never held, still is. Costs are compared for
+  taxable accounts only: a registered account's book cost is not a tax
+  cost (one Info line says so); its quantities are still compared.
+- Every positions view holds the units bought before the data: `taxjson
+  sanity` (and the run's holdings check, and its dividend share-count
+  check) compared the broker's snapshot with positions rebuilt without the
+  missing-history openings, so the sale of those units read as a short
+  (`MISSING_IN_HOLDINGS` with a negative quantity). An uncovered sale is
+  still flagged.
 - In a Canadian project a ticker.map `TOBASE` or `DISTINCT` line naming a
   TSX Venture listing (`X.V`) also covers its TSX spelling (`X.TO`), the
   one the books carry: the two are one listing.

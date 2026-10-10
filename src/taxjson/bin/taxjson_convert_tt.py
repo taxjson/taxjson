@@ -170,6 +170,13 @@ def parse_tt_line(line: str, account_name: str = 'default',
     if action not in _VALID_ACTIONS:
         raise _unknown_action(action, line, source)
     if action == 'OPENING':
+        if any(t.lower().startswith('cost=') for t in parts[1:]):
+            # (checked by parse_unknown_opening_line; never a row)
+            raise ValueError(
+                f"{_where(source)}an `OPENING ... cost=unknown` line is "
+                f"units held before the data, read by `taxjson run` "
+                f"(lib/missing_history) — not a row of the books: "
+                f"{line.strip()!r}")
         return parse_opening_line(parts, line, account_name, source)
     if len(parts) < 3:
         raise ValueError(
@@ -489,6 +496,111 @@ def parse_journal_line(line: str, source: str = ''):
 # The most units a dated event may move (a JOURNAL line): no position
 # holds a trillion units; a bigger number is a typo (1e308).
 _MAX_EVENT_QTY = 1e12
+
+# Units held before the data starts, cost unknown (lib/missing_history:
+# missing history, read by `taxjson run`).
+UNKNOWN_OPENING_FORM = ('OPENING <date> <SYMBOL> <qty> cost=unknown '
+                        '[reason="..."]')
+
+
+def _cut_comment_outside_quotes(line: str) -> str:
+    """`line` up to its first `#` outside double quotes (a reason="..."
+    may hold a `#`)."""
+    inq = False
+    for i, ch in enumerate(line):
+        if ch == '"':
+            inq = not inq
+        elif ch == '#' and not inq:
+            return line[:i]
+    return line
+
+
+def parse_unknown_opening_line(line: str, source: str = ''):
+    """`OPENING <date> <SYMBOL> <qty> cost=unknown [reason="..."]` ->
+    {date, symbol, quantity, reason, line}: <qty> units of SYMBOL held
+    on <date>, bought before the data starts at a cost the files do not
+    give — missing history (tax-logic
+    CA-ACB-11 / US-BASIS-04). None when the line is not an OPENING line
+    with a `cost=` word (a positions-report OPENING line has a currency
+    and a total instead). `taxjson run` reads it from the account's .tt
+    files (lib/missing_history.read_tt_openings); it is never a row of
+    the converted file. Raises ValueError naming the form on a
+    malformed line."""
+    import shlex
+    where = _where(source)
+    body = _cut_comment_outside_quotes(line)
+    head = body.split()
+    if not head or head[0] != 'OPENING' or not any(
+            t.lower().startswith('cost=') for t in head[1:]):
+        return None
+    shown = body.strip()
+    try:
+        parts = shlex.split(body, posix=True)
+    except ValueError:
+        raise ValueError(
+            f"{where}malformed OPENING line — an unclosed quote (expected "
+            f"`{UNKNOWN_OPENING_FORM}`): {shown!r}") from None
+    reason = None
+    rest = []
+    for t in parts:
+        if t.lower().startswith('reason='):
+            if reason is not None:
+                raise ValueError(
+                    f"{where}malformed OPENING line — two reason= words "
+                    f"(expected `{UNKNOWN_OPENING_FORM}`): {shown!r}")
+            reason = t.split('=', 1)[1]
+            continue
+        rest.append(t)
+    reason = (reason or '').strip()
+    if len(rest) != 5 or rest[4].lower() != 'cost=unknown':
+        bad = [t for t in rest if t.lower().startswith('cost=')]
+        hint = (f" — the cost of units held before the data is `unknown` "
+                f"(got {bad[0]!r}; units whose cost you know are a "
+                f"positions-report line `OPENING <date> <symbol> <qty> "
+                f"<currency> <total-cost>`)"
+                if bad and bad[0].lower() != 'cost=unknown' else '')
+        raise ValueError(
+            f"{where}malformed OPENING line — expected "
+            f"`{UNKNOWN_OPENING_FORM}`{hint}: {shown!r}")
+    _, date, sym, qty, _cost = rest
+    if not _is_date(date):
+        raise ValueError(
+            f"{where}malformed OPENING line — the date {date!r} is not "
+            f"YYYY-MM-DD (expected `{UNKNOWN_OPENING_FORM}`): {shown!r}")
+    _sy = {'action': 'SPLIT', 'symbol': sym.upper()}
+    _canonical_ca_symbols(_sy)
+    sym = _sy['symbol']
+    if sym.startswith(_FUTURES_PREFIXES):
+        raise ValueError(
+            f"{where}OPENING cost=unknown on a futures contract ({sym}) is "
+            f"not supported: futures are booked on their own basis "
+            f"(lib/futures.py): {shown!r}")
+    try:
+        q = _tt_num(qty)
+    except ValueError as e:
+        raise ValueError(
+            f"{where}malformed OPENING line — the quantity {qty!r} is not "
+            f"a number ({e}; expected `{UNKNOWN_OPENING_FORM}`): "
+            f"{shown!r}") from None
+    if not q > 0 or q > _MAX_EVENT_QTY:
+        raise ValueError(
+            f"{where}malformed OPENING line — the quantity must be a "
+            f"positive number of units held before the data (expected "
+            f"`{UNKNOWN_OPENING_FORM}`): {shown!r}")
+    _not_in_future(date, 'OPENING', where, shown)
+    return {'date': date, 'symbol': sym, 'quantity': q, 'reason': reason,
+            'line': shown}
+
+
+def unknown_opening_text(date: str, symbol: str, quantity: float,
+                         reason: str = '') -> str:
+    """The .tt line parse_unknown_opening_line reads back."""
+    r = ' '.join(str(reason or '').replace('"', "'").split())
+    q = _num(quantity)
+    if '.' in q:
+        q = q.rstrip('0').rstrip('.')
+    return (f"OPENING {date} {symbol} {q} cost=unknown"
+            + (f' reason="{r}"' if r else ''))
 
 
 def _not_in_future(date: str, kind: str, where: str, shown: str) -> None:
@@ -1262,6 +1374,11 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
             # (lib/dated_events): checked here, never a row of the file.
             if (parse_journal_line(line, source) is not None
                     or parse_rename_line(line, source) is not None):
+                continue
+            # Units held before the data, cost unknown (lib/
+            # missing_history.read_tt_openings): read by `taxjson run`,
+            # checked here, never a row of the file.
+            if parse_unknown_opening_line(line, source) is not None:
                 continue
             # A filing position against the loss rule (lib/loss_overrides):
             # read by `taxjson run`, never a row of the books.

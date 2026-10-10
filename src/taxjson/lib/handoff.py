@@ -258,8 +258,10 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
              phantoms: Optional[Path] = None) -> Dict[str, Any]:
     """{group: {symbol: {qty, acb, deferred}}} for the taxable pools as
     of the end of `as_of` (the engine's date basis). `phantoms`: the
-    project's missing-history file (missing_history.json), applied when
-    it exists (the parameter keeps its pre-rename name)."""
+    project's missing-history path (lib/missing_history.
+    missing_history_arg: the project folder, for the accounts' .tt
+    OPENING cost=unknown lines), None without either (the parameter
+    keeps its pre-rename name)."""
     settings = cfg.get("settings", {}) or {}
     basis = _basis(settings)
     cut = _d(as_of)
@@ -293,7 +295,7 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                 tail = ["--taxable"] + common_flags
                 if sheltered.exists() and g == "equity":
                     tail += ["--sheltered", str(sheltered)]
-                if phantoms is not None and phantoms.exists():
+                if phantoms is not None:
                     tail += ["--incomplete-history", str(phantoms)]
                 full_out = tdp / f"{g}_full_gains.json"
                 run_gains(tail + [str(full)], full_out)
@@ -339,7 +341,7 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                     tail += ["--sheltered", str(sheltered)]
             else:
                 tail = ["--taxable", "--no-wash"] + common_flags
-            if phantoms is not None and phantoms.exists():
+            if phantoms is not None:
                 tail += ["--incomplete-history", str(phantoms)]
             trunc_out = tdp / f"{g}_asof_gains.json"
             run_gains(tail + [str(trunc)], trunc_out)
@@ -563,8 +565,8 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
                   common_flags: List[str],
                   filed_csv: Optional[Path] = None) -> Dict[str, Any]:
     cache = Path(root) / "work"
-    from taxjson.lib.missing_history import missing_history_path
-    mh_file = missing_history_path(root)
+    from taxjson.lib.missing_history import missing_history_arg
+    mh_file = missing_history_arg(root)
     rec = {
         "record_version": RECORD_VERSION,
         "date_basis": _basis(cfg.get("settings", {}) or {}),

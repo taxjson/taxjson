@@ -171,11 +171,11 @@ def _parse_args():
     )
     parser.add_argument(
         "--incomplete-history",
-        metavar="FILE",
+        metavar="DIR",
         help=(
-            "JSON file (a project's missing_history.json) listing "
-            "(symbol, account) pairs sold with no purchase in the files "
-            "(bought before the data starts). The engine inserts a synthetic OPENING_BALANCE "
+            "The project folder: its accounts' .tt `OPENING <date> "
+            "<SYMBOL> <qty> cost=unknown` lines (units bought before the "
+            "data starts). The engine inserts a synthetic OPENING_BALANCE "
             "for each, taints the ACB pool, and excludes affected dispositions "
             "from the gains report (surfaced separately under "
             "'manual_reporting_required')."
@@ -187,9 +187,10 @@ def _parse_args():
         help=(
             "Detect (symbol, account) pairs whose running position goes "
             "negative (a sale with no purchase in the files) and write "
-            "them to FILE as a candidate missing-history file. Review, "
-            "remove entries that are actually real shorts, then re-run "
-            "with --incomplete-history FILE."
+            "them to FILE as JSON candidates, each with the units the "
+            "run would open (`taxjson find-missing-history "
+            "--write-missing-history` turns them into .tt OPENING "
+            "cost=unknown lines)."
         ),
     )
     # The flag's old name: hidden, still accepted with a note.
@@ -297,9 +298,8 @@ def _suggest_missing_history_and_exit(args, transactions,
     # is ours.
     if _out.is_file() and _out.stat().st_size > 0:
         emit_line(f"taxjson-gains: error: --suggest-missing-history {_out} "
-                  f"already exists — not overwritten (it may be a reviewed "
-                  f"missing_history.json). Write to a new file and merge by hand, or "
-                  f"delete it first.", file=sys.stderr)
+                  f"already exists — not overwritten. Write to a new file, "
+                  f"or delete it first.", file=sys.stderr)
         raise SystemExit(2)
     # 'cannot write <path>: ...' for a directory or a missing folder,
     # not 'cannot read' / 'no such file' (re-audit A2-1432).
@@ -316,16 +316,21 @@ def _suggest_missing_history_and_exit(args, transactions,
                                            flag_stale=False, until=_until)
         _qty = {(e['symbol'], e['account']): e['opening_qty']
                 for e in _applied if e.get('inserted')}
+        _all = {(e['symbol'], e['account']): e['opening_all_rows']
+                for e in _applied if e.get('opening_all_rows')}
     except Exception:                                   # noqa: BLE001
-        _qty = {}
-    write_text_atomic(_out, format_suggestions(candidates, _qty, _until))
+        _qty, _all = {}, {}
+    write_text_atomic(_out, format_suggestions(candidates, _qty, _until,
+                                               all_rows=_all))
     n_reg = sum(1 for c in candidates if c.registered)
     print(
         f"Wrote {len(candidates)} candidate(s) to {args.suggest_missing_history} "
         f"({n_reg} in registered accounts — almost certainly a purchase "
         f"missing from your files). "
-        f"Review, remove any real shorts, then re-run with "
-        f"--incomplete-history {args.suggest_missing_history}.",
+        f"Review them; the units held before the data go in the "
+        f"account's .tt files as `OPENING <date> <SYMBOL> <qty> "
+        f"cost=unknown` lines (`taxjson find-missing-history "
+        f"--write-missing-history` writes them).",
         file=sys.stderr,
     )
 

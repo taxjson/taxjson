@@ -110,17 +110,17 @@ class TestWashPassGetsPhantoms(unittest.TestCase):
             root = Path(tmp)
             cache = root / "work"; cache.mkdir()
             reports = root / "reports"; reports.mkdir()
-            (cache / "margin_base.json").write_text(json.dumps({
-                "transactions": [
-                    {"action": "BUYSELL", "date": "2026-03-01",
+            rows = [{"action": "BUYSELL", "date": "2026-03-01",
                      "time": "09:30:00", "symbol": "PHM.TO",
                      "quantity": -100, "price": 50.0, "net_amount": 5000.0,
-                     "currency": "CAD", "account": "margin"}]}))
+                     "currency": "CAD", "account": "margin"}]
+            (cache / "margin_base.json").write_text(json.dumps({
+                "transactions": rows}))
             (cache / "sheltered_base.json").write_text(
                 json.dumps({"transactions": []}))
-            phantoms = root / "missing_history.json"
-            phantoms.write_text(json.dumps(
-                [{"symbol": "PHM.TO", "account": "margin"}]))
+            # (the missing history: a .tt OPENING cost=unknown line)
+            from _mh import mh_dir
+            phantoms = mh_dir(rows, [("PHM.TO", "margin")])
             settings = {"year": 2026, "country": "canada",
                         "tax_date": "settle", "base_currency": "CAD"}
             # In-process stage: capture its progress lines (they name

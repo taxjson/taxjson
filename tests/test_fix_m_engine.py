@@ -681,6 +681,8 @@ class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
         self.ph = self.tmp / 'missing_history.json'
         self.ph.write_text(json.dumps([{'symbol': 'OLD.TO',
                                         'account': 'margin'}]))
+        from _mh import from_json
+        self.ph = from_json(self.ph, rows)
 
     def test_traces_file_matches_gains_json(self):
         import json
@@ -927,6 +929,8 @@ class TestDiagnosticsReachTheUser(unittest.TestCase):
         base.write_text(json.dumps([t.to_dict() for t in rows]))
         ph = tmp / 'missing_history.json'
         ph.write_text(json.dumps([{'symbol': 'ABC.TO', 'account': 'margin'}]))
+        from _mh import from_json
+        ph = from_json(ph, rows)
         r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
                  '--year', '2025', '--taxable', '--incomplete-history', ph,
                  base)
@@ -1126,10 +1130,15 @@ class TestPhantomWalks(unittest.TestCase):
         from pathlib import Path
         from taxjson.lib.missing_history import (load_missing_history,
                                                   synthesize_openings)
-        f = Path(tempfile.mkdtemp()) / 'missing_history.json'
-        f.write_text(json.dumps([{'symbol': 'xyz.to', 'account': 'margin'},
-                                 {'symbol': 'NOPE.TO', 'account': 'margin'}]))
-        ph = load_missing_history(f)
+        # (.tt lines: a hand-typed lower-case symbol, a symbol with no
+        # rows)
+        d = Path(tempfile.mkdtemp())
+        (d / 'taxjson.toml').write_text('[accounts.margin]\ntype = "taxable"\n')
+        (d / 'inputs' / 'margin').mkdir(parents=True)
+        (d / 'inputs' / 'margin' / 'missing_history.tt').write_text(
+            'OPENING 2025-01-01 xyz.to 100 cost=unknown\n'
+            'OPENING 2025-01-01 NOPE.TO 5 cost=unknown\n')
+        ph = load_missing_history(d)
         self.assertIn(('XYZ.TO', 'margin'), ph)
         txs = _tt("BUYSELL 2025-03-03 10:00:00 XYZ.TO -100 CAD 20 2000")
         err = io.StringIO()

@@ -1,6 +1,7 @@
 """Regression pins for the re-audit-2 "phantoms" list (lib/missing_history,
 formerly lib/phantom_holdings; find-missing-history; the run's
-missing_history.json handling — the file was phantoms.json until 2026-10).
+missing-history handling — missing_history.json, phantoms.json until
+2026-10, and since v0.27.0 the .tt OPENING cost=unknown lines).
 
 Synthetic data only: fake account numbers (55500001 # pii-ok), all-CAD
 Questrade books, no FX fetch.
@@ -97,12 +98,15 @@ _PHANTOM_CSV = _QT_HEADER + (
 
 def _project(tmp, csv=_PHANTOM_CSV, missing_history=None, config=_CONFIG):
     root = Path(tmp)
+    root.mkdir(parents=True, exist_ok=True)
     (root / "taxjson.toml").write_text(config)
     (root / "inputs" / "margin").mkdir(parents=True)
     (root / "inputs" / "margin" / "questrade_2025.csv").write_text(csv)
     if missing_history is not None:
-        (root / "missing_history.json").write_text(
-            json.dumps(missing_history))
+        # .tt OPENING cost=unknown lines (missing_history.json is no
+        # longer read)
+        (root / "inputs" / "margin" / "missing_history.tt").write_text(
+            "".join(ln + "\n" for ln in missing_history))
     return root
 
 
@@ -347,7 +351,7 @@ class TestStaleMissingHistoryEntries(unittest.TestCase):
         e = next(x for x in log if x["symbol"] == "QQA.TO")
         self.assertTrue(e["inserted"])
         self.assertEqual(e["stale"], "broker-short")
-        self.assertIn("warning: ATTENTION: missing_history.json lists "
+        self.assertIn("warning: ATTENTION: missing_history.tt lists "
                       "QQA.TO / margin", err)
         self.assertIn("REAL short", err)
 
@@ -395,14 +399,14 @@ class TestStaleMissingHistoryEntries(unittest.TestCase):
             base = Path(tmp) / "margin_base.json"
             base.write_text(json.dumps({"transactions": [
                 t.to_dict() for t in self._marked()]}))
-            ph = Path(tmp) / "missing_history.json"
-            ph.write_text(json.dumps([{"symbol": "QQA.TO",
-                                       "account": "margin"}]))
+            ph = _project(Path(tmp) / "p", csv=_QT_HEADER,
+                          missing_history=[
+                              "OPENING 2024-04-14 QQA.TO 1000 cost=unknown"])
             r = _run_mod("taxjson.bin.taxjson_missing_history",
                          "--year", "2024", "--missing-history", ph, base)
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("REMOVE from missing_history.json", r.stdout)
-            self.assertIn("missing_history.json LISTS it: remove that entry",
+            self.assertIn("REMOVE from missing_history.tt", r.stdout)
+            self.assertIn("missing_history.tt LISTS it: remove that entry",
                           r.stdout)
             self.assertNotIn("No missing-cost-basis issues", r.stdout)
 
@@ -431,7 +435,7 @@ class TestStaleMissingHistoryEntries(unittest.TestCase):
         # the gains stage's ATTENTION line reaches the console.
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, missing_history=[
-                {"symbol": "XYZ260619C00050000.TO", "account": "margin"}])
+                "OPENING 2025-03-01 XYZ260619C00050000.TO 1 cost=unknown"])
             (root / "inputs" / "margin" / "opts.tt").write_text(
                 "BUYSELL 2025-03-02 09:30:00 XYZ260619C00050000.TO -1 CAD "
                 "3.00 300.00 0.0\n"
@@ -439,8 +443,8 @@ class TestStaleMissingHistoryEntries(unittest.TestCase):
                 "1.00 -100.00 0.0\n")
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
-            self.assertIn("ATTENTION: missing_history.json lists "
-                          "XYZ260619C00050000.TO / margin", r.stdout)
+            self.assertIn("ATTENTION: inputs/margin/missing_history.tt:1 "
+                          "lists XYZ260619C00050000.TO / margin", r.stdout)
 
 
 # ------------------------------------------------------- A2-0111 / A2-0305
@@ -453,8 +457,8 @@ class TestNativeBooksApplyMissingHistory(unittest.TestCase):
     @rule("CA-ACB-11")
     def test_holdings_and_native_gains_agree_with_sum(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp, missing_history=[{"symbol": "ZZZ.TO",
-                                            "account": "margin"}])
+            root = _project(tmp, missing_history=[
+                "OPENING 2025-01-09 ZZZ.TO 100 cost=unknown"])
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             raw = json.loads((root / "work" / "margin_raw_gains.json")
@@ -492,43 +496,9 @@ class TestNativeBooksApplyMissingHistory(unittest.TestCase):
 # ------------------------------------------------------------------ A2-0312
 
 class TestWriteMissingHistoryKeepsAReviewedFile(unittest.TestCase):
-    """A2-0312: --write-missing-history never rewrites an existing
-    (reviewed) missing_history.json without --force, and --force keeps a
-    .bak."""
-
-    def test_refuses_then_force_keeps_backup(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp)
-            self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
-                             0)
-            ph = root / "missing_history.json"
-            reviewed = json.dumps([{"symbol": "HAND.TO",
-                                    "account": "margin"}])
-            ph.write_text(reviewed)
-            r = _run_cli(root, "find-missing-history",
-                         "--write-missing-history", str(ph))
-            self.assertNotEqual(r.returncode, 0)
-            self.assertIn("already exists", r.stderr)
-            self.assertEqual(ph.read_text(), reviewed)
-            r = _run_cli(root, "find-missing-history",
-                         "--write-missing-history", str(ph), "--force")
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertEqual((root / "missing_history.json.bak").read_text(),
-                             reviewed)
-            self.assertEqual([e["symbol"] for e in
-                              json.loads(ph.read_text())], ["ZZZ.TO"])
-
-    def test_new_file_is_written(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = _project(tmp)
-            self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
-                             0)
-            out = root / "cand.json"
-            r = _run_cli(root, "find-missing-history",
-                         "--write-missing-history", str(out))
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertEqual([e["symbol"] for e in
-                              json.loads(out.read_text())], ["ZZZ.TO"])
+    """A2-0312: a reviewed file is never rewritten (the .tt lines are
+    merged, never replaced — test_fix_missing_history_tt); the standalone
+    suggestion file is not overwritten."""
 
     def test_standalone_suggest_refuses_a_non_empty_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -562,7 +532,10 @@ class TestDanglingProjectMap(unittest.TestCase):
                 (root / name).symlink_to(root / "nowhere" / name)
                 r = _run_cli(root, "run", "--no-input")
                 self.assertNotEqual(r.returncode, 0)
-                self.assertIn(f"{name} is a symlink", r.stderr)
+                # (missing_history.json / phantoms.json: no longer read,
+                # in any form)
+                self.assertIn(f"{name} is a symlink" if name == "ticker.map"
+                              else f"{name} is no longer read", r.stderr)
                 self.assertIn("nothing was run", r.stderr)
 
     def test_live_symlink_still_works(self):

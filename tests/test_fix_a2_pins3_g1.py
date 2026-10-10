@@ -39,13 +39,15 @@ def _split(date_, symbol, ratio, account="margin", new="", **kw):
 
 
 def _gains(rows, listed, country="canada", year=2025):
-    """run_gains with missing_history.json listing `listed`; (results, stderr)."""
+    """run_gains with the .tt lines `listed` converts to; (results, stderr)."""
     from taxjson.lib.core import TaxTransaction
     from taxjson.lib.pipeline import GainsRequest, run_gains
     with tempfile.TemporaryDirectory() as tmp:
         ph = Path(tmp) / "missing_history.json"
         ph.write_text(json.dumps([{"symbol": s, "account": a}
                                   for s, a in listed]))
+        from _mh import from_json
+        ph = from_json(ph, rows, until=f"{year}-12-31")
         err = io.StringIO()
         with redirect_stderr(err):
             res = run_gains([TaxTransaction(**t.to_dict()) for t in rows],
@@ -553,6 +555,8 @@ class TestApplicationLogOrder(unittest.TestCase):
             ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": s, "account": "margin"}
                                       for s in reversed(self.SYMS)]))
+            from _mh import from_json
+            ph = from_json(ph, self._rows())
             outs = []
             for seed in ("0", "1", "7"):
                 e = dict(os.environ)

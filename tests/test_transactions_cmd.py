@@ -455,16 +455,17 @@ class TestFindMissingHistory(unittest.TestCase):
                                   "quantity": -100, "price": 50.0,
                                   "net_amount": 5000.0, "currency": "CAD",
                                   "account": "margin"}]}))
-            out = root / "missing_history.json"
+            out = root / "inputs" / "margin" / "missing_history.tt"
             r = _runsub(root, "find-missing-history", "margin",
-                        "--write-missing-history", str(out))
+                        "--write-missing-history")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertTrue(out.exists())
-            entries = json.loads(out.read_text())
-        # Emits the (symbol, account) pair the --incomplete-history loader reads.
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]["symbol"], "XYZ.US")
-        self.assertEqual(entries[0]["account"], "margin")
+            lines = [ln for ln in out.read_text().splitlines()
+                     if ln.startswith("OPENING ")]
+        # Emits the line the --incomplete-history loader reads.
+        self.assertEqual(lines, ["OPENING 2026-02-28 XYZ.US 100 cost=unknown "
+                                 "reason=\"find-missing-history: the "
+                                 "shortage of the rows through "
+                                 "2026-12-31\""])
 
     def test_gen_phantoms_output_is_consumed_by_gains(self):
         # The whole point of the file: what --write-missing-history emits must be
@@ -485,14 +486,13 @@ class TestFindMissingHistory(unittest.TestCase):
                  "date_settle": "2025-03-01", "time": "09:30:00",
                  "symbol": "XYZ.TO", "quantity": -100, "price": 50.0,
                  "net_amount": 4995.0, "currency": "CAD", "account": "margin"}]}))
-            ph = root / "missing_history.json"
             r = _runsub(root, "find-missing-history", "margin",
-                        "--write-missing-history", str(ph))
+                        "--write-missing-history")
             self.assertEqual(r.returncode, 0, r.stderr)
             g = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                  "--country", "canada", "--year", "2025", "--taxable",
-                 "--incomplete-history", str(ph), str(base)],
+                 "--incomplete-history", str(root), str(base)],
                 cwd=REPO_ROOT, capture_output=True, text=True)
             self.assertEqual(g.returncode, 0, g.stderr)
             out = json.loads(g.stdout)
@@ -517,12 +517,15 @@ class TestFindMissingHistory(unittest.TestCase):
                                       "quantity": -100, "price": 50.0,
                                       "net_amount": 5000.0, "currency": "CAD",
                                       "account": acct}]}))
-            out = root / "missing_history.json"
             r = _runsub(root, "find-missing-history",
-                        "--write-missing-history", str(out))
+                        "--write-missing-history")
             self.assertEqual(r.returncode, 0, r.stderr)
-            entries = json.loads(out.read_text())
-        pairs = {(e["symbol"], e["account"]) for e in entries}
+            pairs = set()
+            for acct in ("margin", "lira"):
+                f = root / "inputs" / acct / "missing_history.tt"
+                pairs |= {(ln.split()[2], acct)
+                          for ln in f.read_text().splitlines()
+                          if ln.startswith("OPENING ")}
         self.assertEqual(pairs, {("XYZ.US", "margin"), ("ABC.TO", "lira")})
 
 

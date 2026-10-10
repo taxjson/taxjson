@@ -89,6 +89,8 @@ class TestPartialTaintWarningWindowEdge(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ph = Path(tmp) / "missing_history.json"
             ph.write_text(json.dumps([{"symbol": "PT.TO", "account": "m"}]))
+            from _mh import from_json
+            ph = from_json(ph, book)
             with contextlib.redirect_stderr(io.StringIO()):
                 res = run_gains(copy.deepcopy(book), [], [], req=GainsRequest(
                     country="canada", year=2026, taxable=True,
