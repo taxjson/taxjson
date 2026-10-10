@@ -52,6 +52,8 @@ command, the docs). Every command follows these rules.
    | --- | --- |
    | `run` | each message one line (its headline; the detail with `--details` and in work/*.diag); the closing block under `==> Before you trust these numbers` at most 6 lines; `==> ` steps are not counted |
    | `checklist` | the next step, one `! ` line per item needing attention, one line per section with its counts (a table); at most 6 other lines. `--all` is the full list |
+   | `format`, `format-map` | the diff is the data; the note after it one line |
+   | `init --force` over another project | 8: the backup it kept and the leftover folders are never left out |
    | `tax-logic`, `help`, `-h` | exempt: they are the reference text |
    | `form-export --form txf`, `--json`, `events` `.tt` lines | exempt: machine output |
 
