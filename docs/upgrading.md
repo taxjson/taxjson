@@ -60,6 +60,37 @@ needed nothing.
 
 ### v0.28.0
 
+- **Shorter command output.** A command's default output is the
+  essentials: a legend before each table, then only the lines to act on
+  (starting `! `) or not to miss, one line each, naming the command with
+  the detail. Every explanation, caveat and citation is still there
+  behind `--details` (`tjs sum --details`, `tjs run --details`);
+  `tjs checklist` shows the steps that need attention and the next one
+  (`tjs checklist --all` is the full list); `tjs estimate` shows the
+  estimate alone (`--details` puts the gains table back in front);
+  `tjs years` is a table (`--details` prints each year in words).
+  `--json`, the `reports/` files and the run's `work/*.diag` are
+  unchanged. A script that read a note from the text output: read
+  `--json`, or add `--details`. [output-style.md](output-style.md)
+  describes the format, and [troubleshooting.md](troubleshooting.md)
+  quotes the one-line forms.
+- **`tjs close-year` asks first** when a checklist step before the lock
+  needs attention: it lists them and asks on a terminal; without a
+  terminal (a script, a pipe) it refuses unless you pass `--yes`.
+- **`tjs init` in an empty folder named like a year refuses** (it would
+  have built `2026/2026/`): run it in the folder above —
+  `mkdir -p ~/taxes && cd ~/taxes && tjs init --country canada && cd 2026`.
+  `tjs init --single` still makes one folder where you are.
+- **`option_grant_timing_since` (Canada):** a new `taxjson.toml` leaves
+  it commented out unless another year folder beside it sets it, and
+  `tjs run` warns only when the books hold a written option. A new
+  warning says when it is later than `year` ("option_grant_timing_since
+  = 2026 is after year = 2025"): usually `year` was lowered with the key
+  left as an older `tjs init` wrote it — set it to the first year you
+  file under grant timing ([troubleshooting.md](troubleshooting.md)).
+- **The help page's Maintainer group.** The release commands
+  (`channels`, `deploy`, `promote`) are listed only on a development
+  checkout; `tjs help --all` lists them everywhere, and they still run.
 - **The docs moved.** README.md is a front page; its reference sections
   moved to their own pages: [commands.md](commands.md) (every command),
   [brokers.md](brokers.md) (getting each broker's files, the generic
@@ -69,22 +100,9 @@ needed nothing.
   [glossary.md](glossary.md) and this page. KNOWN_ISSUES.md now lists open
   bugs only. A bookmark to a README section lands on the front page; the
   section is in the page above.
-- **Shorter command output.** A command's default output is the
-  essentials: a legend before each table, then only the lines to act on
-  (starting `! `) or not to miss. Every explanation, caveat and citation
-  is still there behind `--details` (`tjs sum --details`,
-  `tjs checklist --all`); `--json` is unchanged. A script that read a
-  note from the text output: read `--json`, or add `--details`.
-  [output-style.md](output-style.md) describes the format.
-- **The help page** lists the maintainer's release commands (`channels`,
-  `deploy`, `promote`) only on a development checkout;
-  `tjs help --all` lists them everywhere, and they still run.
-- `tjs run` downloads exchange rates from a few days before the earliest
-  date in your files instead of from 2000.
-
-<!-- TODO-SYNC: these v0.28.0 bullets follow feat/concise-output and
-feat/newuser-fixes as of their last commits; recheck after both merge,
-and add the demo project command once it lands. -->
+- New, nothing to do: `tjs init --demo ~/taxjson-demo` makes a project
+  of made-up exports to try first
+  ([getting-started.md](getting-started.md#1-install)).
 
 ### v0.27.1
 

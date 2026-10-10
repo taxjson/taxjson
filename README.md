@@ -63,7 +63,13 @@ tjs checklist               # again at year end: ready to file?
 For last year's return, `tjs init --country canada --year 2025` and
 `cd 2025`.
 
-<!-- TODO-SYNC: feat/newuser-fixes adds a demo project (`tjs init --demo` or `tjs demo`); add its one line here. -->
+To try it first on made-up exports (Canada, tax year 2024; the first run
+downloads that year's exchange rates):
+
+```bash
+tjs init --demo ~/taxjson-demo && cd ~/taxjson-demo/2024
+tjs run && tjs sum && tjs checklist
+```
 
 Then read **[docs/getting-started.md](docs/getting-started.md)**: a
 first project step by step, including the part that takes the time —

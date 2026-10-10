@@ -44,14 +44,26 @@ Re-run the same line to upgrade; release channels and what changed
 between releases are in [upgrading.md](upgrading.md); installing from a
 checkout is in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
 
-<!-- TODO-SYNC: feat/newuser-fixes adds a demo project; name its command here once it lands. -->
-**Try it first (optional).** The repository's `examples/` folder holds a
-made-up export for each broker (`questrade_demo.csv`, `ib_demo.csv` ...).
-Make a throw-away project (step 2, in a folder of its own; set
-`local_timezone` or delete `[accounts.crypto]` as step 2 says), copy one
-into `inputs/margin/`, and `tjs run` then `tjs sum` in the year folder
-(`--year 2024` for the demos' dates): that is what a finished run looks
-like, before you download anything of your own.
+**Try it first (optional).** `tjs init --demo ~/taxjson-demo` makes a
+throw-away project of made-up exports (Canada, tax year 2024: two
+Interactive Brokers accounts, Questrade, Webull, a TFSA at RBC, Kraken
+and Coinbase), its `taxjson.toml` ready (time zone set, nothing to
+answer). Then:
+
+```bash
+cd ~/taxjson-demo/2024
+tjs run          # the first run downloads 2024's exchange rates
+tjs sum          # the year's gains, as on the return
+tjs checklist    # every step to filing, checked
+```
+
+That is what a finished run looks like, before you download anything of
+your own. The demo also holds the cases this guide walks through: a sale
+with no purchase (`tjs find-missing-history`, step 5), a spin-off with
+its election saved (`tjs spinoffs`), a superficial loss
+(`tjs wash-sales`) and a written option open at the year end
+(`tjs option-boundary`). The same made-up exports, one per broker, are
+in the repository's `examples/` folder.
 
 ## 2. Create a project
 
