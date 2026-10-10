@@ -11,24 +11,24 @@ Claude Code, Codex, Gemini CLI, Cursor and Copilot read this file.
 
 1. **Start with `tjs checklist` in their project folder:** every step
    from install to filing, each checked, the next one named with its
-   command (it writes only `checklist.json` marks). Then the detail behind
-   a step: `tjs sanity` (positions against the broker's holdings),
-   `tjs find-missing-history` and, in Canada, `tjs slip-audit` (T5 / T3
-   slips). The end of `tjs run` lists what to look at. Most problems are an
-   input (a missing older export, a transfer in, an election not made),
-   not a bug. Say which it is.
+   command. Then the detail behind a step: `tjs sanity` (positions against
+   the broker's holdings), `tjs find-missing-history` and, in Canada,
+   `tjs slip-audit` (T5 / T3 slips). The end of `tjs run` lists what to
+   look at. Most problems are an input (a missing older export, a transfer
+   in, an election not made), not a bug. Say which it is. A command's
+   default output is the essentials; `--details` shows the rest.
 2. **`docs/troubleshooting.md`: known problems.** Search it for the exact
    message text. Each entry says how to **check** it, the cause, the fix,
    the release that **fixed** it (newer than `tjs --version`: upgrade) and
    the code. Bugs an upgrade alone fixes, and breaking changes:
    `docs/upgrading.md`.
-3. **Settings:** `docs/settings.md` (every taxjson.toml key; `tjs format`
-   lays the file out). **Tax rules:** `docs/tax-rules.md`; the spec is
-   `tjs tax-logic` (`--ids`). Commands: `docs/commands.md`; broker
-   downloads: `docs/brokers.md`; out of scope: `docs/limits.md`; terms:
-   `docs/glossary.md`.
+3. **Settings:** `docs/settings.md` (every taxjson.toml key). **Tax
+   rules:** `docs/tax-rules.md`; the spec is `tjs tax-logic` (`--ids`).
+   Commands: `docs/commands.md`; downloads: `docs/brokers.md`; out of
+   scope: `docs/limits.md`; terms: `docs/glossary.md`; a first project:
+   `docs/getting-started.md`; the year end: `docs/filing.md`.
 4. **Where the code is:** `docs/architecture-map.md`. Don't read
-   `src/taxjson/bin/taxjson_run.py` (22k lines) top to bottom: search it for
+   `src/taxjson/bin/taxjson_run.py` (28k lines) top to bottom: search it for
    the `cmd_<command>` or `stage_` name the map gives.
 
 **Privacy.** Work from tjs command output. Never read the raw CSVs in a
@@ -41,16 +41,15 @@ it computed and which rule it applied; for what to file, point to the CRA or
 IRS guidance and a tax professional.
 
 **Reporting a bug** (`.github/ISSUE_TEMPLATE/bug_report.md`):
-- Include: `tjs --version`, the Python version, the OS, the command and its
-  console `Error:` / `Warning:` lines, and the `tjs checklist` and
-  `tjs sanity` summaries.
+- Include: `tjs --version`, Python, the OS, the command, its `Error:` /
+  `Warning:` lines, and the `tjs checklist` and `tjs sanity` summaries.
 - Never include real amounts, account or slip numbers, names, the raw CSVs
   or anything copied from them.
-- Reproduce it on a made-up CSV: copy the broker's `examples/*_demo.csv`,
-  edit rows to the same shape (same columns, actions and wording pattern;
-  made-up values and ids), run taxjson on it to confirm it fails the same
-  way, and attach that file (made-up amounts are fine). A `tjs redact` copy
-  is a fallback, attached only after the person has read all of it.
+- Reproduce it on a made-up CSV: copy the broker's `examples/*_demo.csv`
+  (or `tjs init --demo DIR`), edit rows to the same shape (columns, actions,
+  wording; made-up values and ids), confirm it fails the same way, and
+  attach that file. A `tjs redact` copy is a fallback, attached only after
+  the person has read all of it.
 - Show the person the full report first; then file it with
   `gh issue create --repo taxjson/taxjson`, or give them the text.
 
@@ -78,12 +77,13 @@ IRS guidance and a tax professional.
     comment stays under 1,000 or carries a `pii-ok` marker on its line.
   - No hard-coded security data (coin ids, tickers, ratios): it goes in the
     user's ticker.map or taxjson.toml, with an error naming the line to add.
-  - Output follows `docs/output-style.md`: `Info:` / `Warning:` / `Error:`
-    labels, `==>` steps; a message's later lines flush-left and one blank
-    line after a message of more than one line (print it with
-    `out.show` / `out.emit`, not a loop of `print`); wrap width 120 piped,
-    the terminal's up to 160; captured `.diag` / `.sum` / work/ bytes stay
-    stable (`TAXJSON_WIDTH=0`).
+  - Output follows `docs/output-style.md`: essentials first (a legend, the
+    data, one-line `! ` items; the rest behind `--details`; `--json`
+    unchanged); `Info:` / `Warning:` / `Error:` labels, `==>` steps; a
+    message's later lines flush-left, one blank line after a message of more
+    than one line (`out.show` / `out.emit`, not a loop of `print`); width
+    120 piped, the terminal's up to 160; captured `.diag` / `.sum` / work/
+    bytes stay stable (`TAXJSON_WIDTH=0`).
   - User files (taxjson.toml, ticker.map, .tt) are written through
     `src/taxjson/lib/safe_write.py`.
   - Child Python: `lib/dispatch.py` `python_module_argv` (`-P`), never
