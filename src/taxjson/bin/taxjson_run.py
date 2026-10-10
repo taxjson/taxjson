@@ -16087,7 +16087,7 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     if getattr(args, "json", False):
         _json_out(doc)
     else:
-        for ln in render(doc, show_all=args.all):
+        for ln in render(doc, show_all=args.all, details=_details(args)):
             print(ln)
     if doc["errors"]:
         raise SystemExit(1)
@@ -16269,15 +16269,26 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             print(_ln)
 
     print(f"OPTION YEAR-BOUNDARY REVIEW — tax year {year}")
-    _para(f"Premium timing: {timing}"
+    # Essentials first (docs/output-style.md): --details adds each
+    # contract's where and what-if.
+    _det = _details(args)
+    if not _det:
+        _para(f"Premium timing: {timing}"
+              + (f" (from {since})" if timing == "grant" and since else "")
+              + "; filed-year locks: "
+              + (", ".join(str(y) + ("*" if y in partial_locks else "")
+                           for y in sorted(filed_years))
+                 if filed_years else "none") + ".")
+    else:
+        _para(f"Premium timing: {timing}"
           + (f" (contracts written from {since})"
              if timing == "grant" and since else "") + ".")
-    if filed_years:
+    if filed_years and _det:
         _para("Filed-year locks: " + ", ".join(
             str(y) + (" (partial: taken before the year ended)"
                       if y in partial_locks else "")
             for y in sorted(filed_years)) + ".")
-    else:
+    elif _det:
         _para("No filed-year locks (run `taxjson close-year` after "
               "filing).")
     for _py in sorted(partial_locks):
@@ -16293,23 +16304,37 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         out.append(" ".join([r["account"], r["symbol"], r["written"], f"{r['units']:g}",
                              fmt_money(r["premium"]), r["closed"] or "-", r["close_kind"],
                              fmt_money(r["paid"]) if r["paid"] else "-"]))
+    if not _det:
+        print("KIND: how it closed (open: still open at year end); PAID: "
+              "the cost to close it.")
     # Too wide: PAID, then UNITS go; then one record per contract.
     _print_report_table(out, fit=True, drop=(7, 3), key=(1, 0))
     print()
-    for i, r in enumerate(rows, 1):
+    if not _det:
+        for r in rows:
+            if str(r.get("action", "")).startswith("T1-ADJ"):
+                print(_out.act(f"{r['symbol']} ({r['account']}): an "
+                               f"amended return (T1-ADJ)",
+                               "tjs option-boundary --details"))
+            elif r.get("attention"):
+                print(_out.act(f"{r['symbol']} ({r['account']}): review "
+                               f"it", "tjs option-boundary --details"))
+    for i, r in enumerate(rows if _det else [], 1):
         _lead = f"{i:>3}. "
         _hang = " " * len(_lead)
         _para(f"{r['symbol']} ({r['account']}, written {r['written']}): "
               f"{r['where']}", _lead, _hang)
         _para(f"=> {r['action']}", _hang, _hang + "   ")
-    print()
-    if attention:
+    if _det:
+        print()
+    # (the default view said each as a `! ` line above)
+    if attention and _det:
         _para(f"{len(attention)} item(s) need ATTENTION (review; a locked "
               f"year may need a T1-ADJ) — marked above.")
-    if amend:
+    if amend and _det:
         _para(f"{len(amend)} item(s) require an amended return (T1-ADJ) — "
               f"listed above with the year and amount.")
-    elif not attention:
+    if not amend and not attention:
         _para("No amended return is required by these contracts under the "
               "timing in force.")
 
@@ -23996,7 +24021,13 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
     from taxjson.lib.cli_diag import read_text_utf8
     ticker_text = read_text_utf8(tm) if tm.is_file() else ""
     tob = TB.read_tobase(root)
-    if shared and not args.json:
+    # Essentials first (docs/output-style.md): --details adds the
+    # master's figures, each line's reason and the long headings.
+    _det = _details(args)
+    from taxjson.lib.out import act as _act
+    if shared and not args.json and not _det:
+        print(f"{_PL.tobase_shown(root)}: read by {_yrs_text}.")
+    elif shared and not args.json:
         for _ln in _out_wrap(
                 f"{_PL.tobase_shown(root)}: read by {_yrs_text} — a "
                 f"change applies to each (a filed year's `taxjson "
@@ -24027,8 +24058,9 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                                               for r, w in ov.overridden],
                        "written": bool(args.write)})
         else:
-            for _ln in _out_wrap(head):
-                print(_ln)
+            if _det:
+                for _ln in _out_wrap(head):
+                    print(_ln)
             for _ln in _out_wrap(
                     f"This project has no tobase.map yet: one would hold "
                     f"{n_lines} pair line(s)."):
@@ -24046,6 +24078,8 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                     for _ln in _out_wrap(f"- {g.rule}: {how}", "  ",
                                          "    "):
                         print(_ln)
+            elif not _det:
+                print("None of them changes these books.")
             else:
                 for _ln in _out_wrap(
                         "None of them changes these books (ticker.map "
@@ -24057,10 +24091,15 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                 print(f"ticker.map decides {len(ov.overridden)} pair(s) "
                       f"otherwise (ticker.map wins; reported only):")
                 for r, w in ov.overridden:
-                    for _ln in _out_wrap(f"- {r} ({w})", "  ", "    "):
+                    for _ln in _out_wrap(f"- {r}" + (f" ({w})" if _det
+                                                     else ""),
+                                         "  ", "    "):
                         print(_ln)
         if not args.write:
-            if not args.json:
+            if not args.json and not _det:
+                print(_act("Nothing written: create tobase.map, then "
+                           "`tjs run`", "tjs update-tobase-map --write"))
+            elif not args.json:
                 for _ln in _out_wrap(
                         "Nothing written: `taxjson update-tobase-map "
                         "--write` creates tobase.map; then `taxjson run`."):
@@ -24118,13 +24157,16 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                                             plan.old_stamp !=
                                             plan.new_stamp))})
     else:
-        for _ln in _out_wrap(head):
-            print(_ln)
+        if _det:
+            for _ln in _out_wrap(head):
+                print(_ln)
         print(f"tobase.map was made from the master of "
-              f"{plan.old_stamp or 'an unknown date'}.")
+              f"{plan.old_stamp or 'an unknown date'}"
+              + ("." if _det else f"; installed: {master.generated}."))
         if plan.added:
-            print(f"Added: {len(plan.added)} line(s) (new interlistings or "
-                  f"listings)" + (f"; {len(in_books)} name a symbol of "
+            print(f"Added: {len(plan.added)} line(s)"
+                  + (" (new interlistings or listings)" if _det else "")
+                  + (f"; {len(in_books)} name a symbol of "
                                   f"these books:" if in_books else "."))
             for g in in_books:
                 print(f"  + {g.rule}")
@@ -24133,18 +24175,28 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                     if g not in in_books:
                         print(f"  + {g.rule}")
         if plan.ended:
-            print(f"Ended: {len(plan.ended)} interlisting(s) (annotated "
-                  f"with `until`, kept for the years they traded):")
+            print(f"Ended: {len(plan.ended)} interlisting(s)"
+                  + (" (annotated with `until`, kept for the years they "
+                     "traded):" if _det else ":"))
             for ln, g in plan.ended:
                 print(f"  ~ {ln.rule} until {g.until}")
         if plan.retracted:
-            print(f"Retracted: {len(plan.retracted)} line(s) the master no "
-                  f"longer gives or no longer needs (removed; never a "
-                  f"line you edited):")
+            print(f"Retracted: {len(plan.retracted)} line(s)"
+                  + (" the master no longer gives or no longer needs "
+                     "(removed; never a line you edited):" if _det
+                     else " (removed):"))
             for ln, why in plan.retracted:
-                for _ln in _out_wrap(f"- {ln.rule}: {why}", "  ", "    "):
+                for _ln in _out_wrap(f"- {ln.rule}"
+                                     + (f": {why}" if _det else ""),
+                                     "  ", "    "):
                     print(_ln)
-        if plan.retracted_edited:
+        if plan.retracted_edited and not _det:
+            print(_act(f"{len(plan.retracted_edited)} line(s) you edited "
+                       f"were retracted by the master: check each",
+                       "tjs update-tobase-map --details"))
+            for ln, why in plan.retracted_edited:
+                print(f"  ? {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
+        elif plan.retracted_edited:
             print(f"ATTENTION: {len(plan.retracted_edited)} line(s) you "
                   f"edited are lines the master RETRACTED (kept as you "
                   f"wrote them; check each):")
@@ -24154,8 +24206,9 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                     print(_ln)
         if plan.edited:
             print(f"Left as written: {len(plan.edited)} marked line(s) you "
-                  f"edited (yours now; the master's line for the same "
-                  f"listing is not added beside it):")
+                  f"edited" + (" (yours now; the master's line for the "
+                               "same listing is not added beside it):"
+                               if _det else ":"))
             for ln in plan.edited:
                 print(f"  = {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
         if plan.unknown:
@@ -24165,8 +24218,10 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                 print(f"  ? {ln.rule} ({TB.TOBASE_MAP}:{ln.lineno})")
         if plan.removed_now:
             print(f"Removed by you: {len(plan.removed_now)} master line(s) "
-                  f"you deleted (recorded as `# removed:` lines and never "
-                  f"added again; delete such a line to have it back):")
+                  f"you deleted" + (" (recorded as `# removed:` lines and "
+                                    "never added again; delete such a "
+                                    "line to have it back):" if _det
+                                    else ":"))
             for g in plan.removed_now:
                 print(f"  x {g.rule}")
         if plan.opted_out:
@@ -24174,8 +24229,11 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
                   f"opted out of (`# removed:` or commented out).")
         if plan.others:
             print(f"Kept as written: {len(plan.others)} line(s) that are "
-                  f"not TOBASE / DISTINCT lines (the run refuses them: "
-                  f"move them to ticker.map):")
+                  f"not TOBASE / DISTINCT lines" + (" (the run refuses "
+                                                    "them: move them to "
+                                                    "ticker.map):" if _det
+                                                    else " (move them to "
+                                                    "ticker.map):"))
             for r in plan.others:
                 print(f"  ! {r.strip()}")
         for o, n, pooled in plan.renamed:
@@ -24199,13 +24257,16 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
             print(f"ticker.map decides {len(plan.conflicts)} pair(s) "
                   f"otherwise (ticker.map wins; reported only):")
             for r, w in plan.conflicts:
-                for _ln in _out_wrap(f"- {r} ({w})", "  ", "    "):
+                for _ln in _out_wrap(f"- {r}" + (f" ({w})" if _det else ""),
+                                     "  ", "    "):
                     print(_ln)
         if not plan.changes:
             print(f"tobase.map is up to date with the installed master.")
     stale = plan.old_stamp != plan.new_stamp
     if not args.write:
-        if (plan.changes or stale) and not args.json:
+        if (plan.changes or stale) and not args.json and not _det:
+            print(_act("Nothing written", "tjs update-tobase-map --write"))
+        elif (plan.changes or stale) and not args.json:
             print("Nothing written: `taxjson update-tobase-map --write` "
                   "applies it.")
         if not tm.is_file() and not args.json:

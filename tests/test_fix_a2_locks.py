@@ -247,7 +247,8 @@ class TestPriorLockTiming(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p26 = self._pair(td, ("close", None),
                              "option_grant_timing_since = 2025\n")
-            r = _run_cli(p26, "option-boundary")
+            # (each contract's where: --details, docs/output-style.md)
+            r = _run_cli(p26, "option-boundary", "--details")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("no filed-year locks", r.stdout)
             self.assertNotIn("No amended return is required", r.stdout)

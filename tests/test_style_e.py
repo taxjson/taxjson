@@ -30,6 +30,12 @@ class TestStyledNonZeroExits(unittest.TestCase):
         assert_styled(self, r.stdout)
         self.assertTrue(r.stdout.startswith("CHECK DATES — "))
         self.assertIn("ERRORS — impossible dates (1)", r.stdout)
+        # The default view ends with the `! ` line (docs/output-style.md,
+        # Essentials first); --details keeps the sentence.
+        self.assertEqual(r.stdout.splitlines()[-1],
+                         "! 1 date(s) cannot be right; fix the source file "
+                         "or the parser")
+        r = project("canada").run("check-dates", "--details")
         self.assertEqual(r.stdout.splitlines()[-1],
                          "1 date(s) cannot be right; fix the source file "
                          "or the parser.")

@@ -111,7 +111,8 @@ class TestEdgeCasesWindowBasis(unittest.TestCase):
                 loss, it = self._item(doc)
                 self.assertEqual((it["day"], it["inside"]), (day, inside),
                                  (country, tax_date, it))
-                text = "\n".join(render_text(doc))
+                # (the counting notes: --details, docs/output-style.md)
+                text = "\n".join(render_text(doc, details=True))
                 self.assertNotIn("DECIDES", text)
                 self.assertIn("SETTLEMENT dates" if country == "canada"
                               else "TRADE dates", text)

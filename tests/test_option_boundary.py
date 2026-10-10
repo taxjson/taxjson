@@ -82,6 +82,11 @@ class TestCommand(unittest.TestCase):
             self.assertEqual(len(doc["rows"]), 1)
             self.assertTrue(doc["rows"][0]["action"].startswith("T1-ADJ 2025"))
             t = cli(); self.assertEqual(t.returncode, 0, t.stderr)
+            # The default view: one `! ` line per contract to amend; the
+            # count sentence with --details (docs/output-style.md).
+            self.assertIn("an amended return (T1-ADJ) — tjs "
+                          "option-boundary --details", t.stdout)
+            t = cli("--details")
             self.assertIn("1 item(s) require an amended return", t.stdout)
             (root / "taxjson.toml").write_text('[settings]\nyear = 2025\ncountry = "canada"\nbase_currency = "CAD"\noption_premium_timing = "close"\n[accounts.margin]\ntype = "taxable"\n')
             t = cli(); self.assertIn("premium timing: close", t.stdout.lower())

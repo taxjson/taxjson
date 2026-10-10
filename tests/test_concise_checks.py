@@ -190,5 +190,58 @@ class TestYears(unittest.TestCase):
                       _flat(d.stdout))
 
 
+class TestCheckDates(unittest.TestCase):
+
+    def test_budget_and_details(self):
+        r = _run("canada", "check-dates")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        assert_concise(self, r.stdout, r.stderr)
+        self.assertIn("NOTES: 7 (settle-cycle 6, income-weekend 1) — tjs "
+                      "check-dates --details", r.stdout)
+        self.assertTrue(r.stdout.rstrip().splitlines()[-1].startswith("! "))
+        d = _run("canada", "check-dates", "--details")
+        self.assertIn("NOTES — information (7)", d.stdout)
+        self.assertIn("standard cycle 2024-11-06", d.stdout)
+
+
+class TestUpdateTobaseMap(unittest.TestCase):
+
+    def test_budget_and_details(self):
+        r = _run("canada", "update-tobase-map")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        assert_concise(self, r.stdout, r.stderr)
+        self.assertIn("tjs update-tobase-map --write", r.stdout)
+        self.assertNotIn("The installed interlisted master", r.stdout)
+        d = _run("canada", "update-tobase-map", "--details")
+        self.assertIn("The installed interlisted master", d.stdout)
+        self.assertIn("they apply when you trade such a security",
+                      _flat(d.stdout))
+
+
+class TestOptionBoundary(unittest.TestCase):
+
+    def test_budget_and_details(self):
+        r = _run("canada", "option-boundary")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        assert_concise(self, r.stdout, r.stderr, legend="KIND: how it")
+        self.assertIn("No amended return is required", r.stdout)
+        d = _run("canada", "option-boundary", "--details")
+        self.assertIn("=> if assigned in a later year", _flat(d.stdout))
+        self.assertIn("No filed-year locks (run `taxjson close-year`",
+                      _flat(d.stdout))
+
+
+class TestSmallViews(unittest.TestCase):
+    """The views already within the budget stay there."""
+
+    def test_budget(self):
+        for country in ("canada", "usa"):
+            for args in (("journals",), ("renames",), ("spinoffs",),
+                         ("splits",), ("handoff",), ("years",)):
+                with self.subTest(country=country, args=args):
+                    r = _run(country, *args)
+                    assert_concise(self, r.stdout, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
