@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- Every edit of taxjson.toml by `align`, `migrate` and `new-year` now reads the keys as TOML does and reads the result back: it must be the file with exactly that key changed, or the command stops and writes nothing (it never writes a file that reads differently).
+- `migrate` (one shared tobase.map) sets `tobase_map` inside a `[settings]` inline table instead of adding a second `[settings]` table, and checks every year's edit before moving any file (#34).
+- `align --write` checks every chosen change before writing: ticker.map is no longer changed when the taxjson.toml edit fails, and it is put back when the second write fails (#35).
+- `align` and `years --diff` keep an account name holding a dot (`[accounts."margin.one"]`) as one name: its account ids and holdings stay out of the output, and the key is written in its own table (#36).
+- `new-year` sets `year` whatever its spelling (`+2024`, `2_024`, `0x7e8`) (#37), in a `[settings]` inline table (#38), and puts `prior_year_record` in `[settings]` when the settings are dotted keys (#39).
+- `align` adds and removes an array of tables (`[[distributions]]`): adding one wrote an invalid `[]` line, removing one kept it (#41).
+- `align` and `years --diff` list the accounts' order when it differs (`accounts (order)`); align shows it and leaves the tables as they are (#42).
+- `align` and `years --diff` stop with an error naming a taxjson.toml or ticker.map that cannot be read, instead of reporting no differences; `years` lists it as that year's problem (#56).
 
 ## v0.28.1 (2026-10-10)
 

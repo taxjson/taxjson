@@ -2339,9 +2339,14 @@ def _copy_holdings_lists(root: Path, inputs: Path, files: List[_TreeFile],
                 if rel in names:
                     out.append(names[rel].as_posix())
                 break
-        text = _PL.set_key_text(
-            text, ("accounts", name, "holdings"),
-            (out if isinstance(h, list) else out[0]) if out else None)
+        try:
+            text = _PL.set_key_text(
+                text, ("accounts", name, "holdings"),
+                (out if isinstance(h, list) else out[0]) if out else None)
+        except _PL.LayoutError:
+            # The redacted copy does not read (a pattern matched part
+            # of a setting): _valid_copy_config refuses it.
+            break
     cfg_tf.text = text
 
 
@@ -2569,7 +2574,10 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         if shared and f.rel == Path(_PL.CONFIG):
             # The redacted project reads its own inputs/ and holdings/.
             for _k in _PL.FOLDER_KEYS + (_PL.TOBASE_KEY,):
-                text = _PL.set_key_text(text, f"settings.{_k}", None)
+                try:
+                    text = _PL.set_key_text(text, f"settings.{_k}", None)
+                except _PL.LayoutError:
+                    break           # (refused by _valid_copy_config)
         if shared and str(f.rel) in _PROJECT_FILES:
             # Settings and symbol rules, not an export: the export
             # heuristics read a rule line such as `GLOBAL OLD NEW` as a

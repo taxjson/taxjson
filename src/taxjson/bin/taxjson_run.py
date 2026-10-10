@@ -4188,6 +4188,8 @@ def _migrate_shared_tobase(top: Path, args: argparse.Namespace) -> bool:
     from taxjson.lib.safe_write import OutsideLinkError
     try:
         done, baks = TB.apply_shared(plan)
+    except _PL.LayoutError as e:
+        _die_input(str(e), "Nothing was changed.")
     except (OSError, OutsideLinkError) as e:
         _die_input(f"could not write the migration: {e}")
     for b in baks:
@@ -24787,7 +24789,11 @@ def cmd_years(args: argparse.Namespace) -> None:
         for d in (a, b):
             if not _PL.has_config(d):
                 _die_input(f"no project in {d}")
-        _align_show(_PL.compare(a, b), a.name, b.name, args.json)
+        try:
+            c = _PL.compare(a, b)
+        except _PL.LayoutError as e:
+            _die_input(str(e), "Nothing was compared: fix the file first.")
+        _align_show(c, a.name, b.name, args.json)
         return
     rep = _PL.years_report(top)
     if args.json:
@@ -25469,7 +25475,11 @@ def cmd_align(args: argparse.Namespace) -> None:
         _die_input(f"--from {args.from_year} is this project")
     if not _PL.has_config(other):
         _die_input(f"no project in {other}")
-    c = _PL.compare(root, other)
+    try:
+        c = _PL.compare(root, other)
+    except _PL.LayoutError as e:
+        _die_input(str(e), "Nothing was compared: fix the file, then run "
+                   "`taxjson align` again.")
     if not args.write:
         _align_show(c, root.name, other.name, args.json)
         return
@@ -25487,12 +25497,19 @@ def cmd_align(args: argparse.Namespace) -> None:
         return ans.startswith("y")
     lines = [r for r in c["map_only_there"]
              if _ask(f"add to ticker.map: {r}")]
-    keys = [k for k in c["keys"]
-            if _ask(f"set {k['key']} = {_setting_text(k['there'])}")]
+    # The accounts' order (GitHub #42) is shown, never rewritten.
+    order = next((k for k in c["keys"] if k.get("order")), None)
+    keys = [k for k in c["keys"] if not k.get("order")
+            and _ask(f"set {k['key']} = {_setting_text(k['there'])}")]
     done = []
     skipped: List[Tuple[str, List[str]]] = []
+    # Every chosen change is made and checked in memory first; the
+    # files are written only when all of them can be (GitHub #35: a
+    # taxjson.toml edit that failed after ticker.map was written said
+    # "nothing was written").
+    tm = _PL.ticker_map_path(root)
+    map_text: Optional[str] = None
     if lines:
-        tm = _PL.ticker_map_path(root)
         cur = tm.read_text(encoding="utf-8-sig") if tm.is_file() else ""
         head = (cur.rstrip("\n") + ("\n\n" if cur.strip() else "")
                 + f"# from {other.name}/ticker.map (`taxjson align`, "
@@ -25518,26 +25535,58 @@ def cmd_align(args: argparse.Namespace) -> None:
             else:
                 kept.append(ln)
         lines = kept
-    if lines:
-        text = head + "\n".join(lines) + "\n"
-        bak = write_user_file(tm, text, root)
-        done.append(f"ticker.map: {len(lines)} line(s) added"
-                    + (f" (the previous file kept as {bak.name})"
-                       if bak else ""))
+        if lines:
+            map_text = head + "\n".join(lines) + "\n"
+    cfg = root / "taxjson.toml"
+    cfg_text: Optional[str] = None
     if keys:
-        cfg = root / "taxjson.toml"
         text = _read_config_text(cfg)
-        for k in keys:
-            text = _PL.set_key_text(text, k["key"], k["there"])
         try:
-            tomllib.loads(text)
-        except Exception as e:                          # noqa: BLE001
-            _die(f"the changed taxjson.toml would not read ({e}) — "
-                 f"nothing was written")
-        bak = write_user_file(cfg, text, root)
-        done.append(f"taxjson.toml: {len(keys)} key(s) set"
-                    + (f" (the previous file kept as {bak.name})"
-                       if bak else ""))
+            for k in keys:
+                # (set_key_text reads the result back: it must be this
+                # file with exactly that key changed.)
+                text = _PL.set_key_text(text, tuple(k["path"]), k["there"])
+        except _PL.LayoutError as e:
+            _die_input(f"{cfg.name}: {e}", "Nothing was written (neither "
+                       "ticker.map nor taxjson.toml).")
+        cfg_text = text
+    from taxjson.lib.safe_write import (OutsideLinkError, link_outside,
+                                        write_atomic)
+    for p, t in ((tm, map_text), (cfg, cfg_text)):
+        tgt = link_outside(p, root) if t is not None else None
+        if tgt is not None:
+            _die_input(f"{p.name} is a symlink to {tgt}, outside the "
+                       f"project — never written through: replace the "
+                       f"link with a copy", "Nothing was written.")
+    written: List[Tuple[Path, Optional[bytes]]] = []
+    failed = cfg
+    try:
+        for p, t, what in ((tm, map_text, f"ticker.map: {len(lines)} "
+                            f"line(s) added"),
+                           (cfg, cfg_text, f"taxjson.toml: {len(keys)} "
+                            f"key(s) set")):
+            if t is None:
+                continue
+            failed = p
+            real = p.resolve() if p.is_symlink() else p
+            old = real.read_bytes() if real.is_file() else None
+            bak = write_user_file(p, t, root)
+            written.append((real, old))
+            done.append(what + (f" (the previous file kept as {bak.name})"
+                                if bak else ""))
+    except (OSError, OutsideLinkError) as e:
+        # Put back what was already written: all or nothing.
+        for real, old in written:
+            try:
+                if old is None:
+                    real.unlink()
+                else:
+                    write_atomic(real, old, keep_mode=True)
+            except OSError:
+                pass
+        _die_input(f"could not write {failed.name}: "
+                   f"{getattr(e, 'strerror', None) or e}",
+                   "Nothing was changed.")
     print("\n".join(done) if done else "Nothing brought over.")
     if skipped:
         _say("warning", f"{len(skipped)} ticker.map line(s) of "
@@ -25546,6 +25595,14 @@ def cmd_align(args: argparse.Namespace) -> None:
              *[f"- {ln}: {'; '.join(why)}" for ln, why in skipped],
              "Decide which line is right for this year and edit "
              "ticker.map by hand.", prog=_cmd_prog())
+    if order:
+        _say("warning", f"the accounts are in another order in "
+             f"{other.name} ({', '.join(order['there'])}) than here "
+             f"({', '.join(order['here'])}) — not changed by align",
+             "The [accounts.NAME] tables are read in the order they are "
+             "written (trades at the same moment in two accounts book in "
+             "that order): move the tables by hand if this year should "
+             "follow that order.", prog=_cmd_prog())
     if done:
         print("Run `taxjson run` to rebuild the books with them.")
 

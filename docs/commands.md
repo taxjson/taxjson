@@ -325,10 +325,15 @@ own copy passes it on). It prints where to save the year's downloads.
 `taxjson align --from YEAR [--write [--all]] [--json]`
 
 The `ticker.map` rules and `taxjson.toml` keys of another year's project
-that differ from this one's (the year's own keys aside). `--write` brings
+that differ from this one's (the year's own keys and the accounts' ids
+and `holdings` aside; an array of tables such as `[[distributions]]` is
+one key; `accounts (order)` when the accounts are in another order). A
+file that cannot be read is an error, never "the same". `--write` brings
 the other year's into this project, asked one by one on a terminal
 (`--all`: every one), keeping the previous file as `.bak`; the other year
-is never written.
+is never written. Every chosen change is made and read back first: the
+files are written only when all of them can be (otherwise nothing is),
+and the accounts' order is shown, never rewritten.
 
 #### taxjson format
 

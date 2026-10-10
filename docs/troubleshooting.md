@@ -117,6 +117,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.27.1`
 - **Code:** `src/taxjson/lib/project_layout.py` — `new_year_text`, `toml_statements`
 
+### "Error: taxjson.toml: cannot set settings.year in taxjson.toml safely (it would read differently): the table is written in a form this edit does not handle" from `tjs new-year`, `tjs align --write`, `tjs migrate`; or, on an older release, a taxjson.toml these commands left unreadable or wrong
+- **Check:** look at how the table is written in taxjson.toml: an inline table (`settings = {country = "canada", year = 2024}`), dotted keys (`settings.year = 2024`), an array of tables (`[[distributions]]`), a year spelt `+2024` / `2_024`, or an account name with a dot (`[accounts."margin.one"]`). On an older release: after `new-year` the new folder still says `year = 2024` ("Error: [settings] year = 2024 but this folder is 2025") or has `prior_year_record` outside [settings]; after `migrate` (one shared tobase.map) "taxjson.toml is not valid TOML … Cannot declare ('settings',) twice"; after `align --write` a `[]` line, a distribution that stayed, an `[accounts.margin.one]` table, or ticker.map changed although the error said nothing was written.
+- **Cause:** these commands edited taxjson.toml line by line and knew only `[table]` headers with one key per line: other spellings TOML allows were missed or written at the wrong level, and nothing checked the result.
+- **Fix:** upgrade: every edit reads the keys as TOML does, writes inline tables, dotted keys and arrays of tables in place, and reads the result back — it must be the file with exactly that key changed, else the command stops and writes nothing (`align` checks every change before writing ticker.map or taxjson.toml; `migrate` before moving a tobase.map). With the new message, write the table out as `[settings]` with one key per line and run the command again. For a year made by an older release, fix `year`, `prior_year_record` and `[[distributions]]` by hand, or delete the new year folder and run `new-year` again.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `set_key_text`, `_edit_text`, `new_year_text`, `flat_paths`; `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `cmd_new_year`, `_migrate_to_years`; `src/taxjson/lib/tobase_map.py` — `apply_shared`
+
+### `tjs align --from 2024` or `tjs years --diff 2024 2025` says "the same ticker.map rules and settings" although 2024/taxjson.toml does not read, or the accounts are in another order
+- **Check:** `tjs -C 2024 run` (does its taxjson.toml read?); compare the order of the `[accounts.NAME]` tables in the two files.
+- **Cause:** a taxjson.toml (or ticker.map) that could not be read was compared as an empty one, and the accounts' order was not compared; the tables are processed in the order written, so trades at the same moment in two accounts can book differently.
+- **Fix:** upgrade: a file that cannot be read stops `align` / `years --diff` with an error naming it (`tjs years` lists it as the year's problem), and a different order is listed as `accounts (order)`. `align --write` never reorders the tables: move them by hand if this year should follow the other's order.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `compare`, `account_order`, `map_rules`, `ACCOUNT_ORDER_KEY`; `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `cmd_years`
+
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
 - **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.
