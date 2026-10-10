@@ -89,7 +89,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from taxjson.lib import project_layout as _PL
 
 _IB_ID = re.compile(r"(?<![A-Za-z0-9])(?:DU|U|F|I)\d{7,8}(?![0-9])")
@@ -863,14 +863,38 @@ def _mapper(shared: Dict[str, str], mine: Dict[str, str],
     return repl
 
 
+# An option's expiry right before a "house number": the number is the
+# strike and the words after it the issuer ("CALL QZP 09/18/26 40 QZERO
+# SQUARE ..." — Questrade's option description; "QZP 18SEP26 40 ..."),
+# never a street address. Redacting it took the strike out of the
+# description and the parser read the option as shares (a price x
+# quantity mismatch stopped the copy's run).
+_EXPIRY_BEFORE = re.compile(
+    r"(?:\b\d{1,2}/\d{1,2}/\d{2,4}|\b\d{1,2}[A-Za-z]{3}\d{2,4})[ \t]+$")
+
+
+def _sub_address(rx: re.Pattern, line: str) -> Tuple[str, int]:
+    """`rx`'s street addresses in `line` replaced (and counted), except
+    a match that starts right after an option's expiry date."""
+    n = 0
+
+    def sub(m: re.Match) -> str:
+        nonlocal n
+        if _EXPIRY_BEFORE.search(line, 0, m.start()):
+            return m.group(0)
+        n += 1
+        return "REDACTED"
+    return rx.sub(sub, line), n
+
+
 def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     """Phones, postal codes, street addresses, SIN/SSN, honorific /
     initiated-by names — anywhere on the line. A candidate name that
     mixes a statement word with other words ("FROM BILL SAMPLE") is
     kept but its line is listed for REVIEW."""
-    line, k = _STREET.subn("REDACTED", line)
+    line, k = _sub_address(_STREET, line)
     rep.addresses += k
-    line, k = _STREET_FR.subn("REDACTED", line)
+    line, k = _sub_address(_STREET_FR, line)
     rep.addresses += k
     line, k = _PO_BOX.subn("REDACTED", line)
     rep.addresses += k
@@ -1602,6 +1626,13 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     if enc != "utf-8":
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
                          f"(the strict UTF-8 parsers would refuse the original — say so in the report)")
+    why = numbers_changed(src, text, new, bool(bom), redacted_name(
+        src, rep.accounts, rep.name_patterns, rep.known_ids)) \
+        if new != text else None
+    if why:
+        raise InputRefused(f"{src.name}: a number would change in the "
+                           f"redacted copy — {why}; nothing written. "
+                           + _NUMBERS_HINT)
     if check_only:
         return None, rep
     dst_dir = out_dir or src.parent
@@ -1644,6 +1675,112 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     if written is not None:
         written.add(dst.resolve())
     return dst, rep
+
+
+def _parse_quiet(broker: str, path: Path) -> List[Dict[str, Any]]:
+    """`path` read by the parser `broker` (its messages swallowed)."""
+    import contextlib
+    from taxjson.bin import taxjson_brokerage  # noqa: F401  (registers)
+    from taxjson.lib.core import load_brokerage
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        rows = load_brokerage(broker)().parse_file(path)
+    return [r if isinstance(r, dict) else getattr(r, "__dict__", {})
+            for r in rows]
+
+
+def _number_diff(a: Any, b: Any, key: str = "") -> List[str]:
+    """The fields of two parsed rows whose numbers differ (a number on
+    one side only included); text (ids, names, descriptions) is not
+    compared."""
+    if isinstance(a, dict) or isinstance(b, dict):
+        a = a if isinstance(a, dict) else {}
+        b = b if isinstance(b, dict) else {}
+        out: List[str] = []
+        for k in list(a) + [k for k in b if k not in a]:
+            out += _number_diff(a.get(k), b.get(k),
+                                f"{key}.{k}" if key else str(k))
+        return out
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        if len(a) != len(b):
+            return [key]
+        out = []
+        for i, (x, y) in enumerate(zip(a, b)):
+            out += _number_diff(x, y, f"{key}[{i}]")
+        return out
+
+    def num(v: Any) -> bool:
+        from decimal import Decimal
+        return isinstance(v, (int, float, Decimal)) \
+            and not isinstance(v, bool)
+    if (num(a) or num(b)) and a != b:
+        return [key]
+    return []
+
+
+class _Unreadable(Exception):
+    """A text the parser refuses (numbers_changed)."""
+
+
+def numbers_changed(src: Path, orig: str, text: str, bom: bool,
+                    name: str) -> Optional[str]:
+    """Why the redacted `text` of the export `src` (its text `orig`;
+    the copy named `name`) would not book as the original does, or
+    None: each is written alone in a temporary folder under `name` (the
+    same context: a sibling file the parser would also read is in
+    neither) and read by the parser the run uses (detected from `src`'s
+    content), and every number of every row is compared — the row
+    count, quantities, prices, amounts. Ids, names and descriptions may
+    differ; numbers must not.
+    An export no parser reads on its own (a generic mapping, a name-
+    routed or undetected file, one the parser refuses as it is) is not
+    checked."""
+    import tempfile
+    from taxjson.lib.brokerages.detect import detect
+    try:
+        det = detect(src)
+    except Exception:                                   # noqa: BLE001
+        return None
+    if not det.broker or det.broker == "generic" or det.positions \
+            or det.how != "content":
+        return None
+    def parse(body: str) -> List[Dict[str, Any]]:
+        with tempfile.TemporaryDirectory(prefix="taxjson-redact-") as d:
+            from taxjson.lib import safe_write
+            p = Path(d) / name
+            with safe_write.open_new(p, encoding="utf-8",
+                                     newline="") as fh:
+                fh.write(("\ufeff" if bom else "") + body)
+            try:
+                return _parse_quiet(det.broker, p)
+            except (Exception, SystemExit) as e:        # noqa: BLE001
+                raise _Unreadable(" ".join(str(e).replace(
+                    str(p), name).split()) or type(e).__name__) from None
+    try:
+        before = parse(orig)
+    except _Unreadable:
+        return None
+    try:
+        after = parse(text)
+    except _Unreadable as e:
+        return f"the parser refuses the redacted copy ({e})"
+    if len(after) != len(before):
+        return (f"the redacted copy reads as {len(after)} row(s), the "
+                f"original as {len(before)}")
+    for i, (a, b) in enumerate(zip(before, after), start=1):
+        diff = _number_diff(a, b)
+        if diff:
+            what = " ".join(str(a.get(k) or "") for k in
+                            ("date", "action", "symbol")).strip()
+            return (f"row {i} of what the parser reads ({what}): "
+                    f"{', '.join(diff)} changed")
+    return None
+
+
+_NUMBERS_HINT = ("A denylist / --also pattern, or a redaction heuristic, "
+                 "matched part of a field the parser reads: narrow the "
+                 "pattern, or report the row's shape (made-up values) as "
+                 "a bug.")
 
 
 _REVIEW_SHOWN = 25
@@ -1732,7 +1869,15 @@ def _diag(kind: str, text: str, details=(), file=None) -> None:
 #   * Ids are consistent across the whole tree: one placeholder table
 #     for every file (and file name), and a final sweep replaces an id
 #     collected in one file wherever it appears in another (a .tt
-#     comment, a sends.json).
+#     comment, a sends.json). An id the project's taxjson.toml holds
+#     (`account`, `broker_accounts`, `query_id`: config_ids) joins that
+#     table, so it is replaced even where no export names it.
+#   * A year folder's own settings files (taxjson.toml, ticker.map,
+#     tobase.map) are not exports: redact_project_text replaces their
+#     ids, e-mail addresses and denylist / --also matches, and the
+#     contact details of their comments, never reading a rule line as
+#     a row; the copied taxjson.toml must read as TOML, or nothing is
+#     written (GitHub #22, #26).
 #   * File and folder NAMES that carry an account id (IB names
 #     downloads after the account) get the same placeholder as the
 #     content; names stay unique (`-2` ...). The old -> new map is
@@ -1771,6 +1916,8 @@ class _TreeFile:
         self.rep: Optional[Report] = None
         self.skip: Optional[str] = None
         self.swept = 0
+        # An export's text before redaction (its numbers are checked).
+        self.orig: Optional[str] = None
 
 
 def _inside(p: Path, folder: Path) -> bool:
@@ -2147,9 +2294,166 @@ def _copy_holdings_lists(root: Path, inputs: Path, files: List[_TreeFile],
                     out.append(names[rel].as_posix())
                 break
         text = _PL.set_key_text(
-            text, f"accounts.{name}.holdings",
+            text, ("accounts", name, "holdings"),
             (out if isinstance(h, list) else out[0]) if out else None)
     cfg_tf.text = text
+
+
+# A taxjson.toml account's keys that hold the user's broker ids (the
+# fetch plugins' `account` and `query_id`, `broker_accounts`): replaced
+# in the copy whatever their shape (GitHub #22). Any other key, in any
+# table, named like an id (`*_account`, `account_id`, `*_ids`,
+# `*_number`) is replaced when its value is id-shaped (_is_id), so a
+# `[[capital_gains_dividends]] account = "margin"` label stays.
+_CONFIG_ID_KEYS = ("account", "broker_accounts", "query_id")
+_CONFIG_ID_KEY_RE = re.compile(
+    r"(?:^|_)(?:accounts?|acct|query)(?:_?(?:ids?|numbers?|nums?|no))?$"
+    r"|_(?:ids?|numbers?)$", re.IGNORECASE)
+
+
+def config_ids(root: Path) -> Tuple[List[str], List[str]]:
+    """The broker ids `root`'s taxjson.toml holds: (id-shaped ones —
+    replaced in every file of the copy, like an export's —, the other
+    values of an account's id keys — replaced in the configuration
+    only: a 4-digit query id elsewhere is a quantity)."""
+    from taxjson.lib.tomlcompat import tomllib
+    try:
+        doc = tomllib.loads((root / _PL.CONFIG).read_text(
+            encoding="utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return [], []
+    ids: List[str] = []
+    local: List[str] = []
+
+    def add(v: Any, explicit: bool) -> None:
+        v = str(v).strip() if isinstance(v, (str, int)) \
+            and not isinstance(v, bool) else ""
+        if not any(c.isdigit() for c in v):
+            return
+        if _is_id(v) or _IB_ID_ANYCASE.fullmatch(v):
+            if v.upper() not in {x.upper() for x in ids}:
+                ids.append(v)
+        elif explicit and v not in local:
+            local.append(v)
+
+    def walk(node: Any, in_account: bool) -> None:
+        items = node.items() if isinstance(node, dict) else ()
+        for k, v in items:
+            explicit = in_account and k in _CONFIG_ID_KEYS
+            if explicit or _CONFIG_ID_KEY_RE.search(str(k)):
+                for x in (v if isinstance(v, list) else [v]):
+                    if not isinstance(x, (dict, list)):
+                        add(x, explicit)
+            if isinstance(v, dict):
+                walk(v, False)
+            elif isinstance(v, list):
+                for x in v:
+                    walk(x, False)
+    walk(doc, False)
+    accts = doc.get("accounts") if isinstance(doc, dict) else None
+    for a in (accts.values() if isinstance(accts, dict) else ()):
+        walk(a, True)
+    return ids, local
+
+
+def _text_ids(text: str) -> List[str]:
+    """The ids the free-text detectors find in a settings file: IB ids,
+    `account <id>` / `transfer from <id>` phrases, `account = "<id>"`
+    keys, a broker's name and 8 digits — never its rule lines read as
+    a CSV's columns."""
+    out: List[str] = []
+
+    def add(v: str, ok: Callable[[str], bool]) -> None:
+        if ok(v) and v.upper() not in {x.upper() for x in out}:
+            out.append(v)
+    for m in _IB_ID_ANYCASE.finditer(text):
+        add(m.group(0), lambda v: True)
+    for m in _ACCOUNT_PHRASE.finditer(text):
+        add(m.group(2), _is_phrase_id)
+    for m in _ACCOUNT_KEY.finditer(text):
+        add(m.group(1), _is_id)
+    for m in _BROKER_ACCOUNT.finditer(text):
+        add(m.group(1), _is_broker_account)
+    return out
+
+
+def _comment_at(line: str) -> int:
+    """Where a settings line's `#` comment starts (outside "..." and
+    '...'), or len(line)."""
+    q = ""
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if q:
+            if c == "\\" and q == '"':
+                i += 1
+            elif c == q:
+                q = ""
+        elif c in "\"'":
+            q = c
+        elif c == "#":
+            return i
+        i += 1
+    return len(line)
+
+
+def redact_project_text(text: str, compiled: List[re.Pattern],
+                        known_ids: Dict[str, str],
+                        cfg_ids: Tuple[List[str], List[str]] = ([], [])
+                        ) -> Tuple[str, Report]:
+    """A year's own settings file (taxjson.toml, ticker.map, tobase.map)
+    as copied by `taxjson redact` (GitHub #22): the configuration's ids
+    (`cfg_ids`, from config_ids) and any id the free-text detectors find
+    get the invocation's placeholders (an id-shaped one the same as in
+    the exports); e-mail addresses anywhere; phones, addresses, SINs
+    and names in its comments; every denylist / --also match anywhere.
+    Its rule and setting lines are never read as an export's rows (a
+    `GLOBAL OLD NEW` line is not a name)."""
+    rep = Report()
+    rep.known_ids = known_ids
+    rep.name_patterns = compiled
+    glob, local = cfg_ids
+    found = list(glob)
+    for v in _text_ids(text):
+        if v.upper() not in {x.upper() for x in found}:
+            found.append(v)
+    subs: List[Tuple[str, str]] = []
+    for v in found:
+        subs.append((v, _known_placeholder(known_ids, v)))
+    for n, v in enumerate(local, start=1):
+        subs.append((v, _placeholder(v, n)))
+    for orig, ph in sorted(subs, key=lambda kv: -len(kv[0])):
+        text, k = _id_pattern(orig).subn(ph, text)
+        if k:
+            rep.accounts[orig] = ph
+    out: List[str] = []
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        line, k = _EMAIL.subn("redacted@example.com", line)
+        rep.emails += k
+        at = _comment_at(line)
+        if at < len(line):
+            line = line[:at] + _redact_contact(line[at:], rep, lineno)
+        for pat in compiled:
+            line, k = pat.subn("REDACTED", line)
+            rep.patterns += k
+        out.append(line)
+    return "\n".join(out), rep
+
+
+def _valid_copy_config(files: List["_TreeFile"]) -> Optional[str]:
+    """Why the copy's taxjson.toml would not read, or None (every edit
+    of it — folder settings, holdings lists, placeholders, denylist /
+    --also matches — is checked before anything is written)."""
+    from taxjson.lib.tomlcompat import tomllib
+    cfg = next((f for f in files if f.rel == Path(_PL.CONFIG)
+                and f.text is not None), None)
+    if cfg is None or tomllib is None:
+        return None
+    try:
+        tomllib.loads(cfg.text)
+    except Exception as e:                              # noqa: BLE001
+        return str(e)
+    return None
 
 
 def redact_tree(root: Path, out: Optional[Path], extra: List[str],
@@ -2193,6 +2497,9 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     known_ids: Dict[str, str] = {}
     pseudonyms = Pseudonyms()
     compiled, _ = compile_patterns(extra)
+    # The configuration's broker ids (GitHub #22): replaced in its copy
+    # and, id-shaped, wherever they appear in the exports and file names.
+    cfg_ids = config_ids(root)
     for f in files:
         if f.skip is not None:
             continue
@@ -2215,20 +2522,56 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             for _k in _PL.FOLDER_KEYS + (_PL.TOBASE_KEY,):
                 text = _PL.set_key_text(text, f"settings.{_k}", None)
         if shared and str(f.rel) in _PROJECT_FILES:
-            # Settings and symbol rules, not an export: only the ids
-            # found in the exports are replaced in them (the sweep
-            # below) — the export heuristics read a rule line such as
-            # `GLOBAL OLD NEW` as a name.
-            f.text, f.rep = text, Report()
+            # Settings and symbol rules, not an export: the export
+            # heuristics read a rule line such as `GLOBAL OLD NEW` as a
+            # name. Their ids, comments and denylist / --also matches
+            # are redacted (redact_project_text; they were copied as
+            # they were, GitHub #22), and the exports' ids by the sweep.
+            f.text, f.rep = redact_project_text(
+                text, compiled, known_ids,
+                cfg_ids if f.rel == Path(_PL.CONFIG) else ([], []))
             continue
+        f.orig = text
         f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms)
         f.rep.patterns += sum(len(p.findall(f.rel.stem)) for p in compiled)
         if enc != "utf-8":
             f.rep.notes.append(f"The input was {enc}; the copy is UTF-8.")
+    for v in cfg_ids[0]:
+        # An id only the configuration names (a single-folder project's
+        # taxjson.toml is not copied): still replaced in the exports.
+        _known_placeholder(known_ids, v)
     names = _tree_names(dirs, files, known_ids, compiled)
     _sweep(files, known_ids, pseudonyms)
     if shared:
         _copy_holdings_lists(root, inputs, files, names)
+        why = _valid_copy_config(files)
+        if why:
+            _diag("error", f"the redacted taxjson.toml would not read as "
+                           f"TOML ({why}) — nothing written",
+                  ["A denylist / --also pattern that matches part of a "
+                   "setting breaks it: narrow the pattern. Else check "
+                   "that the project's own taxjson.toml reads (`taxjson "
+                   "run` says where it does not)."])
+            return 2
+    # Every redacted export must book as the original does: the parser
+    # reads both and every number is compared; any difference refuses
+    # the whole copy.
+    changed = []
+    for f in files:
+        if f.text is None or f.orig is None or f.text == f.orig:
+            continue
+        src = f.src if f.src is not None else inputs / f.rel
+        why = numbers_changed(src, f.orig, f.text, bool(f.bom),
+                              names[f.rel].name)
+        if why:
+            changed.append((f, why))
+    sys.stdout.flush()          # the step lines above the errors
+    for f, why in changed:
+        _diag("error", f"{'' if shared else 'inputs/'}{f.rel.as_posix()}: "
+                       f"a number would change in the redacted copy — "
+                       f"{why}; nothing written", [_NUMBERS_HINT])
+    if changed:
+        return 2
     text_files = [f for f in files if f.text is not None]
     step(f"Redacting {_plural(len(text_files), 'file')}")
     found = False

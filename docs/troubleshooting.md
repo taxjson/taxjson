@@ -86,6 +86,34 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.26.0`
 - **Code:** `src/taxjson/bin/taxjson_run.py` — `cmd_align`, `not brought over`
 
+### `tjs redact` in a year folder: the copy's taxjson.toml, ticker.map or tobase.map still holds an account id, a comment or an `--also` match, and the console said "taxjson.toml: nothing to redact" (or `tjs redact --check`: "Done. Nothing to redact.")
+- **Check:** search the copy (`inputs_redact/taxjson.toml`, `ticker.map`, `tobase.map`) for the values of your accounts' `account`, `broker_accounts` and `query_id` keys and for the `--also` text. On an older release the year's own files were copied as they were.
+- **Cause:** in a year folder of a shared-exports project, `taxjson redact` copies the year's own files beside the exports as a runnable project, but it replaced in them only the ids it had found in the exports: an id only the configuration holds, the denylist and `--also` patterns and the contact details in their comments were never applied to them.
+- **Fix:** upgrade and run `tjs redact --force` again. The configuration's ids get placeholders (the same as in the exports, so the copy still runs), e-mail addresses and denylist / `--also` matches are replaced in every file, phones, addresses and names in their comments, and `--check` counts them. In a single-folder project an id only taxjson.toml names is now replaced in the exports too. Review the copy before sharing it.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_redact.py` — `redact_project_text`, `config_ids`, `redact_tree`
+
+### `tjs redact`: "Error: inputs/rrsp/questrade_2026.csv: a number would change in the redacted copy — … row 3 of what the parser reads (…): price changed; nothing written"; or, on an older release, `tjs run` on the redacted copy stops with "|Gross Amount| 280.00 is not |Quantity| 2 x Price 1.4 x 1 = 2.80 ('CALL QZP 09/18/26 REDACTED …')"
+- **Check:** the error names the file and the row (or the parser's refusal of the copy). On an older release, the redacted copy's option description reads `REDACTED` where the original had the strike and the issuer's name.
+- **Cause:** redaction must never change what the parser reads, but a pattern can hit a field it reads: the street-address pattern took a Questrade option description's strike and issuer (`40 QZERO SQUARE`) for a house number and street, and a denylist or `--also` pattern can match part of a number. The copy then booked differently or not at all.
+- **Fix:** upgrade: a number right after an option's expiry date is not read as an address, and every redacted export is read by its parser beside the original's text and compared number by number; a difference refuses the whole copy. With the new error, narrow the denylist / `--also` pattern it names; if none is given, report the row's shape (made-up values) as a bug.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/bin/taxjson_redact.py` — `numbers_changed`, `_sub_address`, `_EXPIRY_BEFORE`
+
+### `tjs redact` in a year folder: "Error: the redacted taxjson.toml would not read as TOML (…) — nothing written"; or, on an older release, a copy (or an `align --write`, `migrate --to-years` result) whose taxjson.toml stops `tjs run` after a `holdings = [` list written over several lines
+- **Check:** the project's taxjson.toml has a value over several lines (`holdings = [` with one file per line, a `"""` string). On an older release the written file shows the new first line followed by the old value's remaining lines.
+- **Cause:** the editor of taxjson.toml lines (`src/taxjson/lib/project_layout.py` — `set_key_text`: redact's holdings lists and folder settings, `align --write`, `migrate --to-years`) replaced or commented out only the first line of a value.
+- **Fix:** upgrade: every line of the value is replaced or commented out, and redact checks that the whole copied file reads before anything is written. With the new message, a denylist / `--also` pattern matched part of a setting: narrow the pattern (or fix the project's own taxjson.toml if `tjs run` refuses it too).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `set_key_text`, `toml_statements`; `src/taxjson/bin/taxjson_redact.py` — `_copy_holdings_lists`, `_valid_copy_config`
+
+### `tjs new-year 2026`: the new taxjson.toml still lists last year's `holdings = [...]` for an account whose table is quoted or hyphenated (`[accounts."margin-main"]`, `[accounts.margin-main]`)
+- **Check:** `grep -n holdings 2026/taxjson.toml` shows a line not commented out under such an account, although new-year said the accounts' holdings were commented out; or that account's other lines were commented out when `[estimate]` or `[instalments]` came just before it.
+- **Cause:** new-year recognised only table names made of letters, digits, `_` and `.`: a quoted or hyphenated name was not read as a table, so the table before it stayed in effect.
+- **Fix:** upgrade; for a year made by an older release, comment out (or delete) the account's `holdings` line in the new year's taxjson.toml and uncomment any account line commented by mistake (the new year's snapshots go in its holdings/).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/project_layout.py` — `new_year_text`, `toml_statements`
+
 ### "Info: ../inputs/: rrsp2 — not an account of 2024 (no [accounts.NAME] here): not read"
 - **Check:** `tjs years`: another year's `taxjson.toml` has `[accounts.rrsp2]` (an account split, opened or closed in another year).
 - **Cause:** every year reads the shared `inputs/`, but a year's books hold only the accounts its own `taxjson.toml` declares.
@@ -1499,6 +1527,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** `sudo apt install poppler-utils` (Debian, Ubuntu), `brew install poppler` (macOS); or type the slips into `inputs/slips/slips.toml`.
 - **Fixed in:** `v0.24.2`
 - **Code:** `src/taxjson/lib/cra_slips.py` — `pdf_text`
+
+### `tjs slip-audit --import-cra` hangs on a PDF, with no "pdftotext took over 60 s" error
+- **Check:** `ps` shows the `pdftotext` it started still running minutes later.
+- **Cause:** the 60-second limit covered only reading pdftotext's output: a pdftotext (or a program installed under that name) that closed its output and kept running was then waited for without a limit.
+- **Fix:** upgrade: the one limit covers the reading and the process's exit, and the process is killed and reaped when it passes. On an older release, stop that pdftotext; type the slip into `inputs/slips/slips.toml` instead.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/cra_slips.py` — `_read_capped`, `pdf_text`
 
 ### `tjs slip-audit --import-cra`: one PDF shows as two slips ("merged.pdf #1", "merged.pdf #2"), or "skipped merged.pdf: box 24 twice in one T5 slip — the page cannot be read cleanly; not imported"
 - **Check:** the PDF holds two slips (pages saved together, or files merged); `pdftotext -layout merged.pdf -` shows two "2025 T5 slip (original) from …" lines.

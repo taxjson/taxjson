@@ -53,6 +53,38 @@
 - `taxjson migrate` lets the newest year listing an entry decide it: an
   explicit "opens nothing" there is no longer replaced by an older year's
   opening; a year that does not list it does not decide (#28).
+- `taxjson redact` in a year folder with shared exports copied the year's
+  taxjson.toml, ticker.map and tobase.map unredacted: an account id found
+  only in the configuration (`account`, `broker_accounts`, `query_id`), a
+  denylist or `--also` match found only in those files and contact details
+  in their comments stayed in the copy, and `--check` said "Nothing to
+  redact". They are now redacted (an id with the same placeholder as in
+  the exports, so the copy still runs) and counted; in a single-folder
+  project an id only taxjson.toml names is replaced in the exports too
+  (#22).
+- `taxjson redact` read a Questrade option description such as `CALL QZP
+  09/18/26 40 QZERO SQUARE ...` as a street address and replaced the strike
+  and issuer, so the copy's run read the option as shares and stopped on
+  a price × quantity mismatch. A number right after an option's expiry is
+  no house number now. And every redacted export is read again by its
+  parser and compared with the original: if any row count, quantity,
+  price or amount would differ, nothing is written (exit 2, naming the
+  file and the row).
+- A taxjson.toml value written over several lines (a `holdings = [...]`
+  list with one file per line, a multi-line string) was only partly
+  rewritten by `taxjson redact`, `align --write` and `migrate --to-years`:
+  the first line replaced, the rest left behind, so the copy did not read
+  as TOML. The whole value is now replaced or commented out, and redact
+  checks the copied file reads before writing anything (#26).
+- `taxjson new-year` missed an account table named in quotes or with a
+  hyphen (`[accounts."margin-main"]`, `[accounts.margin-main]`): last
+  year's `holdings` list stayed active in the new year (and could
+  override its snapshots), or lines of the account were commented out
+  when the table before it was [estimate] or [instalments] (#27).
+- `slip-audit --import-cra`: the 60-second limit on pdftotext covered
+  only reading its output; a pdftotext that closed its output and kept
+  running was waited for without a limit. The limit now covers its exit
+  too, and it is killed and reaped when it passes (#29).
 
 
 ## v0.27.0 (2026-10-09)
