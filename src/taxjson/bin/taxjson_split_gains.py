@@ -62,7 +62,7 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
     per event), the engine's position_start_date convention: the last
     time the balance left zero (or changed sign). The blended row's own
     date is the POOL's start — another account's (audit S050-19)."""
-    from taxjson.lib.corporate_timeline import split_seen
+    from taxjson.lib.corporate_timeline import split_copies
     date_key = "date_settle" if basis == "settle" else "date"
     order = sorted(rows, key=lambda t: (str(t.get(date_key)
                                             or t.get("date") or ""),
@@ -71,7 +71,8 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
                                         str(t.get("time") or "")))
     bal: Dict[str, float] = {}
     start: Dict[str, str] = {}
-    seen: set = set()
+    # One corporate event per account however many copies (CA-CORP-12).
+    dup = split_copies(order, per_account=True)
     for t in order:
         sym = str(t.get("symbol") or "")
         act = t.get("action")
@@ -87,9 +88,7 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
         elif act == "SPLIT":
             ratio = float(t.get("quantity") or 0.0)
             new = (t.get("symbol_new") or "").strip()
-            if not ratio or split_seen(
-                    seen, sym, str(t.get("date") or ""), ratio, new,
-                    account=str(t.get("account") or "")) is not None:
+            if not ratio or id(t) in dup:
                 continue
             q = bal.pop(sym, 0.0) * ratio
             st = start.pop(sym, None)

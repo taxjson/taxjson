@@ -701,6 +701,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Corporate actions and income
 
+### "Info: split QZS.TO x2 is booked on two dates (2025-06-03 and 2025-06-04) — One corporate event reported by two sources; applied ONCE, on 2025-06-03.", and a `[[distributions]]` amount (or an account's share of a blended pool) looks too small
+- **Check:** `tjs list` shows the `[[distributions]]` ADJUST (id `DIST-…`) on the record date; compare its amount with per_share x the shares you held that day. On releases before the fix it came out short when a sale executed before the split settled after it: the sale was scaled by the ratio once per copy of the split.
+- **Cause:** two sources (two brokers, or a `.tt` SPLIT line next to the broker's row) report one split on nearby dates. The gains engine and the holding walk counted it once, but the settle-lag step that re-denominates a trade straddling the split multiplied by every copy, so the record-date holding (and the split-gains apportionment of a blended pool) was wrong and gains were overstated.
+- **Fix:** upgrade: every walk of split events now uses one corporate-event rule (same symbol and ratio within a week = one event, kept on its earliest date), and `tjs run` again. Deleting the extra `.tt` SPLIT line also works on older releases.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/corporate_timeline.py` — `split_copies`, `dedupe_split_events`; `src/taxjson/bin/taxjson_apply_distributions.py` — `_settle_lag_factors`, `balance_on`; `src/taxjson/bin/taxjson_split_gains.py` — `split_for_account`
+
 ### "Error: 1 corp-action event(s) need an election but --no-input" (or "… but stdin is not a TTY"), and `tjs run` exits 3
 - **Check:** `tjs elect --pending` lists each event with what each election books and the hints it needs (also in `work/pending_elections.json`).
 - **Cause:** a spin-off or merger has more than one tax treatment and only you can choose. The run defers the account until it is chosen; run from a script or an AI assistant, stdin is not a terminal, so it cannot ask.

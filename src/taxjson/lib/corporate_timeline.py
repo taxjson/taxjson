@@ -30,7 +30,7 @@ back to 1.0 (preserving both engines' `if f else` guards).
 
 from taxjson.lib.stage_msg import emit_line
 from enum import IntEnum
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 
 # --------------------------------------------------------------- ordering
@@ -380,6 +380,59 @@ def split_seen(seen: Set, symbol: str, date: str, ratio: Any,
         return prior[0]
     seen.add(key)
     return None
+
+
+def _field(t: Any, name: str) -> Any:
+    """A row's field, whether the row is a dict (base-book JSON) or a
+    TaxTransaction-like object (engine rows)."""
+    return t.get(name) if isinstance(t, dict) else getattr(t, name, None)
+
+
+def split_copies(rows: Iterable[Any], seen: Optional[Set] = None, *,
+                 per_account: bool = False, note: bool = False) -> Set[int]:
+    """id() of every SPLIT row in `rows` that repeats a corporate event
+    already counted — THE one dedup rule for split events (tax-logic
+    CA-CORP-12 / US-CORP-13). Every walk that applies split ratios —
+    the engines, the record-date holding of a [[distributions]] row, the
+    settle-lag re-denomination of a trade straddling a split, the
+    per-account views — asks this, for dict rows and engine rows alike,
+    so no walk can count a duplicate the others drop (GitHub #92: the
+    settle-lag factor multiplied by both copies of one split).
+
+    Copies are one event when split_seen says so (same symbol, ratio up
+    to rounding and rename target, dated within SPLIT_DATE_WINDOW_DAYS);
+    the EARLIEST copy is kept, whatever the rows' order. `per_account`
+    keys the event per account, for walks whose pools are per account
+    (each account's own copy applies to its own shares); the engines and
+    the settle-lag test key it per security. Pass a shared `seen` to
+    dedupe across several lists; `note` prints the one-line note that a
+    split was booked on two dates."""
+    if seen is None:
+        seen = set()
+    drop: Set[int] = set()
+    splits = [t for t in rows if _field(t, 'action') == 'SPLIT']
+    for t in sorted(splits, key=lambda t: str(_field(t, 'date') or '')):
+        sym = _field(t, 'symbol') or ''
+        date = str(_field(t, 'date') or '')
+        ratio = _field(t, 'quantity')
+        prior = split_seen(
+            seen, sym, date, ratio, _field(t, 'symbol_new') or '',
+            account=(str(_field(t, 'account') or '') if per_account
+                     else None))
+        if prior is not None:
+            drop.add(id(t))
+            if note:
+                note_split_date_conflict(sym, prior, date, ratio)
+    return drop
+
+
+def dedupe_split_events(rows: Iterable[Any], seen: Optional[Set] = None, *,
+                        per_account: bool = False,
+                        note: bool = False) -> List[Any]:
+    """`rows` without the SPLIT rows `split_copies` names (order kept)."""
+    rows = list(rows)
+    drop = split_copies(rows, seen, per_account=per_account, note=note)
+    return [t for t in rows if id(t) not in drop]
 
 
 # Two copies of one split agree on the ratio to this RELATIVE tolerance
@@ -809,24 +862,9 @@ class SplitTimeline:
         across several lists (the engines share one across the
         taxable/sheltered/affiliated inputs); `per_account=True` keys the
         event per account for the walks whose pools are per-account."""
-        if seen is None:
-            seen = set()
         # Earliest copy first: a split booked on two dates by two
         # brokers (split_seen's window) is applied on the EARLIER date,
         # so post-split trades in between never meet a pre-split pool.
-        keep = set()
-        splits = [t for t in txs if getattr(t, 'action', None) == 'SPLIT']
-        for t in sorted(splits, key=lambda t: t.date or ''):
-            prior = split_seen(
-                seen, t.symbol, t.date, t.quantity,
-                getattr(t, 'symbol_new', ''),
-                account=(getattr(t, 'account', '') if per_account
-                         else None))
-            if prior is None:
-                keep.add(id(t))
-            else:
-                note_split_date_conflict(t.symbol, prior, t.date,
-                                         t.quantity)
-        out = [t for t in txs
-               if getattr(t, 'action', None) != 'SPLIT' or id(t) in keep]
-        return out
+        # The rule itself is split_copies — shared with the dict walks.
+        return dedupe_split_events(txs, seen, per_account=per_account,
+                                   note=True)

@@ -160,9 +160,13 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     # so upstream dedup keeps both). The gains engine dedupes these per
     # corporate event; without the same dedup here, the blended
     # per-account split apportioned DOUBLED quantities (2026-09 audit).
+    # split_copies is THE corporate-event rule (CA-CORP-12): the same
+    # split booked on two dates by two sources (within a week) is ONE
+    # event, kept on its earliest date. Keyed per account here: each
+    # account's own copy scales that account's shares.
     from taxjson.lib.corporate_timeline import (normalize_symbol_new,
-                                                split_seen)
-    _seen_splits = set()
+                                                split_copies)
+    _dup_splits = split_copies(rows, per_account=True)
     # Shares per (account, raw symbol), the way the engine walk holds
     # them: a SPLIT scales and moves only the shares of ITS symbol (in
     # its account), so shares already held under a rename's target are
@@ -182,14 +186,7 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
                 float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0))
         elif act == "SPLIT":
             ratio = float(t.get("quantity") or 0.0)
-            if not ratio:
-                continue
-            # split_seen: the same split booked on two dates by two
-            # brokers (within a week) is still ONE event.
-            if split_seen(_seen_splits, sym,
-                          str(t.get("date") or ""), ratio,
-                          t.get("symbol_new") or "",
-                          account=acct) is not None:
+            if not ratio or id(t) in _dup_splits:
                 continue
             target = normalize_symbol_new(sym, t.get("symbol_new")) or sym
             for key in [k for k in held
@@ -204,8 +201,13 @@ def _settle_lag_factors(transactions: List[dict]) -> dict:
     """{id(row): factor} for BUYSELL/ASSIGN rows whose settle lag
     straddles a plain SPLIT of their symbol: executed (date, time)
     before the split's moment, settling after its date. The same test
-    the gains engine uses to re-denominate the executed quantity."""
-    splits = [t for t in transactions
+    the gains engine uses to re-denominate the executed quantity, on
+    the same split events: one split reported twice (two sources, dates
+    within a week) is ONE event, counted once (split_copies, keyed per
+    security like the engine's dedup — GitHub #92: both copies scaled
+    the lagged sale and the record-date holding came out short)."""
+    from taxjson.lib.corporate_timeline import dedupe_split_events
+    splits = [t for t in dedupe_split_events(transactions)
               if t.get("action") == "SPLIT" and t.get("date")
               and float(t.get("quantity") or 0.0)
               and (t.get("symbol_new") or t.get("symbol"))

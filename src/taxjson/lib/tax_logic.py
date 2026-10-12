@@ -1730,6 +1730,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "is unchanged."),
             Rule("CA-CORP-02", "Name changes carry the pool automatically.",
                  cont=True),
+            Rule("CA-CORP-12",
+                 "One split reported by several sources (two brokers, a "
+                 ".tt line next to the broker's row) at the same ratio, "
+                 "on dates within a week, is ONE event, applied once on "
+                 "the earliest date — in the gains, in the shares held on "
+                 "a [[distributions]] record date, in a trade executed "
+                 "before the split and settling after it (re-denominated "
+                 "through the ratio once), and in each account's share of "
+                 "the pool; a note says it was booked on two dates."),
             Rule("CA-CORP-03",
                  "Mergers: taxable_disposition (old shares sold at FMV; "
                  "new shares cost FMV)"),
@@ -3461,6 +3470,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "and purchase dates are unchanged."),
             Rule("US-CORP-02", "Name changes carry the lots automatically.",
                  cont=True),
+            Rule("US-CORP-13",
+                 "One split reported by several sources (two brokers, a "
+                 ".tt line next to the broker's row) at the same ratio, "
+                 "on dates within a week, is ONE event, applied once on "
+                 "the earliest date — in the gains, in the shares held on "
+                 "a [[distributions]] record date, and in a trade executed "
+                 "before the split and settling after it (re-denominated "
+                 "through the ratio once); a note says it was booked on "
+                 "two dates."),
             Rule("US-CORP-03",
                  "Mergers: taxable_exchange (§1001: old shares sold at "
                  "FMV; new shares cost FMV),"),

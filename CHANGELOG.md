@@ -18,6 +18,13 @@
   way rows of an export with no ID column always were, and the same rows
   in an overlapping export are still counted once. Kraken rows with a
   blank `txid` get the same treatment (#93).
+- One split reported twice (two brokers, or a `.tt` SPLIT line next to
+  the broker's row, on dates a few days apart) is now one event in every
+  step that walks splits. A sale executed before the split and settling
+  after it was scaled by both copies when sizing a `[[distributions]]`
+  row's record-date holding, so a reinvested distribution was booked too
+  small and the gains came out too high; the same walk also skewed each
+  account's share of a blended pool. (#92)
 
 ## v0.29.2 (2026-10-11)
 
