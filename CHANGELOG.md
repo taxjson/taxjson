@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- Canada: a superficial loss whose replacement shares were still held
+  under an old ticker, and came into the loss's symbol by a later
+  rename or merger after that symbol had been sold out, is now added to
+  the ACB of those shares, so their sale recovers it. Before, the loss
+  was denied and never recovered, and the gains were overstated by the
+  denied amount. The US engine was not affected. (#91)
+
 
 ## v0.29.2 (2026-10-11)
 

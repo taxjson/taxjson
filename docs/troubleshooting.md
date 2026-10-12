@@ -1261,6 +1261,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** `v0.29.1`
 - **Code:** `src/taxjson/lib/futures.py` — `pool_across_accounts`, `engine_pool_key`, `held in several taxable accounts`; `src/taxjson/lib/core.py` — `_fold_short_futures_pools`
 
+### `tjs wash-sales` denies a loss whose replacement arrived by a rename or merger, and the later sale's gain in `tjs sum` never gets the denied amount back
+- **Check:** `tjs audit QZA.TO` for the loss's symbol: the loss sale is denied (deferred, not "permanently"), the symbol held no shares right after it, and a rename or merger (a broker corporate-action row, a `.tt` `RENAME` or `SPLIT ... QZB.TO QZA.TO` line) later brought the replacement shares in under that symbol. On v0.29.2 and older the ACB of those shares after the rename is their own cost only, without the denied loss; once they are sold the total gain exceeds proceeds less purchases by the denied amount. `tjs sanity` and the holdings check agree, since the share counts are right.
+- **Cause:** a denied loss is added to the replacement's ACB (CA-SL-09). When the loss's symbol holds nothing at that moment, the amount waits until the symbol next opens a position. A purchase applied it, but a rename or merger into the empty symbol did not, so the loss was denied and never recovered (issue #91; CA-SL-19 in `tjs tax-logic --ids`). The US engine adds a wash sale's disallowed loss to the replacement lot itself, which the rename carries, and was not affected.
+- **Fix:** upgrade, then `tjs run`: the renamed shares' ACB now includes the denied amount, and each later sale (partial or final) recovers its share. If you filed an earlier year with such a sale, `tjs check-filed` shows whether its figure moved.
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `pending_wash`
+
 ### `tjs wash-sales` shows a loss "permanently denied"
 - **Check:** `tjs wash-sales` lists each denied loss, its trigger and DENIED vs ALLOWED; `tjs audit` traces the sale.
 - **Cause:** identical property was bought within 30 days of the loss and still held at day 30 in a registered account (or by an affiliated person), so the loss is gone from your return (s.54, s.40(2)(g)(i)). A denial against a taxable repurchase is added to that ACB instead (s.53(1)(f)).

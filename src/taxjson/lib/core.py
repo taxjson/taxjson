@@ -3376,20 +3376,25 @@ class CanadaTaxRules(TaxRules):
                                 # future recovery (2026-09 adversarial
                                 # audit). Apply signed by the TARGET
                                 # pool's direction when it has one;
-                                # else keep parking.
-                                _src_pw = pool.pop('pending_wash', 0.0)
-                                if _src_pw > 1e-9:
+                                # else keep parking. The TARGET's own
+                                # parked dollars count too: a flat
+                                # target the rename brings shares into
+                                # opens here, as a purchase opens a
+                                # flat pool — leaving them parked
+                                # denied the loss for good (issue #91,
+                                # CA-SL-19). The deferred_wash tally
+                                # already holds both sides' dollars
+                                # (summed above): only the cost moves.
+                                _pw = (pool.pop('pending_wash', 0.0)
+                                       + existing.pop('pending_wash',
+                                                      0.0))
+                                if _pw > 1e-9:
                                     if existing['qty'] > 1e-6:  # cov: a2-1596-rename-pending-wash
-                                        existing['total_cost'] += D(
-                                            _src_pw)
+                                        existing['total_cost'] += D(_pw)
                                     elif existing['qty'] < -1e-6:
-                                        existing['total_cost'] += D(
-                                            -_src_pw)
+                                        existing['total_cost'] += D(-_pw)
                                     else:
-                                        existing['pending_wash'] = (
-                                            existing.get(
-                                                'pending_wash', 0.0)
-                                            + _src_pw)
+                                        existing['pending_wash'] = _pw
                                 existing['tainted'] = (
                                     existing.get('tainted', False)
                                     or pool.get('tainted', False)

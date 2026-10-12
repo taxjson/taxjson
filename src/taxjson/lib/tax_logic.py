@@ -1546,6 +1546,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "bought by an affiliated person (--affiliated) is denied "
                  "on your return too, and that person adds it to their "
                  "own ACB (s.53(1)(f))."),
+            Rule("CA-SL-19",
+                 "When the loss's symbol holds no units at that moment "
+                 "(the replacement is still held under an old ticker a "
+                 "later rename or merger brings into the symbol), the "
+                 "denied amount waits and is added, once, to the next "
+                 "position the symbol opens: a purchase, or the rename "
+                 "or merger that brings the shares in.", cont=True),
             Rule("CA-SL-10",
                  "Replacements are matched in acquisition order: purchases "
                  "after the sale first, then earlier ones, latest first. "
@@ -3295,7 +3302,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-WASH-09",
                  "The disallowed loss is added to the replacement lot's "
-                 "basis"),
+                 "basis (a lot a later rename or merger carries into the "
+                 "loss's symbol keeps it)"),
             Rule("US-WASH-10", "and its holding period carries over.",
                  cont=True),
             Rule("US-WASH-11",
