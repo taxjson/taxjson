@@ -58,6 +58,15 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.30.1
+
+- **v0.30.0 can no longer be installed; v0.30.1 is the same program.**
+  An install that follows a channel (`stable`, `beta`, `latest`)
+  upgrades as usual by re-running the installer. One pinned to `v0.30.0`
+  (`--channel v0.30.0`, `TAXJSON_CHANNEL=v0.30.0`): pin `v0.30.1`, or
+  use `--channel stable`. A clone of the repository keeps working: the
+  history did not change.
+
 ### v0.30.0
 
 - **Releases v0.15.0 to v0.29.2 were withdrawn.** The public history
