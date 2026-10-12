@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- The public history starts again from a single commit holding the
+  same files, and releases v0.15.0 to v0.29.2 were withdrawn (personal
+  data in old file versions and commit messages). Nothing in how
+  taxjson computes changes; see docs/upgrading.md for pinned installs
+  and old clones.
+
 ### Fixed
 
 - Canada: a superficial loss whose replacement shares were still held

@@ -58,8 +58,16 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
-### v0.29.3
+### v0.30.0
 
+- **Releases v0.15.0 to v0.29.2 were withdrawn.** The public history
+  was replaced by a single starting commit, and those releases and their
+  tags are gone. An install that follows a channel (`stable`, `beta`,
+  `latest`) upgrades as usual by re-running the installer. One pinned to
+  a withdrawn version (`--channel v0.28.4`, `TAXJSON_CHANNEL=v0.29.0`)
+  can no longer re-install it: re-run the installer with
+  `--channel stable` (or pin `v0.30.0`). A clone of the repository made
+  before 2026-10-12 shares no history with the new one: clone it again.
 - **Two engine fixes can move a filed year.** A superficial loss whose
   replacement shares came into the loss's symbol by a later rename or
   merger (Canada), and a split reported twice around a per-share
