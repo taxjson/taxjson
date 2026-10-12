@@ -122,10 +122,10 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 ## Splits, consolidations and name changes
 
-- **Rule:** a split or consolidation scales the quantity; the ACB is unchanged. A trade executed before a split but settling after it is re-denominated. A name change carries the pool automatically.
+- **Rule:** a split or consolidation scales the quantity; the ACB is unchanged. A trade executed before a split but settling after it is re-denominated. A name change carries the pool automatically. One split reported by several sources at the same ratio within a week is one event, applied once on the earliest date, in every step that walks splits.
 - **Source:** s.47; T4037 "Stock splits".
-- **Rule ids:** `CA-CORP-01`, `CA-CORP-02`.
-- **Code:** `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `lineage_factor`, `cumulative_factor`; `src/taxjson/lib/corp_actions.py` — `NAME_CHANGE`, `_emit_rename`; `src/taxjson/lib/core.py` — `_redenoms`, `SplitStraddlesSettlementError`.
+- **Rule ids:** `CA-CORP-01`, `CA-CORP-02`, `CA-CORP-12`.
+- **Code:** `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `lineage_factor`, `cumulative_factor`, `split_copies`; `src/taxjson/lib/corp_actions.py` — `NAME_CHANGE`, `_emit_rename`; `src/taxjson/lib/core.py` — `_redenoms`, `SplitStraddlesSettlementError`.
 - **Edge cases and limits:** a rename-split dated between a trade's execution and its settlement is refused (`SplitStraddlesSettlementError`): re-date the row's settlement or the split. Cash in lieu of a fractional share is a sale of the fraction (`CA-CORP-05`); IB's cash-in-lieu wording is modelled, not seen in a real statement (docs/limits.md "Export rows modelled without a real sample").
 
 ## Mergers and takeovers
@@ -398,7 +398,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 - **Rule:** a merger is elected per event: `taxable_exchange` (§1001: sold and bought at FMV), `reorg_368` (all-stock: basis carries over, holding period tacks) or `reorg_368_boot` (§356 per lot: gain recognised up to the lot's share of the cash, a loss never; new basis = basis − cash + gain). Cash in lieu is a sale of the fraction from the oldest lot. A cash merger is a sale; shares-and-cash from an IB row stops the run as UNSUPPORTED.
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-CORP-03` … `US-CORP-05` (citing §1001, §368(a), §358, §1223(1), §356, Reg. §1.356-1(b)).
-- **Rule ids:** `US-CORP-01`, `US-CORP-03`, `US-CORP-04`, `US-CORP-05`, `US-CORP-08`, `US-CORP-09`, `US-CORP-10`, `US-CORP-11`.
+- **Rule ids:** `US-CORP-01`, `US-CORP-03`, `US-CORP-04`, `US-CORP-05`, `US-CORP-08`, `US-CORP-09`, `US-CORP-10`, `US-CORP-11`, `US-CORP-13` (one split reported by several sources within a week is one event, applied once).
 - **Code:** `src/taxjson/lib/corp_actions.py` — `USA_MERGER`, `_emit_boot_exchange`, `_emit_basis_carryover_rename`, `_emit_taxable_exchange`.
 - **Edge cases and limits:** a significant holder attaches the Reg. §1.368-3 statement; taxjson only says so.
 
