@@ -58,6 +58,25 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.29.3
+
+- **Two engine fixes can move a filed year.** A superficial loss whose
+  replacement shares came into the loss's symbol by a later rename or
+  merger (Canada), and a split reported twice around a per-share
+  distribution's record date, now give the correct gain; a filed year
+  with either shows `filed <year> DRIFTED` on the next run
+  ([troubleshooting.md](troubleshooting.md)).
+- **`tjs splits` no longer fails on a split reported twice.** Two
+  reports of the same split within a week are marked `TWO-SOURCES`
+  (applied once, on the earlier date) and exit 0; they were marked
+  `TWICE?` with exit 1, though every engine already applied them once.
+  `TWICE?` and exit 1 remain for the same ratio 8 to 10 days apart.
+- **Blank broker ids (Coinbase, Kraken).** Two identical rows in one
+  export whose ID (Coinbase) or `txid` (Kraken) cell is blank are now
+  two trades or ledger events, as in an export with no ID column. A
+  row pasted into a file twice by hand is then counted twice: remove
+  the copy.
+
 ### v0.29.1
 
 - **Cached prices are fetched again once.** `harvest` and the other

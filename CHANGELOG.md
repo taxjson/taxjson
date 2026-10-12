@@ -10,7 +10,6 @@
   the ACB of those shares, so their sale recovers it. Before, the loss
   was denied and never recovered, and the gains were overstated by the
   denied amount. The US engine was not affected. (#91)
-
 - Coinbase: two identical purchases or sales in the same second, in an
   export whose ID column is blank on those rows, are now booked as two
   trades; they were read as one, so the gain was understated and a later sale
