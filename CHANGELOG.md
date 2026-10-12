@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.30.1 (2026-10-12)
+
 ### Changed
 
 - v0.30.1 is v0.30.0 again, under a new number. The GitHub repository
