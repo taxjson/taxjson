@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed
+
+- v0.30.1 is v0.30.0 again, under a new number. The GitHub repository
+  was recreated on 2026-10-12 so that pull requests from before v0.30.0
+  no longer serve the withdrawn history, and GitHub does not let a
+  published release's tag name be used again. Nothing in how taxjson
+  computes changes. Issue and pull request numbers start again from #1:
+  the numbers in older entries below refer to the earlier repository,
+  which is no longer public.
 
 ## v0.30.0 (2026-10-11)
 
