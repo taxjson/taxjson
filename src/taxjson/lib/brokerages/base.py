@@ -12,6 +12,7 @@ subclass that delegates to these helpers instead of re-implementing them.
 from taxjson.lib.stage_msg import emit_line
 from datetime import datetime, timedelta
 from decimal import Decimal
+import hashlib
 import math
 from pathlib import Path
 import re
@@ -1127,6 +1128,21 @@ class BaseBrokerage:
         ds = [d for d in dates if d]
         return (len(set(ds)) > 1
                 and all(a >= b for a, b in zip(ds, ds[1:])))
+
+    def content_stem(self, cells, prefix: str) -> str:
+        """A stable id stem for a row the broker gave no id (no ID
+        column, or a blank cell — issue #93): a hash of the row's cells,
+        numbered when the same row repeats in the file. Both legs of a
+        swap carry it, so fill-crypto values the exchange once (re-audit
+        A2-0998); an identical copy of the same export in another file
+        gets the same stems, so the cross-file dedup still folds it. A
+        parser resets `self._stems` at the start of each file."""
+        stems = self.__dict__.setdefault('_stems', {})
+        h = hashlib.sha1('\x1f'.join(str(c or '').strip() for c in cells)
+                         .encode('utf-8')).hexdigest()[:16]
+        n = stems.get(h, 0) + 1
+        stems[h] = n
+        return f"{prefix}{h}" + (f"n{n}" if n > 1 else "")
 
     @staticmethod
     def disambiguate_split_fills(transactions: List[Dict[str, Any]]) -> None:

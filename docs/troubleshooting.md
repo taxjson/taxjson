@@ -1085,6 +1085,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/brokerages/coinbase.py` — `the parser does not book`
 
+### "Warning: Short position: ETH (coins): its purchase is missing — `taxjson find-missing-history`" for a coin you bought twice in one second, with a Coinbase file whose ID cells are blank (or a Kraken file whose `txid` cells are blank)
+- **Check:** the export has an `ID` column (Kraken: `txid`) but the cell is empty on the rows in question, and two of them are alike in every other cell (same second, asset, quantity, price and total). `tjs sum` books fewer units and a smaller gain than the export holds; `tjs sanity` against a holdings file shows the short. On v0.29.2 and older (issue #93).
+- **Cause:** taxjson keeps two identical rows of one file apart by the broker's row id. A row with no id is told apart by its order among identical rows (as rows of an older Coinbase layout with no ID column always were), but a blank cell in an ID column took neither path, so the two purchases became one row and the sale went short.
+- **Fix:** upgrade and `tjs run`: rows without an id are now kept apart, while the same rows in an overlapping export are still read once. On an older release, delete the empty ID column (or fill in distinct ids).
+- **Fixed in:** unreleased
+- **Code:** `src/taxjson/lib/brokerages/coinbase.py` — `parse_file`, `_content_stem`; `src/taxjson/lib/brokerages/kraken.py` — `_mark_idless_fills`; `src/taxjson/lib/brokerages/base.py` — `content_stem`, `disambiguate_split_fills`
+
 ### "Error: kr_ledgers.csv: Kraken ledger kr_ledgers.csv: refid RZ*** (2025-03-02)" — the leg "is under the books' zero (1e-09 units) but not negligible"
 - **Check:** the paragraph names the coin, its tiny amount and its USD value (more than 0.01 USD); the crypto account's files are not booked (exit 1). A dust leg that is worth nothing gives only a note ("dust sweep" / "instant trade … not booked").
 - **Cause:** Kraken writes amounts to ten decimals, so a sweep or trade can spend less than 1e-09 of a coin. Such a leg is left out only when it and its share of the other side are each worth at most 0.01 USD (tax-logic CA-CRYPTO-11); one that carries value would be a real sale or purchase lost. Before v0.21.0 any such leg became a 0-unit trade and stopped the account.

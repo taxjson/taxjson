@@ -11,6 +11,13 @@
   was denied and never recovered, and the gains were overstated by the
   denied amount. The US engine was not affected. (#91)
 
+- Coinbase: two identical purchases or sales in the same second, in an
+  export whose ID column is blank on those rows, are now booked as two
+  trades; they were read as one, so the gain was understated and a later sale
+  showed a short position. A row without an ID is now told apart the
+  way rows of an export with no ID column always were, and the same rows
+  in an overlapping export are still counted once. Kraken rows with a
+  blank `txid` get the same treatment (#93).
 
 ## v0.29.2 (2026-10-11)
 

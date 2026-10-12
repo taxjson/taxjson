@@ -706,6 +706,7 @@ class KrakenBrokerage(BaseBrokerage):
         ignored_types: Dict[str, int] = {}
         ledger_idx = self._sibling_ledger_index(path)
         unverified = 0
+        self._stems = {}
         coin_fee_fills = 0
         margin_fills = 0
         with io.StringIO(read_broker_text(path)) as f:
@@ -919,9 +920,13 @@ class KrakenBrokerage(BaseBrokerage):
                             _leg['price'] = round(_usd / _q, 8) if _q else 0.0
                             _leg['net_amount'] = round(_usd, 8)
                             _leg['gross_amount'] = round(_usd, 8)
-                    if _txid:
-                        base_leg['id'] = f'{_txid}-base'
-                        quote_leg['id'] = f'{_txid}-quote'
+                    # A blank txid cell still needs one stem for both
+                    # legs (fill-crypto values the swap once, A2-0998)
+                    # and one per fill (issue #93).
+                    _stem = _txid or self.content_stem(
+                        [v for k, v in raw.items() if k is not None], 'kr')
+                    base_leg['id'] = f'{_stem}-base'
+                    quote_leg['id'] = f'{_stem}-quote'
                     transactions.extend([base_leg, quote_leg])
                     continue
 
@@ -993,8 +998,19 @@ class KrakenBrokerage(BaseBrokerage):
                   f"coins given, with no quote-currency fee; those fees "
                   f"are therefore NOT in the fee reports (fees.rpt, "
                   f"fees-sum, the .sum FEES line).")
+        self._mark_idless_fills(transactions)
         self.emit_skip_summary(shown_name(path))
         return transactions
+
+    def _mark_idless_fills(self, transactions) -> None:
+        """A row whose txid cell is blank carries no id, so two genuine
+        identical same-second rows would hash to one content id and the
+        dedup stage would keep one (issue #93). Mark them as split fills
+        the way every other parser does; rows with a txid keep it
+        untouched, and an overlapping export gets the same marks, so the
+        cross-file rule still folds the copy."""
+        self.disambiguate_split_fills(
+            [t for t in transactions if not t.get('id')])
 
     # --------------------------------------------------------------- ledgers
     def _parse_ledgers(self, path: Path) -> List[Dict[str, Any]]:
@@ -1331,6 +1347,7 @@ class KrakenBrokerage(BaseBrokerage):
             self.zero_tx_reason = (
                 f"its {nonevents + sum(ignored_types.values())} row(s) "
                 f"are recognized non-events")
+        self._mark_idless_fills(transactions)
         self.emit_skip_summary(shown_name(path))
         return transactions
 

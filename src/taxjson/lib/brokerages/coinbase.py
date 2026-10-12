@@ -1,6 +1,5 @@
 from taxjson.lib.stage_msg import emit_line
 import csv
-import hashlib
 import io
 import re
 import sys
@@ -74,7 +73,8 @@ _CONVERT_NOTES_RE = re.compile(
     re.IGNORECASE,
 )
 # `price currency` is optional (defaults to USD) and `id` is absent in
-# older exports (handled via disambiguate_split_fills below).
+# older exports or blank on a row (handled via disambiguate_split_fills
+# below).
 _REQUIRED_FIELDS = ('timestamp', 'transaction type', 'asset',
                     'quantity transacted', 'price at transaction', 'total')
 
@@ -494,9 +494,10 @@ class CoinbaseBrokerage(BaseBrokerage):
                 # dedup from collapsing distinct events that happen to share
                 # second-precision timestamp + qty + price.
                 cb_id = self._col(row, header_map, 'id').strip()
-                if not cb_id and crypto_quote and 'id' not in header_map:
+                if not cb_id and crypto_quote:
                     # Both legs need one id stem for fill-crypto to value
-                    # the swap once (re-audit A2-0998's twin).
+                    # the swap once (re-audit A2-0998's twin) — also for
+                    # a blank cell in an ID column (issue #93).
                     cb_id = self._content_stem(row)
                 where = (f"Coinbase {shown_name(path)} line {row_start} "
                          f"({type_raw.strip()} {asset} "
@@ -636,13 +637,16 @@ class CoinbaseBrokerage(BaseBrokerage):
                   f"Subtotal ± fee (or quantity × price ± fee when "
                   f"Subtotal is blank too). Check them against the "
                   f"Coinbase statement.")
-        # Older Coinbase exports have no ID column, so byte-identical
-        # same-second fills would hash to the same content id and
-        # `taxjson-sort --dedup` would silently delete real trades —
-        # every other parser already guards this. Only needed when the
-        # export lacks per-row IDs (with them, ids are already unique).
-        if header and 'id' not in header_map:
-            self.disambiguate_split_fills(transactions)
+        # A row without an ID (older exports have no ID column; a
+        # current one can leave the cell blank — issue #93) gets a
+        # content id, so byte-identical same-second fills would hash to
+        # one id and `taxjson-sort --dedup` would silently delete real
+        # trades — every other parser already guards this. Rows with a
+        # broker ID are unique already and keep it untouched. The same
+        # rows in an overlapping export get the same marks, so the
+        # cross-file rule still folds the copy.
+        self.disambiguate_split_fills(
+            [t for t in transactions if not t.get('id')])
         if unbooked:
             kinds: Dict[str, int] = {}
             for k, _d, _a, _q in unbooked:
@@ -663,17 +667,8 @@ class CoinbaseBrokerage(BaseBrokerage):
         return transactions
 
     def _content_stem(self, row) -> str:
-        """A stable id stem for a row of an export with no ID column:
-        a hash of the row's cells, numbered when the same row repeats in
-        the file. Both legs of a swap carry it, so fill-crypto values the
-        exchange once (re-audit A2-0998); an identical copy of the same
-        export in another file gets the same stem, so dedup still folds
-        it."""
-        h = hashlib.sha1('\x1f'.join(c.strip() for c in row)
-                         .encode('utf-8')).hexdigest()[:16]
-        n = self._stems.get(h, 0) + 1
-        self._stems[h] = n
-        return f"cb{h}" + (f"n{n}" if n > 1 else "")
+        """The id stem of a row with no ID (base.content_stem)."""
+        return self.content_stem(row, 'cb')
 
     @staticmethod
     def _fits_qp(value, qty, price) -> bool:
@@ -864,9 +859,10 @@ class CoinbaseBrokerage(BaseBrokerage):
             'description': f'Convert (buy leg): {notes}'.strip(),
         }
         cb_id = self._col(row, header_map, 'id').strip()
-        if not cb_id and 'id' not in header_map:
-            # No ID column (older exports): the legs still need one stem
-            # or fill-crypto values each from its own close (A2-0998).
+        if not cb_id:
+            # No ID (an older export without the column, or a blank
+            # cell — issue #93): the legs still need one stem or
+            # fill-crypto values each from its own close (A2-0998).
             cb_id = self._content_stem(row)
         if cb_id:
             sell['id'] = f'{cb_id}-sell'

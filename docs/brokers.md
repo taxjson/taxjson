@@ -277,6 +277,9 @@ take from a few minutes to a week.
   adjustment, margin), are `UNBOOKED` too. `tjs run --strict` stops on
   any `UNBOOKED` line.
 - **Overlapping ledgers are read once**, by their ledger `txid`.
+- **A blank `txid`.** Two fills or ledger rows alike in every cell
+  are two events when their `txid` is blank, as in any export without
+  ids; an overlapping export holding the same rows is still read once.
 - **Required columns:** trades `txid`, `pair`, `time`, `type`, `price`,
   `cost`, `fee`, `vol`; ledgers `txid`, `refid`, `time`, `type`,
   `asset`, `amount`, `fee`.
@@ -316,6 +319,10 @@ dates as CSV.
 - **Unknown types.** A row of a type the parser does not book that
   moves coins (an airdrop, a new reward label) is an `UNBOOKED`
   warning: enter it as a `.tt` line.
+- **Row IDs.** A row's ID keeps two fills in the same second apart. A
+  row without one (an older layout with no ID column, or a blank cell)
+  is told apart from an identical row of the same file by its order, and
+  the same rows in an overlapping export are still read once.
 
 **Positions report:** none taxjson knows. Use a `[[holding]]` TOML.
 
