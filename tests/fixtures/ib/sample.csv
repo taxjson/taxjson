@@ -1,0 +1,8 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,MSFT,"2025-02-05, 09:31:00",50,400.00,0,-20000,-1,0,0,0,O
+Dividends,Header,Currency,Account,Date,Description,Amount
+Dividends,Data,USD,U777,2025-06-12,MSFT(US5949181045) Cash Dividend USD 0.75 per Share,37.50
+Withholding Tax,Header,Currency,Account,Date,Description,Amount
+Withholding Tax,Data,USD,U777,2025-06-12,MSFT(US5949181045) Cash Dividend USD 0.75 per Share - US Tax,-5.63

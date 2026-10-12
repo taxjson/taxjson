@@ -1,0 +1,51 @@
+# Column mapping template for a Wealthsimple activity CSV imported
+# through the GENERIC importer. Copy next to your export as
+#   inputs/<account>/generic_wealthsimple.csv.toml    (sidecar), or
+#   inputs/<account>/generic.toml                     (whole folder)
+# and adjust the header names/action values to match YOUR export —
+# Wealthsimple has shipped several layouts. When you've confirmed a
+# mapping works, consider contributing the sample so a dedicated
+# parser can be generated (taxjson-generate-parser).
+
+[columns]
+date     = "Date"             # the TRADE date
+# settle = "Settlement Date"  # map it if your export has one; otherwise
+#                             # the standard T+1/T+2 cycle is computed
+action   = "Transaction type"
+symbol   = "Symbol"
+quantity = "Quantity"
+price    = "Price"
+amount   = "Amount"           # signed, fee-inclusive total
+currency = "Currency"
+
+[formats]
+date = "%Y-%m-%d"
+# fee_sign = "cash"          # FEE rows: negative Amount = charged (default);
+#                             # "charged" if your export shows charges positive
+
+[actions]
+"BUY"       = "buy"
+"SELL"      = "sell"
+"DIV"       = "dividend"
+"DIVIDEND"  = "dividend"
+"NRT"       = "tax"           # non-resident tax withheld
+"INT"       = "interest"
+"FEE"       = "fee"
+"TRFIN"     = "skip"          # transfers: supply real history instead
+"TRFOUT"    = "skip"
+
+[defaults]
+currency = "CAD"
+
+# [options]
+# settle_on_trade_date = true  # settle every trade on its trade date (the
+#                              # export's date is already settlement). Not
+#                              # for crypto: the generic importer books
+#                              # securities; coins go in a crypto = true
+#                              # account.
+
+# Optional: the real broker. `taxjson run` parses each named broker's
+# generic files on their own and the fees report shows them as
+# generic:wealthsimple (instead of one "generic" row for every broker).
+[broker]
+name = "wealthsimple"

@@ -1,0 +1,4 @@
+Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Fees and/or Spread,Total (inclusive of fees and/or spread)
+2025-01-15 10:00:00 UTC,Buy,ETH,1.5,USD,3000,10,4510
+2025-04-10 09:00:00 UTC,Sell,ETH,0.5,USD,3400,5,1695
+2025-05-01 00:00:00 UTC,Receive,ETH,0.2,USD,0,0,0

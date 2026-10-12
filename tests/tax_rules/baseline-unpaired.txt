@@ -1,0 +1,4 @@
+# Shrink-only baseline: partition rules (tax_logic.PARTITION_RULES) with
+# no @rule_absent test yet — the same synthetic book under the other
+# country, asserting the rule does NOT apply there. Delete a line when
+# its pair is written; ids must be in seed-ids.txt.

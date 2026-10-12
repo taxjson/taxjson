@@ -1,0 +1,52 @@
+name: privacy watch
+
+# What GitHub publishes beside the code — issue and pull request titles and
+# bodies, their comments, review and commit comments, release notes — never
+# passes a push check, and a commit that reached main without the
+# maintainer's pre-push hook carries a message nobody scanned. Once a day
+# this reads what changed in the last two days (all release notes, and the
+# messages of main's commits in those days) and scans it with
+# scripts/check-pii.sh's generic patterns (account-id shapes, e-mails, home
+# paths, credentials, money amounts in release notes and commit messages):
+# scripts/check-public.sh --days 2. GitHub has none of the maintainer's
+# private lists, so this is the generic layer; scripts/promote.sh runs the
+# full scan, private lists included, before a channel moves. A hit fails
+# the run (GitHub e-mails the owner); the log shows a masked hint and where,
+# never the value. What to do then: docs/releasing.md, "Something private
+# leaked into a release".
+#
+# A pull request that changes this watch (or the scanner it runs) runs it
+# once too, so a broken watch is seen before it is merged. Not a required
+# check: it does not run on every pull request.
+on:
+  schedule:
+    - cron: "41 7 * * *"     # daily (UTC)
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/privacy-watch.yml
+      - scripts/check-public.sh
+      - scripts/check-pii.sh
+
+# Read-only, and no secrets: it reads issues, pull requests, releases and
+# commits, and changes nothing.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  watch:
+    name: privacy watch (last two days)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan what GitHub serves beside the code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAXJSON_SLUG: ${{ github.repository }}
+        run: bash scripts/check-public.sh --days 2

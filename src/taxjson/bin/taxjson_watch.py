@@ -1,0 +1,283 @@
+"""taxjson watch — cron-able change detector over the wash radar (and,
+optionally, the harvest schedule).
+
+The radar and harvest answer "what is the state NOW"; watch answers
+"what CHANGED since I last looked". It compares the live combined
+radar against the state saved by the previous watch run
+(work/.watch_state.json) and reports only transitions:
+
+  - a new actionable advisory (VIOLATION appearing, a LOCKED position)
+  - a category change (LOCKED -> CLEAR: the loss became claimable)
+  - a clear date pushed out (a new buy extended the window)
+  - an advisory disappearing (position closed / window passed)
+  - with --harvest: the harvestable-now loss total moving by more
+    than --threshold
+
+Quiet run (no changes) prints NOTHING and exits 0 — under cron, no
+output means no mail. `--exit-code` makes changes exit 1 for shell
+scripting; the default stays 0 so `taxjson run watch` chains never
+break on a mere change report. The first run records a baseline and
+says so. State updates on every run (atomic write).
+"""
+from taxjson.lib.out import exit_text
+import json
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+STATE_VERSION = 1
+
+# Categories worth announcing on first sight. CLEAR is tracked in
+# state (so LOCKED->CLEAR transitions can be reported) but a NEW
+# ticker that is already CLEAR is noise.
+_ACTIONABLE = ("VIOLATION", "WASHED", "BLOCKED", "LOCKED", "EXITABLE",
+               "CAUTION", "COOLING", "RISK")
+
+
+def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """{ticker: {category, advisory, clears_at}} from a radar JSON
+    document (the --json / --json-out payload)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for sec in doc.get("sections") or []:
+        for r in sec.get("rows") or []:
+            t = r.get("ticker")
+            if t and t not in out:
+                out[t] = {"category": r.get("category") or "",
+                          "advisory": r.get("advisory") or "",
+                          "clears_at": r.get("clears_at"),
+                          # buy-check/sell-check need the scope: a
+                          # sheltered-ONLY holding must not be told
+                          # to "sell at a loss", and a sheltered
+                          # in-window buy makes a violation
+                          # permanent rather than rescueable.
+                          "taxable_qty": r.get("taxable_qty"),
+                          "sheltered_qty": r.get("sheltered_qty"),
+                          # Per-holder rule: who backs a VIOLATION
+                          # (rescue) and how much of a LOCKED position
+                          # a loss sale today would lose (at_risk_qty).
+                          "rescue": r.get("rescue"),
+                          "denied_qty": r.get("denied_qty"),
+                          "at_risk_qty": r.get("at_risk_qty"),
+                          # BLOCKED/COOLING: the in-window loss and its
+                          # units (buy-check's per-unit denial).
+                          "recent_loss": r.get("recent_loss"),
+                          "recent_loss_qty": r.get("recent_loss_qty"),
+                          # Warn-only flags (a warrant, an adjusted
+                          # series, a long call in the US, a futures
+                          # option): sell-check / buy-check relay them
+                          # (audit A2-0434 / A2-0445 / A2-1341).
+                          "notes": list(r.get("notes") or []),
+                          # US: outside §1091 (US-WASH-18), and a
+                          # short-cover loss only a re-short replaces
+                          # (§1091(e)) — A2-0435 / A2-0436.
+                          "outside_wash_rule": bool(
+                              r.get("outside_wash_rule")),
+                          "short_cover_loss": r.get("short_cover_loss"),
+                          # The class's recent losses and the first day
+                          # a buy no longer replaces them (rebuy).
+                          "losses": list(r.get("losses") or []),
+                          "rebuy_at": r.get("rebuy_at"),
+                          "deadline_passed": bool(
+                              r.get("deadline_passed"))}
+    return out
+
+
+def diff_radar(prev: Dict[str, Dict[str, Any]],
+               cur: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Transition records, stable order (severity of the CURRENT state,
+    then ticker). Each: {kind, ticker, ...} with a human `line`."""
+    changes: List[Dict[str, Any]] = []
+
+    def _known(rec):
+        # The --all radar also emits rows with an EMPTY category (no
+        # advisory — e.g. a position fully exited at a gain). Treating
+        # those as states produced garbled transitions ("CLEAR -> ")
+        # and false "safe to sell at a loss" lines; normalize them to
+        # absent.
+        if rec is None:
+            return None
+        cat = rec.get("category") or ""
+        return rec if cat in _ACTIONABLE or cat == "CLEAR" else None
+
+    for t in sorted(set(prev) | set(cur)):
+        p, c = _known(prev.get(t)), _known(cur.get(t))
+        if c is None:
+            if p and p.get("category") in _ACTIONABLE:
+                changes.append({
+                    "kind": "gone", "ticker": t,
+                    "was": p.get("category"),
+                    "line": f"{t}: {p.get('category')} advisory gone "
+                            f"(position closed or window passed)"})
+            continue
+        ccat = c.get("category") or ""
+        if p is None:
+            if ccat in _ACTIONABLE:
+                changes.append({
+                    "kind": "new", "ticker": t, "category": ccat,
+                    "line": f"{t}: NEW {ccat} — {c.get('advisory')}"})
+            continue
+        pcat = p.get("category") or ""
+        if ccat != pcat:
+            if ccat == "CLEAR":
+                changes.append({
+                    "kind": "cleared", "ticker": t, "was": pcat,
+                    "line": f"{t}: {pcat} -> CLEAR — safe to sell at a "
+                            f"loss (don't buy back for 30 days)"})
+            else:
+                # Advisory text starts with "<CAT>: ..." — strip the
+                # prefix so the line doesn't say the category twice.
+                adv = (c.get("advisory") or "")
+                if adv.startswith(f"{ccat}:"):
+                    adv = adv[len(ccat) + 1:].strip()
+                changes.append({
+                    "kind": "changed", "ticker": t, "was": pcat,
+                    "category": ccat,
+                    "line": f"{t}: {pcat} -> {ccat} — {adv}"})
+            continue
+        pc, cc = p.get("clears_at"), c.get("clears_at")
+        if pc != cc and (pc or cc):
+            # Explain the move only when it actually moved LATER on a
+            # window category — a VIOLATION's date is a deadline, and
+            # an earlier date isn't an extension (2026-09 audit).
+            _why = (" (a new buy extended the window)"
+                    if (pc and cc and cc > pc
+                        and ccat != "VIOLATION") else "")
+            changes.append({
+                "kind": "clears_moved", "ticker": t, "category": ccat,
+                "was": pc, "clears_at": cc,
+                "line": f"{t}: clear date moved {pc or '?'} -> "
+                        f"{cc or '?'}{_why}"})
+            continue
+        # Same category, same clears — but a materially different
+        # ADVISORY (e.g. a VIOLATION's required sell quantity doubled
+        # after a further buy) is still news; keying the diff on
+        # category+clears alone swallowed it (2026-09 audit).
+        pa, ca = (p.get("advisory") or ""), (c.get("advisory") or "")
+        if pa != ca and ca and ccat not in ("", "CLEAR"):
+            adv = ca
+            if adv.startswith(f"{ccat}:"):
+                adv = adv[len(ccat) + 1:].strip()
+            changes.append({
+                "kind": "advisory_changed", "ticker": t,
+                "category": ccat,
+                "line": f"{t}: {ccat} advisory changed — {adv}"})
+    _rank = {"new": 0, "changed": 1, "advisory_changed": 2,
+             "cleared": 3, "clears_moved": 4, "gone": 5}
+    changes.sort(key=lambda ch: (_rank.get(ch["kind"], 9),
+                                 ch["ticker"]))
+    return changes
+
+
+def diff_harvest(prev_now: Optional[float], cur_now: float,
+                 threshold: float) -> Optional[Dict[str, Any]]:
+    """A change record when the harvestable-NOW loss total moved by
+    more than `threshold` (absolute, base currency)."""
+    if prev_now is None:
+        return None
+    delta = cur_now - prev_now
+    # Cents: with --threshold 0 ("any move") float noise below a cent
+    # must not read as a change.
+    if abs(round(delta, 2)) <= threshold:
+        return None
+    return {"kind": "harvest_now", "was": round(prev_now, 2),
+            "now": round(cur_now, 2),
+            "line": f"harvestable-now losses: {prev_now:,.2f} -> "
+                    f"{cur_now:,.2f} ({delta:+,.2f})"}
+
+
+def _state_shape_problem(doc: Dict[str, Any]) -> Optional[str]:
+    radar = doc.get("radar")
+    if radar is None:
+        return None
+    if not isinstance(radar, dict):
+        return '"radar" is not an object'
+    for t, rec in radar.items():
+        if not isinstance(rec, dict):
+            return f'"radar" entry {t!r} is not an object'
+        for k in ("category", "advisory", "clears_at"):
+            if rec.get(k) is not None and not isinstance(rec.get(k), str):
+                return f'"radar" entry {t!r}: {k} is not text'
+    h = doc.get("harvest_now")
+    if h is not None and (isinstance(h, bool)
+                          or not isinstance(h, (int, float))):
+        return '"harvest_now" is not a number'
+    return None
+
+
+def load_state(path: Path) -> Optional[Dict[str, Any]]:
+    """The saved baseline, or None (the caller then records a new one).
+    A state file that EXISTS but cannot be used re-baselined silently,
+    losing the changes pending since the last run, and valid JSON that
+    is not an object crashed (R1-242) — both now warn on stderr."""
+    if not path.exists():
+        return None
+    why = ""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as e:
+        doc, why = None, f"unreadable ({e})"
+    # Valid JSON of the wrong shape (a list) is no baseline either — it
+    # crashed `taxjson watch` with an AttributeError (S068-11, R1-242).
+    if doc is not None and not isinstance(doc, dict):
+        doc, why = None, "not a JSON object"
+    if doc is not None and doc.get("schema_version") != STATE_VERSION:
+        # Older/newer state: treat as no baseline rather than diffing
+        # across incompatible shapes.
+        why = (f"schema_version {doc.get('schema_version')!r}, this "
+               f"version reads {STATE_VERSION}")
+        doc = None
+    if doc is not None:
+        # The inner shape too: a radar entry that is a string, or a
+        # radar that is a list, crashed diff_radar (re-audit A2-1460).
+        bad = _state_shape_problem(doc)
+        if bad:
+            doc, why = None, f"damaged ({bad})"
+    if doc is None:
+        from taxjson.lib.out import warn
+        warn(f"state file {path.name} is {why} — recording a NEW "
+             f"baseline", prog="taxjson watch",
+             details=["Changes since the previous run are not reported "
+                      "this time."])
+    return doc
+
+
+def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
+               harvest_now: Optional[float],
+               as_of: str) -> None:
+    doc: Dict[str, Any] = {"schema_version": STATE_VERSION,
+                           "as_of": as_of, "radar": radar}
+    if harvest_now is not None:
+        doc["harvest_now"] = round(harvest_now, 2)
+    # No stray .part beside a state that could not be written (the
+    # caller names the path, S046-12); never through a symlink (M1).
+    from taxjson.lib.safe_write import write_atomic
+    write_atomic(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+def render_report(changes: List[Dict[str, Any]], as_of: str,
+                  since: Optional[str] = None,
+                  scope: Optional[str] = None,
+                  width_: Optional[int] = None) -> str:
+    """The change report: a title, each change as a `- ` item (a radar
+    note it quotes as its own `Info:` item), then `scope`
+    (lib/wash_scope.scope_note) as a paragraph: a CLEAR is "safe as far
+    as this project's accounts show" (tax-logic CA-PLAN-04 /
+    US-PLAN-04, re-audit A2-0909). Wrapped at the house width."""
+    from taxjson.lib import out
+    from taxjson.lib.wash_scope import advisory_lines
+    w = out.width() if width_ is None else width_
+    prev = f" (previous baseline {since})" if since else ""
+    lines = out.wrap(f"WATCH — {len(changes)} change(s) since the last "
+                     f"run{prev} (as of {as_of})", w)
+    lines.append("")
+    for ch in changes:
+        lines += advisory_lines(ch["line"], w, "- ", "  ")
+    if scope:
+        lines += [""] + out.wrap(scope, w)
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":                       # pragma: no cover
+    sys.exit(exit_text("taxjson-watch is not a standalone tool — use "
+                       "`taxjson watch` (it needs the project's radar "
+                       "inputs)."))

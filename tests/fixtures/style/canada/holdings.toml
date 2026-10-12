@@ -1,0 +1,12 @@
+# synthetic positions report
+date = "2024-12-31"
+[[holding]]
+symbol = "QZQ.TO"
+quantity = 100
+currency = "CAD"
+book_value = 240.10
+[[holding]]
+symbol = "SAMPA.TO"
+quantity = 90
+currency = "CAD"
+book_value = 340.00

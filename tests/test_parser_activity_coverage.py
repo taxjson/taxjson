@@ -1,0 +1,1086 @@
+"""Regression coverage for brokerage parsers.
+
+Each broker has a canonical set of activities the parser MUST handle
+without dropping rows on the floor. This file pins one test per
+(broker, activity) pair against representative CSV data shaped like
+real exports (values synthetic).
+
+Goal: if functionality regresses (e.g. dividend parsing silently
+dropped, as happened with Questrade), one of these tests fails loudly
+instead of the user noticing a discrepancy weeks later.
+
+Activity matrix (where applicable per broker):
+  - buy_stock              long open
+  - sell_stock             long close
+  - sell_call_open         covered call write (short, +cash)
+  - buy_call_close         close short call (-cash)
+  - buy_call_open          long call open
+  - sell_call_close        close long call
+  - get_assigned           option-leg ASSIGN notification
+  - option_expires         worthless expiry
+  - dividend               cash dividend
+  - transfer               position move in/out (broker-specific)
+"""
+import os
+import tempfile
+from _tmpfiles import private_tmpfile
+import unittest
+from pathlib import Path
+
+from taxjson.lib.brokerages.questrade import QuestradeBrokerage
+from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+from taxjson.lib.brokerages.webull import WebullBrokerage
+from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
+from taxjson.lib.brokerages.kraken import KrakenBrokerage
+from tax_rules import rule
+
+
+def setUpModule():
+    # Crypto UTC stamps need a named zone (no default since the 2026-10
+    # generalisation): the parsers outside a project read
+    # TAXJSON_LOCAL_TZ; the project fixtures here set local_timezone.
+    os.environ["TAXJSON_LOCAL_TZ"] = "America/Toronto"
+
+
+def _parse_csv(parser_cls, content):
+    """Run a parser against an in-memory CSV string."""
+    f = private_tmpfile(mode='w', suffix='.csv', delete=False)
+    f.write(content)
+    f.close()
+    try:
+        return parser_cls().parse_file(Path(f.name))
+    finally:
+        os.remove(f.name)
+
+
+def _find(txs, **fields):
+    """First transaction matching all given key/value pairs (or None)."""
+    for t in txs:
+        if all(t.get(k) == v for k, v in fields.items()):
+            return t
+    return None
+
+
+# ============================================================================
+# Questrade
+# ============================================================================
+QUESTRADE_HEADER = (
+    'Transaction Date,Settlement Date,Action,Symbol,Description,'
+    'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
+    'Account #,Activity Type,Account Type\n'
+)
+
+
+class TestQuestradeActivities(unittest.TestCase):
+    def test_buy_stock(self):
+        csv = QUESTRADE_HEADER + (
+            '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,AAPL,APPLE INC,'
+            '100,150.00,15000.00,9.95,-15009.95,USD,12345,Trades,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, symbol='AAPL.US', action='BUYSELL')
+        self.assertIsNotNone(t)
+        self.assertEqual(t['quantity'], 100)
+        self.assertAlmostEqual(t['price'], 150.0)
+        self.assertAlmostEqual(t['commission'], 9.95, places=2)
+        # Trade rows carry the raw description so a description-keyed
+        # --security-overrides rule can correct a mislabeled ticker (IB/RBC/
+        # Webull already did; Questrade trades were the gap).
+        self.assertEqual(t.get('description'), 'APPLE INC')
+
+    def test_sell_stock(self):
+        csv = QUESTRADE_HEADER + (
+            '2025-03-15 09:30:00 AM,2025-03-16 12:00:00 AM,Sell,AAPL,APPLE INC,'
+            '100,160.00,16000.00,9.95,15990.05,USD,12345,Trades,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, symbol='AAPL.US', action='BUYSELL')
+        self.assertIsNotNone(t)
+        self.assertEqual(t['quantity'], -100)
+
+    def test_sell_call_open(self):
+        """Sell-to-open a covered call: positive Sell quantity in Questrade,
+        rebuilt into OCC option symbol from the description."""
+        csv = QUESTRADE_HEADER + (
+            '2025-04-10 09:30:00 AM,2025-04-11 12:00:00 AM,Sell,AAPL.OPT,'
+            'CALL AAPL 06/20/25 150.00,1,5.00,500.00,1.25,498.75,USD,'
+            '12345,Trades,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, action='BUYSELL')
+        self.assertIsNotNone(t)
+        self.assertEqual(t['symbol'], 'AAPL250620C00150000.US')
+        self.assertEqual(t['quantity'], -1)  # Sell → negative
+
+    def test_buy_call_close(self):
+        csv = QUESTRADE_HEADER + (
+            '2025-05-20 09:30:00 AM,2025-05-21 12:00:00 AM,Buy,AAPL.OPT,'
+            'CALL AAPL 06/20/25 150.00,1,3.00,300.00,1.25,-301.25,USD,'
+            '12345,Trades,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, action='BUYSELL')
+        self.assertEqual(t['symbol'], 'AAPL250620C00150000.US')
+        self.assertEqual(t['quantity'], 1)
+
+    def test_get_assigned(self):
+        """Option-leg ASN row: emits action='ASSIGN' instead of BUYSELL."""
+        csv = QUESTRADE_HEADER + (
+            '2025-06-20 09:30:00 AM,2025-06-20 12:00:00 AM,ASN,AAPL.OPT,'
+            'CALL AAPL 06/20/25 150.00 ASSIGNMENT,1,0.00,0.00,0.00,0.00,USD,'
+            '12345,Other,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, action='ASSIGN')
+        self.assertIsNotNone(t)
+
+    def test_option_expires(self):
+        csv = QUESTRADE_HEADER + (
+            '2025-06-20 09:30:00 AM,2025-06-20 12:00:00 AM,EXP,AAPL.OPT,'
+            'CALL AAPL 06/20/25 150.00 - EXPIRED,1,0.00,0.00,0.00,0.00,USD,'
+            '12345,Other,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, action='BUYSELL')  # EXP routes to BUYSELL with zero amounts
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(t['net_amount'], 0.0)
+        self.assertAlmostEqual(t['commission'], 0.0)
+
+    def test_dividend(self):
+        """The bug that triggered this whole regression suite."""
+        csv = QUESTRADE_HEADER + (
+            '2025-03-20 12:00:00 AM,2025-03-20 12:00:00 AM,DIV,.OTEX,'
+            'OPEN TEXT CORP CASH DIV ON 150 SHS,0,0,0,0,55.92,CAD,'
+            '12345,Dividends,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, action='DIVIDEND')
+        self.assertIsNotNone(t)
+        self.assertEqual(t['symbol'], 'OTEX.TO')
+        self.assertAlmostEqual(t['net_amount'], 55.92, places=2)
+        self.assertEqual(t['type'], 'dividend')
+        # Quantity + price extracted from "ON 150 SHS" + amount/qty —
+        # makes the record self-describing: 150 × $0.3728 ≈ $55.92.
+        self.assertAlmostEqual(t['quantity'], 150.0)
+        self.assertAlmostEqual(t['price'], 55.92 / 150, places=4)
+
+    def test_transfer(self):
+        """TF6 row emitted as TRANSFER. taxjson-brokerage --transfers
+        controls whether it survives downstream."""
+        csv = QUESTRADE_HEADER + (
+            '2025-07-09 12:00:00 AM,2025-07-09 12:00:00 AM,TF6,.NGM,'
+            'NORTHERN GOLD MINES,120.0,0,0,0,21480.00,CAD,'
+            '12345,Transfers,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        t = _find(txs, action='TRANSFER')
+        self.assertEqual(t['symbol'], 'NGM.TO')
+        self.assertEqual(t['quantity'], 120)
+        self.assertAlmostEqual(t['net_amount'], 21480.0, places=2)
+
+    def test_internal_code_dividend_resolves_via_trade(self):
+        """Questrade can emit a dividend with an internal-code symbol.
+        Resolution via desc-match against trade rows."""
+        csv = QUESTRADE_HEADER + (
+            '2025-06-13 12:00:00 AM,2025-06-16 12:00:00 AM,Sell,NWG.TO,'
+            'NORTHWIND GOLD LTD COM WE ACTED AS AGENT,-3,12.47,37.41,0,37.41,'
+            'CAD,12345,Trades,Individual\n'
+            '2025-07-02 12:00:00 AM,2025-07-02 12:00:00 AM,DIV,N041552,'
+            'NORTHWIND GOLD LTD COM CASH DIV ON 3 SHS REC 06/20/25 PAY 07/02/25,'
+            '0,0,0,0,0.06,CAD,12345,Dividends,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        d = _find(txs, action='DIVIDEND')
+        self.assertEqual(d['symbol'], 'NWG.TO')
+
+    def test_split_fills_disambiguated(self):
+        """Two byte-identical CSV rows from one order split into two
+        fills must produce two distinct transactions, not one (i.e.
+        taxjson-sort --dedup should not collapse them)."""
+        csv = QUESTRADE_HEADER + (
+            '2025-11-19 12:00:00 AM,2025-11-20 12:00:00 AM,Sell,ZQV.TO,'
+            'ZEQUAVA RESOURCES INC WE ACTED AS AGENT,'
+            '-100,9.42,942.00,0,942.00,CAD,12345,Trades,Individual\n'
+            '2025-11-19 12:00:00 AM,2025-11-20 12:00:00 AM,Sell,ZQV.TO,'
+            'ZEQUAVA RESOURCES INC WE ACTED AS AGENT,'
+            '-100,9.42,942.00,0,942.00,CAD,12345,Trades,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        wcps = [t for t in txs if t['symbol'] == 'ZQV.TO']
+        self.assertEqual(len(wcps), 2)
+        # The second instance carries a "fill #2" marker so its hashed
+        # id is different. The original (first) keeps its stable id.
+        descs = [t.get('description') or '' for t in wcps]
+        # The first keeps its plain (now real) description; the second gets a
+        # "fill #2" marker so the two hash to distinct ids and survive --dedup.
+        self.assertNotIn('fill #', descs[0])
+        self.assertIn('fill #2', descs[1])
+        self.assertNotEqual(descs[0], descs[1])
+
+    def test_stock_split_dis_row_becomes_split_not_dropped_dividend(self):
+        """A 'STK SPLIT' DIS row (tagged Dividends) must emit a SPLIT that
+        scales the held pool — not get dropped as a $0 dividend. The temp
+        symbol (P044127) resolves to the traded ticker (PLMN) via the
+        same-security trade, and the ratio is (held + received)/held."""
+        csv = QUESTRADE_HEADER + (
+            '2026-06-11 09:30:00 AM,2026-06-12 12:00:00 AM,Buy,PLMN,'
+            'PLUMINA CORPORATION COMMON STOCK WITH DUE-BILL SPLIT WE ACTED AS AGENT,'
+            '1,840.00,840.00,0,-840.00,USD,12345,Trades,Individual\n'
+            '2026-06-22 12:00:00 AM,2026-06-22 12:00:00 AM,DIS,P044127,'
+            'PLUMINA CORPORATION COMMON STOCK STK SPLIT ON 1 SHS REC 06/19/26 PAY '
+            '06/22/26,9.0,0.0,0.0,0.0,0.0,USD,12345,Dividends,Individual\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        split = _find(txs, action='SPLIT')
+        self.assertIsNotNone(split, f"expected a SPLIT row, got: {txs}")
+        self.assertEqual(split['symbol'], 'PLMN.US')   # resolved from P044127
+        self.assertAlmostEqual(split['quantity'], 10.0)  # (1 + 9) / 1
+        # And it is NOT a dividend.
+        self.assertIsNone(_find(txs, action='DIVIDEND'))
+
+
+# ============================================================================
+# RBC Direct
+# ============================================================================
+RBC_HEADER = (
+    '"Date","Activity","Symbol","Symbol Description","Quantity","Price",'
+    '"Settlement Date","Account","Value","Currency","Description"\n'
+)
+
+
+class TestRbcActivities(unittest.TestCase):
+    def test_buy_stock(self):
+        csv = RBC_HEADER + (
+            '"January 15, 2025","Buy","AAPL","APPLE INC","100","150.00",'
+            '"January 16, 2025","12345","-15010.00","USD","Buy 100 shares"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        t = _find(txs, symbol='AAPL.US', action='BUYSELL')
+        self.assertIsNotNone(t)
+        self.assertEqual(t['quantity'], 100)
+        # Fee back-compute: theoretical 15000, net 15010 → ~10 fee.
+        self.assertAlmostEqual(t['fee'], 10.0, places=2)
+
+    def test_sell_stock(self):
+        csv = RBC_HEADER + (
+            '"March 15, 2025","Sell","AAPL","APPLE INC","100","160.00",'
+            '"March 16, 2025","12345","15990.00","USD","Sell 100 shares"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        t = _find(txs, symbol='AAPL.US', action='BUYSELL')
+        self.assertEqual(t['quantity'], -100)
+
+    def test_sell_call_open(self):
+        csv = RBC_HEADER + (
+            '"January 15, 2025","Sell","8ABCDE1","","-1","5.00",'
+            '"January 16, 2025","12345","498.00","CAD",'
+            '"CALL .QQZ   07/18/25    32 QQZ HOLDINGS INC OPEN CONTRACT"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        t = _find(txs, action='BUYSELL')
+        self.assertEqual(t['symbol'], 'QQZ250718C00032000.TO')
+        self.assertEqual(t['quantity'], -1)
+
+    def test_get_assigned(self):
+        """RBC ASN row → action=ASSIGN."""
+        csv = RBC_HEADER + (
+            '"May 23, 2025","Other","9QRSAS1","","1","",'
+            '"May 27, 2025","12345","0","USD",'
+            '"ASN - CALL QRS   05/23/25   41.50 QRS HOLDINGS INC ASSIGNMENT OF OPTION"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        t = _find(txs, action='ASSIGN')
+        self.assertIsNotNone(t)
+
+    def test_option_expires(self):
+        """EXP row stays BUYSELL with cleared amounts so the engine
+        realizes premium gain/loss in place."""
+        csv = RBC_HEADER + (
+            '"April 21, 2025","Reorganization","8QRBXP2","","-12","",'
+            '"April 21, 2025","12345","0","CAD",'
+            '"EXP - CALL .QRB   04/18/25    31 QRB BANCORP OPTION EXPIRATION - EXPIRED"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        t = _find(txs, action='BUYSELL')
+        self.assertIsNotNone(t)
+        self.assertEqual(t['symbol'], 'QRB250418C00031000.TO')
+
+    def test_dividend(self):
+        csv = RBC_HEADER + (
+            '"March 15, 2025","Dividends","AAPL","APPLE INC","0","",'
+            '"March 15, 2025","12345","100.00","USD","DIV ON 100 SHS"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        t = _find(txs, action='DIVIDEND')
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(t['net_amount'], 100.0, places=2)
+        # qty extracted from "ON 100 SHS", price back-computed from
+        # net/qty → $1.00/share.
+        self.assertAlmostEqual(t['quantity'], 100.0)
+        self.assertAlmostEqual(t['price'], 1.0, places=4)
+
+    def test_interest(self):
+        csv = RBC_HEADER + (
+            '"April 01, 2025","Interest","CASH","","0","",'
+            '"April 01, 2025","12345","12.34","CAD","INTEREST PAID"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        t = _find(txs, action='INTEREST')
+        self.assertIsNotNone(t)
+        self.assertEqual(t['symbol'], 'CASH')
+
+    def test_cross_listed_dividend_uses_trade_market(self):
+        """A Canadian-listed stock paying a USD dividend: trades arrive
+        in CAD, dividend arrives in USD. Without resolution the parser
+        would suffix the dividend with .US (since currency=USD),
+        splitting the ticker identity from the trades' .TO. Same
+        regression class as the Questrade BTO/B2GOLD case — pin the
+        right behavior so a future refactor can't silently re-break it.
+        """
+        csv = RBC_HEADER + (
+            # Trade: BNS in CAD → BNS.TO.
+            '"January 15, 2025","Buy","BNS","BANK OF NOVA SCOTIA","100","75.00",'
+            '"January 16, 2025","12345","-7510.00","CAD","Buy 100 shares"\n'
+            # Dividend: BNS again, but in USD.
+            '"March 15, 2025","Dividends","BNS","BANK OF NOVA SCOTIA","0","",'
+            '"March 15, 2025","12345","100.00","USD","BNS DIV ON 100 SHS"\n'
+        )
+        txs = _parse_csv(RbcBrokerage, csv)
+        divs = [t for t in txs if t.get('action') == 'DIVIDEND']
+        self.assertEqual(len(divs), 1)
+        # Dividend symbol follows the trade's market (BNS.TO), not the
+        # dividend row's USD currency (which would yield BNS.US).
+        self.assertEqual(divs[0]['symbol'], 'BNS.TO')
+        # The currency field still records the actual payment currency.
+        self.assertEqual(divs[0]['currency'], 'USD')
+
+
+# ============================================================================
+# Webull
+# ============================================================================
+class TestWebullActivities(unittest.TestCase):
+    def _csv(self, data_rows):
+        header = (
+            '"Currency","Date","Action Code","Symbol","Security Description",'
+            '"Type Code","Quantity","Price","Proceeds"\n'
+        )
+        return header + ''.join(data_rows)
+
+    def test_buy_stock(self):
+        csv = self._csv([
+            'USD,15-01-2025,BUY,AAPL,APPLE INC,STK,100,150.00,"(15010.00)"\n'
+        ])
+        txs = _parse_csv(WebullBrokerage, csv)
+        t = _find(txs, symbol='AAPL.US', action='BUYSELL')
+        self.assertEqual(t['quantity'], 100)
+        self.assertAlmostEqual(t['fee'], 10.0, places=2)
+
+    def test_sell_stock(self):
+        csv = self._csv([
+            'USD,15-03-2025,SELL,AAPL,APPLE INC,STK,100,160.00,"15990.00"\n'
+        ])
+        txs = _parse_csv(WebullBrokerage, csv)
+        t = _find(txs, symbol='AAPL.US', action='BUYSELL')
+        self.assertEqual(t['quantity'], -100)
+
+    def test_sell_call_open(self):
+        csv = self._csv([
+            'USD,02-12-2024,SELL,@QRS,CALL QRS03/26/25 63.5,OPC,10,1.55,"1540.08"\n'
+        ])
+        txs = _parse_csv(WebullBrokerage, csv)
+        t = _find(txs, action='BUYSELL')
+        self.assertEqual(t['symbol'], 'QRS250326C00063500.US')
+        self.assertEqual(t['quantity'], -10)
+
+    def test_buy_call(self):
+        csv = self._csv([
+            'USD,22-12-2024,BUY,@QRS,CALL QRS03/26/25 63.5,OPC,10,2.45,"(2460.00)"\n'
+        ])
+        txs = _parse_csv(WebullBrokerage, csv)
+        t = _find(txs, action='BUYSELL')
+        self.assertEqual(t['symbol'], 'QRS250326C00063500.US')
+        self.assertEqual(t['quantity'], 10)
+
+    def test_currency_suffix_per_row(self):
+        csv = self._csv([
+            'CAD,15-01-2025,BUY,SHOP,SHOPIFY INC,STK,10,100.00,"(1000.00)"\n'
+        ])
+        txs = _parse_csv(WebullBrokerage, csv)
+        t = _find(txs, action='BUYSELL')
+        self.assertEqual(t['symbol'], 'SHOP.TO')
+
+    def test_no_dividend_handling_currently(self):
+        """Documents that Webull's parser doesn't emit DIVIDEND
+        transactions today. Webull users in the wild typically don't
+        rely on this brokerage for dividend tracking, but if the CSV
+        format starts including dividend rows this test will flag the
+        gap (and the cross-listing regression should be added when
+        support is built)."""
+        csv = self._csv([
+            'USD,15-03-2025,DIV,AAPL,APPLE INC,DIV,0,0.00,"100.00"\n'
+        ])
+        txs = _parse_csv(WebullBrokerage, csv)
+        divs = [t for t in txs if t.get('action') == 'DIVIDEND']
+        # No dividend support yet — file an issue if you need it.
+        self.assertEqual(divs, [])
+
+
+# ============================================================================
+# Interactive Brokers — dividends use ISIN prefix for the suffix
+# ============================================================================
+IB_HEADER_LINES = (
+    'Statement,Header,Field Name,Field Value\n'
+    'Statement,Data,BrokerName,Interactive Brokers\n'
+)
+
+
+class TestIbActivities(unittest.TestCase):
+    def test_dividend_us_listed(self):
+        """A US-listed stock paying USD dividend. ISIN starts with US
+        → suffix .US. Sanity baseline."""
+        csv = IB_HEADER_LINES + (
+            'Dividends,Header,Currency,Date,Description,Amount\n'
+            'Dividends,Data,USD,2025-03-15,"AAPL (US0378331005) Cash Dividend USD 0.24 per Share (Ordinary Dividend)",24.00\n'
+        )
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        import os, tempfile
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
+        f.write(csv); f.close()
+        try:
+            txs = IbBrokerage().parse_file(Path(f.name))
+        finally:
+            os.remove(f.name)
+        divs = [t for t in txs if t.get('action') == 'DIVIDEND']
+        self.assertEqual(len(divs), 1)
+        self.assertEqual(divs[0]['symbol'], 'AAPL.US')
+        # IB descriptions carry "USD 0.24 per Share" — extract the rate
+        # and back-compute qty (24.00 / 0.24 = 100 shares).
+        self.assertAlmostEqual(divs[0]['price'], 0.24, places=4)
+        self.assertAlmostEqual(divs[0]['quantity'], 100.0, places=4)
+
+    def test_cross_listed_dividend_uses_isin_market(self):
+        """The Canadian-ticker-USD-dividend case for IB. IB uses the
+        ISIN's country prefix to derive the market suffix, NOT the
+        currency. So a CA-prefixed ISIN paying USD still produces .TO.
+        Regression-guard so a future refactor that switches to
+        currency-based suffix doesn't reintroduce the BTO.US bug.
+        """
+        csv = IB_HEADER_LINES + (
+            'Dividends,Header,Currency,Date,Description,Amount\n'
+            # Bank of Nova Scotia, Canadian ISIN (CA0641491075), USD payment.
+            'Dividends,Data,USD,2025-03-15,"BNS (CA0641491075) Cash Dividend USD 1.00 per Share (Ordinary Dividend)",100.00\n'
+        )
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        import os, tempfile
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
+        f.write(csv); f.close()
+        try:
+            txs = IbBrokerage().parse_file(Path(f.name))
+        finally:
+            os.remove(f.name)
+        divs = [t for t in txs if t.get('action') == 'DIVIDEND']
+        self.assertEqual(len(divs), 1)
+        # CA-ISIN → .TO suffix, regardless of USD payment.
+        self.assertEqual(divs[0]['symbol'], 'BNS.TO')
+        # Currency on the record reflects the actual payment.
+        self.assertEqual(divs[0]['currency'], 'USD')
+
+    @rule("US-INC-03")
+    @rule("CA-INC-05")
+    def test_withholding_tax_uses_isin_market(self):
+        """Regression: the IB Withholding Tax row used to hardcode `.US`
+        on the emitted TAX symbol, fragmenting it from the matching
+        dividend's market suffix for non-US holdings. The fix mirrors
+        the dividend handler — pull the ISIN from the description and
+        use the same country→market map. A CA-domiciled ISIN paying
+        non-resident withholding must produce TAX symbol `BNS.TO`,
+        matching the DIVIDEND row's pool key downstream."""
+        csv = IB_HEADER_LINES + (
+            'Withholding Tax,Header,Currency,Date,Description,Amount\n'
+            'Withholding Tax,Data,USD,2025-03-15,"BNS (CA0641491075) Cash Dividend USD 1.00 per Share - US Tax",-15.00\n'
+        )
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        import os, tempfile
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
+        f.write(csv); f.close()
+        try:
+            txs = IbBrokerage().parse_file(Path(f.name))
+        finally:
+            os.remove(f.name)
+        taxes = [t for t in txs if t.get('action') == 'TAX']
+        self.assertEqual(len(taxes), 1)
+        # CA-ISIN → .TO, NOT the old hardcoded .US.
+        self.assertEqual(taxes[0]['symbol'], 'BNS.TO')
+
+    def test_assign_code_requires_exact_A_token_not_substring(self):
+        """IB packs space- / semicolon-separated codes into one cell.
+        The ASSIGN classifier must match the bare `A` token, not any
+        code containing the letter A — so `Au` (auction adjustment),
+        `AEx` (auto-exercise), `ADR` (ADR fee), etc. don't get
+        silently reclassified as option assignments. The earlier
+        `'A' in code` substring check fired on every one of these."""
+        csv = IB_HEADER_LINES + (
+            'Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,'
+            'Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,'
+            'Realized P/L,MTM P/L,Code\n'
+            # Code `Au` with zero price — substring match would
+            # mis-classify this as ASSIGN.
+            'Trades,Data,Order,Stocks,USD,AAPL,"2025-05-01, 09:30:00",'
+            '100,0,0,0,0,0,0,0,Au\n'
+            # Bare `A` IS the real assignment marker.
+            'Trades,Data,Order,Stocks,USD,MSFT,"2025-05-02, 09:30:00",'
+            '50,0,0,0,0,0,0,0,A\n'
+        )
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        import os, tempfile
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
+        f.write(csv); f.close()
+        try:
+            txs = IbBrokerage().parse_file(Path(f.name))
+        finally:
+            os.remove(f.name)
+        by_sym = {t['symbol']: t for t in txs}
+        self.assertEqual(by_sym['AAPL.US']['action'], 'BUYSELL',
+                         "Code='Au' must not match the 'A' ASSIGN token")
+        self.assertEqual(by_sym['MSFT.US']['action'], 'ASSIGN',
+                         "Code='A' (bare) must classify as ASSIGN")
+
+    def test_malformed_trade_cell_fails_the_parse_naming_the_cell(self):
+        """RE-PREMISED (2026-09 parse hardening). A malformed numeric
+        cell in a Trades row (e.g. 'N/A' where Quantity should be) used
+        to skip that row with a warning and let the rest of the file
+        parse — a trade silently missing from the book, the same
+        failure class as a missing column read as 0. The parse now
+        FAILS, naming the line, section and cell; the old behaviour
+        before that (a raw ValueError traceback) is also gone."""
+        csv_content = IB_HEADER_LINES + (
+            'Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,'
+            'Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,'
+            'Realized P/L,MTM P/L,Code\n'
+            'Trades,Data,Order,Stocks,USD,AAPL,"2025-05-01, 09:30:00",'
+            'N/A,150.0,0,-15000,-1,0,0,0,O\n'
+            'Trades,Data,Order,Stocks,USD,MSFT,"2025-05-02, 09:30:00",'
+            '50,400.0,0,-20000,-1,0,0,0,O\n'
+        )
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        import os, tempfile, io, sys as _sys
+        from unittest.mock import patch
+        f = private_tmpfile(mode='w', suffix='.csv', delete=False)
+        f.write(csv_content); f.close()
+        buf = io.StringIO()
+        try:
+            with patch.object(_sys, 'stderr', buf):
+                with self.assertRaises(BrokerageParseError) as cm:
+                    IbBrokerage().parse_file(Path(f.name))
+        finally:
+            os.remove(f.name)
+        msg = str(cm.exception)
+        self.assertIn('Trades', msg)
+        self.assertIn("Quantity 'N/A'", msg)
+
+
+# ============================================================================
+# Coinbase (crypto — narrower activity surface)
+# ============================================================================
+COINBASE_HEADER = (
+    'Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,'
+    'Price at Transaction,Fees and/or Spread,Total (inclusive of fees and/or spread)\n'
+)
+
+
+class TestCoinbaseActivities(unittest.TestCase):
+    def test_buy_crypto(self):
+        csv = COINBASE_HEADER + (
+            '2025-01-15 10:00:00 UTC,Buy,BTC,0.1,USD,60000,5,6005\n'
+        )
+        txs = _parse_csv(CoinbaseBrokerage, csv)
+        t = _find(txs, symbol='BTC', action='BUYSELL')
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(t['quantity'], 0.1)
+        self.assertAlmostEqual(t['fee'], 5.0)
+
+    def test_sell_crypto(self):
+        csv = COINBASE_HEADER + (
+            '2025-02-15 10:00:00 UTC,Sell,BTC,0.05,USD,65000,3,3247\n'
+        )
+        txs = _parse_csv(CoinbaseBrokerage, csv)
+        t = _find(txs, symbol='BTC', action='BUYSELL')
+        # Negative-on-sell convention.
+        self.assertAlmostEqual(t['quantity'], -0.05)
+
+    def test_advanced_trade_buy(self):
+        """Coinbase Advanced uses the prefixed type 'Advanced Trade Buy'.
+        The legacy cb_trades.pl matched /(Buy|Sell)/i on substring so it
+        caught these too. We must do the same — otherwise Advanced trades
+        silently disappear and per-ticker cost basis becomes wrong."""
+        csv = COINBASE_HEADER + (
+            '2025-03-15 10:00:00 UTC,Advanced Trade Buy,ETH,0.5,USD,3000,1.5,1501.5\n'
+        )
+        txs = _parse_csv(CoinbaseBrokerage, csv)
+        t = _find(txs, symbol='ETH', action='BUYSELL')
+        self.assertIsNotNone(t)
+        self.assertAlmostEqual(t['quantity'], 0.5)
+
+    def test_advanced_trade_sell(self):
+        csv = COINBASE_HEADER + (
+            '2025-04-15 10:00:00 UTC,Advanced Trade Sell,ETH,0.25,USD,3500,1.0,873.0\n'
+        )
+        txs = _parse_csv(CoinbaseBrokerage, csv)
+        t = _find(txs, symbol='ETH', action='BUYSELL')
+        self.assertAlmostEqual(t['quantity'], -0.25)
+
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
+    def test_staking_income(self):
+        """Coinbase 'Staking Income' rows are the dominant source of
+        crypto-asset dividend income for ADA/AVAX/DOT/ETH/SOL holders
+        (hundreds of rows a year). Old cb_dividends.pl emitted a paired
+        DIVIDEND + zero-cost BUYSELL; the new parser must too, so the
+        rewards land in inventory at FMV cost basis AND surface as
+        per-ticker dividend income."""
+        csv = COINBASE_HEADER + (
+            '2025-05-15 10:00:00 UTC,Staking Income,DOT,1.5,USD,8.00,0,12.00\n'
+        )
+        txs = _parse_csv(CoinbaseBrokerage, csv)
+        div = _find(txs, symbol='DOT', action='DIVIDEND')
+        buy = _find(txs, symbol='DOT', action='BUYSELL')
+        self.assertIsNotNone(div, "Staking Income must emit DIVIDEND")
+        self.assertIsNotNone(buy, "Staking Income must emit BUYSELL for inventory")
+        # DIVIDEND carries the reward qty so fill_crypto_prices computes
+        # income = qty*FMV correctly (same convention as Kraken).
+        self.assertAlmostEqual(div['quantity'], 1.5)
+        self.assertAlmostEqual(div['net_amount'], 12.0)
+        # BUYSELL adds the tokens to inventory at FMV (matches the income
+        # event, so when sold the cap gain reflects only post-receipt price
+        # change — not the entire FMV being taxed twice).
+        self.assertAlmostEqual(buy['quantity'], 1.5)
+        self.assertAlmostEqual(buy['net_amount'], 12.0)
+
+    def test_staking_income_label_variants(self):
+        """Coinbase uses several labels for what's economically the same
+        event: `Reward Income` (singular), `Inflation Reward`, etc. The
+        regex must accept all of them so the parser doesn't silently
+        drop legitimate income rows that happen to use a non-canonical
+        label."""
+        # 'Incentives Rewards Payout' is the referral/usage-incentive
+        # variant — it was falling to the counted-skip bucket, leaving
+        # the rewarded coins off the books (surfaced as a tiny BTC
+        # phantom-short when the account was emptied).
+        for label in ('Reward Income', 'Rewards Income', 'Inflation Reward',
+                      'Coinbase Earn', 'Learning Reward',
+                      'Incentives Rewards Payout', 'Rewards Payout'):
+            csv = COINBASE_HEADER + (
+                f'2025-05-15 10:00:00 UTC,{label},DOT,1.5,USD,8.00,0,12.00\n'
+            )
+            txs = _parse_csv(CoinbaseBrokerage, csv)
+            self.assertTrue(
+                any(t.get('action') == 'DIVIDEND' for t in txs),
+                f"label {label!r} should produce a DIVIDEND row; got {[t.get('action') for t in txs]}",
+            )
+
+    def test_unknown_types_ignored(self):
+        """Subscription/staking-transfer/etc. shouldn't produce tax
+        records. Since 2026-09, Send/Receive produce TRANSFER
+        EVIDENCE rows (custody sidecar — an off-platform gift is a
+        taxable disposition at FMV that deserves a trace). A USDC
+        Deposit here (stablecoins as US-dollar cash, the Canada mode,
+        CA-CRYPTO-02) is a cash deposit; a COIN Deposit is never
+        dropped silently — see test_coin_deposit_is_unbooked
+        (A2-0566, re-audit A2-1480)."""
+        csv = COINBASE_HEADER + (
+            '2025-06-01 10:00:00 UTC,Send,BTC,0.01,USD,60000,0,600\n'
+            '2025-06-02 10:00:00 UTC,Deposit,USDC,100,USD,1,0,100\n'
+            '2025-06-03 10:00:00 UTC,Subscription,USD,5,USD,1,0,5\n'
+            '2025-06-04 10:00:00 UTC,Retail Staking Transfer,ETH,1,USD,3000,0,3000\n'
+        )
+        txs = _parse_csv(CoinbaseBrokerage, csv)
+        self.assertEqual([t.get('action') for t in txs], ['TRANSFER'])
+        self.assertEqual(txs[0]['symbol'], 'BTC')
+        self.assertEqual(txs[0]['quantity'], -0.01)
+
+    def test_coin_deposit_is_unbooked(self):
+        """A coin Deposit (and, with stablecoins as property, a USDC
+        one) moves coins: an UNBOOKED warning, never a silent drop
+        (re-audit A2-1480; Kraken books its deposit as TRANSFER
+        evidence)."""
+        import contextlib
+        import io
+        for cash, asset in ((True, 'BTC'), (False, 'USDC')):
+            csv = COINBASE_HEADER + (
+                f'2025-06-02 10:00:00 UTC,Deposit,{asset},100,USD,1,0,100\n')
+            f = private_tmpfile(mode='w', suffix='.csv',
+                                delete=False)
+            f.write(csv)
+            f.close()
+            try:
+                p = CoinbaseBrokerage()
+                p.stablecoins_as_cash = cash
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    txs = p.parse_file(Path(f.name))
+            finally:
+                os.remove(f.name)
+            self.assertEqual(txs, [])
+            self.assertIn('UNBOOKED', err.getvalue())
+            self.assertIn(asset, err.getvalue())
+
+    def test_convert_row_raises_rather_than_silent_drop(self):
+        """A Coinbase 'Convert from BTC to ETH' row is a taxable
+        disposition; silently skipping it (the prior behavior) would
+        drop a tax event. The parser must raise rather than
+        masquerade-pass — the user can hand-edit the row to a paired
+        Buy+Sell as a workaround, but the failure has to be visible."""
+        csv = COINBASE_HEADER + (
+            '2025-04-10 10:00:00 UTC,Convert,BTC,0.05,USD,65000,0,3250\n'
+        )
+        with self.assertRaises(ValueError) as cm:
+            _parse_csv(CoinbaseBrokerage, csv)
+        msg = str(cm.exception)
+        self.assertIn('Convert', msg)
+
+
+# ============================================================================
+# Kraken (crypto — two distinct CSV formats: trades and ledgers)
+# ============================================================================
+class TestQuestradeFxSettledUsTrades(unittest.TestCase):
+    """A US-listed security bought in a CAD-only Questrade account
+    (RESP): Price and Gross Amount are USD, Net Amount is the CAD paid,
+    Currency says CAD and the description carries EXCHANGE RATE. Such
+    rows were filed as `.TO` with the USD gross as the CAD cost — an
+    under-statement by the exchange rate and a CDR-shaped symbol."""
+    HEAD = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
+            'Account #,Activity Type,Account Type\n')
+
+    def test_us_listing_and_cad_cost_as_paid(self):
+        csv = self.HEAD + (
+            '2026-09-11 12:00:00 AM,2026-09-14 12:00:00 AM,Buy,AVGO,'
+            'BROADCOM INC COMMON STOCK WE ACTED AS AGENT EXCHANGE RATE 1.38500000,'
+            '4,312.5,-1250.0,0,-1731.25,CAD,99900001,Trades,API\n'
+            '2026-09-11 12:00:00 AM,2026-09-14 12:00:00 AM,Buy,LFE.TO,'
+            'CANADIAN LIFE COMPANIES SPLIT CORP CL A,200,9.00,-1800,0,-1800,'
+            'CAD,99900001,Trades,API\n')
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        avgo = next(t for t in txs if t['symbol'].startswith('AVGO'))
+        self.assertEqual(avgo['symbol'], 'AVGO.US')          # the listing
+        self.assertEqual(avgo['currency'], 'CAD')            # settled in CAD
+        self.assertAlmostEqual(avgo['net_amount'], 1731.25)   # the CAD paid
+        self.assertAlmostEqual(avgo['price'], round(312.5 * 1.385, 8))
+        self.assertEqual(avgo['quantity'], 4)
+        lfe = next(t for t in txs if t['symbol'].startswith('LFE'))
+        self.assertEqual(lfe['symbol'], 'LFE.TO')             # plain CAD row untouched
+        self.assertAlmostEqual(lfe['net_amount'], 1800.0)
+
+
+class TestKrakenActivities(unittest.TestCase):
+    def test_trades_buy(self):
+        csv = (
+            "txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers\n"
+            "T1,O1,BTC/USD,2025-01-15 10:00:00.1234,buy,limit,60000,6000,1,0.1,,,\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        self.assertEqual(len(txs), 1)
+        t = txs[0]
+        self.assertEqual(t['symbol'], 'BTC')
+        self.assertEqual(t['currency'], 'USD')
+        self.assertAlmostEqual(t['quantity'], 0.1)
+
+    def test_trades_sell(self):
+        csv = (
+            "txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers\n"
+            "T1,O1,BTC/USD,2025-02-15 10:00:00.5678,sell,limit,65000,3250,2,0.05,,,\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        t = txs[0]
+        self.assertAlmostEqual(t['quantity'], -0.05)
+
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
+    def test_ledgers_staking_reward(self):
+        """Kraken ledger format: earn/reward rows produce a DIVIDEND
+        plus a zero-cost BUYSELL pair (the rewarded shares become
+        new acquisitions with no basis)."""
+        csv = (
+            "txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n"
+            "L1,,2025-01-15 10:00:00,earn,reward,currency,ADA,,100,0,1000\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        actions = {t['action'] for t in txs}
+        self.assertEqual(actions, {'DIVIDEND', 'BUYSELL'})
+
+    def test_ledgers_staking_reward_dividend_carries_qty(self):
+        """Regression: the DIVIDEND row must carry the reward qty so
+        fill_crypto_prices computes income as qty*FMV. Without it the
+        prices-filler defaults qty to 1.0, inflating e.g. a 0.001 ETH
+        reward into a full ETH's worth of bogus dividend income."""
+        csv = (
+            "txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n"
+            "L1,,2025-01-15 10:00:00,earn,reward,currency,ETH,,0.001,0,1\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        div = next(t for t in txs if t['action'] == 'DIVIDEND')
+        self.assertAlmostEqual(div['quantity'], 0.001)
+        buy = next(t for t in txs if t['action'] == 'BUYSELL')
+        self.assertAlmostEqual(buy['quantity'], 0.001)
+
+    def test_ledgers_2026_format_prices_rewards_from_amountusd(self):
+        """The 2026 ledger export adds amountusd/feeusd/balanceusd/
+        feecurrency. amountusd is Kraken's USD valuation at credit time
+        — the reward's FMV — so both legs are priced here and the fill
+        step (which has no quote for some coins, e.g. HYPE) is not
+        needed. Older exports without the column still ship price=0."""
+        head = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
+                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n")
+        csv = head + (
+            "L1,,2026-03-01 10:00:00,earn,reward,currency,,HYPE,earn / locked,"
+            "0.2653,0,5,19.06,0,360.1,USD\n"
+            "L2,,2026-03-01 10:00:00,earn,reward,currency,,USDC,spot / main,"
+            "27.7115,0,100,27.71,0,100,USD\n")
+        txs = _parse_csv(KrakenBrokerage, csv)
+        div = next(t for t in txs if t['action'] == 'DIVIDEND' and t['symbol'] == 'HYPE')
+        buy = next(t for t in txs if t['action'] == 'BUYSELL' and t['symbol'] == 'HYPE')
+        self.assertAlmostEqual(div['net_amount'], 19.06)
+        self.assertAlmostEqual(div['gross_amount'], 19.06)
+        self.assertAlmostEqual(div['price'], round(19.06 / 0.2653, 8))
+        self.assertAlmostEqual(buy['net_amount'], 19.06)     # cost basis = FMV
+        self.assertAlmostEqual(buy['price'], div['price'])
+        self.assertEqual(div['currency'], 'USD')
+        usdc = next(t for t in txs if t['symbol'] == 'USDC')
+        self.assertAlmostEqual(usdc['price'], 1.0)          # stablecoin rule unchanged
+        # Old format: no amountusd column -> unpriced pair for the fill step.
+        old = ("txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n"
+               "L1,,2025-01-15 10:00:00,earn,reward,currency,HYPE,,0.2653,0,5\n")
+        txs = _parse_csv(KrakenBrokerage, old)
+        self.assertTrue(all(t.get('price', 0.0) == 0.0 and t['net_amount'] == 0.0 for t in txs))
+
+    def test_ledgers_earn_allocations_are_recognised_non_events(self):
+        """Allocation / deallocation / autoallocation pairs move coins
+        between the spot and Earn wallets. Ownership never changes:
+        counted non-events, not 'unhandled' types, and no transaction
+        is emitted. (hybridearnwithdrawal is NOT one of these — it has
+        no counter-leg; see TestKrakenCoinUnitFees.)"""
+        head = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
+                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n")
+        csv = head + (
+            "L1,,2026-01-14 09:00:00,earn,allocation,currency,,SOL,spot / main,-83.36,0,0,-12225.83,0,0,USD\n"
+            "L2,,2026-01-14 09:00:00,earn,allocation,currency,,SOL,earn / bonded,83.36,0,83.36,12225.83,0,12225.83,USD\n"
+            "L3,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,earn / bonded,-9.08,0,0,-20577.75,0,0,USD\n"
+            "L4,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,spot / main,9.08,0,9.08,20577.75,0,20577.75,USD\n")
+        parser = KrakenBrokerage()
+        import io, contextlib, tempfile, os
+        from pathlib import Path as _P
+        err = io.StringIO()
+        with private_tmpfile("w", suffix=".csv", delete=False, prefix="kr_ledgers_") as f:
+            f.write(csv); name = f.name
+        try:
+            with contextlib.redirect_stderr(err):
+                txs = parser.parse_file(_P(name))
+        finally:
+            os.remove(name)
+        self.assertEqual(txs, [])
+        self.assertNotIn("unhandled", err.getvalue())
+        moves = {k: v for k, v in parser._skip_counts.items() if "Earn wallet move" in k}
+        self.assertEqual(sum(moves.values()), 4)
+        self.assertTrue(all(k.startswith(KrakenBrokerage.KNOWN_NONEVENT_PREFIX) for k in moves))
+
+    def test_ledgers_instant_trade(self):
+        """spend + receive pair with same refid = one logical trade."""
+        csv = (
+            "txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n"
+            "L2,REF1,2025-01-15 10:05:00,spend,,currency,ZUSD,,-100,1,0\n"
+            "L3,REF1,2025-01-15 10:05:00,receive,,currency,XXBT,,0.001,0,0\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        instant = [t for t in txs if t.get('description') == 'Instant Trade']
+        self.assertEqual(len(instant), 1)
+        self.assertEqual(instant[0]['symbol'], 'BTC')
+        self.assertEqual(instant[0]['currency'], 'USD')
+
+    def test_dai_is_normalized_to_usd(self):
+        """DAI is a USD-pegged stablecoin; `_normalize_asset` folds it
+        the same way as USDC/USDT. Without this, DAI is in
+        `_FIAT_ASSETS` (so a `BTC/DAI` row bypasses the crypto/crypto
+        raise) but stays as `DAI` in the emitted tx — downstream FX
+        conversion can't anchor it and falls back to --default-rate."""
+        from taxjson.lib.brokerages.kraken import _normalize_asset
+        self.assertEqual(_normalize_asset('DAI'), 'USD')
+        self.assertEqual(_normalize_asset('USDC'), 'USD')
+        self.assertEqual(_normalize_asset('USDT'), 'USD')
+
+    def test_btc_dai_pair_treated_as_fiat_quote(self):
+        """With DAI folded to USD, a BTC/DAI trades.csv row emits a
+        normal single-leg BUYSELL priced in USD (not a die-hard raise
+        and not a crypto-denominated currency)."""
+        csv = (
+            "txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers\n"
+            "T1,O1,XXBT/DAI,2025-02-10 10:00:00.0,buy,limit,60000,6000,1,0.1,,,\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        self.assertEqual(len(txs), 1)
+        t = txs[0]
+        self.assertEqual(t['symbol'], 'BTC')
+        self.assertEqual(t['currency'], 'USD')  # DAI normalized to USD
+
+    @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
+    def test_ledgers_crypto_to_crypto_emits_two_legs(self):
+        """A crypto-to-crypto swap is a taxable disposition of the spent
+        crypto at FMV (CRA s. 40(1) / IRS Notice 2014-21). The parser
+        must emit BOTH a SELL of the spent asset and a BUY of the
+        received asset, each priced in USD with price=0 / net=0 so
+        taxjson-fill-crypto backfills FMV. Pre-fix the swap squashed
+        into a single BUYSELL of the received asset denominated in
+        the spent crypto, silently dropping the disposition gain."""
+        csv = (
+            "txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n"
+            # Spend 1 ETH (with $0.50 in ETH fee), receive 0.05 BTC.
+            "L4,REF2,2025-02-10 14:30:00,spend,,currency,XETH,,-1.0,0.0005,0\n"
+            "L5,REF2,2025-02-10 14:30:00,receive,,currency,XXBT,,0.05,0,0\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        swap_legs = [t for t in txs if 'crypto-to-crypto' in t.get('description', '')]
+        self.assertEqual(len(swap_legs), 2,
+                         "Crypto-to-crypto swap must emit a SELL + BUY pair")
+        sell = next(t for t in swap_legs if t['quantity'] < 0)
+        buy = next(t for t in swap_legs if t['quantity'] > 0)
+        # Sell leg: spent 1 ETH + the 0.0005 ETH fee (the ledger fee is
+        # in the row's coin units and the balance moves by amount − fee)
+        # → quantity = -1.0005, symbol=ETH, USD-priced.
+        self.assertEqual(sell['symbol'], 'ETH')
+        self.assertAlmostEqual(sell['quantity'], -1.0005)
+        self.assertEqual(sell['currency'], 'USD')
+        self.assertAlmostEqual(sell['price'], 0.0)
+        self.assertAlmostEqual(sell['net_amount'], 0.0)
+        # Buy leg: received 0.05 BTC → quantity = +0.05, symbol=BTC, USD-priced.
+        self.assertEqual(buy['symbol'], 'BTC')
+        self.assertAlmostEqual(buy['quantity'], 0.05)
+        self.assertEqual(buy['currency'], 'USD')
+        self.assertAlmostEqual(buy['price'], 0.0)
+        self.assertAlmostEqual(buy['net_amount'], 0.0)
+        # IDs distinguish the two legs so the sort-stage dedup keeps both.
+        self.assertEqual(sell['id'], 'REF2-sell')
+        self.assertEqual(buy['id'], 'REF2-buy')
+        # Fees zero-out on both legs: Kraken stores the swap fee in the
+        # row's asset units (e.g. fractional ETH), but the legs are
+        # USD-denominated and the parser can't convert without FMV.
+        # Stamping the crypto-denominated fee onto a USD leg was the
+        # original bug; zero is the safe placeholder.
+        self.assertAlmostEqual(sell['fee'], 0.0)
+        self.assertAlmostEqual(buy['fee'], 0.0)
+
+    @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
+    def test_trades_csv_crypto_to_crypto_two_legs(self):
+        """A crypto-to-crypto trades-CSV fill emits the same two-leg
+        SELL+BUY as the ledgers path (both USD-denominated, price=0
+        for the fill-crypto FMV backfill) — graduated 2026-08 from the
+        KNOWN_ISSUES fail-hard placeholder, per its fix template."""
+        csv = (
+            "txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers\n"
+            # ETH/BTC buy: received 12.5 ETH (vol), spent 0.5 BTC (cost).
+            "T1,O1,ETH/BTC,2025-02-10 10:00:00.0,buy,limit,0.04,0.5,0.0001,12.5,,,\n"
+        )
+        txs = _parse_csv(KrakenBrokerage, csv)
+        self.assertEqual(len(txs), 2)
+        by_sym = {t['symbol']: t for t in txs}
+        self.assertAlmostEqual(by_sym['ETH']['quantity'], 12.5)
+        # 0.5 BTC cost + 0.0001 BTC fee (trades-CSV fee is in QUOTE units).
+        self.assertAlmostEqual(by_sym['BTC']['quantity'], -0.5001)
+        for t in txs:
+            self.assertEqual(t['currency'], 'USD')
+            self.assertEqual(t['price'], 0.0)
+        self.assertEqual(by_sym['ETH']['id'], 'T1-base')
+
+
+
+
+class TestQuestradeStockDividend(unittest.TestCase):
+    """A DIS row with 'STK DIV' delivers NEW shares in kind (split-share
+    corps). The dividend branch's zero-cash guard silently
+    discarded it — the position then went phantom-short by the
+    delivered count at the next full sale (e.g. 180 shares on 1,200:
+    a sale of 1,380 vs book 1,200 → -180)."""
+
+    def test_stk_div_row_delivers_shares(self):
+        csv = QUESTRADE_HEADER + (
+            '2026-02-17 09:30:00 AM,2026-02-18 12:00:00 AM,Buy,QSC.TO,'
+            'QUILL SPLIT CORP SHS CL A NEW WE ACTED AS AGENT,1200,7.40,'
+            '8880.00,0.00,-8880.00,CAD,1,Trades,Individual\n'
+            '2026-06-26 12:00:00 AM,2026-06-26 12:00:00 AM,DIS,QSC,'
+            'QUILL SPLIT CORP SHS CL A NEW STK DIV ON 1200 SHS REC '
+            '06/19/26 PAY 06/26/26,180.0,0.0,0.0,0.0,0.0,CAD,1,'
+            'Dividends,Individual\n')
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            txs = _parse_csv(QuestradeBrokerage, csv)
+        stk = [t for t in txs if t['action'] == 'BUYSELL'
+               and t['quantity'] == 180.0]
+        self.assertEqual(len(stk), 1,
+                         "the stock-dividend shares were dropped")
+        self.assertEqual(stk[0]['symbol'], 'QSC.TO')
+        self.assertEqual(stk[0]['price'], 0.0)
+        self.assertIn("stock dividend", buf.getvalue())
+        # Total position: 1200 + 180.
+        total = sum(t['quantity'] for t in txs
+                    if t['action'] == 'BUYSELL')
+        self.assertAlmostEqual(total, 1380.0)
+
+    def test_cash_div_rows_still_informational(self):
+        # Zero-cash DIST rows without share delivery keep the old
+        # behavior (no transaction).
+        csv = QUESTRADE_HEADER + (
+            '2026-04-10 12:00:00 AM,2026-04-10 12:00:00 AM,,QSC,'
+            'QUILL SPLIT CORP SHS CL A NEW DIST ON 800 SHS REC 03/31/26 '
+            'PAY 04/10/26,0.0,0.05,0.0,0.0,0.0,CAD,1,Dividends,'
+            'Individual\n')
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        self.assertEqual(txs, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestQuestradeReinvestmentAndCashInLieu(unittest.TestCase):
+    """Two Questrade rows that were counted skips: REI (DRIP purchase)
+    and CIL (cash in lieu of a fractional stock-dividend share)."""
+
+    def test_rei_row_is_a_purchase_at_the_reinvest_price(self):
+        csv = QUESTRADE_HEADER + (
+            '2026-05-11 12:00:00 AM,2026-05-11 12:00:00 AM,   ,ZZQ.TO,'
+            'ZZQ SPLIT CORP CL-A SHS DIST ON 800 SHS REC 04/30/26 '
+            'PAY 05/11/26,0,0.1,0,0,80,CAD,99900001,Dividends,API\n'
+            '2026-05-11 12:00:00 AM,2026-05-11 12:00:00 AM,REI,ZZQ.TO,'
+            'ZZQ SPLIT CORP CL-A SHS REINV@C$7.12500 REC 04/30/26 '
+            'PAY 05/11/26,11,0,0,0,-78.38,CAD,99900001,'
+            'Dividend reinvestment,API\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        div = _find(txs, symbol='ZZQ.TO', action='DIVIDEND')
+        self.assertIsNotNone(div, "the cash dividend is still booked")
+        buy = _find(txs, symbol='ZZQ.TO', action='BUYSELL')
+        self.assertIsNotNone(buy, "the DRIP shares enter inventory")
+        self.assertEqual(buy['quantity'], 11)
+        self.assertAlmostEqual(buy['price'], 7.125)
+        self.assertAlmostEqual(buy['net_amount'], 78.38)
+        self.assertEqual(buy['date_settle'], '2026-05-11')
+
+    def test_cil_row_disposes_the_fraction_for_the_cash(self):
+        csv = QUESTRADE_HEADER + (
+            '2026-06-30 12:00:00 AM,2026-06-30 12:00:00 AM,CIL,QSC.TO,'
+            'QUILL SPLIT CORP SHS CL A NEW CASH IN LIEU OF .40000 REC '
+            '06/19/26 PAY 06/26/26 000000Q10000,0,0,0,0,3.10,CAD,'
+            '99900001,Corporate actions,API\n'
+        )
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        legs = [t for t in txs if t.get('symbol') == 'QSC.TO']
+        self.assertEqual([t['quantity'] for t in legs], [0.4, -0.4])
+        self.assertAlmostEqual(legs[0]['net_amount'], 0.0)
+        self.assertAlmostEqual(legs[1]['net_amount'], 3.10)
+        self.assertAlmostEqual(legs[1]['price'], 7.75)
+        # Same-day, ordered: the acquisition precedes the sale.
+        self.assertLess(legs[0]['time'], legs[1]['time'])
+

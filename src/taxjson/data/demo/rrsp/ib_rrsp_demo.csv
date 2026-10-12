@@ -1,0 +1,29 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers (Synthetic Demo)
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2024 - December 31, 2024"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Name,Demo User
+Account Information,Data,Account,U99900002
+Account Information,Data,Account Type,Individual RRSP
+Account Information,Data,Base Currency,CAD
+Financial Instrument Information,Header,Asset Category,Symbol,Description,Conid,Security ID,Underlying,Listing Exch,Multiplier,Expiry,Delivery Month,Type,Strike,Code
+Financial Instrument Information,Data,Equity and Index Options,KO 20SEP24 65 C,KO 20SEP24 65 C,999000201,,KO,CBOE,100,2024-09-20,2024-09,C,65,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,JNJ,"2024-01-22, 10:04:12",40,157.00,157.00,-6280.00,-1.00,6281.00,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,KO 20SEP24 65 C,"2024-06-03, 11:20:05",2,1.85,1.85,-370.00,-1.30,371.30,0,0,O
+Trades,Data,Order,Equity and Index Options,USD,KO 20SEP24 65 C,"2024-08-05, 14:07:51",-2,0.85,0.85,170.00,-1.30,-371.30,-202.60,0,C
+Trades,Data,Order,Stocks,USD,JNJ,"2024-08-14, 13:31:50",-40,163.00,163.00,6520.00,-1.00,-6281.00,238.00,0,C
+Trades,Data,Order,Stocks,USD,INTC,"2024-08-19, 09:47:22",20,20.00,20.00,-400.00,-1.00,401.00,0,0,O
+Dividends,Header,Currency,Date,Description,Amount
+Dividends,Data,USD,2024-03-05,JNJ (US4781601046) CASH DIVIDEND USD 1.19 PER SHARE (Ordinary Dividend),47.60
+Dividends,Data,USD,2024-06-11,JNJ (US4781601046) CASH DIVIDEND USD 1.24 PER SHARE (Ordinary Dividend),49.60
+Dividends,Data,Total,,,97.20
+Cash Report,Header,Currency Summary,Currency,Total,Securities,Futures,
+Cash Report,Data,Starting Cash,Base Currency Summary,0,0,0,
+Cash Report,Data,Starting Cash,USD,7000.00,7000.00,0,
+Cash Report,Data,Commissions,USD,-5.60,-5.60,0,
+Cash Report,Data,Dividends,USD,97.20,97.20,0,
+Cash Report,Data,Trades (Sales),USD,6690.00,6690.00,0,
+Cash Report,Data,Trades (Purchase),USD,-7050.00,-7050.00,0,
+Cash Report,Data,Ending Cash,USD,6731.60,6731.60,0,

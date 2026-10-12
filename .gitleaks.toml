@@ -1,0 +1,30 @@
+# gitleaks (the CI "secrets" job in .github/workflows/tests.yml): its
+# default rules, with NO exceptions today. There used to be a word list
+# ("fake|example|synthetic|placeholder|dummy|made-up|…") matched against
+# the whole finding: a real secret whose setting NAME, or value, held one
+# of those words was hidden by it. A scan of the full history with the
+# default rules alone (gitleaks 8.28.0, 2026-10-10) found nothing to allow:
+# the tests assemble every secret-shaped fixture at run time, so no
+# literal reaches the history (scripts/check-pii.sh is the local check; a
+# `# pii-ok` comment marks a fixture line there).
+#
+# A fixture that ever needs an exception gets its EXACT value, for the one
+# rule it trips and only in the file that holds it — never a word list:
+#
+#   [[rules]]
+#   id = "generic-api-key"            # the default rule it trips
+#   [[rules.allowlists]]
+#   description = "what the fixture is"
+#   condition = "AND"
+#   paths = ['''^tests/test_the_file\.py$''']
+#   regexTarget = "secret"
+#   regexes = ['''^the-exact-value$''']
+#
+# (Per-rule allowlists: gitleaks 8.28 ignores a top-level allowlist's
+# targetRules when the rules come from useDefault.) A pull request is
+# judged by the BASE commit's copy of this file, so such an entry lands on
+# main before the fixture that needs it. scripts/gitleaks-regression.sh
+# (the same CI job) checks that ordinary secrets are still reported
+# whatever they are called.
+[extend]
+useDefault = true

@@ -1,0 +1,9 @@
+{
+  "elections": {
+    "20240603-parnt-spnco-3509": {
+      "election": "taxable_deemed_dividend",
+      "notes": "the demo's election: the spun-off shares as a dividend at the value IB reports (`taxjson spinoffs`)",
+      "summary": "2024-06-03 spinoff: PARNT.US \u2192 SPNCO.US (1.0-for-4.0, ratio 0.25, FMV 500.00 USD)"
+    }
+  }
+}

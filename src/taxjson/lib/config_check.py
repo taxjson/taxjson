@@ -1,0 +1,383 @@
+"""The account-type, account-name and quoted-boolean checks every config
+reader applies.
+
+Every filing command partitions accounts with an exact match on
+`type == "taxable"` / `"sheltered"`. A typo'd or missing type matches
+neither, so the account silently vanished from estimate, instalments,
+`sum` FOR THE RETURN, form-export and close-year, while only `taxjson
+run` (through validate_config) refused the same config (R1-268). This
+is the one home for that check, so the run and every read-only command
+refuse the same configs with the same message.
+"""
+import difflib
+import re
+from typing import Any, Dict, List
+
+ACCOUNT_TYPES = ("taxable", "sheltered")
+
+# Every key and table taxjson.toml may carry, by table: the one list the
+# config readers warn against (unknown keys are named, with a did-you-
+# mean) and the one `taxjson init` / `taxjson format` document
+# (lib/config_template; tests/test_config_template.py checks that every
+# key here is in the template). [settings] keys and their owning country
+# live in lib/country.SETTING_COUNTRY; one-country tables and keys in
+# lib/country.CONFIG_COUNTRY.
+TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate",
+                    "carryover", "capital_gains_dividends",
+                    "distributions")
+# brokerage / account / query_id are the fetcher plugins' keys
+# (lib/fetchers.CORE_ACCOUNT_KEYS): accepted whether or not a fetcher is
+# installed, so a project that used `taxjson fetch` keeps validating.
+ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
+                "brokerage", "account", "query_id", "holdings",
+                "broker_accounts",
+                "combined_broker_accounts", "exercise_fee",
+                "year_end_posting")
+ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
+                 "carrying_charges", "long_term_losses", "amt_carryover")
+INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
+                    "withheld", "prescribed_rate", "prescribed_rates",
+                    "paid")
+CARRYOVER_KEYS = ("claimed",)
+# One [[distributions]] / [[capital_gains_dividends]] entry's keys
+# (lib/project_tables, lib/cg_dividends).
+DISTRIBUTION_KEYS = ("symbol", "record_date", "per_share")
+CGD_KEYS = ("symbol", "year", "date", "amount", "account")
+# [settings] keys still recognised only to warn that they are ignored:
+# never documented as a setting.
+RETIRED_SETTINGS = ("cross_asset",)
+
+# Every per-account artifact is work/<name>_<suffix>.json, so an account
+# named `<other>_raw` owns `<other>_raw_base.json` — the other account's
+# native books — and the gains discovery skips any `*_raw_gains.json`
+# as a derivative: the account's gains vanished from sum/estimate, or
+# overwrote a sibling's (2026-09 audit S022-00, S041-14). A name ending
+# in one of these, or the combined book's own name, is refused.
+RESERVED_NAME_SUFFIXES = ("_raw", "_base", "_gains", "_wash", "_merged",
+                          "_sorted", "_filled", "_mapped", "_report",
+                          "_tt", "_manifest", "_sources")
+RESERVED_NAMES = ("sheltered",)
+# Account names build file and directory names (inputs/<name>,
+# work/<name>_*, reports/<name>_holdings.toml) and sub-tool argv: a
+# "../x" name reads or writes outside the project, a "-x" name parses
+# as a flag. Every config reader refuses them (R1-349).
+ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+def account_name_problem(name: str) -> str:
+    """A message when `name` would collide with a pipeline artifact
+    name, else ''."""
+    n = str(name)
+    low = n.lower()
+    if not ACCOUNT_NAME_RE.fullmatch(n):
+        return (f"[accounts.{n!r}] is not a valid account name — use "
+                f"letters, digits, '_', '-' or '.' (must start with a "
+                f"letter, digit or '_'); it becomes file and directory "
+                f"names.")
+    if n.upper() == "COMBINED":
+        return (f"[accounts.{n}]: the name COMBINED is reserved for the "
+                f"cross-account wash radar — rename the account (and its "
+                f"inputs/{n}/ folder).")
+    if low in RESERVED_NAMES:
+        return (f"[accounts.{n}]: {n!r} is reserved (work/{n}_base.json "
+                f"is the combined registered-account book) — rename the "
+                f"account (and its inputs/{n}/ folder)")
+    for suf in RESERVED_NAME_SUFFIXES:
+        if low.endswith(suf):
+            return (f"[accounts.{n}]: an account name may not end in "
+                    f"{suf!r} — work/{n}_*.json would collide with the "
+                    f"pipeline's per-account {suf.lstrip('_')} artifacts "
+                    f"(one account's books overwrite or hide another's). "
+                    f"Rename the account (and its inputs/{n}/ folder), "
+                    f"e.g. {n[:-len(suf)] + suf.replace('_', '-')!r}")
+    return ""
+
+
+# The per-account artifact namespaces an account `a` owns besides its
+# fixed suffixes: work/a_tt_<stem>.json (a converted .tt), work/a_<broker>
+# [_corp|_transfers].json (a broker parse). An account named
+# `a_tt_x` or `a_questrade` lives inside `a`'s namespace: the two
+# overwrote each other's books, and one run's stale-file cleanup deleted
+# the other's corp and transfer files (re-audit A2-0140, A2-0402).
+ARTIFACT_NAMESPACES = ("tt", "questrade", "ib", "webull", "rbc_direct",
+                       "coinbase", "kraken", "generic")
+
+
+def account_pair_problems(names) -> List[str]:
+    """One message per account whose name sits in another account's
+    artifact namespace (`<other>_<namespace>...`), and one per group of
+    names that differ only by letter case (#48)."""
+    out: List[str] = []
+    names = [str(n) for n in names]
+    by_fold: Dict[str, List[str]] = {}
+    for n in names:
+        by_fold.setdefault(n.casefold(), []).append(n)
+    for same in by_fold.values():
+        if len(same) > 1:
+            # One folder and one holdings file on Windows and macOS;
+            # holdings/ discovery and file names match case-blind too.
+            out.append(
+                f"{' and '.join(f'[accounts.{n}]' for n in same)} differ "
+                f"only by letter case — an account's name is also its "
+                f"inputs/ folder and its holdings file's name, which "
+                f"letter case does not tell apart. Rename one (and its "
+                f"inputs/ folder).")
+    for long in names:
+        for short in names:
+            if long == short or not long.lower().startswith(
+                    short.lower() + "_"):
+                continue
+            rest = long[len(short) + 1:].lower()
+            ns = next((x for x in ARTIFACT_NAMESPACES
+                       if re.match(rf"{re.escape(x)}(?:$|[_-])", rest)),
+                      None)
+            if ns:
+                out.append(
+                    f"[accounts.{long}]: the name is inside account "
+                    f"{short!r}'s work files (work/{short}_{ns}...json, "
+                    f"its {'.tt' if ns == 'tt' else ns} books) — the two "
+                    f"accounts would overwrite or delete each other's "
+                    f"books. Rename it (and its inputs/{long}/ folder), "
+                    f"e.g. {short + '-' + long[len(short) + 1:]!r}.")
+                break
+    return out
+
+
+def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
+    """One message per [accounts.*] entry that is not a table or whose
+    `type` is missing or not exactly "taxable"/"sheltered". Empty on a
+    valid config."""
+    out: List[str] = []
+    accounts = cfg.get("accounts") or {}
+    if not isinstance(accounts, dict):
+        return ["[accounts] must be a table of [accounts.<name>] sections"]
+    for name, acfg in accounts.items():
+        clash = account_name_problem(name)
+        if clash:
+            out.append(clash)
+            continue
+        if not isinstance(acfg, dict):
+            out.append(f"[accounts.{name}] must be a table")
+            continue
+        atype = acfg.get("type")
+        if atype is None:
+            # The old "default to sheltered" silently dropped an
+            # untyped TAXABLE account's gains from every filing
+            # command (2026-09 CLI audit).
+            out.append(
+                f"[accounts.{name}] has no `type` — it is required: "
+                f"add type = \"taxable\" or type = \"sheltered\" "
+                f"(taxable | sheltered). An untyped account would "
+                f"otherwise be left out of the return.")
+        elif atype not in ACCOUNT_TYPES:
+            close = difflib.get_close_matches(str(atype).lower(),
+                                              ACCOUNT_TYPES, n=1)
+            hint = f" (did you mean {close[0]!r}?)" if close else ""
+            out.append(
+                f"[accounts.{name}] type must be \"taxable\" or "
+                f"\"sheltered\", got {atype!r} — this account would "
+                f"otherwise be silently dropped from the run{hint}")
+        if "crypto" in acfg and not isinstance(acfg["crypto"], bool):
+            # Every reader tests `crypto` for truthiness: a quoted
+            # "false" moved a whole equity book to Schedule 3's
+            # crypto-asset line and its dividends to staking income
+            # (S005-00).
+            out.append(
+                f"[accounts.{name}] crypto must be true or false (no "
+                f"quotes), got {acfg['crypto']!r}")
+        _cba = acfg.get("combined_broker_accounts")
+        if _cba is not None and not isinstance(_cba, bool):
+            # A quoted "false" is truthy: it would silence the 'statement
+            # spans N accounts' ATTENTION the user never waived.
+            out.append(
+                f"[accounts.{name}] combined_broker_accounts must be true "
+                f"or false (no quotes), got {_cba!r}")
+        _fee = acfg.get("exercise_fee")
+        if _fee is not None and (isinstance(_fee, bool)
+                                 or not isinstance(_fee, (int, float))
+                                 or not 0 <= _fee < 1000):
+            # The broker's exercise/assignment charge (Webull): a
+            # quoted "1.00" would never equal a row's fee (B11).
+            out.append(
+                f"[accounts.{name}] exercise_fee must be a number such "
+                f"as 1.00 (the broker's exercise/assignment charge, no "
+                f"quotes), got {_fee!r}")
+        _bas = acfg.get("broker_accounts")
+        if _bas is not None and not (
+                isinstance(_bas, list)
+                and all(isinstance(x, str) and x.strip() for x in _bas)):
+            # The ids a holdings/ snapshot's [meta] account is matched
+            # against (lib/holdings_dir); a number would never match.
+            out.append(f"[accounts.{name}] broker_accounts must be a list "
+                       f"of quoted broker account ids, e.g. "
+                       f"[\"ACCOUNT_A\", \"ACCOUNT_B\"]")
+        _yep = acfg.get("year_end_posting")
+        if _yep is not None:
+            from taxjson.lib.brokerages.rbc_direct import parse_month_day
+            try:
+                if not isinstance(_yep, str):
+                    raise ValueError(f"{_yep!r} is not a quoted MM-DD day")
+                parse_month_day(_yep)
+            except ValueError as e:
+                out.append(f"[accounts.{name}] year_end_posting must be a "
+                           f"day such as \"06-30\" (MM-DD): {e}")
+    return (out + account_pair_problems(accounts.keys())
+            + bool_setting_problems(cfg))
+
+
+def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
+    """A quoted boolean (`= "false"`) is truthy: every command but `run`
+    read [settings] option_buyback_loss_superficial = "false" as ON
+    (audit S021-07 / S076-17 — carryover, check-filed, audit and
+    close-year applied the strict buy-back rule). Refused by every
+    config reader, like `run` does. (accounts.*.crypto: above.)"""
+    out: List[str] = []
+    settings = cfg.get("settings") or {}
+    if isinstance(settings, dict):
+        # fx_cash_gains = "false" switched the FX-on-cash report ON and
+        # its banner said "= true" (R1-152, R1-261).
+        for key in ("option_buyback_loss_superficial", "fx_cash_gains",
+                    "transfers_as_acquisitions"):
+            v = settings.get(key)
+            if v is not None and not isinstance(v, bool):
+                out.append(f"[settings] {key} must be true or false, "
+                           f"unquoted (got {v!r})")
+        # The FX-on-cash ledger (CA-FX-07 / US-FX-03): v1 is the default,
+        # v2 the opt-in under audit; a typo must not fall back to either.
+        led = settings.get("fx_cash_ledger")
+        if led is not None and (not isinstance(led, str)
+                                or led.strip().lower() not in ("v1", "v2")):
+            out.append(f"[settings] fx_cash_ledger must be \"v1\" or "
+                       f"\"v2\" (got {led!r})")
+        inc = settings.get("fx_cash_inflow_cost")
+        if inc is not None and (not isinstance(inc, str)
+                                or inc.strip().lower()
+                                not in ("declared", "spot")):
+            out.append(f"[settings] fx_cash_inflow_cost must be "
+                       f"\"declared\" or \"spot\" (got {inc!r})")
+        # Only `run` checked these: option-boundary read a typo'd
+        # "grants" as close timing and advised enabling grant timing,
+        # close-year wrote the typo into the filed-year lock, and a
+        # since of `true` read as year 1 (R1-183).
+        opt = settings.get("option_premium_timing")
+        if opt is not None and (not isinstance(opt, str)
+                                or opt.strip().lower()
+                                not in ("grant", "close")):
+            out.append(f"[settings] option_premium_timing must be "
+                       f"\"grant\" or \"close\" (got {opt!r})")
+        # A sheltered account's corporate-action elections (lib/
+        # corp_actions.sheltered_elections_mode): a typo must not read
+        # as either mode.
+        she = settings.get("sheltered_elections")
+        if she is not None and (not isinstance(she, str)
+                                or she.strip().lower()
+                                not in ("zero", "ask")):
+            out.append(f"[settings] sheltered_elections must be "
+                       f"\"zero\" or \"ask\" (got {she!r})")
+        since = settings.get("option_grant_timing_since")
+        if since is not None and not (isinstance(since, int)
+                                      and not isinstance(since, bool)
+                                      and 1900 <= since <= 2100):
+            out.append(f"[settings] option_grant_timing_since must be a "
+                       f"tax year such as 2025, unquoted (got {since!r})")
+    return out
+
+
+# Top-level sections every reader treats as a table.
+_TABLE_SECTIONS = ("estimate", "instalments")
+
+
+def settings_problems(cfg: Dict[str, Any]) -> List[str]:
+    """Canonicalise [settings] in place and return what is wrong with
+    it: the country (required; one spelling table, lib/country), the
+    date basis, the base currency's spelling, and every setting or
+    table the project's country does not own (lib/country
+    SETTING_COUNTRY / CONFIG_COUNTRY), including a base currency that
+    is not the country's. The one home for these checks: `taxjson`'s
+    config readers die on the list. Stops at the
+    first country problem (the ownership checks need a country)."""
+    from taxjson.lib.country import (CountryError, config_country_problems,
+                                     settings_country, TAX_DATES)
+    settings = cfg.get("settings")
+    if settings is None:
+        settings = {}
+    if not isinstance(settings, dict):
+        return ["[settings] must be a table"]
+    # A top-level `estimate = 5` / `instalments = [..]` (a key where a
+    # section belongs) was an AttributeError traceback in estimate, sum
+    # and instalments (re-audit A2-0469).
+    for _t in _TABLE_SECTIONS:
+        if _t in cfg and not isinstance(cfg[_t], dict):
+            return [f"[{_t}] must be a table (a [{_t}] section), got "
+                    f"`{_t} = {cfg[_t]!r}`"]
+    try:
+        settings["country"] = settings_country(settings)
+        if "settings" not in cfg:
+            cfg["settings"] = settings
+    except CountryError as e:
+        return [str(e)]
+    out: List[str] = []
+    # year: the one check every reader shares (a reader once accepted
+    # 1850, 2024.0, true or "2024" that every CLI command refuses;
+    # A2-1373).
+    # Same plausible range as `taxjson init` and --year (cli_diag).
+    year = settings.get("year")
+    if year is not None:
+        from datetime import date as _date
+        _hi = _date.today().year + 1
+        if isinstance(year, bool) or not isinstance(year, int):
+            out.append(f"[settings] year must be an integer tax year, "
+                       f"got {year!r}")
+        elif not 1900 <= year <= _hi:
+            out.append(f"[settings] year = {year} is not a plausible tax "
+                       f"year (expected 1900..{_hi})")
+    tax_date = settings.get("tax_date")
+    if tax_date is not None and tax_date not in TAX_DATES:
+        out.append(f"[settings] tax_date must be settle|trade, "
+                   f"got {tax_date!r}")
+    # base_currency: " CAD" / "Cad " passed validation and failed later
+    # as a misdiagnosed "rows still carry a non-CAD currency" error
+    # (R1-153). One canonical, checked spelling for every reader.
+    import re
+    base = settings.get("base_currency")
+    if base is not None:
+        if not isinstance(base, str) \
+                or not re.fullmatch(r"[A-Za-z]{3}", base.strip()):
+            out.append(f"[settings] base_currency must be a 3-letter "
+                       f"currency code such as \"CAD\" or \"USD\", got "
+                       f"{base!r}")
+            return out
+        settings["base_currency"] = base.strip().upper()
+    # Every reader of the prior-year lock (run, handoff, the checklist)
+    # refuses a non-path the same way: handoff and the checklist turned
+    # a list into "no prior-year record at P/['../2023/...']" (A2-1161).
+    pyr = settings.get("prior_year_record")
+    if pyr is not None and not (isinstance(pyr, str) and pyr.strip()):
+        out.append(f"[settings] prior_year_record must be a path string "
+                   f"such as \"../2024/filed/2024.json\" (got {pyr!r})")
+    # The LEAPS views' cut-off (leaps, leaps-sum): months from the buy to
+    # expiry. A quoted "3" or 2.5 would compare oddly.
+    lm = settings.get("leaps_months")
+    if lm is not None and not (isinstance(lm, int)
+                               and not isinstance(lm, bool)
+                               and 1 <= lm <= 120):
+        out.append(f"[settings] leaps_months must be a whole number of "
+                   f"months such as 9, unquoted (got {lm!r})")
+    tz = settings.get("local_timezone")
+    if tz is not None:
+        from taxjson.lib.brokerages._crypto_common import utc_to_local
+        from datetime import datetime as _dt
+        try:
+            if not isinstance(tz, str) or not tz.strip():
+                raise ValueError
+            utc_to_local(_dt(2025, 1, 1), tz.strip())
+            settings["local_timezone"] = tz.strip()
+        except ValueError:
+            out.append(f"[settings] local_timezone must be an IANA zone "
+                       f"name such as \"America/Toronto\" or "
+                       f"\"America/Los_Angeles\", got {tz!r}")
+    # The hand-entered year data ([[distributions]], [carryover] claimed,
+    # [[capital_gains_dividends]], [estimate] amt_carryover): types,
+    # dates, duplicates — lib/project_tables.
+    from taxjson.lib.project_tables import table_problems
+    return out + config_country_problems(cfg) + table_problems(cfg)

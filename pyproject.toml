@@ -1,0 +1,147 @@
+[project]
+name = "taxjson"
+version = "0.29.2"
+description = "Capital gains, dividend income, and wash-sale / superficial-loss computation from brokerage CSVs (Canada + US)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "cksci", email = "ckscijdtest@gmail.com" },
+]
+keywords = ["tax", "capital-gains", "wash-sale", "acb", "fifo", "brokerage", "csv", "canada", "us"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+
+# `tomllib` is in the stdlib only from Python 3.11. `taxjson_run.py`
+# falls back to `tomli` on older versions; declare it so 3.9/3.10
+# users get a working install instead of a "pip install tomli"
+# stderr at first invocation.
+# Windows ships no IANA time-zone database: zoneinfo needs `tzdata` for
+# the IB exchange-local trade dates (Sydney, Tokyo, ...; audit A2-1447).
+dependencies = [
+    'tomli >= 1.2.0; python_version < "3.11"',
+    'tzdata; sys_platform == "win32"',
+]
+
+[project.urls]
+Homepage = "https://github.com/taxjson/taxjson"
+Repository = "https://github.com/taxjson/taxjson"
+Issues = "https://github.com/taxjson/taxjson/issues"
+
+[project.optional-dependencies]
+# FX-rate fallback (taxjson-to-base-curr). The Bank of Canada Valet API
+# is the primary source for a CAD base and needs no extra (its daily
+# rate from 2017-03-01, its legacy noon rate from 2007-05-01); Yahoo
+# Finance (via yfinance) covers dates before 2007-05-01, currencies the
+# Bank does not publish, and non-CAD bases.
+fx = [
+    "yfinance>=0.2",
+    "pandas>=1.5",
+]
+# XLSX → CSV preprocessor (taxjson-xlsx-to-csv). Some brokerages ship
+# statements only as Excel; convert with this tool before
+# taxjson-brokerage.
+xlsx = [
+    "pandas>=1.5",
+    "openpyxl>=3.0",
+]
+# Maintainer tool: AI-aided parser scaffolding (taxjson-generate-parser).
+# Either provider works; lazy imports tolerate either being absent.
+generate-parser = [
+    "anthropic>=0.40",
+    "google-generativeai>=0.7",
+]
+# IBKR price tier for the pricing chain (`taxjson harvest` prefers a
+# running TWS / IB Gateway before falling back to yfinance). Lazy-
+# imported, so the rest of the toolkit installs and runs without it.
+ibkr = [
+    "ib_insync>=0.9.86",
+]
+# Test/CI dependencies beyond the runtime extras.
+# Full suite: pip install -e ".[all,dev]".
+dev = [
+    # The ci.sh / workflow lint stage (critical tier); a missing linter
+    # fails the gate.
+    "ruff>=0.4",
+]
+# Everything, for users who want one install command.
+all = [
+    "yfinance>=0.2",
+    "pandas>=1.5",
+    "numpy>=1.20",
+    "openpyxl>=3.0",
+    "anthropic>=0.40",
+    "google-generativeai>=0.7",
+    "ib_insync>=0.9.86",
+]
+
+[project.scripts]
+# Stand-alone tools go through taxjson.bin._entry, which sets an
+# owner-only umask (files 0600, dirs 0700) before calling <module>.main().
+taxjson = "taxjson.bin.taxjson_run:main"
+# `tjs`: the same program under a shorter name (usage shows the name used).
+tjs = "taxjson.bin.taxjson_run:main"
+taxjson-brokerage = "taxjson.bin._entry:taxjson_brokerage"
+taxjson-convert-currency = "taxjson.bin._entry:taxjson_convert_currency"
+taxjson-convert-tt = "taxjson.bin._entry:taxjson_convert_tt"
+taxjson-corp-actions = "taxjson.bin._entry:taxjson_corp_actions"
+taxjson-detect-brokerage = "taxjson.bin._entry:taxjson_detect_brokerage"
+taxjson-extractors = "taxjson.bin._entry:taxjson_extractors"
+taxjson-generate-parser = "taxjson.bin._entry:taxjson_generate_parser"
+taxjson-gains = "taxjson.bin._entry:taxjson_gains"
+taxjson-explain = "taxjson.bin._entry:taxjson_explain"
+taxjson-audit = "taxjson.bin._entry:taxjson_audit"
+taxjson-diff = "taxjson.bin._entry:taxjson_diff"
+taxjson-merge = "taxjson.bin._entry:taxjson_merge"
+taxjson-merge2 = "taxjson.bin._entry:taxjson_merge2"
+taxjson-safe-to-sell = "taxjson.bin._entry:taxjson_safe_to_sell"
+taxjson-sort = "taxjson.bin._entry:taxjson_sort"
+taxjson-sum-gains = "taxjson.bin._entry:taxjson_sum_gains"
+taxjson-sum-income = "taxjson.bin._entry:taxjson_sum_income"
+taxjson-t1135 = "taxjson.bin._entry:taxjson_t1135"
+taxjson-carryover = "taxjson.bin._entry:taxjson_carryover"
+taxjson-form-export = "taxjson.bin._entry:taxjson_form_export"
+taxjson-reconcile-slips = "taxjson.bin._entry:taxjson_reconcile_slips"
+taxjson-harvest = "taxjson.bin._entry:taxjson_harvest"
+# Canonical name: the tool is the brokerage fee ROLL-UP — `taxjson
+# fees-sum`'s standalone twin, not `taxjson fees`' (the per-trade view).
+taxjson-fees-sum = "taxjson.bin._entry:taxjson_fees"
+taxjson-lint-crosslistings = "taxjson.bin._entry:taxjson_lint_crosslistings"
+taxjson-ticker-map = "taxjson.bin._entry:taxjson_ticker_map"
+taxjson-wash-radar = "taxjson.bin._entry:taxjson_wash_radar"
+taxjson-to-base-curr = "taxjson.bin._entry:to_base_curr"
+taxjson-fill-crypto = "taxjson.bin._entry:fill_crypto_prices"
+taxjson-apply-distributions = "taxjson.bin._entry:taxjson_apply_distributions"
+taxjson-split-gains = "taxjson.bin._entry:taxjson_split_gains"
+taxjson-validate = "taxjson.bin._entry:taxjson_validate"
+taxjson-leaps-gains = "taxjson.bin._entry:taxjson_leaps_gains"
+taxjson-missing-history = "taxjson.bin._entry:taxjson_missing_history"
+taxjson-ccd-gains = "taxjson.bin._entry:taxjson_ccd_gains"
+taxjson-export = "taxjson.bin._entry:taxjson_export"
+taxjson-xlsx-to-csv = "taxjson.bin._entry:xlsx_to_csv"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# The shipped market reference data (lib/markets): venue suffixes,
+# currencies and the security lists a user's ticker.map can override.
+[tool.setuptools.package-data]
+# The `taxjson init --demo` project (lib/demo): made-up exports.
+taxjson = ["data/*.toml", "data/demo/*/*"]

@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+"""Draft a Python brokerage parser from a sample CSV using an LLM.
+
+Maintainer-side tool. Reads a sample CSV from a new brokerage, feeds the
+chosen LLM:
+  - the BaseBrokerage class (so the model sees what helpers exist)
+  - a complete example subclass (Questrade)
+  - the canonical transaction schema
+  - the CSV sample
+
+…and writes a draft `BaseBrokerage` subclass to disk. You review the file,
+fix anything the model got wrong, register the class in
+taxjson_brokerage.py, and commit.
+
+The runtime parsing path never calls this tool or any LLM — generated
+parsers are checked-in Python files like the hand-written ones.
+
+Provider:
+  - claude (default) — uses Anthropic's claude-opus-4-7. Requires
+    ANTHROPIC_API_KEY and `pip install '.[generate-parser]'`. The stable
+    system prefix is prompt-cached, so re-running for a second brokerage
+    in the same hour costs ~10% of the first call's input tokens.
+  - gemini — uses gemini-2.5-flash. Requires GEMINI_API_KEY and the same
+    install extra.
+
+Usage:
+    taxjson-generate-parser <sample.csv> -o <output.py> \\
+        --brokerage-name "Schwab" --class-name SchwabBrokerage
+    taxjson-generate-parser <sample.csv> -o <out.py> --provider gemini
+"""
+
+from taxjson.lib.stage_msg import emit_line
+import argparse
+import os
+import re
+import sys
+import warnings
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from taxjson.lib.brokerages.schema import render_schema_prompt
+
+
+# Stable across every invocation: instructions + canonical schema + BaseBrokerage
+# source + a complete example. Claude caches this block (cache_control) so
+# subsequent runs in the same ~5-minute window pay ~10% of input cost on it.
+_SYSTEM_TEMPLATE = """You are an expert Python developer writing brokerage CSV parsers.
+
+# Task
+Write a single Python class that parses a brokerage's CSV export. The
+class MUST subclass `BaseBrokerage` (provided below) and use the helper
+methods it provides rather than re-implementing logic.
+
+# Canonical transaction schema
+The parser returns a list of dicts. This block is GENERATED from
+`taxjson.lib.brokerages.schema` — the same table `taxjson-brokerage`
+validates every parse against, so following it exactly means the
+validator and conformance kit pass on the first try.
+
+{schema_block}
+
+Numeric field notes: price is the per-share execution price;
+gross_amount is qty*price notional (self.theoretical_gross); fee is
+absolute (self.back_compute_fee when the CSV doesn't break fees out);
+commission only when the CSV has a real Commission column; quantity
+sign via self.signed_quantity.
+
+Number parsing: every REQUIRED money or quantity cell (quantity, price,
+net/gross amount, a real fee/commission column) MUST go through
+`parse_strict_number(cell, field=..., where=...)` (import it from
+`taxjson.lib.brokerages.base`): it raises on a blank or ambiguous cell
+instead of returning 0. `self.clean_number` is ONLY for optional cells,
+because it turns a blank into 0.0 — a blank net read that way makes
+back_compute_fee book the whole trade value as a fee and the sale as $0.
+Call back_compute_fee only with a strictly parsed, non-blank net.
+
+# BaseBrokerage source (the helpers available to you)
+```python
+{base_source}
+```
+
+# Complete example: a working subclass for Questrade
+```python
+{example_source}
+```
+
+# Output requirements
+- Output ONLY valid Python source code for a single file.
+- Subclass `BaseBrokerage` from `taxjson.lib.brokerages.base`.
+- Implement `parse_file(self, path: Path) -> List[Dict[str, Any]]`.
+- Prefer the base helpers (parse_strict_number for required numbers,
+  apply_currency_suffix, signed_quantity, back_compute_fee,
+  theoretical_gross, clean_number for OPTIONAL cells only, parse_date,
+  equity_settlement_date for EQUITY settle dates (era-aware T+2/T+1),
+  settlement_date_t1 for OPTIONS only, parse_option_from_description,
+  format_occ_symbol). Crypto settles on the trade date: date_settle =
+  date, no helper.
+- Include the imports the file needs (csv, re, Path, etc.).
+- DO NOT include the BaseBrokerage source — import it.
+- DO NOT include any prose, markdown, or explanation around the code.
+- DO NOT wrap the output in code fences — emit raw Python.
+- Do not invent column names. If a field you'd want isn't in the sample,
+  leave it out rather than guess.
+- Do not invent action codes. If the sample doesn't show an action value
+  for a case, omit handling for it; a human will add it on review.
+"""
+
+
+_USER_TEMPLATE = """Write the parser for the following brokerage.
+
+Brokerage name: {brokerage_name}
+Class name: {class_name}
+DEFAULT_ACCOUNT class attribute: "{default_account}"
+
+Sample CSV lines (first {n_lines}):
+```
+{sample_csv}
+```
+"""
+
+
+def _load_text(p: Path) -> str:
+    return p.read_text(encoding='utf-8')
+
+
+def _strip_code_fences(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r'^```(?:python|py)?\n', '', text)
+    text = re.sub(r'\n```$', '', text)
+    return text.strip() + '\n'
+
+
+def _read_sample(csv_path: Path, n: int) -> str:
+    """The first `n` lines of the sample, decoded the way detection and
+    every parser read a broker export (base.decode_broker_text: UTF-16
+    with a BOM, else UTF-8 with an optional BOM). A legacy encoding
+    raises BrokerageParseError naming the file (audit A2-1080)."""
+    from taxjson.lib.brokerages.base import decode_broker_text
+    text = decode_broker_text(csv_path.read_bytes(), csv_path.name)
+    return '\n'.join(line.rstrip('\r') for line in
+                     text.splitlines()[:n])
+
+
+# Synthetic ids the redactor and check-pii treat as placeholders.
+_SYNTHETIC_ID = re.compile(r"^(U?9990\d*|U1234567\d?|1234567[89])$")
+
+
+def _lines(nums: List[int]) -> str:
+    """'line 3' / 'lines 2, 5, 7 ...' (at most ten numbers)."""
+    shown = ", ".join(map(str, nums[:10])) + (" ..." if len(nums) > 10 else "")
+    return f"line{'s' if len(nums) > 1 else ''} {shown}"
+
+
+def gate_sample(sample: str) -> Tuple[Optional[str], List[str]]:
+    """(the redactor's copy of `sample`, what still identifies someone).
+
+    The findings are counts and line numbers ('2 account id(s)', 'the
+    redactor changes line(s) 1, 4') — never the values. Every identity
+    kind of the redactor's report counts (Report.identity_counts, so a
+    new kind is never skipped — the gate's own list missed identity rows
+    and review candidates, GitHub #80), and so does ANY line the
+    redactor would change beyond pseudonymising a transaction id, even
+    one no counter recorded: fail closed. Placeholder ids (U9990...,
+    9990...) do not count, so an already-redacted sample passes.
+
+    The copy is None when the private denylist cannot be used (the
+    gate refuses, A2-0448)."""
+    from taxjson.bin import taxjson_redact as R
+    try:
+        deny = R.load_denylist()
+    except R.DenylistError as e:
+        # Missing, a directory, unreadable, UTF-16 / not UTF-8: the
+        # gate cannot check the sample, so it refuses (A2-0448).
+        return None, [f"the private denylist cannot be used: {e}"]
+    out, rep = R.redact_text(sample, deny)
+    review = sorted({n for n, why in rep.review
+                     if why != R.UNREPLACED_REASON})
+    found = []
+    for n, what in rep.identity_counts(lambda v: bool(_SYNTHETIC_ID.match(v))):
+        if what == dict(R.Report.IDENTITY_KINDS)["review"]:
+            what += f" ({_lines(review)})"
+        found.append(f"{n} {what}")
+    # Transaction-id pseudonyms are the one change that is not identity.
+    expected = sample
+    for orig, ph in sorted(rep.txids.items(), key=lambda kv: -len(kv[0])):
+        expected = expected.replace(orig, ph)
+    changed = [n for n, (a, b) in enumerate(
+        zip(expected.splitlines(), out.splitlines()), start=1) if a != b]
+    if len(expected.splitlines()) != len(out.splitlines()) and not changed:
+        changed = [min(len(expected.splitlines()), len(out.splitlines())) + 1]
+    if changed:
+        found.append(f"the redactor changes {_lines(changed)}")
+    return out, found
+
+
+def identity_findings(sample: str) -> List[str]:
+    """What `taxjson redact` would still find in `sample` (gate_sample's
+    findings), as counts and line numbers — never the values."""
+    return gate_sample(sample)[1]
+
+
+def _safe_default_name(stem: str) -> str:
+    """The input file's stem as a default brokerage name, with any
+    account id it carries (IB names a download after the account:
+    'U1234567_20250101_20251231') replaced by a 9990 placeholder and any
+    private-denylist match by REDACTED. The stem went into the prompt
+    (brokerage, class and DEFAULT_ACCOUNT names) and the 'Calling ...'
+    line unscanned while the gate checked only the sample lines
+    (A2-0447)."""
+    from taxjson.bin.taxjson_redact import (
+        redacted_name, load_denylist, compile_patterns, DenylistError)
+    try:
+        pats, _bad = compile_patterns(load_denylist())
+    except DenylistError:
+        pats = []          # identity_findings refuses the run on this
+    name = redacted_name(Path(stem + ".x"), {}, pats)
+    return name[:-len(".redacted.x")]
+
+
+def _default_class_name(brokerage_name: str) -> str:
+    parts = re.findall(r'[A-Za-z0-9]+', brokerage_name)
+    if not parts:
+        return "NewBrokerage"
+    return ''.join(p.capitalize() for p in parts) + "Brokerage"
+
+
+def _call_claude(system_text: str, user_text: str, model_id: str) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        emit_line("taxjson-generate-parser: error: ANTHROPIC_API_KEY is not set", file=sys.stderr)
+        sys.exit(1)
+    try:
+        import anthropic
+    except ImportError:
+        emit_line(
+            "taxjson-generate-parser: error: anthropic SDK not installed. Run:\n"
+            "    pip install '.[generate-parser]'",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=8192,
+            system=[{
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": user_text}],
+        )
+    except anthropic.APIStatusError as e:
+        emit_line(f"taxjson-generate-parser: error: Claude API error ({e.status_code}): {e.message}", file=sys.stderr)
+        sys.exit(1)
+
+    usage = response.usage
+    cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+    cache_write = getattr(usage, 'cache_creation_input_tokens', 0) or 0
+    print(
+        f"Claude usage: input={usage.input_tokens} "
+        f"cache_write={cache_write} cache_read={cache_read} "
+        f"output={usage.output_tokens}",
+        file=sys.stderr,
+    )
+    return "".join(b.text for b in response.content if b.type == "text")
+
+
+def _call_gemini(system_text: str, user_text: str, model_id: str) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        emit_line("taxjson-generate-parser: error: GEMINI_API_KEY is not set", file=sys.stderr)
+        sys.exit(1)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=FutureWarning)
+            import google.generativeai as genai
+    except ImportError:
+        emit_line(
+            "taxjson-generate-parser: error: google-generativeai not installed. Run:\n"
+            "    pip install '.[generate-parser]'",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_id)
+    # Gemini has no system+cache split; concatenate.
+    response = model.generate_content(system_text + "\n\n" + user_text)
+    return response.text
+
+
+_DEFAULT_MODELS = {
+    "claude": "claude-opus-4-7",
+    "gemini": "gemini-2.5-flash",
+}
+
+
+def main():
+    here = Path(__file__).resolve().parents[1]
+    base_path = here / 'lib' / 'brokerages' / 'base.py'
+    example_path = here / 'lib' / 'brokerages' / 'questrade.py'
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Draft a Python brokerage parser from a sample CSV using an LLM. "
+            "Output is a Python file for manual review, NOT parsed transactions. "
+            "PRIVACY: the first --sample-lines lines of the file are sent to "
+            "the provider. Run `taxjson redact` on a real export first; a "
+            "sample that still carries anything the redactor would change "
+            "(an account id, name, e-mail, address, SIN, private-denylist "
+            "match) or lines it lists for review is refused, and a sample "
+            "that passes is sent as the redactor's copy."
+        ),
+    )
+    parser.add_argument("input_file", help="Sample CSV from the new brokerage")
+    parser.add_argument(
+        "-o", "--output", required=True,
+        help="Path to write the draft parser .py file to",
+    )
+    parser.add_argument(
+        "--provider", choices=["claude", "gemini"], default="claude",
+        help="Which LLM to use (default: claude).",
+    )
+    parser.add_argument(
+        "--model", default=None,
+        help=(
+            "Override the model ID. Defaults: "
+            f"claude→{_DEFAULT_MODELS['claude']}, gemini→{_DEFAULT_MODELS['gemini']}"
+        ),
+    )
+    parser.add_argument(
+        "--brokerage-name", default=None,
+        help="Human-readable brokerage name (e.g. 'Charles Schwab'). "
+             "Defaults to the input file stem.",
+    )
+    parser.add_argument(
+        "--class-name", default=None,
+        help="Override the generated class name. Default derived from --brokerage-name.",
+    )
+    parser.add_argument(
+        "--default-account", default=None,
+        help="DEFAULT_ACCOUNT class attribute. Defaults to --brokerage-name.",
+    )
+    parser.add_argument(
+        "--sample-lines", type=int, default=30,
+        help="Number of leading CSV lines to send to the model (default: 30)",
+    )
+    parser.add_argument(
+        "--allow-unredacted", action="store_true",
+        help="Send the sample as it is, even when it still carries "
+             "identity shapes (account ids, names, contact details, "
+             "denylist matches) or lines the redactor lists for review.",
+    )
+    args = parser.parse_args()
+    if args.sample_lines < 1:
+        parser.error(f"--sample-lines must be at least 1 "
+                     f"(got {args.sample_lines})")
+
+    from taxjson.lib.brokerages.base import shown_name
+    input_path = Path(args.input_file)
+    output_path = Path(args.output)
+    if not input_path.exists():
+        # Exit 2: a missing input is a usage error (A2-1435).
+        emit_line(f"taxjson-generate-parser: error: file not found: {shown_name(input_path)}", file=sys.stderr)
+        sys.exit(2)
+    if not base_path.exists() or not example_path.exists():
+        emit_line(f"taxjson-generate-parser: error: base.py or questrade.py not found in {here / 'lib' / 'brokerages'}",
+                  file=sys.stderr)
+        sys.exit(1)
+
+    brokerage_name = args.brokerage_name or _safe_default_name(input_path.stem)
+    if not args.brokerage_name and brokerage_name != input_path.stem:
+        emit_line("note: the file name carries an account id or a denylisted "
+                  "word; the default brokerage name uses a placeholder "
+                  f"({brokerage_name}) — pass --brokerage-name to choose one",
+                  file=sys.stderr)
+    class_name = args.class_name or _default_class_name(brokerage_name)
+    default_account = args.default_account or brokerage_name
+    model_id = args.model or _DEFAULT_MODELS[args.provider]
+
+    from taxjson.lib.brokerages.base import BrokerageParseError
+    try:
+        sample = _read_sample(input_path, args.sample_lines)
+    except BrokerageParseError as e:
+        emit_line(f"taxjson-generate-parser: error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not sample:
+        emit_line(f"taxjson-generate-parser: error: {shown_name(input_path)} is empty", file=sys.stderr)
+        sys.exit(1)
+    # The sample goes to a third-party API, and broker exports keep the
+    # holder's name, account id and address in their first lines: scan it
+    # with the redactor's detectors (and the private denylist) and refuse
+    # unless told otherwise (R1-342).
+    redacted, found = gate_sample(sample)
+    if found and not args.allow_unredacted:
+        emit_line(f"taxjson-generate-parser: error: the first {args.sample_lines} "
+                  f"line(s) of {shown_name(input_path)} still carry personal data "
+                  f"({', '.join(found)}) and would be sent to {args.provider}. "
+                  f"Run `taxjson redact {shown_name(input_path)}` and use its output; "
+                  f"once you have read the lines it lists for review and "
+                  f"found no personal data there, or to send it anyway, "
+                  f"pass --allow-unredacted (the file is then sent as it is).",
+                  file=sys.stderr)
+        sys.exit(1)
+    if found:
+        emit_line(f"warning: sending a sample that carries personal data "
+                  f"({', '.join(found)}) — --allow-unredacted", file=sys.stderr)
+    else:
+        # Only the reviewed, redacted copy goes out (it differs from the
+        # file at most by transaction-id pseudonyms): a change no check
+        # above could see still never leaves the machine (GitHub #80).
+        sample = redacted
+
+    system_text = _SYSTEM_TEMPLATE.format(schema_block=render_schema_prompt(), 
+        base_source=_load_text(base_path),
+        example_source=_load_text(example_path),
+    )
+    user_text = _USER_TEMPLATE.format(
+        brokerage_name=brokerage_name,
+        class_name=class_name,
+        default_account=default_account,
+        n_lines=args.sample_lines,
+        sample_csv=sample,
+    )
+
+    print(
+        f"Calling {args.provider} ({model_id}) for {brokerage_name} ({class_name})...",
+        file=sys.stderr,
+    )
+    if args.provider == "claude":
+        raw = _call_claude(system_text, user_text, model_id)
+    else:
+        raw = _call_gemini(system_text, user_text, model_id)
+
+    code = _strip_code_fences(raw)
+
+    try:
+        compile(code, str(output_path), 'exec')
+    except SyntaxError as e:
+        emit_line(
+            f"taxjson-generate-parser: error: generated code has syntax errors: {e}\n"
+            "Writing it to <output>.bad for inspection.",
+            file=sys.stderr,
+        )
+        bad_path = output_path.with_suffix(output_path.suffix + '.bad')
+        bad_path.write_text(code, encoding='utf-8')
+        sys.exit(1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(code, encoding='utf-8')
+
+    print(f"Draft parser written to {output_path}", file=sys.stderr)
+    # The hint quotes the sample's path unless its name carries an id.
+    sample_hint = (str(input_path) if shown_name(input_path) == input_path.name
+                   else str(input_path.parent / "<sample>.csv"))
+    print(
+        "\nNext steps:\n"
+        f"  1. Read {output_path} top to bottom. Verify column names match the CSV.\n"
+        "  2. Hand-test with a sample file:\n"
+        f"       python -c \"from {output_path.stem} import {class_name}; "
+        f"print({class_name}().parse_file('{sample_hint}')[:3])\"\n"
+        "  3. Confirm the model used self.* helpers — not inlined regex/date logic.\n"
+        "  4. Register the class in taxjson/bin/taxjson_brokerage.py.\n"
+        "  5. Add a test against a real CSV sample.\n",
+        file=sys.stderr,
+    )
+
+
+if __name__ == "__main__":
+    main()

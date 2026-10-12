@@ -1,0 +1,2299 @@
+"""One definition of "a gains run".
+
+Historically the semantics of a correct gains computation lived only in
+taxjson_gains.py's main(): TRANSFER strip/rewrite, missing-history
+opening synthesis, the year filter with per-action date-basis rules, the
+by_ticker rebuild, the tainted-split into manual_reporting_required,
+superficial-loss / partial-taint warnings, and fee aggregation. Every
+other consumer of compute_gains (taxjson-explain, taxjson-audit)
+re-implemented a subset and drifted — the tier-5 "explain contradicts
+the .sum" bug was a symptom.
+
+This module is the single home:
+
+    prepare_books(...)  — load-side preprocessing (transfers, missing-
+                          history openings)
+                          shared by every consumer, usable standalone
+                          (books without a full run).
+    run_gains(...)      — the full CLI-equivalent gains run, returning
+                          the exact dict taxjson-gains serializes.
+
+taxjson_gains.py main() is now argparse + load + run_gains + json.dump;
+explain and audit call the same functions, so they cannot drift.
+"""
+
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from taxjson.lib.core import TaxTransaction, get_tax_rules, is_stock_dividend
+from taxjson.lib.numeric import round_floats
+from taxjson.lib.stage_msg import emit_line, say
+from taxjson.lib.missing_history import (
+    detect_missing_history,
+    detect_superficial_loss_warnings,
+    load_missing_history,
+    synthesize_openings,
+)
+
+
+_INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU')
+
+
+def _trade_gain_total(rows) -> float:
+    """summary.total_gain: the dispositions' gains only. Income rows
+    (DIVIDEND / DIVIDEND_IN_LIEU) carry gain 0.0 today; they are left out
+    by action so the total can never absorb income (audit R1-313)."""
+    return sum(float(t.get('gain', 0.0) or 0.0) for t in rows
+               if t.get('action') not in _INCOME_ACTIONS)
+
+def load_stdin_transactions(stream=None) -> List[TaxTransaction]:
+    """The CLIs' stdin loader (naive line-based '#' comment stripping),
+    shared so taxjson-gains and taxjson-explain can't drift. Kept
+    byte-compatible with the historical inline copies rather than routed
+    through core.strip_json_comments (which is string-aware and could
+    accept inputs the old path rejected)."""
+    from taxjson.lib.core import coerce_transaction_row
+    if stream is None:
+        # UTF-8 whatever the locale, as files are read (A2-1219).
+        import io
+        from taxjson.lib.cli_diag import read_stdin_utf8
+        stream = io.StringIO(read_stdin_utf8())
+    content = "".join(line for line in stream
+                      if not line.strip().startswith('#'))
+    if not content.strip():
+        return []
+    raw = json.loads(content)
+    if not isinstance(raw, dict) or not isinstance(raw.get("transactions"),
+                                                   list):
+        # A {"Transactions": ...} document (or any JSON without the
+        # list) computed zero gains at exit 0 (audit S033-01).
+        raise ValueError(
+            "stdin: no 'transactions' list — expected a taxjson stage "
+            "document ({\"transactions\": [...]})")
+    tx_dicts = raw.get("transactions", [])
+    # Row handling is shared with load_transactions so the stdin path
+    # gets the same FUZZ #K hard guards and never silently drops a
+    # malformed row (it used to `continue` past non-dicts — a corrupted
+    # entry vanished from the ACB pool with no diagnostic).
+    return [coerce_transaction_row(t, i, "stdin")
+            for i, t in enumerate(tx_dicts)]
+
+
+# A same-position custody move (broker transfer, cross-listing journal,
+# cancel/rebook restatement) completes within days; ACATS worst cases run
+# a couple of weeks. Rows further apart than this are separate EVENTS —
+# an in-kind contribution out in February and an unrelated transfer in
+# come December must never cancel each other just because the share
+# counts happen to match.
+_TRANSFER_PAIR_MAX_GAP_DAYS = 35
+
+# The per-gap limit alone still lets a segment CHAIN: eleven rows each
+# <= 35 days apart span February..December, so a real February
+# disposition could be "netted" against unrelated rows ten months later.
+# Beyond the per-gap limit, the whole segment's lo..hi SPAN is therefore
+# capped for the zero-net drop decision. Oversized chains are REFUSED
+# outright rather than split at the largest internal gap: refusal is
+# simpler and strictly conservative — the surviving rows fall through to
+# the loud paths (the --taxable hard error, or the transfer_rewrite +
+# AmbiguousTransferDateError engine guard) instead of being silently
+# guessed into clusters. A genuine custody move (ACATS worst case,
+# cancel/rebook restatements included) completes well inside 45 days.
+_TRANSFER_SEGMENT_MAX_SPAN_DAYS = 45
+
+# How close a main-book trade of the symbol may be to a zero-net
+# TRANSFER segment before netting is refused — mirrors the engine's
+# ±30-day superficial-loss window.
+_TRANSFER_NEAR_TRADE_PAD_DAYS = 30
+
+# Stamped into `description` by taxjson-convert-tt on every hand-written
+# .tt TRANSFER row. A zero-net segment containing a declared leg is the
+# user ANSWERING the AmbiguousTransferDateError ("add a counter-TRANSFER
+# to a .tt file so the pair nets out") — the near-trade refusal must not
+# re-refuse the declared resolution it demanded (2026-09 audit).
+MANUAL_TRANSFER_DECLARATION = 'manual declaration (.tt)'
+
+# How far (days) a DECLARED .tt leg's authority reaches: only rows this
+# close to a declared leg join its netted cluster. Wide enough for a
+# multi-day broker restatement churn attested by one dated pair, narrow
+# enough that a segment gap-chained weeks past the attestation keeps
+# its own rows out of the blessing.
+_ATTEST_BLESS_PAD_DAYS = 7
+
+# Account-wide restatement detection: when at least this many DISTINCT
+# symbols in ONE account have zero-net TRANSFER clusters overlapping a
+# common date envelope (segments chained when within
+# _RESTATEMENT_CHAIN_PAD_DAYS of each other), the event is a broker
+# custody restatement — no tax event journals an account's whole
+# inventory out-and-back to zero — and its clusters net without a
+# per-symbol attestation. Below the threshold the per-symbol
+# near-trade refusal (and the DECLARED resolution path) still applies:
+# one or two symbols' churn is not evidence of an account-level event.
+_RESTATEMENT_MIN_SYMBOLS = 3
+_RESTATEMENT_CHAIN_PAD_DAYS = 3
+# One broker restatement is a FEW DAYS of churn (well under a week).
+# Without an event-level cap, pad-chaining could glue
+# unrelated per-symbol pairs weeks apart into a >= 3-symbol "event"
+# (round-five adversarial audit finding 2).
+_RESTATEMENT_EVENT_MAX_SPAN_DAYS = 7
+
+# Cross-listing journal candidates: an out-leg of X and an in-leg of a
+# DIFFERENT symbol Y, same account, equal quantity, within this many
+# days — the fingerprint of an UNMAPPED dual-listing journal (the
+# mapped ones were normalized to one symbol before this code runs and
+# net as same-symbol clusters). Surfaced as a ticker.map suggestion.
+_JOURNAL_CANDIDATE_PAD_DAYS = 7
+
+
+def _main_trade_dates(main_transactions):
+    """Per-symbol datetimes of every main-book BUYSELL/ASSIGN — BOTH the
+    trade date and the settle date (when present), regardless of the
+    quantity's sign.
+
+    Both dates (2026-09 audit finding 2): the Canada engine's ±30-day
+    superficial-loss window runs on SETTLE dates, so a loss trading
+    06-10 / settling 06-12 reaches two days further than the trade date
+    alone; collecting only t.date let a transfer pair 31 days after the
+    trade date (29 after settle) net silently while the engine, had it
+    seen the rows, would have refused.
+
+    Any sign (finding 3): a SHORT-cover loss is realized by a BUY, so a
+    disposition can hide behind either sign. The refusal only needs to
+    know "a main-book trade of this symbol is nearby", not its
+    direction — being near ANY trade is reason enough not to guess.
+    """
+    from collections import defaultdict
+    from datetime import datetime as _dt
+    out: Dict[str, list] = defaultdict(list)
+    for t in main_transactions:
+        if t.action in ('BUYSELL', 'ASSIGN'):
+            for raw in (t.date, getattr(t, 'date_settle', '') or ''):
+                if not raw:
+                    continue
+                try:
+                    out[t.symbol].append(_dt.strptime(raw, '%Y-%m-%d'))
+                except (TypeError, ValueError):
+                    continue
+    return out
+
+
+def _drop_self_cancelling_transfers(transactions, main_transactions=None,
+                                    base_currency=None,
+                                    near_trade_guard=True,
+                                    netted_segments=None):
+    """Drop TRANSFER groups that net to zero WITHIN ONE TIME CLUSTER and
+    have no intervening trade or split.
+
+    Real cross-listing journals (SAMPLM.TO out → SAMPLM.US in, where the ticker
+    map has normalized .US back to .TO) and broker-to-broker custody
+    moves (out at the old broker, in at the new, often with cancel/
+    rebook restatements between) appear as TRANSFER rows on the same
+    ticker summing to zero qty within a few days. The position
+    economically never changed; the gains engine should treat the
+    intervening "missing" period as a no-op.
+
+    Per (symbol, account), rows are first SEGMENTED in date order —
+    consecutive rows more than _TRANSFER_PAIR_MAX_GAP_DAYS apart start a
+    new segment — and each segment is judged alone. This is what keeps
+    the drop from erasing two UNRELATED real events (e.g. a taxable
+    in-kind contribution out — a CRA deemed disposition — cancelled by
+    an unrelated transfer in months later): distant rows never share a
+    segment, so neither nets to zero and both fall through to the
+    taxable hard-error / sheltered rewrite.
+
+    Safe-drop conditions (per segment):
+      * segment qty sums to zero (within epsilon)
+      * no BUYSELL/ASSIGN of the same symbol in the same account falls
+        inside the segment's date span — the user traded while the
+        position was "in transit"; surface that instead of papering over
+      * no SPLIT of the symbol (ANY account — splits are corporate-wide)
+        falls inside the span: the out and in legs would be denominated
+        in different share terms, so a zero qty sum no longer means
+        "same position".
+      * the segment's lo..hi span does not exceed
+        _TRANSFER_SEGMENT_MAX_SPAN_DAYS — see that constant for why
+        chained segments are refused rather than split.
+
+    When `main_transactions` is given (the SHELTERED-context invocation
+    only — see _handle_transfers), a segment is additionally NOT dropped
+    when any main-book trade of the symbol (trade or settle date, any
+    sign) falls within _TRANSFER_NEAR_TRADE_PAD_DAYS of its span, and a
+    main-book SPLIT inside the span blocks it too. Without this the
+    per-account dropper — which runs BEFORE the cross-account netter —
+    silently erased a same-account contribution+withdrawal pair inside a
+    loss window, and let chained rrsp→rrsp2→out hops net per-account
+    before the netter's near-sale refusal could ever see them (2026-09
+    audit finding 4). The surviving legs are rewritten and the engine's
+    AmbiguousTransferDateError forces a declaration if they matter.
+    A segment containing a MANUAL_TRANSFER_DECLARATION leg (a
+    hand-written .tt TRANSFER) bypasses that near-trade refusal only:
+    the declaration is the answer the guard exists to demand, and
+    re-refusing it would make the documented resolution path a dead
+    end. The SPLIT blocks stay unconditional — mixed share terms are
+    arithmetic, not judgment. The
+    MAIN-book invocation deliberately does NOT get this guard: taxable
+    custody moves near the account's own sales are normal (a broker move
+    mid-trading), and the taxable book's transfers are guarded by the
+    TransferValidationError hard-error path instead.
+
+    `near_trade_guard=False` (the default transfer policy, CA-SL-16 /
+    US-WASH-23: a sheltered TRANSFER is a custody move, never an
+    acquisition for the loss rule) drops the near-trade refusal, the
+    restatement pre-pass and their notes: a zero-net cluster nets
+    whatever trades sit near it, as a custody move would. The SPLIT
+    blocks and the journal-candidate post-pass stay.
+
+    `netted_segments`, when given, receives each dropped segment's rows
+    (a list per segment): the default policy's caller lists the ones
+    inside a loss's window (transfers_in_loss_windows).
+
+    Returns the filtered list plus a list of (symbol, account, count)
+    tuples for the caller to log.
+    """
+    epsilon = 1e-9
+    from collections import defaultdict
+    from datetime import datetime as _dt, timedelta as _td
+    _guarded = main_transactions is not None and near_trade_guard
+    main_trades = (_main_trade_dates(main_transactions)
+                   if _guarded else {})
+    groups: Dict[tuple, list] = defaultdict(list)
+    for idx, t in enumerate(transactions):
+        if t.action == 'TRANSFER':
+            groups[(t.symbol, t.account)].append((idx, t))
+
+    def _d(t):
+        try:
+            return _dt.strptime(t.date, '%Y-%m-%d')
+        except (TypeError, ValueError):
+            return None
+
+    def _segment(rows):
+        rows = sorted(rows, key=lambda r: (r[1].date or '',
+                                           r[1].time or ''))
+        segments: list = [[rows[0]]]
+        for prev, cur in zip(rows, rows[1:]):
+            pd, cd = _d(prev[1]), _d(cur[1])
+            if pd is None or cd is None \
+                    or (cd - pd).days > _TRANSFER_PAIR_MAX_GAP_DAYS:
+                segments.append([cur])
+            else:
+                segments[-1].append(cur)
+        return segments
+
+    seg_by_key = {k: _segment(v) for k, v in groups.items()}
+
+    # PRE-PASS (sheltered invocation only): account-wide restatement
+    # detection. Per account, chain zero-net qualified segments whose
+    # date spans sit within _RESTATEMENT_CHAIN_PAD_DAYS of each other;
+    # a chain covering >= _RESTATEMENT_MIN_SYMBOLS distinct symbols is
+    # one broker custody event (a restatement can journal every
+    # position of one account out-and-back over a few days) —
+    # its segments net without per-symbol attestation. The evidence is
+    # IN the data: no tax event journals an account's whole inventory
+    # out-and-back to zero, and the per-symbol near-trade refusal was
+    # blind to the cross-symbol correlation, demanding one DECLARED
+    # attestation per symbol for a single event.
+    restatement_rows: set = set()
+    if _guarded:
+        _by_acct: Dict[str, list] = defaultdict(list)
+        for (symbol, account), segs in seg_by_key.items():
+            for seg in segs:
+                if abs(sum(t.quantity for _, t in seg)) > epsilon:
+                    continue
+                _pd = [d for d in (_d(t) for _, t in seg)
+                       if d is not None]
+                if not _pd or (max(_pd) - min(_pd)).days \
+                        > _TRANSFER_SEGMENT_MAX_SPAN_DAYS:
+                    continue
+                # Round-five adversarial audit, three discriminators
+                # that keep genuine tax events out of the pool:
+                # (a) LEG ORDER — a restatement journals OUT and back
+                #     IN; an in-kind contribution+withdrawal pair is
+                #     IN-first. The first non-declared leg must be an
+                #     out-leg (declared legs are the user's attest
+                #     rows, excluded from the order test).
+                # Same-date/time ties resolve by input order (.tt
+                # rows default to 09:30:00, so ties are common). A
+                # misordered tie fails SAFE in the in-first direction
+                # (falls back to the refusal/attestation path); the
+                # out-first direction is what the discriminator
+                # accepts anyway.
+                _real = [t for _, t in sorted(
+                    seg, key=lambda r: (r[1].date or '',
+                                        r[1].time or ''))
+                    if (t.description or '')
+                    != MANUAL_TRANSFER_DECLARATION]
+                if not _real or _real[0].quantity >= 0:
+                    continue
+                # (b) GUARDED SEGMENTS never qualify — a segment with
+                #     an in-span trade/SPLIT is refused by the main
+                #     loop and must not raise the symbol count here.
+                _sd_lo = min(t.date for _, t in seg)
+                _sd_hi = max(t.date for _, t in seg)
+                if any((t.action in ('BUYSELL', 'ASSIGN')
+                        and t.symbol == symbol
+                        and t.account == account
+                        and t.date
+                        and _sd_lo <= t.date <= _sd_hi)
+                       or (t.action == 'SPLIT' and t.symbol == symbol
+                           and t.date
+                           and _sd_lo <= t.date <= _sd_hi)
+                       for t in transactions):
+                    continue
+                # MAIN-book SPLITs disqualify too (corporate-wide,
+                # mirroring the drop loop's refusal): a guarded
+                # symbol must not raise the event's symbol count and
+                # launder its siblings past the near-trade refusal
+                # (round-six adversarial audit finding 3).
+                if main_transactions is not None and any(
+                        t.action == 'SPLIT' and t.symbol == symbol
+                        and t.date and _sd_lo <= t.date <= _sd_hi
+                        for t in main_transactions):
+                    continue
+                _by_acct[account].append(
+                    (min(_pd), max(_pd), symbol, seg))
+        _cpad = _td(days=_RESTATEMENT_CHAIN_PAD_DAYS)
+        _evcap = _td(days=_RESTATEMENT_EVENT_MAX_SPAN_DAYS)
+        for account, entries in _by_acct.items():
+            entries.sort(key=lambda e: e[0])
+            event: list = []
+            ev_lo = ev_hi = None
+
+            def _flush(ev, acct):
+                syms = {s for _, _, s, _ in ev}
+                if len(syms) < _RESTATEMENT_MIN_SYMBOLS:
+                    return
+                lo = min(e[0] for e in ev)
+                hi = max(e[1] for e in ev)
+                for _, _, _, seg in ev:
+                    for idx, _t in seg:
+                        restatement_rows.add(idx)
+                say("note", f"account-wide restatement detected ({acct}): "
+                    f"{len(syms)} symbols share zero-net TRANSFER "
+                    f"clusters over {lo:%Y-%m-%d} to {hi:%Y-%m-%d}",
+                    ["Netted as one custody event (no attestation "
+                     "needed)."],
+                    legacy=f"NOTE: account-wide restatement detected "
+                    f"({acct}): {len(syms)} symbols share zero-net "
+                    f"TRANSFER clusters over {lo:%Y-%m-%d}.."
+                    f"{hi:%Y-%m-%d} — netted as one custody event "
+                    f"(no attestation needed).")
+
+            for e in entries:
+                # (c) EVENT SPAN CAP — one broker event is a few days
+                #     of churn; pad-chaining must not glue unrelated
+                #     pairs weeks apart into a symbol count. A segment
+                #     that would stretch the event past the cap starts
+                #     a new event instead.
+                if event and (e[0] > ev_hi + _cpad
+                              or (max(ev_hi, e[1]) - min(ev_lo, e[0]))
+                              > _evcap):
+                    _flush(event, account)
+                    event, ev_lo, ev_hi = [], None, None
+                event.append(e)
+                ev_lo = e[0] if ev_lo is None else min(ev_lo, e[0])
+                ev_hi = e[1] if ev_hi is None else max(ev_hi, e[1])
+            if event:
+                _flush(event, account)
+
+    drop_idx = set()
+    dropped = []
+    for (symbol, account), rows in groups.items():
+        segments = seg_by_key[(symbol, account)]
+        n_dropped = 0
+        for seg in segments:
+            net_qty = sum(t.quantity for _, t in seg)
+            if abs(net_qty) > epsilon:
+                continue
+            dates = [t.date for _, t in seg]
+            date_lo, date_hi = min(dates), max(dates)
+            pdates = [d for d in (_d(t) for _, t in seg) if d is not None]
+            # Chained-segment residue: per-gap clustering alone lets
+            # consecutive <=35d gaps chain a Feb..Dec span. Refuse the
+            # zero-net drop for oversized spans (see the constant).
+            if pdates and (max(pdates) - min(pdates)).days \
+                    > _TRANSFER_SEGMENT_MAX_SPAN_DAYS:
+                continue
+            blocked = any(
+                (t.action in ('BUYSELL', 'ASSIGN')
+                 and t.symbol == symbol and t.account == account
+                 and t.date and date_lo <= t.date <= date_hi)
+                or (t.action == 'SPLIT' and t.symbol == symbol
+                    and t.date and date_lo <= t.date <= date_hi)
+                for t in transactions
+            )
+            if blocked:
+                continue
+            blessed_seg = seg
+            if _guarded and pdates:
+                lo, hi = min(pdates), max(pdates)
+                _pad = _td(days=_TRANSFER_NEAR_TRADE_PAD_DAYS)
+                near = any(lo - _pad <= td_ <= hi + _pad
+                           for td_ in main_trades.get(symbol, ()))
+                # Segments of a detected account-wide restatement net
+                # regardless of nearby taxable trades — the event-level
+                # evidence outranks the per-symbol ambiguity. The
+                # SPLIT-in-span checks below still apply (share-term
+                # arithmetic is unconditional).
+                # Segments carrying DECLARED legs keep the
+                # attestation path (bless-pad narrowing) even inside a
+                # detected event — the event bypass must not widen a
+                # declaration's reach (round-five audit finding 3).
+                _has_decl = any((t.description or '')
+                                == MANUAL_TRANSFER_DECLARATION
+                                for _, t in seg)
+                if near and not _has_decl                         and seg[0][0] in restatement_rows:
+                    near = False
+                # Near ANY main-book trade of the symbol (trade or
+                # settle date, either sign): don't guess — keep the
+                # legs so the rewrite + engine guard force a
+                # declaration if they would act as wash triggers.
+                # EXCEPT rows covered by a hand-written .tt DECLARED
+                # leg: that IS the demanded declaration (the
+                # counter-TRANSFER / attestation the error message
+                # prescribes). The blessing reaches only rows within
+                # _ATTEST_BLESS_PAD_DAYS of a declared leg — a
+                # declared June pair must not silently net a genuine
+                # July contribution that gap-chained into the same
+                # segment (2026-09 round-four audit finding 1).
+                decl_dates = [d for (_, t), d in
+                              ((r, _d(r[1])) for r in seg)
+                              if d is not None
+                              and (t.description or '')
+                              == MANUAL_TRANSFER_DECLARATION]
+                if near and not decl_dates:
+                    # The engine guard downstream will prescribe a
+                    # counter-TRANSFER — wrong for a cluster that
+                    # ALREADY nets to zero (it would unbalance it).
+                    # Tell the user the attestation form instead.
+                    _q = abs(seg[0][1].quantity)
+                    say("note", f"{symbol} ({account}): a zero-net "
+                        f"TRANSFER cluster ({len(seg)} rows, {date_lo} to "
+                        f"{date_hi}) was NOT netted out",
+                        [f"It sits within {_TRANSFER_NEAR_TRADE_PAD_DAYS} "
+                         f"days of a taxable-book trade of the symbol. If "
+                         f"this is broker churn (listing flip / custody "
+                         f"restatement — ownership never changed), attest "
+                         f"it by adding a hand-written zero-net pair to a "
+                         f".tt file in the same account (the trailing "
+                         f"DECLARED token marks a deliberate declaration), "
+                         f"e.g.:",
+                         f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
+                         f"{_q:g}  CAD  0.0  0.0  DECLARED",
+                         f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
+                         f"-{_q:g}  CAD  0.0  0.0  DECLARED",
+                         "Declared legs let the cluster net. If any leg "
+                         "was a genuine in-kind contribution or "
+                         "withdrawal, record THAT leg as a BUYSELL dated "
+                         "the true event day instead."],
+                        legacy=
+                        f"NOTE: {symbol} ({account}): a zero-net "
+                        f"TRANSFER cluster ({len(seg)} rows, "
+                        f"{date_lo}..{date_hi}) was NOT netted out "
+                        f"because it sits within "
+                        f"{_TRANSFER_NEAR_TRADE_PAD_DAYS} days of a "
+                        f"taxable-book trade of the symbol. If this is "
+                        f"broker churn (listing flip / custody "
+                        f"restatement — ownership never changed), "
+                        f"attest it by adding a hand-written zero-net "
+                        f"pair to a .tt file in the same account "
+                        f"(the trailing DECLARED token marks a "
+                        f"deliberate declaration), e.g.:\n"
+                        f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
+                        f"{_q:g}  CAD  0.0  0.0  DECLARED\n"
+                        f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
+                        f"-{_q:g}  CAD  0.0  0.0  DECLARED\n"
+                        f"  — declared legs let the cluster net. If any "
+                        f"leg was a genuine in-kind contribution or "
+                        f"withdrawal, record THAT leg as a BUYSELL "
+                        f"dated the true event day instead.")
+                    continue
+                if near and decl_dates:
+                    _bpad = _td(days=_ATTEST_BLESS_PAD_DAYS)
+                    blessed_seg = [
+                        (idx, t) for idx, t in seg
+                        if (_d(t) is not None
+                            and any(abs(_d(t) - dd) <= _bpad
+                                    for dd in decl_dates))]
+                    if len(blessed_seg) < len(seg):
+                        bal = sum(t.quantity for _, t in blessed_seg)
+                        if abs(bal) > epsilon:
+                            # The declared legs don't net within their
+                            # own reach — refuse the whole segment; the
+                            # survivors face the rewrite + guard.
+                            say("note", f"{symbol} ({account}): the "
+                                f"DECLARED attestation does not net to "
+                                f"zero within {_ATTEST_BLESS_PAD_DAYS} "
+                                f"days of its own legs — nothing was "
+                                f"netted",
+                                [f"Cover the whole cluster ({date_lo} to "
+                                 f"{date_hi}) or move the declared pair "
+                                 f"next to the rows it attests."],
+                                legacy=
+                                f"NOTE: {symbol} ({account}): the "
+                                f"DECLARED attestation does not net to "
+                                f"zero within {_ATTEST_BLESS_PAD_DAYS} "
+                                f"days of its own legs — nothing was "
+                                f"netted. Cover the whole cluster "
+                                f"({date_lo}..{date_hi}) or move the "
+                                f"declared pair next to the rows it "
+                                f"attests.")
+                            continue
+            # Main-book SPLIT inside the span: splits are
+            # corporate-wide, so the legs are in different terms
+            # (whatever the transfer policy).
+            if main_transactions is not None and any(
+                    t.action == 'SPLIT' and t.symbol == symbol
+                    and t.date and date_lo <= t.date <= date_hi
+                    for t in main_transactions):
+                continue
+            for idx, _ in blessed_seg:
+                drop_idx.add(idx)
+            n_dropped += len(blessed_seg)
+            if netted_segments is not None and blessed_seg:
+                netted_segments.append([t for _, t in blessed_seg])
+        if n_dropped:
+            dropped.append((symbol, account, n_dropped))
+
+    # POST-PASS (sheltered invocation only): unmapped cross-listing
+    # journal candidates. A mapped dual listing (ticker.map
+    # TOBASE/JOURNAL) was normalized to ONE symbol before this code
+    # ran and netted as a same-symbol cluster above. An UNMAPPED pair
+    # (different roots — SAMPLQ.US/SAMPLP.TO) survives as an out-leg of X
+    # and an in-leg of Y that nothing can net: surface the fingerprint
+    # (same account, equal qty, opposite signs, within
+    # _JOURNAL_CANDIDATE_PAD_DAYS) as a ticker.map suggestion instead
+    # of silently feeding the loss walk a disposal of X and an
+    # acquisition of Y.
+    if main_transactions is not None:
+        _left = [t for i, t in enumerate(transactions)
+                 if i not in drop_idx and t.action == 'TRANSFER']
+        _warned = set()
+        for a in _left:
+            da = _d(a)
+            if a.quantity >= 0 or da is None:
+                continue
+            for b in _left:
+                db = _d(b)
+                if (b.quantity <= 0 or db is None
+                        or b.account != a.account
+                        or b.symbol == a.symbol
+                        or abs(b.quantity + a.quantity)
+                        > max(epsilon, 1e-6 * abs(b.quantity))
+                        or abs((db - da).days)
+                        > _JOURNAL_CANDIDATE_PAD_DAYS):
+                    continue
+                key = (a.symbol, b.symbol, a.account)
+                if key in _warned:
+                    continue
+                _warned.add(key)
+                # The conventional direction: the listing in another
+                # currency maps onto the base-currency one (audit
+                # S076-18; lib/cross_listings.tobase_direction).
+                from taxjson.lib.cross_listings import tobase_direction
+                _frm, _to = tobase_direction(a.symbol, b.symbol,
+                                             base_currency)
+                say("note", f"possible unmapped cross-listing journal in "
+                    f"{a.account}: {a.symbol} out {a.quantity:g} "
+                    f"({a.date}) pairs with {b.symbol} in "
+                    f"+{b.quantity:g} ({b.date})",
+                    [f"If these are the SAME security's two listings, "
+                     f"add `TOBASE {_frm} {_to}` to "
+                     f"ticker.map so the legs net as one symbol; if they "
+                     f"are different securities, ignore this note."],
+                    legacy=f"NOTE: possible unmapped cross-listing journal "
+                    f"in {a.account}: {a.symbol} out "
+                    f"{a.quantity:g} ({a.date}) pairs with "
+                    f"{b.symbol} in +{b.quantity:g} ({b.date}). If "
+                    f"these are the SAME security's two listings, "
+                    f"add `TOBASE {_frm} {_to}` to "
+                    f"ticker.map so the legs net as one symbol; if "
+                    f"they are different securities, ignore this "
+                    f"note.")
+
+    if not drop_idx:
+        return transactions, dropped
+
+    filtered = [t for i, t in enumerate(transactions) if i not in drop_idx]
+    return filtered, dropped
+
+
+# type of a netted own-account registered move kept in the wash context
+# as a balance-only TRANSFER row (see _net_cross_account_transfers).
+OWN_MOVE_TYPE = 'own_account_move'
+
+
+def _net_cross_account_transfers(transactions, main_transactions=(),
+                                 netted_out: Optional[list] = None, *,
+                                 near_trade_guard: bool = True,
+                                 netted_segments: Optional[list] = None):
+    """Net out TRANSFER groups that cancel at the SYMBOL level across
+    accounts within one time cluster — a registered-to-registered move
+    of the user's own shares (rrsp → rrsp2). Ownership never changed, so
+    the receiving leg is not an acquisition for wash purposes, and the
+    symbol-level sheltered balance is unchanged. Same clustering and
+    zero-net rules as the per-account drop; used only on the
+    wash-context (--sheltered) book, where balances are consumed at the
+    symbol level.
+
+    Two refusals (2026-09 adversarial audit — a contribution INTO one
+    registered account plus an in-kind withdrawal FROM another is
+    byte-identical to a custody move, and netting it hid the canonical
+    permanently-denied superficial-loss trigger):
+      * a SPLIT of the symbol inside the segment's span blocks the
+        drop (share terms changed — mirrors the per-account dropper);
+      * a segment within _TRANSFER_NEAR_TRADE_PAD_DAYS of any MAIN-book
+        (taxable) trade of the same symbol — trade OR settle date,
+        either quantity sign (see _main_trade_dates: the engine's
+        window runs on settle dates, and a short-cover loss is realized
+        by a BUY) — is NOT netted: the surviving legs are rewritten
+        and, if they would actually act as wash triggers, the engine's
+        AmbiguousTransferDateError makes the user declare what they
+        were. Custody moves away from loss windows still net silently.
+
+    Segments whose lo..hi span exceeds _TRANSFER_SEGMENT_MAX_SPAN_DAYS
+    are never netted (chained-gap residue — see that constant).
+
+    `near_trade_guard=False` (the default transfer policy, CA-SL-16 /
+    US-WASH-23) drops the near-trade refusal only: the SPLIT guard reads
+    `main_transactions` whatever the policy (a main-book split changes
+    the share terms of the legs). `netted_segments`, when given,
+    receives each netted segment's rows (a list per segment) — the
+    default policy's caller lists those inside a loss's window.
+
+    The netted legs are removed from the returned list and, when
+    `netted_out` is given, appended to it: _handle_transfers keeps them
+    in the wash context as balance-only rows (action TRANSFER,
+    type=OWN_MOVE_TYPE) — audit S018-05 / G2-0. The
+    Canada engine's s.54 still-held test runs PER HOLDER (each
+    registered account on its own), so dropping both legs left the
+    receiving account short (its in-window rebuy looked sold: a
+    permanent denial was missed) and the sending account long (an
+    in-window round trip looked held: a denial was invented). A
+    TRANSFER row is never a wash trigger and never touches a pool; it
+    only moves the per-account balance, which is what an own-account
+    move does."""
+    epsilon = 1e-9
+    from collections import defaultdict
+    from datetime import datetime as _dt, timedelta as _td
+    groups: Dict[str, list] = defaultdict(list)
+    for idx, t in enumerate(transactions):
+        if t.action == 'TRANSFER':
+            groups[t.symbol].append((idx, t))
+
+    def _d(t):
+        try:
+            return _dt.strptime(t.date, '%Y-%m-%d')
+        except (TypeError, ValueError):
+            return None
+
+    main_trades = (_main_trade_dates(main_transactions)
+                   if near_trade_guard else {})
+
+    drop_idx = set()
+    for symbol, rows in groups.items():
+        rows = sorted(rows, key=lambda r: (r[1].date or '',
+                                           r[1].time or ''))
+        segments: list = [[rows[0]]]
+        for prev, cur in zip(rows, rows[1:]):
+            pd, cd = _d(prev[1]), _d(cur[1])
+            if pd is None or cd is None \
+                    or (cd - pd).days > _TRANSFER_PAIR_MAX_GAP_DAYS:
+                segments.append([cur])
+            else:
+                segments[-1].append(cur)
+        for seg in segments:
+            if abs(sum(t.quantity for _, t in seg)) > epsilon:
+                continue
+            # A one-sided segment (all same sign) can't be a move.
+            if not (any(t.quantity > 0 for _, t in seg)
+                    and any(t.quantity < 0 for _, t in seg)):
+                continue
+            dates = [_d(t) for _, t in seg if _d(t) is not None]
+            if not dates:
+                continue
+            lo, hi = min(dates), max(dates)
+            # Chained-gap residue: refuse oversized spans outright.
+            if (hi - lo).days > _TRANSFER_SEGMENT_MAX_SPAN_DAYS:
+                continue
+            # SPLIT inside the span: legs are in different share terms.
+            if any(t.action == 'SPLIT' and t.symbol == symbol
+                   and _d(t) is not None and lo <= _d(t) <= hi
+                   for t in list(transactions)
+                   + list(main_transactions)):
+                continue
+            # Near a taxable trade (either sign, trade or settle
+            # date): don't guess — let the rewrite + engine guard
+            # force a declaration if it matters.
+            _pad = _td(days=_TRANSFER_NEAR_TRADE_PAD_DAYS)
+            if near_trade_guard and any(
+                    lo - _pad <= sd <= hi + _pad
+                    for sd in main_trades.get(symbol, ())):
+                continue
+            for idx, _ in seg:
+                drop_idx.add(idx)
+            if netted_segments is not None:
+                netted_segments.append([t for _, t in seg])
+    if not drop_idx:
+        return transactions
+    if netted_out is not None:
+        netted_out.extend(t for i, t in enumerate(transactions)
+                          if i in drop_idx)
+    return [t for i, t in enumerate(transactions) if i not in drop_idx]
+
+
+class TransferValidationError(ValueError):
+    """A taxable input contains TRANSFER rows the engine must not book.
+
+    Raised (never sys.exit) so library consumers — tests, future
+    embedders — decide the failure mode. CLI entry points catch it
+    and exit 1 with the message on stderr."""
+
+
+# The project's own terms in the books' notes (re-audit A2-1255 /
+# A2-1323): a US .sum never reads "superficial-loss walk", "ACB" or
+# "registered accounts". None (a standalone caller with no country):
+# neutral wording.
+_BOOK_WORDS = {
+    "canada": {"walk": "superficial-loss walk", "pool": "ACB pooling",
+               "reg": "registered accounts",
+               "reg_one": "a registered account (TFSA/RRSP)",
+               "denial": "superficial-loss denial"},
+    "usa": {"walk": "wash-sale walk", "pool": "basis tracking",
+            "reg": "retirement (IRA) accounts",
+            "reg_one": "a retirement account (IRA/401(k))",
+            "denial": "wash-sale denial"},
+    None: {"walk": "loss-denial walk", "pool": "cost tracking",
+           "reg": "sheltered accounts",
+           "reg_one": "a sheltered (tax-advantaged) account",
+           "denial": "loss denial"},
+}
+
+
+def _book_words(country: Optional[str]) -> Dict[str, str]:
+    return _BOOK_WORDS.get(country, _BOOK_WORDS[None])
+
+
+def _handle_transfers(transactions, sheltered_transactions, *, taxable,
+                      base_currency=None, country=None,
+                      transfers_as_acquisitions=False,
+                      moves_out: Optional[list] = None):
+    """Pre-process TRANSFER rows before they reach the gains engine.
+
+    The --sheltered file is for cross-account wash-sale context only. Its
+    TRANSFER rows are informational for ownership tracking and are not
+    buy/sell events — they're stripped unconditionally so they can't
+    falsely trigger wash-sale detection on the main file's losses.
+
+    For the main input we first auto-drop self-cancelling TRANSFER pairs
+    (cross-listing journals etc. — see _drop_self_cancelling_transfers),
+    then for whatever TRANSFERs remain:
+      --taxable: hard-error. The user must replace transfers with the
+                 actual buy/sell history.
+      default (sheltered): rewrite each TRANSFER to BUYSELL using its
+                 net_amount as approximate cost basis. Approximate is
+                 acceptable because sheltered gains aren't reported on
+                 the return — the rewrite exists so the sheltered run
+                 still tracks the position in inventory_long/short for
+                 the holdings.toml / inventory report.
+
+    The sheltered CONTEXT's unmatched TRANSFER rows (the default policy,
+    CA-SL-16 / US-WASH-23): a custody move between accounts — their
+    shares count as held, but a transfer-in is never an acquisition for
+    the superficial-loss / wash-sale window (core.TRANSFER_CUSTODY_TYPE);
+    run_gains warns once about each one inside a taxable loss's window.
+    `transfers_as_acquisitions=True` ([settings] transfers_as_acquisitions
+    = true, CA-SL-17 / US-WASH-24) restores the strict treatment below:
+    near-trade refusals, and the survivors booked as acquisitions /
+    disposals whose arrival date the engine refuses to guess
+    (AmbiguousTransferDateError).
+
+    `moves_out` (default policy only): receives the sheltered context's
+    netted transfer clusters (a zero-net cluster in one account, a move
+    between two of your accounts), one list of rows each — netted here
+    whatever trades sit near them, so run_gains lists those inside a
+    loss's window in its one transfer warning (one leg may have been a
+    contribution: pre-release review M1).
+    """
+    # The --sheltered context file's TRANSFER rows need three-way
+    # handling, not the old unconditional strip. Stripping everything
+    # hid a GENUINE acquisition from superficial-loss detection: an
+    # in-kind contribution into an RRSP/TFSA within the ±30-day window
+    # is the canonical PERMANENTLY-denied superficial loss (s.40(2)(g),
+    # affiliated-person acquisition), and parsers emit exactly a
+    # TRANSFER row for it — the loss was silently claimed. So:
+    #   1. custody noise (same-account broker moves, cancel/rebook
+    #      restatements) cancels via the pair drop;
+    #   2. registered-to-registered moves between the user's OWN
+    #      sheltered accounts (rrsp→rrsp2) net at the symbol level —
+    #      moving your own shares acquires nothing, and treating the
+    #      receiving leg as a buy would fabricate wash triggers;
+    #   3. what survives is a real acquisition or disposal by the
+    #      sheltered side — rewritten to BUYSELL so the wash walk sees
+    #      it (as trigger and in still-held balances).
+    # Own-account custody moves `taxjson run` pairs into a US blended
+    # book (core.LOT_MOVE_TYPE, US-BASIS-05) are not transfers in or out
+    # of the taxpayer's hands: kept aside here, handed back unchanged.
+    from taxjson.lib.core import LOT_MOVE_TYPE
+    _lot_moves = [t for t in transactions
+                  if t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE]
+    if _lot_moves:
+        transactions = [t for t in transactions
+                        if not (t.action == 'TRANSFER'
+                                and t.type == LOT_MOVE_TYPE)]
+        transactions, sheltered_transactions = _handle_transfers(
+            transactions, sheltered_transactions, taxable=taxable,
+            base_currency=base_currency, country=country,
+            transfers_as_acquisitions=transfers_as_acquisitions,
+            moves_out=moves_out)
+        return transactions + _lot_moves, sheltered_transactions
+    n_sh_before = sum(1 for t in sheltered_transactions
+                      if t.action == 'TRANSFER')
+    # The SHELTERED-side dropper gets main-book visibility so it applies
+    # the same near-trade refusal as the cross-account netter — it runs
+    # FIRST, so without the guard a same-account contribution+withdrawal
+    # pair inside a loss window vanished before the netter could refuse.
+    # The main-book invocation below stays unguarded on purpose (taxable
+    # custody moves near own-sales are normal; the taxable book has the
+    # TransferValidationError hard-error path instead).
+    # Default policy (CA-SL-16 / US-WASH-23): no near-trade refusal —
+    # a transfer is a custody move whatever trades sit near it.
+    _moves = (moves_out if moves_out is not None
+              and not transfers_as_acquisitions else None)
+    sheltered_transactions, _sh_pairs = _drop_self_cancelling_transfers(
+        sheltered_transactions, main_transactions=transactions,
+        base_currency=base_currency,
+        near_trade_guard=transfers_as_acquisitions,
+        netted_segments=_moves)
+    _own_moves: list = []
+    # The main book always reaches the netter: its SPLIT guard holds in
+    # both policies; only the near-trade refusal is the strict one's.
+    sheltered_transactions = _net_cross_account_transfers(
+        sheltered_transactions, main_transactions=transactions,
+        netted_out=_own_moves,
+        near_trade_guard=transfers_as_acquisitions,
+        netted_segments=_moves)
+    from taxjson.lib.core import TRANSFER_CUSTODY_TYPE
+    # type='transfer_rewrite' (strict): the engine refuses to use the
+    # row as a wash TRIGGER (its date may be a custody-arrival date,
+    # not an acquisition date) while still counting it in still-held
+    # balances, which are date-insensitive. TRANSFER_CUSTODY_TYPE
+    # (default): held, never a trigger (core.not_a_purchase).
+    _sh_type = ('transfer_rewrite' if transfers_as_acquisitions
+                else TRANSFER_CUSTODY_TYPE)
+    n_sh_rewritten = 0
+    _sh_out = []
+    for t in sheltered_transactions:
+        if t.action == 'TRANSFER':
+            t = TaxTransaction(**{**t.to_dict(), 'action': 'BUYSELL',
+                                  'type': _sh_type})
+            n_sh_rewritten += 1
+        _sh_out.append(t)
+    # Netted own-account moves stay as balance-only TRANSFER rows: the
+    # per-holder still-held test needs each registered account's real
+    # balance (see _net_cross_account_transfers). The engines never
+    # treat a TRANSFER as a trigger or a pool event.
+    _sh_out.extend(TaxTransaction(**{**t.to_dict(), 'type': OWN_MOVE_TYPE})
+                   for t in _own_moves)
+    sheltered_transactions = _sh_out
+    n_sh_stripped = n_sh_before - n_sh_rewritten
+
+    # Auto-drop self-cancelling pairs first — they're never tax events,
+    # and dropping them avoids needlessly tripping the --taxable guard.
+    transactions, dropped_pairs = _drop_self_cancelling_transfers(transactions)
+    if dropped_pairs:
+        # Emit one note line per ticker so the silence is audible —
+        # a user reading the log can see which TRANSFER rows their
+        # broker emitted but the engine deliberately ignored.
+        summary = ", ".join(f"{sym} ({count} row{'s' if count != 1 else ''}, {acct})"
+                            for sym, acct, count in dropped_pairs)
+        _n_dropped = sum(c for _, _, c in dropped_pairs)
+        say("note", f"auto-dropped {_n_dropped} self-cancelling TRANSFER "
+            f"row(s) (net-zero, no intervening sell)", [f"{summary}."],
+            legacy=f"NOTE: auto-dropped {_n_dropped} self-cancelling "
+            f"TRANSFER row(s) (net-zero, no intervening sell): {summary}.")
+
+    n_main = sum(1 for t in transactions if t.action == 'TRANSFER')
+
+    if n_sh_rewritten and not transfers_as_acquisitions:
+        say("note", f"{n_sh_rewritten} unmatched TRANSFER row(s) in the "
+            f"sheltered context kept as custody moves",
+            [f"Their shares count as held; none is a purchase or a sale "
+             f"for the {_book_words(country)['walk']} "
+             f"(transfers_as_acquisitions = false)."],
+            legacy=f"NOTE: {n_sh_rewritten} unmatched TRANSFER row(s) in "
+            f"the --sheltered context kept as custody moves: their shares "
+            f"count as held; none is a purchase or a sale for the "
+            f"{_book_words(country)['walk']} "
+            f"(transfers_as_acquisitions = false).")
+    elif n_sh_rewritten:
+        say("note", f"{n_sh_rewritten} unmatched TRANSFER row(s) in the "
+            f"sheltered context booked as acquisitions/disposals",
+            [f"They count as sheltered acquisitions/disposals for the "
+             f"{_book_words(country)['walk']} (in-kind contributions/"
+             f"withdrawals; custody moves were netted out)."],
+            legacy=f"NOTE: {n_sh_rewritten} unmatched TRANSFER row(s) in "
+            f"the --sheltered context treated as sheltered "
+            f"acquisitions/disposals for the "
+            f"{_book_words(country)['walk']} "
+            f"(in-kind contributions/withdrawals; custody moves were "
+            f"netted out).")
+    if n_main == 0:
+        if n_sh_stripped:
+            say("note", f"netted out {n_sh_stripped} TRANSFER row(s) from "
+                f"the --sheltered context (custody moves, not "
+                f"acquisitions)",
+                legacy=f"NOTE: netted out {n_sh_stripped} TRANSFER row(s) "
+                f"from the --sheltered context (custody moves — not "
+                f"acquisitions).")
+        return transactions, sheltered_transactions
+
+    if taxable:
+        sample = []
+        for t in transactions:
+            if t.action == 'TRANSFER':
+                sample.append(f"  {t.date}  {t.symbol:<16}  qty={t.quantity:>8}  account={t.account}")
+                if len(sample) >= 5:
+                    break
+        more = "" if n_main <= 5 else f"\n  (+{n_main - 5} more)"
+        _accts = sorted({t.account for t in transactions
+                         if t.action == 'TRANSFER' and t.account})
+        # Worded for both callers: `taxjson run` never passes a flag the
+        # user typed (re-audit A2-1221, the S076-19 twin).
+        raise TransferValidationError(
+            f"taxable account {', '.join(_accts) or '?'}: its input holds "
+            f"{n_main} TRANSFER row(s). "
+            f"TRANSFER is not allowed in taxable accounts — replace each with "
+            f"the actual buy/sell history that established the position "
+            f"(standalone `taxjson-gains`: drop --taxable for a sheltered "
+            f"book).\n"
+            + "\n".join(sample) + more
+        )
+
+    # Sheltered main file: rewrite TRANSFER → BUYSELL so the engine
+    # treats net_amount as cost basis and the sheltered run still
+    # tracks the position in inventory. Other fields preserved.
+    rewritten = []
+    for t in transactions:
+        if t.action == 'TRANSFER':
+            t = TaxTransaction(**{**t.to_dict(), 'action': 'BUYSELL',
+                                  'type': 'transfer_rewrite'})
+        rewritten.append(t)
+    msg = (
+        f"NOTE: rewrote {n_main} TRANSFER row(s) → BUYSELL for "
+        f"{_book_words(country)['pool']} "
+        f"(sheltered-account approximation). (Standalone "
+        f"`taxjson-gains`: pass --taxable to reject TRANSFER rows "
+        f"instead.)"
+    )
+    if n_sh_stripped:
+        msg += (f" Also netted out {n_sh_stripped} custody-move "
+                f"TRANSFER row(s) from --sheltered.")
+    say("note", f"rewrote {n_main} TRANSFER row(s) to BUYSELL for "
+        f"{_book_words(country)['pool']} (sheltered-account "
+        f"approximation)",
+        ["Standalone `taxjson-gains`: pass --taxable to reject TRANSFER "
+         "rows instead."]
+        + ([f"Also netted out {n_sh_stripped} custody-move TRANSFER "
+            f"row(s) from --sheltered."] if n_sh_stripped else []),
+        legacy=msg)
+    return rewritten, sheltered_transactions
+
+
+# A position short where none can exist (a registered account, spot
+# crypto, a sale the broker codes CLOSING): `taxjson run` echoes these
+# and `run --strict` refuses them.
+ATTENTION_SHORT = "warning: ATTENTION: short: "
+
+
+def prepare_books(transactions, sheltered_transactions=(),
+                  affiliated_transactions=(), *, taxable: bool,
+                  incomplete_history: Optional[Path] = None,
+                  phantom_hint: bool = True,
+                  base_currency: Optional[str] = None,
+                  spot_crypto: bool = False,
+                  country: Optional[str] = None,
+                  transfers_as_acquisitions: bool = False,
+                  moves_out: Optional[list] = None,
+                  year: Optional[int] = None,
+                  native_books: bool = False):
+    """The load-side preprocessing every gains consumer must share:
+    TRANSFER handling (strip/drop/rewrite/reject) then missing-history
+    opening synthesis. Returns (transactions, sheltered, affiliated,
+    missing_history_log).
+
+    `phantom_hint` (the name predates the missing-history rename) controls
+    the advisory stderr NOTE emitted when NO missing-history file is
+    supplied but positions go short (the gains CLI wants
+    it; explain keeps its stderr quiet).
+
+    With the hint on, a position that goes short where no short can
+    exist — a registered account (TFSA/RRSP/IRA), or a spot-crypto book
+    (`spot_crypto`) — is said as an ATTENTION `short:` line (`taxjson
+    run` echoes it and `run --strict` refuses), as is a sale the broker
+    codes CLOSING with no position (re-audit A2-0395, A2-0137, A2-1223).
+
+    `native_books`: the books are a native-currency view (no TOBASE /
+    JOURNAL renames): the missing-history lines map their symbols as
+    those rows were (load_missing_history, issue #23).
+    """
+    transactions = list(transactions)
+    sheltered_transactions = list(sheltered_transactions)
+    affiliated_transactions = list(affiliated_transactions)
+    # The computation's input contract, checked before the transfer
+    # rewrite and the opening synthesis rebuild any row (issues #14,
+    # #16): the engines check it again on what reaches them.
+    from taxjson.lib.core import require_computable_rows
+    require_computable_rows(transactions, sheltered_transactions,
+                            affiliated_transactions)
+
+    transactions, sheltered_transactions = _handle_transfers(
+        transactions, sheltered_transactions, taxable=taxable,
+        base_currency=base_currency, country=country,
+        transfers_as_acquisitions=transfers_as_acquisitions,
+        moves_out=moves_out,
+    )
+
+    missing_history_log: list = []
+    if incomplete_history:
+        mh_pairs = load_missing_history(Path(incomplete_history),
+                                        native=native_books)
+        # (A pair without a .tt line — none here: every pair is a
+        # line, opened as written — would be sized through the year end.)
+        from taxjson.lib.missing_history import sizing_until
+        _until = sizing_until(year)
+        transactions, missing_history_log = synthesize_openings(
+            transactions, mh_pairs, until=_until)
+        # The wash context too (audit S021-09): a registered or
+        # affiliated account with truncated history otherwise looks
+        # short here, so its in-window rebuy is not "still held at day
+        # 30" and a permanent superficial-loss denial is missed. Each
+        # pair's opening is sized on its own account's rows, so the
+        # three books never double-apply one entry.
+        # (Stale-entry ATTENTION lines come from the main book only:
+        # a context book's pair is its own account's stage to flag.)
+        sheltered_transactions, _sh_log = synthesize_openings(
+            sheltered_transactions, mh_pairs, flag_stale=False,
+            until=_until)
+        affiliated_transactions, _af_log = synthesize_openings(
+            affiliated_transactions, mh_pairs, flag_stale=False,
+            until=_until)
+        _ctx = {}
+        for _label, _log in (('sheltered', _sh_log),
+                             ('affiliated', _af_log)):
+            for _e in _log:
+                if _e.get('inserted'):
+                    _ctx[(_e['symbol'], _e['account'])] = dict(
+                        _e, context=_label)
+        from taxjson.lib.missing_history import report_missing_history_log
+        report_missing_history_log(
+            [missing_history_log, _sh_log, _af_log],
+            {t.account for t in (transactions + sheltered_transactions
+                                 + affiliated_transactions)},
+            file_name=getattr(mh_pairs, 'source_name', None)
+            or Path(incomplete_history).name)
+        missing_history_log = [
+            _ctx.get((_e['symbol'], _e['account']), _e)
+            if not _e.get('inserted') else _e
+            for _e in missing_history_log]
+    if phantom_hint:
+        # If the data has positions that go negative, the user may have
+        # truncated history they haven't told us about. Emit a one-time
+        # hint so they notice. Options are filtered out (sell-to-open is
+        # normal, not missing history). With a missing-history file, its
+        # listed pairs no longer go short (their openings are in the books
+        # now), so the hint names only the pairs the file does NOT cover
+        # (audit S076-05: any such file switched the hint off).
+        # Registered status from the books' roles, not the labels
+        # (audit S076-08): the --sheltered context is registered, and so
+        # is a main book that is not --taxable.
+        # (Affiliated accounts are not ours to type: label heuristic.)
+        _types = {t.account: not taxable for t in transactions}
+        _types.update({t.account: True for t in sheltered_transactions})
+        _types = {a: v for a, v in _types.items() if a}
+        candidates = detect_missing_history(
+            transactions + sheltered_transactions + affiliated_transactions,
+            registered_accounts=_types)
+        # Options coded CLOSING that the books cannot back — a sale or a
+        # purchase, with the held contract under another root named
+        # (audit A2-0006: an RBC CLOSE CONTRACT booked as a new write).
+        from taxjson.lib.core import is_option_symbol as _is_opt
+        from taxjson.lib.option_close_check import (
+            unbacked_option_close_messages)
+        for _m in unbacked_option_close_messages(
+                transactions + sheltered_transactions
+                + affiliated_transactions):
+            emit_line(_m)
+        for c in candidates:
+            if c.broker_says_closing and not _is_opt(c.symbol):
+                # The broker coded the sale CLOSING (IB code C): what it
+                # sold was bought before the data — not a short, not a
+                # written option, whatever the books do with it until
+                # the history is supplied (audit S013-00).
+                _basis = (f", IB Basis {c.broker_basis}" if c.broker_basis
+                          else "")
+                say("attention", f"short: {c.symbol} ({c.account}): the "
+                    f"broker codes the sale on {c.first_negative_date} "
+                    f"CLOSING (IB code C{_basis}), but the data holds no "
+                    f"position to close",
+                    ["It is booked as a new short until the missing "
+                     "purchase is supplied (`taxjson find-missing-history "
+                     "--write-missing-history` writes its .tt OPENING "
+                     "cost=unknown line)."],
+                    legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
+                    f"broker codes the sale on {c.first_negative_date} "
+                    f"CLOSING (IB code C" + _basis
+                    + f"), but the data holds no position to close — "
+                      f"it is booked as a new short until the missing "
+                      f"purchase is supplied (`taxjson "
+                      f"find-missing-history --write-missing-history` "
+                      f"writes its .tt OPENING cost=unknown line).")
+        # A short where none can exist (A2-0395 / A2-0137): the main
+        # book's own accounts only — a context book's account says it in
+        # its own stage. A listed pair that goes short only after the
+        # tax year its opening was sized for is said once, as the
+        # missing-history ATTENTION (short_again_message): a later
+        # year's gap, not this year's (CA-ACB-11 / US-BASIS-04).
+        _main_accts = {t.account for t in transactions}
+        _later = {(e['symbol'], e['account'])
+                  for e in missing_history_log
+                  if e.get('short_again') and e.get('sized_through')
+                  and e['short_again']['date'] > e['sized_through']}
+        for c in candidates:
+            if (c.account not in _main_accts or _is_opt(c.symbol)
+                    or c.broker_says_closing
+                    or (c.symbol, c.account) in _later):
+                continue
+            if c.registered:
+                _w = _book_words(country)
+                why = f"{_w['reg_one']} cannot be short"
+                tail = ("its later purchases are read as covering the "
+                        f"short, so a {_w['denial']} they cause for a "
+                        "taxable account's loss is missed")
+            elif spot_crypto:
+                why = "spot crypto cannot be short"
+                tail = ("no gain is booked for the sale until the coins' "
+                        "cost is supplied")
+            else:
+                continue
+            say("attention", f"short: {c.symbol} ({c.account}): {why} — "
+                f"it sells {abs(c.peak_short):g} more than the data holds "
+                f"from {c.first_negative_date}",
+                ["History is missing (a transfer-in, a deposit, or a "
+                 f"purchase before the data). Until it is supplied, "
+                 f"{tail}. Supply it (the transfer or purchase rows, or "
+                 f"`taxjson find-missing-history --write-missing-history`, "
+                 f"which writes .tt OPENING cost=unknown lines)."],
+                legacy=f"{ATTENTION_SHORT}{c.symbol} ({c.account}): {why} — "
+                f"it sells {abs(c.peak_short):g} more than the data "
+                f"holds from {c.first_negative_date}: history is missing "
+                f"(a transfer-in, a deposit, or a purchase before the "
+                f"data). Until it is supplied, {tail}. Supply it (the "
+                f"transfer or purchase rows, or `taxjson "
+                f"find-missing-history --write-missing-history`, which "
+                f"writes .tt OPENING cost=unknown lines).")
+        if candidates:
+            n_reg = sum(1 for c in candidates if c.registered)
+            preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
+            more = f" (+{len(candidates) - 3} more)" if len(candidates) > 3 else ""
+            say("note", f"{len(candidates)} (symbol, account) pair(s) go "
+                f"short in this data: {preview}{more}",
+                [f"{n_reg} are in {_book_words(country)['reg']}. If any of "
+                 f"these are sales of shares bought before your files "
+                 f"start (no purchase in the data) rather than real short "
+                 f"trades, open the units held before the data with .tt "
+                 f"OPENING cost=unknown lines: `taxjson "
+                 f"find-missing-history --write-missing-history` in a "
+                 f"project writes them (`taxjson run` reads them)."],
+                legacy=f"NOTE: {len(candidates)} (symbol, account) pair(s) "
+                f"go short in this data: "
+                f"{preview}{more}. {n_reg} are in "
+                f"{_book_words(country)['reg']}. "
+                f"If any of these are sales of shares bought before your "
+                f"files start (no purchase in the data) rather than real "
+                f"short trades, open the units held before the data with "
+                f".tt OPENING cost=unknown lines: `taxjson "
+                f"find-missing-history --write-missing-history` in a "
+                f"project writes them (`taxjson run` reads them).")
+    return (transactions, sheltered_transactions, affiliated_transactions,
+            missing_history_log)
+
+
+@dataclass
+class GainsRequest:
+    """Everything that shapes a gains run. `tax_date` and `detect_wash`
+    default country-aware / policy-aware here — ONE place — instead of
+    being re-derived by each caller."""
+    # Required: "canada" | "usa" (any lib/country alias; canonicalised
+    # in __post_init__, an unknown or missing value raises CountryError).
+    country: str
+    year: Optional[int] = None
+    taxable: bool = False
+    tax_date: Optional[str] = None            # None → country-aware default
+    incomplete_history: Optional[Path] = None
+    # The books are a native-currency view (taxjson-gains --native-books).
+    native_books: bool = False
+    trace: bool = False
+    no_wash: bool = False
+    detect_wash: Optional[bool] = None        # None → taxable and not no_wash
+    cross_asset: bool = False
+    phantom_hint: bool = True
+    # The book is a crypto account (spot coins): a short is missing
+    # history, said as ATTENTION (prepare_books).
+    spot_crypto: bool = False
+    # ITA s.49(1) premium timing for written options (Canada only):
+    # 'grant' recognises the premium on the write date, 'close' at the
+    # closing transaction (the US §1234 convention). Contracts written
+    # before `option_grant_since` keep close timing (transition).
+    option_premium_timing: str = 'close'
+    option_grant_since: Optional[int] = None
+    option_buyback_loss_superficial: bool = False
+    # Blended multi-account mode: US FIFO pools keyed per
+    # (account, symbol) while §1091 matching stays cross-account.
+    # Canada needs no flag — its symbol-global pools already blend
+    # (ITA s.47), so this is forwarded to the US engine only. None →
+    # the US default, True: FIFO is per account (tax-logic US-BASIS-01)
+    # on any merged book, not only inside `taxjson run` (SPEC-30).
+    per_account_basis: Optional[bool] = None
+    # Income dating overrides (lib/income_dating): Canada — symbols
+    # whose "distribution" is a corporation's payout (dated when paid);
+    # USA — January RIC/REIT dividends received on Dec 31 of the prior
+    # year ("SYM" or "SYM YYYY-01-DD"). Each is refused in the other
+    # country (lib/income_dating.IncomeRules).
+    corporate_distributions: Tuple[str, ...] = ()
+    ric_january_dividends: Tuple[str, ...] = ()
+    # USA: filed (locked) tax years. A wash-sale loss whose replacement
+    # was sold in one of them, before the loss's year, does not change
+    # that sale: the basis add is booked in the loss's year instead,
+    # said as ATTENTION (tax-logic US-WASH-22).
+    locked_years: Tuple[int, ...] = ()
+    # A sheltered account's unmatched TRANSFER row: a custody move by
+    # default (held, never an acquisition for the loss rule — CA-SL-16 /
+    # US-WASH-23); True ([settings] transfers_as_acquisitions = true)
+    # books it as an acquisition/disposal (CA-SL-17 / US-WASH-24).
+    transfers_as_acquisitions: bool = False
+    # The user's filing positions against the loss rule (.tt ALLOWLOSS
+    # lines, lib/loss_overrides; CA-SL-18 / US-WASH-25): each names one
+    # sale whose denial is not applied (recorded in `loss_overrides`).
+    loss_overrides: Tuple[Dict[str, Any], ...] = ()
+
+    def __post_init__(self):
+        from taxjson.lib.country import canonical_country
+        self.country = canonical_country(self.country,
+                                         what="GainsRequest.country")
+        if self.per_account_basis is None:
+            self.per_account_basis = (self.country == 'usa')
+        self.income_rules()             # refuse a foreign override now
+
+    def income_rules(self):
+        from taxjson.lib.income_dating import IncomeRules, parse_ric_entries
+        return IncomeRules(
+            country=self.country,
+            corporate_distributions=tuple(
+                str(s).strip().upper()
+                for s in (self.corporate_distributions or ())),
+            ric_january_dividends=parse_ric_entries(
+                list(self.ric_january_dividends or ()),
+                key="--ric-january-dividend"))
+
+    def effective_tax_date(self) -> str:
+        # Country-aware default: CRA times dispositions on the SETTLEMENT
+        # date, the IRS on the TRADE date. Explicit value wins
+        # (lib/country.resolve_tax_date, the one resolver).
+        from taxjson.lib.country import resolve_tax_date
+        return resolve_tax_date(self.country, self.tax_date,
+                                what="tax_date")
+
+    def effective_detect_wash(self) -> bool:
+        # Wash-sale detection: only meaningful for taxable accounts. The
+        # superficial-loss rule (CRA ITA 54 / IRC §1091) disallows real
+        # losses, which sheltered accounts don't have. Default-off avoids
+        # spurious "disallowed" entries on RRSP/TFSA/etc. reports.
+        if self.detect_wash is not None:
+            return self.detect_wash
+        return self.taxable and not self.no_wash
+
+
+def declared_multipliers(transactions) -> Dict[str, float]:
+    """{symbol: the contract size its rows declare} (the parser's
+    `multiplier`: a futures option's CL 1000 or ES 50, an equity option's
+    100). A symbol whose rows declare two sizes is left out (unknown),
+    as is one that declares none."""
+    seen: Dict[str, set] = {}
+    for t in transactions:
+        m = float(getattr(t, 'multiplier', 0.0) or 0.0)
+        if m > 0 and getattr(t, 'symbol', ''):
+            seen.setdefault(t.symbol, set()).add(round(m, 10))
+    return {s: next(iter(v)) for s, v in seen.items() if len(v) == 1}
+
+
+def annotate_inventory_multipliers(results: dict, transactions) -> None:
+    """Put the declared contract size on each held option/futures line
+    of the year-end inventory (`multiplier`), so the holdings export, the
+    reports and the what-if never assume an equity option's 100 for a
+    futures option (audit S026-22). Lines with no declared size are left
+    as they are (the consumer then says it does not know)."""
+    mults = declared_multipliers(transactions)
+    if not mults:
+        return
+    for item in results.get('inventory') or []:
+        m = mults.get(item.get('symbol'))
+        if m:
+            item['multiplier'] = m
+
+
+def apply_trust_roc_record_dates(transactions, income_rules) -> list:
+    """Canada: a Canadian trust's return of capital lowers the ACB when it
+    becomes payable (s.53(2)(h)): an ADJUST with a printed record date is
+    booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row keeps its id;
+    only its dates move. Every engine caller applies it (run_gains,
+    taxjson-audit, taxjson-explain): applied only in
+    run_gains, the others booked the ROC on its pay date and contradicted
+    the .sum (re-audit A2-0139 / A2-0201 / A2-0397). A no-op for the US
+    (IncomeRules.roc_record_date is Canada-only). Returns [(row, pay
+    date)] for each row moved."""
+    moved = []
+    for _t in transactions:
+        _rec = income_rules.roc_record_date(_t)
+        if _rec:
+            moved.append((_t, _t.date))
+            _t.date = _rec
+            _t.date_settle = _rec
+    return moved
+
+
+def add_loss_override_args(parser) -> None:
+    """--loss-overrides FILE: the project's .tt ALLOWLOSS lines as `taxjson
+    run` writes them (work/loss_overrides.json, lib/loss_overrides) — the
+    engine CLIs that recompute the books share the spelling (taxjson-gains,
+    -audit, -explain, -carryover, -t1135)."""
+    parser.add_argument(
+        "--loss-overrides", metavar="FILE", default=None,
+        help="Filing positions against the superficial-loss / wash-sale "
+             "rule (.tt ALLOWLOSS lines; `taxjson run` writes "
+             "work/loss_overrides.json): each named sale's denial is not "
+             "applied, and what the rule would have denied is recorded.")
+
+
+def loss_overrides_from_args(args) -> tuple:
+    """The overrides of --loss-overrides (() when not given). A file that
+    cannot be read raises ValueError naming it."""
+    path = getattr(args, "loss_overrides", None)
+    if not path:
+        return ()
+    from taxjson.lib.loss_overrides import load_file
+    try:
+        return tuple(load_file(path))
+    except OSError as e:
+        raise ValueError(f"--loss-overrides {path}: {e}") from None
+
+
+def add_income_dating_args(parser) -> None:
+    """--corporate-distribution / --ric-january-dividend ([settings]
+    corporate_distributions / ric_january_dividends): the engine CLIs
+    that date income share one spelling (taxjson-gains, -audit,
+    -explain)."""
+    parser.add_argument(
+        "--corporate-distribution", action="append", default=None,
+        metavar="SYMBOL",
+        help="Canada: a Canadian issuer whose \"distribution\" rows are "
+             "a corporation's payout (dated when paid), beyond the "
+             "built-in split-share list; repeatable ([settings] "
+             "corporate_distributions).")
+    parser.add_argument(
+        "--ric-january-dividend", action="append", default=None,
+        metavar="\"SYMBOL [YYYY-01-DD]\"",
+        help="USA: a January fund/REIT dividend received on Dec 31 of "
+             "the prior year (§852(b)(7), §857(b)(9)); repeatable "
+             "([settings] ric_january_dividends).")
+
+
+def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
+    """A trust ROC paid in one year with a record date in the year before
+    lowers the ACB of a sale made between the two dates in that earlier
+    year — a year that may already be filed without it (re-audit
+    A2-0039). Name each such sale on the ATTENTION channel (`taxjson
+    run` echoes it) when this run's year is the pay year (or no year)."""
+    from taxjson.lib.income_dating import ATTENTION_INCOME_YEAR
+    key = 'date_settle' if tax_date == 'settle' else 'date'
+    for t, pay in moved:
+        rec = t.date or ''
+        if not rec or not pay or rec[:4] == pay[:4]:
+            continue
+        if year is not None and str(year) != pay[:4]:
+            continue
+        sales = [e for e in results.get('transactions') or []
+                 if e.get('gain') is not None
+                 and e.get('symbol') == t.symbol
+                 and rec <= (e.get('date') or '') < pay
+                 and (e.get(key) or e.get('date') or '')[:4] == rec[:4]]
+        if not sales:
+            continue
+        what = ", ".join(
+            f"{(e.get(key) or e.get('date'))} (gain now "
+            f"{float(e.get('gain') or 0.0):,.2f})" for e in sales)
+        amt = -float(t.net_amount or 0.0)
+        emit_line(f"warning: {ATTENTION_INCOME_YEAR}{t.symbol}: the return "
+                  f"of capital {amt:,.2f} {t.currency} paid {pay} (record "
+                  f"date {rec}) lowers the ACB of the {rec[:4]} sale on "
+                  f"{what}. If {rec[:4]} was filed without this ROC, that "
+                  f"return needs an adjustment (T1-ADJ) for the gain.")
+
+# The run's ATTENTION channel for a wash-sale basis add that reaches a
+# replacement sold in a filed year (`taxjson run` echoes it).
+ATTENTION_WASH_LOCKED = "ATTENTION: wash sale reaches a filed year: "
+
+
+def place_retro_wash_adjustments(results, tax_date: str,
+                                 locked_years=(), year=None) -> None:
+    """USA (tax-logic US-WASH-22): the US engine adds a disallowed loss
+    to the basis of a replacement another taxable account bought AND
+    sold before the loss (`wash_basis_added` on that sale's gain row).
+    When that sale is in an earlier year that is filed (locked), its row
+    is NOT changed: the add is booked as its own row on the loss's date
+    (a loss of the same amount and term), and an ATTENTION line names
+    the earlier sale — that return may need an amendment. When the
+    earlier year is not locked, the sale's row carries the add and a
+    note says the earlier year changed. In place."""
+    locked = {int(y) for y in (locked_years or ())}
+    key = 'date_settle' if tax_date == 'settle' else 'date'
+    rows = results.get('transactions') or []
+    added: list = []
+    for e in rows:
+        adds = e.get('wash_basis_added')
+        if not adds:
+            continue
+        e_year = str(e.get(key) or e.get('date') or '')[:4]
+        moved = []
+        for a in adds:
+            l_year = str(a.get('loss_date_settle' if key == 'date_settle'
+                               else 'loss_date') or '')[:4]
+            if not (e_year and l_year and e_year < l_year):
+                continue
+            if e_year.isdigit() and int(e_year) in locked:
+                moved.append(a)
+                continue
+            if year is None or str(year) in (e_year, l_year):
+                emit_line(f"note: {e.get('symbol')}: the {a['loss_date']} "
+                          f"wash-sale loss ({a['loss_account']}) adds "
+                          f"{a['amount']:,.2f} to the basis of the "
+                          f"replacement sold {e.get('date')} in "
+                          f"{e.get('account')} — that {e_year} sale's gain "
+                          f"changes (US-WASH-22). If {e_year} was filed "
+                          f"without it, amend that return, or lock the year "
+                          f"(`taxjson close-year`) to book the add in "
+                          f"{l_year} instead.")
+        if not moved:
+            continue
+        amt = sum(float(a['amount']) for a in moved)
+        e['cost'] -= amt
+        e['raw_gain'] += amt
+        e['gain'] += amt
+        if len(moved) == len(adds) and e.get('pre_retro'):
+            for k, v in e['pre_retro'].items():
+                e[k] = v
+        e['wash_basis_added'] = [a for a in adds if a not in moved]
+        for a in moved:
+            amt_a = float(a['amount'])
+            if year is None or str(year) in (e_year,
+                                             str(a['loss_date'])[:4],
+                                             str(a['loss_date_settle'])[:4]):
+                emit_line(f"warning: {ATTENTION_WASH_LOCKED}{e.get('symbol')}: "
+                      f"the {a['loss_date']} loss ({a['loss_account']}) "
+                      f"is a wash sale whose replacement was bought and "
+                      f"sold {e.get('date')} in {e.get('account')}, in "
+                      f"filed year {e_year}. That sale's basis grows by "
+                      f"{amt_a:,.2f} (§1091(d)); the filed year is left "
+                      f"as filed and the {amt_a:,.2f} is booked as a "
+                      f"{str(a.get('term') or '').replace('_', '-').lower()}"
+                      f" loss on {a['loss_date']} instead. Your {e_year} "
+                      f"return may need an amendment (Form 1040-X) for "
+                      f"that sale.")
+            added.append({
+                'date': a['loss_date'],
+                'date_settle': a['loss_date_settle'],
+                'symbol': e.get('symbol'), 'qty': 0.0,
+                'cost': amt_a, 'proceeds': 0.0,
+                'gain': -amt_a, 'raw_gain': -amt_a,
+                'disallowed_amount': 0.0, 'permanently_disallowed': 0.0,
+                'replacement_lot_ids': [],
+                'days_held': e.get('days_held', 0),
+                'acquired_date': e.get('acquired_date', ''),
+                'account': e.get('account'),
+                'currency': e.get('currency'),
+                'commission': 0.0, 'fee': 0.0,
+                'is_wash_sale': False,
+                'is_option': e.get('is_option', False),
+                'id': f"{a['loss_id']}-wash-basis", 'trace': [],
+                'direction': 'LONG',
+                'term': a.get('term') or e.get('term'),
+                'wash_trigger': None, 'wash_window': None,
+                'wash_replacements': None, 'tainted': False,
+                'deemed': True,
+                'deemed_desc': (f"{e.get('symbol')} wash-sale basis add "
+                                f"to the {e.get('date')} sale (filed "
+                                f"{e_year}; §1091(d))"),
+                'note': (f"WASH-SALE BASIS ADD to the replacement sold "
+                         f"{e.get('date')} in filed year {e_year} "
+                         f"(§1091(d)); booked here, not in the filed "
+                         f"year — that return may need an amendment"),
+            })
+    rows.extend(added)
+
+
+def apply_roc_record_dates(transactions, req: GainsRequest) -> list:
+    """Canada: a Canadian trust's return of capital lowers the ACB when
+    it becomes payable (s.53(2)(h)): an ADJUST with a printed record
+    date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row
+    keeps its id; only its dates move (in place).
+
+    Every engine entry point calls this — run_gains, taxjson-audit and
+    taxjson-explain — so an audit or a trace cannot re-run the engine
+    on the pay date the books did not use (re-audit A2-0033). Returns
+    the rows moved, as apply_trust_roc_record_dates does."""
+    if req.country != 'canada':
+        return []
+    return apply_trust_roc_record_dates(transactions, req.income_rules())
+
+
+def engine_options(req: GainsRequest) -> Dict[str, Any]:
+    """The country's engine keyword arguments for `req` (the ones
+    run_gains passes to compute_gains beyond the books and the wash
+    switch): US per-account FIFO (US-BASIS-01); Canadian option premium
+    timing, its since-year and the date basis that year is tested on
+    (SPEC-13: the tax date, not always the settlement date). One
+    builder for run_gains, taxjson-audit and taxjson-explain
+    (re-audit A2-0314/A2-0318)."""
+    extra: Dict[str, Any] = {}
+    if req.loss_overrides:
+        extra['loss_overrides'] = tuple(req.loss_overrides)
+    if req.per_account_basis and req.country == 'usa':
+        extra['per_account_basis'] = True
+    if req.country == 'canada':
+        extra['option_premium_timing'] = req.option_premium_timing or 'close'
+        extra['option_grant_since'] = req.option_grant_since
+        extra['option_buyback_loss_superficial'] = \
+            req.option_buyback_loss_superficial
+        extra['option_grant_basis'] = req.effective_tax_date()
+    return extra
+
+
+def run_gains(transactions, sheltered_transactions=(),
+              affiliated_transactions=(), req: GainsRequest = None, *,
+              trace_sink: Optional[Callable[[dict], None]] = None,
+              books_prepared: bool = False) -> dict:
+    """The full gains run — the dict this returns is byte-identical to
+    what `taxjson-gains` serializes (it IS what taxjson-gains serializes).
+
+    `trace_sink`, when given with req.trace, is called with the results
+    dict after the year filter, fee aggregation and the tainted split
+    (clean rows in 'transactions', unknown-cost rows in
+    'manual_reporting_required'), before traces are stripped.
+
+    `books_prepared=True` skips prepare_books for callers that already
+    ran it (the CLI's --suggest-missing-history path preprocesses first).
+    """
+    if req is None:
+        raise TypeError("run_gains needs a GainsRequest (its country is "
+                        "required)")
+    tax_date = req.effective_tax_date()
+
+    # The sheltered context's netted transfer clusters (default policy):
+    # listed below when one sits inside a loss's window.
+    _netted_moves: list = []
+    if books_prepared:
+        missing_history_log = []
+    else:
+        from taxjson.lib.country import HOME_CURRENCY
+        (transactions, sheltered_transactions, affiliated_transactions,
+         missing_history_log) = prepare_books(
+            transactions, sheltered_transactions, affiliated_transactions,
+            taxable=req.taxable, incomplete_history=req.incomplete_history,
+            phantom_hint=req.phantom_hint, spot_crypto=req.spot_crypto,
+            base_currency=HOME_CURRENCY.get(req.country),
+            country=req.country,
+            transfers_as_acquisitions=req.transfers_as_acquisitions,
+            moves_out=_netted_moves, year=req.year,
+            native_books=req.native_books)
+
+    rules = get_tax_rules(req.country)
+    income_rules = req.income_rules()
+    _warn_year = int(req.year) if req.year else None
+    # Income-dating advice is about a return's income and ACB: none of
+    # it applies to a sheltered (registered) book (re-audit A2-1218).
+    for _w in (income_rules.warnings(transactions, _warn_year)
+               if req.taxable else ()):
+        emit_line(f"warning: {_w}")
+    _roc_moved = apply_roc_record_dates(transactions, req)
+    if req.country == 'canada':
+        # The parsers book a stock dividend as a neutral $0 event; the
+        # Canadian cost is its declared amount, which the export does
+        # not carry (tax-logic CA-STKDIV-01). The US engine words its
+        # own rule (§305(a)/§307) when it spreads the basis.
+        # An ATTENTION line, on the run console (re-audit A2-0265: the
+        # NOTE sat in the .sum while the income and ACB were short).
+        # Only for the run's own year and a taxable book, and quiet once
+        # the cost is in the books (an ADJUST on the symbol from 31 days
+        # before to 7 days after: a .tt line or a [[distributions]]
+        # entry's record-date row). Adding it books the ACB only — the dividend
+        # is reported from the slip (re-audit A2-0709, A2-0711, A2-1220,
+        # A2-1224; CA-DIST-01).
+        from datetime import date as _d, timedelta as _td
+
+        def _cost_added(sd):
+            try:
+                d0 = _d.fromisoformat(str(sd.date)[:10])
+            except ValueError:
+                return False
+            lo, hi = (d0 - _td(days=31)).isoformat(), \
+                (d0 + _td(days=7)).isoformat()
+            return any(a.action == 'ADJUST' and a.symbol == sd.symbol
+                       and float(a.net_amount or 0) > 0
+                       and lo <= str(a.date)[:10] <= hi
+                       for a in transactions)
+        for _t in (transactions if req.taxable else ()):
+            if not (is_stock_dividend(_t) and float(_t.quantity or 0) > 0):
+                continue
+            if _warn_year is not None and not str(_t.date).startswith(
+                    str(_warn_year)):
+                continue
+            if _cost_added(_t):
+                continue
+            emit_line(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
+                  f"{float(_t.quantity):g} share(s) on {_t.date} "
+                  f"entered at $0 cost — in Canada it is a dividend at its "
+                  f"declared amount, which is also the new shares' cost: "
+                  f"add that cost ([[distributions]] in taxjson.toml or a "
+                  f".tt ADJUST) for "
+                  f"the correct ACB. That books the ACB only: report the "
+                  f"dividend itself from the T5/T3 slip (taxjson does not "
+                  f"count it as income).")
+    _extra = engine_options(req)
+    # The engine's option/right-replacement warnings are printed below,
+    # after the year filter: printed by the engine they put a prior
+    # year's warning in this year's .sum DIAGNOSTICS (audit S070-04).
+    rules.emit_replacement_stderr = False
+    results = rules.compute_gains(
+        transactions,
+        sheltered_transactions=sheltered_transactions,
+        affiliated_transactions=affiliated_transactions,
+        cross_asset=req.cross_asset,
+        trace=req.trace,
+        detect_wash_sales=req.effective_detect_wash(),
+        **_extra,
+    )
+
+    annotate_inventory_multipliers(results, transactions)
+    _warn_roc_moved_into_prior_year(results, _roc_moved, tax_date,
+                                    _warn_year)
+    if req.country == 'usa':
+        place_retro_wash_adjustments(results, tax_date,
+                                     req.locked_years, _warn_year)
+
+    # Capture tainted dispositions across ALL years before the year filter
+    # strips them. The superficial-loss warning below pairs in-year clean
+    # losses with tainted dispositions that may be in adjacent years —
+    # a Dec 28 tainted leg can disqualify a Jan 5 in-year loss next year.
+    all_tainted_across_years = [
+        t for t in results.get('transactions', []) if t.get('tainted', False)
+    ]
+
+    # Income rows: the date whose year they belong to, and (Canada) the
+    # character of a payment in lieu — lib/income_dating, the same rules
+    # the .sum income section and the views apply.
+    _by_id = {getattr(t, 'id', None): t for t in transactions}
+    # The units the books show to be a Canadian trust's (their payouts
+    # are distributions): a payment in lieu on one is ordinary income,
+    # never an s.260 dividend (CA-INC-07; A2-1465).
+    _trusts = income_rules.trust_units(
+        list(transactions) + list(sheltered_transactions or [])
+        + list(affiliated_transactions or []))
+    for _e in results.get('transactions', []):
+        if _e.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
+            continue
+        _src = _by_id.get(_e.get('id'))
+        if _src is None:
+            continue
+        _idate = income_rules.income_date(_src)
+        if _idate and _idate != _e.get('date'):
+            _e['income_date'] = _idate
+            if _src.record_date:
+                _e['record_date'] = _src.record_date
+        if income_rules.pil_is_dividend(_src, _trusts):
+            # ITA s.260(5)/(5.1): a Canadian dealer's payment in lieu
+            # on a Canadian corporation's share is a taxable dividend (the
+            # dealer's T5 box 24): counted with the dividends, kept
+            # recognisable as a payment in lieu.
+            _amt = float(_e.get('pil') or 0.0)
+            _e['dividend'] = _amt
+            _e['pil'] = 0.0
+            _e['deemed_dividend'] = 'ITA s.260'
+
+    # Filter by year if specified. --tax-date picks which date drives the
+    # filter: 'trade' (default) or 'settle'. Trades that close on Dec 30/31
+    # but settle on Jan 1/2 of the following year fall in different tax
+    # years depending on this choice.
+    if req.year:
+        year_str = str(req.year)
+        date_key = 'date_settle' if tax_date == 'settle' else 'date'
+        _INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST',
+                           'FEE')
+
+        def in_year(rec, key=date_key):
+            # Income belongs to the year it was RECEIVED (pay date) — no
+            # settlement concept applies. All parsers currently stamp income
+            # date_settle == pay date, but keying income on 'date' removes
+            # the latent divergence (and the sum_income tool already filters
+            # on 'date', so the .sum sections agree by construction).
+            if rec.get('action') in _INCOME_ACTIONS:
+                # lib/income_dating: a Canadian trust's distribution by
+                # its record date, a listed US January RIC dividend on
+                # Dec 31; everything else by its pay date.
+                return (rec.get('income_date') or rec.get('date')
+                        or '').startswith(year_str)
+            return (rec.get(key) or rec.get('date', '')).startswith(year_str)
+
+        results['transactions'] = [t for t in results['transactions'] if in_year(t)]
+        # Option-replacement warnings follow their LOSS date (already on
+        # the engine's window basis) — an out-of-year loss's warning is
+        # noise in a year-scoped report.
+        if results.get('option_replacement_warnings'):
+            results['option_replacement_warnings'] = [
+                w for w in results['option_replacement_warnings']
+                if (w.get('loss_date') or '').startswith(year_str)]
+        results['summary']['year'] = year_str
+        results['summary']['tax_date_basis'] = tax_date
+        if req.transfers_as_acquisitions:
+            results['summary']['transfers_as_acquisitions'] = True
+        if req.country == 'canada':
+            results['summary']['option_premium_timing'] = req.option_premium_timing or 'close'
+            results['summary']['option_grant_since'] = req.option_grant_since
+            results['summary']['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
+        results['summary']['total_gain'] = _trade_gain_total(results['transactions'])
+        if 'wash_sales' in results:
+            # Wash record shape diverges by engine. Canada builds
+            # `{'loss_tx': v.to_dict(), ...}` — the date lives nested.
+            # US builds `{'loss_tx_id': tx.id, 'date': tx.date, ...}` —
+            # the date lives flat. The fallback `w.get('loss_tx', w)`
+            # handles both: for Canada it returns the nested dict; for
+            # US it returns `w` itself (which has `'date'`). Without
+            # this fallback the US case silently filtered EVERY wash
+            # record out under `--year`, zeroing `total_disallowed`.
+            results['wash_sales'] = [
+                w for w in results['wash_sales']
+                if in_year(w.get('loss_tx', w))
+            ]
+            results['summary']['total_disallowed'] = sum(w['disallowed_amount'] for w in results['wash_sales'])
+
+    # Rebuild by_ticker from the (year-filtered) rows, with or without
+    # --year (re-audit A2-0710: without it an s.260 deemed dividend
+    # stayed in total_pil). Under --year, consumers reading
+    # by_ticker['SAMPLG.US']['total_gain'] otherwise got all-year totals
+    # on what looks like a single-year report.
+    #
+    # Skip `tainted` rows — they carry fabricated gain numbers (cost
+    # basis = 0 against a synthetic missing-history opening) which are about
+    # to be routed to `manual_reporting_required` below. Letting them
+    # into by_ticker totals would silently inflate any downstream
+    # consumer that reads by_ticker instead of `transactions`.
+    if 'by_ticker' in results:
+        rebuilt: Dict[str, Dict] = {}
+        for t in results['transactions']:
+            if t.get('tainted'):
+                continue
+            sym = t.get('symbol')
+            if not sym:
+                continue
+            stats = rebuilt.setdefault(sym, {
+                'total_cost': 0.0, 'total_proceeds': 0.0,
+                'total_gain': 0.0, 'total_div': 0.0,
+                'total_pil': 0.0,
+                'trade_count': 0, 'hold_days': [],
+            })
+            action = t.get('action')
+            if action == 'DIVIDEND':
+                stats['total_div'] += float(t.get('dividend', 0.0) or 0.0)
+            elif action == 'DIVIDEND_IN_LIEU':
+                # A Canadian s.260 payment in lieu carries its
+                # amount as 'dividend' (see the income pass above).
+                stats['total_div'] += float(t.get('dividend', 0.0)
+                                            or 0.0)
+                # PIL is its own bucket — same per-ticker association
+                # as a dividend but bucketed separately so downstream
+                # T5 totals stay clean. Before this branch, PIL rows
+                # fell into the trade accumulator below: trade_count
+                # got incremented and the PIL amount was invisible.
+                stats['total_pil'] += float(t.get('pil', 0.0) or 0.0)
+            else:
+                stats['total_cost'] += float(t.get('cost', 0.0) or 0.0)
+                stats['total_proceeds'] += float(t.get('proceeds', 0.0) or 0.0)
+                stats['total_gain'] += float(t.get('gain', 0.0) or 0.0)
+                stats['trade_count'] += 1
+                if t.get('days_held') is not None:
+                    stats['hold_days'].append(t['days_held'])
+        results['by_ticker'] = rebuilt
+
+    # Aggregate trading fees across the raw transaction list (both buys AND
+    # sells, both taxable and sheltered) for informational reporting. Gain
+    # entries only carry sell-side fees (buy-side fees are folded into cost
+    # basis), so summing from the raw input is the only way to get a true
+    # "total cost of trading" figure that consumers like taxjson-sum-gains
+    # can show as a percentage of portfolio value.
+    year_str_for_fees = str(req.year) if req.year else None
+    fee_date_attr = 'date_settle' if tax_date == 'settle' else 'date'
+
+    def fee_tx_in_year(tx) -> bool:
+        if not year_str_for_fees:
+            return True
+        d = getattr(tx, fee_date_attr, '') or tx.date
+        return d.startswith(year_str_for_fees)
+
+    fees_by_currency: Dict[str, Dict[str, float]] = {}
+    # TAXABLE transactions only (FUZZ #I): the cross-account wash pass
+    # feeds this account's book PLUS sheltered_base — summing fees over
+    # all three lists booked every sheltered account's fees into EVERY
+    # taxable account's wash file, so `taxjson sum` counted an RRSP's
+    # 14.95 three times. The sheltered accounts' own gains files carry
+    # their own fees.
+    for tx in list(transactions):
+        if tx.action not in ('BUYSELL', 'ASSIGN'):
+            continue
+        if not fee_tx_in_year(tx):
+            continue
+        fee = float(tx.commission or 0) + float(tx.fee or 0)
+        # != 0, not > 0: a commission REBATE (negative fee) must net
+        # against the total, or `.sum` FEES disagrees with `fees-sum`
+        # (which nets) by the rebate amount. Zero rows carry nothing.
+        if fee == 0:
+            continue
+        curr = tx.currency or '?'
+        is_opt = bool(re.search(r'\d{6}[CP]\d+', tx.symbol or ''))
+        # A plain futures contract is neither a stock nor an option: its
+        # own bucket (audit S076-12 — it inflated the Stocks figure).
+        from taxjson.lib.futures import is_plain_future
+        asset = ('options' if is_opt else
+                 'futures' if is_plain_future(tx.symbol) else 'stocks')
+        bucket = fees_by_currency.setdefault(
+            curr, {'stocks': 0.0, 'options': 0.0, 'total': 0.0}
+        )
+        bucket[asset] = bucket.get(asset, 0.0) + fee
+        bucket['total'] += fee
+    results['summary']['total_fees_by_currency'] = fees_by_currency
+
+    # The engine's dated notes (US stock dividends, an unapplied basis
+    # adjustment), printed for the tax year only (audit A2-0956).
+    _notes = results.pop('dated_notes', None) or []
+    for _d, _text in _notes:
+        if not req.year or str(_d or '').startswith(str(req.year)):
+            emit_line(_text)
+
+    # The engine's option/right-replacement warnings, printed here after
+    # the year filter above (audit S070-04).
+    if results.get('option_replacement_warnings'):
+        from taxjson.lib.core import _emit_option_replacement_stderr
+        _emit_option_replacement_stderr(
+            results['option_replacement_warnings'], country=req.country)
+
+    # Split tainted dispositions (those drawing from a missing-history pool OR a
+    # TRANSFER opening) into a separate "manual_reporting_required"
+    # section. Their gain values are bogus by construction (cost basis =
+    # 0 on the synthetic opening), so they must not feed totals.
+    # Tax-year filter (above) already trimmed everything to the year of
+    # interest; we just bucket it here.
+    clean_txs = []
+    tainted_txs = []
+    for t in results.get('transactions', []):
+        if t.pop('tainted', False):
+            # Strip the bogus gain numbers before surfacing — leave the
+            # facts the user needs for manual reporting (date, qty,
+            # proceeds, account) and drop the fabricated gain/cost.
+            # days_held too: the missing-history opening is dated 1970-01-01
+            # (a sentinel), so the engine's figure is ~20,000 days of
+            # nothing (audit R1-165).
+            tainted_txs.append({
+                **{k: v for k, v in t.items()
+                   if k not in ('gain', 'cost', 'taxable_gain',
+                                'disallowed')},
+                'days_held': None,
+            })
+        else:
+            clean_txs.append(t)
+    results['transactions'] = clean_txs
+    if tainted_txs:
+        results['manual_reporting_required'] = tainted_txs
+    if missing_history_log:
+        # Written as 'phantom_application_log' before 2026-10; readers
+        # (taxjson-split-gains) accept both keys.
+        results['missing_history_log'] = missing_history_log
+    # Recompute total_gain from clean transactions only.
+    if 'summary' in results and (tainted_txs or req.incomplete_history):
+        results['summary']['total_gain'] = _trade_gain_total(clean_txs)
+    # The US engine's count is taken before the year filter and the
+    # tainted split (audit S070-22): it counts the records in this file.
+    if 'count' in results.get('summary', {}):
+        results['summary']['count'] = len(clean_txs)
+
+    # Traces after the split (audit R1-165): the trace file's header and
+    # per-symbol totals then match the gains JSON, and unknown-cost
+    # dispositions are rendered in their own manual-reporting section.
+    if req.trace and trace_sink is not None:
+        trace_sink(results)
+
+    # Cross-year superficial-loss warning: an in-year clean loss within
+    # ±30 days of a tainted disposition on the same symbol may be
+    # affected by the superficial-loss rule. We can't compute the
+    # adjustment because the tainted leg has unknown ACB — surface it
+    # for manual resolution.
+    # Measured on the country's own window dates and named by its rule
+    # (settle dates and s.54 in Canada, trade dates and §1091 in the
+    # US), and skipped where the rule does not apply at all (US crypto:
+    # detect_wash off) — partition ENGINE-04/05, INPUTS-11.
+    _loss_rule = req.effective_detect_wash()
+    if req.incomplete_history and all_tainted_across_years and _loss_rule:
+        clean_losses = [t for t in clean_txs if t.get('gain', 0.0) < -0.001]
+        sl_warnings = detect_superficial_loss_warnings(
+            clean_losses, all_tainted_across_years, country=req.country)
+        if sl_warnings:
+            results['superficial_loss_warnings'] = sl_warnings
+
+    # Partial-taint warning: a TAINTED loss never feeds the wash-sale solver
+    # (its number is fabricated against a zero-cost pool by construction),
+    # but when most of the shares were REAL and an acquisition sits inside
+    # the ±30-day window, the user manually reporting that loss must apply
+    # CRA's superficial-loss rule BY HAND — previously there was zero signal.
+    if tainted_txs and _loss_rule:
+        from datetime import datetime as _dt
+        from taxjson.lib.missing_history import LOSS_RULE, loss_window_date
+        _rule_name, _basis = LOSS_RULE[req.country]
+        _pt_warns = []
+        for t in tainted_txs:
+            raw = float(t.get('raw_gain') or 0.0)
+            if raw >= -0.001:
+                continue
+            try:
+                d0 = _dt.strptime(loss_window_date(t, req.country),
+                                  '%Y-%m-%d')
+            except ValueError:
+                continue
+            from taxjson.lib.core import not_a_purchase as _is_open
+            for a in transactions:
+                # An opening balance is not a purchase (CA-OPEN-01 /
+                # US-OPEN-01).
+                if (a.symbol != t.get('symbol')
+                        or a.action not in ('BUYSELL', 'ASSIGN')
+                        or a.quantity <= 0 or _is_open(a)):
+                    continue
+                try:
+                    da = _dt.strptime(loss_window_date(
+                        {'date': a.date, 'date_settle': a.date_settle},
+                        req.country), '%Y-%m-%d')
+                except ValueError:
+                    continue
+                if abs((da - d0).days) <= 30:
+                    _pt_warns.append({
+                        'symbol': t.get('symbol'),
+                        'account': t.get('account'),
+                        'loss_date': t.get('date'),
+                        'raw_loss': raw,
+                        'acquisition_date': a.date,
+                        'note': ('unknown-cost loss with an '
+                                 f'in-window acquisition ({_basis} dates) — '
+                                 'if you claim this loss manually, apply '
+                                 f'{_rule_name} to the rebuy'),
+                    })
+                    break
+        if _pt_warns:
+            results.setdefault('superficial_loss_warnings', []).extend(_pt_warns)
+
+    # Transfer-ins the books keep as custody moves (CA-SL-16 /
+    # US-WASH-23; a taxable arrival at the broker's book value too,
+    # CA-ACB-TRANSFER-BV) that sit inside a loss's window: never a
+    # replacement, so said once — the user decides whether one was an
+    # in-kind contribution or a purchase after all.
+    if _loss_rule:
+        _xw = transfers_in_loss_windows(
+            clean_txs, list(transactions) + list(sheltered_transactions)
+            + list(affiliated_transactions or []), req.country,
+            moves=_netted_moves)
+        if _xw:
+            results['transfers_in_loss_windows'] = _xw
+            _h, _det, _leg = transfer_window_message(_xw, req.country)
+            say("warning", _h, _det, legacy=_leg)
+
+    # Say it where the user reads it (audit R1-325): the warnings only
+    # lived in the gains JSON, and the per-account split dropped them.
+    # A `warning:` line reaches the .diag and the DIAGNOSTICS banner.
+    from taxjson.lib.missing_history import LOSS_CHECK_LABEL, LOSS_RULE
+    for w in results.get('superficial_loss_warnings') or []:
+        if w.get('message'):
+            emit_line(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
+                      f"{w['message']}")
+        else:
+            emit_line(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
+                  f"{w.get('symbol')} loss with unknown cost (no purchase "
+                  f"in your files) of "
+                  f"{abs(float(w.get('raw_loss') or 0.0)):.2f} on "
+                  f"{w.get('loss_date')} with a buy on "
+                  f"{w.get('acquisition_date')} inside the window — if "
+                  f"you report this loss by hand, apply "
+                  f"{LOSS_RULE[req.country][0]} to that rebuy.")
+
+    # Traces are emitted in the sidecar text file (when requested) — drop
+    # them from the JSON unconditionally so stdout stays clean and
+    # grep-friendly. The engine emits 'trace': [] even when trace=False, so
+    # stripping is worth doing in both modes.
+    for t in results.get('transactions', []):
+        t.pop('trace', None)
+    for t in results.get('manual_reporting_required', []):
+        t.pop('trace', None)
+    for w in results.get('wash_sales', []):
+        w.pop('trace', None)
+
+    return round_floats(results)
+
+
+# The captured head of the run's one transfer-window warning (the run
+# reads the gains JSON's `transfers_in_loss_windows`, not this text).
+TRANSFER_WINDOW_HEAD = "warning: transfer-in inside a loss window: "
+
+
+def transfers_in_loss_windows(losses, rows, country: str,
+                              window_days: int = 30, *,
+                              moves=()) -> List[Dict[str, Any]]:
+    """Each transfer-in the books hold but never count as a purchase
+    (core.TRANSFER_CUSTODY_TYPE: a sheltered account's custody move;
+    core.TRANSFER_BOOK_VALUE_TYPE: a taxable arrival at the broker's
+    book value) dated inside the ±`window_days` window of a loss in
+    `losses` (gain rows; the raw loss before any denial) on the same
+    symbol, measured on the country's window dates (settle in Canada,
+    trade in the US). One record per transfer row, naming the nearest
+    loss: {account, symbol, qty, date, loss_date, loss_account}.
+
+    `moves`: the transfer clusters the default policy netted out of the
+    sheltered context (_handle_transfers moves_out — a move between two
+    of your accounts, a zero-net cluster in one), one list of TRANSFER
+    rows each. A cluster with a leg inside a loss's window is one record
+    too, kind "move": {kind, account ("rrsp→tfsa"), from_accounts,
+    to_accounts, symbol, qty (the shares moved), date, date_end,
+    loss_date, loss_account} — one leg may have been a contribution."""
+    from datetime import datetime as _dt
+    from taxjson.lib.core import (TRANSFER_BOOK_VALUE_TYPE,
+                                  TRANSFER_CUSTODY_TYPE)
+    from taxjson.lib.missing_history import loss_window_date
+
+    def _day(v):
+        try:
+            return _dt.strptime(str(v or '')[:10], '%Y-%m-%d')
+        except ValueError:
+            return None
+    by_sym: Dict[str, list] = {}
+    for e in losses or ():
+        if e.get('action') in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
+            continue
+        raw = e.get('raw_gain', e.get('gain'))
+        try:
+            raw = float(raw or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if raw >= -0.005 or e.get('deemed'):
+            continue
+        d = _day(loss_window_date(e, country))
+        if d is not None and e.get('symbol'):
+            by_sym.setdefault(e['symbol'], []).append((d, e))
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for t in rows or ():
+        if (getattr(t, 'action', '') != 'BUYSELL'
+                or float(getattr(t, 'quantity', 0) or 0) <= 0
+                or (getattr(t, 'type', '') or '') not in (
+                    TRANSFER_CUSTODY_TYPE, TRANSFER_BOOK_VALUE_TYPE)):
+            continue
+        cands = by_sym.get(t.symbol)
+        if not cands:
+            continue
+        td = _day(loss_window_date({'date': t.date,
+                                    'date_settle': t.date_settle}, country))
+        if td is None:
+            continue
+        near = [(abs((td - d).days), d, e) for d, e in cands
+                if abs((td - d).days) <= window_days]
+        if not near:
+            continue
+        _gap, _d, e = min(near, key=lambda x: (x[0], x[1]))
+        key = (t.account, t.symbol, t.date, float(t.quantity))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({'account': t.account, 'symbol': t.symbol,
+                    'qty': float(t.quantity), 'date': t.date,
+                    'loss_date': e.get('date'),
+                    'loss_account': e.get('account')})
+    for seg in moves or ():
+        legs = [t for t in seg if getattr(t, 'action', '') == 'TRANSFER']
+        if not legs:
+            continue
+        sym = legs[0].symbol
+        cands = by_sym.get(sym)
+        if not cands:
+            continue
+        near = []
+        for t in legs:
+            td = _day(loss_window_date({'date': t.date,
+                                        'date_settle': t.date_settle},
+                                       country))
+            if td is None:
+                continue
+            near += [(abs((td - d).days), d, e) for d, e in cands
+                     if abs((td - d).days) <= window_days]
+        if not near:
+            continue
+        _gap, _d, e = min(near, key=lambda x: (x[0], x[1]))
+        outs = sorted({t.account for t in legs if t.quantity < 0})
+        ins = sorted({t.account for t in legs if t.quantity > 0})
+        dates = sorted(t.date for t in legs)
+        qty = sum(float(t.quantity) for t in legs if t.quantity > 0)
+        acct = f"{'+'.join(outs) or '?'}→{'+'.join(ins) or '?'}"
+        key = ('move', acct, sym, dates[0], qty)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({'kind': 'move', 'account': acct, 'symbol': sym,
+                    'from_accounts': outs, 'to_accounts': ins,
+                    'qty': qty, 'date': dates[0], 'date_end': dates[-1],
+                    'loss_date': e.get('date'),
+                    'loss_account': e.get('account')})
+    out.sort(key=lambda r: (r['date'], r['account'], r['symbol']))
+    return out
+
+
+def _date_span(a: str, b: str) -> str:
+    """2025-04-20/21, 2025-04-30/05-02, or one date."""
+    a, b = str(a or ''), str(b or '')
+    if not b or a == b:
+        return a
+    if a[:7] == b[:7]:
+        return f"{a}/{b[8:]}"
+    if a[:4] == b[:4]:
+        return f"{a}/{b[5:]}"
+    return f"{a}/{b}"
+
+
+def transfer_window_message(items, country: Optional[str]
+                            ) -> Tuple[str, List[str], str]:
+    """(headline, details, captured text) of the one warning for
+    transfers_in_loss_windows `items`: captured as a `warning:` marker
+    line and indented detail lines (the .diag and the .sum DIAGNOSTICS
+    keep them), shown as `Warning:` with two-space continuations."""
+    n = len(items)
+    rule = ("the loss may be superficial (s.54)" if country == 'canada'
+            else "the loss may be a wash sale (§1091)" if country == 'usa'
+            else "the loss may be denied")
+    head = (f"{n} transfer in a taxable loss's 30-day window counted "
+            f"as an account move, not a purchase" if n == 1 else
+            f"{n} transfers in a taxable loss's 30-day window counted "
+            f"as account moves, not purchases")
+
+    def _row(x):
+        where = (f" in {x['loss_account']}" if x.get('loss_account')
+                 else '')
+        if x.get('kind') == 'move':
+            return (f"- {x['symbol']} {float(x.get('qty') or 0):g} moved "
+                    f"{x['account']} "
+                    f"{_date_span(x.get('date'), x.get('date_end'))} "
+                    f"inside the {x['loss_date']} loss window{where} — "
+                    f"if one leg was a contribution, {rule}")
+        return (f"- {x['account']}: {x['symbol']} +{x['qty']:g} on "
+                f"{x['date']} (loss sale {x['loss_date']}{where})")
+    rows = [_row(x) for x in items]
+    tail = (f"If one was an in-kind contribution or a purchase rather "
+            f"than an account move, {rule}: record it as a BUYSELL dated "
+            f"the day it was acquired to have it counted "
+            f"([settings] transfers_as_acquisitions = true counts every "
+            f"transfer).")
+    legacy = "\n".join([TRANSFER_WINDOW_HEAD + head]
+                       + ["  " + r for r in rows] + ["  " + tail])
+    return head, rows + [tail], legacy
+
+
+def tt_json_path(cache: Path, account: str, tt_name: str) -> Path:
+    """Where `taxjson run` writes the converted JSON of one account's
+    .tt file: `<cache>/<account>_tt_<stem>.json`. The `tt_` namespace
+    keeps a .tt named after a broker group (`questrade.tt`) or a
+    pipeline intermediate (`base.tt`) from overwriting that file —
+    the old `<account>_<stem>.json` did, silently dropping the whole
+    broker parse (R1-116). Every reader of a .tt's JSON uses this."""
+    return Path(cache) / f"{account}_tt_{Path(tt_name).stem}.json"
+
+
+def option_timing_from_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """The engine kwargs for `[settings] option_premium_timing` /
+    `option_grant_timing_since` (Canada). Default: statutory grant timing
+    from the project year on — earlier contracts keep close timing so a
+    premium that was open at a prior year end is not taxed nowhere."""
+    from taxjson.lib.country import settings_country
+    if settings_country(settings) == "usa":
+        return {}
+    timing = str(settings.get("option_premium_timing")
+                 or "grant").strip().lower()
+    if timing not in ("grant", "close"):
+        raise ValueError(
+            f"[settings] option_premium_timing must be \"grant\" or "
+            f"\"close\" (got {settings.get('option_premium_timing')!r})")
+    since = settings.get("option_grant_timing_since")
+    if since in (None, ""):
+        since = settings.get("year")
+    try:
+        since = int(since) if since is not None else None
+    except (TypeError, ValueError):
+        since = None
+    bb = settings.get("option_buyback_loss_superficial", False)
+    if bb is not None and not isinstance(bb, bool):
+        # bool("false") is True: the strict rule used to switch ON
+        # (audit S021-07). Every config reader refuses this too.
+        raise ValueError(
+            f"[settings] option_buyback_loss_superficial must be true or "
+            f"false, unquoted (got {bb!r})")
+    return {"option_premium_timing": timing, "option_grant_since": since,
+            "option_buyback_loss_superficial": bool(bb)}
+
+
+def income_dating_flags(settings: Dict[str, Any]) -> List[str]:
+    """The project's income-dating overrides ([settings]
+    corporate_distributions / ric_january_dividends) as taxjson-gains /
+    taxjson-sum-income flags (lib/income_dating)."""
+    from taxjson.lib.income_dating import IncomeRules
+    return IncomeRules.from_settings(settings).cli_flags()
+
+
+def transfers_as_acquisitions(settings: Dict[str, Any]) -> bool:
+    """`[settings] transfers_as_acquisitions` (both countries; default
+    false: a sheltered account's unmatched transfer is a custody move,
+    CA-SL-16 / US-WASH-23). A quoted or non-boolean value is refused
+    (bool("false") is True)."""
+    v = settings.get("transfers_as_acquisitions", False)
+    if v is None:
+        return False
+    if not isinstance(v, bool):
+        raise ValueError(
+            f"[settings] transfers_as_acquisitions must be true or false, "
+            f"unquoted (got {v!r})")
+    return v
+
+
+def option_timing_flags(settings: Dict[str, Any]) -> List[str]:
+    """The same choice as CLI flags for the taxjson-gains / audit / explain
+    subprocesses — plus the transfer policy (`--transfers-as-acquisitions`,
+    both countries), which every engine CLI given these flags reads."""
+    fl: List[str] = []
+    kw = option_timing_from_settings(settings)
+    if kw:
+        fl += ["--option-premium-timing", kw["option_premium_timing"]]
+        if kw.get("option_grant_since") is not None:
+            fl += ["--option-grant-since", str(kw["option_grant_since"])]
+        if kw.get("option_buyback_loss_superficial", False):
+            fl.append("--option-buyback-wash")
+    if transfers_as_acquisitions(settings):
+        fl.append("--transfers-as-acquisitions")
+    return fl

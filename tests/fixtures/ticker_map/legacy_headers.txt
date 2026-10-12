@@ -1,0 +1,509 @@
+Every header and explanatory paragraph earlier taxjson versions wrote into a
+ticker.map, one variant per `=== ` section, oldest first. Their example
+symbols are replaced by made-up ones (src/taxjson/lib/ticker_map_legacy.py
+masks a listing symbol before hashing, so the hashes are the same).
+tests/test_ticker_map_legacy.py recomputes that module's tables from this
+file and formats a map holding each variant.
+
+=== the earliest projects' header, before `taxjson init` wrote one
+# ticker.map — symbol rules for the taxjson pipeline.
+#
+# Each line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US and
+#                     XYZQ.TO). Consolidated only in the main pipeline
+#                     (which converts to base currency); the holdings
+#                     view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB in the main pipeline, AND
+#                     netted together in the holdings view so the
+#                     round-trip doesn't show as a phantom position.
+#   DELETE  from      Nuke that ticker's transactions — for pure
+#                     artifacts that are never real positions. The
+#                     deletion is audited (a NOTE on stderr).
+#
+# '#' starts a comment.
+=== `taxjson init`, first template
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#
+# Examples — uncomment and edit:
+# GLOBAL   OLDQ.US    NEWQ.US
+# TOBASE   XYZQ.US     XYZQ.TO
+# JOURNAL  ABCX.U.TO   ABCX.TO
+# DELETE   ZZZQ.US
+=== `taxjson init`: DISTINCT (the first public release)
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#
+# Examples — uncomment and edit:
+# GLOBAL   OLDQ.US    NEWQ.US
+# TOBASE   XYZQ.US     XYZQ.TO
+# JOURNAL  ABCX.U.TO   ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US     WXYQ.TO
+=== `taxjson init`: dated RENAME
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
+#
+# Examples — uncomment and edit:
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US     XYZQ.TO
+# JOURNAL  ABCX.U.TO   ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US     WXYQ.TO
+=== `taxjson init`: QUOTE, TRADINGVIEW, CRYPTO, EXTRACT
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
+#
+# Lookups — they change no symbol in the books:
+#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
+#                     The Yahoo Finance spelling price lookups use
+#                     (`taxjson harvest`); RATIO converts the position's
+#                     quantity (a ticker consumed by a merger, quoted as
+#                     the acquirer: OLDCO.TO NEWCO 0.25).
+#   TRADINGVIEW SYMBOL EXCHANGE
+#                     The exchange prefix of the TradingView watchlist
+#                     export (reports/exports/*_TV.txt).
+#   CRYPTO  SYMBOL YAHOO_ID
+#                     A coin whose ticker collides with another asset on
+#                     Yahoo (prices are looked up as YAHOO_ID-USD).
+#   EXTRACT description words | CURRENCY | SYMBOL
+#                     Parser override: a broker row whose description has
+#                     these words and whose currency is CURRENCY ('*' =
+#                     any) gets SYMBOL (a USD unit that trades only on the
+#                     TSX would otherwise become a .US listing).
+#
+# Examples — uncomment and edit:
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US     XYZQ.TO
+# JOURNAL  ABCX.U.TO   ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US     WXYQ.TO
+# QUOTE    XYZQ.TO    XYZQ.V
+# TRADINGVIEW ZZQ.US  NYSE
+# CRYPTO   ABC        ABC12345
+# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
+=== `taxjson init`: TRADINGVIEW retired
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
+#
+# Lookups — they change no symbol in the books:
+#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
+#                     The Yahoo Finance spelling price lookups use
+#                     (`taxjson harvest`); RATIO converts the position's
+#                     quantity (a ticker consumed by a merger, quoted as
+#                     the acquirer: OLDCO.TO NEWCO 0.25).
+#   CRYPTO  SYMBOL YAHOO_ID
+#                     A coin whose ticker collides with another asset on
+#                     Yahoo (prices are looked up as YAHOO_ID-USD).
+#   EXTRACT description words | CURRENCY | SYMBOL
+#                     Parser override: a broker row whose description has
+#                     these words and whose currency is CURRENCY ('*' =
+#                     any) gets SYMBOL (a USD unit that trades only on the
+#                     TSX would otherwise become a .US listing).
+#
+# Examples — uncomment and edit:
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US     XYZQ.TO
+# JOURNAL  ABCX.U.TO   ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US     WXYQ.TO
+# QUOTE    XYZQ.TO    XYZQ.V
+# CRYPTO   ABC        ABC12345
+# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
+=== `taxjson init`: T1135
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
+#
+# Lookups — they change no symbol in the books:
+#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
+#                     The Yahoo Finance spelling price lookups use
+#                     (`taxjson harvest`); RATIO converts the position's
+#                     quantity (a ticker consumed by a merger, quoted as
+#                     the acquirer: OLDCO.TO NEWCO 0.25).
+#   CRYPTO  SYMBOL YAHOO_ID
+#                     A coin whose ticker collides with another asset on
+#                     Yahoo (prices are looked up as YAHOO_ID-USD).
+#   EXTRACT description words | CURRENCY | SYMBOL
+#                     Parser override: a broker row whose description has
+#                     these words and whose currency is CURRENCY ('*' =
+#                     any) gets SYMBOL (a USD unit that trades only on the
+#                     TSX would otherwise become a .US listing).
+#   T1135   SYMBOL COUNTRY
+#                     The T1135 domicile where the listing suffix is wrong
+#                     (an interlisted company): an ISO 3166 alpha-3 code,
+#                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
+#                     (`taxjson t1135`).
+#
+# Examples — uncomment and edit:
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US     XYZQ.TO
+# JOURNAL  ABCX.U.TO   ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US     WXYQ.TO
+# QUOTE    XYZQ.TO    XYZQ.V
+# CRYPTO   ABC        ABC12345
+# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
+# T1135    XYZQ.US     CA
+=== `taxjson init`: CRYPTO's Yahoo id explained
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
+#
+# Lookups — they change no symbol in the books:
+#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
+#                     The Yahoo Finance spelling price lookups use
+#                     (`taxjson harvest`); RATIO converts the position's
+#                     quantity (a ticker consumed by a merger, quoted as
+#                     the acquirer: OLDCO.TO NEWCO 0.25).
+#   CRYPTO  SYMBOL YAHOO_ID
+#                     A coin whose ticker collides with another asset on
+#                     Yahoo (prices are looked up as YAHOO_ID-USD; with
+#                     no line, as SYMBOL-USD). Yahoo numbers a shared
+#                     ticker (SYMBOL<number>-USD): find the id on
+#                     finance.yahoo.com.
+#   EXTRACT description words | CURRENCY | SYMBOL
+#                     Parser override: a broker row whose description has
+#                     these words and whose currency is CURRENCY ('*' =
+#                     any) gets SYMBOL (a USD unit that trades only on the
+#                     TSX would otherwise become a .US listing).
+#   T1135   SYMBOL COUNTRY
+#                     The T1135 domicile where the listing suffix is wrong
+#                     (an interlisted company): an ISO 3166 alpha-3 code,
+#                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
+#                     (`taxjson t1135`).
+#
+# Examples — uncomment and edit:
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US     XYZQ.TO
+# JOURNAL  ABCX.U.TO   ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US     WXYQ.TO
+# QUOTE    XYZQ.TO    XYZQ.V
+# CRYPTO   ABC        ABC12345
+# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
+# T1135    XYZQ.US     CA
+=== `taxjson init`: made-up example symbols
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
+#
+# Lookups — they change no symbol in the books:
+#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
+#                     The Yahoo Finance spelling price lookups use
+#                     (`taxjson harvest`); RATIO converts the position's
+#                     quantity (a ticker consumed by a merger, quoted as
+#                     the acquirer: OLDCO.TO NEWCO 0.25).
+#   CRYPTO  SYMBOL YAHOO_ID
+#                     A coin whose ticker collides with another asset on
+#                     Yahoo (prices are looked up as YAHOO_ID-USD; with
+#                     no line, as SYMBOL-USD). Yahoo numbers a shared
+#                     ticker (SYMBOL<number>-USD): find the id on
+#                     finance.yahoo.com.
+#   EXTRACT description words | CURRENCY | SYMBOL
+#                     Parser override: a broker row whose description has
+#                     these words and whose currency is CURRENCY ('*' =
+#                     any) gets SYMBOL (a USD unit that trades only on the
+#                     TSX would otherwise become a .US listing).
+#   T1135   SYMBOL COUNTRY
+#                     The T1135 domicile where the listing suffix is wrong
+#                     (an interlisted company): an ISO 3166 alpha-3 code,
+#                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
+#                     (`taxjson t1135`).
+#
+# Examples — uncomment and edit:
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US    XYZQ.TO
+# JOURNAL  ABCX.U.TO  ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US    WXYQ.TO
+# QUOTE    XYZQ.TO    XYZQ.V
+# CRYPTO   ABC        ABC12345
+# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
+# T1135    XYZQ.US    CA
+=== `taxjson init`: the market lists
+# ticker.map — symbol rules for the taxjson pipeline. OPTIONAL: the pipeline
+# runs without it. Each non-comment line is:  KEYWORD  from  [to]
+#
+#   GLOBAL  from to   Plain rename — the same security under a wrong/old
+#                     ticker. Applied in EVERY stage (main + holdings).
+#   TOBASE  from to   Currency-equivalent cross-listing (e.g. XYZQ.US / XYZQ.TO).
+#                     Consolidated only in the to-base main pipeline; the
+#                     holdings view keeps the two listings separate.
+#   JOURNAL from to   A Norbert's Gambit pair (e.g. ABCX.U.TO / ABCX.TO):
+#                     consolidated for ACB AND netted in the holdings view.
+#   DELETE  from      Nuke that ticker's transactions (a pure artifact).
+#   DISTINCT a b      Declares two look-alike listings are SEPARATE
+#                     securities (a CDR vs its US underlying — WXYQ.TO
+#                     is a fractional CAD-hedged receipt over WXYQ.US,
+#                     never map it). Changes no symbol; silences the
+#                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
+#
+# Lookups — they change no symbol in the books:
+#   QUOTE   SYMBOL YAHOO_SYMBOL [RATIO]
+#                     The Yahoo Finance spelling price lookups use
+#                     (`taxjson harvest`); RATIO converts the position's
+#                     quantity (a ticker consumed by a merger, quoted as
+#                     the acquirer: OLDCO.TO NEWCO 0.25).
+#   CRYPTO  SYMBOL YAHOO_ID
+#                     A coin whose ticker collides with another asset on
+#                     Yahoo (prices are looked up as YAHOO_ID-USD; with
+#                     no line, as SYMBOL-USD). Yahoo numbers a shared
+#                     ticker (SYMBOL<number>-USD): find the id on
+#                     finance.yahoo.com.
+#   EXTRACT description words | CURRENCY | SYMBOL
+#                     Parser override: a broker row whose description has
+#                     these words and whose currency is CURRENCY ('*' =
+#                     any) gets SYMBOL (a USD unit that trades only on the
+#                     TSX would otherwise become a .US listing).
+#   T1135   SYMBOL COUNTRY
+#                     The T1135 domicile where the listing suffix is wrong
+#                     (an interlisted company): an ISO 3166 alpha-3 code,
+#                     or CA/CAN/CANADA/EXCLUDE for "not foreign property"
+#                     (`taxjson t1135`).
+#
+# Market lists — extend or override taxjson's shipped list (data/markets.toml;
+# the run notes once per symbol when a built-in entry decided something):
+#   STABLE     SYMBOL USD|NO   A US-dollar stablecoin (NO: not one).
+#   SPLITSHARE ROOT [NO]       A Canadian split-share corporation (dividends
+#                              dated when paid, not a trust's distribution).
+#   INDEXOPT   ROOT [NO]       US: a broad-based index option root (§1256).
+#   EVENING    ROOT [NO]       An option root with a Cboe evening session
+#                              (a fill from 20:15 ET is the next trading day).
+#   MULT       SYMBOL N        An option's contract size where the export
+#                              does not give it (SYMBOL: the option or root).
+#   VENUE      IBCODE SUFFIX   An IB listing exchange and its suffix (NO:
+#                              drop a built-in one).
+#   GLOBAL     CODE SYMBOL     Between bare crypto codes: folded by the
+#                              Coinbase/Kraken parsers before reading a row
+#                              (a staked-coin code into its coin).
+#
+# Examples — uncomment and edit:
+# RENAME   OLDQ.US    NEWQ.US   2024-06-10
+# GLOBAL   ABCX-B.US  ABCX.B.US
+# TOBASE   XYZQ.US    XYZQ.TO
+# JOURNAL  ABCX.U.TO  ABCX.TO
+# DELETE   ZZZQ.US
+# DISTINCT WXYQ.US    WXYQ.TO
+# QUOTE    XYZQ.TO    XYZQ.V
+# CRYPTO   ABC        ABC12345
+# EXTRACT  Example US Dollar Unit Fund | USD | ABCX.U.TO
+# T1135    XYZQ.US    CA
+# STABLE   ZZUSD      USD
+# SPLITSHARE ZZQ
+# MULT     ZZQ1       50
+# GLOBAL   ZZC2       ZZC
+=== `taxjson init` / `taxjson format-map`: the first grouped layout
+## ticker.map: standing truths about the securities in your books, one rule per line, in groups: a
+## spelling to read as another symbol, two listings that are one security (or are not), a symbol to
+## drop, a ticker change on a date, and lookups an export cannot give. Optional: a run needs no rule
+## here. Symbols are case-insensitive; a note goes after `#`; a line starting `# KEYWORD` is a rule
+## switched off (delete the `# ` to use it). `taxjson format-map` keeps this layout, and a comment
+## directly above a line moves with it. Every keyword: docs/settings.md, ticker.map.
+
+## --- Spellings ---
+## GLOBAL FROM TO  FROM is another spelling of TO, in every stage (an odd broker ticker, an internal
+##                 code, a coin alias)
+## RENAME FROM TO  the same (a RENAME without a date)
+
+# GLOBAL ABCX-B.US ABCX.B.US
+# GLOBAL ZZC2 ZZC
+
+## --- Listings of one security ---
+## TOBASE FROM TO  two listings of one security: one cost pool (in the base currency)
+## DISTINCT A B    two look-alike listings that are separate securities
+
+# TOBASE XYZQ.US XYZQ.TO
+# DISTINCT WXYQ.US WXYQ.TO
+
+## --- Clean-up ---
+## DELETE SYMBOL  drop every row of a symbol that is no real security (a broker artifact)
+
+# DELETE ZZZQ.US
+
+## --- Dated events ---
+## RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]  a ticker change on that date
+## JOURNAL FROM TO                                      a Norbert's Gambit pair: one cost pool,
+##                                                      netted in the holdings view
+
+# RENAME OLDQ.US NEWQ.US 2024-06-10
+# JOURNAL ABCX.U.TO ABCX.TO
+
+## --- Lookups ---
+## They change no symbol in the books.
+## QUOTE SYMBOL YAHOO_SYMBOL [RATIO]              the Yahoo spelling a price lookup uses
+## EXTRACT DESCRIPTION WORDS | CURRENCY | SYMBOL  the symbol of a broker row with these words
+## CRYPTO SYMBOL YAHOO_ID                         a coin's Yahoo id
+## T1135 SYMBOL COUNTRY                           the T1135 domicile of a symbol (Canada)
+## STABLE SYMBOL USD|NO                           a US-dollar stablecoin, or not one
+## SPLITSHARE ROOT [NO]                           a Canadian split-share corporation
+## INDEXOPT ROOT [NO]                             a broad-based index option root (US)
+## EVENING ROOT [NO]                              an option root with a Cboe evening session
+## MULT SYMBOL N                                  an option's contract size
+## VENUE IBCODE SUFFIX|NO                         an IB listing exchange and its suffix
+
+# QUOTE XYZQ.TO XYZQ.V
+# EXTRACT Example US Dollar Unit Fund | USD | ABCX.U.TO
+# CRYPTO ABC ABC12345
+# T1135 XYZQ.US CA
+# STABLE ZZUSD USD
+# SPLITSHARE ZZQ
+# MULT ZZQ1 50
+=== `taxjson migrate`: a ticker.map it created
+# ticker.map — symbol rules and lookups (see `taxjson-ticker-map --help`).

@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# Installed into .git/hooks/pre-push by scripts/dev-setup.sh (and run by
+# scripts/release.sh itself). On a public repository a push IS
+# publication, so this is the last check: scan the net diff the push
+# would add AND the added lines of every commit it publishes, merge
+# commits included (a value added in one commit — or in a merge's
+# resolution — and removed in the next is still in history; money
+# amounts in CHANGELOG / docs / code comments too), the text inside every revision of a binary file
+# it adds, the branch / tag NAMES it publishes, the commit messages,
+# annotated-tag messages, and the author / committer / tagger identities
+# of the NEW commits and tags — identities against your private denylist
+# and the e-mail allowlist, everything else against the generic patterns
+# too. Refuses on any hit or scanner error — except an identity that
+# equals this repo's configured user.name <user.email>: that one is only
+# WARNED about (history already carries it, and blocking it would block
+# every push; switch to a pseudonym to stop publishing it).
+# First, the TAG GUARD: a pushed tag must be a release — named vX.Y.Z,
+# annotated, and on main (the remote's main, or the main this same push
+# sends) — and a tag is never deleted or moved. `git push --tags` once
+# published tags that were never meant to be public; scripts/release.sh
+# pushes the one tag by name (docs/releasing.md).
+# Bypass knowingly: git push --no-verify
+set -uo pipefail
+root="$(git rev-parse --show-toplevel)"
+remote="$1"
+check="$root/scripts/check-pii.sh"
+z=0000000000000000000000000000000000000000
+me="$(git config user.name || true) <$(git config user.email || true)>"
+refuse() { echo "pre-push: refusing to publish $1 — $2" >&2; exit 1; }
+input="$(cat)"
+
+# ---- tag guard ----------------------------------------------------------
+pushed_main=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = refs/heads/main ] && [ -n "$local_sha" ] && [ "$local_sha" != "$z" ] \
+    && pushed_main="$local_sha"
+done <<< "$input"
+remote_main="$(git rev-parse -q --verify "refs/remotes/$remote/main^{commit}" 2>/dev/null || true)"
+tag_refused=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in refs/tags/*) ;; *) continue ;; esac
+  name="${remote_ref#refs/tags/}"
+  why=""
+  if [ "$local_sha" = "$z" ]; then
+    why="deleting a tag — a published release is never deleted (roll a channel back with scripts/promote.sh)"
+  elif [ -n "$remote_sha" ] && [ "$remote_sha" != "$z" ]; then
+    why="moving a tag the remote already has — a published release is never moved"
+  elif ! [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    why="not a release tag (vX.Y.Z)"
+  elif [ "$(git cat-file -t "$local_sha" 2>/dev/null)" != tag ]; then
+    why="a lightweight tag — a release is an annotated tag (scripts/release.sh makes one)"
+  elif ! commit="$(git rev-parse -q --verify "$local_sha^{commit}" 2>/dev/null)"; then
+    why="it does not point at a commit"
+  else
+    why="its commit is not on $remote's main (nor on a main this push sends)"
+    for m in $remote_main $pushed_main; do
+      if git merge-base --is-ancestor "$commit" "$m" 2>/dev/null; then why=""; break; fi
+    done
+  fi
+  [ -z "$why" ] || tag_refused="$tag_refused  $name: $why
+"
+done <<< "$input"
+if [ -n "$tag_refused" ]; then
+  printf 'pre-push: refusing to push these tags:\n%s' "$tag_refused" >&2
+  echo "Releases are cut by scripts/release.sh, which pushes the one tag by name; never \`git push --tags\` (docs/releasing.md)." >&2
+  exit 1
+fi
+
+# ---- the PII scan of what each ref publishes ------------------------------
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "$local_sha" ] || continue                       # an empty line
+  [ "$local_sha" = "$z" ] && continue                  # branch delete
+  # The ref NAME is published too (a branch named after the holder or an
+  # account id): S024-24.
+  if ! printf '%s\n%s\n' "$local_ref" "$remote_ref" | "$check" --text >/dev/null; then
+    printf '%s\n%s\n' "$local_ref" "$remote_ref" | "$check" --text | grep -v '^check-pii' >&2
+    refuse "a ref" "the branch or tag NAME hit the scan."
+  fi
+  if [ "$remote_sha" != "$z" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    diff_cmd=(git diff "$remote_sha" "$local_sha" --)
+    log_range=("$remote_sha..$local_sha")
+    per_commit=1
+  else
+    # New branch/tag, or a remote tip we do not have: everything not
+    # already on that remote, each commit's own patch (a merge's against
+    # its first parent: a superset of what its resolution added).
+    diff_cmd=(git log -p --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
+    log_range=("$local_sha" --not --remotes="$remote/*")
+    per_commit=0      # the log above is already per commit
+  fi
+  if ! "${diff_cmd[@]}" | "$check" --diff; then
+    refuse "$local_ref" "see above."
+  fi
+  # The net diff hides a value one pushed commit added and a later one
+  # removed — history publishes it all the same (security review M2).
+  # One pass over every pushed commit's own patch, MERGES INCLUDED: a
+  # merge's patch is its combined diff (--cc), whose lines added against
+  # every parent are what the resolution itself wrote — a value a merge
+  # added and a later commit removed is not in the net diff (issue #33).
+  if [ "$per_commit" = 1 ] && ! git log -p --cc --format='' "${log_range[@]}" -- | "$check" --diff; then
+    refuse "$local_ref" "see above — a commit in the push adds it, even if a later one removes it (rewrite that commit)."
+  fi
+  # A diff shows a binary only as 'Binary files ... differ': scan the
+  # text inside each binary the push adds (PDF /Author, DOCX creator, a
+  # spreadsheet's cells, a compressed PDF stream) — EVERY revision of it
+  # that any pushed commit introduces, not just the one at $local_sha: a
+  # PDF cleaned in a later commit is still published in history (S024-04,
+  # issue #7). Each distinct blob once; a blob the remote already has
+  # (reachable from what it holds) is skipped.
+  newobj="$(git rev-list --objects "${log_range[@]}" -- | cut -d' ' -f1)" \
+    || refuse "$local_ref" "could not list the objects it adds (git rev-list failed) to scan its binary files."
+  bins="$(git log --raw --numstat --no-renames --no-abbrev --format='commit %H' \
+            --diff-merges=first-parent "${log_range[@]}" -- \
+          | awk -F'\t' '/^commit /  { delete m; next }
+                        /^:/        { split($1, a, " "); m[$2] = a[4]; next }
+                        $1 == "-" && $2 == "-" && ($3 in m) { print m[$3] "\t" $3 }' \
+          | awk -F'\t' 'NR == FNR { if ($1 != "") new[$1] = 1; next }
+                        ($1 in new) && !seen[$1]++' <(printf '%s\n' "$newobj") -)" \
+    || refuse "$local_ref" "could not list the binary files it adds (git log failed) to scan them."
+  if [ -n "$bins" ]; then
+    bt="$(mktemp -d)"
+    i=0
+    while IFS=$'\t' read -r sha p; do
+      [ -n "$sha" ] || continue
+      i=$((i + 1))            # one folder per revision: the same path twice
+      mkdir -p "$bt/blobs/rev$i/$(dirname "$p")"
+      git cat-file blob "$sha" > "$bt/blobs/rev$i/$p" || {
+        rm -rf "$bt"; refuse "$local_ref" "could not read a binary file ($p) to scan it."; }
+    done <<< "$bins"
+    if [ -n "$(find "$bt/blobs" -type f 2>/dev/null)" ] && ! "$check" "$bt/blobs"; then
+      rm -rf "$bt"; refuse "$local_ref" "a BINARY file's embedded text hit the scan (blobs/revN/<path> is one revision of <path> among the pushed commits, even if a later one replaces it: rewrite the commit that added it)."
+    fi
+    rm -rf "$bt"
+  fi
+  # Messages also refuse a money amount (1,234,567.89): no owner-book  # pii-ok
+  # figure in public history (A2-1384); `pii-ok` on the line marks a
+  # synthetic one.
+  if ! git log --format=%B "${log_range[@]}" | "$check" --message; then
+    refuse "$local_ref" "a commit MESSAGE hit the scan."
+  fi
+  # Identities of the commits this push adds (not of existing history).
+  ids="$(git log --format='%an <%ae>%n%cn <%ce>' "${log_range[@]}")"
+  if [ "$(git cat-file -t "$local_sha" 2>/dev/null)" = tag ]; then
+    tagobj="$(git cat-file tag "$local_sha")"
+    ids="$ids
+$(printf '%s\n' "$tagobj" | sed -nE 's/^tagger (.*) <([^>]*)> [0-9]+ [+-][0-9]{4}$/\1 <\2>/p')"
+    if ! printf '%s\n' "$tagobj" | sed '1,/^$/d' | "$check" --message; then
+      refuse "$local_ref" "the annotated TAG message hit the scan."
+    fi
+  fi
+  ids="$(printf '%s\n' "$ids" | grep -v '^$' | sort -u)"
+  others="$(printf '%s\n' "$ids" | grep -vxF -e "$me" || true)"
+  mine="$(printf '%s\n' "$ids" | grep -xF -e "$me" || true)"
+  if [ -n "$others" ] && ! printf '%s\n' "$others" | "$check" --identity; then
+    refuse "$local_ref" "an author/committer/tagger IDENTITY hit the scan."
+  fi
+  if [ -n "$mine" ] && ! printf '%s\n' "$mine" | "$check" --identity >/dev/null; then
+    echo "pre-push: WARNING: your configured git identity (user.name /" \
+         "user.email) hits the scan (private denylist, or an e-mail not on the" \
+         "allowlist) and is published in every" \
+         "commit and tag you push. Not blocking (it is this repo's configured" \
+         "user); set a pseudonym to stop: git config user.name <pseudonym>;" \
+         "git config user.email <id>+<login>@users.noreply.github.com" >&2
+  fi
+done <<< "$input"
+exit 0

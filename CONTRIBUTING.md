@@ -1,0 +1,452 @@
+# Contributing to taxjson
+
+Thanks for your interest. This project computes numbers that real people put on real tax returns, so correctness is the top priority. Contributions of all sizes are welcome — bug reports, parser support for new brokerages, rule coverage for additional countries, and documentation fixes.
+
+## Ground rules
+
+- **Every fix lands with a regression test.** Pipeline correctness is preserved primarily through the test suite. A change without a test that would have failed before it is unlikely to be merged.
+- **Don't change pipeline output silently.** If your change alters the JSON shape, sums, or counts emitted by any `taxjson-*` tool, call it out in the PR description and update affected tests / baselines.
+- **No mocks for tax math.** Tests that hit the cost-basis solver, wash-sale matcher, or corp-action rewriter should exercise real code paths against real fixtures.
+
+## Setup
+
+```bash
+git clone https://github.com/taxjson/taxjson.git
+cd taxjson
+scripts/dev-setup.sh     # venv/, editable install with the [fx,dev] extras, the taxjson-fetch plugin, the pre-push hook
+source setup.sh          # activate it (each new shell)
+```
+
+`scripts/dev-setup.sh` is idempotent (re-run it after a pull). It installs
+the core with `pip install -e ".[fx,dev]"`, then the broker-fetch plugin
+with `pip install --no-deps -e packages/taxjson-fetch` (`--no-deps`: its
+only dependency is the core you just installed — taxjson is not published
+on PyPI, and a `taxjson` package there is not ours), installs the pre-push
+hook (tag guard and personal-data scan, below) and scaffolds your private
+denylist. `scripts/dev-setup.sh --hook-only` (re)installs just the hook.
+End users install with the one-line installer instead (README, "Install").
+
+## Help wanted: broker exports
+
+The most valuable contribution is the **shape of a real export** from a
+broker the parsers don't cover yet (Wealthsimple, TD Direct, BMO
+InvestorLine, CIBC Investor's Edge, Scotia iTRADE, National Bank Direct,
+Qtrade, Desjardins…) or from a US account for the experimental US engine.
+How to share it — the same rule as the bug-report template, README and
+SECURITY.md:
+
+1. **Never attach a raw export** or anything copied from one.
+2. **First choice, a synthetic file:** the header and a few rows of each
+   kind (buy, sell, dividend, fee, transfer, corporate action…), with the
+   broker's exact columns, action words and wording pattern, and made-up
+   symbols, ids and amounts. Its amounts are made up, so they are fine.
+3. **Otherwise a redacted copy, after review.** `taxjson redact` copies an
+   export and strips what it recognises:
+
+   ```bash
+   taxjson redact ~/Downloads/activity.csv        # writes activity.redacted.csv
+   taxjson redact                                 # in a project: inputs/ -> inputs_redact/
+   ```
+
+   It replaces every account number with a same-length placeholder (so
+   the file still parses), removes name/alias/address rows and e-mail
+   addresses, and prints a report. Run with no file in a project, it
+   copies the whole `inputs/` folder to `inputs_redact/` and redacts the
+   copy (file names that hold an account number included; the old → new
+   names are printed, never written into the copy); `inputs/` is left as
+   it was, and binary files (`.xlsx`, `.pdf`) are not copied. It is
+   pattern-based and keeps quantities, prices, amounts, dates and symbols
+   (what a parser needs): read all of it — the free-text description
+   column especially — and attach it only after that review, and only if
+   you are comfortable sharing those real amounts.
+
+## Before anything is pushed: personal data
+
+This is a public repository, so a push is publication. `scripts/check-pii.sh`
+scans for broker account-id shapes, home paths, unlisted e-mail addresses,
+credential-looking strings (PEM private keys, GitHub / Anthropic / Slack /
+AWS key formats, a high-entropy value after a key / secret / token name), and — for the maintainer — a **private denylist**
+at `~/.config/taxjson/pii-denylist` (one regex per line: your real account
+numbers, name, addresses; it lives outside every repository, so the strings
+it guards are never themselves committed). It runs in every `scripts/ci.sh`
+mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs (into
+the clone's own hooks folder, also when a global `core.hooksPath` chains
+to it; `--hook-only` installs just the hook), which
+scans only what a push would add — the diff lines (the net diff and the
+added lines of every pushed commit: a value added in one commit and removed
+in the next is still published), the text inside binary
+files (PDF/Office metadata and compressed PDF text, spreadsheet cells) —
+every revision of a binary file a pushed commit adds, not only the one at
+the tip — branch and tag names,
+commit and tag messages, and author/committer/tagger identities (against
+the denylist and the e-mail allowlist) — and refuses on any hit (your own
+configured identity only warns). `scripts/release.sh` runs the same hook
+itself before it pushes. Account-id shapes count in folder names as well
+as file names, and an 8-9 digit value under an `Account` / `Account #`
+CSV column counts as an account number; other broker id layouts are
+caught only by your private denylist, so fill it in.
+Mark a genuine false positive with a `# pii-ok` (or `pii-ok:`) comment on that
+line — the bare word does not count; bypass knowingly with
+`git push --no-verify`. Fixtures must be synthetic: fake account ids
+(`U1234567`, `99900001`), made-up ISINs, no real statements.
+A pull request (and a push to `main`) gets the same check in CI with the
+generic patterns: every commit it adds (patch, message, author and
+committer identities), so
+commit with your GitHub `…@users.noreply.github.com` address.
+
+**Never put figures, ids or names from a real person's books into code,
+tests, docs, the CHANGELOG or commit messages** — yours or anyone else's.
+Use synthetic inputs: made-up amounts, quantities, dates, tickers and
+ids (a test builds its expected numbers from a synthetic input it
+states). CHANGELOG entries describe a change in words; a worked example
+with numbers is allowed only when it is computed from a synthetic input
+stated next to it. Commit and tag messages are public history and cannot
+be scrubbed: no real amounts or totals, no symbol + quantity pairs or
+trade dates from real books, no account ids — write "the 2025 total is
+unchanged", not the number. The `pre-push` hook enforces part of this: a commit or tag message
+line with a money-like amount (thousands separators and cents, such as
+`1,234,567.89`) is refused (`scripts/check-pii.sh --message`), and so is <!-- pii-ok: the synthetic example -->
+one added to a CHANGELOG or markdown doc line or a code comment in a pushed
+commit (`--diff`). A synthetic number is let through by the word `pii-ok`
+on its line (in a doc, `<!-- pii-ok -->`).
+
+The maintainer also keeps a **private figure list**: the distinctive
+money figures (amounts with cents, five or more digits, cents other than
+.00/.25/.50/.75) of their own projects' outputs — `reports/`,
+`work/*.sum`, `*.toml`, `*.tt` — and the distinctive values of the raw
+broker exports under `inputs/`: amounts with cents from six digits up,
+numbers with three or more decimals and six or more significant digits
+(prices, rates, fractional and coin quantities), broker reference codes
+(six or more letters and digits with at least two digits — internal
+security and option codes, option symbols with their root, order
+references — or a number of seven or more digits that is not a date),
+and clock times with seconds next to their date. Short, round and public
+values are never listed (a word ending in a 2-digit number, a month-name
+date, an option series without its root, an ISIN or CUSIP, a time on
+the minute), so a synthetic example rarely collides; when one does, use
+another synthetic value. All are stored only as salted SHA-256 hashes
+(mode `0600`, no plain figure on disk) at
+`~/.config/taxjson/pii-amounts` (override with `TAXJSON_PII_AMOUNTS`).
+Build or refresh it after a run with
+
+```bash
+scripts/check-pii.sh --collect-amounts path/to/project-2025 path/to/project-2026
+```
+
+(it merges into the existing list). Every check-pii mode — the tree scan
+in `ci.sh`, the pre-push diff and per-commit scan (merge commits
+included: the lines a merge adds against every parent), commit and tag
+messages, ref names — then refuses a line holding one of those figures,
+naming the file and line ("matches a figure from your own books") but
+never the figure. There is no `pii-ok` escape: if a synthetic number
+collides with one, pick another number. Contributors have no list, and a
+missing list at the default path is skipped silently; a list named by
+`TAXJSON_PII_AMOUNTS` that does not exist, or one that cannot be read,
+fails the scan. The hashes keep the figures out of plain sight on disk;
+they are not a defence against someone who already has the file, so keep
+it private like the denylist.
+
+## Running tests
+
+The package uses a `src/` layout, so tests import it **as installed** —
+run `scripts/dev-setup.sh` (Setup above) first, then:
+
+```bash
+python scripts/run_tests_parallel.py          # the suite on min(CPUs, 16) processes
+python scripts/run_tests_parallel.py test_x test_y   # some modules, in parallel
+python -m unittest discover -s tests -p "test_*.py" </dev/null   # serial
+```
+
+`scripts/run_tests_parallel.py` (standard library only) runs each test
+module in a process of its own — its own `TMPDIR` and its own synthetic
+HOME — `--jobs N` at a time, longest first by the times the previous
+run recorded in `.ci/test-durations.json` (gitignored; the file size
+stands in on a fresh clone). It prints a line per module that fails
+(`-v`: every module), each failure's full output, the total and the
+slowest 15 modules, and it fails unless every module passed AND the
+tests run add up to the serial discovery's count. A module slow enough
+to hold up the whole run is split into a process per test class. It
+never retries: a test that fails only in parallel shares something it
+must not — a fixed temp path, a port, a file in the checkout — and is a
+bug to fix. `--serial` runs the plain serial discovery.
+
+Or use the wrapper (serial, verbose):
+
+```bash
+./run_tests.sh
+```
+
+The broker-fetch plugin (`packages/taxjson-fetch`) has its own tests;
+they run from a checkout without installing the plugin (its
+`tests/_support.py` registers the entry point for the run), or after
+`pip install --no-deps -e packages/taxjson-fetch` (after the core: `--no-deps`
+keeps pip from fetching a `taxjson` from PyPI to meet its dependency):
+
+```bash
+PYTHONPATH=packages/taxjson-fetch/src python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py" </dev/null
+```
+
+Run taxjson on a project with the `taxjson` (`tjs`) console script, not
+`python -m taxjson.bin.taxjson_run` from inside the project folder:
+`python -m` puts the current directory first on `sys.path`, so a
+`json.py` or `csv.py` lying in the project would be imported and run
+(`python -P -m ...` on Python 3.11+ is safe). Code that starts a child
+Python process uses `taxjson.lib.dispatch.python_module_argv`, never
+`[sys.executable, "-m", ...]`.
+
+### The full gate: `scripts/ci.sh`
+
+Run this before every push. It is the full local gate (fuzzers, the
+private lists); the workflow file (`.github/workflows/tests.yml`, Python
+3.9–3.13 on Linux) runs its stages on every pull request and push to
+`main` — lint, consistency, tax-rules, the PII scan (generic patterns
+only: a hosted runner has no private denylist), gitleaks and the suite —
+and its checks are required before a pull request merges and before a
+release is tagged (docs/releasing.md). A missing `ruff` fails
+the lint stage; `pip install -e ".[dev]"` (or `scripts/dev-setup.sh`)
+installs it:
+
+```bash
+scripts/ci.sh            # lint (ruff, critical tier) + suite + fuzzers at CI depth
+scripts/ci.sh --nightly  # fuzzers at 5000/3000/1600 books
+scripts/ci.sh --quick    # lint + suite only
+scripts/ci.sh --serial   # ...with the suite in one process (the old way; a fallback)
+```
+
+The suite stage runs `scripts/run_tests_parallel.py` (`TAXJSON_TEST_JOBS=N`
+picks the process count). Measured on a 20-core machine (2026-10, ~8,350
+tests): serial 1,054 s; parallel 107 s on 16 processes (94 s on 20,
+128 s on 12, 180 s on 8, 327 s on 4). No module dominates: the slowest
+take 25-45 s, under the run's own length, so none is split. The whole
+default gate: 129 s (suite 98 s, fuzzers 10 s, the other stages ~20 s),
+was 18-20 minutes.
+
+Every run appends one line to `.ci/history.log` (gitignored) with the
+commit, mode, result and wall time, so "when was this last green?" has
+an answer.
+
+The suite runs in an empty HOME, offline, as on a GitHub runner: every
+test process gets a synthetic HOME with made-up exchange rates and
+`TAXJSON_OFFLINE=1` (`tests/_hermetic`), so a test never reads your rate
+cache or the network. A test of an online path injects its fetcher, or
+clears `TAXJSON_OFFLINE` itself. GitHub's matrix jobs install no optional
+extras: a test that needs one skips without it, and the gate's
+`no-extras` stage (`scripts/ci_no_extras.sh`, seconds) runs the tests
+that touch an extra with every extra hidden. Add a new such test module
+to its `EXTRAS_TESTS`; `scripts/ci_no_extras.sh venv/bin/python3 test_x`
+runs any module that way.
+
+### Property fuzzers
+
+Three seeded fuzzers assert LAWS of the domain over generated books —
+they are what keeps finding real engine bugs after the example tests
+stopped (each of the last three engine defects was a fuzzer catch):
+
+| Test module | Property | Depth env var (default) |
+|---|---|---|
+| `test_engine_invariants` | conservation, no phantom denials, order invariance, sign, solver health — both engines | `TAXJSON_FUZZ_BOOKS` (200) |
+| `test_transfer_fuzz` | custody-transfer netting/restatement/attestation: no crashes, conservation, determinism | `TAXJSON_TRANSFER_FUZZ_BOOKS` (150) |
+| `test_settle_straddle_fuzz` | settle-lagged trades vs splits: refusal semantics, conservation, lag-no-op and straddle differentials | `TAXJSON_STRADDLE_FUZZ_BOOKS` (200) |
+
+A failure prints its seed and the generated book; rebuild the book
+with the module's generator in a scratch script and shrink from there.
+
+### Mutation testing
+
+`scripts/mutation_audit.py --yes` mutates the wash-relevant regions of
+`core.py`/`pipeline.py` one operator at a time and reports survivors —
+mutants no test kills. Triage survivors with `scripts/mutation_triage.py`
+(equivalent mutants vs genuine test gaps). **It rewrites engine files in
+place**: run it alone on a clean tree, never alongside edits, and if it
+is interrupted restore with `git checkout -- src/taxjson/lib/`.
+`--list-targets` shows the regions without running anything.
+
+## Adding a brokerage parser
+
+1. Subclass `BaseBrokerage` in `src/taxjson/lib/brokerages/your_broker.py` and
+   implement `parse_file(path) -> List[Dict[str, Any]]`. Reuse the `base.py`
+   helpers (option symbol formatting, currency suffix, fee back-compute,
+   dividend qty/rate extraction, `tx_roc_adjust`) instead of reinventing them,
+   and follow the schema in `src/taxjson/lib/brokerages/schema.py` — it is
+   enforced: `taxjson-brokerage` validates every parse against it.
+2. Count what you drop: rows the parser can't classify go through
+   `self.count_skip('<category>')` (see the Questrade/RBC/Coinbase dispatch
+   loops); `taxjson-brokerage --lint` reconciles rows in vs rows out.
+3. Register the id(s) in `src/taxjson/bin/taxjson_brokerage.py`
+   (`register_brokerage(...)`) and add a content detector to `DETECTORS`
+   in `src/taxjson/lib/brokerages/detect.py`, built on your parser's OWN
+   header test (export the function the parser uses, as
+   `questrade.missing_columns` or `kraken.header_kind` do) — never a
+   second column list, and never the file name. Add your samples to the
+   detector matrix in `tests/test_fix_detect.py`: each must match only
+   its own detector.
+4. Add a SYNTHETIC fixture (never real account data) at
+   `tests/fixtures/your_broker/sample.csv`, register a three-line subclass in
+   `tests/test_parser_conformance.py`, and mint the golden with
+   `UPDATE_GOLDEN=1 python -m unittest tests/test_parser_conformance.py`.
+   The conformance kit (schema, golden, determinism, skip accounting) plus a
+   few behavior-specific unit tests is the review bar.
+5. `taxjson-generate-parser` can draft step 1 from a CSV sample — its prompt
+   is generated from the same schema table, but the draft still goes through
+   steps 2–4 like hand-written code.
+
+## Adding a broker fetcher (`taxjson fetch`)
+
+Broker API clients never go in the core: the core holds no broker
+client and reads no broker credential (SECURITY.md lists the core's
+network egress). `taxjson fetch` is a thin dispatcher over plugins, so a
+new broker's downloader is its own package. The contract is the module
+docstring of `src/taxjson/lib/fetchers.py`; in short:
+
+1. Write a class (instantiated with no arguments) or an object with:
+   - `brokerages` — the `brokerage = "..."` values (under
+     `[accounts.<name>]` in taxjson.toml) it serves;
+   - `description` — one line for `taxjson fetch --list`;
+   - `fetch(request) -> {account: {...}}` — download every account in
+     `request.accounts` into `request.inputs / <account>` (the inputs
+     folder: with `[settings] inputs_dir` it is the folder of exports
+     every year's project shares, and `request.shared_inputs` is true),
+     in a format an existing parser reads (or a `.tt` file), and return a
+     JSON-able result per account (the `--json` document). A positions
+     snapshot goes in `request.holdings` (the year's holdings folder).
+     An older core sends no `inputs` / `holdings`: fall back to
+     `request.root / "inputs"` / `request.root / "holdings"` then. Fail
+     with `SystemExit("taxjson fetch: ...")`, never a traceback.
+   - optional: `add_arguments(parser)` (its own `taxjson fetch` options;
+     an option two fetchers both define is shared, so keep the
+     conventional meaning, e.g. `--year`), `account_keys` (extra
+     `[accounts.<name>]` keys the config check should accept; `brokerage`,
+     `account` and `query_id` always are) and `setup_hint` (shown when no
+     account declares one of its brokerages).
+
+   `request` (`FetchRequest`) also carries `root` (the year's project),
+   `work`, the parsed `config`, the parsed `args`, a `say` progress
+   printer (stderr under `--json`) and the `dry_run` / `json` flags.
+2. Register it in your package's `pyproject.toml`:
+   `[project.entry-points."taxjson.fetchers"]` → `mybroker =
+   "mybroker_fetch.plugin:Fetcher"`, and depend on `taxjson`.
+3. Test it offline: inject the HTTP layer (see
+   `packages/taxjson-fetch/src/taxjson_fetch/api.py`'s `http_get`) and
+   round-trip the written file through the core parser. Never commit a
+   real token or account number.
+
+`packages/taxjson-fetch` (Questrade REST API, IBKR Flex) is the worked
+example; a fetcher kept in this repository lives under `packages/` and
+`scripts/ci.sh` runs its tests. User setup of the plugin is in
+[docs/brokers.md](docs/brokers.md).
+
+## Running the stages by hand
+
+`taxjson run` drives the whole pipeline for a project. The stage tools
+it calls are console scripts too — handy for one file, scripting, or
+seeing what a parser makes of an export. Each takes `--help`; outputs are
+JSON that feed the next stage. A walk-through on the demo files is in
+[examples/README.md](examples/README.md).
+
+```bash
+export TAXJSON_LOCAL_TZ=America/Toronto   # crypto exports: UTC times dated in this zone (required for Kraken/Coinbase)
+
+# 1. Convert a broker CSV to normalized JSON. --country picks the one
+#    country-specific parse choice (IB foreign return of capital: ITA
+#    s.90(1) dividend in Canada, a basis reduction in the US).
+taxjson-brokerage --brokerage ib --account margin --country ca activity.csv > margin.json
+
+# 2. Merge each ACCOUNT'S files into one per-account JSON. Sheltered
+#    accounts are NOT merged into the taxable input: RRSP/TFSA/IRA trades
+#    are outside the taxable ACB/FIFO pool and go to taxjson-gains via
+#    --sheltered (so they still feed cross-account loss-denial checks).
+#    --dedup / --validate are opt-in; without them merge2 just concatenates.
+taxjson-merge2 --dedup --validate margin.json > taxable.json
+taxjson-merge2 --dedup            rrsp.json   > sheltered.json
+
+# 3. Compute gains for a tax year. --taxable turns on superficial-loss /
+#    wash-sale detection (ITA s.54 and s.40(2)(g) in Canada, IRC §1091 in
+#    the US); --sheltered passes registered-account context for
+#    cross-account matching. A Canada project uses grant timing for
+#    written options: pass --option-premium-timing grant
+#    --option-grant-since YEAR to match `taxjson run`.
+taxjson-gains --country ca --year 2025 --taxable \
+    --sheltered sheltered.json taxable.json > gains.json
+
+# 4. Summarize
+taxjson-sum-gains gains.json        # realized gains/losses
+taxjson-sum-income taxable.json     # dividends/interest (reads merged JSON)
+```
+
+These stages skip what `taxjson run` adds around them (currency
+conversion to the base currency, corporate-action elections, ticker.map,
+the cross-account wash pass, missing-history openings), so their figures
+are not the project's.
+
+## Adding a country rule set
+
+Country-specific cost-basis and wash-sale logic lives in `src/taxjson/lib/core.py`. The Canadian ACB and US FIFO paths are the templates; add a new branch keyed off the `--country` CLI flag and write tests that exercise the boundary conditions (year-end carryover, multi-account aggregation, settlement-date edge cases).
+
+## Canada and US law never mix
+
+- **One country resolver.** Read a project's or a flag's country only
+  through `src/taxjson/lib/country.py` (`canonical_country`,
+  `settings_country`, `country_arg`, `resolve_tax_date`,
+  `home_currency`). A missing or unknown country is an error there, never
+  a silent Canada.
+- **Ownership tables.** A setting, config table, engine flag or command
+  that belongs to one country goes in `SETTING_COUNTRY`,
+  `CONFIG_COUNTRY`, `FLAG_COUNTRY` or `COMMAND_COUNTRY` (with its
+  `*_WHY` reason). The config readers, the engine CLIs and `taxjson`'s
+  dispatch refuse the other country's entries from those tables; tax-logic
+  states them.
+- **Country gates live in the engine, command or config layer.** Parsers
+  emit neutral facts; they never decide one country's tax treatment.
+
+## tax-logic is the spec
+
+Every statement `taxjson tax-logic` prints is a `Rule` with a stable id in
+`src/taxjson/lib/tax_logic.py` (`CA-...` in the Canada section, `US-...` in
+the US section; `taxjson tax-logic --ids` shows them). A change in tax
+logic changes or adds a Rule in the right country's section, and the test
+that pins it cites the id:
+
+```python
+from tax_rules import rule, rule_absent
+from tax_rules.dual import gains_both, tx
+
+@rule("CA-SL-02")                         # Canada applies it ...
+@rule_absent("CA-SL-02", country="usa")   # ... the same book under the US does not
+@rule("US-WASH-06")
+def test_still_held_at_day_30(self):
+    r = gains_both(book)                  # one synthetic book, both countries
+    ...
+```
+
+While a test runs, its markers restrict which country's engine may run (an
+`AssertionError` otherwise, also in a `taxjson` subprocess). Behaviour that
+belongs to one country needs a dual-country test like the one above.
+`scripts/check_tax_rules.py` (a stage of `scripts/ci.sh`) fails on an unknown
+or retired id, a one-country test that names the other country's engine, a
+rule without a test beyond the shrink-only baseline
+(`tests/tax_rules/baseline-unpinned.txt`), a partition rule
+(`PARTITION_RULES`) without its `@rule_absent` pair beyond
+`baseline-unpaired.txt`, and a `[settings]` key no rule names. When a rule
+gains a test, delete its baseline line; a new rule can never be baselined.
+Retire an id in `tests/tax_rules/retired.txt`; never reuse one.
+
+## Pull request checklist
+
+- [ ] `scripts/ci.sh` passes — read its **last line**: it must say `PASS`
+      (a pipe such as `scripts/ci.sh | tail` hides the exit status).
+      `scripts/ci.sh --quick` while iterating; the full gate before you
+      push, once in a fresh `git clone` (it catches untracked files).
+- [ ] New behavior has a test that would have failed before the change
+- [ ] A tax change edits its `Rule` in `src/taxjson/lib/tax_logic.py` and
+      the test cites it (`@rule("CA-...")`)
+- [ ] Docs kept true: a user-visible fix adds a `CHANGELOG.md` bullet under
+      `## Unreleased` and its `docs/troubleshooting.md` entry (Fixed in:
+      `unreleased`); moved code updates `docs/architecture-map.md`
+- [ ] Synthetic data only; no personal data in the change or its commit
+      messages (the pre-push hook runs `scripts/check-pii.sh`)
+- [ ] No unrelated drift (no formatting churn, no rename cascades)
+- [ ] PR description explains *why*, not just *what*
+
+## License
+
+By contributing, you agree your contributions will be licensed under the MIT License.

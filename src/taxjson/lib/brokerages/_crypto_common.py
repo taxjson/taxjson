@@ -1,0 +1,353 @@
+"""Strict helpers shared by the Kraken and Coinbase parsers.
+
+Two jobs, both about refusing to produce a quietly-wrong number:
+
+* `strict_money` — parse a CSV amount, accepting the currency-prefixed
+  forms exchanges actually ship (`$1,234.50`, `CA$4.00`, `US$-3`,
+  `(12.00)`), and RAISING on anything else. `BaseBrokerage.clean_number`
+  returns 0.0 for anything it can't read, so `CA$4.00` became a $0
+  basis/proceeds row without a word.
+
+* `utc_to_local` — Kraken and Coinbase stamp every row in UTC. A
+  Canadian taxpayer's trade/income DATE is the local calendar date, so
+  a fill at 2026-01-01 03:00 UTC belongs to 2025-12-31 in Toronto (and
+  to the 2025 return). Rows are converted to the user's local time:
+  the IANA zone in the `TAXJSON_LOCAL_TZ` environment variable, which
+  `taxjson` sets from the project's [settings] local_timezone. There is
+  no default zone: a crypto row with none named is refused
+  (LocalTimezoneMissing) rather than dated in someone else's time.
+"""
+
+from taxjson.lib.stage_msg import emit_line
+import os
+import re
+from collections.abc import Set as AbstractSet
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+ENV_LOCAL_TZ = 'TAXJSON_LOCAL_TZ'
+
+class _LiveStablecoins(AbstractSet):
+    """The USD-pegged stablecoins, ONE list for every crypto consumer
+    (the Coinbase and Kraken parsers, crypto-sends, fx-cash,
+    fill-crypto): taxjson's shipped market data (lib/markets) with the
+    project's ticker.map STABLE lines, read at each use — never a copy
+    frozen at import (copies drifted apart: PYUSD/GUSD missing in some,
+    audit S060-24 / re-audit A2-0589). In a Canada project they are
+    US-dollar cash (tax-logic CA-CRYPTO-02); a US project books them as
+    property valued at par. A membership test the BUILT-IN list
+    answered yes is noted once per coin (the line to add if it is
+    wrong)."""
+
+    def __contains__(self, item) -> bool:
+        if not isinstance(item, str) or not item:
+            return False
+        from taxjson.lib.markets import is_usd_stablecoin
+        return is_usd_stablecoin(item.strip().upper(), note=True)
+
+    def __iter__(self):
+        from taxjson.lib.markets import usd_stablecoins
+        return iter(sorted(usd_stablecoins()))
+
+    def __len__(self) -> int:
+        from taxjson.lib.markets import usd_stablecoins
+        return len(usd_stablecoins())
+
+    @classmethod
+    def _from_iterable(cls, it):
+        return frozenset(it)
+
+    def __repr__(self) -> str:
+        return f"USD_STABLECOINS({sorted(self)!r})"
+
+
+USD_STABLECOINS = _LiveStablecoins()
+
+# Fiat currencies an exchange row can be priced or quoted in, ONE list
+# (lib/markets: taxjson/data/markets.toml) for the Coinbase and Kraken
+# parsers, the IB currency tags and the price chain. Anything else is a
+# crypto-asset: erring toward "crypto" books a visible phantom position,
+# while a coin wrongly taken for cash would drop a disposition silently.
+from taxjson.lib.markets import fiat_currencies as _fiat  # noqa: E402
+FIAT_CURRENCIES = _fiat()
+
+# Currency markers an exchange may glue to an amount. Longest first so
+# `CA$` is not half-eaten by `A$`/`$`.
+_MONEY_PREFIXES = ('CA$', 'US$', 'C$', 'A$', '$', '€', '£')
+# A first group of 0 is a decimal comma ('0,125'), never thousands
+# (audit S055-08).
+_THOUSANDS_OK = re.compile(r'^[1-9]\d{0,2}(,\d{3})+(\.\d*)?$')
+# What is left once sign, currency and thousands commas are stripped:
+# ASCII digits with at most one decimal point, and an optional exponent
+# (tiny crypto quantities: 1e-8). float() also took '1_000' and
+# non-ASCII digits (R1-114).
+_PLAIN_NUMBER = re.compile(r'^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$', re.ASCII)
+
+
+def strict_money(raw, what: str = 'amount', context: str = '') -> float:
+    """Parse one numeric CSV cell. Empty -> 0.0. `(x)` is negative.
+    Commas must be thousands separators (a European `1.234,56` is
+    refused, never read as 1.23456). Raises ValueError, naming the
+    field and `context`, on anything unparseable."""
+    if raw is None:
+        return 0.0
+    s = str(raw).strip()
+    if not s:
+        return 0.0
+    orig = s
+    neg = False
+    signs = 0          # at most ONE of (x), a leading -/+, a -/+ after $
+    if s.startswith('(') and s.endswith(')'):
+        neg = True
+        signs += 1
+        s = s[1:-1].strip()
+    if s.startswith('-'):
+        neg = not neg
+        signs += 1
+        s = s[1:].strip()
+    elif s.startswith('+'):
+        signs += 1
+        s = s[1:].strip()
+    for p in _MONEY_PREFIXES:
+        if s.upper().startswith(p):
+            s = s[len(p):].strip()
+            break
+    # A sign AFTER the currency marker (`CA$-4.00`, `$-4.00`).
+    if s[:1] in ('-', '+'):
+        neg = neg != (s[0] == '-')
+        signs += 1
+        s = s[1:].strip()
+    if signs > 1:
+        # '--5', '(-5)', '-$-5' used to cancel into +5 (R1-114).
+        raise ValueError(
+            f"unparseable {what} {orig!r}{_ctx(context)}: more than one "
+            f"sign marker — refusing to guess the sign.")
+    if ',' in s:
+        if not _THOUSANDS_OK.match(s):
+            raise ValueError(
+                f"unparseable {what} {orig!r}{_ctx(context)}: commas are "
+                f"only accepted as thousands separators (1,234.56).")
+        s = s.replace(',', '')
+    if not _PLAIN_NUMBER.match(s):
+        # float() also takes '1_000', non-ASCII digits and 'nan'.
+        raise ValueError(
+            f"unparseable {what} {orig!r}{_ctx(context)} — refusing to "
+            f"book it as 0. Fix the cell or report the new export "
+            f"format.")
+    try:
+        v = float(s)
+    except ValueError:
+        raise ValueError(
+            f"unparseable {what} {orig!r}{_ctx(context)} — refusing to "
+            f"book it as 0. Fix the cell or report the new export "
+            f"format.") from None
+    if v != v or v in (float('inf'), float('-inf')):
+        raise ValueError(f"non-finite {what} {orig!r}{_ctx(context)}")
+    return -v if neg else v
+
+
+def _ctx(context: str) -> str:
+    return f" ({context})" if context else ''
+
+
+class LocalTimezoneMissing(ValueError):
+    """No local time zone is named for crypto UTC stamps."""
+
+
+def missing_timezone_message(where: str = "project") -> str:
+    """The one message for a crypto row (or a crypto project) with no
+    local time zone named: the key to set and this machine's zone as a
+    suggestion when it can be read (not UTC)."""
+    try:
+        from taxjson.lib.config_template import system_timezone
+        sys_tz = system_timezone()
+    except Exception:   # noqa: BLE001 — a suggestion only
+        sys_tz = None
+    if sys_tz:
+        hint = (f"this machine's zone is {sys_tz} — if that is where you "
+                f"live, set local_timezone = \"{sys_tz}\"")
+    else:
+        hint = ("this machine's zone cannot be read or is UTC (a server "
+                "default), so name yours: an IANA zone such as "
+                "\"America/Vancouver\" or \"Europe/London\"")
+    lead = ("crypto exchanges stamp every row in UTC and taxjson dates "
+            "it in YOUR local time zone, which has no default")
+    if where == "project":
+        return (f"{lead}: add local_timezone to [settings] in taxjson.toml "
+                f"({hint}).")
+    return (f"{lead}: set the {ENV_LOCAL_TZ} environment variable to an "
+            f"IANA zone name, or run inside a project with [settings] "
+            f"local_timezone ({hint}).")
+
+
+def local_tz_name() -> str:
+    """The zone crypto rows are dated in (TAXJSON_LOCAL_TZ; `taxjson`
+    sets it from [settings] local_timezone). LocalTimezoneMissing when
+    none is named."""
+    name = (os.environ.get(ENV_LOCAL_TZ) or '').strip()
+    if not name:
+        raise LocalTimezoneMissing(missing_timezone_message("env"))
+    return name
+
+
+def _eastern_offset_hours(dt_utc: datetime) -> int:
+    """UTC offset for North-American Eastern time from the DST rules —
+    the fallback when the platform has no tz database (Windows without
+    the `tzdata` package). 2007+: second Sunday of March 07:00 UTC to
+    first Sunday of November 06:00 UTC; before: first Sunday of April
+    to last Sunday of October."""
+    y = dt_utc.year
+
+    def nth_sunday(month, n):
+        d = datetime(y, month, 1)
+        d += timedelta(days=(6 - d.weekday()) % 7)
+        return d + timedelta(weeks=n - 1)
+
+    if y >= 2007:
+        start = nth_sunday(3, 2) + timedelta(hours=7)
+        end = nth_sunday(11, 1) + timedelta(hours=6)
+    else:
+        start = nth_sunday(4, 1) + timedelta(hours=7)
+        last_oct = datetime(y, 10, 31)
+        last_oct -= timedelta(days=(last_oct.weekday() + 1) % 7)
+        end = last_oct + timedelta(hours=6)
+    return -4 if start <= dt_utc < end else -5
+
+
+def utc_to_local(dt_utc: datetime, tz_name: Optional[str] = None) -> datetime:
+    """Naive UTC datetime -> naive local wall-clock datetime."""
+    name = tz_name or local_tz_name()
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(name)
+    except Exception:
+        if name in ('America/Toronto', 'America/Montreal',
+                    'America/New_York', 'US/Eastern', 'Canada/Eastern'):
+            return dt_utc + timedelta(hours=_eastern_offset_hours(dt_utc))
+        raise ValueError(
+            f"local time zone {name!r} (TAXJSON_LOCAL_TZ) is not available "
+            f"— install the `tzdata` package or use an IANA zone name "
+            f"such as America/Toronto.")
+    return (dt_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+            .replace(tzinfo=None))
+
+
+def same_coin_hint(a: str, b: str, qty_a: float, qty_b: float,
+                   where: str) -> None:
+    """A swap between two codes where one is the other plus a suffix
+    (ETH and ETH2) at exactly 1:1 is booked as the swap it is — a
+    disposition — but it is often a staked or wrapped form of the same
+    coin: say once which ticker.map line folds them (taxjson ships no
+    such fold; owner, 2026-10-04)."""
+    a, b = (a or '').strip().upper(), (b or '').strip().upper()
+    if not a or not b or a == b:
+        return
+    short, long_ = sorted((a, b), key=len)
+    if not long_.startswith(short):
+        return
+    qa, qb = abs(qty_a or 0.0), abs(qty_b or 0.0)
+    if not qa or abs(qa - qb) > 1e-8 * max(qa, qb):
+        return
+    from taxjson.lib.markets import note_builtin
+    note_builtin("same-coin-hint", f"{long_}>{short}", (
+        f"{where}: {a} -> {b} at exactly 1:1 is booked as a swap (a "
+        f"disposition). If {long_} is a staked or wrapped form of "
+        f"{short} (the same property), add `GLOBAL {long_} {short}` to "
+        f"ticker.map and re-run."))
+
+
+# A USD stablecoin traded this far from 1.00 USD is said: the parsers
+# book stablecoins as US-dollar cash (an approximation), so a de-peg
+# gain or loss never reaches the books (partition INPUTS-12; tax-logic
+# CA-CRYPTO-02 / US-CRYPTO-02).
+DEPEG_TOLERANCE = 0.02
+
+
+# The run's rates table (work/to_base.csv, the conversion stage's own
+# rates and lookback), installed by `taxjson-brokerage --rates`: a fill
+# valued in CAD, EUR, ... is turned into US dollars through it before
+# the peg test (re-audit A2-0590). None = no rates given.
+_DEPEG_RATES = None
+# Currencies already named as "not checked" (one note each per parse run).
+_DEPEG_UNCHECKED: set = set()
+
+
+def set_depeg_rates(path, base) -> None:
+    """Load the rates file (`DATE TIME FROM TO RATE [SOURCE]`, rates to
+    `base`) the de-peg test converts a non-USD fill with; None clears."""
+    global _DEPEG_RATES
+    _DEPEG_UNCHECKED.clear()
+    if path is None:
+        _DEPEG_RATES = None
+        return
+    from pathlib import Path
+    from taxjson.lib.crypto_sends import Rates, load_rates
+    if not base:
+        # The file's own target currency (its TO column).
+        base = 'CAD'
+        for line in Path(path).read_text(encoding='utf-8-sig').splitlines():
+            parts = line.split()
+            if len(parts) >= 5:
+                base = parts[3]
+                break
+    _DEPEG_RATES = Rates(load_rates(Path(path)), str(base))
+
+
+def usd_value(amount: float, currency: str, date: str):
+    """`amount` of `currency` in US dollars on `date` through the loaded
+    rates (each currency's rate to the base, the conversion stage's
+    lookback), or None when a rate is missing."""
+    cur = (currency or 'USD').strip().upper() or 'USD'
+    if cur == 'USD':
+        return amount
+    if _DEPEG_RATES is None:
+        return None
+    a = _DEPEG_RATES.get(cur, str(date)[:10])
+    u = _DEPEG_RATES.get('USD', str(date)[:10])
+    if not a or not u:
+        return None
+    return amount * a[0] / u[0]
+
+
+def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
+               where: str, currency: str = 'USD') -> bool:
+    """Print a warning when a stablecoin fill's USD price is more than
+    DEPEG_TOLERANCE from 1.00. `usd_price` is the fill's price in
+    `currency`: a non-USD price is converted through the loaded rates
+    first (re-audit A2-0590); with no rate the fill is said to be
+    unchecked, never guessed. Returns whether it warned."""
+    import sys
+    try:
+        price = float(usd_price)
+    except (TypeError, ValueError):
+        return False
+    if not price:
+        return False
+    cur = (currency or 'USD').strip().upper() or 'USD'
+    native = price
+    if cur != 'USD':
+        conv = usd_value(price, cur, date)
+        if conv is None:
+            if cur not in _DEPEG_UNCHECKED:
+                _DEPEG_UNCHECKED.add(cur)
+                emit_line(f"note: {where}: a {coin} fill valued in {cur} on "
+                      f"{date} is not checked for a de-peg: no {cur} and "
+                      f"USD rate for that day (`taxjson run` passes its "
+                      f"rates; add {cur} to source_currencies). Further "
+                      f"{cur} fills are not named.")
+            return False
+        price = conv
+    if abs(price - 1.0) <= DEPEG_TOLERANCE:
+        return False
+    # The ATTENTION channel: `taxjson run` echoes it on the console
+    # (it was only in the .sum, re-audit A2-1001) — money the books
+    # leave out.
+    via = (f" ({native:.4f} {cur} at the day's rate)" if cur != 'USD'
+           else "")
+    emit_line(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD"
+          f"{via} on {date} "
+          f"— stablecoins are booked as US-dollar cash (an "
+          f"approximation), so the {abs(price - 1.0) * qty:,.2f} USD "
+          f"de-peg difference on {qty:g} {coin} is not in the gains; "
+          f"report it by hand if it matters.")
+    return True

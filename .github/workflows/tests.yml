@@ -1,0 +1,266 @@
+name: tests
+
+# NOTE: the authoritative gate is scripts/ci.sh, run locally before every
+# push; this workflow mirrors its stages (lint, consistency, tax-rules,
+# PII, suite, fuzz) for pull requests on the public repo. The PII stage
+# here has no private denylist, so it applies the generic patterns
+# (account-id shapes, home paths, e-mails, credentials) — enough to stop
+# a PR that carries a real-looking id before it is merged — to the tree
+# and, on a pull request, to every commit it adds (patch, message,
+# identities), as the pre-push hook does. macOS runners
+# are excluded to keep the matrix fast.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"     # nightly deep fuzz (UTC)
+
+# The workflow only reads the repository. Actions are pinned to a full
+# commit SHA (a moved tag cannot change what runs), the version beside it,
+# and runners to an explicit image (ubuntu-24.04, never ubuntu-latest: the
+# image changes only when we choose; tests/test_fix_release_hardening.py
+# checks both). The required checks of main's ruleset are these jobs'
+# names (docs/releasing.md, "main takes pull requests only"): every job
+# that runs on a pull request runs on EVERY pull request (no paths filter,
+# no `if:` that skips one), so a required check never waits forever.
+# Every checkout leaves no token behind (persist-credentials: false) and
+# every job has a timeout, so a hung step cannot hold a runner for hours.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    # Critical-tier only (syntax errors, undefined names, misused
+    # comparisons): the class of defect that once let a dead parameter
+    # survive five audit cycles. Style rules are deliberately excluded.
+    name: ruff (critical tier)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.16.8      # pinned: a new release cannot change the gate
+      - run: ruff check --select E9,F63,F7,F82 src/ tests/ packages/
+
+  gates:
+    # The ci.sh stages besides lint and the suite: release consistency,
+    # the tax-logic spec gate, and the PII scan of the whole tree.
+    name: consistency / tax-rules / pii
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: bash scripts/check-consistency.sh
+      - run: python scripts/check_tax_rules.py
+      - run: bash scripts/check-pii.sh
+
+  secrets:
+    # gitleaks (generic secret formats, entropy-checked) on the commits a
+    # push or pull request adds — a pull request never passes the
+    # maintainer's own pre-push hook. The binary is a pinned release,
+    # checked against its sha256 before it runs. On a pull request the
+    # allowlist (.gitleaks.toml) is the BASE commit's copy, so a pull
+    # request cannot widen the allowlist it is judged by; and
+    # scripts/gitleaks-regression.sh — which proves the config still
+    # reports ordinary secrets whatever they are called — is the BASE's
+    # copy too, run against the config the pull request proposes, so it
+    # cannot weaken the test its own config must pass either.
+    name: secrets (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks on the new commits
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          V=8.28.0
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$V/gitleaks_${V}_linux_x64.tar.gz"
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  gl.tgz" | sha256sum -c -
+          tar -xzf gl.tgz gitleaks
+          cd "$GITHUB_WORKSPACE"
+          if [ -n "${BASE:-}" ] && git cat-file -e "$BASE:.gitleaks.toml" 2>/dev/null; then
+            git show "$BASE:.gitleaks.toml" > "$RUNNER_TEMP/gitleaks.toml"
+            echo "config: the base commit's .gitleaks.toml"
+          else
+            cp .gitleaks.toml "$RUNNER_TEMP/gitleaks.toml"
+          fi
+          FROM="${BASE:-$BEFORE}"
+          if [ -n "$FROM" ] && ! echo "$FROM" | grep -qE '^0+$' && git cat-file -e "$FROM^{commit}" 2>/dev/null; then
+            RANGE="$FROM..$HEAD_SHA"
+          else
+            RANGE="-1 $HEAD_SHA"
+          fi
+          "$RUNNER_TEMP/gitleaks" git --log-opts="$RANGE" --config "$RUNNER_TEMP/gitleaks.toml" \
+            --redact --no-banner --exit-code 1
+      - name: the config still reports ordinary secrets
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          reg="$RUNNER_TEMP/gitleaks-regression.sh"
+          if [ -n "${BASE:-}" ] && git show "$BASE:scripts/gitleaks-regression.sh" > "$reg" 2>/dev/null; then
+            echo "regression script: the base commit's"
+          else
+            cp scripts/gitleaks-regression.sh "$reg"
+            echo "regression script: this commit's (the base has none)"
+          fi
+          bash "$reg" "$RUNNER_TEMP/gitleaks" "$GITHUB_WORKSPACE/.gitleaks.toml"
+
+  pr-commits:
+    # Every commit a pull request — or a push to main — adds: its patch,
+    # message and author / committer identities, as the pre-push hook
+    # checks a push: the tree scan above sees only the final tree, and a
+    # value one commit (or a merge's resolution) adds and a later one
+    # removes is still published by the merge. On a push to main the
+    # range is before..after, so a commit that reached main without the
+    # maintainer's hook (a web edit, another machine, a merged pull
+    # request's rebased copy) is scanned too. Generic patterns only (no
+    # private files here). The scanner is the BASE commit's copy (a pull
+    # request's base, a push's `before`), so a change cannot weaken the
+    # check it is judged by.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    name: pii / new commits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan the new commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pii/scripts"
+          check="$RUNNER_TEMP/pii/scripts/check-pii.sh"
+          if [ -n "${BASE_SHA:-}" ] && ! echo "$BASE_SHA" | grep -qE '^0+$' \
+             && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            range="$BASE_SHA..$HEAD_SHA"
+            git show "$BASE_SHA:scripts/check-pii.sh" > "$check" 2>/dev/null \
+              || cp scripts/check-pii.sh "$check"
+          else
+            # No usable base (a new branch, a force-push's lost tip): the
+            # head commit alone, with this commit's scanner.
+            range="$HEAD_SHA^!"
+            cp scripts/check-pii.sh "$check"
+          fi
+          echo "range: $range"
+          # Merge commits too (issue #33): a merge's patch is its combined
+          # diff (--cc), whose lines added against every parent are what
+          # the resolution wrote; its message and identities are published.
+          git log -p --cc --format='' "$range" -- | bash "$check" --diff
+          git log --format=%B "$range" | bash "$check" --message
+          git log --format='%an <%ae>%n%cn <%ce>' "$range" \
+            | sort -u | bash "$check" --identity
+
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # In parallel, a process per module (scripts/run_tests_parallel.py:
+      # min(CPUs, 16) processes — 4 on a hosted runner — each with its
+      # own TMPDIR and synthetic HOME; it checks the tests run add up to
+      # the serial discovery's count). Measured pinned to 4 and 2 cores
+      # before it replaced the serial run here; `--serial` is the fallback.
+      - name: Run tests
+        run: python scripts/run_tests_parallel.py
+
+      # The broker-fetch plugin, installed the way a user installs it.
+      - name: Install and test taxjson-fetch
+        run: |
+          pip install --no-deps -e packages/taxjson-fetch
+          python -m unittest discover -s packages/taxjson-fetch/tests -p "test_*.py"
+
+
+  test-extras:
+    # One cell with every optional extra installed, so the fx/
+    # analytics code paths (yfinance, pandas...) are actually
+    # imported in CI instead of silently skipping — the extras rotted
+    # undetected before this job existed.
+    name: ubuntu-24.04 / Python 3.12 / all extras
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install package with all extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[all,dev]"
+      - name: Run tests
+        run: python scripts/run_tests_parallel.py
+
+  fuzz-nightly:
+    # The three property fuzzers at nightly depth (the suite runs them
+    # at 200/150/200 books; this is 5000/3000/1600). Only on the
+    # schedule or a manual dispatch — too slow for every push.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: ubuntu-24.04 / Python 3.12 / nightly fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Deep fuzz
+        env:
+          TAXJSON_FUZZ_BOOKS: "5000"
+          TAXJSON_TRANSFER_FUZZ_BOOKS: "3000"
+          TAXJSON_STRADDLE_FUZZ_BOOKS: "1600"
+        run: |
+          cd tests
+          python -m unittest -q test_engine_invariants test_transfer_fuzz test_settle_straddle_fuzz

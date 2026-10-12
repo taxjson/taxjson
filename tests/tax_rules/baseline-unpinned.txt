@@ -1,0 +1,9 @@
+# Shrink-only baseline: tax-logic rules with no @rule test yet (seeded
+# 2026-09-30 from the partition audit's matrix, spec-rules.json: the
+# statements it found unpinned, wrong, or pinned only by a whole file).
+# scripts/check_tax_rules.py fails when a listed rule gains a test (delete
+# its line) and refuses any id that is not in seed-ids.txt.
+# id            audit verdict   claim
+CA-INC-02       ok              Take the return's line numbers from your slips.
+US-BASIS-02     ok              Specific-lot identification is not supported.
+US-WASH-07      ok              Look-alike securities are not detected.

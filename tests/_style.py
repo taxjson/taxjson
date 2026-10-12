@@ -1,0 +1,295 @@
+"""Style smoke helper for the output-style work (docs/output-style.md).
+
+Builds the synthetic style projects in tests/fixtures/style/{canada,usa}
+once per test process — options, superficial losses (one re-bought in a
+registered account), a spin-off (elected), crypto with a send, dividends,
+transfers, a sale with no purchase, a T5008/1099-B slip, a holdings file,
+a price cache — and runs commands on them as a person piping the output
+would (width 120, lib/out.WIDTH; TAXJSON_OFFLINE=1, stdin /dev/null).
+
+    from _style import project, assert_styled
+
+    class TestHarvestStyle(unittest.TestCase):
+        def test_layout(self):
+            r = project("canada").run("harvest", "--no-ibkr")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            assert_styled(self, r.stdout)                  # stdout
+            assert_styled(self, r.stderr, allow=("taxjson elect ",))
+
+`project("canada", pending=True)` is a copy stopped at the pending
+spin-off election (for `elect --pending`, the run's exit 3). Every
+fixture is synthetic, amounts under 1,000 where a document shows them.
+"""
+import atexit
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import _hermetic  # noqa: F401  (a synthetic HOME, offline: tests/_hermetic)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC = REPO_ROOT / "src"
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "style"
+
+# The default elections the builder saves (the countries' taxable ones).
+_ELECTION = {"canada": "taxable_deemed_dividend",
+             "usa": "taxable_distribution_301"}
+# Synthetic current prices for harvest / tips / watch (asof today).
+_PRICES = {"QZQ": 22.0, "SAMPA": 31.0, "SAMPB": 10.0, "NVDA": 120.0,
+           "MSFT": 420.0, "PARN": 45.0, "SPNC": 30.0, "XYZQ": 55.0,
+           "OLDCO": 18.0, "GHOSTQ": 14.0}
+_CRYPTO = {"BTC": 90000.0, "ETH": 3000.0}
+
+_built = {}
+_failed = {}            # (country, pending) -> the build's error
+_tmp = None
+
+
+def env(**extra) -> dict:
+    """The environment a style test runs taxjson in: this checkout's
+    code, offline, no TAXJSON_WIDTH (piped = width 120, lib/out.WIDTH)."""
+    e = dict(os.environ)
+    e.pop("TAXJSON_WIDTH", None)
+    e["TAXJSON_OFFLINE"] = "1"
+    e["PYTHONPATH"] = str(SRC) + os.pathsep + e.get("PYTHONPATH", "")
+    e.update({k: str(v) for k, v in extra.items()})
+    return e
+
+
+class CapturedWidth:
+    """A test module whose assertions read taxjson's CAPTURED output (the
+    `warning: ATTENTION:` / `error:` labels, nothing wrapped:
+    TAXJSON_WIDTH=0, as scripts/ci.sh runs the suite) sets that width
+    itself, so it passes run alone too (`python -m unittest test_x`
+    without the variable printed the person's style at width 120):
+
+        _WIDTH = CapturedWidth()
+        def setUpModule(): _WIDTH.start()
+        def tearDownModule(): _WIDTH.stop()
+
+    os.environ is set for the module's tests (every subprocess env built
+    from it, and lib/out read in-process) and restored after."""
+
+    def __init__(self, width: str = "0") -> None:
+        self.width = width
+        self._old = None
+        self._set = False
+
+    def start(self) -> None:
+        self._old = os.environ.get("TAXJSON_WIDTH")
+        os.environ["TAXJSON_WIDTH"] = self.width
+        self._set = True
+
+    def stop(self) -> None:
+        if not self._set:
+            return
+        if self._old is None:
+            os.environ.pop("TAXJSON_WIDTH", None)
+        else:
+            os.environ["TAXJSON_WIDTH"] = self._old
+        self._set = False
+
+
+class Project:
+    def __init__(self, root: Path, country: str):
+        self.root = root
+        self.country = country
+
+    def run(self, *args, stdin=None, **env_extra):
+        """`taxjson -C <project> <args>` run from the project folder
+        (relative paths such as inputs/slips/t5008.csv work): a
+        CompletedProcess (text)."""
+        return subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+             str(self.root), *args], cwd=self.root, capture_output=True,
+            text=True, env=env(**env_extra), timeout=900,
+            stdin=subprocess.DEVNULL if stdin is None else stdin)
+
+
+def _check(r, what):
+    if r.returncode not in (0, 3):
+        raise RuntimeError(f"style project: {what} exited {r.returncode}:"
+                           f"\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
+    return r
+
+
+def quote_spelling(root: Path, sym: str) -> str:
+    """The spelling harvest quotes `sym` as (the project's ticker.map
+    QUOTE / CRYPTO lines, else the derived one; an option contract is
+    its own): a price-cache entry serves only that spelling (#82)."""
+    from taxjson.lib import price_chain as PC
+    from taxjson.lib.core import is_option_symbol
+    if is_option_symbol(sym):
+        return sym
+    quote = PC.load_yf_map([root])
+    if sym in quote:
+        return quote[sym][0]
+    return PC.yf_symbol_for(sym, PC.load_crypto_overrides([root])) or sym
+
+
+def _price_cache(p: Project) -> None:
+    today = datetime.date.today().isoformat()
+    sfx, cur = (".TO", "CAD") if p.country == "canada" else (".US", "USD")
+    doc = {f"{s}{sfx}": {"price": v, "asof": today, "source": "yfinance",
+                         "currency": cur} for s, v in _PRICES.items()}
+    doc.update({s: {"price": v, "asof": today, "source": "yfinance",
+                    "currency": cur} for s, v in _CRYPTO.items()})
+    # The written call still open in the books (harvest --options).
+    doc[f"QZQ250117C00040000{sfx}"] = {"price": 0.05, "asof": today,
+                                       "source": "ibkr", "currency": cur}
+    for sym, rec in doc.items():
+        rec["quote_symbol"] = quote_spelling(p.root, sym)
+    (p.root / "work").mkdir(exist_ok=True)
+    (p.root / "work" / ".price_cache.json").write_text(json.dumps(doc))
+
+
+def _build(country: str, pending: bool) -> Project:
+    global _tmp
+    if _tmp is None:
+        _tmp = tempfile.mkdtemp(prefix="taxjson_style_")
+        atexit.register(shutil.rmtree, _tmp, True)
+    root = Path(_tmp) / f"{country}{'_pending' if pending else ''}"
+    # A build that failed half-way (project() re-raises its error for
+    # every later test) must not leave a folder that turns the next
+    # attempt into a FileExistsError hiding the real failure.
+    shutil.rmtree(root, ignore_errors=True)
+    shutil.copytree(FIXTURES / country, root)
+    p = Project(root, country)
+    _check(p.run("run", "--no-input"), "run (pending)")
+    if pending:
+        return p
+    agg = json.loads((root / "work" / "pending_elections.json").read_text())
+    for acct, doc in sorted(agg["accounts"].items()):
+        for ev in doc["pending"]:
+            _check(p.run("elect", acct, "--set",
+                         f"{ev['event_id']}={_ELECTION[country]}"),
+                   "elect --set")
+    if country == "canada":
+        # Decide the crypto send (the US project keeps it pending).
+        sends = json.loads(p.run("crypto-sends", "--json").stdout or "{}")
+        for acct, d in (sends.get("accounts") or {}).items():
+            for s in d.get("sends") or []:
+                _check(p.run("crypto-sends", acct, "--set",
+                             f"{s['id']}=gift", "--note", "synthetic"),
+                       "crypto-sends --set")
+    r = _check(p.run("run", "--no-input"), "run")
+    if r.returncode:
+        raise RuntimeError(f"style project: run exited {r.returncode}:\n"
+                           f"{r.stderr[-2000:]}")
+    _price_cache(p)
+    return p
+
+
+def project(country: str = "canada", pending: bool = False) -> Project:
+    """The built synthetic project (built once per process; treat it as
+    read-only, or copy p.root first for a command that writes)."""
+    key = (country, pending)
+    if key in _failed:
+        raise RuntimeError(f"style project {country}"
+                           f"{' (pending)' if pending else ''} failed to "
+                           f"build earlier in this process:\n{_failed[key]}")
+    if key not in _built:
+        try:
+            _built[key] = _build(country, pending)
+        except Exception as exc:
+            _failed[key] = f"{type(exc).__name__}: {exc}"
+            raise
+    return _built[key]
+
+
+# The width a style test's command runs at: piped, lib/out.WIDTH.
+PIPE_WIDTH = 120
+
+
+def assert_styled(tc, text: str, width: int = PIPE_WIDTH, allow=()) -> None:
+    """Fail `tc` with the out.lint problems of `text` (lines over
+    `width` that are not table rows or contain an `allow` substring,
+    blank-line runs, a leading/trailing blank line, retired prefixes — a
+    captured lower-case `note:` / `warning:` / `error:` label at the
+    start of a line included)."""
+    from taxjson.lib.out import lint
+    probs = lint(text, width, allow)
+    if probs:
+        tc.fail("output style:\n  " + "\n  ".join(probs[:20])
+                + "\n--- output ---\n" + text[:4000])
+
+
+def assert_console(tc, text: str, width: int = PIPE_WIDTH,
+                   allow=()) -> None:
+    """Fail `tc` unless every non-blank line of `text` (the run's
+    console, or a command's stderr messages) starts with `==> `,
+    `Info: `, `Warning: `, `Error: ` or continues the entry on the line
+    above, flush-left; a blank line only (and always) after an entry of
+    more than one line, none at the end; no ATTENTION word, no
+    detection detail (out.console_lint; docs/output-style.md, The run's
+    console)."""
+    from taxjson.lib.out import console_lint
+    probs = console_lint(text, width, allow)
+    if probs:
+        tc.fail("console style:\n  " + "\n  ".join(probs[:20])
+                + "\n--- output ---\n" + text[:4000])
+
+
+# A message label in its captured (width 0) form at the start of a line:
+# shown to a person it is `Info:` / `Warning:` / `Error:` (lib/out).
+_CAPTURED_LABEL = re.compile(
+    r"(?m)^[ \t]*(?:(?:taxjson|tjs)[\w -]*: )?"
+    r"(?:note|warning|error|NOTE|WARNING|ERROR|Note):")
+
+
+def assert_labelled(tc, text: str) -> None:
+    """Fail `tc` when a line of `text` (a person's stdout or stderr)
+    starts with a captured message label instead of `Info:` /
+    `Warning:` / `Error:` — wherever the line is, however long."""
+    bad = [m.group(0).strip() + " ..." for m in
+           re.finditer(_CAPTURED_LABEL.pattern + r".*", text)]
+    if bad:
+        tc.fail("captured labels shown to a person:\n  "
+                + "\n  ".join(bad[:20]) + "\n--- output ---\n" + text[:4000])
+
+
+# Essentials first (docs/output-style.md): the default view's budget.
+CONCISE_WIDTH = 100
+
+
+def assert_concise(tc, *texts: str, budget: int = 6, legend=None,
+                   width: int = CONCISE_WIDTH) -> None:
+    """Fail `tc` unless the default view in `texts` (stdout, stderr: run
+    at TAXJSON_WIDTH=100) keeps the budget: at most `budget` lines that
+    are not a table row, heading, step or figure (out.prose_lines),
+    every `! ` line within `width` columns, and — `legend` given (a
+    phrase, or a list of phrases) — each legend line directly above a
+    table (out.classify: a table line within the next two lines)."""
+    from taxjson.lib import out
+    prose = [ln for t in texts for ln in out.prose_lines(t or "")]
+    if len(prose) > budget:
+        tc.fail(f"{len(prose)} non-table lines, budget {budget}:\n  "
+                + "\n  ".join(prose) + "\n--- output ---\n"
+                + "\n".join(t or "" for t in texts)[:4000])
+    for t in texts:
+        for ln in out.act_lines(t or ""):
+            if len(ln) > width:
+                tc.fail(f"! line over {width} columns ({len(ln)}): {ln}")
+    for phrase in ([legend] if isinstance(legend, str) else legend or ()):
+        assert_legend_first(tc, texts[0], phrase)
+
+
+def assert_legend_first(tc, text: str, phrase: str) -> None:
+    """Fail `tc` unless the line holding `phrase` comes before a table it
+    explains: a table line (out.classify) within the next three
+    non-blank lines, and no table line of that table above it."""
+    from taxjson.lib import out
+    cls = out.classify(text)
+    idx = next((i for i, (_k, ln) in enumerate(cls) if phrase in ln), None)
+    if idx is None:
+        tc.fail(f"legend {phrase!r} not in the output:\n{text[:3000]}")
+    nxt = [k for k, _ln in cls[idx + 1: idx + 4]]
+    if "table" not in nxt:
+        tc.fail(f"legend {phrase!r} is not directly above a table:\n"
+                + "\n".join(ln for _k, ln in cls[max(0, idx - 3):idx + 5]))

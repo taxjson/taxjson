@@ -1,0 +1,36 @@
+# taxjson CRA slip issuers — the SHIPPED DEFAULTS.
+#
+# `taxjson slip-audit --import-cra` places a T5 downloaded from CRA My
+# Account by the issuer CRA prints on it (the copy shows no account
+# number). An issuer that carries a broker's whole name (Interactive
+# Brokers, RBC Direct Investing, Questrade, ...) is that broker's
+# without an entry here. Some brokers' slips are issued by another
+# company — the carrying dealer that holds the accounts — whose name
+# says nothing of the broker. This file names those issuers.
+#
+# Read only by taxjson/lib/cra_slips.py (`issuer_aliases`). Each
+# [[alias]]:
+#   broker  a taxjson broker id (lib/brokerages/detect DISPLAY_NAMES)
+#   issuer  the issuer's names, one per language half: CRA prints a
+#           bilingual issuer as "ENGLISH NAME INC./FRENCH NAME INC". A
+#           name matches when its words stand together, in order, in
+#           one half of the issuer's name (case, punctuation and legal
+#           forms such as INC or LTEE ignored); at least one word must
+#           be distinctive (not INVESTMENT, SERVICES, DIRECT, ...).
+#   source  where the issuer name was seen (a public statement or the
+#           slips the broker's clients receive).
+#
+# An alias places a slip only in a broker account of that broker the
+# project's books hold; with several, the slips are shared out by the
+# books' payments, as for any broker. An issuer not placed is listed:
+# `taxjson slip-audit ACCOUNT --import-cra FILE` puts it in ACCOUNT.
+
+# Webull Canada (Webull Securities (Canada) Ltd.) is an introducing
+# broker: its clients' accounts are carried by CI Investment Services
+# Inc., which issues their T5 slips. CI Direct Investing, CI Global
+# Asset Management and other CI businesses are not matched: the name
+# must read "CI INVESTMENT SERVICES" (or its French half).
+[[alias]]
+broker = "webull"
+issuer = ["CI INVESTMENT SERVICES", "CI SERVICES D'INVESTISSEMENT"]
+source = "the issuer CRA My Account shows on Webull Canada clients' T5 slips (tax year 2025)"
