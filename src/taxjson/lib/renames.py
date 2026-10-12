@@ -704,6 +704,10 @@ def _walk_states(rows: List[Dict[str, Any]]):
         return (str(r.get("date") or ""),
                 0 if a in ("OPENING_BALANCE",) else 1 if a == "SPLIT" else 2,
                 str(r.get("time") or ""))
+    from taxjson.lib.corporate_timeline import split_copies
+    # One split reported twice is ONE event (CA-CORP-12): a later copy
+    # sees the state the first left and changes nothing.
+    dup = split_copies(rows, per_account=True)
     for r in sorted(rows, key=key):
         a = str(r.get("action") or "").upper()
         sym = str(r.get("symbol") or "")
@@ -712,6 +716,8 @@ def _walk_states(rows: List[Dict[str, Any]]):
         if a == "SPLIT":
             new = rename_target(r)
             snap[id(r)] = (st[0], st[1])
+            if id(r) in dup:
+                continue
             if q:
                 st[0] *= q
             if new:

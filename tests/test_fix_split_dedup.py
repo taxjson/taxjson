@@ -141,6 +141,92 @@ class TestSplitGainsApportionment(unittest.TestCase):
         self.assertAlmostEqual(inv_b[0]["qty"], 1000.0)
 
 
+def _simple(account="A", sym="QZS.TO", second="2025-06-04"):
+    """Buy 100, a 2:1 split reported twice (06-03 and `second`), then
+    nothing else: 200 shares held after the split."""
+    return [
+        _row("BUYSELL", "2025-01-06", sym, 100, account=account),
+        _row("SPLIT", "2025-06-03", sym, 2, account=account,
+             time="00:00:01"),
+        _row("SPLIT", second, sym, 2, account=account, time="00:00:01"),
+    ]
+
+
+class TestOtherSplitWalksCountOnce(unittest.TestCase):
+    """The sweep for issue #92: every other walk that scales positions by
+    a split's ratio asks the same split_copies rule."""
+
+    @rule("CA-CORP-12")
+    @rule("US-CORP-13")
+    def test_positions_on_two_accounts(self):
+        # `taxjson sanity` walks a group of accounts keyed by symbol:
+        # each account's copy of the split is the same event.
+        from taxjson.lib.positions_check import positions_on
+        rows = _simple("A") + _simple("B", second="2025-06-03")
+        self.assertAlmostEqual(positions_on(rows, "2025-12-31")["QZS.TO"],
+                               400.0)
+
+    @rule("CA-CORP-12")
+    def test_export_coverage_open_positions(self):
+        from datetime import date
+        from taxjson.lib.export_coverage import open_positions
+        self.assertEqual(open_positions(_simple(), date(2025, 12, 31)),
+                         [("QZS.TO", 200.0)])
+
+    @rule("CA-CORP-12")
+    def test_edge_cases_walk(self):
+        from taxjson.lib.edge_cases import _walk
+        from datetime import date
+        rows = [dict(r, _acct=r["account"]) for r in _simple()]
+        pos = _walk(rows, lambda r: date.fromisoformat(r["date"]))
+        self.assertAlmostEqual(pos[("A", "QZS.TO")], 200.0)
+
+    @rule("CA-CORP-12")
+    def test_cross_listing_radar_held(self):
+        from datetime import date
+        from taxjson.lib.xlist_loss_radar import _held_at
+        self.assertAlmostEqual(_held_at(_simple(), date(2025, 12, 31),
+                                        "canada"), 200.0)
+
+    @rule("CA-CORP-12")
+    def test_lint_crosslistings_net(self):
+        from taxjson.bin.taxjson_lint_crosslistings import _net_by_symbol
+        rows = [dict(r, _src="a.json") for r in _simple()]
+        net = _net_by_symbol(rows)[0]
+        self.assertAlmostEqual(net["QZS.TO"], 200.0)
+
+    @rule("CA-CORP-12")
+    def test_renames_carried_quantity(self):
+        from taxjson.lib.renames import _walk_states
+        rows = _simple() + [_row("SPLIT", "2025-08-01", "QZS.TO", 1,
+                                 account="A", symbol_new="QZN.TO")]
+        snaps = _walk_states(rows)
+        self.assertEqual(snaps[id(rows[-1])][0], 200.0)
+
+    @rule("CA-CORP-12")
+    @rule("US-CORP-13")
+    def test_option_walks(self):
+        from taxjson.lib.option_close_check import unbacked_option_closes
+        opt = "QZS250919C00010000"
+        rows = [TaxTransaction(**r) for r in (
+            _row("BUYSELL", "2025-01-06", opt, 1, account="A"),
+            _row("SPLIT", "2025-06-03", opt, 2, account="A"),
+            _row("SPLIT", "2025-06-04", opt, 2, account="A"),
+            _row("BUYSELL", "2025-07-01", opt, -3, account="A",
+                 open_close="C"))]
+        # 2 contracts after the one split: a close of 3 sells more than
+        # is held and is flagged (with the split doubled, 4 "backed" it).
+        got = unbacked_option_closes(rows)
+        self.assertEqual([(g["symbol"], g["quantity"]) for g in got],
+                         [(opt, -3.0)])
+
+    @rule("CA-CORP-12")
+    def test_splits_view_second_copy_changes_nothing(self):
+        from taxjson.lib.corp_views import _held
+        self.assertAlmostEqual(_held(_simple(), "QZS.TO", "2025-12-31",
+                                     True), 200.0)
+
+
 def _files(country):
     sym, ccy, tt_sym = (("SYNTH.TO", "CAD", "SYNTH.TO") if country == "canada"
                         else ("SYNTH", "USD", "SYNTH.US"))
@@ -191,6 +277,15 @@ class TestIssue92EndToEnd(unittest.TestCase):
                 self.assertEqual(len(adj), 1, c)
                 self.assertAlmostEqual(abs(float(adj[0]["net_amount"])),
                                        800.0, msg=c)
+                # The run's wash radar walks the same split (the radar's
+                # own settle-lag step): everything was sold, so no
+                # position is left — a doubled factor left a short.
+                radar = json.loads((root / "reports" /
+                                    "wash_radar_margin.json").read_text())
+                held = [r.get("taxable_qty") for sec in radar["sections"]
+                        for r in sec["rows"]
+                        if abs(float(r.get("taxable_qty") or 0)) > 1e-9]
+                self.assertEqual(held, [], c)
             sums = cli_both(projects, "sum", "--json")
             for c, r in sums.items():
                 self.assertEqual(r.returncode, 0, f"{c}: {r.stderr[-2000:]}")

@@ -16560,9 +16560,11 @@ def cmd_spinoffs(args: argparse.Namespace) -> None:
 
 def cmd_splits(args: argparse.Namespace) -> None:
     """`taxjson splits`: every split, consolidation and rename in the
-    books with holdings before and after, flagging a split applied twice,
-    a no-op row and a fractional result (lib/corp_views). Exit 1 on a
-    likely double application."""
+    books with holdings before and after, noting a split two sources
+    report within a week (one event, applied once) and flagging the same
+    ratio again further apart (applied twice), a no-op row and a
+    fractional result (lib/corp_views). Exit 1 on a likely double
+    application."""
     from taxjson.lib.corp_views import ViewError, render_splits, splits
     root = Path(args.dir).resolve()
     cfg = load_config(root)

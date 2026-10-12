@@ -39,6 +39,7 @@ from taxjson.lib.stage_msg import emit_line
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from taxjson.lib.corporate_timeline import dedupe_split_events
 
 WINDOW = 30
 # Rows that change a position (OPENING_BALANCE: a missing-history opening
@@ -122,6 +123,10 @@ def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
     moving = [r for r in rows
               if r.get("action") in ACQ_ACTIONS + ("SPLIT",)]
     moving.sort(key=lambda r: (str(datef(r) or ""), r.get("time") or ""))
+    # One split reported twice is ONE event per account (CA-CORP-12).
+    moving = dedupe_split_events(
+        moving, per_account=True,
+        account_of=lambda r: r.get("_acct") or "")
     for r in moving:
         d = datef(r)
         if until is not None and (d is None or d > until):

@@ -295,9 +295,15 @@ def open_positions(rows: Iterable[Dict[str, Any]], day: date
     missing history (find-missing-history), not a sign of a short
     export."""
     from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.corporate_timeline import split_copies
+    rows = list(rows)
+    # One split reported twice is ONE event; positions here are keyed by
+    # symbol, so the event is too (split_copies, CA-CORP-12).
+    dup = split_copies(rows)
     dated = []
     for r in rows:
-        if str(r.get("action") or "") not in _POSITION_ACTIONS:
+        if str(r.get("action") or "") not in _POSITION_ACTIONS \
+                or id(r) in dup:
             continue
         rd = _d(r.get("date"))
         if rd is not None and rd <= day:

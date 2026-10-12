@@ -534,8 +534,13 @@ def _held_at(rows: List[Dict[str, Any]], day: _date, country: str) -> float:
     to another symbol moves them off it (third pre-release review,
     finding 9: the ratio was added as units)."""
     from taxjson.lib.missing_history import loss_window_date
+    from taxjson.lib.corporate_timeline import split_copies
+    # One split reported twice is ONE event per account (CA-CORP-12).
+    dup = split_copies(rows, per_account=True)
     dated = []
     for r in rows:
+        if id(r) in dup:
+            continue
         rd = _d(loss_window_date(r, country))
         if rd is not None and rd <= day:
             dated.append((rd, r))

@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from taxjson.lib.core import _OCC_OPTION_RE, _root_matches_stock
-from taxjson.lib.corporate_timeline import (event_sort_key,
+from taxjson.lib.corporate_timeline import (dedupe_split_events, event_sort_key,
                                             normalize_symbol_new)
 from taxjson.lib.missing_history import (OrderStarts, open_close_codes,
                                           unbacked_close)
@@ -55,6 +55,8 @@ def unbacked_option_closes(transactions: Iterable[Any]) -> List[Dict[str, Any]]:
            if getattr(t, 'action', '') in _POSITION_ACTIONS + ('SPLIT',)
            and _contract(getattr(t, 'symbol', '') or '')]
     txs.sort(key=lambda t: event_sort_key(t, profile='missing_history_walk'))
+    # One split reported twice is ONE event per account (CA-CORP-12).
+    txs = dedupe_split_events(txs, per_account=True)
     pos: Dict[Tuple[str, str], float] = {}
     orders = OrderStarts()
     out: List[Dict[str, Any]] = []

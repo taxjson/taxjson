@@ -389,7 +389,9 @@ def _field(t: Any, name: str) -> Any:
 
 
 def split_copies(rows: Iterable[Any], seen: Optional[Set] = None, *,
-                 per_account: bool = False, note: bool = False) -> Set[int]:
+                 per_account: bool = False, note: bool = False,
+                 account_of: Optional[Callable[[Any], str]] = None
+                 ) -> Set[int]:
     """id() of every SPLIT row in `rows` that repeats a corporate event
     already counted — THE one dedup rule for split events (tax-logic
     CA-CORP-12 / US-CORP-13). Every walk that applies split ratios —
@@ -406,7 +408,8 @@ def split_copies(rows: Iterable[Any], seen: Optional[Set] = None, *,
     (each account's own copy applies to its own shares); the engines and
     the settle-lag test key it per security. Pass a shared `seen` to
     dedupe across several lists; `note` prints the one-line note that a
-    split was booked on two dates."""
+    split was booked on two dates; `account_of` reads a walk's own
+    account key (default: the row's `account`)."""
     if seen is None:
         seen = set()
     drop: Set[int] = set()
@@ -415,10 +418,15 @@ def split_copies(rows: Iterable[Any], seen: Optional[Set] = None, *,
         sym = _field(t, 'symbol') or ''
         date = str(_field(t, 'date') or '')
         ratio = _field(t, 'quantity')
+        try:
+            float(ratio or 0)
+        except (TypeError, ValueError):
+            continue                    # malformed: the walk reports it
         prior = split_seen(
             seen, sym, date, ratio, _field(t, 'symbol_new') or '',
-            account=(str(_field(t, 'account') or '') if per_account
-                     else None))
+            account=((str(account_of(t) if account_of
+                          else _field(t, 'account') or ''))
+                     if per_account else None))
         if prior is not None:
             drop.add(id(t))
             if note:
@@ -427,11 +435,13 @@ def split_copies(rows: Iterable[Any], seen: Optional[Set] = None, *,
 
 
 def dedupe_split_events(rows: Iterable[Any], seen: Optional[Set] = None, *,
-                        per_account: bool = False,
-                        note: bool = False) -> List[Any]:
+                        per_account: bool = False, note: bool = False,
+                        account_of: Optional[Callable[[Any], str]] = None
+                        ) -> List[Any]:
     """`rows` without the SPLIT rows `split_copies` names (order kept)."""
     rows = list(rows)
-    drop = split_copies(rows, seen, per_account=per_account, note=note)
+    drop = split_copies(rows, seen, per_account=per_account, note=note,
+                        account_of=account_of)
     return [t for t in rows if id(t) not in drop]
 
 

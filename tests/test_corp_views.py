@@ -108,16 +108,30 @@ class TestSplits(unittest.TestCase):
     def test_before_after_and_flags(self):
         rows = [_row("BUYSELL", "2024-01-02", "SPLT.US", 40, 1000),
                 _row("SPLIT", "2024-06-17", "SPLT.US", 10.0),
-                _row("SPLIT", "2024-06-20", "SPLT.US", 10.0),   # twice
+                _row("SPLIT", "2024-06-20", "SPLT.US", 10.0),   # 2 sources
                 _row("BUYSELL", "2023-01-02", "QHN.US", 15, 1000),
-                _row("SPLIT", "2026-03-09", "QHN.US", 0.5)]      # fraction
+                _row("SPLIT", "2026-03-09", "QHN.US", 0.5),      # fraction
+                _row("BUYSELL", "2023-01-02", "QTW.US", 10, 1000),
+                _row("SPLIT", "2025-02-03", "QTW.US", 2.0),
+                _row("SPLIT", "2025-02-12", "QTW.US", 2.0)]      # 9 days
         td, root, cfg = _proj(rows)
         with td:
             items = splits(root, cfg)
         nv = [i for i in items if i["symbol"] == "SPLT.US"]
         self.assertEqual(nv[0]["held_before"], 40)
         self.assertEqual(nv[0]["held_after"], 400)
-        self.assertIn("TWICE?", nv[0]["flags"])
+        # Copies within a week are ONE event, applied once (GitHub #92,
+        # CA-CORP-12): the second copy changes nothing, and the view no
+        # longer says "applied twice".
+        self.assertIn("TWO-SOURCES", nv[0]["flags"])
+        self.assertNotIn("TWICE?", nv[0]["flags"])
+        self.assertEqual((nv[1]["held_before"], nv[1]["held_after"]),
+                         (400, 400))
+        self.assertIn("applied ONCE, on 2024-06-17", " ".join(nv[1]["why"]))
+        # Further apart they are two events: both apply, flagged.
+        tw = [i for i in items if i["symbol"] == "QTW.US"]
+        self.assertIn("TWICE?", tw[0]["flags"])
+        self.assertEqual(tw[1]["held_after"], 40)
         qhn = [i for i in items if i["symbol"] == "QHN.US"][0]
         self.assertIn("FRACTION", qhn["flags"])
         self.assertIn("consolidation", "\n".join(render_splits(items)))

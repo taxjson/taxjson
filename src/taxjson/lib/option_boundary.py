@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from taxjson.lib.core import (TaxTransaction,
                               _make_assign_underlying_resolver,
                               is_option_symbol, parse_option_expiry)
-from taxjson.lib.corporate_timeline import event_sort_key
+from taxjson.lib.corporate_timeline import dedupe_split_events, event_sort_key
 from taxjson.lib.missing_history import OrderStarts, unbacked_close
 
 
@@ -154,6 +154,9 @@ def write_lots(transactions: List[TaxTransaction],
                                    "OPENING_BALANCE")
                    and is_option_symbol(t.symbol or "")),
                   key=lambda x: event_sort_key(x, profile="ca_main", date_of=_date_of))
+    # One split reported twice is ONE event (split_copies, CA-CORP-12);
+    # positions here are keyed by symbol, so the event is too.
+    rows = dedupe_split_events(rows)
     pos: Dict[str, float] = {}
     lots: Dict[str, List[WriteLot]] = {}
     out: List[WriteLot] = []
@@ -527,6 +530,8 @@ def expired_open(transactions: List[TaxTransaction], year: int,
                    and is_option_symbol(t.symbol or "")),
                   key=lambda x: event_sort_key(x, profile="ca_main",
                                                date_of=_date_of))
+    # One split reported twice is ONE event per account (CA-CORP-12).
+    rows = dedupe_split_events(rows, per_account=True)
     pos: Dict[Any, float] = {}
     # Positions the broker says were opened before the data (a sale
     # coded IB C with no long held, a buy coded C with no short): the

@@ -81,9 +81,14 @@ def _manifest(root: Path, acct: str) -> Dict[str, Any]:
 
 def _held(rows: List[Dict[str, Any]], sym: str, until: str,
           inclusive: bool) -> float:
+    from taxjson.lib.corporate_timeline import split_copies
+    # One split reported twice is ONE event per account (CA-CORP-12).
+    dup = split_copies(rows, per_account=True)
     q = 0.0
     for r in sorted(rows, key=lambda r: (r.get("date") or "",
                                          r.get("time") or "")):
+        if id(r) in dup:
+            continue
         d = r.get("date") or ""
         if d > until or (d == until and not inclusive):
             continue
@@ -357,6 +362,9 @@ def splits(root: Path, cfg: Dict[str, Any],
             continue
         rows = _rows(cache / f"{acct}_base.json")
         sp = [r for r in rows if r.get("action") == "SPLIT"]
+        from taxjson.lib.corporate_timeline import (SPLIT_DATE_WINDOW_DAYS,
+                                                    split_copies)
+        copies = split_copies(rows, per_account=True)
         for r in sorted(sp, key=lambda r: (r.get("date") or "",
                                            r.get("symbol") or "")):
             sym = r.get("symbol") or ""
@@ -366,7 +374,9 @@ def splits(root: Path, cfg: Dict[str, Any],
             before = _held(rows, sym, d, False)
             # after: the rename target from the split on
             after_sym = new or sym
-            after = before * ratio if ratio else before
+            # A later copy of an event already applied changes nothing.
+            after = (before if id(r) in copies
+                     else before * ratio if ratio else before)
             flags: List[str] = []
             why: List[str] = []
             if abs(ratio - 1.0) < 1e-9 and (not new or new == sym):
@@ -384,7 +394,7 @@ def splits(root: Path, cfg: Dict[str, Any],
                 dd = datetime.strptime(d, "%Y-%m-%d")
             except ValueError:
                 dd = None
-            twins = []
+            twins, same_event = [], []
             if dd:
                 for o in sp:
                     if o is r or o.get("symbol") != sym:
@@ -396,12 +406,24 @@ def splits(root: Path, cfg: Dict[str, Any],
                         continue
                     if abs((od - dd).days) <= window_days and \
                             abs(float(o.get("quantity") or 0) - ratio) < 1e-6:
-                        twins.append(o.get("date"))
+                        (same_event if abs((od - dd).days)
+                         <= SPLIT_DATE_WINDOW_DAYS
+                         else twins).append(o.get("date"))
+            if same_event:
+                # Within the window the copies are ONE event, applied
+                # once on the earliest date (split_copies, CA-CORP-12).
+                flags.append("TWO-SOURCES")
+                first = min([d] + same_event)
+                why.append(f"the same {ratio:g} split of {sym} is also "
+                           f"booked on {', '.join(sorted(same_event))}: one "
+                           f"corporate event reported by two sources, "
+                           f"applied ONCE, on {first}")
             if twins:
                 flags.append("TWICE?")
                 why.append(f"another {ratio:g} split of {sym} on "
-                           f"{', '.join(sorted(twins))}: a split reported by "
-                           f"two sources is applied twice")
+                           f"{', '.join(sorted(twins))}, more than "
+                           f"{SPLIT_DATE_WINDOW_DAYS} days apart: both are "
+                           f"applied — delete one if it is the same event")
             if re.search(r"\bROC\b|RETURN OF CAPITAL|CASH", str(
                     r.get("description") or ""), re.IGNORECASE):
                 why.append("the event also mentions a cash or return-of-"
@@ -456,7 +478,7 @@ def render_spinoffs(doc: Dict[str, Any],
                          f"{s['new_cost']:,.2f} {s['currency']}"),
               ("held now", f"{s['held_now']:g}")], "  ")
         d.items(s["why"], "  ")
-    n = sum(1 for s in items if s["flags"])
+    n = sum(1 for s in items if set(s["flags"]) - {"TWO-SOURCES"})
     if stale:
         d.blank()
         d.para(f"{len(stale)} saved spin-off election(s) match no event "
@@ -496,7 +518,7 @@ def render_splits(items: List[Dict[str, Any]],
                f"{kind} x{s['ratio']:g}  held {s['held_before']:g} -> "
                f"{s['held_after']:g}{tag}", "", "  ")
         d.items(s["why"], "  ")
-    n = sum(1 for s in items if s["flags"])
+    n = sum(1 for s in items if set(s["flags"]) - {"TWO-SOURCES"})
     d.blank()
     d.para(f"{n} split(s) need attention." if n else
            "No split is doubled, empty or fractional.")

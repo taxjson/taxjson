@@ -226,7 +226,7 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
     account: the walk undoes every SPLIT row up to the snapshot day that
     leads to the snapshot's symbol, whichever account's export carries
     it (each event once), and none of the account's own twice."""
-    from taxjson.lib.corporate_timeline import normalize_symbol_new
+    from taxjson.lib.corporate_timeline import split_copies
     renames = renames or []
     where = {id(t): i for i, t in enumerate(txs)}
     splits = [(i, t) for i, t in enumerate(txs)
@@ -247,6 +247,9 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
             open_cost[key] = (cur if pc == cur else None, pa + amt)
             lots.setdefault(key, []).append(
                 (str(_get(t, 'lot_date')), amt))
+    # Each split event counts once whichever account (or source) carries
+    # it, copies on nearby dates included (split_copies, CA-CORP-12).
+    split_dups = split_copies([t for _i, t in splits])
     bad: List[Tuple] = []
     for acct, rows in dropped.items():
         groups: Dict[str, List] = {}
@@ -255,18 +258,13 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
                 groups.setdefault(hit, []).append((where[id(t)], t))
         for hit, grp in groups.items():
             day = by_acct[acct][hit]
-            seen = set()
             for i, t in splits:
                 d = str(_get(t, 'date'))
                 sym = str(_get(t, 'symbol'))
-                if d > day or _final_symbol(sym, renames, day) != hit:
+                if d > day or _final_symbol(sym, renames, day) != hit \
+                        or id(t) in split_dups:
                     continue
-                key = (d, sym, normalize_symbol_new(
-                    sym, str(_get(t, 'symbol_new'))),
-                    round(float(_get(t, 'quantity', 0.0) or 0.0), 9))
-                if key not in seen:
-                    seen.add(key)
-                    grp.append((i, t))
+                grp.append((i, t))
             grp.sort(key=lambda it: _when(it[1], it[0]))
             pos: Dict[str, float] = {hit: open_qty.get((acct, hit), 0.0)}
             # The cost, walked back the same way (issue #77): None once

@@ -120,8 +120,13 @@ def _net_by_symbol(txs):
     by_src: Dict[Any, Dict[str, float]] = {}
     opt: Dict[str, float] = {}
     desc: Dict[str, str] = {}
+    from taxjson.lib.corporate_timeline import split_copies
+    txs = [t for t in txs if isinstance(t, dict)]
+    # One split reported twice is ONE event per book (CA-CORP-12).
+    dup = split_copies(txs, per_account=True,
+                       account_of=lambda t: str(t.get("_src")))
     for t in txs:
-        if not isinstance(t, dict):
+        if id(t) in dup:
             continue
         s = t.get("symbol", "") or ""
         act = t.get("action")

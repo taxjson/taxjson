@@ -2608,10 +2608,12 @@ needs attention. The rules:
 `taxjson splits [ACCOUNT] [--json]`
 
 Every split, consolidation and rename with the holdings just before and
-after. It flags a split recorded twice (two sources, close dates), a
+after. It notes a split recorded twice within a week (two sources:
+TWO-SOURCES, one event applied once, on the earliest date) and flags
+the same ratio again 8 to 10 days apart (TWICE?: both are applied), a
 no-op row, a result with a fractional share (expect cash in lieu), and
 events that also mention a cash or return-of-capital leg. Exit 1 on a
-likely double application.
+likely double application (TWICE?).
 
 ### Maintainer
 

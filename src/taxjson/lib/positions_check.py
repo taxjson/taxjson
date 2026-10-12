@@ -123,7 +123,13 @@ def positions_on(rows: Iterable[Dict[str, Any]], day: str, *,
     """{symbol: quantity} after every row traded on or before `day`
     (`before`: strictly before it; `settled`: by settlement date — the
     holder of record). Splits scale the symbol's shares; a rename moves
-    them to the new symbol."""
+    them to the new symbol. One split reported twice (two accounts'
+    or two sources' copies, nearby dates) applies once: the position
+    is keyed by symbol, so the event is too (split_copies,
+    CA-CORP-12)."""
+    from taxjson.lib.corporate_timeline import split_copies
+    rows = list(rows)
+    dup = split_copies(rows)
     pos: Dict[str, float] = {}
     for r in _ordered(rows):
         d = str((r.get("date_settle") if settled else None)
@@ -134,7 +140,7 @@ def positions_on(rows: Iterable[Dict[str, Any]], day: str, *,
         sym = str(r.get("symbol") or "")
         if a in _QTY_ACTIONS:
             pos[sym] = pos.get(sym, 0.0) + float(r.get("quantity") or 0.0)
-        elif a == "SPLIT":
+        elif a == "SPLIT" and id(r) not in dup:
             new = str(r.get("symbol_new") or "").strip() or sym
             q = pos.pop(sym, 0.0) * float(r.get("quantity") or 0.0)
             pos[new] = pos.get(new, 0.0) + q

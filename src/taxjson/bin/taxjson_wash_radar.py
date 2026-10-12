@@ -35,7 +35,8 @@ from taxjson.lib.core import (TaxTransaction, is_stock_dividend,
                               not_a_purchase)
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
-                                            account_tie, split_seen)
+                                            account_tie, dedupe_split_events,
+                                            split_seen)
 from taxjson.lib.price_chain import is_crypto_symbol
 from taxjson.lib.ticker_map import is_option_ticker
 from taxjson.lib import out as _out
@@ -536,8 +537,10 @@ def main():
     # 11-for-10 split left 8 nonexistent post-split shares held.
     # (US: the walk orders by TRADE date, so a pre-split trade is booked
     # before the split scales it — nothing to re-denominate.)
-    _lag_splits = [t for t in transactions if t.action == 'SPLIT' and t.date
-                   and not us_mode]
+    # One split reported twice (two sources, nearby dates) is ONE event
+    # (split_copies, CA-CORP-12 — keyed per security like the engine).
+    _lag_splits = [t for t in dedupe_split_events(transactions)
+                   if t.action == 'SPLIT' and t.date and not us_mode]
     if _lag_splits:
         for t in transactions:
             if not (t.action in ('BUYSELL', 'ASSIGN') and t.date
@@ -685,7 +688,7 @@ def main():
     # DATED (A2-0197): an old ticker's row after its rename date
     # is its own security (SplitTimeline.class_at); `date` None = now.
     _split_tl = SplitTimeline.from_transactions(
-        [t for t in transactions if _booked(t)],
+        dedupe_split_events([t for t in transactions if _booked(t)]),
         date_of=_tax_day)
 
     def alias_of(sym, date=None, before=False):

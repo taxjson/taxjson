@@ -25,6 +25,12 @@
   row's record-date holding, so a reinvested distribution was booked too
   small and the gains came out too high; the same walk also skewed each
   account's share of a blended pool. (#92)
+- The other views that walk splits count such a pair once too: the wash
+  radar (it showed a short position after a sale settling across the
+  split), `taxjson sanity`, `taxjson edge-cases`, `taxjson renames`, the
+  cross-listing checks, the option checks and the opening-balance check.
+  `taxjson splits` now marks the pair TWO-SOURCES (applied once) instead
+  of TWICE?, and keeps TWICE? for the same ratio 8 to 10 days apart.
 
 ## v0.29.2 (2026-10-11)
 
