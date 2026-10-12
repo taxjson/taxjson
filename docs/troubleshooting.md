@@ -705,7 +705,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs list` shows the `[[distributions]]` ADJUST (id `DIST-…`) on the record date; compare its amount with per_share x the shares you held that day. On releases before the fix it came out short when a sale executed before the split settled after it: the sale was scaled by the ratio once per copy of the split.
 - **Cause:** two sources (two brokers, or a `.tt` SPLIT line next to the broker's row) report one split on nearby dates. The gains engine and the holding walk counted it once, but the settle-lag step that re-denominates a trade straddling the split multiplied by every copy, so the record-date holding (and the split-gains apportionment of a blended pool) was wrong and gains were overstated.
 - **Fix:** upgrade: every walk of split events now uses one corporate-event rule (same symbol and ratio within a week = one event, kept on its earliest date), and `tjs run` again. Deleting the extra `.tt` SPLIT line also works on older releases.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.30.0`
 - **Code:** `src/taxjson/lib/corporate_timeline.py` — `split_copies`, `dedupe_split_events`; `src/taxjson/bin/taxjson_apply_distributions.py` — `_settle_lag_factors`, `balance_on`; `src/taxjson/bin/taxjson_split_gains.py` — `split_for_account`
 
 ### "Error: 1 corp-action event(s) need an election but --no-input" (or "… but stdin is not a TTY"), and `tjs run` exits 3
@@ -1096,7 +1096,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** the export has an `ID` column (Kraken: `txid`) but the cell is empty on the rows in question, and two of them are alike in every other cell (same second, asset, quantity, price and total). `tjs sum` books fewer units and a smaller gain than the export holds; `tjs sanity` against a holdings file shows the short. On v0.29.2 and older (issue #93).
 - **Cause:** taxjson keeps two identical rows of one file apart by the broker's row id. A row with no id is told apart by its order among identical rows (as rows of an older Coinbase layout with no ID column always were), but a blank cell in an ID column took neither path, so the two purchases became one row and the sale went short.
 - **Fix:** upgrade and `tjs run`: rows without an id are now kept apart, while the same rows in an overlapping export are still read once. On an older release, delete the empty ID column (or fill in distinct ids).
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.30.0`
 - **Code:** `src/taxjson/lib/brokerages/coinbase.py` — `parse_file`, `_content_stem`; `src/taxjson/lib/brokerages/kraken.py` — `_mark_idless_fills`; `src/taxjson/lib/brokerages/base.py` — `content_stem`, `disambiguate_split_fills`
 
 ### "Error: kr_ledgers.csv: Kraken ledger kr_ledgers.csv: refid RZ*** (2025-03-02)" — the leg "is under the books' zero (1e-09 units) but not negligible"
@@ -1279,7 +1279,7 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Check:** `tjs audit QZA.TO` for the loss's symbol: the loss sale is denied (deferred, not "permanently"), the symbol held no shares right after it, and a rename or merger (a broker corporate-action row, a `.tt` `RENAME` or `SPLIT ... QZB.TO QZA.TO` line) later brought the replacement shares in under that symbol. On v0.29.2 and older the ACB of those shares after the rename is their own cost only, without the denied loss; once they are sold the total gain exceeds proceeds less purchases by the denied amount. `tjs sanity` and the holdings check agree, since the share counts are right.
 - **Cause:** a denied loss is added to the replacement's ACB (CA-SL-09). When the loss's symbol holds nothing at that moment, the amount waits until the symbol next opens a position. A purchase applied it, but a rename or merger into the empty symbol did not, so the loss was denied and never recovered (issue #91; CA-SL-19 in `tjs tax-logic --ids`). The US engine adds a wash sale's disallowed loss to the replacement lot itself, which the rename carries, and was not affected.
 - **Fix:** upgrade, then `tjs run`: the renamed shares' ACB now includes the denied amount, and each later sale (partial or final) recovers its share. If you filed an earlier year with such a sale, `tjs check-filed` shows whether its figure moved.
-- **Fixed in:** unreleased
+- **Fixed in:** `v0.30.0`
 - **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `pending_wash`
 
 ### `tjs wash-sales` shows a loss "permanently denied"

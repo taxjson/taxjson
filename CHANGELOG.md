@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.30.0 (2026-10-11)
+
 ### Changed
 
 - The public history starts again from a single commit holding the
