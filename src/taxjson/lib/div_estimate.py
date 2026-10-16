@@ -3,11 +3,13 @@ position's own dividend history in the books. Planning numbers only,
 never a filing figure (tax-logic CA-PLAN-06 / US-PLAN-07).
 
 Per payer (a listing, across the accounts that hold it):
-- the payment frequency from its past pay dates (the gaps of the last
-  payments, a gap of several periods read as payments made while the
-  position was not held: monthly, quarterly, semi-annual or annual;
-  anything else, or a single payment, is irregular and is estimated pro
-  rata from the trailing-12-month amount per share);
+- the payment frequency from its past pay dates: the grid (weekly,
+  monthly, quarterly, semi-annual or annual), anchored at the latest
+  payment, that most of the last payments fall on; a payment off the
+  grid (a special) or a stretch of empty slots (payments made while
+  the position was not held) does not break it. No grid fits, or a
+  single payment: irregular (its estimate is pro rata from the
+  trailing-12-month amount per share);
 - its latest per-share amount (gross, in the payment's currency) and
   its trailing-12-month amount per share.
 
@@ -36,18 +38,24 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 SCHEMA_VERSION = 1
 
-# (name, months between payments, median gap in days: low, high)
-FREQUENCIES: Tuple[Tuple[str, int, int, int], ...] = (
-    ("monthly", 1, 20, 45),
-    ("quarterly", 3, 70, 110),
-    ("semi-annual", 6, 150, 215),
-    ("annual", 12, 320, 410),
+# (name, months between payments (0: by days), days between payments)
+FREQUENCIES: Tuple[Tuple[str, int, int], ...] = (
+    ("weekly", 0, 7),
+    ("monthly", 1, 30),
+    ("quarterly", 3, 91),
+    ("semi-annual", 6, 182),
+    ("annual", 12, 365),
 )
-# A projected payment this many days overdue (by its period) is taken as
-# missing from the books, not as still to come.
-GRACE_DAYS = {1: 7, 3: 15, 6: 20, 12: 30}
-# Gaps the frequency is read from: the last LOOKBACK payments.
-LOOKBACK = 8
+# A projected payment this many days overdue (by its frequency) is taken
+# as missing from the books, not as still to come.
+GRACE_DAYS = {"weekly": 3, "monthly": 7, "quarterly": 15, "semi-annual": 20,
+              "annual": 30}
+# The frequency is read from the last LOOKBACK payments.
+LOOKBACK = 12
+# A payment is on a frequency's grid when it is within GAP_TOL of a
+# period from its slot (a monthly payer's date drifts a few days with
+# weekends and the broker's posting; a quarterly one's a few weeks).
+GAP_TOL = 0.25
 _INCOME = ("DIVIDEND", "DIVIDEND_IN_LIEU")
 
 
@@ -85,15 +93,30 @@ def parse_window(token: str) -> Optional[int]:
     return max(1, int(round(months)))
 
 
-def payments(rows: Iterable[Tuple[str, Dict[str, Any]]]
-             ) -> Dict[str, List[Payment]]:
-    """{symbol: [Payment] by pay date} from (account, native row) pairs:
+class Payments(dict):
+    """{symbol: [Payment]} that remembers the rows it was read from, so
+    `estimate` can read them again as of its own date (a reversal or a
+    share count dated after the as-of date must not change what the
+    books said on it: 2026-10 audit R09)."""
+    rows: List[Tuple[str, Dict[str, Any]]] = []
+
+
+def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
+             as_of: Optional[str] = None) -> "Payments":
+    """{symbol: [Payment] by pay date} from (account, native row) pairs
+    dated up to `as_of` (all of them when None):
     DIVIDEND (and DIVIDEND_IN_LIEU: the same stream, paid while the
     shares were lent) rows netted per account, symbol and pay date (a
     reversal and its re-posting are one payment), their withholding
-    from the TAX rows of that account, symbol and date. A corporate
-    action's deemed dividend (a spin-off election) and a row with no
-    share count are not part of a payer's schedule."""
+    from the TAX rows of that account, symbol and date. A reversal
+    posted on a later date nets against the latest earlier posting of
+    that account and symbol (the original it cancels), so a correction
+    counts once. A corporate action's deemed dividend (a spin-off
+    election) is not part of a payer's schedule; a row with no share
+    count (the broker's description names none) takes the count of the
+    account's nearest dated payment of that symbol that has one, or is
+    left out when none has."""
+    rows = list(rows)
     inc: Dict[tuple, Dict[str, Any]] = {}
     tax: Dict[tuple, float] = {}
     for acct, t in rows:
@@ -103,6 +126,8 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]]
         sym = str(t.get("symbol") or "").strip()
         d = str(t.get("date") or "")[:10]
         if not sym or len(d) != 10:
+            continue
+        if as_of is not None and d > as_of:
             continue
         k = (acct, sym, d)
         if act == "TAX" or str(t.get("type") or "").lower() == "tax":
@@ -120,7 +145,37 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]]
         q = abs(float(t.get("quantity") or 0.0))
         if q > e["qty"]:
             e["qty"], e["row"] = q, t
-    out: Dict[str, List[Payment]] = {}
+    # Per account and symbol, in date order: a net-negative date (a
+    # reversal) cancels the latest earlier positive posting(s); a date
+    # with no share count borrows the nearest dated one.
+    by_pair: Dict[tuple, List[tuple]] = {}
+    for (acct, sym, d), e in inc.items():
+        by_pair.setdefault((acct, sym), []).append((d, e))
+    for ents in by_pair.values():
+        ents.sort(key=lambda x: x[0])
+        for i, (_d, e) in enumerate(ents):
+            if e["gross"] >= -0.005:
+                continue
+            left = -e["gross"]
+            e["gross"] = 0.0
+            for _pd, pe in reversed(ents[:i]):
+                if pe["gross"] <= 0.005:
+                    continue
+                take = min(left, pe["gross"])
+                pe["gross"] -= take
+                left -= take
+                if left <= 0.005:
+                    break
+        for i, (d, e) in enumerate(ents):
+            if e["qty"] > 1e-9 or e["gross"] <= 0.005:
+                continue
+            near = [(abs((date.fromisoformat(d)
+                          - date.fromisoformat(pd)).days), pe["qty"])
+                    for pd, pe in ents if pe["qty"] > 1e-9]
+            if near:
+                e["qty"] = min(near)[1]
+    out = Payments()
+    out.rows = rows
     for (acct, sym, d), e in inc.items():
         if e["gross"] <= 0.005 or e["qty"] <= 1e-9:
             continue
@@ -178,39 +233,62 @@ def schedule(pays: List[Payment]) -> List[Payment]:
     return out
 
 
-def _fits(gap: float, period: float) -> Tuple[int, bool]:
-    """(k, fits): the whole number of periods nearest `gap` and whether
-    the gap is within tolerance of it (k >= 1)."""
-    k = max(1, int(round(gap / period)))
-    return k, abs(gap - k * period) <= period * (GAP_TOL + GAP_TOL_K * k)
+def _slot(anchor: date, months: int, days: int, k: int) -> date:
+    """The grid date k periods before `anchor`."""
+    if months:
+        return date.fromisoformat(add_months(anchor.isoformat(), -months * k))
+    return anchor - timedelta(days=days * k)
 
 
 def detect_frequency(dates: List[str]) -> Tuple[Optional[str],
                                                 Optional[int],
                                                 Optional[float]]:
-    """(name, months, typical gap in days) from sorted pay dates; (None,
-    None, gap) when irregular, (None, None, None) with fewer than two
-    payments. Each frequency is tried on the last LOOKBACK gaps: a gap
-    of about one period is a hit, one of about k periods a stretch the
-    payer paid while the position was not held (fits); the frequency
-    with the most hits whose fits cover two thirds of the gaps wins (the
-    shorter one on a tie). None fits: irregular."""
+    """(name, months between payments (0: weekly), typical gap in days)
+    from sorted pay dates; (None, None, gap) when irregular, (None,
+    None, None) with fewer than two payments. Each frequency's grid is
+    anchored at the latest of the last LOOKBACK payments: a payment is
+    on the grid when it is within GAP_TOL of a period from its slot. A
+    frequency fits when two thirds of the payments are on its grid, no
+    slot holds more than two (a payment and a special, or a second
+    broker's posting of it) and two payments fill adjacent slots (a
+    stretch of empty slots is the position not held; a payment off the
+    grid is a special); the one with the most adjacent slots filled
+    wins, then the most slots, then the shortest period (a quarterly
+    payer's dates are on the monthly grid too, but fill no adjacent
+    monthly slots; they are on the weekly grid as well, 13 weeks to a
+    quarter, so weekly needs two thirds of its slot gaps adjacent)."""
     ds = [date.fromisoformat(d) for d in dates[-LOOKBACK:]]
     if len(ds) < 2:
         return None, None, None
-    gaps = [(b - a).days for a, b in zip(ds, ds[1:])]
+    anchor = ds[-1]
     best = None
-    for name, months, _lo, _hi in FREQUENCIES:
-        period = months * 365.25 / 12
-        ks = [_fits(g, period) for g in gaps]
-        hits = [g for g, (k, ok) in zip(gaps, ks) if ok and k == 1]
-        fits = sum(1 for _k, ok in ks if ok)
-        if not hits or fits * 3 < 2 * len(gaps):
+    for name, months, days in FREQUENCIES:
+        period = months * 365.25 / 12 if months else float(days)
+        tol = period * GAP_TOL
+        slots: Dict[int, List[date]] = {}
+        for d in ds:
+            k = max(0, int(round((anchor - d).days / period)))
+            if abs((d - _slot(anchor, months, days, k)).days) <= tol:
+                slots.setdefault(k, []).append(d)
+        # A slot holds a payment and at most one more (a special, a
+        # second broker's posting): three is a shorter period.
+        if any(len(v) > 2 for v in slots.values()):
             continue
-        key = (len(hits), fits, -months)
+        on = sum(len(v) for v in slots.values())
+        ks = sorted(slots)
+        adj = [(slots[a][-1] - slots[b][-1]).days
+               for a, b in zip(ks, ks[1:]) if b == a + 1]
+        if not adj or on * 3 < 2 * len(ds):
+            continue
+        # Every grid is on the weekly one (13 weeks to a quarter): the
+        # weekly payer is the one whose slots are mostly adjacent.
+        if not months and len(adj) * 3 < 2 * (len(ks) - 1):
+            continue
+        key = (len(adj), len(slots), -period)
         if best is None or key > best[0]:
-            best = (key, name, months, float(median(hits)))
+            best = (key, name, months, float(median(adj)))
     if best is None:
+        gaps = [(b - a).days for a, b in zip(ds, ds[1:])]
         return None, None, float(median(gaps))
     return best[1], best[2], best[3]
 
@@ -255,6 +333,13 @@ def estimate(positions: Iterable[Dict[str, Any]],
     the base-currency rate of `cur` (None: no rate in the books)."""
     horizon = add_months(as_of, months)
     ystart, yend = f"{tax_year}-01-01", f"{tax_year}-12-31"
+    if isinstance(pays, Payments) and pays.rows:
+        pays = payments(pays.rows, as_of=as_of)
+    # The projection runs to the later of the window and the tax year
+    # (plus the month a December-record distribution is paid in): the
+    # rest-of-year total is the year's, whatever window was asked for
+    # (2026-10 audit R08).
+    reach = max(horizon, add_months(yend, 1))
     rows: List[Dict[str, Any]] = []
     omitted: List[Dict[str, Any]] = []
     for pos in sorted(positions, key=lambda p: (p["symbol"],
@@ -284,12 +369,14 @@ def estimate(positions: Iterable[Dict[str, Any]],
         missed = 0
         status = "ok"
         win = roy = 0.0
-        if step:
-            grace = GRACE_DAYS[step]
+        if name:
+            grace = GRACE_DAYS[name]
             k = 1
             while True:
-                d = add_months(latest.pay_date, step * k)
-                if d > horizon:
+                d = (add_months(latest.pay_date, step * k) if step
+                     else _iso(date.fromisoformat(latest.pay_date)
+                               + timedelta(days=7 * k)))
+                if d > reach:
                     break
                 k += 1
                 if (date.fromisoformat(as_of)
@@ -306,9 +393,10 @@ def estimate(positions: Iterable[Dict[str, Any]],
             elif missed == 1:
                 status = "late"
                 flags.append("1 expected payment not in the books")
-            win = sum(p["amount"] for p in projected)
             roy = sum(p["amount"] for p in projected
                       if ystart <= p["tax_date"] <= yend)
+            projected = [p for p in projected if p["pay_date"] <= horizon]
+            win = sum(p["amount"] for p in projected)
         else:
             status = "irregular"
             flags.append("single payment" if len(sched) < 2
@@ -329,7 +417,8 @@ def estimate(positions: Iterable[Dict[str, Any]],
         rows.append({
             "account": acct, "group": pos.get("group") or "",
             "symbol": sym, "currency": cur, "shares": shares,
-            "frequency": name or "irregular",
+            "frequency": name or ("1 payment" if len(sched) < 2
+                                  else "irregular"),
             "median_gap_days": gap, "payments": len(sched),
             "last_pay_date": latest.pay_date,
             "last_per_share": round(latest.per_share, 6),
@@ -498,13 +587,14 @@ def render(doc: Dict[str, Any], details: bool = False,
     else:
         d.line("  (none)")
     d.section("HOW IT IS ESTIMATED")
-    d.para("The frequency is read from the gaps between the last "
-           "payments (monthly, quarterly, semi-annual, annual; a gap of "
-           "several periods is payments made while the position was not "
-           "held, and postings a few days apart are one payment); an "
-           "irregular payer "
-           "or a single payment is estimated pro rata from its "
-           "12-month amount per share. Each projected payment is the "
+    d.para("The frequency is the grid (weekly, monthly, quarterly, "
+           "semi-annual, annual) most of the last payments fall on, "
+           "anchored at the latest one: a payment off the grid (a "
+           "special) or a stretch of empty slots (the position not "
+           "held) does not break it, and postings a few days apart are "
+           "one payment; no grid, or a single payment, is estimated pro "
+           "rata from the 12-month amount per share. Each projected "
+           "payment is the "
            "latest per-share amount x the shares held now, converted at "
            "the books' latest rate, and counts in the tax year of its "
            "pay date (a Canadian trust's distribution: its record date), "

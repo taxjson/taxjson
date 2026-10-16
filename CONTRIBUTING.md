@@ -201,8 +201,8 @@ private lists); the workflow file (`.github/workflows/tests.yml`, Python
 3.9–3.13 on Linux) runs its stages on every pull request and push to
 `main` — lint, consistency, tax-rules, the PII scan (generic patterns
 only: a hosted runner has no private denylist), gitleaks and the suite —
-and its checks are required before a pull request merges and before a
-release is tagged (docs/releasing.md). A missing `ruff` fails
+and its checks must pass before a change lands and before a release is
+tagged (docs/releasing.md). A missing `ruff` fails
 the lint stage; `pip install -e ".[dev]"` (or `scripts/dev-setup.sh`)
 installs it:
 
@@ -431,6 +431,12 @@ gains a test, delete its baseline line; a new rule can never be baselined.
 Retire an id in `tests/tax_rules/retired.txt`; never reuse one.
 
 ## Pull request checklist
+
+Open pull requests here as usual; CI runs on them. This repository's
+`main` changes only through releases, so a pull request is not merged
+here: once it is ready, the maintainer brings it into the development
+repository (you stay the commit's author), and it ships with the next
+release; the pull request is then closed with a note saying which.
 
 - [ ] `scripts/ci.sh` passes — read its **last line**: it must say `PASS`
       (a pipe such as `scripts/ci.sh | tail` hides the exit status).

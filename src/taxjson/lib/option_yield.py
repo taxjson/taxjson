@@ -1,0 +1,716 @@
+"""`taxjson option-yield`: how the option trades on an underlying did
+over a window — premiums received and paid, the profit or loss on the
+contracts closed in the window and how they closed (expired, bought
+back, assigned, sold, exercised), what is still open, and the yield on
+the strike notional at risk, time-weighted over the window and
+annualized. Planning numbers only, never a filing figure (tax-logic
+CA-PLAN-07 / US-PLAN-08): the tax treatment of a premium (ITA s.49
+timing, §1234) is in the gains, not here.
+
+Contracts are matched per account and option series, first in first
+out, from the native books (what `taxjson events` shows): a sale with
+no long position WRITES a contract, a purchase with no short position
+BUYS one; the opposite trade closes the oldest open contract of that
+series. A close at price 0 with no money is an expiry; an ASSIGN row
+is an assignment (of a written contract) or an exercise (of a bought
+one). A SPLIT on the series re-denominates and renames the open
+contracts. Money keeps the books' convention — the quantity carries
+the direction, the amount is a magnitude — so a .tt book's negative
+buy-back amount and a parser's positive one read the same.
+
+The yield is the realized profit or loss of the window over the cost
+of the underlying's shares held now in the accounts read (the books'
+holdings: a covered-call writer's capital), annualized by 365 / the
+window's days. With no shares held (naked or cash-secured contracts)
+it is over the average strike notional open in the window instead
+(strike x contract size x contracts, each contract weighted by its
+days open inside the window), and the row says so. A contract opened
+before the data (a missing-history opening) has no premium: its closes
+are listed, its money is unknown, and the row is flagged.
+
+This module is pure: the command (taxjson_run.cmd_option_yield) reads
+the books and hands the rows in.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+
+from taxjson.lib.core import (is_option_symbol, parse_option_expiry,
+                              parse_option_right, parse_option_strike,
+                              parse_option_underlying)
+from taxjson.lib.corporate_timeline import dedupe_split_events
+
+SCHEMA_VERSION = 1
+WRITTEN = "written"
+BOUGHT = "bought"
+# How a contract closed: the written side, then the bought side.
+EXPIRED = "expired"
+BOUGHT_BACK = "bought back"
+ASSIGNED = "assigned"
+SOLD = "sold"
+EXERCISED = "exercised"
+_EPS = 1e-9
+
+
+@dataclass
+class Close:
+    date: str
+    kind: str
+    units: float
+    cash: float          # signed: money received (+) or paid (-)
+    pnl: float           # this close's share of the contract's premium + cash
+
+
+@dataclass
+class Lot:
+    """One opened position in a series. `units`, `symbol`, `strike` and
+    `expiry` are as OPENED; the splits and renames the series went
+    through later are dated in `splits`, and the `_on(end)` accessors
+    give the lot as it stood at a window's end (a later split used to
+    rewrite an earlier window's counts: 2026-10 audit R10). A close's
+    `units` are the contracts of its own day."""
+    account: str
+    symbol: str
+    underlying: str
+    right: str           # C | P
+    strike: float
+    expiry: str
+    currency: str
+    side: str            # WRITTEN | BOUGHT
+    open_date: str
+    units: float
+    size: float          # units of the underlying per contract
+    cash_open: float     # signed: a write's premium (+), a purchase's cost (-)
+    unknown_cost: bool = False
+    open_units: float = 0.0          # contracts open now, in today's units
+    closes: List[Close] = field(default_factory=list)
+    notional: float = 0.0    # strike x size x units at the open (split-invariant)
+    splits: List[Tuple[str, float, str]] = field(default_factory=list)
+
+    def factor(self, since: str, through: str) -> float:
+        """The split ratios applied after `since` up to and including
+        `through` (a split on a lot's own day came first)."""
+        f = 1.0
+        for d, ratio, _new in self.splits:
+            if since < d <= through:
+                f *= ratio
+        return f
+
+    def units_on(self, through: str) -> float:
+        return self.units * self.factor(self.open_date, through)
+
+    def per_unit_on(self, through: str) -> float:
+        u = self.units_on(through)
+        return self.cash_open / u if u else 0.0
+
+    def symbol_on(self, through: str) -> str:
+        sym = self.symbol
+        for d, _ratio, new in self.splits:
+            if self.open_date < d <= through and new:
+                sym = new
+        return sym
+
+    def underlying_on(self, through: str) -> str:
+        sym = self.symbol_on(through)
+        if sym == self.symbol:
+            return self.underlying
+        return parse_option_underlying(sym) or sym
+
+    def strike_on(self, through: str) -> float:
+        f = self.factor(self.open_date, through)
+        return self.strike / f if f else self.strike
+
+    def expiry_on(self, through: str) -> str:
+        sym = self.symbol_on(through)
+        return (self.expiry if sym == self.symbol
+                else parse_option_expiry(sym) or self.expiry)
+
+    def close_units_on(self, c: "Close", through: str) -> float:
+        """A close's contracts in the units of `through`."""
+        return c.units * self.factor(c.date, through)
+
+    def units_open_on(self, end: str) -> float:
+        """Contracts still open at the end of `end` (closes after it
+        not yet taken), in the units of `end`."""
+        return self.units_on(end) - sum(self.close_units_on(c, end)
+                                        for c in self.closes
+                                        if c.date <= end)
+
+
+def _row(t: Dict[str, Any], key: str, default: Any = None) -> Any:
+    v = t.get(key)
+    return default if v is None else v
+
+
+def _is_flat(t: Dict[str, Any]) -> bool:
+    return (abs(float(_row(t, "price", 0.0) or 0.0)) < 1e-12
+            and abs(float(_row(t, "net_amount", 0.0) or 0.0)) < 1e-9)
+
+
+def default_size(t: Dict[str, Any]) -> float:
+    """The row's contract size: its multiplier when it states one,
+    else the standard 100 shares."""
+    m = float(_row(t, "multiplier", 0.0) or 0.0)
+    return m if m > 0 else 100.0
+
+
+def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
+              size_of: Optional[Callable[[Dict[str, Any]], float]] = None,
+              through: Optional[str] = None) -> List[Lot]:
+    """The option contracts of the books, matched per account and
+    series (FIFO), in the order they were opened. `rows` are
+    (account, native row) pairs, any actions, any order; `through`
+    stops the replay after that date."""
+    size_of = size_of or default_size
+    opts = [(a, t) for a, t in rows
+            if _row(t, "action", "") in ("BUYSELL", "ASSIGN", "SPLIT",
+                                         "OPENING_BALANCE")
+            and is_option_symbol(str(_row(t, "symbol", "") or "").upper())
+            and (through is None or str(_row(t, "date", "") or "") <= through)]
+    opts.sort(key=lambda at: (str(_row(at[1], "date", "")),
+                              str(_row(at[1], "time", "") or "00:00:00"),
+                              0 if _row(at[1], "action") == "SPLIT" else 1))
+    # One split reported twice is one event, per account here.
+    splits = dedupe_split_events(
+        [t for _a, t in opts if _row(t, "action") == "SPLIT"],
+        per_account=True)
+    split_ids = {id(t) for t in splits}
+    pos: Dict[Tuple[str, str], float] = {}
+    open_lots: Dict[Tuple[str, str], List[Lot]] = {}
+    out: List[Lot] = []
+    for acct, t in opts:
+        sym = str(_row(t, "symbol", "") or "").upper()
+        key = (acct, sym)
+        q = float(_row(t, "quantity", 0.0) or 0.0)
+        action = _row(t, "action", "")
+        d = str(_row(t, "date", "") or "")
+        if action == "SPLIT":
+            if id(t) not in split_ids:
+                continue
+            ratio = q if q > 0 else 1.0
+            new = str(_row(t, "symbol_new", "") or "").strip().upper() or sym
+            p_old = pos.pop(key, 0.0) * ratio
+            moved = open_lots.pop(key, [])
+            for lot in moved:
+                lot.open_units *= ratio
+                lot.splits.append((d, ratio, new))
+            nk = (acct, new)
+            pos[nk] = pos.get(nk, 0.0) + p_old
+            if moved:
+                open_lots.setdefault(nk, []).extend(moved)
+            continue
+        if q == 0:
+            continue
+        p = pos.get(key, 0.0)
+        money = abs(float(_row(t, "net_amount", 0.0) or 0.0))
+        und = parse_option_underlying(sym) or sym
+        strike = float(parse_option_strike(sym) or 0.0)
+        size = float(size_of(t) or 0.0) or 100.0
+        cur = str(_row(t, "currency", "") or "").upper()
+        if action == "OPENING_BALANCE":
+            lot = Lot(account=acct, symbol=sym, underlying=und,
+                      right=parse_option_right(sym) or "",
+                      strike=strike, expiry=parse_option_expiry(sym) or "",
+                      currency=cur, side=(BOUGHT if q > 0 else WRITTEN),
+                      open_date=d, units=abs(q), size=size, cash_open=0.0,
+                      unknown_cost=True, open_units=abs(q),
+                      notional=strike * size * abs(q))
+            open_lots.setdefault(key, []).append(lot)
+            out.append(lot)
+            pos[key] = p + q
+            continue
+        if q < 0:
+            closing = min(-q, max(p, 0.0))
+            opening = -q - closing
+            kind = (EXERCISED if action == "ASSIGN"
+                    else EXPIRED if _is_flat(t) else SOLD)
+            sign = 1.0
+        else:
+            closing = min(q, max(-p, 0.0))
+            opening = q - closing
+            kind = (ASSIGNED if action == "ASSIGN"
+                    else EXPIRED if _is_flat(t) else BOUGHT_BACK)
+            sign = -1.0
+        aq = abs(q)
+        if closing > _EPS:
+            cash_close = sign * money * (closing / aq)
+            per_close = cash_close / closing
+            rem = closing
+            for lot in open_lots.get(key, []):
+                if rem <= _EPS:
+                    break
+                take = min(rem, lot.open_units)
+                if take <= _EPS:
+                    continue
+                c_cash = per_close * take
+                lot.closes.append(Close(date=d, kind=kind, units=take,
+                                        cash=c_cash,
+                                        pnl=lot.per_unit_on(d) * take
+                                        + c_cash))
+                lot.open_units -= take
+                rem -= take
+            open_lots[key] = [l for l in open_lots.get(key, [])
+                              if l.open_units > _EPS]
+        if opening > _EPS:
+            lot = Lot(account=acct, symbol=sym, underlying=und,
+                      right=parse_option_right(sym) or "",
+                      strike=strike, expiry=parse_option_expiry(sym) or "",
+                      currency=cur, side=(WRITTEN if q < 0 else BOUGHT),
+                      open_date=d, units=opening, size=size,
+                      cash_open=sign * money * (opening / aq),
+                      open_units=opening,
+                      notional=strike * size * opening)
+            open_lots.setdefault(key, []).append(lot)
+            out.append(lot)
+        pos[key] = p + q
+    return out
+
+
+def _days(a: str, b: str) -> int:
+    """Days from `a` to `b` (exclusive of `b`), never negative."""
+    try:
+        return max(0, (date.fromisoformat(b) - date.fromisoformat(a)).days)
+    except ValueError:
+        return 0
+
+
+def _next_day(d: str) -> str:
+    return (date.fromisoformat(d) + timedelta(days=1)).isoformat()
+
+
+def underlying_matches(und: str, wanted: Iterable[str]) -> bool:
+    """`QQQ` names QQQ.US (any market), `QQQ.US` that listing."""
+    u = und.upper()
+    root = u.split(".", 1)[0]
+    for w in wanted:
+        w = str(w or "").strip().upper()
+        if w and (w == u or w == root):
+            return True
+    return False
+
+
+def _blank() -> Dict[str, Any]:
+    return {"written_contracts": 0.0, "bought_contracts": 0.0,
+            "received": 0.0, "paid": 0.0, "cash_flow": 0.0,
+            "closed_contracts": 0.0, "realized": 0.0,
+            "outcomes": {}, "wins": 0.0,
+            "open_contracts": 0.0, "open_cash": 0.0,
+            "notional_days": 0.0, "unknown_cost": 0,
+            "unknown_closes": 0.0}
+
+
+def _add_notional_days(acc: Dict[str, Any], lot: Lot, start: str,
+                       end: str, end_excl: str) -> None:
+    units = lot.units_on(end)
+    per_unit = lot.notional / units if units else 0.0
+    opened = lot.open_date
+    # Each close ends the exposure of its units; the rest runs to the
+    # window's end.
+    taken = 0.0
+    for c in lot.closes:
+        if c.date > end:
+            continue
+        cu = lot.close_units_on(c, end)
+        taken += cu
+        a, b = max(opened, start), min(c.date, end_excl)
+        if b > a:
+            acc["notional_days"] += _days(a, b) * cu * per_unit
+    left = units - taken
+    if left > _EPS:
+        a, b = max(opened, start), end_excl
+        if b > a:
+            acc["notional_days"] += _days(a, b) * left * per_unit
+
+
+def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
+    """Add a lot's window figures, in the units of `end`."""
+    end_excl = _next_day(end)
+    # Received / paid: every dollar in and out of the window, the opens
+    # and the closes alike (a put written and bought back: received
+    # its premium, paid the buy-back).
+    if start <= lot.open_date <= end:
+        if lot.side == WRITTEN:
+            acc["written_contracts"] += lot.units_on(end)
+        else:
+            acc["bought_contracts"] += lot.units_on(end)
+        acc["received"] += max(lot.cash_open, 0.0)
+        acc["paid"] += max(-lot.cash_open, 0.0)
+        acc["cash_flow"] += lot.cash_open
+        if lot.unknown_cost:
+            acc["unknown_cost"] += 1
+    for c in lot.closes:
+        if start <= c.date <= end:
+            cu = lot.close_units_on(c, end)
+            acc["closed_contracts"] += cu
+            acc["received"] += max(c.cash, 0.0)
+            acc["paid"] += max(-c.cash, 0.0)
+            acc["cash_flow"] += c.cash
+            acc["outcomes"][c.kind] = acc["outcomes"].get(c.kind, 0.0) + cu
+            if lot.unknown_cost:
+                # The premium is unknown: no P/L, no win or loss (a
+                # zero placeholder read as a definite loss: 2026-10
+                # audit R06).
+                acc["unknown_closes"] += cu
+                if lot.open_date < start:
+                    acc["unknown_cost"] += 1
+                continue
+            acc["realized"] += c.pnl
+            if c.pnl > 0.005:
+                acc["wins"] += cu
+    left = lot.units_open_on(end)
+    if lot.open_date <= end and left > _EPS:
+        acc["open_contracts"] += left
+        acc["open_cash"] += lot.per_unit_on(end) * left
+    _add_notional_days(acc, lot, start, end, end_excl)
+
+
+def _finish(acc: Dict[str, Any], days: int,
+            shares: Tuple[float, float] = (0.0, 0.0),
+            capital: Optional[Tuple[str, float]] = None) -> Dict[str, Any]:
+    """The window's figures with the yield: on the cost of the shares
+    held (`shares` = (quantity, cost)), else on the average strike
+    notional open in the window; `capital` = (basis, amount) imposes
+    the denominator (a total: the sum of its rows' own). A window with
+    a close whose premium is unknown has no realized P/L, win rate or
+    yield (None)."""
+    avg = acc["notional_days"] / days if days > 0 else 0.0
+    sq, sc = shares
+    if capital is not None:
+        basis, cap = capital
+    elif sq > _EPS and sc > 0.005:
+        basis, cap = "shares", sc
+    elif avg > 0.005:
+        basis, cap = "notional", avg
+    else:
+        basis, cap = "", 0.0
+    unknown = acc["unknown_closes"] > _EPS
+    y = (acc["realized"] / cap) if cap > 0.005 and not unknown else None
+    out = {k: (round(v, 2) if isinstance(v, float) else v)
+           for k, v in acc.items() if k != "notional_days"}
+    out["outcomes"] = {k: round(v, 4) for k, v in
+                       sorted(acc["outcomes"].items())}
+    for k in ("written_contracts", "bought_contracts", "closed_contracts",
+              "open_contracts", "wins", "unknown_closes"):
+        out[k] = round(acc[k], 4)
+    out["shares_held"] = round(sq, 4)
+    out["shares_cost"] = round(sc, 2)
+    known = acc["closed_contracts"] - acc["unknown_closes"]
+    # The win rate: the contracts closed at a profit over the contracts
+    # closed in the window (a close at exactly zero is not a win).
+    out["win_rate"] = (round(acc["wins"] / known, 4)
+                       if known > _EPS and not unknown else None)
+    if unknown:
+        out["realized"] = None
+    out["avg_notional"] = round(avg, 2)
+    out["yield_basis"] = basis
+    out["capital"] = round(cap, 2)
+    out["_capital"] = cap                 # unrounded, for the totals
+    out["yield"] = None if y is None else round(y, 6)
+    out["annualized"] = (None if y is None or days <= 0
+                         else round(y * 365.0 / days, 6))
+    return out
+
+
+def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
+            underlyings: Iterable[str] = (),
+            accounts: Optional[Iterable[str]] = None,
+            groups: Optional[Dict[str, str]] = None,
+            shares: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None
+            ) -> Dict[str, Any]:
+    """The window's figures per underlying and per account, side and
+    right, the contracts closed in the window and those open at its
+    end, with totals per currency. `shares` = {(account, underlying):
+    (quantity, cost)} of the underlying's shares held now, the yield's
+    capital where there are any."""
+    wanted = [w for w in underlyings if str(w or "").strip()]
+    accts = set(accounts) if accounts is not None else None
+    groups = groups or {}
+    shares = {(a, u.upper()): v for (a, u), v in (shares or {}).items()
+              if accts is None or a in accts}
+    days = _days(start, _next_day(end))
+    by_und: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    by_part: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
+    by_cur: Dict[str, Dict[str, Any]] = {}
+    closed: List[Dict[str, Any]] = []
+    open_: List[Dict[str, Any]] = []
+    seen_unds: set = set()
+    for lot in lots:
+        if accts is not None and lot.account not in accts:
+            continue
+        # The series as it stood at the window's end: a renamed series
+        # is found by its new underlying (2026-10 audit R05, R10).
+        und = lot.underlying_on(end)
+        sym = lot.symbol_on(end)
+        strike, expiry = lot.strike_on(end), lot.expiry_on(end)
+        seen_unds.add(und)
+        if wanted and not underlying_matches(und, wanted):
+            continue
+        touches = ((start <= lot.open_date <= end)
+                   or any(start <= c.date <= end for c in lot.closes)
+                   or (lot.open_date <= end
+                       and lot.units_open_on(end) > _EPS))
+        if not touches:
+            continue
+        k = (und, lot.currency)
+        _fold(by_und.setdefault(k, _blank()), lot, start, end)
+        pk = (und, lot.currency, lot.account, lot.side, lot.right)
+        _fold(by_part.setdefault(pk, _blank()), lot, start, end)
+        _fold(by_cur.setdefault(lot.currency, _blank()), lot, start, end)
+        per_unit = lot.per_unit_on(end)
+        for c in lot.closes:
+            if start <= c.date <= end:
+                cu = lot.close_units_on(c, end)
+                closed.append({
+                    "underlying": und, "symbol": sym,
+                    "account": lot.account, "side": lot.side,
+                    "right": lot.right, "strike": strike,
+                    "expiry": expiry, "currency": lot.currency,
+                    "opened": lot.open_date, "closed": c.date,
+                    "how": c.kind, "contracts": round(cu, 4),
+                    "premium": (None if lot.unknown_cost
+                                else round(per_unit * cu, 2)),
+                    "close_cash": round(c.cash, 2),
+                    "pnl": (None if lot.unknown_cost else round(c.pnl, 2)),
+                    "days_open": _days(lot.open_date, c.date)})
+        left = lot.units_open_on(end)
+        if lot.open_date <= end and left > _EPS:
+            open_.append({
+                "underlying": und, "symbol": sym,
+                "account": lot.account, "side": lot.side,
+                "right": lot.right, "strike": strike,
+                "expiry": expiry, "currency": lot.currency,
+                "opened": lot.open_date, "contracts": round(left, 4),
+                "premium": (None if lot.unknown_cost
+                            else round(per_unit * left, 2)),
+                "days_open": _days(lot.open_date, _next_day(end)),
+                "expired": bool(expiry and expiry < end)})
+
+    def _shares_of(und: str, cur: str, acct: Optional[str] = None):
+        q = c = 0.0
+        for (a, u), (sq, sc) in shares.items():
+            if u == und and (acct is None or a == acct) and (
+                    acct is not None or any(
+                        p[0] == und and p[1] == cur and p[2] == a
+                        for p in by_part)):
+                q += sq
+                c += sc
+        return q, c
+    rows = []
+    for (und, cur), acc in sorted(by_und.items()):
+        r = _finish(acc, days, _shares_of(und, cur))
+        r.update({"underlying": und, "currency": cur,
+                  "accounts": sorted({p[2] for p in by_part
+                                      if p[0] == und and p[1] == cur})})
+        rows.append(r)
+    parts = []
+    for (und, cur, acct, side, right), acc in sorted(by_part.items()):
+        r = _finish(acc, days, _shares_of(und, cur, acct))
+        r.update({"underlying": und, "currency": cur, "account": acct,
+                  "group": groups.get(acct, ""), "side": side,
+                  "right": right})
+        parts.append(r)
+    totals = {}
+    for cur, acc in sorted(by_cur.items()):
+        mine = [r for r in rows if r["currency"] == cur]
+        sq = sum(r["shares_held"] for r in mine)
+        sc = sum(r["shares_cost"] for r in mine)
+        # The capital is each underlying's own denominator added up (a
+        # share cost alone dropped the uncovered underlyings' notional:
+        # 2026-10 audit R07).
+        bases = {r["yield_basis"] for r in mine if r["yield_basis"]}
+        cap = sum(r["_capital"] for r in mine)
+        basis = (next(iter(bases)) if len(bases) == 1
+                 else "mixed" if bases else "")
+        t = _finish(acc, days, (sq, sc), capital=(basis, cap))
+        t["notional_capital"] = round(sum(
+            r["_capital"] for r in mine if r["yield_basis"] == "notional"), 2)
+        totals[cur] = t
+    for r in rows + parts + list(totals.values()):
+        r.pop("_capital", None)
+    unmatched = [w for w in wanted
+                 if not any(underlying_matches(u, [w]) for u in seen_unds)]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "option-yield",
+        "scope": scope, "start": start, "end": end, "days": days,
+        "underlyings": [str(w).strip().upper() for w in wanted],
+        "unmatched_underlyings": [str(w).strip().upper() for w in unmatched],
+        "rows": rows, "parts": parts,
+        "closed": sorted(closed, key=lambda c: (c["closed"], c["opened"],
+                                                c["symbol"])),
+        "open": sorted(open_, key=lambda o: (o["expiry"], o["opened"],
+                                             o["symbol"])),
+        "totals": totals,
+    }
+
+
+def _pct(v: Optional[float]) -> str:
+    return "-" if v is None else f"{v * 100:,.2f}%"
+
+
+def _money(v: Optional[float]) -> str:
+    """A money figure; `?` when it is unknown (a premium before the
+    data)."""
+    from taxjson.lib.report_model import fmt_money
+    return "?" if v is None else fmt_money(v)
+
+
+def _n(v: float) -> str:
+    return f"{v:,.4f}".rstrip("0").rstrip(".") if v else "0"
+
+
+def _rate(v: Optional[float]) -> str:
+    """A win rate: `67%`, `-` with nothing closed."""
+    return "-" if v is None else f"{v * 100:.0f}%"
+
+
+def _side_right(side: str, right: str) -> str:
+    return f"{side} {({'C': 'call', 'P': 'put'}).get(right, right or '?')}"
+
+
+def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
+    """The text view (lib/out.Doc): a legend, the contracts closed in
+    the window, those open at its end, then the summary per underlying
+    (and per account, side and right), the totals per currency and
+    what to look at."""
+    from taxjson.lib import out
+    from taxjson.lib.report_model import fmt_money
+    which = (", ".join(doc["underlyings"]) + ": " if doc["underlyings"]
+             else "")
+    d = out.Doc(f"OPTION YIELD — planning numbers, {which}{doc['scope']} "
+                f"({doc['start']} to {doc['end']}, {doc['days']} days)")
+    rows = doc["rows"]
+    if not rows:
+        d.para("No option contract of " + (", ".join(doc["underlyings"])
+                                           if doc["underlyings"]
+                                           else "any underlying")
+               + " was opened, closed or open in the window.")
+        for w in doc["unmatched_underlyings"]:
+            d.item(out.act(f"{w}: no option on it in the books (the "
+                           f"underlying's ticker, e.g. QQQ or QQQ.US)",
+                           "tjs events"), bullet="")
+        return d
+    d.para("Planning numbers, not filing. WIN% = contracts closed at a "
+           "profit / contracts closed; YIELD = realized P/L / cost of the "
+           "shares held (* strike notional), annualized.")
+    if doc["closed"]:
+        body = []
+        for c in doc["closed"]:
+            body.append([
+                c["closed"], c["symbol"], c["account"], c["currency"],
+                _side_right(c["side"], c["right"]), _n(c["contracts"]),
+                c["how"], str(c["days_open"]),
+                ("?" if c["premium"] is None else fmt_money(c["premium"])),
+                fmt_money(c["close_cash"]),
+                ("?" if c["pnl"] is None else fmt_money(c["pnl"]))])
+        d.table(["CLOSED", "SERIES", "ACCOUNT", "CUR", "SIDE", "QTY", "HOW",
+                 "DAYS", "PREMIUM", "CLOSE", "P/L"],
+                body, aligns=["<", "<", "<", "<", "<", ">", "<", ">", ">",
+                              ">", ">"], drop=(2, 7, 4))
+    else:
+        d.para("No contract closed in the window.")
+    d.section(f"OPEN AT {doc['end']}")
+    if doc["open"]:
+        body = []
+        for o in doc["open"]:
+            body.append([
+                o["opened"], o["symbol"], o["account"], o["currency"],
+                _side_right(o["side"], o["right"]), _n(o["contracts"]),
+                o["expiry"] + (" (past)" if o["expired"] else ""),
+                str(o["days_open"]),
+                ("?" if o["premium"] is None else fmt_money(o["premium"]))])
+        d.table(["OPENED", "SERIES", "ACCOUNT", "CUR", "SIDE", "QTY",
+                 "EXPIRY", "DAYS", "PREMIUM"],
+                body, aligns=["<", "<", "<", "<", "<", ">", "<", ">", ">"],
+                drop=(2, 7))
+    else:
+        d.para("None.")
+    d.section("SUMMARY")
+    body = []
+    for r in rows:
+        star = "*" if r["yield_basis"] == "notional" else ""
+        body.append([
+            r["underlying"], r["currency"],
+            _n(r["written_contracts"]), _n(r["bought_contracts"]),
+            fmt_money(r["received"]), fmt_money(r["paid"]),
+            _money(r["realized"]), _rate(r["win_rate"]),
+            _n(r["open_contracts"]),
+            _n(r["shares_held"]), fmt_money(r["shares_cost"]),
+            _pct(r["yield"]) + star, _pct(r["annualized"]) + star])
+    d.table(["UNDERLYING", "CUR", "WRITTEN", "BOUGHT", "RECEIVED", "PAID",
+             "REALIZED", "WIN%", "OPEN", "SHARES", "SHARE COST", "YIELD",
+             "ANNUAL"],
+            body, aligns=["<", "<", ">", ">", ">", ">", ">", ">", ">", ">",
+                          ">", ">", ">"],
+            drop=(3, 5, 8, 1, 9))
+    if len(doc["parts"]) > len(rows):
+        d.blank()
+        body = []
+        for p in doc["parts"]:
+            oc = ", ".join(f"{_n(v)} {k}" for k, v in p["outcomes"].items())
+            star = "*" if p["yield_basis"] == "notional" else ""
+            body.append([
+                p["underlying"], p["account"],
+                _side_right(p["side"], p["right"]),
+                _n(p["written_contracts"] + p["bought_contracts"]),
+                fmt_money(p["received"] - p["paid"]),
+                _money(p["realized"]), _rate(p["win_rate"]),
+                _pct(p["annualized"]) + star, oc or "-"])
+        d.table(["UNDERLYING", "ACCOUNT", "SIDE", "OPENED", "NET CASH",
+                 "REALIZED", "WIN%", "ANNUAL", "CLOSED HOW"],
+                body, aligns=["<", "<", "<", ">", ">", ">", ">", ">", "<"],
+                drop=(3, 8))
+    d.blank()
+    kv = []
+    for cur, t in doc["totals"].items():
+        if t["realized"] is None:
+            kv.append((f"Realized, {cur}",
+                       f"unknown: {_n(t['unknown_closes'])} of the "
+                       f"{_n(t['closed_contracts'])} contract(s) closed "
+                       f"had no premium in the books; net cash "
+                       f"{fmt_money(t['cash_flow'])}"))
+            continue
+        kv.append((f"Realized, {cur}",
+                   f"{fmt_money(t['realized'])} on {_n(t['closed_contracts'])}"
+                   f" contract(s) closed ({_n(t['wins'])} at a profit: "
+                   f"win rate {_rate(t['win_rate'])}); "
+                   f"net cash {fmt_money(t['cash_flow'])}"))
+        if t["yield_basis"] == "shares":
+            on = (f"the {fmt_money(t['shares_cost'])} cost of "
+                  f"{_n(t['shares_held'])} share(s) held")
+        elif t["yield_basis"] == "mixed":
+            on = (f"{fmt_money(t['capital'])} of capital (the "
+                  f"{fmt_money(t['shares_cost'])} cost of "
+                  f"{_n(t['shares_held'])} share(s) held, and an average "
+                  f"strike notional of {fmt_money(t['notional_capital'])} "
+                  f"where none are)")
+        else:
+            on = (f"an average strike notional of "
+                  f"{fmt_money(t['avg_notional'])} (no shares held)")
+        kv.append((f"Yield, {cur}",
+                   f"{_pct(t['yield'])} on {on}, {_pct(t['annualized'])}"
+                   f" annualized"))
+    d.kv(kv)
+    acts = []
+    opened = [o for o in doc["open"] if o["expired"]]
+    if opened:
+        acts.append(out.act(
+            f"{_n(sum(o['contracts'] for o in opened))} open contract(s) "
+            f"past expiry with no expiry or assignment row: add the "
+            f"missing export", "tjs option-boundary"))
+    unk = [r["underlying"] for r in rows if r["unknown_cost"]]
+    if unk:
+        acts.append(out.act(
+            f"{len(unk)} underlying(s) with a contract opened before the "
+            f"data (premium unknown): {', '.join(unk[:3])}",
+            "tjs find-missing-history"))
+    for w in doc["unmatched_underlyings"]:
+        acts.append(out.act(f"{w}: no option on it in the books",
+                            "tjs events"))
+    if acts:
+        d.blank()
+        for a in acts:
+            d.item(a[len(out.ACT):], bullet=out.ACT)
+    return d

@@ -14,8 +14,10 @@
 # equals this repo's configured user.name <user.email>: that one is only
 # WARNED about (history already carries it, and blocking it would block
 # every push; switch to a pseudonym to stop publishing it).
-# First, the TAG GUARD: a pushed tag must be a release — named vX.Y.Z,
-# annotated, and on main (the remote's main, or the main this same push
+# First, the TAG GUARD: a pushed tag must be a release — named vX.Y.Z —
+# or a fast-lane request — named channels-YYYYMMDDTHHMMSSZ, made by
+# scripts/promote.sh (docs/releasing.md, "How a release reaches the
+# public repo") — annotated, and on main (the remote's main, or the main this same push
 # sends) — and a tag is never deleted or moved. `git push --tags` once
 # published tags that were never meant to be public; scripts/release.sh
 # pushes the one tag by name (docs/releasing.md).
@@ -45,8 +47,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     why="deleting a tag — a published release is never deleted (roll a channel back with scripts/promote.sh)"
   elif [ -n "$remote_sha" ] && [ "$remote_sha" != "$z" ]; then
     why="moving a tag the remote already has — a published release is never moved"
-  elif ! [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    why="not a release tag (vX.Y.Z)"
+  elif ! [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$name" =~ ^channels-[0-9]{8}T[0-9]{6}Z$ ]]; then
+    why="not a release tag (vX.Y.Z) or a fast-lane tag (channels-YYYYMMDDTHHMMSSZ)"
   elif [ "$(git cat-file -t "$local_sha" 2>/dev/null)" != tag ]; then
     why="a lightweight tag — a release is an annotated tag (scripts/release.sh makes one)"
   elif ! commit="$(git rev-parse -q --verify "$local_sha^{commit}" 2>/dev/null)"; then

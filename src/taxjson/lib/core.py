@@ -1304,7 +1304,7 @@ def _per_share(amount, qty, symbol) -> float:
     S069-08: 'ACB/Sh: 500.65' beside '@ 5.00'). 0.0 for an empty
     position."""
     q = float(qty)
-    if abs(q) <= 1e-6:
+    if abs(q) <= pool_qty_eps(symbol, q):
         return 0.0
     mult = OPTION_CONTRACT_SHARES if is_option_symbol(symbol or '') else 1.0
     return float(amount) / (q * mult)
@@ -2153,9 +2153,75 @@ def _dedupe_corporate_splits(txs: List[TaxTransaction], seen: set) -> List[TaxTr
     return SplitTimeline.dedupe(txs, seen)
 
 
+def _rename_ratio_groups(lists) -> Dict[tuple, list]:
+    """The rename-SPLIT rows of each corporate event, keyed (symbol,
+    earliest date, target) -> [(list index, row index, row)]. One merger
+    booked by two brokers on different dates (IB 06-11, RBC 06-15) is
+    ONE event: rows of a (symbol, target) pair within
+    SPLIT_DATE_WINDOW_DAYS of each other form one group (audit S071-01
+    — an exact-date key left the second broker's row to find an empty
+    pool and drop its extra share)."""
+    by_pair: Dict[tuple, list] = {}
+    for li, lst in enumerate(lists):
+        for i, t in enumerate(lst):
+            if t.action != 'SPLIT' or not t.date:
+                continue
+            new = normalize_symbol_new(t.symbol, getattr(t, 'symbol_new', ''))
+            if not new:
+                continue
+            by_pair.setdefault((t.symbol, new), []).append((li, i, t))
+    groups: Dict[tuple, list] = {}
+    for (sym, new), rows in by_pair.items():
+        rows.sort(key=lambda r: r[2].date)
+        cluster: list = []
+        for r in rows:
+            if cluster:
+                gap = _day_gap(cluster[-1][2].date, r[2].date)
+                if gap is None or gap > SPLIT_DATE_WINDOW_DAYS:
+                    groups[(sym, cluster[0][2].date, new)] = cluster
+                    cluster = []
+            cluster.append(r)
+        if cluster:
+            groups[(sym, cluster[0][2].date, new)] = cluster
+    return groups
+
+
+def _multi_ratio_rename_groups(lists) -> Dict[tuple, list]:
+    """The events of _rename_ratio_groups whose rows carry more than one
+    ratio: a merger's per-account EMPIRICAL deliveries (12 -> 12 and
+    40 -> 42; corp_actions._emit_basis_carryover_rename)."""
+    return {k: rows for k, rows in _rename_ratio_groups(lists).items()
+            if len({round(float(r[2].quantity or 0), 9) for r in rows}) > 1}
+
+
+def _per_account_rename_ratios(taxable: List[TaxTransaction],
+                               sheltered: List[TaxTransaction],
+                               affiliated: List[TaxTransaction]
+                               ) -> Dict[str, tuple]:
+    """A US blended book (FIFO lots per account, US-BASIS-01): each row
+    of a multi-ratio merger event scales and migrates ITS account's
+    lots at its own delivered ratio (US-CORP-14). Returns, for every
+    such row, tx.id -> (event key, {account: that account's ratio}).
+    The 2026-10 filing audit (F1): the first row scaled and migrated
+    every account's lots at its ratio; the second found the source
+    symbol gone, so an account that received 42 shares for 40 sold
+    42 against 40 and opened a two-share phantom short."""
+    out: Dict[str, tuple] = {}
+    for key, rows in _multi_ratio_rename_groups(
+            (taxable, sheltered, affiliated)).items():
+        ratio_of: Dict[str, float] = {}
+        for _li, _i, t in rows:
+            ratio_of.setdefault(t.account, float(t.quantity or 0))
+        for _li, _i, t in rows:
+            out[t.id] = (key, ratio_of)
+    return out
+
+
 def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
                                     sheltered: List[TaxTransaction],
-                                    affiliated: List[TaxTransaction]):
+                                    affiliated: List[TaxTransaction],
+                                    *, profile: str = 'ca_balance',
+                                    date_of=None):
     """One merger, per-account EMPIRICAL ratios -> one corporate event.
 
     corp_actions emits a rename-SPLIT per account with the ratio the
@@ -2176,73 +2242,82 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
     broker delivered in total, cost preserved. Accounts holding the
     symbol without a row of their own keep the first row's ratio, as
     before. Per-account balances in the wash walks become the weighted
-    share of that total (a fraction of a share off per account)."""
+    share of that total (a fraction of a share off per account).
+
+    `profile` / `date_of` order the balance walk: the Canada engine's
+    settle-first ladder (the default); a US book whose lots are
+    symbol-wide (no per-account basis) and the T1135 cost walk pass
+    their own."""
     lists = (taxable, sheltered, affiliated)
-    by_pair: Dict[tuple, list] = {}
-    for li, lst in enumerate(lists):
-        for i, t in enumerate(lst):
-            if t.action != 'SPLIT' or not t.date:
-                continue
-            new = normalize_symbol_new(t.symbol, getattr(t, 'symbol_new', ''))
-            if not new:
-                continue
-            by_pair.setdefault((t.symbol, new), []).append((li, i, t))
-    # One merger booked by two brokers on different dates (IB 06-11,
-    # RBC 06-15) is ONE event: rows of a (symbol, target) pair within
-    # SPLIT_DATE_WINDOW_DAYS of each other form one group, keyed by its
-    # earliest date (audit S071-01 — an exact-date key left the second
-    # broker's row to find an empty pool and drop its extra share).
-    groups: Dict[tuple, list] = {}
-    for (sym, new), rows in by_pair.items():
-        rows.sort(key=lambda r: r[2].date)
-        cluster: list = []
-        for r in rows:
-            if cluster:
-                gap = _day_gap(cluster[-1][2].date, r[2].date)
-                if gap is None or gap > SPLIT_DATE_WINDOW_DAYS:
-                    groups[(sym, cluster[0][2].date, new)] = cluster
-                    cluster = []
-            cluster.append(r)
-        if cluster:
-            groups[(sym, cluster[0][2].date, new)] = cluster
-    todo = {k: rows for k, rows in groups.items()
-            if len({round(float(r[2].quantity or 0), 9) for r in rows}) > 1}
+    todo = _multi_ratio_rename_groups(lists)
     if not todo:
         return taxable, sheltered, affiliated
 
     def _sd(t):
         return t.date_settle or t.date
 
+    if date_of is None:
+        date_of = _sd
     drop = set()
     replace: Dict[tuple, TaxTransaction] = {}
     for (sym, d, new), rows in todo.items():
         first = rows[0][2]
-        split_key = event_sort_key(first, profile='ca_balance', date_of=_sd)
+        split_key = event_sort_key(first, profile=profile, date_of=date_of)
         ratio_of = {}
         for _li, _i, t in rows:
             ratio_of.setdefault(t.account, float(t.quantity or 0))
         r0 = float(first.quantity or 0)
 
         def _weights(scopes):
-            bal: Dict[str, float] = {}
+            # Every symbol's balance per account up to the event, the
+            # renames replayed: shares bought under an earlier ticker
+            # and renamed INTO `sym` weigh too (reading only `sym`'s
+            # own rows found no weights after a prior rename, and the
+            # first row then migrated the whole pool: 2026-10 audit
+            # R01). An own-account move (TRANSFER) moves them.
+            bal: Dict[str, Dict[str, float]] = {}
             seen_plain = set()
+            seen_rename = set()
             src = [t for li in scopes for t in lists[li]
-                   if t.symbol == sym
-                   and event_sort_key(t, profile='ca_balance',
-                                      date_of=_sd) < split_key]
+                   if event_sort_key(t, profile=profile,
+                                     date_of=date_of) < split_key]
             src.sort(key=lambda t: event_sort_key(
-                t, profile='ca_balance', date_of=_sd))
+                t, profile=profile, date_of=date_of))
             for t in src:
-                if t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE'):
-                    bal[t.account] = bal.get(t.account, 0.0) + float(t.quantity or 0)
-                elif (t.action == 'SPLIT'
-                      and not normalize_symbol_new(t.symbol, t.symbol_new)):
-                    if split_seen(seen_plain, t.symbol, t.date,
-                                  t.quantity, '') is not None:
+                if t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                                'TRANSFER'):
+                    b = bal.setdefault(t.symbol, {})
+                    b[t.account] = (b.get(t.account, 0.0)
+                                    + float(t.quantity or 0))
+                elif t.action == 'SPLIT':
+                    tgt = normalize_symbol_new(t.symbol, t.symbol_new)
+                    if not tgt:
+                        if split_seen(seen_plain, t.symbol, t.date,
+                                      t.quantity, '') is not None:
+                            continue
+                        for a in bal.get(t.symbol, {}):
+                            bal[t.symbol][a] *= float(t.quantity or 0)
                         continue
-                    for a in bal:
-                        bal[a] *= float(t.quantity or 0)
-            return {a: q for a, q in bal.items() if q > 1e-9}
+                    ev_key = (t.symbol, t.date, tgt)
+                    if ev_key in seen_rename:
+                        continue
+                    seen_rename.add(ev_key)
+                    # One rename event: each account's own ratio where
+                    # it has a row, else the first row's.
+                    ev_ratio = {}
+                    for u in src:
+                        if (u.action == 'SPLIT' and u.symbol == t.symbol
+                                and u.date == t.date
+                                and normalize_symbol_new(
+                                    u.symbol, u.symbol_new) == tgt):
+                            ev_ratio.setdefault(u.account,
+                                                float(u.quantity or 0))
+                    r_first = float(t.quantity or 0)
+                    moved = bal.pop(t.symbol, {})
+                    dst = bal.setdefault(tgt, {})
+                    for a, q in moved.items():
+                        dst[a] = dst.get(a, 0.0) + q * ev_ratio.get(a, r_first)
+            return {a: q for a, q in bal.get(sym, {}).items() if q > 1e-9}
 
         w = _weights((0,)) or _weights((0, 1, 2))
         tot = sum(w.values())
@@ -3117,6 +3192,12 @@ class CanadaTaxRules(TaxRules):
                         symbol_acb_traces[symbol].append(f"# {tx.date} DISALLOW {tx.net_amount:10.4f} | (Loss disallowed on this date)")
                 elif action == 'ADJUST':
                     _applied_adj = float(tx.net_amount)
+                    # Flat is the pool's own tolerance (pool_qty_eps):
+                    # the 1e-6 share epsilon read a sub-micro coin
+                    # position as empty, parked its superficial-loss
+                    # deferral in pending_wash, and the closing sale
+                    # never recovered it (2026-10 filing audit F2).
+                    _aeps = pool_qty_eps(symbol, pool['qty'])
                     if not is_other_scope:
                         # A user ROC ADJUST landing on a DRAINED pool
                         # (position fully sold before the distribution
@@ -3135,10 +3216,10 @@ class CanadaTaxRules(TaxRules):
                         # (it used to leak into the NEXT purchase's
                         # ACB, understating that position's later
                         # gain).
-                        _empty_roc = (abs(pool['qty']) <= 1e-6
+                        _empty_roc = (abs(pool['qty']) <= _aeps
                                       and not str(tx.id or '').startswith('WASH_')
                                       and float(tx.net_amount) < -0.005)
-                        if (abs(pool['qty']) <= 1e-6
+                        if (abs(pool['qty']) <= _aeps
                                 and not str(tx.id or '').startswith('WASH_')
                                 and abs(float(tx.net_amount)) > 0.005
                                 and iteration == 0):
@@ -3169,7 +3250,7 @@ class CanadaTaxRules(TaxRules):
                                     f"disposition's gain) or apply it "
                                     f"manually.")
                         _applied_adj = float(tx.net_amount)
-                        if (pool['qty'] < -1e-6
+                        if (pool['qty'] < -_aeps
                                 and not str(tx.id or '').startswith('WASH_')):
                             # A SHORT pool's total_cost holds the short
                             # sale's proceeds: a return of capital while
@@ -3228,9 +3309,9 @@ class CanadaTaxRules(TaxRules):
                             # keeps the creation-sign proxy (the trigger
                             # opens on the loss side).
                             _mag = abs(_applied_adj)
-                            if pool['qty'] > 1e-6:
+                            if pool['qty'] > _aeps:
                                 _applied_adj = _mag
-                            elif pool['qty'] < -1e-6:
+                            elif pool['qty'] < -_aeps:
                                 _applied_adj = -_mag  # cov: a2-1596-wash-short-pool-sign
                             else:
                                 # FLAT pool: the sign cannot be decided
@@ -3260,7 +3341,7 @@ class CanadaTaxRules(TaxRules):
                         # below zero is a deemed capital gain in that
                         # year. Rare enough to warrant human eyes rather
                         # than silent computation — flag, don't book.
-                        if (pool['qty'] > 1e-6 and pool['total_cost'] < D('-0.005')
+                        if (pool['qty'] > _aeps and pool['total_cost'] < D('-0.005')
                                 and not str(tx.id or '').startswith('WASH_')):
                             # ITA s.40(3): a return of capital that drives
                             # the ACB below zero is a capital gain in the
@@ -3389,9 +3470,10 @@ class CanadaTaxRules(TaxRules):
                                        + existing.pop('pending_wash',
                                                       0.0))
                                 if _pw > 1e-9:
-                                    if existing['qty'] > 1e-6:  # cov: a2-1596-rename-pending-wash
+                                    _reps = pool_qty_eps(target_symbol, existing['qty'])
+                                    if existing['qty'] > _reps:  # cov: a2-1596-rename-pending-wash
                                         existing['total_cost'] += D(_pw)
-                                    elif existing['qty'] < -1e-6:
+                                    elif existing['qty'] < -_reps:
                                         existing['total_cost'] += D(-_pw)
                                     else:
                                         existing['pending_wash'] = _pw
@@ -4785,7 +4867,8 @@ class CanadaTaxRules(TaxRules):
                         if snap:
                             entry['pool_qty_after'] = snap['pool_qty']
                             entry['pool_acb_after'] = snap['pool_acb']
-                            if abs(snap['pool_qty']) > 1e-6:
+                            if abs(snap['pool_qty']) > pool_qty_eps(
+                                    entry.get('symbol') or '', snap['pool_qty']):
                                 entry['acb_per_share_after'] = _per_share(
                                     snap['pool_acb'], snap['pool_qty'],
                                     entry.get('symbol') or '')
@@ -5306,12 +5389,45 @@ class USATaxRules(TaxRules):
         # One corporate split = one application: collapse per-account SPLIT
         # duplicates across all three lists (shared `seen`) before the
         # symbol-keyed inventory/replacement walks see them.
+        # A merger's per-account EMPIRICAL ratios (US-CORP-14): with
+        # per-account lots each row applies to its own account
+        # (_per_account_rename_ratios); with symbol-wide lots the rows
+        # fold into one event at the holdings-weighted ratio, as the
+        # Canada engine's symbol-global pool does.
+        if per_account_basis:
+            _acct_ratios = _per_account_rename_ratios(
+                list(transactions), list(sheltered_transactions or []),
+                list(affiliated_transactions or []))
+        else:
+            _acct_ratios = {}
+            transactions, sheltered_transactions, affiliated_transactions = \
+                _fold_per_account_rename_ratios(
+                    list(transactions), list(sheltered_transactions or []),
+                    list(affiliated_transactions or []),
+                    profile='us_main', date_of=lambda t: t.date)
         _seen_splits: set = set()
         transactions = _dedupe_corporate_splits(transactions, _seen_splits)
         sheltered_transactions = _dedupe_corporate_splits(
             sheltered_transactions or [], _seen_splits)
         affiliated_transactions = _dedupe_corporate_splits(
             affiliated_transactions or [], _seen_splits)
+
+        def _split_covers(tx, seen_groups: set):
+            """Which accounts a SPLIT row applies to: None for every
+            account (one event, one ratio); else a predicate over the
+            account name — the accounts whose delivered ratio is this
+            row's, plus, for the event's first row met, the accounts
+            holding the symbol with no row of their own (they keep the
+            first ratio, as the Canada fold does)."""
+            ent = _acct_ratios.get(tx.id)
+            if ent is None:
+                return None
+            key, ratio_of = ent
+            r = round(float(tx.quantity or 0), 9)
+            accts = {a for a, ra in ratio_of.items() if round(ra, 9) == r}
+            first = key not in seen_groups
+            seen_groups.add(key)
+            return lambda a: a in accts or (first and a not in ratio_of)
 
         sheltered_ids = {t.id for t in (sheltered_transactions or [])}
         affiliated_ids = {t.id for t in (affiliated_transactions or [])}
@@ -5417,6 +5533,7 @@ class USATaxRules(TaxRules):
         # partition (Rev. Rul. 2008-5: a sheltered ACQUISITION is
         # replacement-eligible; a buy-to-close acquires nothing).
         other_qty_state: Dict[tuple, float] = {}
+        _pre_split_groups: set = set()      # _split_covers, the pre-pass
         # Per-symbol split timeline (TRADE-basis dates, IRS semantics), ALL
         # scopes — a split is a property of the security, and
         # _dedupe_corporate_splits at entry guarantees one row per event.
@@ -5480,15 +5597,20 @@ class USATaxRules(TaxRules):
                 # survivor left the taxable balance unscaled and vice
                 # versa).
                 ratio = ev.quantity
+                # A multi-ratio merger's row reaches its own account's
+                # balances only (US-CORP-14; _split_covers).
+                _covers = _split_covers(ev, _pre_split_groups)
                 if ratio:
                     if per_account_basis:
                         for _nk in list(net_qty_state):
-                            if _nk[1] == sym:
+                            if _nk[1] == sym and (_covers is None
+                                                  or _covers(_nk[0])):
                                 net_qty_state[_nk] *= ratio
                     elif sym in net_qty_state:
                         net_qty_state[sym] *= ratio
                     for _ok in list(other_qty_state):
-                        if _ok[1] == sym:
+                        if _ok[1] == sym and (_covers is None
+                                              or _covers(_ok[0])):
                             other_qty_state[_ok] *= ratio
                 # Handle ticker rename (e.g. merger). Migration ensures
                 # future BUYSELLs on the new ticker correctly partition
@@ -5497,7 +5619,8 @@ class USATaxRules(TaxRules):
                 if target_symbol and target_symbol != sym:
                     if per_account_basis:
                         for _nk in list(net_qty_state):
-                            if _nk[1] == sym:
+                            if _nk[1] == sym and (_covers is None
+                                                  or _covers(_nk[0])):
                                 _tk = (_nk[0], target_symbol)
                                 net_qty_state[_tk] = (
                                     net_qty_state.get(_tk, 0.0)
@@ -5510,7 +5633,8 @@ class USATaxRules(TaxRules):
                         # would KeyError.
                         net_qty_state.pop(sym, None)
                     for _ok in list(other_qty_state):
-                        if _ok[1] == sym:
+                        if _ok[1] == sym and (_covers is None
+                                              or _covers(_ok[0])):
                             _nk = (_ok[0], target_symbol)
                             other_qty_state[_nk] = (
                                 other_qty_state.get(_nk, 0.0)
@@ -6224,6 +6348,7 @@ class USATaxRules(TaxRules):
                 return [k for k in inv if k[1] == sym]
             return [sym] if sym in inv else []
 
+        _main_split_groups: set = set()     # _split_covers, the main pass
         for tx in taxable_sorted:
             symbol = tx.symbol
             ikey = _ikey(tx.account, symbol)
@@ -6312,6 +6437,15 @@ class USATaxRules(TaxRules):
             # merger) as new shares at $0 cost — completely wrong.
             if tx.action == 'SPLIT':
                 ratio = tx.quantity
+                # A multi-ratio merger's row reaches its own account's
+                # lots only (US-CORP-14; _split_covers): each account
+                # lands on exactly the shares its broker delivered.
+                _covers = _split_covers(tx, _main_split_groups)
+
+                def _split_keys(inv, _sym=symbol, _c=_covers):
+                    return [k for k in _inv_keys_for(inv, _sym)
+                            if _c is None or not per_account_basis
+                            or _c(k[0])]
                 # A zero/falsy ratio skips only the SCALING — the
                 # rename migration below must still run. The old
                 # `continue` dropped the whole event while the pre-pass
@@ -6324,7 +6458,7 @@ class USATaxRules(TaxRules):
                     # Blended mode: a split is a property of the
                     # SECURITY — scale every account's key.
                     for inv in (inventory_long, inventory_short):
-                        for _k in _inv_keys_for(inv, symbol):
+                        for _k in _split_keys(inv):
                             for lot in inv[_k]:
                                 lot['qty'] = lot['qty'] * ratio
                             # Cost basis is held in Decimal; multiplying
@@ -6342,7 +6476,7 @@ class USATaxRules(TaxRules):
                 target_symbol = (tx.symbol_new or '').strip()
                 if target_symbol and target_symbol != symbol:
                     for inv in (inventory_long, inventory_short):
-                        for _k in _inv_keys_for(inv, symbol):
+                        for _k in _split_keys(inv):
                             _tk = ((_k[0], target_symbol)
                                    if per_account_basis else target_symbol)
                             inv.setdefault(_tk, []).extend(inv[_k])
@@ -6554,48 +6688,119 @@ class USATaxRules(TaxRules):
             if is_stock_dividend(tx) and tx.quantity > 0:
                 _lots = inventory_long.get(ikey, [])
                 _held = sum(l['qty'] for l in _lots)
-                if _held > epsilon and not inventory_short.get(ikey):
-                    _ratio = (_held + tx.quantity) / _held
-                    for _lot in _lots:
+                # The shares ENTITLED to the dividend share their basis
+                # with the new ones (Pub. 550, "Stock bought at various
+                # times"): the lots bought before the ex-dividend date
+                # (with only a record date, before it). A lot bought
+                # after the entitlement date and before the pay date
+                # keeps its own basis (2026-10 filing audit F3: every
+                # lot held on the pay date was scaled, moving basis from
+                # the old lot to the new one and the gain the other
+                # way). With neither date the lots held on the pay date
+                # are taken as entitled, and a lot bought within the
+                # 90 days before it is named as the open question.
+                _ent_date = (tx.ex_date or tx.record_date or '').strip()
+                if _ent_date:
+                    _ent = [l for l in _lots
+                            if (l.get('date') or '') < _ent_date]
+                else:
+                    _ent = list(_lots)
+                _ent_qty = sum(l['qty'] for l in _ent)
+                if (_held > epsilon and _ent_qty > epsilon
+                        and not inventory_short.get(ikey)):
+                    _ratio = (_ent_qty + tx.quantity) / _ent_qty
+                    # Named before the spread: the lots' own shares.
+                    _recent = [l for l in _lots
+                               if (l.get('date') or '') <= tx.date
+                               and (_day_gap(l.get('date') or '',
+                                             tx.date) or 999) <= 90]
+                    _recent_qty = sum(l['qty'] for l in _recent)
+                    for _lot in _ent:
                         _lot['qty'] = _lot['qty'] * _ratio
+                    _later = [l for l in _lots if l not in _ent]
                     _note(tx.date,
                           f"note: {symbol}: stock dividend of "
                           f"{tx.quantity:g} share(s) on {tx.date} — "
                           f"nontaxable (§305(a)): the basis of the "
-                          f"{_held:g} share(s) held is spread over old "
-                          f"and new (§307) and their purchase dates carry "
-                          f"over; if it was taxable (§305(b), e.g. a cash "
+                          f"{_ent_qty:g} share(s) "
+                          + (f"bought before {_ent_date} "
+                             f"({len(_ent)} lot(s))" if _ent_date
+                             else "held")
+                          + f" is spread over old and new (§307) and "
+                          f"their purchase dates carry over"
+                          + (f"; the {sum(l['qty'] for l in _later):g} "
+                             f"bought on or after {_ent_date} keep their "
+                             f"own basis" if _later else "")
+                          + f"; if it was taxable (§305(b), e.g. a cash "
                           f"option), enter it by hand.")
+                    if not _ent_date and len(_lots) > 1:
+                        if _recent:
+                            _note(tx.date,
+                                  f"warning: ATTENTION: {symbol}: the "
+                                  f"stock dividend of {tx.quantity:g} "
+                                  f"share(s) on {tx.date} carries no record or "
+                                  f"ex-dividend date, so its basis was "
+                                  f"spread over every lot held on the "
+                                  f"pay date — including "
+                                  f"{_recent_qty:g} share(s) bought on "
+                                  f"{', '.join(sorted({l['date'] for l in _recent}))}"
+                                  f", within 90 days before it. A lot "
+                                  f"bought after the record date is not "
+                                  f"entitled to the dividend and keeps "
+                                  f"its own basis (§307): check the "
+                                  f"issuer's record date; if one of "
+                                  f"those lots came after it, give the "
+                                  f"row its ex_date / record_date in a "
+                                  f"JSON book, or correct the lots' "
+                                  f"basis by hand.")
                     if trace:
                         symbol_traces[symbol].append(
                             f"# {tx.date} STOCK DIVIDEND +{tx.quantity:g} "
-                            f"sh | spread over {len(_lots)} lot(s), "
-                            f"{_held:.4f} sh held")
+                            f"sh | spread over {len(_ent)} lot(s), "
+                            f"{_ent_qty:.4f} sh entitled"
+                            + (f" (before {_ent_date})" if _ent_date
+                               else ""))
                     continue
-                # Held before and sold out by the pay date (sold between
-                # the record and pay dates): the history is complete, the
-                # §307 share belongs to the sold lots (audit A2-0562). Never
-                # a wash-sale replacement (US-STKDIV-01, A2-0205).
-                _sold_out = any(
-                    _p is not tx and _p.symbol == tx.symbol
-                    and _p.account == tx.account
-                    and _p.action in ('BUYSELL', 'ASSIGN')
-                    and _p.quantity < 0
-                    and (_p.date, _p.time or '') <= (tx.date,
-                                                     tx.time or '')
-                    for _p in taxable_sorted)
-                _note(tx.date,
-                      f"warning: {symbol}: stock dividend of "
-                      f"{tx.quantity:g} share(s) on {tx.date} with no "
-                      f"shares held — booked as a $0 purchase (not a "
-                      f"wash-sale replacement); "
-                      + ("the shares were disposed of before the pay "
-                         "date, so the §307 basis allocation reaches the "
-                         "SOLD lots: adjust their basis and this lot's by "
-                         "hand (.tt ADJUST rows)."
-                         if _sold_out else
-                         "add the missing purchase history so it can "
-                         "share their basis (§307)."))
+                if _held > epsilon and not inventory_short.get(ikey):
+                    # Shares held on the pay date, none bought before
+                    # the entitlement date: the dividend belongs to
+                    # shares the books do not show (history missing, or
+                    # sold between the record and pay dates).
+                    _note(tx.date,
+                          f"warning: {symbol}: stock dividend of "
+                          f"{tx.quantity:g} share(s) on {tx.date}: none "
+                          f"of the {_held:g} share(s) held was bought "
+                          f"before its entitlement date {_ent_date} — "
+                          f"booked as a $0 purchase (not a wash-sale "
+                          f"replacement); add the purchase history of "
+                          f"the shares entitled to it (§307), or check "
+                          f"the row's ex_date / record_date.")
+                    # Falls through to the $0 purchase below.
+                else:
+                    # Held before and sold out by the pay date (sold between
+                    # the record and pay dates): the history is complete, the
+                    # §307 share belongs to the sold lots (audit A2-0562). Never
+                    # a wash-sale replacement (US-STKDIV-01, A2-0205).
+                    _sold_out = any(
+                        _p is not tx and _p.symbol == tx.symbol
+                        and _p.account == tx.account
+                        and _p.action in ('BUYSELL', 'ASSIGN')
+                        and _p.quantity < 0
+                        and (_p.date, _p.time or '') <= (tx.date,
+                                                         tx.time or '')
+                        for _p in taxable_sorted)
+                    _note(tx.date,
+                          f"warning: {symbol}: stock dividend of "
+                          f"{tx.quantity:g} share(s) on {tx.date} with no "
+                          f"shares held — booked as a $0 purchase (not a "
+                          f"wash-sale replacement); "
+                          + ("the shares were disposed of before the pay "
+                             "date, so the §307 basis allocation reaches the "
+                             "SOLD lots: adjust their basis and this lot's by "
+                             "hand (.tt ADJUST rows)."
+                             if _sold_out else
+                             "add the missing purchase history so it can "
+                             "share their basis (§307)."))
 
             if (tx.action == 'BUYSELL' and tx.quantity > 0
                     and tx.type == SPINOFF_355_TYPE):

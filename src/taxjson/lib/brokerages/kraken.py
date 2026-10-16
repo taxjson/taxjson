@@ -280,6 +280,14 @@ def _kraken_siblings(path: Path) -> List[Path]:
         by_name=lambda n: n.startswith('kr_') or 'kraken' in n)
 
 
+def _dec_sub(a: float, b: float) -> float:
+    """`a - b` on the decimal digits the export printed (repr is the
+    shortest decimal of each float), so a net reward quantity has no
+    binary tail."""
+    from decimal import Decimal
+    return float(Decimal(repr(float(a))) - Decimal(repr(float(b))))
+
+
 def _units(q: float) -> str:
     """A coin quantity in plain decimals (0.0000000004, not 4e-10)."""
     return f"{q:.12f}".rstrip('0').rstrip('.') or '0'
@@ -1509,7 +1517,11 @@ class KrakenBrokerage(BaseBrokerage):
                    if feeusd_raw not in (None, '') else None)
         same_ccy = (not fee_qty) or (fee_ccy == asset_name)
         if same_ccy:
-            net_qty = gross_qty - fee_qty
+            # In decimal, as the ledger states them: the binary
+            # difference of two 8-decimal amounts carries a 17-digit
+            # tail (0.0027 - 0.00013116 = 0.0025688399999999998) into
+            # the books, every view and the .tt round trip.
+            net_qty = _dec_sub(gross_qty, fee_qty)
             if net_qty <= 1e-12:
                 self.count_nonevent(
                     "Kraken Earn reward fully consumed by its fee")

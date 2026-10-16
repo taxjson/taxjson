@@ -47,8 +47,10 @@ def _channels_json(stable="v0.2.0", beta="v0.3.0"):
 
 
 class _Repos(unittest.TestCase):
-    """A bare `origin` with three annotated releases on main and
-    channels.json (stable v0.2.0, beta v0.3.0), and a clone of it."""
+    """A bare `origin` (the dev repo) with three annotated releases on
+    main and channels.json (stable v0.2.0, beta v0.3.0), a clone of it,
+    and a bare `public` repo holding the same (what the publisher
+    published), read only from the clone."""
 
     def setUp(self):
         if not shutil.which("git"):
@@ -93,6 +95,17 @@ class _Repos(unittest.TestCase):
         self.git(self.dev, "add", "channels.json")
         self.git(self.dev, "commit", "-q", "-m", "channels")
         self.git(self.dev, "push", "-q", "origin", "main", "--tags")
+        self.public = self.d / "public.git"
+        self.git(self.d, "init", "-q", "--bare", "-b", "main",
+                 str(self.public))
+        self.git(self.dev, "push", "-q", str(self.public), "main", "--tags")
+        self.git(self.dev, "remote", "add", "public", str(self.public))
+        self.git(self.dev, "remote", "set-url", "--push", "public",
+                 "DISABLED")
+
+    def publish(self, *refs):
+        """What the publisher does: the public repo gets these refs."""
+        self.git(self.dev, "push", "-q", str(self.public), *refs)
 
     def tearDown(self):
         self._td.cleanup()
@@ -162,9 +175,26 @@ class TestPromote(_Repos):
     def head(self):
         return self.git(self.dev, "rev-parse", "HEAD")
 
+    def fast_lane_tags(self):
+        """{name: (commit, message)} of the channels-* tags on origin."""
+        out = {}
+        for line in self.git(self.dev, "ls-remote", "origin",
+                             "refs/tags/channels-*").splitlines():
+            sha, ref = line.split("\t")
+            if ref.endswith("^{}"):
+                continue
+            name = ref[len("refs/tags/"):]
+            self.git(self.dev, "fetch", "-q", "origin",
+                     f"+{ref}:{ref}")
+            out[name] = (self.git(self.dev, "rev-parse", f"{name}^{{commit}}"),
+                         self.git(self.dev, "tag", "-l", "--format=%(contents)",
+                                  name).strip())
+        return out
+
     def test_forward_commits_channels_json_and_pushes(self):
         self.git(self.dev, "tag", "-a", "v0.4.0", "-m", "taxjson v0.4.0")
         self.git(self.dev, "push", "-q", "origin", "v0.4.0")
+        self.publish("v0.4.0")
         (self.dev / "f.txt").write_text("staged, not promoted\n")
         self.git(self.dev, "add", "f.txt")
         tags = self.git(self.dev, "tag", "-l")
@@ -181,7 +211,16 @@ class TestPromote(_Repos):
         files = self.git(self.dev, "show", "--name-only", "--format=",
                          "origin/main")
         self.assertEqual(files, "channels.json")               # only it
-        self.assertEqual(self.git(self.dev, "tag", "-l"), tags)  # no tag
+        # No release tag; one fast-lane tag on the promote commit asks the
+        # publisher to copy channels.json to the public repo.
+        lane = self.fast_lane_tags()
+        self.assertEqual([v for v in lane.values()],
+                         [(self.git(self.dev, "rev-parse", "origin/main"),
+                           "taxjson channels: stable → v0.4.0")])
+        self.assertRegex(next(iter(lane)), r"^channels-\d{8}T\d{6}Z$")
+        self.assertIn("asked the publisher for stable → v0.4.0", r.stdout)
+        self.assertEqual(set(self.git(self.dev, "tag", "-l").split())
+                         - set(lane), set(tags.split()))
         # beta, with trailers from the environment only.
         r = self.promote("0.4.0", "beta", env={
             "TAXJSON_PROMOTE_IGNORE_CI": "1",
@@ -191,9 +230,41 @@ class TestPromote(_Repos):
         msg = self.git(self.dev, "log", "-1", "--format=%B", "origin/main")
         self.assertEqual(msg, "Promote v0.4.0 to beta\n\n"
                               "Co-Authored-By: Pat <p@example.com>")
+        self.assertEqual(len(self.fast_lane_tags()), 2)
+        # Again: the fast lane is already asked for.
         r = self.promote("v0.4.0", "beta")
         self.assertEqual(r.returncode, 0)
         self.assertIn("already points at v0.4.0", r.stdout)
+        self.assertIn("waiting for the publisher", r.stdout)
+        self.assertEqual(len(self.fast_lane_tags()), 2)
+        # Once the publisher has copied channels.json, nothing to do.
+        self.publish("origin/main:refs/heads/main")
+        r = self.promote("v0.4.0", "beta")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("beta points at v0.4.0 on the public repo", r.stdout)
+        self.assertEqual(len(self.fast_lane_tags()), 2)
+
+    def test_a_promote_that_landed_earlier_gets_its_fast_lane_tag(self):
+        # The pull request merged after promote.sh stopped waiting: the
+        # channel already names the release on main, the public repo not.
+        (self.dev / "channels.json").write_text(_channels_json("v0.3.0"))
+        self.git(self.dev, "commit", "-q", "-am", "Promote v0.3.0 to stable")
+        self.git(self.dev, "push", "-q", "origin", "main")
+        r = self.promote("v0.3.0")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("already points at v0.3.0", r.stdout)
+        self.assertEqual(len(self.fast_lane_tags()), 1)
+
+    def test_only_a_published_release(self):
+        self.git(self.dev, "tag", "-a", "v0.4.0", "-m", "taxjson v0.4.0")
+        self.git(self.dev, "push", "-q", "origin", "v0.4.0")
+        r = self.promote("v0.4.0", env={"TAXJSON_PROMOTE_IGNORE_CI": "1"})
+        self.assertRefused(r, "v0.4.0 is not published yet", self.head())
+        self.git(self.dev, "remote", "remove", "public")
+        r = self.promote("v0.3.0", env={"TAXJSON_PROMOTE_IGNORE_CI": "1"})
+        self.assertRefused(r, "No remote 'public' for the public repo",
+                           self.head())
+        self.assertEqual(self.fast_lane_tags(), {})
 
     def assertRefused(self, r, needle, head):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
@@ -255,7 +326,8 @@ class TestInstallerChannels(_Repos):
     def install(self, *args, ok=True, **env):
         e = dict(GIT_ENV, HOME=str(self.home), TAXJSON_REPO=str(self.origin),
                  TAXJSON_DIR=str(self.inst), TAXJSON_BIN=str(self.bin),
-                 PATH=f"{self.stub}:{os.environ['PATH']}", **env)
+                 PATH=f"{self.stub}:{os.environ['PATH']}")
+        e.update(env)
         r = subprocess.run(["bash", str(REPO / "install.sh"), *args], env=e,
                            capture_output=True, text=True,
                            stdin=subprocess.DEVNULL)
@@ -363,8 +435,33 @@ class TestInstallerChannels(_Repos):
         self.assertFalse(self.chfile.exists())
         self.assertFalse((self.bin / "taxjson").exists())
         self.install()
+        # On an existing install, a dry run fetches tags and nothing else.
+        self.git(self.dev, "tag", "-a", "v0.4.0", "-m", "taxjson v0.4.0")
+        self.git(self.dev, "push", "-q", "origin", "v0.4.0")
+        r = self.install("--channel", "latest", TAXJSON_DRY_RUN="1")
+        self.assertIn("channel latest → release v0.4.0  (dry run", r.stdout)
+        self.assertEqual((self.on(), self.remembered()), ("v0.2.0", "stable"))
         self.install("--channel", "v0.3.0", TAXJSON_REMEMBER_CHANNEL="0")
         self.assertEqual((self.on(), self.remembered()), ("v0.3.0", "stable"))
+
+    def test_dry_run_creates_no_install(self):
+        """With no install yet, a dry run resolves the channel in a
+        temporary clone: TAXJSON_DIR and its parent are not created, and
+        nothing of the clone is left behind."""
+        inst = self.d / "new" / "taxjson"
+        tmp = self.d / "tmp"
+        tmp.mkdir()
+        for channel, line in [("beta", "channel beta → release v0.3.0"),
+                              ("dev", "channel dev → main")]:
+            r = self.install("--channel", channel, TAXJSON_DRY_RUN="1",
+                             TAXJSON_DIR=str(inst), TMPDIR=str(tmp))
+            self.assertIn(f"{line}  (dry run: nothing checked out", r.stdout)
+            self.assertIn("does not exist and is not created", r.stdout)
+            self.assertFalse(inst.exists(), "a dry run clones nothing there")
+            self.assertFalse(inst.parent.exists(), "nor makes the parent")
+            self.assertEqual(list(tmp.iterdir()), [], "temporary clone removed")
+            self.assertFalse(self.chfile.exists())
+            self.assertFalse((self.bin / "taxjson").exists())
 
     def test_help(self):
         r = self.install("--help")
@@ -426,12 +523,13 @@ class TestChannelsCommand(_Repos):
                               cwd=self.d, stdin=subprocess.DEVNULL)
 
     def test_json_shape(self):
-        # A newer stable on origin than the local main knows: the fetch
-        # brings it in.
+        # A newer stable on the public repo than the local main knows
+        # (the publisher copied it there): the fetch brings it in, and the
+        # page shows what installers read.
         other = self.d / "other"
-        self.git(self.d, "clone", "-q", str(self.origin), str(other))
+        self.git(self.d, "clone", "-q", str(self.public), str(other))
         (other / "channels.json").write_text(_channels_json("v0.3.0"))
-        self.git(other, "commit", "-q", "-am", "Promote v0.3.0 to stable")
+        self.git(other, "commit", "-q", "-am", "Update channels")
         self.git(other, "push", "-q", "origin", "main")
         r = self.cli("channels", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -445,7 +543,7 @@ class TestChannelsCommand(_Repos):
         self.assertEqual(st["channels"], {"stable": "v0.3.0",
                                           "beta": "v0.3.0",
                                           "latest": "v0.3.0"})
-        self.assertEqual(st["channels_file"], "channels.json on origin/main")
+        self.assertEqual(st["channels_file"], "channels.json on public/main")
         box = st["this_box"]
         self.assertEqual((box["installed"], box["release"], box["channel"]),
                          (True, "v0.2.0", "stable"))

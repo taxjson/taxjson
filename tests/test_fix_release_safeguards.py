@@ -1,7 +1,8 @@
 """Release safeguards (owner-approved, 2026-10-09).
 
-scripts/release.sh publishes the GitHub release with notes that passed
-`scripts/check-pii.sh --message` first. Every remote here is a local
+scripts/release.sh tags a release on the dev repo only after its notes
+(the CHANGELOG section the public repo's release.yml publishes) passed
+`scripts/check-pii.sh --message`. Every remote here is a local
 temporary repository and `gh` is a stub on PATH that only records what
 it was asked: nothing touches the network. Every "private" value is
 synthetic and assembled at run time.
@@ -97,7 +98,8 @@ class _Sandbox(unittest.TestCase):
                         TAXJSON_PII_DENYLIST=str(self.deny),
                         TMPDIR=str(self.d))
         for k in ("TAXJSON_PII_AMOUNTS", "TAXJSON_PROMOTE_IGNORE_CI",
-                  "TAXJSON_PROMOTE_TRAILERS", "TAXJSON_SLUG"):
+                  "TAXJSON_PROMOTE_TRAILERS", "TAXJSON_SLUG",
+                  "TAXJSON_PUBLIC_REMOTE", "TAXJSON_PUBLIC_SLUG"):
             self.env.pop(k, None)
         # The throwaway origins take direct pushes (scripts/land.sh's
         # escape hatch for tests), and a missing CI run is not waited for.
@@ -162,7 +164,8 @@ class _ReleaseRepo(_Sandbox):
         self.git(self.dev, "symbolic-ref", "HEAD", "refs/heads/main")
         s = self.dev / "scripts"
         (s / "hooks").mkdir(parents=True)
-        for f in ("release.sh", "check-pii.sh", "land.sh", "github-ci.sh"):
+        for f in ("release.sh", "check-pii.sh", "land.sh", "github-ci.sh",
+                  "release-notes.sh"):
             shutil.copy(REPO / "scripts" / f, s / f)
         shutil.copy(REPO / "scripts" / "hooks" / "pre-push",
                     s / "hooks" / "pre-push")
@@ -182,6 +185,14 @@ class _ReleaseRepo(_Sandbox):
         self.git(self.dev, "commit", "-q", "-m", "start")
         self.git(self.dev, "tag", "-a", "v0.1.0", "-m", "taxjson v0.1.0")
         self.git(self.dev, "push", "-q", "origin", "main", "v0.1.0")
+        # The public repo, as the publisher left it: v0.1.0 published.
+        self.public = self.d / "public.git"
+        self.git(self.d, "init", "-q", "--bare", "-b", "main",
+                 str(self.public))
+        self.git(self.dev, "push", "-q", str(self.public), "main", "v0.1.0")
+        self.git(self.dev, "remote", "add", "public", str(self.public))
+        self.git(self.dev, "remote", "set-url", "--push", "public",
+                 "DISABLED")
         self.py = self._stub("python-stub", _PY_STUB, where=self.d)
         self.env["PYTHON"] = str(self.py)
 
@@ -235,6 +246,10 @@ class _ReleaseRepo(_Sandbox):
         return [c[1] for c in self.gh_calls()
                 if c[0] == "api" and "actions/workflows" in c[1]]
 
+    def notes_left(self):
+        """Notes files release.sh left in its TMPDIR."""
+        return sorted(p.name for p in self.d.glob("taxjson-notes-*"))
+
 
 class TestReleaseNotes(_ReleaseRepo):
     def test_prepare_lands_the_version_commit_and_the_cut_tags_it(self):
@@ -261,18 +276,20 @@ class TestReleaseNotes(_ReleaseRepo):
             "repos/taxjson/taxjson/actions/workflows/tests.yml/runs"
             f"?head_sha={vc}&event=push&branch=main&per_page=1"])
         self.assertIn("CI passed on the version commit of v0.2.0", r.stdout)
-        calls = [c for c in self.gh_calls() if c[:2] == ["release", "create"]]
-        self.assertEqual(len(calls), 1, self.gh_calls())
-        c = calls[0]
-        self.assertEqual(c[:4], ["release", "create", "v0.2.0",
-                                 "--verify-tag"])
-        self.assertEqual(c[c.index("-t") + 1], "taxjson v0.2.0")
-        notes = Path(str(self.gh_log) + ".notes").read_text()
+        self.assertIn("tagged v0.2.0 on the dev repo", r.stdout)
+        # The GitHub release is the public repo's release.yml's job, from
+        # the notes release-notes.sh prints for the tagged CHANGELOG.
+        self.assertFalse([c for c in self.gh_calls() if c[0] == "release"])
+        self.assertEqual(self.notes_left(), [])
+        self.assertEqual(self.git(self.public, "tag", "-l", "v0.2.0"), "",
+                         "nothing is pushed to the public repo")
+        self.git(self.dev, "checkout", "-q", "v0.2.0")
+        notes = subprocess.run(
+            ["bash", "scripts/release-notes.sh", "v0.2.0"], cwd=self.dev,
+            capture_output=True, text=True, env=self.env).stdout
+        self.git(self.dev, "checkout", "-q", "main")
         self.assertEqual(notes, "- **Faster runs** — the books build in "
                                 "half the time.\n- Fix a typo.\n")
-        self.assertFalse(Path(c[c.index("-F") + 1]).exists(),
-                         "the notes file is removed once the release exists")
-        self.assertNotIn("--repo", c)          # origin is not on GitHub here
         # Prepared twice is a no-op that names the next step.
         r = self.prepare()
         self.assertEqual(r.returncode, 1, r.stdout)
@@ -284,47 +301,46 @@ class TestReleaseNotes(_ReleaseRepo):
         self.ci()
         r = self.release("v0.2.0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        c = [c for c in self.gh_calls() if c[:2] == ["release", "create"]][0]
-        self.assertEqual(c[-2:], ["--repo", "example/taxjson"])
         self.assertTrue(self.ci_paths()[0].startswith(
             "repos/example/taxjson/actions/"))
 
-    def test_notes_file_overrides_the_changelog(self):
+    def test_notes_option_is_gone(self):
         notes = self.d / "my-notes.md"
         notes.write_text("Hand-written notes.\n")
-        r = self.release("0.2.0", "--prepare", "--notes", str(notes))
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("scripts/release.sh v0.2.0 --notes FILE", r.stdout)
-        self.ci()
-        r = self.release("0.2.0", "--notes", str(notes))
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(Path(str(self.gh_log) + ".notes").read_text(),
-                         "Hand-written notes.\n")
+        for args in (("--prepare", "--notes", str(notes)),
+                     (f"--notes={notes}",)):
+            r = self.release("0.2.0", *args)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("--notes is gone", r.stdout)
+        self.assertNotIn("0.2.0", self.origin_version())
 
     def test_a_scan_hit_stops_before_anything_is_pushed(self):
-        # The CHANGELOG is clean; the hand-written notes carry an amount
-        # and, in a second run, a denylisted name.
+        # The CHANGELOG section carries an amount and, in a second run, a
+        # denylisted name.
         start = self.origin_version()
-        for text in (f"Total {_AMOUNT} moved.\n", f"Thanks {_NAME}.\n"):
-            notes = self.d / "bad-notes.md"
-            notes.write_text(text)
-            r = self.prepare("--notes", str(notes))
+        for text in (f"- Total {_AMOUNT} moved.\n", f"- Thanks {_NAME}.\n"):
+            self.commit_changelog(text)
+            r = self.prepare()
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertIn("release notes REFUSED", r.stdout)
             self.assertNotIn(_AMOUNT, r.stdout + r.stderr)
             self.assertNotIn(_NAME, r.stdout + r.stderr)
             self.assertEqual(self.origin_version(), start)
             self.git(self.dev, "checkout", "-q", "--", ".")
-        # The cut scans the notes again before it tags.
+        self.assertEqual(self.notes_left(), [])
+        # The cut scans the notes again before it tags: a name added to
+        # the denylist after the version commit was prepared.
+        self.deny.write_text("# test denylist\n")
+        self.commit_changelog(f"- Faster.\n- Thanks {_NAME}.\n")
         self.prepared()
         self.ci()
-        r = self.release("v0.2.0", "--notes", str(notes))
+        self.deny.write_text(f"# test denylist\n{_NAME}\n")
+        r = self.release("v0.2.0")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("release notes REFUSED", r.stdout)
         self.assertNotIn(_NAME, r.stdout + r.stderr)
         self.assertFalse(self.origin_tags())
         self.assertEqual(self.git(self.dev, "tag", "-l", "v0.2.0"), "")
-        self.assertFalse([c for c in self.gh_calls() if c[0] == "release"])
 
     def test_empty_section_is_refused(self):
         self.commit_changelog("")
@@ -455,6 +471,23 @@ class TestReleaseCutGates(_ReleaseRepo):
         r = self.release("v0.2.0")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("v0.2.0 already exists on origin", r.stdout)
+        # A tag name the public repo has is used for good, even when the
+        # dev repo has lost it.
+        self.git(self.dev, "push", "-q", str(self.public), "v0.2.0")
+        self.git(self.dev, "push", "-q", "origin", ":refs/tags/v0.2.0")
+        self.git(self.dev, "tag", "-d", "v0.2.0")
+        r = self.release("v0.2.0")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("v0.2.0 already exists on the public repo", r.stdout)
+
+    def test_the_public_remote_is_needed(self):
+        self.prepared()
+        self.ci()
+        self.git(self.dev, "remote", "remove", "public")
+        r = self.release("v0.2.0")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no remote 'public' for the public repo", r.stdout)
+        self.assertFalse(self.origin_tags())
 
     def test_prepare_only_options_are_refused_by_the_cut(self):
         for opt in ("--fresh-gate", "--gate-max-age=3"):
@@ -562,8 +595,15 @@ class TestTagGuard(_Sandbox):
         r = self.hook(self.tag_line("v1.2.3"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_annotated_fast_lane_tag_on_main_passes(self):
+        self.git(self.repo, "tag", "-a", "channels-20261014T120000Z",
+                 "-m", "taxjson channels: stable → v1.2.3")
+        r = self.hook(self.tag_line("channels-20261014T120000Z"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_bad_names_and_lightweight_tags(self):
-        for name in ("release-1", "v1.2", "v1.2.3-rc1", "v01.2.3x"):
+        for name in ("release-1", "v1.2", "v1.2.3-rc1", "v01.2.3x",
+                     "channels-2026", "channels-20261014T120000"):
             self.git(self.repo, "tag", "-a", name, "-m", "t")
             self.assertRefused(self.hook(self.tag_line(name)),
                                f"{name}: not a release tag (vX.Y.Z)")
@@ -659,6 +699,15 @@ class _PromoteRepo(_Sandbox):
         self.git(self.dev, "commit", "-q", "-m", "channels")
         self.git(self.dev, "push", "-q", "origin", "main", "v0.1.0",
                  "v0.2.0", "v0.3.0")
+        # The public repo, as the publisher left it: the same releases.
+        self.public = self.d / "public.git"
+        self.git(self.d, "init", "-q", "--bare", "-b", "main",
+                 str(self.public))
+        self.git(self.dev, "push", "-q", str(self.public), "main", "v0.1.0",
+                 "v0.2.0", "v0.3.0")
+        self.git(self.dev, "remote", "add", "public", str(self.public))
+        self.git(self.dev, "remote", "set-url", "--push", "public",
+                 "DISABLED")
         self.api({})
 
     def api(self, table, public=None):
@@ -997,9 +1046,11 @@ class TestSecretsWorkflow(unittest.TestCase):
     def test_gitleaks_job(self):
         wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
         job = wf[wf.index("\n  secrets:\n"):wf.index("\n  pr-commits:\n")]
-        for part in ("V=8.28.0", "gitleaks_${V}_linux_x64.tar.gz",
-                     "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
-                     "  gl.tgz\" | sha256sum -c -",
+        for part in ("V=8.28.0", "gitleaks_${V}_linux_${A}.tar.gz",
+                     "X64) A=x64 S=a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb ;;",
+                     "ARM64) A=arm64 S=eff65261156100e5d94a6b3dec313d532fddfe19ae1590bf7a2b4f2699128356 ;;",
+                     "*) echo \"no pinned gitleaks for $RUNNER_ARCH\" >&2; exit 1 ;;",
+                     "echo \"$S  gl.tgz\" | sha256sum -c -",
                      "permissions:\n      contents: read",
                      "persist-credentials: false", "fetch-depth: 0",
                      "timeout-minutes:", 'git show "$BASE:.gitleaks.toml"',

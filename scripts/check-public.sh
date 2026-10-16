@@ -24,8 +24,10 @@
 # that holds it (never its title or text). scripts/promote.sh runs this
 # before moving a channel forward.
 #
-# The repository: --repo, else TAXJSON_SLUG, else origin's github.com
-# address, else taxjson/taxjson. gh's own login, or a GH_TOKEN it is
+# The repository: --repo, else TAXJSON_SLUG, else the github.com address
+# of the remote `public` (the maintainer's clone: origin is the private dev
+# repo), else origin's (a clone of the public repo, as in its workflows),
+# else taxjson/taxjson. gh's own login, or a GH_TOKEN it is
 # given (a workflow's read-only token).
 # Exit 0 clean; 1 a hit; 2 cannot check (no gh, not logged in, an API
 # error, no python3) — it fails closed, never "clean" on what it could
@@ -40,13 +42,14 @@ while [ $# -gt 0 ]; do
     --repo=*) SLUG="${1#--repo=}"; shift ;;
     --days) DAYS="${2:-}"; shift 2 || shift ;;
     --days=*) DAYS="${1#--days=}"; shift ;;
-    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "check-public: unknown argument '$1' (usage: scripts/check-public.sh [--repo OWNER/NAME] [--days N])" >&2; exit 2 ;;
   esac
 done
-if [ -z "$SLUG" ]; then
-  SLUG="$(git remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//')"
-fi
+for r in public origin; do
+  [ -z "$SLUG" ] || break
+  SLUG="$(git remote get-url "$r" 2>/dev/null | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//')"
+done
 SLUG="${SLUG:-taxjson/taxjson}"
 [[ "$SLUG" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "check-public: '$SLUG' is not OWNER/NAME" >&2; exit 2; }
 [ -z "$DAYS" ] || [[ "$DAYS" =~ ^[1-9][0-9]*$ ]] || { echo "check-public: --days takes a whole number of days (got '$DAYS')" >&2; exit 2; }

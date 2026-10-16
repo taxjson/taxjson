@@ -15,9 +15,11 @@ name: privacy watch
 # never the value. What to do then: docs/releasing.md, "Something private
 # leaked into a release".
 #
-# A pull request that changes this watch (or the scanner it runs) runs it
-# once too, so a broken watch is seen before it is merged. Not a required
-# check: it does not run on every pull request.
+# It always reads the public repo (taxjson/taxjson). The daily run happens
+# there only; in the private dev repo, a pull request that changes this
+# watch (or the scanner it runs) runs it once, so a broken watch is seen
+# before it is merged. Not a required check: it does not run on every pull
+# request.
 on:
   schedule:
     - cron: "41 7 * * *"     # daily (UTC)
@@ -39,6 +41,7 @@ permissions:
 jobs:
   watch:
     name: privacy watch (last two days)
+    if: github.event_name != 'schedule' || github.repository == 'taxjson/taxjson'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -48,5 +51,5 @@ jobs:
       - name: Scan what GitHub serves beside the code
         env:
           GH_TOKEN: ${{ github.token }}
-          TAXJSON_SLUG: ${{ github.repository }}
+          TAXJSON_SLUG: taxjson/taxjson
         run: bash scripts/check-public.sh --days 2

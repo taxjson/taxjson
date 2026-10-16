@@ -80,12 +80,13 @@ def auto_aligns(headers, body) -> "list[str]":
     return aligns
 
 
-def _tokenize(lines: "list[str]") -> "list[list[str]]":
-    """Whitespace-split row strings; a row with MORE tokens than the
-    header gets its leading extras merged into the first cell (see
-    align_columns)."""
+def _tokenize(lines: "list[str]", header: bool = True
+              ) -> "list[list[str]]":
+    """Whitespace-split row strings; with a header row, a row with MORE
+    tokens than it gets its leading extras merged into the first cell
+    (see align_columns)."""
     rows = [ln.split() for ln in lines]
-    if rows and rows[0]:
+    if header and rows and rows[0]:
         ncols = len(rows[0])
         for r in rows:
             if len(r) > ncols:
@@ -95,7 +96,8 @@ def _tokenize(lines: "list[str]") -> "list[list[str]]":
 
 
 def align_columns(lines: "list[str]", padding: str = " ",
-                  numeric_right: bool = False) -> "list[str]":
+                  numeric_right: bool = False, header: bool = True
+                  ) -> "list[str]":
     """Align whitespace-separated columns (à la tt/bin/align.pl): each
     positional token is left-justified to the widest value in its column and
     joined with a single-space gap (trailing pad on the last column is
@@ -107,8 +109,15 @@ def align_columns(lines: "list[str]", padding: str = " ",
     or ticker containing a space ([accounts."rrsp x"] is legal TOML)
     used to shift every subsequent column of that row under the wrong
     header (REVIEW #15). Merging left matches where free-text cells
-    live (first column) in every table this renders."""
-    rows = _tokenize(lines)
+    live (first column) in every table this renders.
+
+    `header=False`: the lines are positional records with no header
+    (the row views' taxtext, where a dividend row with withholding
+    carries one more field, its net amount): nothing is merged — the
+    first line being shorter than a later one merged that line's
+    account and action into one cell and shifted its every column —
+    and the numeric columns are read over every line."""
+    rows = _tokenize(lines, header)
     widths: "list[int]" = []
     for r in rows:
         for i, f in enumerate(r):
@@ -123,8 +132,9 @@ def align_columns(lines: "list[str]", padding: str = " ",
         # decimal points and cents line up down the column. The header
         # right-aligns with it. Detection is per-table: a column with
         # any free-text cell stays left.
+        body = rows[1:] if header else rows
         for i in range(len(widths)):
-            cells = [r[i] for r in rows[1:] if i < len(r)]
+            cells = [r[i] for r in body if i < len(r)]
             if cells and all(_NUMERIC_CELL_RE.match(c) for c in cells):
                 right.add(i)
     return [padding.join(

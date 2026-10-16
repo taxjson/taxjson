@@ -30,6 +30,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 CHANNELS_FILE = "channels.json"
+# The maintainer's clone reads the public repo through this remote (its
+# origin is the private dev repo; docs/releasing.md).
+PUBLIC_REMOTE = "public"
 NAMED = ("stable", "beta")             # named in channels.json
 CHANNELS = NAMED + ("latest",)         # latest = the newest release tag
 DEFAULT_LIMIT = 20
@@ -119,30 +122,38 @@ def is_checkout(path: Path) -> bool:
 
 def fetch(repo: Path, env: Optional[Mapping[str, str]] = None,
           timeout: float = 30) -> Tuple[bool, str]:
-    """`git fetch --tags origin main` in `repo`: (True, "") when it
+    """`git fetch --tags origin main` in `repo`, then the main of its
+    `public` remote when it has one (the maintainer's clone: origin is the
+    private dev repo; never the public repo's tags, which the publisher
+    made and which would clash with the dev repo's): (True, "") when it
     worked, else (False, why). TAXJSON_OFFLINE=1 skips it."""
     from taxjson.lib.offline import offline_enabled
     if offline_enabled(env):
         return False, "TAXJSON_OFFLINE is set"
-    try:
-        r = _git(repo, "fetch", "--quiet", "--tags", "--force", "origin",
-                 "main", timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return False, f"git fetch timed out after {timeout:.0f}s"
-    except OSError as e:
-        return False, f"git could not run ({e})"
-    if r.returncode != 0:
-        lines = [x for x in (r.stderr or "").splitlines() if x.strip()]
-        return False, (lines[-1].strip() if lines else
-                       f"git fetch exited {r.returncode}")
+    runs = [("fetch", "--quiet", "--tags", "--force", "origin", "main")]
+    if _git_out(repo, "remote", "get-url", PUBLIC_REMOTE) is not None:
+        runs.append(("fetch", "--quiet", "--no-tags", PUBLIC_REMOTE, "main"))
+    for args in runs:
+        try:
+            r = _git(repo, *args, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, f"git fetch timed out after {timeout:.0f}s"
+        except OSError as e:
+            return False, f"git could not run ({e})"
+        if r.returncode != 0:
+            lines = [x for x in (r.stderr or "").splitlines() if x.strip()]
+            return False, (lines[-1].strip() if lines else
+                           f"git fetch exited {r.returncode}")
     return True, ""
 
 
 def read_channels(repo: Path) -> Tuple[Dict[str, str], Optional[str]]:
-    """channels.json as main has it: origin/main's (what installers
-    read), else the local main's, else the working tree's. Returns
-    (channels, where) — ({}, None) when no version of the file exists."""
-    for ref in ("origin/main", "main"):
+    """channels.json as installers read it: the public repo's main (the
+    `public` remote of the maintainer's clone, else origin/main: a clone
+    of the public repo), else the local main's, else the working tree's.
+    Returns (channels, where) — ({}, None) when no version of the file
+    exists."""
+    for ref in (f"{PUBLIC_REMOTE}/main", "origin/main", "main"):
         text = _git_out(repo, "show", f"{ref}:{CHANNELS_FILE}")
         if text is not None:
             where = f"{CHANNELS_FILE} on {ref}"

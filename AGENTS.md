@@ -5,7 +5,6 @@ superficial-loss rule from broker CSV exports (Questrade, RBC Direct,
 Interactive Brokers, Webull, Coinbase, Kraken, or a generic mapping). Canada
 first; the US engine (FIFO basis, wash sales) is experimental. It runs on the
 user's own machine. Python 3.9+, `src/taxjson/`; the CLI is `taxjson` (`tjs`).
-Claude Code, Codex, Gemini CLI, Cursor and Copilot read this file.
 
 ## Helping someone use taxjson
 
@@ -62,10 +61,11 @@ IRS guidance and a tax professional.
   Read its last line for PASS: a pipe hides the exit status. One module: `cd
   tests && TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing, run
   the gate once in a fresh `git clone` (it catches untracked files).
-- **Landing and releasing** (`docs/releasing.md`): commit, then `scripts/land.sh`
-  (PII gate, PR, rebase-merged on green CI; never `--no-verify`). Release:
-  `scripts/release.sh vX.Y.Z --prepare`, then, once CI passed on that commit,
-  `scripts/release.sh vX.Y.Z`; then `scripts/promote.sh vX.Y.Z [beta]`.
+- **Landing and releasing** (`docs/releasing.md`): `origin` is the private dev
+  repo; only the publisher changes the public one, a day after a release tag.
+  Commit, then `scripts/land.sh` (PII gate, PR, merged on green CI; never
+  `--no-verify`). Release: `scripts/release.sh vX.Y.Z --prepare`, then, once
+  CI passed, `scripts/release.sh vX.Y.Z`; once published, `scripts/promote.sh`.
 - **Conventions the tests and hooks enforce:**
   - Canadian and US law never mix. Read the country only through
     `src/taxjson/lib/country.py`. `tjs tax-logic` is the spec: a tax change

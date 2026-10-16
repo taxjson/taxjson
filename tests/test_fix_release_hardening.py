@@ -2,9 +2,10 @@
 
 - scripts/land.sh: main is published through a pull request, rebase-merged
   once its checks pass (stub gh; the "GitHub" here is a local bare repo).
-- Every workflow pins its actions by SHA and its runners by image.
-- The required checks of main's ruleset (the JSON in docs/releasing.md)
-  are exactly the tests.yml jobs that run on every pull request.
+- Every workflow pins its actions by SHA and its runners by image; only
+  release.yml's job may write (the GitHub release, on the public repo).
+- Every tests.yml job that runs on a pull request runs on every one
+  (land.sh waits for every check).
 - gitleaks: no word-list allowlist; scripts/gitleaks-regression.sh proves
   ordinary secrets are reported whatever they are called.
 - The daily privacy watch (read-only) and check-public.sh --days.
@@ -35,36 +36,20 @@ def _jobs(text):
     return out
 
 
+SCHEDULE_ON_PUBLIC_ONLY = ("github.event_name != 'schedule' || "
+                           "github.repository == 'taxjson/taxjson'")
+
+
 def _runs_on_every_pull_request(block):
     m = re.search(r"\n    if: (.+)", block)
-    return m is None or "github.event_name == 'pull_request'" in m.group(1)
-
-
-def _check_names(block, job_id):
-    """The check-run names a job reports (its matrix expanded)."""
-    m = re.search(r"\n    name: (.+)", block)
-    name = m.group(1).strip() if m else job_id
-    names = [name]
-    for key in ("os", "python-version"):
-        mm = re.search(r"\n        %s: \[(.*)\]" % re.escape(key), block)
-        if not mm:
-            continue
-        vals = [v.strip().strip('"\'') for v in mm.group(1).split(",")]
-        names = [n.replace("${{ matrix.%s }}" % key, v)
-                 for n in names for v in vals]
-    return names
-
-
-def _ruleset():
-    doc = (REPO / "docs" / "releasing.md").read_text()
-    m = re.search(r"<!-- ruleset: main -->\n```json\n(.*?)\n```", doc, re.S)
-    assert m, "docs/releasing.md has no ruleset block"
-    return json.loads(m.group(1))
+    return (m is None or "github.event_name == 'pull_request'" in m.group(1)
+            or m.group(1) == SCHEDULE_ON_PUBLIC_ONLY)
 
 
 class TestWorkflowPins(unittest.TestCase):
     """Actions by full commit SHA with the release beside it; runners by an
-    explicit image, never a moving *-latest label; read-only tokens."""
+    explicit image, never a moving *-latest label; read-only tokens
+    (release.yml's one job excepted: it creates the GitHub release)."""
 
     def test_every_workflow(self):
         self.assertGreaterEqual(len(WORKFLOWS), 2)
@@ -86,7 +71,10 @@ class TestWorkflowPins(unittest.TestCase):
                     self.assertNotRegex(lab, r"-latest$", lab)
                     if not lab.startswith("${{"):
                         self.assertRegex(lab, r"^ubuntu-\d\d\.\d\d$", lab)
-                self.assertRegex(text, r"\npermissions:\n")
+                self.assertRegex(text, r"\npermissions:\n  contents: read\n")
+                if wf.name == "release.yml":
+                    text = text.replace(
+                        "\n    permissions:\n      contents: write\n", "\n", 1)
                 self.assertNotRegex(text, r":\s*write\b")
                 for job, block in _jobs(text).items():
                     self.assertRegex(block, r"\n    timeout-minutes: \d+\n",
@@ -108,39 +96,76 @@ class TestWorkflowPins(unittest.TestCase):
                              "5fda3b95a4ea91299a34e894583c3862153e4b97")
 
 
-class TestRequiredChecks(unittest.TestCase):
-    """main's ruleset (docs/releasing.md) requires exactly the tests.yml
-    checks every pull request reports — none that a pull request skips
-    (it would stay pending forever) and none left out."""
+class TestRunners(unittest.TestCase):
+    """The dev repo is private, so its CI runs on its own self-hosted runner
+    (label taxjson-dev) and draws no Actions minutes; the public repo's runs
+    on GitHub's runners, never on the maintainer's machine. A self-hosted
+    runner keeps its Python between jobs, so every job installs into a
+    fresh virtualenv."""
 
-    def test_ruleset_names_every_pull_request_check(self):
+    PUBLIC_OR_DEV = ("${{ github.repository == 'taxjson/taxjson' && "
+                     "'ubuntu-24.04' || 'taxjson-dev' }}")
+    MATRIX_OR_DEV = ("${{ github.repository == 'taxjson/taxjson' && "
+                     "matrix.os || 'taxjson-dev' }}")
+
+    def test_tests_yml_runs_on_the_dev_runner_only_in_the_dev_repo(self):
+        wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
+        for job, block in _jobs(wf).items():
+            labels = re.findall(r"\n    runs-on: (.+)", block)
+            self.assertEqual(len(labels), 1, job)
+            self.assertIn(labels[0], (self.PUBLIC_OR_DEV, self.MATRIX_OR_DEV), job)
+        self.assertIn("\n        os: [ubuntu-24.04]\n", wf)
+
+    def test_public_only_workflows_use_hosted_runners(self):
+        for name in ("release.yml", "privacy-watch.yml"):
+            wf = (REPO / ".github" / "workflows" / name).read_text()
+            self.assertNotIn("taxjson-dev", wf, name)
+            self.assertNotIn("self-hosted", wf, name)
+
+    def test_installs_go_into_a_fresh_virtualenv(self):
+        wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
+        for job, block in _jobs(wf).items():
+            if "pip install" not in block:
+                continue
+            venv = block.find('python -m venv "$RUNNER_TEMP/venv"')
+            self.assertGreater(venv, block.find("uses: actions/setup-python@"), job)
+            self.assertLess(venv, block.find("pip install"), job)
+            self.assertIn('echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"', block, job)
+
+
+class TestEveryPullRequestCheck(unittest.TestCase):
+    """scripts/land.sh merges once every check of the pull request has
+    passed: each tests.yml job that runs on a pull request runs on every
+    one (no path filter, no `if:` that skips one), so a check that should
+    have run is never simply missing."""
+
+    def test_no_pull_request_check_is_skipped(self):
         wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
         on = wf[wf.index("\non:\n"):wf.index("\npermissions:")]
         self.assertIn("\n  pull_request:\n", on)
         self.assertNotRegex(on, r"\n\s+paths(-ignore)?:",
-                            "a path filter can skip a required check")
-        want = set()
+                            "a path filter can skip a check")
+        on_pr = {job for job, block in _jobs(wf).items()
+                 if _runs_on_every_pull_request(block)}
+        for job in ("lint", "gates", "secrets", "pr-commits", "test"):
+            self.assertIn(job, on_pr)
+
+    def test_schedule_runs_on_the_public_repo_only(self):
+        # The dev repo is private: its runners are billed by the minute,
+        # and a nightly run of the whole matrix there would use more than
+        # a month's included minutes. Every job skips the schedule except
+        # on the public repo (pull-request- or push-only jobs never see it).
+        wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
+        self.assertIn("\n  schedule:\n", wf)
         for job, block in _jobs(wf).items():
-            if _runs_on_every_pull_request(block):
-                want.update(_check_names(block, job))
-        self.assertIn("ubuntu-24.04 / Python 3.13", want)
-        self.assertIn("pii / new commits", want)
-        self.assertIn("secrets (gitleaks)", want)
-        self.assertNotIn("ubuntu-24.04 / Python 3.12 / nightly fuzz", want)
-        rs = _ruleset()
-        rules = {r["type"]: r.get("parameters") for r in rs["rules"]}
-        req = rules["required_status_checks"]["required_status_checks"]
-        self.assertEqual({c["context"] for c in req}, want)
-        self.assertEqual({c["integration_id"] for c in req},
-                         {_GITHUB_ACTIONS_APP})
-        self.assertEqual(rules["pull_request"]["allowed_merge_methods"],
-                         ["rebase"])
-        for t in ("required_linear_history", "deletion", "non_fast_forward"):
-            self.assertIn(t, rules)
-        self.assertEqual(rs["bypass_actors"], [])
-        self.assertEqual(rs["target"], "branch")
-        self.assertEqual(rs["conditions"]["ref_name"]["include"],
-                         ["~DEFAULT_BRANCH"])
+            cond = re.search(r"\n    if: (.+)", block)
+            self.assertIsNotNone(cond, f"{job} runs on the dev repo's schedule")
+            cond = cond.group(1)
+            self.assertTrue(
+                cond == SCHEDULE_ON_PUBLIC_ONLY
+                or "github.repository == 'taxjson/taxjson'" in cond
+                or "schedule" not in cond and "workflow_dispatch" not in cond,
+                f"{job}: {cond}")
 
     def test_pii_commit_scan_runs_on_pushes_to_main_too(self):
         wf = (REPO / ".github" / "workflows" / "tests.yml").read_text()
@@ -223,7 +248,48 @@ class TestGitleaks(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
+class TestReleaseWorkflow(unittest.TestCase):
+    """release.yml: on the public repo only, a pushed vX.Y.Z tag gets its
+    GitHub release from that tag's CHANGELOG section, scanned first."""
+
+    def test_public_repo_tag_push_only(self):
+        wf = (REPO / ".github" / "workflows" / "release.yml").read_text()
+        on = wf[wf.index("\non:\n"):wf.index("\npermissions:")]
+        self.assertEqual(on.strip(), 'on:\n  push:\n    tags: ["v*.*.*"]')
+        jobs = _jobs(wf)
+        self.assertEqual(list(jobs), ["release"])
+        job = jobs["release"]
+        self.assertIn("\n    if: github.repository == 'taxjson/taxjson'\n",
+                      job)
+        self.assertNotIn("secrets.", wf)
+        notes = job.index('bash scripts/release-notes.sh "$TAG"')
+        scan = job.index("bash scripts/check-pii.sh --message")
+        create = job.index('gh release create "$TAG"')
+        self.assertLess(notes, scan)
+        self.assertLess(scan, create)
+        self.assertIn("--verify-tag", job[create:])
+
+    def test_release_notes_script(self):
+        with __import__("tempfile").TemporaryDirectory() as d:
+            cl = Path(d) / "CHANGELOG.md"
+            cl.write_text("# Changelog\n\n## Unreleased\n\n## v1.2.3 (2026-01-02)"
+                          "\n\n- One.\n- Two.\n\n## v1.2.30 (2026-01-01)\n\n"
+                          "- Not this.\n")
+            run = lambda tag: subprocess.run(  # noqa: E731
+                ["bash", str(REPO / "scripts" / "release-notes.sh"), tag,
+                 str(cl)], capture_output=True, text=True).stdout
+            self.assertEqual(run("v1.2.3"), "- One.\n- Two.\n")
+            self.assertEqual(run("v1.2.30"), "- Not this.\n")
+            self.assertEqual(run("v9.9.9"), "")
+
+
 class TestPrivacyWatch(unittest.TestCase):
+    def test_runs_daily_on_the_public_repo_only(self):
+        wf = (REPO / ".github" / "workflows" / "privacy-watch.yml").read_text()
+        self.assertIn("\n    if: github.event_name != 'schedule' || "
+                      "github.repository == 'taxjson/taxjson'\n", wf)
+        self.assertIn("TAXJSON_SLUG: taxjson/taxjson\n", wf)
+
     def test_workflow_is_daily_read_only_and_secret_free(self):
         wf = (REPO / ".github" / "workflows" / "privacy-watch.yml").read_text()
         self.assertRegex(wf, r"\n  schedule:\n    - cron: \"[^\"]+\"")
@@ -304,7 +370,9 @@ class TestCheckPublicDays(_Sandbox):
 
 # gh stand-in for land.sh's pull-request path. State in $LAND_STATE (JSON):
 # checks ("pass" | "fail" | "pending" | "none"), rules (required checks on
-# main?), auto_ok (may auto-merge be turned on?), auto, state, branch. A
+# main?), auto_ok (may auto-merge be turned on?), auto, state, branch, runs
+# (this branch's Actions run id), stale (a failed check from another
+# branch's run on the same commit, as after an earlier landing). A
 # merge rebases the branch's commits onto origin's main with GitHub as the
 # committer (new ids), as GitHub's rebase merge does.
 _LAND_GH = r"""#!/usr/bin/env python3
@@ -350,10 +418,17 @@ if args[:2] == ["pr", "view"]:
     if st.get("auto") and st["checks"] == "pass" and st["state"] == "OPEN":
         merge()
     print(st["state"]); sys.exit(0)
+if args[:2] == ["run", "list"]:
+    print(st.get("runs", "")); sys.exit(0)
 if args[:2] == ["pr", "checks"]:
+    if st.get("stale"):
+        print("ruff (critical tier)\tfail\t1m\t"
+              "https://github.com/o/r/actions/runs/1/job/5")
+    link = ("https://github.com/o/r/actions/runs/%s/job/9" % st["runs"]
+            if st.get("runs") else "https://x")
     if st["checks"] != "none":
         for name in ("ruff (critical tier)", "pii / new commits"):
-            print("%s\t%s\t1m\thttps://x" % (name, st["checks"]))
+            print("%s\t%s\t1m\t%s" % (name, st["checks"], link))
     sys.exit(0 if st["checks"] == "pass" else 8)
 if args[:2] == ["pr", "close"]:
     st["state"] = "CLOSED"; save(); sys.exit(0)
@@ -448,6 +523,20 @@ class TestLand(_Sandbox):
         self.assertEqual(create[create.index("--title") + 1], "one (+1 more)")
         self.assertEqual(self.git(self.dev, "rev-parse", "HEAD"),
                          self.origin_main())
+
+    def test_an_earlier_pull_requests_checks_are_not_this_ones(self):
+        # The same commit landed again: GitHub still shows the failed check
+        # of the last pull request's run; only this branch's run counts.
+        self.set_state(stale=True, runs="2")
+        self.commit()
+        r = self.land()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.git(self.dev, "rev-parse", "HEAD"),
+                         self.origin_main())
+        run_list = self.calls("run", "list")[0]
+        self.assertEqual(run_list[run_list.index("--branch") + 1],
+                         self.calls("pr", "create")[0][
+                             self.calls("pr", "create")[0].index("--head") + 1])
 
     def test_a_failed_check_closes_the_pull_request(self):
         self.set_state(rules=True, auto_ok=True, checks="fail")

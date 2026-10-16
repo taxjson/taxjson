@@ -123,9 +123,18 @@ while :; do
     MERGED) break ;;
     CLOSED) die "The pull request was closed without merging: $URL" 1 ;;
   esac
-  # `gh pr checks` prints "name<TAB>state<TAB>…" and exits non-zero while
-  # a check is pending or failed: read the states, not the exit code.
-  CHECKS="$({ gh pr checks "$URL" --repo "$SLUG" 2>/dev/null || true; } | awk -F'\t' 'NF >= 2')"
+  # `gh pr checks` prints "name<TAB>state<TAB>elapsed<TAB>link" and exits
+  # non-zero while a check is pending or failed: read the states, not the
+  # exit code. Its checks are the head commit's, so landing a commit again
+  # shows the last pull request's results until this one's run exists:
+  # an Actions check counts only when its run is on this branch.
+  RUNS="$(gh run list --repo "$SLUG" --branch "$BRANCH" --json databaseId --jq '[.[].databaseId | tostring] | join(" ")' 2>/dev/null || true)"
+  CHECKS="$({ gh pr checks "$URL" --repo "$SLUG" 2>/dev/null || true; } | awk -F'\t' -v runs="$RUNS" '
+    BEGIN { n = split(runs, r, " "); for (i = 1; i <= n; i++) mine[r[i]] = 1 }
+    NF >= 2 {
+      if (match($4, /\/actions\/runs\/[0-9]+\//) && !(substr($4, RSTART + 14, RLENGTH - 15) in mine)) next
+      print
+    }')"
   FAILED="$(printf '%s\n' "$CHECKS" | awk -F'\t' '$2 == "fail" || $2 == "cancel" { printf "%s, ", $1 }')"
   [ -z "$FAILED" ] || fail "Check(s) failed: ${FAILED%, } ($URL)"
   # Counted whole (wc reads everything): `grep -q` would stop early and,

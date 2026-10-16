@@ -2,8 +2,8 @@
 # Make a release, in two steps, so GitHub CI has passed on the very commit
 # that is tagged (docs/releasing.md, "Cutting a release"):
 #
-#   scripts/release.sh vX.Y.Z --prepare [--notes FILE] [--fresh-gate] [--gate-max-age DAYS]
-#   scripts/release.sh vX.Y.Z [--notes FILE]          # the cut, once CI passed
+#   scripts/release.sh vX.Y.Z --prepare [--fresh-gate] [--gate-max-age DAYS]
+#   scripts/release.sh vX.Y.Z                        # the cut, once CI passed
 #   (X.Y.Z also accepted)
 #
 # main is the development line; a vX.Y.Z tag is a release. Tagging makes
@@ -19,7 +19,8 @@
 #   3. bumps pyproject.toml and, in lockstep, the taxjson-fetch plugin's
 #      packages/taxjson-fetch/pyproject.toml (its version and its
 #      `taxjson>=` floor), reinstalls so `taxjson --version` agrees;
-#   4. scans the release notes (the CHANGELOG section, or --notes FILE)
+#   4. scans the release notes (the CHANGELOG section: what the public
+#      repo's release.yml publishes; scripts/release-notes.sh)
 #      with `scripts/check-pii.sh --message` before anything is committed;
 #   5. runs the FULL local gate (scripts/ci.sh, fuzzers included) — unless
 #      the gate already PASSED on this very tree (scripts/gate-record.sh:
@@ -33,32 +34,35 @@
 #      pass; the pre-push PII gate runs first). GitHub CI then runs on the
 #      push of the version commit to main.
 #
-# The cut (no --prepare) tags that commit and publishes the release. It
-# refuses unless local main is exactly origin/main, the version commit is
-# on main (the commit that made pyproject.toml say X.Y.Z, with the
-# CHANGELOG's "## vX.Y.Z (date)" heading and the plugin's version), the tag
-# is free here and on origin, and GitHub CI (tests.yml) passed on the push
-# of that exact commit to main (scripts/github-ci.sh: a run still going is
-# waited for, a failed one is named). It then scans the notes, makes the
-# annotated tag on the version commit, runs the pre-push gate on it,
-# pushes that one tag by name (never `git push --tags`), scans the notes
-# again and creates the GitHub release (`gh release create --verify-tag`).
-# A refused tag push deletes the local tag again.
+# The cut (no --prepare) tags that commit and pushes the tag to origin,
+# the private dev repo. It refuses unless local main is exactly
+# origin/main, the version commit is on main (the commit that made
+# pyproject.toml say X.Y.Z, with the CHANGELOG's "## vX.Y.Z (date)"
+# heading and the plugin's version), the tag is free here, on origin and
+# on the public repo (the remote `public`), and GitHub CI (tests.yml)
+# passed on the push of that exact commit to main (scripts/github-ci.sh: a
+# run still going is waited for, a failed one is named). It then scans the
+# notes, makes the annotated tag on the version commit, runs the pre-push
+# gate on it and pushes that one tag by name (never `git push --tags`). A
+# refused tag push deletes the local tag again.
+#
+# The publisher does the rest (docs/releasing.md, "How a release reaches
+# the public repo"): it gates the tag, waits, gates again and pushes one
+# release commit and the tag to the public repo, whose release.yml then
+# creates the GitHub release from the same CHANGELOG section.
 #
 # It never touches channels.json. Roll a bad release back by promoting the
 # previous good one (scripts/promote.sh vX.Y.Z — it asks before moving a
 # channel backwards) — never by moving or deleting a published tag.
 set -euo pipefail
-PWD0="$PWD"
-USAGE="usage: scripts/release.sh vX.Y.Z --prepare [--notes FILE] [--fresh-gate] [--gate-max-age DAYS]
-       scripts/release.sh vX.Y.Z [--notes FILE]      (the cut, once GitHub CI passed on the version commit)
+USAGE="usage: scripts/release.sh vX.Y.Z --prepare [--fresh-gate] [--gate-max-age DAYS]
+       scripts/release.sh vX.Y.Z      (the cut, once GitHub CI passed on the version commit)
        (X.Y.Z also accepted)"
-V=""; NOTES_IN=""; FRESH_GATE=""; GATE_MAX_AGE=""; PREPARE=""
+V=""; FRESH_GATE=""; GATE_MAX_AGE=""; PREPARE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --prepare) PREPARE=1; shift ;;
-    --notes) [ $# -ge 2 ] || { echo "--notes needs a file"; exit 1; }; NOTES_IN="$2"; shift 2 ;;
-    --notes=*) NOTES_IN="${1#--notes=}"; shift ;;
+    --notes|--notes=*) echo "--notes is gone: the release notes are the CHANGELOG's '## vX.Y.Z' section, which the public repo's release.yml publishes — edit that"; exit 1 ;;
     --fresh-gate) FRESH_GATE=1; shift ;;
     --gate-max-age) [ $# -ge 2 ] || { echo "--gate-max-age needs a number of days"; exit 1; }; GATE_MAX_AGE="$2"; shift 2 ;;
     --gate-max-age=*) GATE_MAX_AGE="${1#--gate-max-age=}"; shift ;;
@@ -73,10 +77,6 @@ if [ -z "$PREPARE" ] && { [ -n "$FRESH_GATE" ] || [ -n "$GATE_MAX_AGE" ]; }; the
 fi
 GATE_MAX_AGE="${GATE_MAX_AGE:-7}"
 [[ "$GATE_MAX_AGE" =~ ^[0-9]+$ ]] || { echo "--gate-max-age must be a whole number of days (got '$GATE_MAX_AGE')"; exit 1; }
-if [ -n "$NOTES_IN" ]; then
-  case "$NOTES_IN" in /*) ;; *) NOTES_IN="$PWD0/$NOTES_IN" ;; esac
-  [ -f "$NOTES_IN" ] && [ -r "$NOTES_IN" ] || { echo "--notes $NOTES_IN: not a readable file"; exit 1; }
-fi
 cd "$(dirname "$0")/.."
 V="${V#v}"                                   # vX.Y.Z and X.Y.Z both accepted
 [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be vX.Y.Z or X.Y.Z (got 'v$V')"; exit 1; }
@@ -85,18 +85,22 @@ VRE="${V//./\\.}"
 PY="${PYTHON:-$PWD/venv/bin/python3}"
 FETCH_TOML=packages/taxjson-fetch/pyproject.toml
 Z=0000000000000000000000000000000000000000
-# The GitHub repository: TAXJSON_SLUG, else origin's github.com address
-# (gh's own guess, when neither names one).
+# The dev repository, whose CI is checked: TAXJSON_SLUG, else origin's
+# github.com address.
 SLUG="${TAXJSON_SLUG:-$(git remote get-url origin | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//')}"
-REPO_ARGS=(); [ -z "$SLUG" ] || REPO_ARGS=(--repo "$SLUG")
+# The public repo, read only (its push URL is DISABLED): a tag name it has
+# is used for good (immutable releases).
+PUBLIC_REMOTE="${TAXJSON_PUBLIC_REMOTE:-public}"
 
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "release from main only"; exit 1; }
 # The pre-push PII gate must run, and main is published only through
 # land.sh: a checkout without them (or without the scanner the gate
 # calls) is refused before anything is changed.
-for f in scripts/hooks/pre-push scripts/check-pii.sh scripts/land.sh scripts/github-ci.sh; do
+for f in scripts/hooks/pre-push scripts/check-pii.sh scripts/land.sh scripts/github-ci.sh scripts/release-notes.sh; do
   [ -f "$f" ] || { echo "$f is missing from this checkout — the pre-push PII gate cannot run, so nothing is released"; exit 1; }
 done
+git remote get-url "$PUBLIC_REMOTE" >/dev/null 2>&1 || {
+  echo "no remote '$PUBLIC_REMOTE' for the public repo — add it, read only: git remote add --no-tags public https://github.com/taxjson/taxjson.git && git remote set-url --push public DISABLED"; exit 1; }
 if [ -n "$(git status --porcelain)" ]; then
   echo "working tree is not clean — commit or stash first:"; git status --porcelain | sed 's/^/    /'; exit 1
 fi
@@ -108,30 +112,30 @@ tag_free() {
   if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     echo "$TAG already exists in this clone (not on origin) — delete it (git tag -d $TAG) and run again"; exit 1
   fi
+  local pub
+  pub="$(git ls-remote --tags "$PUBLIC_REMOTE" "refs/tags/$TAG")" \
+    || { echo "could not read the public repo's tags ($PUBLIC_REMOTE) — nothing done"; exit 1; }
+  if [ -n "$pub" ]; then
+    echo "$TAG already exists on the public repo — a version is released once; make the next patch version"; exit 1
+  fi
 }
 tag_free
 
-# The release notes: the `## vX.Y.Z` section of the given CHANGELOG (or
-# --notes FILE), in a file of their own until the release exists.
+# The release notes: the `## vX.Y.Z` section of the given CHANGELOG, in a
+# file of their own while they are scanned.
 NOTES=""
 drop_notes() { [ -z "$NOTES" ] || rm -f "$NOTES"; }
 make_notes() {   # make_notes CHANGELOG-FILE
   NOTES="$(mktemp "${TMPDIR:-/tmp}/taxjson-notes-$TAG.XXXXXX")"
-  if [ -n "$NOTES_IN" ]; then
-    cat "$NOTES_IN" > "$NOTES"
-  else
-    awk -v h="## $TAG" 'index($0, h) == 1 && (length($0) == length(h) || substr($0, length(h) + 1, 1) == " ") { f = 1; next }
-                        f && /^## / { exit }
-                        f' "$1" \
-      | awk 'NF { b = 1 } b' | awk '{ l[NR] = $0 } NF { n = NR } END { for (i = 1; i <= n; i++) print l[i] }' > "$NOTES"
-  fi
-  [ -s "$NOTES" ] || { rm -f "$NOTES"; echo "release notes are empty (the CHANGELOG's '## $TAG' section, or --notes) — write them first"; exit 1; }
+  bash scripts/release-notes.sh "$TAG" "$1" > "$NOTES"
+  [ -s "$NOTES" ] || { rm -f "$NOTES"; echo "release notes are empty (the CHANGELOG's '## $TAG' section) — write them first"; exit 1; }
 }
-# Release notes are published apart from the code (no push hook sees
-# them). Fail closed: any hit or scanner error stops the release.
+# Release notes are published apart from the code (the public repo's
+# release.yml makes them the GitHub release). Fail closed: any hit or
+# scanner error stops the release.
 scan_notes() {
   if ! scripts/check-pii.sh --message < "$NOTES"; then
-    echo "release notes REFUSED by scripts/check-pii.sh --message ($1). Fix the notes (the CHANGELOG section or --notes FILE) and run again."
+    echo "release notes REFUSED by scripts/check-pii.sh --message ($1). Fix the notes (the CHANGELOG's '## $TAG' section) and run again."
     return 1
   fi
 }
@@ -243,15 +247,14 @@ if [ -n "$PREPARE" ]; then
     exit 1
   fi
   echo "prepared $TAG: the version commit $(git rev-parse --short HEAD) is on main; GitHub CI runs on it now (https://github.com/${SLUG:-taxjson/taxjson}/actions/workflows/tests.yml)."
-  echo "Once it has passed, cut the release: scripts/release.sh $TAG${NOTES_IN:+ --notes FILE}"
+  echo "Once it has passed, cut the release: scripts/release.sh $TAG"
   exit 0
 fi
 
 # ==== the cut: tag the version commit once GitHub CI passed on it ==========
-# gh answers the CI question and makes the release: without it nothing is
-# tagged.
+# gh answers the CI question: without it nothing is tagged.
 if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
-  echo "gh is $(command -v gh >/dev/null 2>&1 && echo 'not logged in (gh auth login)' || echo 'not installed') — the cut needs it to check GitHub CI and to create the release; nothing tagged."
+  echo "gh is $(command -v gh >/dev/null 2>&1 && echo 'not logged in (gh auth login)' || echo 'not installed') — the cut needs it to check GitHub CI; nothing tagged."
   drop_notes; exit 1
 fi
 AHEAD="$(git rev-list --count origin/main..HEAD)"; BEHIND="$(git rev-list --count HEAD..origin/main)"
@@ -311,18 +314,10 @@ if ! git push --quiet origin "refs/tags/$TAG"; then
   echo "the push of $TAG was refused — nothing published (the local tag is deleted again)"
   drop_notes; exit 1
 fi
-# The GitHub release, its notes scanned again right before it is created.
-GH_CMD="scripts/check-pii.sh --message < $NOTES && gh release create $TAG --verify-tag -t \"taxjson $TAG\" -F $NOTES${SLUG:+ --repo $SLUG}"
-scan_notes "$TAG is pushed; the release is NOT created. Fix the notes, then: $GH_CMD" || exit 1
-if ! gh release create "$TAG" --verify-tag -t "taxjson $TAG" -F "$NOTES" ${REPO_ARGS[@]+"${REPO_ARGS[@]}"}; then
-  echo "pushed $TAG, but gh release create FAILED. Retry with (the notes are kept in $NOTES):"
-  echo "    $GH_CMD"
-  exit 1
-fi
 rm -f "$NOTES"
 STABLE="$(git show origin/main:channels.json 2>/dev/null | sed -nE 's/.*"stable"[[:space:]]*:[[:space:]]*"(v[^"]+)".*/\1/p' | sed -n 1p || true)"
-echo "released $TAG — it is now 'latest' (installs on --channel latest get it on their next run)."
-echo "stable is still ${STABLE:-unset}; when $TAG has held up: scripts/promote.sh $TAG beta / scripts/promote.sh $TAG"
+echo "tagged $TAG on the dev repo. The publisher gates it, waits, gates it again and publishes it to the public repo, where release.yml creates the GitHub release; then it is 'latest'."
+echo "stable is still ${STABLE:-unset}; once $TAG is published and has held up: scripts/promote.sh $TAG beta / scripts/promote.sh $TAG"
 # The tag covers both distributions (the installer installs the plugin
 # from the same checkout by default). To publish wheels as well:
 #   python -m build && python -m build packages/taxjson-fetch

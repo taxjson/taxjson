@@ -2,13 +2,22 @@ name: tests
 
 # NOTE: the authoritative gate is scripts/ci.sh, run locally before every
 # push; this workflow mirrors its stages (lint, consistency, tax-rules,
-# PII, suite, fuzz) for pull requests on the public repo. The PII stage
+# PII, suite, fuzz) for pull requests and pushes to main in the private
+# dev repo, and for each release the publisher pushes to the public repo. The PII stage
 # here has no private denylist, so it applies the generic patterns
 # (account-id shapes, home paths, e-mails, credentials) — enough to stop
 # a PR that carries a real-looking id before it is merged — to the tree
 # and, on a pull request, to every commit it adds (patch, message,
 # identities), as the pre-push hook does. macOS runners
-# are excluded to keep the matrix fast.
+# are excluded to keep the matrix fast. The nightly schedule runs on the
+# public repo only (every job's `if:` skips it elsewhere): the dev repo is
+# private, its runners are billed by the minute, and a nightly run there
+# would use more than a month's included minutes. For the same reason
+# the dev repo's jobs run on its own self-hosted runner (label
+# taxjson-dev; the maintainer's machine, as a user of its own) and the
+# public repo's on GitHub's: every job's runs-on says so. Each job that
+# installs anything does it in a fresh virtualenv: a self-hosted runner
+# keeps its Python between jobs.
 on:
   push:
     branches: [main]
@@ -22,10 +31,10 @@ on:
 # commit SHA (a moved tag cannot change what runs), the version beside it,
 # and runners to an explicit image (ubuntu-24.04, never ubuntu-latest: the
 # image changes only when we choose; tests/test_fix_release_hardening.py
-# checks both). The required checks of main's ruleset are these jobs'
-# names (docs/releasing.md, "main takes pull requests only"): every job
-# that runs on a pull request runs on EVERY pull request (no paths filter,
-# no `if:` that skips one), so a required check never waits forever.
+# checks both). scripts/land.sh merges a pull request once every check
+# has passed (docs/releasing.md, "main takes pull requests only"): every
+# job that runs on a pull request runs on EVERY pull request (no paths
+# filter, no `if:` that skips one), so none is missing from that wait.
 # Every checkout leaves no token behind (persist-credentials: false) and
 # every job has a timeout, so a hung step cannot hold a runner for hours.
 permissions:
@@ -36,8 +45,9 @@ jobs:
     # Critical-tier only (syntax errors, undefined names, misused
     # comparisons): the class of defect that once let a dead parameter
     # survive five audit cycles. Style rules are deliberately excluded.
+    if: github.event_name != 'schedule' || github.repository == 'taxjson/taxjson'
     name: ruff (critical tier)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'taxjson/taxjson' && 'ubuntu-24.04' || 'taxjson-dev' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -46,14 +56,19 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
+      - name: A fresh virtualenv (a self-hosted runner keeps its Python between jobs)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - run: pip install ruff==0.16.8      # pinned: a new release cannot change the gate
       - run: ruff check --select E9,F63,F7,F82 src/ tests/ packages/
 
   gates:
     # The ci.sh stages besides lint and the suite: release consistency,
     # the tax-logic spec gate, and the PII scan of the whole tree.
+    if: github.event_name != 'schedule' || github.repository == 'taxjson/taxjson'
     name: consistency / tax-rules / pii
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'taxjson/taxjson' && 'ubuntu-24.04' || 'taxjson-dev' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -62,6 +77,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
+      - name: A fresh virtualenv (a self-hosted runner keeps its Python between jobs)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - run: pip install -e .
       - run: bash scripts/check-consistency.sh
       - run: python scripts/check_tax_rules.py
@@ -78,8 +97,9 @@ jobs:
     # reports ordinary secrets whatever they are called — is the BASE's
     # copy too, run against the config the pull request proposes, so it
     # cannot weaken the test its own config must pass either.
+    if: github.event_name != 'schedule' || github.repository == 'taxjson/taxjson'
     name: secrets (gitleaks)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'taxjson/taxjson' && 'ubuntu-24.04' || 'taxjson-dev' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -97,8 +117,13 @@ jobs:
           set -euo pipefail
           V=8.28.0
           cd "$RUNNER_TEMP"
-          curl -fsSL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$V/gitleaks_${V}_linux_x64.tar.gz"
-          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  gl.tgz" | sha256sum -c -
+          case "$RUNNER_ARCH" in   # hosted runners are X64; the dev repo's own runner may be ARM64
+            X64) A=x64 S=a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb ;;
+            ARM64) A=arm64 S=eff65261156100e5d94a6b3dec313d532fddfe19ae1590bf7a2b4f2699128356 ;;
+            *) echo "no pinned gitleaks for $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$V/gitleaks_${V}_linux_${A}.tar.gz"
+          echo "$S  gl.tgz" | sha256sum -c -
           tar -xzf gl.tgz gitleaks
           cd "$GITHUB_WORKSPACE"
           if [ -n "${BASE:-}" ] && git cat-file -e "$BASE:.gitleaks.toml" 2>/dev/null; then
@@ -143,7 +168,7 @@ jobs:
     # check it is judged by.
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     name: pii / new commits
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'taxjson/taxjson' && 'ubuntu-24.04' || 'taxjson-dev' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -179,8 +204,9 @@ jobs:
             | sort -u | bash "$check" --identity
 
   test:
+    if: github.event_name != 'schedule' || github.repository == 'taxjson/taxjson'
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ github.repository == 'taxjson/taxjson' && matrix.os || 'taxjson-dev' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -197,6 +223,10 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
+      - name: A fresh virtualenv (a self-hosted runner keeps its Python between jobs)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Install package
         run: |
@@ -223,8 +253,9 @@ jobs:
     # analytics code paths (yfinance, pandas...) are actually
     # imported in CI instead of silently skipping — the extras rotted
     # undetected before this job existed.
+    if: github.event_name != 'schedule' || github.repository == 'taxjson/taxjson'
     name: ubuntu-24.04 / Python 3.12 / all extras
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'taxjson/taxjson' && 'ubuntu-24.04' || 'taxjson-dev' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -233,6 +264,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
+      - name: A fresh virtualenv (a self-hosted runner keeps its Python between jobs)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Install package with all extras
         run: |
           python -m pip install --upgrade pip
@@ -243,10 +278,10 @@ jobs:
   fuzz-nightly:
     # The three property fuzzers at nightly depth (the suite runs them
     # at 200/150/200 books; this is 5000/3000/1600). Only on the
-    # schedule or a manual dispatch — too slow for every push.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # schedule (public repo) or a manual dispatch — too slow for every push.
+    if: (github.event_name == 'schedule' && github.repository == 'taxjson/taxjson') || github.event_name == 'workflow_dispatch'
     name: ubuntu-24.04 / Python 3.12 / nightly fuzz
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'taxjson/taxjson' && 'ubuntu-24.04' || 'taxjson-dev' }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -255,6 +290,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
+      - name: A fresh virtualenv (a self-hosted runner keeps its Python between jobs)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - run: pip install -e .
       - name: Deep fuzz
         env:

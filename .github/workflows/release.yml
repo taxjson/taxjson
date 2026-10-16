@@ -1,0 +1,49 @@
+name: release
+
+# The GitHub release for a tag the publisher pushed (docs/releasing.md,
+# "How a release reaches the public repo"). Nobody pushes to this repo but
+# the publisher: it gated the tag's tree and these notes twice, waited, and
+# pushed one release commit and an annotated vX.Y.Z tag. This job creates
+# the release from that tag's CHANGELOG section (scripts/release-notes.sh,
+# the notes the gate scanned), after one more scan with the generic
+# patterns. It runs only on the public repo, never in the private dev repo
+# the same file lives in. Releases are immutable: once created, the tag and
+# assets are locked (the title and notes stay editable). Run again, it
+# leaves an existing release alone.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: GitHub release
+    if: github.repository == 'taxjson/taxjson'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The one write any workflow here has: creating this tag's release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The release notes, scanned
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG"; exit 1; }
+          bash scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
+          [ -s "$RUNNER_TEMP/notes.md" ] || { echo "CHANGELOG.md has no '## $TAG' section"; exit 1; }
+          bash scripts/check-pii.sh --message < "$RUNNER_TEMP/notes.md"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$TAG already has its release"; exit 0
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag -t "taxjson $TAG" -F "$RUNNER_TEMP/notes.md"

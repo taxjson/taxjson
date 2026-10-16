@@ -1339,7 +1339,8 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Build the books", ("run", "crypto-sends", "find-missing-history",
                          "opening")),
     ("Summaries", ("amt", "div-estimate", "estimate", "fx-cash",
-                   "instalments", "stats", "sum")),
+                   "instalments", "option-yield", "plot-tax", "stats",
+                   "sum", "win-rates")),
     ("Positions", ("list", "shares")),
     ("Row listings", ("dil", "divs", "events", "fees", "gains", "leaps",
                       "roc", "trades", "transfers")),
@@ -10037,11 +10038,15 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
         # repr(): EXACT round-trip. The old :.8f truncated a 9-decimal
         # crypto qty, so re-importing the view produced a different
         # transaction id — dedup missed and every trade double-booked
-        # (REVIEW #19).
+        # (REVIEW #19). Written out in full, never 5e-08: a .tt field
+        # a person reads and a parser takes alike.
+        from decimal import Decimal
         s = repr(float(x or 0))
-        if s.endswith(".0"):
-            s = s[:-2]
-        return "0" if s in ("", "-0") else s
+        if "e" in s or "E" in s:
+            s = format(Decimal(s), "f")
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return "0" if s in ("", "-0", "-") else s
 
     action = tx.get("action", "")
     date = tx.get("date", "")
@@ -10403,10 +10408,14 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         print(f"(no {label} rows in this window)")
         return
     # numeric_right: quantities, per-share rates, and amounts line up
-    # on their decimal points, same as the report tables. The rows
-    # stay whitespace-tokenized taxtext — extra padding parses
-    # identically when pasted into a .tt file.
-    for aligned in _align_columns(out_lines, numeric_right=True):
+    # on their decimal points, same as the report tables, with a
+    # single-space gap. The rows stay whitespace-tokenized taxtext —
+    # extra padding parses identically when pasted into a .tt file.
+    # No header: a row with one more field (a dividend's net amount
+    # after withholding) keeps its columns instead of being merged
+    # leftwards.
+    for aligned in _align_columns(out_lines, numeric_right=True,
+                                  header=False):
         print(aligned)
 
     # Per-currency totals footer. Only the categories actually present print,
@@ -12020,60 +12029,22 @@ def cmd_stats(args: argparse.Namespace) -> None:
     wash-sale denial, the denied total on its own line. A view, never a
     filing number."""
     from taxjson.lib import trade_stats
-    from taxjson.lib.report_model import resolve_gains_files
     root = Path(args.dir).resolve()
-    cache = root / "work"
     if args.all_history:
         if args.period and _is_period(args.period):
             _die_input("give a YEAR or --all-history, not both")
         if args.period and args.account is None:
             args.account, args.period = args.period, None
         args.period = "all"
-    keep, scope, account = _view_window(args, root)
     settings = _soft_settings(root)
     country = _country(settings)
     usa = country == "usa"
-    groups = _account_group_of(root)
-    resolved = resolve_gains_files(cache, account or None)
-    _warn_gains_artifact_scope(resolved, _period_token(args), root)
-    if not account:
-        # Taxable accounts by default; a sheltered one only when named.
-        resolved = {a: f for a, f in resolved.items()
-                    if groups.get(a) != "sheltered"}
-        if resolved:
-            _warn_accounts_without_books(
-                root, list(resolved) + [a for a, g in groups.items()
-                                        if g == "sheltered"],
-                "stats", "gains file")
-    if not resolved:
-        what = (f"account {account!r}" if account else "a taxable account")
-        _die(f"no books for {what} in work/ — run `taxjson run` first")
-    books: Dict[str, list] = {}
-    gains: Dict[str, Dict[str, Any]] = {}
-    for acct, path in resolved.items():
-        gains[acct] = _load_json_or_die(path)
-        bpath = cache / f"{acct}_base.json"
-        if not bpath.is_file():
-            _die(f"no base-currency book for account {acct!r} "
-                 f"(work/{bpath.name})", "Run `taxjson run` first.")
-        books[acct] = list(_load_json_or_die(bpath).get("transactions")
-                           or [])
-    settle = _settle_basis(root, next(iter(gains.values())))
-    from taxjson.lib.crypto_sends import crypto_accounts
-    # The gains files of a year project hold that tax year only; the
-    # written options (rebuilt from the whole-history base book) keep
-    # to the same span.
-    _years = {str((d.get("summary") or {}).get("year") or "")
-              for d in gains.values()}
-    _by = next(iter(_years)) if len(_years) == 1 else ""
-    in_books = None
-    if re.fullmatch(r"\d{4}", _by):
-        def in_books(r, _y=_by):
-            d = (r.get("date_settle") if settle else None) or r.get("date")
-            return str(d or "").startswith(_y)
-    res = trade_stats.compute(
-        gains, books, keep, lambda r: _gains_row_date(r, keep, settle),
-        crypto_accounts(_soft_config(root)), in_books)
+    inp = _closed_trade_inputs(args, root, "stats")
+    keep, scope, account = inp["keep"], inp["scope"], inp["account"]
+    groups, resolved = inp["groups"], inp["resolved"]
+    res = trade_stats.compute(inp["gains"], inp["books"], keep,
+                              inp["date_of"], inp["crypto"],
+                              inp["in_books"])
     base = _base_currency(root)
     sheltered = bool(account) and groups.get(account) == "sheltered"
     rule = "wash-sale" if usa else "superficial-loss"
@@ -12860,6 +12831,316 @@ def cmd_div_estimate(args: argparse.Namespace) -> None:
         _json_out(doc)
         return
     DE.render(doc, _details(args)).print()
+
+def _closed_trade_inputs(args: argparse.Namespace, root: Path,
+                         label: str) -> Dict[str, Any]:
+    """What `stats` and `win-rates` read (lib/trade_stats): the window
+    and account of the positionals, each account's gains document and
+    base-currency book (taxable accounts by default; a sheltered one
+    only when named), the row-dating closure and the span the written
+    options keep to (a year project's gains files hold one tax year)."""
+    from taxjson.lib.crypto_sends import crypto_accounts
+    from taxjson.lib.report_model import resolve_gains_files
+    cache = root / "work"
+    keep, scope, account = _view_window(args, root)
+    groups = _account_group_of(root)
+    resolved = resolve_gains_files(cache, account or None)
+    _warn_gains_artifact_scope(resolved, _period_token(args), root)
+    if not account:
+        # Taxable accounts by default; a sheltered one only when named.
+        resolved = {a: f for a, f in resolved.items()
+                    if groups.get(a) != "sheltered"}
+        if resolved:
+            _warn_accounts_without_books(
+                root, list(resolved) + [a for a, g in groups.items()
+                                        if g == "sheltered"],
+                label, "gains file")
+    if not resolved:
+        what = (f"account {account!r}" if account else "a taxable account")
+        _die(f"no books for {what} in work/ — run `taxjson run` first")
+    books: Dict[str, list] = {}
+    gains: Dict[str, Dict[str, Any]] = {}
+    for acct, path in resolved.items():
+        gains[acct] = _load_json_or_die(path)
+        bpath = cache / f"{acct}_base.json"
+        if not bpath.is_file():
+            _die(f"no base-currency book for account {acct!r} "
+                 f"(work/{bpath.name})", "Run `taxjson run` first.")
+        books[acct] = list(_load_json_or_die(bpath).get("transactions")
+                           or [])
+    settle = _settle_basis(root, next(iter(gains.values())))
+    # The gains files of a year project hold that tax year only; the
+    # written options (rebuilt from the whole-history base book) keep
+    # to the same span.
+    _years = {str((d.get("summary") or {}).get("year") or "")
+              for d in gains.values()}
+    _by = next(iter(_years)) if len(_years) == 1 else ""
+    in_books = None
+    if re.fullmatch(r"\d{4}", _by):
+        def in_books(r, _y=_by):
+            d = (r.get("date_settle") if settle else None) or r.get("date")
+            return str(d or "").startswith(_y)
+    return {"keep": keep, "scope": scope, "account": account,
+            "groups": groups, "resolved": resolved, "gains": gains,
+            "books": books, "settle": settle, "in_books": in_books,
+            "date_of": lambda r: _gains_row_date(r, keep, settle),
+            "crypto": crypto_accounts(_soft_config(root))}
+
+
+def cmd_win_rates(args: argparse.Namespace) -> None:
+    """`taxjson win-rates [SYMBOL...] [PERIOD] [ACCOUNT] [--by
+    symbol|account|month|class] [--all-history] [--json]`: the win
+    rate of every closed trade in the window, grouped per share
+    listing (an option under its underlying) by default, else per
+    account, month of the close or asset class (lib/trade_stats
+    closed_trades + group) — economic P/L in the base currency before
+    any superficial-loss / wash-sale denial, as `stats` counts it. A
+    view, never a filing number."""
+    from taxjson.lib import trade_stats
+    from taxjson.lib.option_yield import underlying_matches
+    root = Path(args.dir).resolve()
+    settings = _soft_settings(root)
+    usa = _country(settings) == "usa"
+    accounts_cfg = (_soft_config(root).get("accounts") or {})
+    # The positionals: a period token, an account name, the rest are
+    # symbols (`win-rates QQQ 1y margin`), in any order.
+    period = account = None
+    syms: List[str] = []
+    for tok in (args.items or []):
+        t = str(tok or "").strip()
+        if not t:
+            continue
+        if period is None and _is_period(t):
+            period = t
+        elif account is None and t in accounts_cfg:
+            account = t
+        elif t[:1].isdigit() and not _is_period(t):
+            _tx_period_cutoff(t)                # sys.exits: invalid period
+        else:
+            syms.append(t.upper())
+    if args.all_history:
+        if period:
+            _die_input("give a PERIOD or --all-history, not both")
+        period = "all"
+    args.period, args.account = period, account
+    inp = _closed_trade_inputs(args, root, "win-rates")
+    res = trade_stats.closed_trades(inp["gains"], inp["books"], inp["keep"],
+                                    inp["date_of"], inp["crypto"],
+                                    inp["in_books"])
+    trades = res["trades"]
+    unmatched: List[str] = []
+    if syms:
+        trades = [t for t in trades
+                  if underlying_matches(t["underlying"], syms)
+                  or t["symbol"].upper() in syms]
+        for w in syms:
+            if not any(underlying_matches(t["underlying"], [w])
+                       or t["symbol"].upper() == w for t in trades):
+                unmatched.append(w)
+    g = trade_stats.group(trades, args.by)
+    base = _base_currency(root)
+    scope, account = inp["scope"], inp["account"]
+    sheltered = bool(account) and inp["groups"].get(account) == "sheltered"
+    rule = "wash-sale" if usa else "superficial-loss"
+    doc = dict(g, scope=scope, currency=base,
+               accounts=sorted(inp["resolved"]), sheltered=sheltered,
+               symbols=syms, unmatched_symbols=unmatched,
+               basis=f"economic P/L before any {rule} denial",
+               denied_total=res["denied_total"],
+               denied_count=res["denied_count"],
+               tainted_skipped=res["tainted_skipped"])
+    if getattr(args, "json", False):
+        _json_out(doc)
+        return
+    money = fmt_money
+
+    def _m(v):
+        return "-" if v is None else money(v)
+
+    def _row(label, st, classes=None):
+        wr = ("-" if st["win_rate"] is None
+              else f"{st['win_rate'] * 100:.1f}%")
+        pf = ("-" if st["profit_factor"] is None
+              else f"{st['profit_factor']:.2f}")
+        row = [label, str(st["trades"]), str(st["wins"]),
+               str(st["losses"]), wr, money(st["net_pl"]),
+               _m(st["avg_win"]), _m(st["avg_loss"]), pf]
+        if args.by != "class":
+            row.append(", ".join(f"{k} {n}" for k, n in
+                                 (classes or {}).items()) or "-")
+        return row
+    kind = ("retirement (IRA)" if usa else "registered")
+    who = (f"account {account}" + (f" — {kind}, not taxable events"
+                                   if sheltered else "")
+           if account else
+           f"taxable accounts: {', '.join(sorted(inp['resolved']))}")
+    head = {"symbol": "TICKER", "account": "ACCOUNT", "month": "MONTH",
+            "class": "CLASS"}[args.by]
+    from taxjson.lib.out import Doc, act, details_hint
+    d = Doc(f"WIN RATES — {scope} ({base}; {who}), by {head.lower()}")
+    d.para(f"Economic P/L in {base} before any {rule} denial: how the "
+           f"trades went, not a filing number. WIN_RATE = wins / trades "
+           f"(a break-even trade is neither); PROFIT_FACTOR = gross wins "
+           f"/ gross losses"
+           + ("; an option counts under its underlying."
+              if args.by == "symbol" else "."))
+    headers = [head, "TRADES", "WINS", "LOSSES", "WIN_RATE", "NET_P/L",
+               "AVG_WIN", "AVG_LOSS", "PROFIT_FACTOR"]
+    aligns = ["<", ">", ">", ">", ">", ">", ">", ">", ">"]
+    drop = (6, 7, 8)
+    if args.by != "class":
+        headers.append("CLASSES")
+        aligns.append("<")
+        drop = (9, 6, 7, 8)
+    if g["rows"]:
+        d.table(headers,
+                [_row(r["key"], r, r.get("classes")) for r in g["rows"]],
+                foot=[_row("TOTAL", g["total"], None)], aligns=aligns,
+                drop=drop)
+    else:
+        d.para("No closed trade in the window.")
+    d.blank()
+    d.para(f"Denied by the {rule} rule (NOT subtracted above): "
+           f"{money(res['denied_total'])} {base} over "
+           f"{res['denied_count']} disposition(s).")
+    acts = []
+    if res["tainted_skipped"]:
+        acts.append(act(f"{res['tainted_skipped']} disposition(s) with an "
+                        f"unknown cost are not counted",
+                        "tjs find-missing-history"))
+    for w in unmatched:
+        acts.append(act(f"{w}: no closed trade on it in the window",
+                        "tjs trades"))
+    if acts:
+        d.blank()
+        for a in acts:
+            d.item(a[len(_out_act_prefix()):], bullet=_out_act_prefix())
+    d.para(details_hint("tjs stats", "the same trades per asset class"))
+    d.print()
+
+
+def _out_act_prefix() -> str:
+    from taxjson.lib import out as _out
+    return _out.ACT
+
+
+def cmd_option_yield(args: argparse.Namespace) -> None:
+    """`taxjson option-yield [UNDERLYING...] [PERIOD] [ACCOUNT] [--json]`:
+    how the option trades on an underlying did over a window — premiums
+    in and out, the profit or loss of the contracts closed in it and
+    how they closed, what is still open, and the yield on the strike
+    notional at risk, time-weighted and annualized (lib/option_yield;
+    CA-PLAN-07 / US-PLAN-08). The contracts are matched per account and
+    series from the native books (work/<acct>_raw.json), every account
+    read so a contract opened before the window still closes in it.
+    Planning numbers only."""
+    from taxjson.lib import markets
+    from taxjson.lib import option_yield as OY
+    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    root = Path(args.dir).resolve()
+    cache = root / "work"
+    settings = _soft_settings(root)
+    _country(settings)                      # refuses a project w/o country
+    accounts_cfg = (_soft_config(root).get("accounts") or {})
+    # The positionals: a period token, an account name, the rest are
+    # underlyings (`option-yield QQQ 1y margin`), in any order.
+    period = account = None
+    unds: List[str] = []
+    for tok in (args.items or []):
+        t = str(tok or "").strip()
+        if not t:
+            continue
+        if period is None and _is_period(t):
+            period = t
+        elif account is None and t in accounts_cfg:
+            account = t
+        elif t.strip()[:1].isdigit() and not _is_period(t):
+            _tx_period_cutoff(t)                # sys.exits: invalid period
+        else:
+            unds.append(t.upper())
+    args.period, args.account = period, account
+    keep, scope, account = _view_window(args, root)
+    if not cache.is_dir():
+        _die("no work/ — run `taxjson run` first.")
+    accounts = ([account] if account else _discover_tx_accounts(cache))
+    if account and _native_tx_file(cache, account) is None:
+        _die(f"no native transaction file for account {account!r} in "
+             f"work/ — run `taxjson run` first, or check the name")
+    if not accounts:
+        _die("no transaction files in work/ — run `taxjson run` first")
+    if not account:
+        _warn_accounts_without_books(root, accounts, "option-yield",
+                                     "transaction file")
+    rows: List[Tuple[str, Dict[str, Any]]] = []
+    first = ""
+    # Every account's rows: the contracts are matched per account, and
+    # an account filter keeps only that account's contracts.
+    for n in _discover_tx_accounts(cache):
+        if (accounts_cfg.get(n) or {}).get("crypto"):
+            continue
+        native = _native_tx_file(cache, n)
+        if native is None:
+            continue
+        for t in (_load_json_or_die(native).get("transactions") or []):
+            if not isinstance(t, dict):
+                continue
+            d = str(t.get("date") or "")
+            if _ISO_DATE_RE.match(d) and (not first or d < first):
+                first = d
+            rows.append((n, t))
+    today = date_cls.today().isoformat()
+    ty = getattr(keep, "tax_year", None)
+    if ty:
+        start, end = f"{ty}-01-01", f"{ty}-12-31"
+    elif period and period.strip().lower() in ("all", "max"):
+        start, end = (first or today), today
+    elif period:
+        start, end = _tx_period_cutoff(period).isoformat(), today
+    else:
+        start, end = (first or today), today
+    end = min(end, today)
+    if start > end:
+        start = end
+
+    def _size(t: Dict[str, Any]) -> float:
+        sym = str(t.get("symbol") or "").upper()
+        root_ = (parse_option_underlying(sym) or "").split(".", 1)[0]
+        ovr = markets.contract_size(sym, root_)
+        return float(ovr) if ovr else OY.default_size(t)
+    # The books as of the window's end: a later split or rename does
+    # not rewrite the window's counts (audit R10).
+    lots = OY.contracts(rows, size_of=_size, through=end)
+    # The underlying's shares held now, per account (the native
+    # holdings, as div-estimate reads them): the yield's capital.
+    shares: Dict[Tuple[str, str], Tuple[float, float]] = {}
+    for n in _discover_tx_accounts(cache):
+        if (accounts_cfg.get(n) or {}).get("crypto"):
+            continue
+        inv = cache / f"{n}_raw_gains.json"
+        if not inv.exists():
+            continue
+        for h in (_load_json_or_die(inv).get("inventory") or []):
+            sym = str((h or {}).get("symbol") or "").strip().upper()
+            qty = float((h or {}).get("qty") or 0.0)
+            if (not sym or qty <= 1e-9 or sym.startswith("CASH.")
+                    or is_option_symbol(sym)):
+                continue
+            q0, c0 = shares.get((n, sym), (0.0, 0.0))
+            shares[(n, sym)] = (q0 + qty,
+                                c0 + float((h or {}).get("total_cost") or 0.0))
+    doc = OY.analyze(lots, start=start, end=end, scope=scope,
+                     underlyings=unds,
+                     accounts=([account] if account else None),
+                     groups=_account_group_of(root), shares=shares)
+    if getattr(args, "json", False):
+        _json_out(doc)
+        return
+    from taxjson.lib.out import width as _w
+    if _w(sys.stderr) > 0:
+        # A blank line between the run-state banner (stderr) and the
+        # report, for a person at a terminal; stdout stays as styled.
+        print(file=sys.stderr)
+    OY.render(doc).print()
 
 def cmd_dil_sum(args: argparse.Namespace) -> None:
     """Payment-in-lieu summary over a window (default: the tax year):
@@ -14042,6 +14323,150 @@ def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
             est["cg_div"] += cg
 
 
+def _fold_estimate_income(res: Dict[str, Any], acct: str,
+                          est: Dict[str, float],
+                          foreign_by_acct: Dict[str, float], *,
+                          crypto: bool, issuer_ca: Dict[str, bool]) -> None:
+    """Add one taxable account's `summarize_gains` aggregates to the
+    estimator's inputs: realized gains (and their ST/LT split), its
+    dividends as Canadian (eligible), foreign (`foreign_by_acct` too,
+    for the FTC) or, in a crypto account, staking rewards (ordinary
+    income, nothing withheld — not foreign dividends with an assumed
+    15% FTC), and the payments in lieu. `sum` / `estimate` and
+    `plot-tax` feed the estimator through this one path."""
+    from taxjson.lib.income_dating import is_canadian_listing
+    for ticker, cur_map in res.get("ticker_stats", {}).items():
+        # The issuer's ISIN country when the books carry it, else the
+        # listing (A2-0319, A2-0662).
+        is_ca_listed = issuer_ca.get(ticker, is_canadian_listing(ticker))
+        for s in cur_map.values():
+            est["realized"] += (float(s.get("cap", 0) or 0)
+                                + float(s.get("opt", 0) or 0))
+            est["st"] += float(s.get("st_gain", 0) or 0)
+            est["lt"] += float(s.get("lt_gain", 0) or 0)
+            d = float(s.get("div", 0) or 0)
+            if crypto:
+                est["staking"] += d
+            elif is_ca_listed:
+                est["div_ca"] += d
+            else:
+                est["div_foreign"] += d
+                foreign_by_acct[acct] = foreign_by_acct.get(acct, 0.0) + d
+            est["pil"] += float(s.get("pil", 0) or 0)
+
+
+def cmd_plot_tax(args: argparse.Namespace) -> None:
+    """`taxjson plot-tax [--other-income AMT] [--other-losses AMT]
+    [--deductions AMT] [--carrying-charges AMT] [--long-term-losses
+    AMT] [--province P] [--json]`: the tax the year's investment income
+    generated month by month as an ASCII chart against the year's
+    estimate (lib/tax_plot; CA-PLAN-08 / US-PLAN-09). The estimator
+    `estimate` uses runs once per month on the taxable accounts' gains
+    and income dated up to the month's end (the same inputs, the same
+    code path); a month's tax is that run less the month before's.
+    Planning numbers only."""
+    from taxjson.bin.taxjson_sum_gains import summarize_gains
+    from taxjson.lib import tax_plot as TP
+    from taxjson.lib.report_model import resolve_gains_files
+    root = Path(args.dir).resolve()
+    cache = root / "work"
+    cfg = load_config(root) if _PL.has_config(root) else {}
+    if not cfg:
+        _die("the tax estimate needs taxjson.toml",
+             "It reads the country and the account types from it.")
+    settings = cfg.get("settings") or {}
+    country = _country(settings)
+    year = settings.get("year")
+    if year is None:
+        _die("no `year` under [settings] in taxjson.toml",
+             "The chart is the project's tax year, month by month.")
+    year = int(year)
+    prov = None
+    if country == "canada":
+        from taxjson.lib import tax_estimate as _te
+        prov = (getattr(args, "province", None)
+                or str(settings.get("province", "") or "")).strip()
+        _te.apply_vintage(year)
+        if not prov:
+            _die("the canada estimate needs a province",
+                 "Pass --province ON|BC|AB or set `province` under "
+                 "[settings] in taxjson.toml.")
+        if prov.upper() not in _te.CA_PROVINCES:
+            _die(f"unsupported province {prov!r} for the estimate",
+                 f"Supported: {', '.join(sorted(_te.CA_PROVINCES))}.")
+    taxable = {n for n, c in (cfg.get("accounts") or {}).items()
+               if c.get("type") == "taxable"}
+    files = {a: p for a, p in resolve_gains_files(cache, None).items()
+             if a in taxable}
+    if not files:
+        _die("no gains files for a taxable account in work/",
+             "Run `taxjson run` first.")
+    _warn_artifact_year(files, year)
+    _warn_run_state(root, cfg)
+    oi, ol = _estimate_inputs(root, args)
+    ded, cc = _estimate_deductions(root, args)
+    ltl = _estimate_lt_losses(root, args)
+    ol, ltl, amt_in, carry_src = _carry_inputs(root, args, cfg, ol, ltl)
+    carry_src["other_income_value"] = oi
+    docs: Dict[str, Dict[str, Any]] = {}
+    for acct, p in files.items():
+        try:
+            docs[acct] = _read_work_doc(p)
+        except (OSError, ValueError) as e:
+            _die(f"could not read {p.name}: {e}",
+                 "A taxable account's gains cannot be left out. Re-run "
+                 "`taxjson run` to rebuild it.")
+    settle = _settle_basis(root, next(iter(docs.values())))
+    keep = _year_keep(str(year))
+
+    def date_of(t):
+        return _gains_row_date(t, keep, settle)
+    issuer_ca = {a: _issuer_is_canadian_by_symbol(cache, a) for a in docs}
+    crypto = {n for n, c in (cfg.get("accounts") or {}).items()
+              if c.get("crypto")}
+
+    def inputs(through: Optional[str]):
+        est = dict(realized=0.0, st=0.0, lt=0.0, div_ca=0.0,
+                   div_foreign=0.0, pil=0.0, staking=0.0)
+        fba: Dict[str, float] = {}
+        for a, doc in docs.items():
+            sl = TP.slice_doc(doc, date_of, through) if through else doc
+            _fold_estimate_income(summarize_gains(sl), a, est, fba,
+                                  crypto=a in crypto,
+                                  issuer_ca=issuer_ca[a])
+        return est, fba
+
+    def run(est):
+        return _tax_estimate_result(
+            cfg, est, other_income=oi, other_losses=ol, province=prov,
+            deductions=ded, carrying_charges=cc, lt_losses=ltl,
+            amt_carryover=amt_in, carry_sources=carry_src)
+    points = []
+    for m in TP.months_of_year(year):
+        r = run(inputs(TP.month_end(m))[0])
+        points.append({"month": m, "cum_tax": r["estimated_tax"],
+                       "cum_income": r["investment_income"]})
+    # The year as `estimate` computes it: the T5 box 18 capital-gains
+    # dividends and the US §1256 fold are dated to the year.
+    est, fba = inputs(None)
+    _box18_into_estimate(root, est, set(docs), year, fba)
+    if country in ("us", "usa"):
+        est["s1256"] = _section_1256_gain(files, set(files), year, settings)
+    ry = run(est)
+    base = _base_currency(root)
+    label = (f"canada/{prov.upper()}" if country == "canada" else "usa")
+    doc = TP.build(points, year=year, base=base,
+                   year_estimate=ry["estimated_tax"],
+                   year_income=ry["investment_income"], label=label,
+                   accounts=docs, with_amt=ry.get("estimated_tax_with_amt"),
+                   other_income=oi)
+    if getattr(args, "json", False):
+        _json_out(doc)
+        return
+    from taxjson.lib import out as _out
+    TP.render(doc, _out.width(sys.stdout)).print()
+
+
 def cmd_summary(args: argparse.Namespace) -> None:
     """One-row-per-account realized-gains summary (base currency) on the
     filing basis: wash-adjusted gains where the pipeline built the
@@ -14214,40 +14639,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
             year = year or (data.get("summary") or {}).get("year")
             res = summarize_gains(data)
         cap = opt = div = pil = 0.0
-        _issuer_ca = (_issuer_is_canadian_by_symbol(cache, acct)
-                      if want_estimate and acct in taxable_accounts
-                      else {})
-        for ticker, cur_map in res.get("ticker_stats", {}).items():
-            from taxjson.lib.income_dating import is_canadian_listing
-            # The issuer's ISIN country when the books carry it, else
-            # the listing (A2-0319, A2-0662).
-            is_ca_listed = _issuer_ca.get(ticker,
-                                          is_canadian_listing(ticker))
+        for cur_map in res.get("ticker_stats", {}).values():
             for s in cur_map.values():
                 cap += float(s.get("cap", 0) or 0)
                 opt += float(s.get("opt", 0) or 0)
                 div += float(s.get("div", 0) or 0)
                 pil += float(s.get("pil", 0) or 0)
-                if acct in taxable_accounts:
-                    g = (float(s.get("cap", 0) or 0)
-                         + float(s.get("opt", 0) or 0))
-                    est["realized"] += g
-                    est["st"] += float(s.get("st_gain", 0) or 0)
-                    est["lt"] += float(s.get("lt_gain", 0) or 0)
-                    d = float(s.get("div", 0) or 0)
-                    # A crypto account's DIVIDEND rows are staking
-                    # rewards: ordinary income, nothing withheld — not
-                    # foreign dividends with an assumed 15% FTC.
-                    if (cfg.get("accounts", {}).get(acct)
-                            or {}).get("crypto"):
-                        est["staking"] += d
-                    elif is_ca_listed:
-                        est["div_ca"] += d
-                    else:
-                        est["div_foreign"] += d
-                        _foreign_by_acct[acct] = (
-                            _foreign_by_acct.get(acct, 0.0) + d)
-                    est["pil"] += float(s.get("pil", 0) or 0)
+        if acct in taxable_accounts:
+            _fold_estimate_income(
+                res, acct, est, _foreign_by_acct,
+                crypto=bool((cfg.get("accounts", {}).get(acct)
+                             or {}).get("crypto")),
+                issuer_ca=(_issuer_is_canadian_by_symbol(cache, acct)
+                           if want_estimate else {}))
         fees = sum(float(v) for v in (res.get("total_fees") or {}).values())
         tainted_included += int(res.get("tainted_count") or 0)
         tainted_routed += int(res.get("tainted_routed") or 0)
@@ -26809,6 +27213,35 @@ def _build_parser(prog: str = "taxjson"
                             "configured)")
     p_est.set_defaults(func=cmd_estimate)
 
+    p_pt = sub.add_parser(
+        "plot-tax",
+        help="Chart of the tax each month's income generated",
+        description="An ASCII chart of the tax the year's investment "
+             "income generated month by month, against the year's "
+             "estimate: the estimator `estimate` uses runs once per "
+             "month on the taxable accounts' gains and income dated up "
+             "to the month's end, and a month's tax is that run less "
+             "the month before's (a loss month is negative). The table "
+             "under the chart carries the running total. Planning "
+             "numbers, never filing numbers.")
+    p_pt.add_argument("--other-income", type=float, default=None,
+                      metavar="AMT",
+                      help="Employment/other income the investment "
+                           "income stacks on top of (default: "
+                           "[estimate] other_income, else 0)")
+    p_pt.add_argument("--other-losses", type=float, default=None,
+                      metavar="AMT", help=_OTHER_LOSSES_HELP
+                      + " (default: [estimate] other_losses, else the "
+                        "carry-forward of the latest close-year lock "
+                        "before the year, else 0)")
+    _add_deduction_flags(p_pt)
+    p_pt.add_argument("--province", default=None,
+                      help="Canada: ON|BC|AB (default: `province` "
+                           "under [settings])")
+    p_pt.add_argument("--json", action="store_true",
+                      help="Emit the document as JSON")
+    p_pt.set_defaults(func=cmd_plot_tax)
+
     p_amt = sub.add_parser(
         "amt",
         help="The year's minimum tax (AMT), line by line",
@@ -26917,6 +27350,27 @@ def _build_parser(prog: str = "taxjson"
                           help="Emit JSON instead of text")
     p_divest.set_defaults(func=cmd_div_estimate)
 
+    p_oy = sub.add_parser(
+        "option-yield",
+        help="Option premiums, P/L and yield per underlying",
+        description="How the option trades on an underlying did over a "
+             "window: premiums received and paid, the profit or loss of "
+             "the contracts closed in it and how they closed (expired, "
+             "bought back, assigned, sold, exercised), what is still "
+             "open, and the yield on the cost of the underlying's shares "
+             "you hold (on the strike notional where you hold none), "
+             "annualized. Contracts "
+             "are matched per account and series from the books. "
+             "Planning numbers only: the tax treatment of each premium "
+             "is in the gains.")
+    p_oy.add_argument("items", nargs="*", metavar="UNDERLYING|PERIOD|ACCOUNT",
+                      help="Underlyings (QQQ, QQQ.US; default: all), a "
+                           "window (" + _PERIOD_HELP + ") and an account "
+                           "(default: all), in any order")
+    p_oy.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text")
+    p_oy.set_defaults(func=cmd_option_yield)
+
     for _side, _fn, _what in (
             ("winners", cmd_winners,
              "the biggest realized WINNERS (gains above zero), best "
@@ -26993,6 +27447,36 @@ def _build_parser(prog: str = "taxjson"
     p_stats.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_wr = sub.add_parser(
+        "win-rates",
+        help="Win rate of your closed trades per ticker",
+        description="The win rate of every closed trade in the window "
+             "(shares, options, futures, crypto), grouped per share "
+             "listing — an option counts under its underlying — or, "
+             "with --by, per account, month of the close or asset "
+             "class: trades, wins, losses, win rate, net P/L, average "
+             "win and loss, profit factor. Economic P/L in the base "
+             "currency before any superficial-loss / wash-sale denial, "
+             "the trades `stats` counts (default: the tax year, taxable "
+             "accounts). A view, never a filing number.")
+    p_wr.add_argument("items", nargs="*", metavar="SYMBOL|PERIOD|ACCOUNT",
+                      help="Symbols (QQQ, QQQ.US; default: all), a "
+                           "window (30d, 6m, 1y, mtd, ytd, all, a tax "
+                           "year; default: the tax year) and an account "
+                           "(default: every taxable account; a sheltered "
+                           "account is shown only when named), in any "
+                           "order")
+    p_wr.add_argument("--by", default="symbol",
+                      choices=("symbol", "account", "month", "class"),
+                      help="Group the trades per symbol (default), "
+                           "account, month of the close or asset class")
+    p_wr.add_argument("--all-history", action="store_true",
+                      help="Every closed trade the books hold, not one "
+                           "year")
+    p_wr.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text")
+    p_wr.set_defaults(func=cmd_win_rates)
 
     p_tsum = sub.add_parser(
         "trades-sum",
@@ -28407,7 +28891,7 @@ _RUN_STATE_BANNER_CMDS = frozenset({
     "fees", "shares", "list", "ccd-sum", "trades", "divs", "dil", "roc",
     "events", "wash-radar", "sell-check", "buy-check", "rebuy",
     "div-estimate", "harvest", "watch", "edge-cases", "option-boundary", "spinoffs", "splits",
-    "check-dates", "stats",
+    "check-dates", "stats", "option-yield", "win-rates",
 })
 
 

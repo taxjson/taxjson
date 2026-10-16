@@ -107,7 +107,6 @@ _SUFFIX_COUNTRY: Dict[str, Optional[str]] = {
 _NON_CAPITAL = ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST", "FEE",
                 "TRANSFER")
 
-_QTY_EPS = 1e-6
 
 # Sentinel country code for symbols we cannot classify (an unknown market
 # suffix). Deliberately ugly so it reads as "review me".
@@ -226,18 +225,28 @@ def classify_country(symbol: str,
 # ---------------------------------------------------------------- cost walk
 
 class _Pool:
-    __slots__ = ("qty", "cost", "tainted", "max_cost_in_year")
+    __slots__ = ("symbol", "qty", "cost", "tainted", "max_cost_in_year")
 
-    def __init__(self) -> None:
+    def __init__(self, symbol: str = "") -> None:
+        self.symbol = symbol
         self.qty = 0.0
         self.cost = Decimal(0)
         self.tainted = False           # missing-history OPENING_BALANCE — unknown ACB
         self.max_cost_in_year = 0.0
 
+    def eps(self, *scales: float) -> float:
+        """The quantity under which this pool is flat: the engine's own
+        tolerance (core.pool_qty_eps) — 1e-6 for shares and options;
+        for a coin only float noise, since a holding of a millionth of
+        a coin is property with a cost amount (2026-10 filing audit F5:
+        the share epsilon dropped it from the T1135)."""
+        from taxjson.lib.core import pool_qty_eps
+        return pool_qty_eps(self.symbol, self.qty, *scales)
+
     def cost_amount(self) -> float:
         """Cost amount of PROPERTY HELD: a short position is a liability,
         not property, so only long cost counts."""
-        if self.qty <= _QTY_EPS:
+        if self.qty <= self.eps():
             return 0.0
         return max(float(self.cost), 0.0)
 
@@ -339,6 +348,40 @@ def _assign_underlying_resolver(transactions: List[Dict[str, Any]]):
     return resolve
 
 
+def _fold_merger_ratios(rows: List[Dict[str, Any]],
+                        tax_date: str = "settle") -> List[Dict[str, Any]]:
+    """The rows with a multi-ratio merger's rename-SPLIT rows folded
+    into one (core._fold_per_account_rename_ratios on the ladder the
+    Canada engine walks: settle-first, or the trade date on a
+    trade-basis project, so the weights see the same purchases the
+    cost walk does — 2026-10 audit R02). Rows the fold keeps are
+    returned as given; the folded row carries the first row's fields
+    and the weighted ratio."""
+    from taxjson.lib.core import (_fold_per_account_rename_ratios,
+                                  coerce_transaction_row)
+    if not any((r.get("action") or "").upper() == "SPLIT"
+               and (r.get("symbol_new") or "") for r in rows):
+        return rows
+    txs = [coerce_transaction_row(r, i, "taxjson-t1135") for i, r in
+           enumerate(rows)]
+    kw = ({"date_of": lambda t: t.date or t.date_settle}
+          if tax_date == "trade" else {})
+    folded, _s, _a = _fold_per_account_rename_ratios(list(txs), [], [],
+                                                     **kw)
+    if len(folded) == len(txs) and all(a is b for a, b in zip(folded, txs)):
+        return rows
+    out: List[Dict[str, Any]] = []
+    i = 0
+    for t in folded:
+        # The fold keeps order: skip the rows it dropped (the event's
+        # later copies) to the row this one is, or replaces (same id).
+        while txs[i] is not t and txs[i].id != t.id:
+            i += 1
+        out.append(rows[i] if txs[i] is t else dict(rows[i], **t.to_dict()))
+        i += 1
+    return out
+
+
 def walk_costs(transactions: List[Dict[str, Any]], year: int,
                overrides: Dict[str, Optional[str]],
                tax_date: str = "settle",
@@ -366,6 +409,14 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # (S008-06).
     applied_splits: Dict[str, List[Tuple[str, float]]] = {}
 
+    # A merger's per-account EMPIRICAL ratios (12 -> 12 and 40 -> 42)
+    # fold into ONE event at the holdings-weighted ratio, as the gains
+    # engine's symbol-global pool takes them (core.
+    # _fold_per_account_rename_ratios; CA-CORP-13). Replayed raw, the
+    # first row renamed the whole pool at its ratio and the second
+    # found the source empty: fewer shares than delivered, and a sale
+    # released too much cost (2026-10 filing audit F4).
+    transactions = _fold_merger_ratios(transactions, tax_date)
     pools: Dict[str, _Pool] = {}
     max_total = 0.0
     max_total_date = ""
@@ -438,7 +489,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         qty = float(tx.get("quantity") or 0.0)
         net = float(tx.get("net_amount") or 0.0)
 
-        pool = pools.setdefault(symbol, _Pool())
+        pool = pools.setdefault(symbol, _Pool(symbol))
 
         if action == "OPENING_BALANCE":
             # Missing-history opening: shares with unknown ACB. Quantity enters at
@@ -467,7 +518,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             if new_symbol and new_symbol != symbol:
                 if symbol in overrides and new_symbol not in overrides:
                     overrides[new_symbol] = overrides[symbol]
-                dest = pools.setdefault(new_symbol, _Pool())
+                dest = pools.setdefault(new_symbol, _Pool(new_symbol))
                 dest.qty += pool.qty
                 dest.cost += pool.cost
                 dest.tainted = dest.tainted or pool.tainted
@@ -475,7 +526,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                 # the "maximum cost during the year" column.
                 dest.max_cost_in_year = max(dest.max_cost_in_year,
                                             pool.max_cost_in_year)
-                pools[symbol] = _Pool()
+                pools[symbol] = _Pool(symbol)
         elif action == "ADJUST":
             # The engine's ADJUST rules (CA-ACB-06/07/14), so the cost
             # amount is the engine's ACB (CA-RPT-12; re-audit A2-0034,
@@ -488,12 +539,13 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             # a superficial-loss addition (WASH_) is applied as booked.
             _adj = Decimal(str(net))
             _wash = str(tx.get("id") or "").startswith("WASH_")
-            if not _wash and abs(pool.qty) <= _QTY_EPS and net < -0.005:
+            _peps = pool.eps()
+            if not _wash and abs(pool.qty) <= _peps and net < -0.005:
                 _adj = Decimal(0)
-            elif not _wash and pool.qty < -_QTY_EPS:
+            elif not _wash and pool.qty < -_peps:
                 _adj = -_adj
             pool.cost += _adj
-            if not _wash and pool.qty > _QTY_EPS and pool.cost < 0:
+            if not _wash and pool.qty > _peps and pool.cost < 0:
                 pool.cost = Decimal(0)
         else:
             # BUYSELL / ASSIGN / EXERCISE-shaped rows: average-cost pool,
@@ -521,7 +573,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                 _m = re.search(r"\d{6}([CP])\d{8}", symbol)
                 right = _m.group(1) if (und and _m) else ""
                 closing_units = min(abs(qty), abs(pool.qty))
-                if (und and closing_units > _QTY_EPS
+                if (und and closing_units > pool.eps(qty)
                         and ((pool.qty > 0 and right == "C")
                              or (pool.qty < 0 and right == "P"))):
                     # s.49(3) / 49(3.1): an exercised long call's cost
@@ -532,15 +584,18 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                     per = pool.cost / Decimal(str(abs(pool.qty)))
                     amt = per * Decimal(str(closing_units))
                     fold = (und, amt if pool.qty > 0 else -amt)
-            is_opening = (pool.qty > _QTY_EPS and qty > 0) or \
-                         (pool.qty < -_QTY_EPS and qty < 0) or \
-                         (abs(pool.qty) <= _QTY_EPS)
+            # The engine's tolerance (core.pool_qty_eps): a coin's
+            # sub-micro sale is a closing, not another opening.
+            _peps = pool.eps(qty)
+            is_opening = (pool.qty > _peps and qty > 0) or \
+                         (pool.qty < -_peps and qty < 0) or \
+                         (abs(pool.qty) <= _peps)
             if is_opening:
                 pool.cost += Decimal(str(abs(net)))
                 pool.qty += qty
             else:
                 closing = min(abs(qty), abs(pool.qty))
-                if abs(pool.qty) > _QTY_EPS:
+                if abs(pool.qty) > _peps:
                     per_unit = pool.cost / Decimal(str(abs(pool.qty)))
                 else:
                     per_unit = Decimal(0)
@@ -554,12 +609,12 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                     pool.qty -= closing
                 else:
                     pool.qty += closing
-                if abs(pool.qty) <= _QTY_EPS:
+                if abs(pool.qty) <= _peps:
                     pool.qty = 0.0
                     pool.cost = Decimal(0)
                     pool.tainted = False   # drained pool: taint clears
                 remainder = abs(qty) - closing
-                if remainder > _QTY_EPS:
+                if remainder > _peps:
                     # Crossed zero: the excess opens a position in the
                     # opposite direction at proportional cost.
                     frac = remainder / abs(qty)
@@ -569,7 +624,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                 # R1-202 / R1-276: the premium follows the shares (the
                 # option leg sorts before its stock leg, so this lands
                 # before the stock purchase's own cost).
-                pools.setdefault(fold[0], _Pool()).cost += fold[1]
+                pools.setdefault(fold[0], _Pool(fold[0])).cost += fold[1]
 
         if date >= year_start:
             snapshot(date)
@@ -593,7 +648,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         return exp <= year_end and (not today or exp < today)
     expired_held = sorted(
         s for s, p in pools.items()
-        if p.qty > _QTY_EPS and is_option_symbol(s)
+        if p.qty > p.eps() and is_option_symbol(s)
         and classify_country(s, overrides) is not None
         and _expired(s))
 
@@ -606,7 +661,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         # A tainted pool still holding shares is foreign property with an
         # UNKNOWN cost — it must appear (flagged), not silently vanish,
         # even though its tracked cost is 0.
-        still_held_unknown = p.tainted and p.qty > _QTY_EPS
+        still_held_unknown = p.tainted and p.qty > p.eps()
         if p.max_cost_in_year <= 0 and year_end_cost <= 0 \
                 and not still_held_unknown:
             continue

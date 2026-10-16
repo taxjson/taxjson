@@ -3103,6 +3103,8 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                "A check on what you owe before you file.",
                (Cmd("tjs estimate", "tax on the year's investment income "
                     "([estimate] other_income in taxjson.toml)"),
+                Cmd("tjs plot-tax", "the tax each month's income "
+                    "generated, as a chart"),
                 Cmd("tjs instalments", "instalments due, paid and "
                     "interest", "canada"))),
         _check("amt",
@@ -3124,7 +3126,12 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
               Cmd("tjs watch", "what changed since the last watch "
                   "(cron)"),
               Cmd("tjs div-estimate", "the dividends your holdings' own "
-                  "history points to (planning)"))),
+                  "history points to (planning)"),
+              Cmd("tjs option-yield", "premiums, profit or loss and "
+                  "yield of your option trades on an underlying "
+                  "(planning)"),
+              Cmd("tjs win-rates", "the win rate of your closed trades "
+                  "per ticker, account, month or class"))),
         # --------------------------------------------------- share safely
         Item("redact", "Share safely", "Share a sample, never the exports",
              "For a bug report or a broker taxjson does not read yet; "

@@ -229,28 +229,38 @@ Releases are the `vX.Y.Z` tags of github.com/taxjson/taxjson; the
 installer clones that repository over HTTPS and checks out the tag
 `channels.json` on `main` names for your channel. What protects them:
 
-- **Tags:** a repository rule lets only the repository's admins create
-  a `v*` tag, and nobody may move or delete one once it exists. The
+- **Who can change it:** nobody pushes to this repository. Development
+  happens in a private repository; a release reaches this one only
+  through the maintainer's publisher, which gates the tagged tree for
+  personal data (the maintainer's private values as keyed fingerprints,
+  generic patterns, gitleaks), waits an hour, gates it again and pushes
+  one release commit and its tag (docs/releasing.md, "How a release
+  reaches the public repo"). Repository rules let only the publisher's
+  deploy key update `main` or create a `v*` tag.
+- **Tags:** nobody may move or delete a `v*` tag once it exists. The
   maintainer's pre-push hook refuses any pushed tag that is not an
-  annotated `vX.Y.Z` on `main`, and every tag delete or move.
+  annotated release (or fast-lane) tag on `main`, and every tag delete or
+  move.
 - **Releases:** GitHub releases are immutable — a published release's
   tag and assets cannot be changed afterwards (its title and notes stay
   editable, as GitHub documents). A release is tagged only on a version
-  commit that GitHub CI passed on (`scripts/release.sh`, two steps), and
-  its notes are scanned with `scripts/check-pii.sh --message` before it
-  is created.
-- **`main`:** a repository rule refuses deleting the branch and force
-  pushes, so published history is not rewritten; changes land by pull
-  request once CI's required checks pass (docs/releasing.md).
+  commit that CI passed on (`scripts/release.sh`, two steps), and its
+  notes (the CHANGELOG section) are scanned with
+  `scripts/check-pii.sh --message` before it is tagged, by the publisher
+  twice, and by `release.yml` before it creates the release.
+- **`main`:** repository rules refuse deleting the branch and force
+  pushes, so published history is not rewritten; in development, changes
+  land by pull request once CI's checks pass (docs/releasing.md).
 - **CI:** every action is pinned to a full commit SHA and every runner to
   an explicit image; tokens are read-only. gitleaks and a per-commit PII
   scan run on every pull request and push to `main` with the base
   commit's config and scanner, and a daily privacy watch scans what
   GitHub serves beside the code.
-- **Channels:** `scripts/promote.sh` moves `stable` / `beta` only to an
-  annotated release tag on `origin/main`, from a `main` equal to
-  `origin/main`, and forward only when the tag's GitHub Actions run
-  passed.
+- **Channels:** `scripts/promote.sh` moves `stable` / `beta` only to a
+  published, annotated release tag on the development `main`, from a
+  `main` equal to it, and forward only when the tag's CI run passed; the
+  publisher then copies `channels.json` alone, and only when every
+  release it names is published.
 - **Dependencies:** the installer never resolves a dependency by name.
   It installs pip, the build backend (setuptools), the core's
   dependencies and each extra (`fx` by default) from the release's

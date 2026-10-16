@@ -84,6 +84,104 @@ class TestFrequency(unittest.TestCase):
         self.assertEqual(detect_frequency([p.pay_date for p in sched])[0],
                          "quarterly")
 
+    def test_specials_and_a_second_posting_do_not_break_the_grid(self):
+        """A special beside the regular payment (a year-end reinvested
+        distribution, a mid-month special) and a second broker's posting
+        of the same payment days later are off-grid or share a slot:
+        the regular frequency still reads (the gap-based reading lost
+        two gaps per special and called the payer irregular)."""
+        from taxjson.lib.div_estimate import detect_frequency
+        monthly = ["2025-01-15", "2025-02-14", "2025-03-14", "2025-03-28",
+                   "2025-04-15", "2025-05-15", "2025-06-13", "2025-06-27",
+                   "2025-07-15", "2025-08-15"]
+        self.assertEqual(detect_frequency(monthly)[:2], ("monthly", 1))
+        quarterly = ["2024-04-08", "2024-07-08", "2024-10-07", "2024-12-31",
+                     "2025-01-08", "2025-04-08", "2025-07-08", "2025-10-07"]
+        self.assertEqual(detect_frequency(quarterly)[:2], ("quarterly", 3))
+        twins = []
+        for d in ["2024-02-15", "2024-05-16", "2024-08-15", "2024-11-14",
+                  "2025-02-13", "2025-05-15", "2025-08-14"]:
+            twins += [d, d[:8] + "%02d" % (int(d[8:]) + 6)]
+        self.assertEqual(detect_frequency(sorted(twins))[:2],
+                         ("quarterly", 3))
+        # Three payments in one slot is a shorter period, not a fit.
+        self.assertEqual(detect_frequency(
+            ["2025-01-10", "2025-01-22", "2025-03-08", "2025-07-26",
+             "2025-08-12"])[:2], (None, None))
+
+    def test_weekly_payer_and_no_weekly_aliasing(self):
+        """A weekly payer reads as weekly and is projected by 7 days; a
+        quarterly payer's dates are on the weekly grid too (13 weeks to
+        a quarter) and still read as quarterly."""
+        from taxjson.lib.div_estimate import detect_frequency
+        weekly = ["2025-08-01", "2025-08-08", "2025-08-15", "2025-08-22",
+                  "2025-08-29", "2025-09-05", "2025-09-12", "2025-09-19"]
+        self.assertEqual(detect_frequency(weekly)[:2], ("weekly", 0))
+        self.assertEqual(detect_frequency(_Q)[:2], ("quarterly", 3))
+        rows = [("margin", _div(d, "ZZW.TO", 100, 0.05)) for d in weekly]
+        doc = _est(rows, [_pos("ZZW.TO", 100)], as_of="2025-09-22",
+                   months=1, year=2025)
+        r = doc["rows"][0]
+        self.assertEqual(r["frequency"], "weekly")
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual([p["pay_date"] for p in r["projected"]][:3],
+                         ["2025-09-26", "2025-10-03", "2025-10-10"])
+
+    def test_reversal_on_a_later_date_nets_the_original(self):
+        """A broker's reversal posted weeks after the payment, with the
+        corrected amount re-posted beside it, nets against the original:
+        the payment counts once, on its own date, at the corrected
+        amount (dropping the negative row left the original and the
+        re-posting both: a seventh payment and a doubled 12-month
+        amount)."""
+        from taxjson.lib import div_estimate as DE
+        rows = [("ib", _div(d, "ZZR.TO", 100, 0.5)) for d in _Q]
+        rows.append(("ib", _div("2026-04-20", "ZZR.TO", 100, -0.5)))
+        rows.append(("ib", _div("2026-04-20", "ZZR.TO", 100, 0.45)))
+        ps = DE.payments(rows)["ZZR.TO"]
+        self.assertEqual(len(ps), 6)
+        by = {p.pay_date: p for p in ps}
+        self.assertNotIn("2026-04-20", by)
+        self.assertAlmostEqual(by["2026-03-15"].per_share, 0.45)
+        # A reversal larger than the latest posting reaches further back.
+        rows = [("ib", _div(d, "ZZR.TO", 100, 0.5)) for d in _Q[:3]]
+        rows.append(("ib", _div("2025-10-01", "ZZR.TO", 100, -0.8)))
+        ps = DE.payments(rows)["ZZR.TO"]
+        self.assertEqual([p.pay_date for p in ps],
+                         ["2025-03-15", "2025-06-15"])
+        self.assertAlmostEqual(ps[-1].per_share, 0.2)
+
+    def test_row_without_a_share_count_borrows_the_nearest(self):
+        """A dividend row whose description named no share count (the
+        parsers leave quantity 0) is still a payment: it takes the
+        account's nearest dated count of that symbol (every other row
+        missing one made a monthly payer irregular, all of them left
+        it out)."""
+        from taxjson.lib import div_estimate as DE
+        dates = ["2025-01-08", "2025-02-07", "2025-03-10", "2025-04-08",
+                 "2025-05-08", "2025-06-09", "2025-07-09", "2025-08-11"]
+        rows = []
+        for i, d in enumerate(dates):
+            r = _div(d, "ZZM.TO", 100 if i % 2 else 0, 0.1)
+            r["gross_amount"] = r["net_amount"] = 10.0
+            rows.append(("qt", r))
+        ps = DE.payments(rows)["ZZM.TO"]
+        self.assertEqual(len(ps), 8)
+        self.assertTrue(all(abs(p.per_share - 0.1) < 1e-9 for p in ps))
+        doc = _est(rows, [_pos("ZZM.TO", 100, acct="qt")],
+                   as_of="2025-08-20", year=2025)
+        self.assertEqual(doc["rows"][0]["frequency"], "monthly")
+        # No row of the symbol has a count: left out, as before.
+        rows = [("qt", dict(_div(d, "ZZN.TO", 0, 0), net_amount=5.0,
+                            gross_amount=5.0)) for d in dates]
+        self.assertNotIn("ZZN.TO", DE.payments(rows))
+
+    def test_single_payment_is_labelled_one_payment(self):
+        rows = [("margin", _div("2026-02-01", "ZZS.TO", 10, 2.0))]
+        doc = _est(rows, [_pos("ZZS.TO", 10)])
+        self.assertEqual(doc["rows"][0]["frequency"], "1 payment")
+        self.assertEqual(doc["rows"][0]["status"], "irregular")
+
     def test_forward_window_tokens(self):
         from taxjson.lib.div_estimate import parse_window
         self.assertEqual(parse_window("6m"), 6)

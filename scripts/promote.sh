@@ -10,23 +10,29 @@
 # more; `stable` and `beta` move only when you run this. That is what
 # lets you release as often as you like without a newcomer's first
 # install landing on whatever was tagged an hour ago. It commits
-# channels.json on main ("Promote vX.Y.Z to stable") and pushes — no new
-# tag, no rebuild. Moving a channel BACKWARDS (rolling a bad release
+# channels.json on main ("Promote vX.Y.Z to stable"), lands it, and asks
+# the publisher to copy that one file to the public repo with a fast-lane
+# tag (channels-YYYYMMDDTHHMMSSZ, UTC) on that commit — no release tag, no
+# rebuild, no wait. Moving a channel BACKWARDS (rolling a bad release
 # back) is allowed, but it asks first. `taxjson promote` runs this.
 #
-# It promotes only what GitHub holds: the local main must BE origin/main
-# (fetched first; nothing unpushed rides along), the tag an annotated
-# vX.Y.Z that origin has, on origin/main, and the channel's current
-# value is read from origin/main:channels.json. A forward move also
+# origin is the private dev repo; the remote `public` is the public repo,
+# read only. It promotes only what GitHub holds: the local main must BE
+# origin/main (fetched first; nothing unpushed rides along), the tag an
+# annotated vX.Y.Z that origin has, on origin/main, and published (the
+# public repo has it); the channel's current value is read from
+# origin/main:channels.json. A forward move also
 # needs the GitHub Actions tests.yml run for the push of the tag's
 # commit to main to be green (scripts/github-ci.sh, as release.sh asks it
 # before tagging; it waits for a run still going;
 # TAXJSON_PROMOTE_IGNORE_CI=1 skips the check, with a warning), and a
-# clean scripts/check-public.sh (release notes, issues and comments on
-# GitHub; skipped with a warning without a working gh).
+# clean scripts/check-public.sh (the public repo's release notes, issues
+# and comments; skipped with a warning without a working gh).
 # The commit reaches main through scripts/land.sh (a pull request, merged
 # once its checks pass; the pre-push PII gate first). When it cannot land,
-# the promote commit is taken back off local main.
+# the promote commit is taken back off local main. Run again when the
+# channel already names the release: it makes the fast-lane tag if the
+# public repo does not say so yet and none is waiting.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 die() { echo "✗ $*" >&2; exit 1; }
@@ -63,12 +69,53 @@ AHEAD="$(git rev-list --count origin/main..HEAD)"; BEHIND="$(git rev-list --coun
 [ "$AHEAD" = 0 ] && [ "$BEHIND" = 0 ] \
   || die "Local main is not origin/main ($AHEAD commit(s) ahead, $BEHIND behind) — push or pull first, so a promote publishes nothing but itself."
 git merge-base --is-ancestor "$TAG^{commit}" origin/main || die "$TAG is not on origin/main — promote only releases tagged on main."
+# Published: the public repo has the tag (the publisher pushed it after
+# its wait). The fast lane refuses a channels.json naming any other.
+PUBLIC_REMOTE="${TAXJSON_PUBLIC_REMOTE:-public}"
+git remote get-url "$PUBLIC_REMOTE" >/dev/null 2>&1 \
+  || die "No remote '$PUBLIC_REMOTE' for the public repo — add it, read only: git remote add --no-tags public https://github.com/taxjson/taxjson.git && git remote set-url --push public DISABLED"
+PUBLIC_TAG="$(git ls-remote "$PUBLIC_REMOTE" "refs/tags/$TAG")" || die "Could not list the public repo's tags."
+[ -n "$PUBLIC_TAG" ] || die "$TAG is not published yet — the publisher publishes it after its wait; promote it then."
 
 # The channel's current release as installers see it: origin/main's file.
 ORIGIN_CHANNELS="$(git show origin/main:channels.json 2>/dev/null)" || die "origin/main has no channels.json."
 CURRENT="$(printf '%s\n' "$ORIGIN_CHANNELS" | sed -nE "s/.*\"$CH\"[[:space:]]*:[[:space:]]*\"(v[^\"]+)\".*/\\1/p" | sed -n 1p)"
 [ -n "$CURRENT" ] || die "channels.json has no \"$CH\" entry — add one by hand (\"$CH\": \"vX.Y.Z\")."
-if [ "$CURRENT" = "$TAG" ]; then echo "$CH already points at $TAG."; exit 0; fi
+
+# The fast lane: a channels-<UTC time> tag on origin's main, whose
+# channels.json names $TAG, asks the publisher to copy that one file to
+# the public repo. Nothing to do when the public main already has that
+# file, or a fast-lane tag already names that commit.
+fast_lane() {
+  git fetch -q origin main || die "Could not fetch main from origin."
+  local c pub name
+  c="$(git rev-parse origin/main)"
+  git show "$c:channels.json" | grep -q "\"$CH\": \"$TAG\"" \
+    || die "origin/main's channels.json does not say $CH → $TAG."
+  git fetch -q --no-tags "$PUBLIC_REMOTE" main || die "Could not fetch main from the public repo."
+  pub="$(git show FETCH_HEAD:channels.json 2>/dev/null || true)"
+  if [ "$pub" = "$(git show "$c:channels.json")" ]; then
+    echo "✓ $CH points at $TAG on the public repo."; return 0
+  fi
+  if git ls-remote origin 'refs/tags/channels-*' | grep -q "^$c[[:space:]].*\^{}\$"; then
+    echo "✓ $CH → $TAG is waiting for the publisher (a fast-lane tag names $(git rev-parse --short "$c"))."; return 0
+  fi
+  name="channels-$(date -u +%Y%m%dT%H%M%SZ)"
+  git tag -a "$name" "$c" -m "taxjson channels: $CH → $TAG"
+  if ! printf 'refs/tags/%s %s refs/tags/%s %s\n' "$name" "$(git rev-parse "$name")" "$name" "$Z" \
+       | bash scripts/hooks/pre-push origin "$(git remote get-url origin)"; then
+    git tag -d "$name" >/dev/null
+    die "The pre-push PII gate refused the fast-lane tag $name (above) — run scripts/promote.sh $TAG $CH again once it is fixed."
+  fi
+  # One tag, by name — never `git push --tags`.
+  if ! git push -q origin "refs/tags/$name"; then
+    git tag -d "$name" >/dev/null
+    die "The push of the fast-lane tag $name was refused — run scripts/promote.sh $TAG $CH again."
+  fi
+  echo "✓ asked the publisher for $CH → $TAG ($name): it copies channels.json to the public repo on its next run; installers on $CH move then."
+}
+Z=0000000000000000000000000000000000000000
+if [ "$CURRENT" = "$TAG" ]; then echo "$CH already points at $TAG on main."; fast_lane; exit 0; fi
 # Backwards is how a bad release is rolled back — never by accident.
 NEWER="$(printf '%s\n%s\n' "$CURRENT" "$TAG" | sort -V | tail -1)"
 if [ "$NEWER" = "$CURRENT" ]; then
@@ -84,6 +131,8 @@ fi
 # rollback is not held to it — an older tag may predate a CI fix.
 SLUG="${TAXJSON_SLUG:-$(git remote get-url origin | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//')}"
 SLUG="${SLUG:-taxjson/taxjson}"
+PUBLIC_SLUG="${TAXJSON_PUBLIC_SLUG:-$(git remote get-url "$PUBLIC_REMOTE" | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//')}"
+PUBLIC_SLUG="${PUBLIC_SLUG:-taxjson/taxjson}"
 ci_gate() {
   if [ "${TAXJSON_PROMOTE_IGNORE_CI:-}" = 1 ]; then
     echo "⚠ WARNING: GitHub Actions CI NOT checked for $TAG (TAXJSON_PROMOTE_IGNORE_CI=1)." >&2
@@ -94,15 +143,15 @@ ci_gate() {
 }
 # What GitHub serves beside the code (release notes, issues, pull
 # requests, comments), scanned for personal data before a release
-# reaches more people (scripts/check-public.sh, read-only). Without a
-# working gh it is skipped with a warning.
+# reaches more people (scripts/check-public.sh, read-only, on the public
+# repo). Without a working gh it is skipped with a warning.
 public_gate() {
   if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
     echo "⚠ WARNING: release notes, issues and comments on GitHub NOT scanned — gh is not installed or not logged in." >&2
     return 0
   fi
   [ -f scripts/check-public.sh ] || die "scripts/check-public.sh is missing from this checkout."
-  TAXJSON_SLUG="$SLUG" bash scripts/check-public.sh \
+  TAXJSON_SLUG="$PUBLIC_SLUG" bash scripts/check-public.sh \
     || die "scripts/check-public.sh refused (above): fix what GitHub serves first — nothing changed."
 }
 if [ "$NEWER" != "$CURRENT" ]; then ci_gate; public_gate; fi
@@ -144,9 +193,10 @@ undo_promote() {
 # landed. Exit 3 is "still waiting": the pull request stays open.
 rc=0; bash scripts/land.sh || rc=$?
 if [ "$rc" = 3 ]; then
-  die "$CH → $TAG is waiting on its pull request (above); new installs move once it merges. Then: git pull --rebase."
+  die "$CH → $TAG is waiting on its pull request (above). Once it merges: git pull --rebase, then scripts/promote.sh $TAG $CH again (it asks the publisher for it)."
 elif [ "$rc" != 0 ]; then
   undo_promote && die "The promote did not land (scripts/land.sh, above: did main move on?) — the promote commit is taken back; nothing changed here or there. Pull, then run it again."
   die "The promote did not land (scripts/land.sh, above)."
 fi
-echo "✓ $CH → $TAG  (was $CURRENT). New installs on $CH get it now; re-running the installer on $CH moves there."
+echo "✓ $CH → $TAG on main (was $CURRENT)."
+fast_lane

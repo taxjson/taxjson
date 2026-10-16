@@ -112,11 +112,19 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
     premium, in_books} ], 'credits': [ {account, underlying, right, shares, amount,
     date} ] (an assigned option's premium the tax rules folded into its
     shares), 'exercised_long': n}."""
+    from taxjson.lib.corporate_timeline import dedupe_split_events
     book = [r for r in rows if isinstance(r, dict)
-            and r.get("action") in ("BUYSELL", "ASSIGN")
+            and r.get("action") in ("BUYSELL", "ASSIGN", "SPLIT")
             and is_option_symbol(str(r.get("symbol") or ""))]
+    # A split first at its stamp, as the engines order it.
     book.sort(key=lambda r: (str(r.get("date") or ""),
-                             str(r.get("time") or "")))
+                             str(r.get("time") or ""),
+                             0 if r.get("action") == "SPLIT" else 1))
+    # One split reported twice is one event, per account here; it
+    # moves and scales the queued contracts (a renamed series closed
+    # against an empty queue and read as a new long: 2026-10 audit R04).
+    splits = {id(r) for r in dedupe_split_events(
+        [r for r in book if r.get("action") == "SPLIT"], per_account=True)}
     longs: Dict[Tuple[str, str], float] = {}
     shorts: Dict[Tuple[str, str], deque] = {}
     trades: List[Dict[str, Any]] = []
@@ -127,7 +135,25 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
         acct = str(r.get("account") or "")
         key = (acct, sym)
         q = _f(r.get("quantity"))
-        net = _f(r.get("net_amount"))
+        if r.get("action") == "SPLIT":
+            if id(r) not in splits:
+                continue
+            ratio = q if q > 0 else 1.0
+            new = str(r.get("symbol_new") or "").strip() or sym
+            nk = (acct, new)
+            if key in longs:
+                longs[nk] = longs.get(nk, 0.0) + longs.pop(key) * ratio
+            lots = shorts.pop(key, None)
+            if lots:
+                for lot in lots:
+                    lot[0] *= ratio
+                    lot[1] /= ratio
+                shorts.setdefault(nk, deque()).extend(lots)
+            continue
+        # Money as a magnitude: the quantity's sign says which way it
+        # went (a buy-back entered with a negative amount counted as
+        # money received: 2026-10 audit R03).
+        net = abs(_f(r.get("net_amount")))
         if abs(q) < _EPS:
             continue
         c = abs(q)
@@ -269,22 +295,25 @@ def _finish(st: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def compute(gains_docs: Dict[str, Dict[str, Any]],
-            books: Dict[str, List[Dict[str, Any]]],
-            keep: Callable[[str], bool],
-            date_of: Callable[[Dict[str, Any]], str],
-            crypto_accounts: Iterable[str] = (),
-            in_books: Optional[Callable[[Dict[str, Any]], bool]] = None,
-            ) -> Dict[str, Any]:
-    """Per-class statistics over the window `keep` (applied to
-    `date_of(row)`).
+def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
+                  books: Dict[str, List[Dict[str, Any]]],
+                  keep: Callable[[str], bool],
+                  date_of: Callable[[Dict[str, Any]], str],
+                  crypto_accounts: Iterable[str] = (),
+                  in_books: Optional[Callable[[Dict[str, Any]], bool]] = None,
+                  ) -> Dict[str, Any]:
+    """Every closed trade in the window `keep` (applied to
+    `date_of(row)`), one record each: {date, symbol, underlying (an
+    option's share listing, else the symbol), account, cls, pnl,
+    kind (a written option's close)}; with the denied total, the
+    tainted dispositions skipped and the option counts `compute`
+    reports.
 
     gains_docs: {account: gains document} (the engine's rows);
     books: {account: base-currency book rows} for the same accounts
     (the written options and the assignment credits)."""
     crypto = set(crypto_accounts)
-    per: Dict[str, Dict[str, Any]] = {c: _new_stats() for c, _ in CLASSES}
-    total = _new_stats()
+    out: List[Dict[str, Any]] = []
     denied = 0.0
     denied_n = 0
     tainted = 0
@@ -337,22 +366,113 @@ def compute(gains_docs: Dict[str, Dict[str, Any]],
                 share = (abs(_f(t.get("qty"))) / qty_by_id[sid]
                          if qty_by_id.get(sid) else 1.0)
                 pnl -= credit[sid] * share
-            _add(per[cls], pnl)
-            _add(total, pnl)
+            sym = str(t.get("symbol") or "")
+            out.append({"date": date_of(t), "symbol": sym,
+                        "underlying": _underlying(sym), "account": row_acct,
+                        "cls": cls, "pnl": pnl, "kind": ""})
 
     for tr in written:
         if not tr["in_books"] or not keep(tr["date"]):
             continue
         if tr["kind"] == "assigned":
             assigned += 1
-        _add(per["written-options"], tr["pnl"])
-        _add(total, tr["pnl"])
+        out.append({"date": tr["date"], "symbol": tr["symbol"],
+                    "underlying": _underlying(tr["symbol"]),
+                    "account": tr["account"], "cls": "written-options",
+                    "pnl": tr["pnl"], "kind": tr["kind"]})
+    out.sort(key=lambda r: (r["date"], r["symbol"], r["account"]))
     return {
-        "classes": {c: _finish(per[c]) for c, _ in CLASSES},
-        "total": _finish(total),
+        "trades": out,
         "denied_total": round(denied, 2),
         "denied_count": denied_n,
         "tainted_skipped": tainted,
         "assigned_written_options": assigned,
         "exercised_long_options": exercised,
     }
+
+
+def _underlying(sym: str) -> str:
+    """An option's share listing (what `win-rates` groups it under),
+    else the symbol itself."""
+    if is_option_symbol(sym):
+        try:
+            return parse_option_underlying(sym) or sym
+        except Exception:                                  # noqa: BLE001
+            return sym
+    return sym
+
+
+def compute(gains_docs: Dict[str, Dict[str, Any]],
+            books: Dict[str, List[Dict[str, Any]]],
+            keep: Callable[[str], bool],
+            date_of: Callable[[Dict[str, Any]], str],
+            crypto_accounts: Iterable[str] = (),
+            in_books: Optional[Callable[[Dict[str, Any]], bool]] = None,
+            ) -> Dict[str, Any]:
+    """Per-class statistics over the window `keep` (applied to
+    `date_of(row)`): the closed trades of `closed_trades` folded per
+    class, with a total."""
+    res = closed_trades(gains_docs, books, keep, date_of, crypto_accounts,
+                        in_books)
+    per: Dict[str, Dict[str, Any]] = {c: _new_stats() for c, _ in CLASSES}
+    total = _new_stats()
+    for tr in res["trades"]:
+        _add(per[tr["cls"]], tr["pnl"])
+        _add(total, tr["pnl"])
+    return {
+        "classes": {c: _finish(per[c]) for c, _ in CLASSES},
+        "total": _finish(total),
+        "denied_total": res["denied_total"],
+        "denied_count": res["denied_count"],
+        "tainted_skipped": res["tainted_skipped"],
+        "assigned_written_options": res["assigned_written_options"],
+        "exercised_long_options": res["exercised_long_options"],
+    }
+
+
+# `win-rates --by`: how the closed trades are grouped.
+GROUPINGS: Tuple[Tuple[str, str], ...] = (
+    ("symbol", "share listing (an option under its underlying)"),
+    ("account", "account"),
+    ("month", "month of the close"),
+    ("class", "asset class"),
+)
+
+
+def _group_key(tr: Dict[str, Any], by: str) -> str:
+    if by == "symbol":
+        return tr["underlying"]
+    if by == "account":
+        return tr["account"]
+    if by == "month":
+        return str(tr["date"])[:7]
+    return tr["cls"]
+
+
+def group(trades: Iterable[Dict[str, Any]], by: str = "symbol"
+          ) -> Dict[str, Any]:
+    """The closed trades folded per `by` (a GROUPINGS name): {'by',
+    'rows': [{key, classes, ...stats}] (most trades first, then the
+    net P/L, then the key), 'total'}."""
+    if by not in dict(GROUPINGS):
+        raise ValueError(f"unknown grouping {by!r}")
+    per: Dict[str, Dict[str, Any]] = {}
+    classes: Dict[str, Dict[str, int]] = {}
+    total = _new_stats()
+    for tr in trades:
+        k = _group_key(tr, by)
+        _add(per.setdefault(k, _new_stats()), tr["pnl"])
+        c = classes.setdefault(k, {})
+        c[tr["cls"]] = c.get(tr["cls"], 0) + 1
+        _add(total, tr["pnl"])
+    rows = []
+    for k, st in per.items():
+        row = _finish(st)
+        row["key"] = k
+        row["classes"] = dict(sorted(classes[k].items()))
+        rows.append(row)
+    if by == "month":
+        rows.sort(key=lambda r: r["key"])
+    else:
+        rows.sort(key=lambda r: (-r["trades"], -r["net_pl"], r["key"]))
+    return {"by": by, "rows": rows, "total": _finish(total)}

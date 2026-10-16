@@ -33,7 +33,8 @@ channel. A channel never moves an install backwards (name a version to
 go back). Only an annotated release tag on `main`'s history is installed.
 `tjs channels` shows where every channel points and what this machine
 runs; `TAXJSON_DRY_RUN=1` prints what the installer would pick and
-changes nothing. The installer leaves alone a `taxjson` or `tjs` in
+stops: an existing install only has its tags fetched, and a missing one
+is not created (the channel is resolved in a temporary clone). The installer leaves alone a `taxjson` or `tjs` in
 `~/.local/bin` that is not its own link, with a note. How releases are
 cut: [releasing.md](releasing.md).
 

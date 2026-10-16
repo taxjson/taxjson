@@ -100,7 +100,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 - **Rule:** writing an option is a disposition: the premium is a capital gain in the year written (`option_premium_timing = "grant"`, the default, for contracts written from `option_grant_timing_since`; earlier contracts keep close timing). Buying it back is a capital loss in the buy-back year; expiry adds nothing. A bought option's cost is a loss on its expiry date. Under `"close"` nothing is taxed until the position closes, and the premium minus the cost is the gain or loss on that date. Contracts written and closed in one year give the same total under either timing; only year-straddling contracts differ. When a premium's year was already filed and the option is later exercised or assigned (s.49(3) for a call, s.49(3.1) for a put, s.49(4)), `taxjson option-boundary` lists every straddling contract and names the grant year to amend (T1-ADJ); it flags a contract written in a locked year (`filed/<year>.json` records the timing that return used) but kept on transition close timing here, and a contract past its expiry with no expiry or assignment row in the export. A contract written before `option_grant_timing_since` and bought back, expired or cash-settled in the project year (a transition contract) has its premium taxed in this year — right only if its write year's return did not report it: with no filed-year lock recording how that year was filed, `taxjson run` warns with the premium at stake and asks, and the checklist's option-boundary step needs attention until `option_grant_timing_since` is lowered to the write year or the step is marked done.
 - **Source:** s.49(1)–(4); **IT-479R** *Transactions in Securities*, paras 23–32 (para 29 for calls, para 32 for puts).
-- **Rule ids:** `CA-OPT-01`, `CA-OPT-02`, `CA-OPT-11`, `CA-OPT-03`, `CA-OPT-04`, `CA-OPT-05` and `CA-OPT-10` *(setting: `option_premium_timing = "close"`)*, `CA-OPT-07`, `CA-SL-11`.
+- **Rule ids:** `CA-OPT-01`, `CA-OPT-02`, `CA-OPT-11`, `CA-OPT-03`, `CA-OPT-04`, `CA-OPT-05` and `CA-OPT-10` *(setting: `option_premium_timing = "close"`)*, `CA-OPT-07`, `CA-SL-11`, `CA-PLAN-07` (`taxjson option-yield`: an underlying's option trades over a window as money and a yield on the cost of the shares held (else the strike notional); planning numbers only).
 - **Code:** `src/taxjson/lib/core.py` — `CanadaTaxRules`, `_grant_applies`, `_open_short_option`, `_recognised_premium`; `src/taxjson/lib/pipeline.py` — `option_timing_from_settings`; `src/taxjson/lib/option_boundary.py` — `write_lots`, `straddling`, `filed_locks`, `project_question_rows`; `src/taxjson/bin/taxjson_run.py` — `_say_option_transition`.
 - **Edge cases and limits:** positions and the holdings export keep the economic book cost of an open written option; only the year attribution moves. `taxjson harvest`, which asks what closing today would book, leaves a premium already recognised at the write out of the cost, so a grant-timed written option's UNREALIZED is the whole buy-back cost. Whether a buy-back loss can be superficial (identical options bought within 30 days and held) is not settled: s.54 needs "a loss from the disposition of a property" and a closing purchase disposes of nothing, so by default the rule is not applied to buy-backs, under grant or close timing alike (transition contracts included); `option_buyback_loss_superficial = true` takes the strict reading. Set `option_grant_timing_since` once to the first year filed under grant timing and keep it unchanged in later projects (left unset it follows `year`, so a later project would put a contract an earlier one taxed at the write back on close timing and tax it again: `taxjson run` warns until it is set); a written option carried out of a closed year under another timing is flagged by `taxjson handoff` (taxed twice, or never) (`CA-RPT-08`). Whether naked option writing is on income account is the user's question (IT-479R para 25(c); `REFERENCES.md` "Capital vs income character").
 
@@ -124,7 +124,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 - **Rule:** a split or consolidation scales the quantity; the ACB is unchanged. A trade executed before a split but settling after it is re-denominated. A name change carries the pool automatically. One split reported by several sources at the same ratio within a week is one event, applied once on the earliest date, in every step that walks splits.
 - **Source:** s.47; T4037 "Stock splits".
-- **Rule ids:** `CA-CORP-01`, `CA-CORP-02`, `CA-CORP-12`.
+- **Rule ids:** `CA-CORP-01`, `CA-CORP-02`, `CA-CORP-12`, `CA-CORP-13` (a merger delivered at different whole-share ratios per account is one event at the holdings-weighted ratio).
 - **Code:** `src/taxjson/lib/corporate_timeline.py` — `SplitTimeline`, `lineage_factor`, `cumulative_factor`, `split_copies`; `src/taxjson/lib/corp_actions.py` — `NAME_CHANGE`, `_emit_rename`; `src/taxjson/lib/core.py` — `_redenoms`, `SplitStraddlesSettlementError`.
 - **Edge cases and limits:** a rename-split dated between a trade's execution and its settlement is refused (`SplitStraddlesSettlementError`): re-date the row's settlement or the split. Cash in lieu of a fractional share is a sale of the fraction (`CA-CORP-05`); IB's cash-in-lieu wording is modelled, not seen in a real statement (docs/limits.md "Export rows modelled without a real sample").
 
@@ -278,7 +278,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 - **Rule:** `taxjson estimate`: federal and provincial tax (ON, BC, AB) on top of your other income, with AMT, for planning only. Canadian dividends are treated as eligible (38% gross-up and credit), a Canadian trust's distribution with them; foreign dividends as ordinary income with withholding credited up to 15%; interest is left out. The federal BPA phases down on net income; it is the only non-refundable credit modelled. Rates are the tax year's own table, else the nearest earlier one (said).
 - **Source:** eligible dividends s.82(1)(b)(ii), s.121(b); foreign dividends s.126(1), Form T2209; BPA s.118(1)(c), (1.1); brackets s.117 and the provincial acts (see `REFERENCES.md` "Canada — income and the tax estimate").
-- **Rule ids:** `CA-RPT-03` … `CA-RPT-06`, `CA-EST-TRUST`, `CA-EST-DEDUCT`, `CA-EST-BPA`, `CA-EST-PROV`, `CA-EST-FTC`, `CA-EST-VINTAGE`, `CA-EST-FED-TABLE`, `CA-EST-DTC`, `CA-EST-ON-TABLE`, `CA-EST-BC-TABLE`, `CA-EST-AB-TABLE`, `CA-EST-OHP`, `CA-INC-01`, `CA-INC-02`, `CA-INC-05`, `CA-RPT-16`, `CA-SCAN-01`, `CA-SCAN-02`.
+- **Rule ids:** `CA-RPT-03` … `CA-RPT-06`, `CA-EST-TRUST`, `CA-EST-DEDUCT`, `CA-EST-BPA`, `CA-EST-PROV`, `CA-EST-FTC`, `CA-EST-VINTAGE`, `CA-EST-FED-TABLE`, `CA-EST-DTC`, `CA-EST-ON-TABLE`, `CA-EST-BC-TABLE`, `CA-EST-AB-TABLE`, `CA-EST-OHP`, `CA-INC-01`, `CA-INC-02`, `CA-INC-05`, `CA-RPT-16`, `CA-SCAN-01`, `CA-SCAN-02`, `CA-PLAN-08` (`taxjson plot-tax`: the year's estimate run through each month's end, a month's tax the difference; planning numbers only).
 - **Code:** `src/taxjson/lib/tax_estimate.py` — `estimate_canada`, `_canada_tax`, `ca_fed_bpa`, `ontario_health_premium`, `_VINTAGES`, `CA_PROVINCES`; `src/taxjson/lib/trade_stats.py`.
 - **Edge cases and limits:** non-eligible dividends are estimated as eligible; Quebec and other provinces are refused; OAS recovery tax is not modelled; dividends are classified by listing suffix when the books carry no ISIN (docs/limits.md "Non-eligible dividends are estimated as eligible", "Estimate classifies dividends by listing suffix"). `taxjson stats` is a view, not a filing number.
 
@@ -383,7 +383,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 - **Rule:** premiums are taxed when the position closes; there is no grant timing, so no transition question is asked (a contract written last year and closed this year is taxed at the close like any other). Exercise or assignment folds the premium into the stock's basis or proceeds; each assignment's premium goes to its own stock leg (same pairing rule as Canada). Cash-settled options realize on the option. Exercising a warrant or right is not a sale: its basis and the exercise price become the shares' basis, and the holding period starts at exercise.
 - **Source:** §1234; Pub 550 "Options".
-- **Rule ids:** `US-OPT-01`, `US-OPT-07`, `US-OPT-02`, `US-OPT-03`, `US-OPT-05`, `US-OPT-06`.
+- **Rule ids:** `US-OPT-01`, `US-OPT-07`, `US-OPT-02`, `US-OPT-03`, `US-OPT-05`, `US-OPT-06`, `US-PLAN-08` (`taxjson option-yield`: an underlying's option trades over a window as money and a yield on the cost of the shares held (else the strike notional); planning numbers only).
 - **Code:** `src/taxjson/lib/core.py` — `USATaxRules`, `_take_option_adj`, `_pair_assign_legs`, `exercise_target`.
 
 ## §1256 contracts and futures
@@ -398,7 +398,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 - **Rule:** a merger is elected per event: `taxable_exchange` (§1001: sold and bought at FMV), `reorg_368` (all-stock: basis carries over, holding period tacks) or `reorg_368_boot` (§356 per lot: gain recognised up to the lot's share of the cash, a loss never; new basis = basis − cash + gain). Cash in lieu is a sale of the fraction from the oldest lot. A cash merger is a sale; shares-and-cash from an IB row stops the run as UNSUPPORTED.
 - **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-CORP-03` … `US-CORP-05` (citing §1001, §368(a), §358, §1223(1), §356, Reg. §1.356-1(b)).
-- **Rule ids:** `US-CORP-01`, `US-CORP-03`, `US-CORP-04`, `US-CORP-05`, `US-CORP-08`, `US-CORP-09`, `US-CORP-10`, `US-CORP-11`, `US-CORP-13` (one split reported by several sources within a week is one event, applied once).
+- **Rule ids:** `US-CORP-01`, `US-CORP-03`, `US-CORP-04`, `US-CORP-05`, `US-CORP-08`, `US-CORP-09`, `US-CORP-10`, `US-CORP-11`, `US-CORP-13` (one split reported by several sources within a week is one event, applied once), `US-CORP-14` (a merger delivered at different whole-share ratios per account applies each account's ratio to its own lots).
 - **Code:** `src/taxjson/lib/corp_actions.py` — `USA_MERGER`, `_emit_boot_exchange`, `_emit_basis_carryover_rename`, `_emit_taxable_exchange`.
 - **Edge cases and limits:** a significant holder attaches the Reg. §1.368-3 statement; taxjson only says so.
 
@@ -426,9 +426,9 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 ## Stock dividends (§305, §307)
 
-- **Rule:** a stock dividend is not income: basis is spread over old and new shares, the new shares keep the old purchase dates, and they are not a wash-sale purchase. A taxable stock dividend (§305(b)) is not detected. Received with no shares held, the new shares are a $0 purchase with a warning.
-- **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-STKDIV-01` … `US-STKDIV-03`.
-- **Rule ids:** `US-STKDIV-01`, `US-STKDIV-02`, `US-STKDIV-03`.
+- **Rule:** a stock dividend is not income: the basis of the lots entitled to it (bought before the ex-dividend date, or with only a record date before it; Pub. 550 "Stock bought at various times") is spread over those shares and the new ones, which keep those lots' purchase dates; a lot bought after the entitlement date keeps its own basis; the new shares are not a wash-sale purchase. A broker's row carries no record or ex date: the lots held on the pay date are taken as entitled, and a lot bought within the 90 days before the pay date is warned about. A taxable stock dividend (§305(b)) is not detected. Received with no shares held (or none entitled), the new shares are a $0 purchase with a warning.
+- **Source:** `REFERENCES.md` has no row: see `taxjson tax-logic` rules `US-STKDIV-01` … `US-STKDIV-04`; IRS Publication 550, "Stock Dividends", "Stock bought at various times".
+- **Rule ids:** `US-STKDIV-01`, `US-STKDIV-02`, `US-STKDIV-03`, `US-STKDIV-04`.
 - **Code:** `src/taxjson/lib/core.py` — `USATaxRules`, `is_stock_dividend`; `src/taxjson/lib/country.py` — `stock_dividend_in_loss_window`.
 
 ## Non-cash distributions
@@ -494,7 +494,7 @@ Settings named here are explained in `docs/settings.md`. taxjson computes; it do
 
 - **Rule:** `taxjson estimate`: federal tax only (single filer, standard deduction), every dividend qualified, NIIT 3.8% over the MAGI threshold, a net capital loss offsetting up to $3,000. AMT (Form 6251) and its credit are not modelled; there is no `taxjson amt` in a US project; estimated tax (1040-ES) is not modelled.
 - **Source:** qualified dividends §1(h)(11); NIIT §1411.
-- **Rule ids:** `US-RPT-04`, `US-RPT-07`, `US-EST-NIIT`, `US-EST-NIIT-LOSS`, `US-EST-VINTAGE`, `US-EST-TABLE`, `US-AMT-01`.
+- **Rule ids:** `US-RPT-04`, `US-RPT-07`, `US-EST-NIIT`, `US-EST-NIIT-LOSS`, `US-EST-VINTAGE`, `US-EST-TABLE`, `US-AMT-01`, `US-PLAN-09` (`taxjson plot-tax`: the year's estimate run through each month's end, a month's tax the difference; planning numbers only).
 - **Code:** `src/taxjson/lib/tax_estimate.py` — `estimate_usa`, `_usa_tax`, `US_NIIT_RATE`.
 - **Edge cases and limits:** docs/limits.md "US AMT is not computed", "US estimated taxes (1040-ES) are not modeled", "Non-eligible dividends are estimated as eligible".
 

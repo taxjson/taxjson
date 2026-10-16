@@ -41,7 +41,9 @@
 #   TAXJSON_REPO     git remote              (default the GitHub repo)
 #   TAXJSON_WITH_FETCH  0 = leave taxjson-fetch out (as --without-fetch);
 #                       1 = install it (the default; as --with-fetch)
-#   TAXJSON_DRY_RUN  1 = say which release the channel resolves to, change nothing
+#   TAXJSON_DRY_RUN  1 = say which release the channel resolves to and stop:
+#                    an existing install only fetches tags; a new one is not
+#                    created (the channel is resolved in a temporary clone)
 set -euo pipefail
 
 DIR="${TAXJSON_DIR:-$HOME/.local/share/taxjson}"
@@ -159,8 +161,18 @@ echo "   git $(git --version | awk '{print $3}')"
 echo "   $("$PY" --version 2>&1) at $PY"
 
 say "2/4 Source → $DIR"
+DRY_RUN="${TAXJSON_DRY_RUN:-0}"
 if [ -d "$DIR/.git" ]; then
   git -C "$DIR" fetch --tags --quiet origin
+elif [ "$DRY_RUN" = 1 ]; then
+  # A dry run changes nothing: resolving the channel needs the tags and
+  # origin/main:channels.json, so it clones into a temporary folder that
+  # is removed on exit, and never creates $DIR or its parent.
+  DRY_TMP="$(mktemp -d)"
+  trap 'rm -rf "$DRY_TMP"' EXIT
+  echo "   (dry run: $DIR does not exist and is not created)"
+  DIR="$DRY_TMP/src"
+  git clone --quiet "$REPO" "$DIR"
 else
   mkdir -p "$(dirname "$DIR")"
   git clone --quiet "$REPO" "$DIR"
@@ -210,8 +222,12 @@ if [ "$TARGET" != main ]; then
     fi ;;
   esac
 fi
-if [ "${TAXJSON_DRY_RUN:-0}" = 1 ]; then
-  echo "   channel $CHANNEL → release $TARGET  (dry run: nothing checked out or installed)"
+if [ "$DRY_RUN" = 1 ]; then
+  if [ "$TARGET" = main ]; then
+    echo "   channel $CHANNEL → main  (dry run: nothing checked out or installed)"
+  else
+    echo "   channel $CHANNEL → release $TARGET  (dry run: nothing checked out or installed)"
+  fi
   exit 0
 fi
 if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no)" ]; then

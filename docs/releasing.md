@@ -1,20 +1,79 @@
 # Releasing
 
 taxjson has one development line, a sequence of release tags, and three
-channels that name a release.
+channels that name a release. Development happens in a private dev repo;
+the public repo (`taxjson/taxjson`, what installers read) changes only
+through the publisher, which publishes each release tag after a gate and a
+wait ("How a release reaches the public repo", below).
 
 | Line | What it is | Who runs it |
 | --- | --- | --- |
-| `main` | Development. Changes land by pull request once GitHub CI passes (`scripts/land.sh`); every commit passes `scripts/ci.sh --quick`, the full gate before a release. | Contributors, and installs on the `dev` channel. |
-| `vX.Y.Z` tags | Releases. Never moved or deleted; each one passed the full local gate (fuzzers included) and GitHub CI before it was tagged. | Installs on a channel that names it, or pinned to it. |
+| `main` | Development, on the dev repo. Changes land by pull request once CI passes (`scripts/land.sh`); every commit passes `scripts/ci.sh --quick`, the full gate before a release. The public repo's `main` holds one commit per published release, plus channel updates. | The maintainer; installs on the `dev` channel run the public `main`. |
+| `vX.Y.Z` tags | Releases. Never moved or deleted; each one passed the full local gate (fuzzers included) and CI before it was tagged, and the publisher's gate twice before it was published. | Installs on a channel that names it, or pinned to it. |
 
 | Channel | Points at | Moves when |
 | --- | --- | --- |
-| `latest` | the newest `vX.Y.Z` tag | you cut a release (`scripts/release.sh`) |
-| `beta` | the release `channels.json` on `main` names | you promote (`scripts/promote.sh vX.Y.Z beta`) |
-| `stable` | the release `channels.json` on `main` names — **what new installs get** | you promote (`scripts/promote.sh vX.Y.Z`) |
+| `latest` | the newest published `vX.Y.Z` tag | the publisher publishes a release you tagged (`scripts/release.sh`) |
+| `beta` | the release `channels.json` on the public `main` names | you promote (`scripts/promote.sh vX.Y.Z beta`); the publisher copies it on its next run |
+| `stable` | the release `channels.json` on the public `main` names — **what new installs get** | you promote (`scripts/promote.sh vX.Y.Z`); the publisher copies it on its next run |
 
 `dev` (the `main` branch) and a pinned `vX.Y.Z` are installer channels too.
+
+## How a release reaches the public repo
+
+The maintainer's clone has two remotes: `origin`, the private dev repo
+(branches, pull requests, CI, release tags), and `public`, the public
+repo, read only:
+
+```bash
+git remote add --no-tags public https://github.com/taxjson/taxjson.git
+git remote set-url --push public DISABLED
+```
+
+(`--no-tags`: the public repo's tags are the publisher's own objects,
+which would clash with the dev repo's.) Nobody pushes to the public repo:
+its rulesets let only the publisher's deploy key update `main` and create
+`v*` tags.
+
+1. `scripts/release.sh` pushes an annotated `vX.Y.Z` tag to the dev repo.
+2. The publisher (a private repository of the maintainer's that runs the
+   publish kit on a schedule) picks the tag up and runs its gate on the
+   tagged tree and its CHANGELOG section: the maintainer's private values
+   (as keyed fingerprints), the generic personal-data patterns and
+   gitleaks. A hit stops the release and opens a private issue naming the
+   rule, path and line (never the value); the fix is a new patch version.
+3. It posts a private digest of the public-facing text that changes, then
+   waits an hour (`wait_hours` in `publish.toml`). Meanwhile the maintainer can hold all publishing or
+   reject this release; a moved or deleted dev tag cancels it.
+4. It runs the gate again (private values added during the wait count
+   too), then pushes one commit onto the public `main` (the tagged tree
+   minus the files that never leave the dev repo, as `Release vX.Y.Z`) and
+   an annotated `vX.Y.Z` tag on it.
+5. The public repo's `.github/workflows/release.yml` creates the GitHub
+   release from that tag's CHANGELOG section (`scripts/release-notes.sh`),
+   and `tests.yml` runs on the release commit.
+
+A channel move takes the fast lane: `scripts/promote.sh` lands the
+`channels.json` change on the dev `main` and pushes a
+`channels-YYYYMMDDTHHMMSSZ` tag (UTC) on that commit. On its next run the
+publisher copies that one file onto the public `main` (`Update channels`),
+after its gate (every release the file names must be published), with no
+wait and no digest. Nothing else on the dev `main` rides along.
+
+So the public history never carries dev commit messages, branches or pull
+requests, and a release is public about a day after it is tagged. The
+publisher runs on a schedule that GitHub may start hours late; the
+maintainer can start a run by hand. Never published: `publish.toml`
+(where and how the publisher publishes; its own copy must match),
+`.github/dependabot.yml` (dependency updates run in the dev repo) and the
+private-values provider `scripts/private-values`, which reads the
+maintainer's private lists for the publisher's fingerprints. It prints
+values: never run it where its output would be kept.
+
+A pull request on the public repo cannot be merged there. The maintainer
+brings it into the dev repo (the contributor stays the commit's author),
+lands it, and closes the public pull request, which ships with the next
+release.
 
 ## Channels — releasing often without moving new users
 
@@ -36,7 +95,7 @@ running `taxjson` is an editable install of (as long as that is not the
 production copy):
 
 ```bash
-tjs deploy               # this machine's production copy → the newest tag   (tjs deploy v0.17.0 for one)
+tjs deploy               # this machine's production copy → the newest published tag   (tjs deploy v0.17.0 for one)
 tjs promote v0.17.0      # stable → v0.17.0   (tjs promote v0.17.0 beta; no version = what this machine runs)
 tjs channels             # where everything points (works on any install; --json, all)
 ```
@@ -45,8 +104,9 @@ tjs channels             # where everything points (works on any install; --json
 everyone else upgrades by re-running the installer.
 
 So the rhythm is: tag as often as you like, and `tjs deploy` each tag to
-your own production copy (it runs your real books on the release before
-anyone else does); promote to `beta` when a release is worth testers'
+your own production copy once it is published (the production copy is a
+clone of the public repo; it runs your real books on the release before
+anyone else moves to it); promote to `beta` when a release is worth testers'
 time; promote to `stable` once it has run for a while without surprises
 — real books run on it, `check-filed` clean. Rolling `stable` back is
 the same command with an older tag (it asks first).
@@ -58,27 +118,34 @@ the same command with an older tag (it asks first).
 `scripts/promote.sh <tag> [stable|beta]` edits `channels.json`, commits
 only that file as `Promote vX.Y.Z to stable` and lands it on `main`
 through `scripts/land.sh` (the pre-push PII gate, then a pull request
-merged once its checks pass; see "main takes pull requests only").
-It never tags and never rebuilds. It promotes only what GitHub holds, so
-it fetches first and refuses:
+merged once its checks pass; see "main takes pull requests only"). Then
+it asks the publisher for it with a fast-lane tag (above). It never makes
+a release tag and never rebuilds. Run again when the channel already
+names the release, it makes the fast-lane tag only if the public repo
+does not say so yet and none is waiting (after a pull request that merged
+once promote had stopped waiting, for instance). It promotes only what
+GitHub holds, so it fetches first and refuses:
 
 - off `main`, with uncommitted changes to `channels.json`, for `latest`
   (always the newest tag), or for a tag that is not a `vX.Y.Z` release;
 - unless the local `main` is exactly `origin/main` (nothing unpushed
   rides along with the promote commit, and nothing newer is missed);
 - unless the tag is an annotated tag that origin has (the same object as
-  this clone's) and its commit is on `origin/main`.
+  this clone's) and its commit is on `origin/main`;
+- unless the release is published: the public repo has the tag (the
+  remote `public`; without that remote it refuses too).
 
-The channel's current release is read from `origin/main:channels.json`,
-what installers read. Moving a channel **forward** also needs CI: the
+The channel's current release is read from `origin/main:channels.json`
+(the public `main` gets that file through the fast lane). Moving a channel **forward** also needs CI: the
 GitHub Actions `tests.yml` run for the push of the tag's commit to
 `main` must have passed (`scripts/github-ci.sh`, the same check the
 release cut makes; a run still going is waited for; no run, a failed run
 or no `gh` refuses).
 `TAXJSON_PROMOTE_IGNORE_CI=1` promotes without that check and prints a
 warning. A forward move then runs `scripts/check-public.sh`: it reads
-what GitHub serves beside the code — every release's notes, every issue
-and pull request, and their comments (`gh api`, read-only) — and scans it
+what the public repo serves beside the code — every release's notes,
+every issue and pull request, and their comments (`gh api`, read-only) —
+and scans it
 with `scripts/check-pii.sh` (release notes as `--message`), naming the
 item of each hit, masked; a hit stops the promote. Without a working
 `gh` that scan is skipped with a warning. Run it any time:
@@ -89,13 +156,14 @@ moved on meanwhile, the PII gate refuses, a check fails), the promote
 commit is taken back off the local `main`: only that commit (the script checks HEAD is it,
 its parent the `main` it started from, its only file `channels.json`),
 and other staged or uncommitted work is left alone. When `land.sh` is
-still waiting at its timeout (exit 3), the pull request stays open and
-the promote happens when it merges. Trailers
+still waiting at its timeout (exit 3), the pull request stays open; run
+`scripts/promote.sh` again once it merges. Trailers
 go on the commit only when you pass them:
 `TAXJSON_PROMOTE_TRAILERS='Co-Authored-By: …' scripts/promote.sh v0.17.0`.
-`TAXJSON_SLUG` names the GitHub repository when `origin` is not a
-github.com URL (default `taxjson/taxjson`); `release.sh` and
-`check-public.sh` read it too.
+`TAXJSON_SLUG` names the dev repository when `origin` is not a
+github.com URL (`release.sh` and `land.sh` read it too);
+`TAXJSON_PUBLIC_SLUG` the public one (default: the remote `public`'s
+address, else `taxjson/taxjson`), which `check-public.sh` scans.
 
 ### What the installer does with a channel
 
@@ -110,7 +178,9 @@ running ahead of its channel (after `tjs deploy`, or a switch from
 `latest` to `stable`) stays put until the channel passes it; naming a
 version is how to go back. It installs only an annotated tag on
 `main`'s history (tags are not signed; this is not a signature check).
-`TAXJSON_DRY_RUN=1` prints what it would pick and changes nothing.
+`TAXJSON_DRY_RUN=1` prints what it would pick and stops: an existing
+install only has its tags fetched; a missing one is not created (the
+channel is resolved in a temporary clone that is removed).
 
 The installer script is on the `stable` schedule too: taxjson.com's
 `install.sh` shim fetches it from the release `stable` names, not from
@@ -172,32 +242,38 @@ the local `main` is exactly `origin/main`; the version commit is on `main`
 (the newest commit whose change made `pyproject.toml` say the version,
 found by content — a rebase merge gives the landed commit a new id — with
 the CHANGELOG's `## v0.17.0 (date)` heading and the plugin's version); the
-tag is free here and on origin; and the GitHub Actions `tests.yml` run for
+tag is free here, on origin and on the public repo (a tag name the public
+repo has is used for good); and the GitHub Actions `tests.yml` run for
 the push of **that exact commit** to `main` succeeded
 (`scripts/github-ci.sh`: it waits up to three minutes for the run to be
 listed, waits for a run still going, and names a failed one; there is no
 override). A pull request's run does not count: it tested a merge onto
 whatever its base was then. Then it makes the annotated tag on the version
 commit (not on later commits, which it names), runs the pre-push gate on
-it, pushes that one tag by name — never `git push --tags` (a checkout can
-hold tags that must not be public; the pre-push hook refuses any other
-tag) — and creates the GitHub release
-(`gh release create vX.Y.Z --verify-tag -t "taxjson vX.Y.Z"`) with the
-CHANGELOG's `## vX.Y.Z` section as its notes, or `--notes FILE` (give the
-same file to both steps). A refused tag push deletes the local tag again.
-The cut needs `gh`, logged in: without it nothing is tagged.
+it, and pushes that one tag by name to the dev repo — never
+`git push --tags` (a checkout can hold tags that must not be public; the
+pre-push hook refuses any other tag). A refused tag push deletes the local
+tag again. The cut needs `gh`, logged in: without it nothing is tagged.
+The publisher does the rest ("How a release reaches the public repo"),
+and the public repo's `release.yml` creates the GitHub release
+(`gh release create vX.Y.Z --verify-tag -t "taxjson vX.Y.Z"`) from the
+CHANGELOG's `## vX.Y.Z` section at the tag.
 
-The notes are published apart from the code, so no push hook sees them:
+The notes are published apart from the code (as the GitHub release), so
 they are scanned with `scripts/check-pii.sh --message` (the
 commit-message scan: denylist, figure list, generic patterns, money
-amounts) by `--prepare` before anything is committed, by the cut before
-it tags, and again right before the release is created; a hit stops the
-release. (A published release's notes can still be edited, even on an
-immutable release — see "Something private leaked into a release" — but
-a scan before they are published is the point.)
+amounts) by `--prepare` before anything is committed and by the cut
+before it tags; the publisher's gate scans them twice more and
+`release.yml` once more (generic patterns) before the release exists. A
+hit stops the release. (A published release's notes can still be edited,
+even on an immutable release — see "Something private leaked into a
+release" — but a scan before they are published is the point.) They are
+always the CHANGELOG section: the old `--notes FILE` is refused, since the
+public release could not carry it.
 
-Neither step touches `channels.json`: the new release is `latest`, and
-`stable` / `beta` stay where they were until you promote. The gate runs
+Neither step touches `channels.json`: once published the new release is
+`latest`, and `stable` / `beta` stay where they were until you promote.
+The gate runs
 the test suite only: a handful of tests drive the real pipeline, but on
 synthetic two-trade projects written into temporary directories and
 deleted afterwards. Nothing in the suite or the release script reads a
@@ -216,8 +292,9 @@ message.
 **The gate is both:** the full local `scripts/ci.sh` (fuzzers, the private
 lists) before the version commit is made, and GitHub CI (the Python
 3.9–3.13 matrix, the extras, gitleaks, the per-commit PII scan) on the
-version commit before it is tagged. A CI failure on the version commit
-means nothing is tagged: re-run a flaky run on GitHub and cut again, or
+version commit before it is tagged, then the publisher's gate twice before
+it is published. A CI failure on the version commit means nothing is
+tagged: re-run a flaky run on GitHub and cut again, or
 fix `main` and prepare the next patch version.
 
 ### Reusing a PASS
@@ -271,7 +348,7 @@ Semantic versioning, applied to tax output: a change that alters any filed numbe
 
 ## The tag guard
 
-Never `git push --tags`: `scripts/release.sh` pushes the one tag, by name. The `pre-push` hook (`scripts/hooks/pre-push`, installed by `scripts/dev-setup.sh`) refuses a push that carries any tag that is not named `vX.Y.Z`, is a lightweight tag, or points at a commit that is not on the remote's `main` (or on the `main` the same push sends), and every push that deletes or moves a tag. On GitHub, rulesets refuse moving or deleting a `v*` tag, creating one except by an admin, and creating the old pre-release tag ranges; and releases are immutable (below).
+Never `git push --tags`: `scripts/release.sh` pushes the one tag, by name, and `scripts/promote.sh` its fast-lane tag. The `pre-push` hook (`scripts/hooks/pre-push`, installed by `scripts/dev-setup.sh`) refuses a push that carries any tag that is not named `vX.Y.Z` or `channels-YYYYMMDDTHHMMSSZ`, is a lightweight tag, or points at a commit that is not on the remote's `main` (or on the `main` the same push sends), and every push that deletes or moves a tag. On the public repo, rulesets let only the publisher's deploy key update `main` or create a `v*` tag, refuse moving or deleting a `v*` tag, and refuse creating the old pre-release tag ranges; and releases are immutable (below). The dev repo is private and has no rulesets (rulesets on private repositories need a paid plan): the hook and the publisher, which ignores any tag that is not a newer release or a fast-lane tag, are its checks.
 
 `scripts/dev-setup.sh` (or `scripts/dev-setup.sh --hook-only`) installs the hook into the clone's own hooks folder (`git rev-parse --git-common-dir`/hooks, shared by every worktree; the installed file runs the pushing worktree's own `scripts/hooks/pre-push`). It does so even when a global `core.hooksPath` is set — git then runs that folder's `pre-push` instead — and says whether that global hook chains to the clone's own (one that runs `"$(git rev-parse --git-common-dir)/hooks/pre-push"` does); when it does not, it warns that the guard will not run.
 
@@ -292,8 +369,8 @@ edited: that was wrong.)
 
 ## main takes pull requests only
 
-Every change reaches `main` through a pull request whose required checks
-passed, whoever or whatever made it. `scripts/land.sh` is how the
+Every change reaches the dev repo's `main` through a pull request whose
+checks passed, whoever or whatever made it. `scripts/land.sh` is how the
 maintainer's own commits land (and how `scripts/release.sh --prepare` and
 `scripts/promote.sh` publish `main`):
 
@@ -306,92 +383,51 @@ It refuses (exit 2) off `main`, behind `origin/main` (pull --rebase
 first) or when the pre-push PII gate refuses — which it runs itself,
 through `bash`, on exactly what it publishes. Then it pushes the new
 commits as a branch `land/<time>-<sha>`, opens the pull request (title:
-the commit subject; body: the subjects), and has it rebase-merged once its
-checks pass — by GitHub's auto-merge (`gh pr merge --auto --rebase`) when
-`main`'s rules require checks and the repository allows auto-merge,
-otherwise by waiting for every check itself and then merging. It waits
-(`--timeout`, 60 minutes; `--no-wait` returns once the pull request is
-open) and brings local `main` to what landed (`git pull --rebase
---autostash`: the rebase merge gave the commits new ids, and the local
-copies drop out). A failed check (exit 1) turns auto-merge off, closes the
+the commit subject; body: the subjects), waits for every check and
+rebase-merges it once all have passed. (Were `main` given a ruleset that
+requires checks, and auto-merge allowed, it would hand the merge to
+GitHub's auto-merge instead; the private dev repo, on GitHub's free plan,
+has neither.) It waits (`--timeout`, 60 minutes; `--no-wait` returns once
+the pull request is open) and brings local `main` to what landed
+(`git pull --rebase --autostash`: the rebase merge gave the commits new
+ids, and the local copies drop out). A failed check (exit 1) closes the
 pull request and deletes its branch, so nothing merges later behind your
-back; the commits stay on local `main` to fix and land again. Exit 3: still
-waiting at the timeout; the pull request stays open. Never
+back; the commits stay on local `main` to fix and land again. Exit 3:
+still waiting at the timeout; the pull request stays open. Never
 `git push --no-verify`. `TAXJSON_LAND_DIRECT=1` pushes straight to `main`
-after the same gate — only for a remote with no pull-request rule (the
-script tests' throwaway remotes) and the emergency below.
+after the same gate — only for the script tests' throwaway remotes and
+the emergency below.
 
-### The ruleset
-
-Applied by the owner (`gh api repos/taxjson/taxjson/rulesets -X POST
---input -` with the JSON below), next to the existing "protect main"
-ruleset. GitHub's "Allow auto-merge" setting
-(`gh api -X PATCH repos/taxjson/taxjson -F allow_auto_merge=true`) lets
-`land.sh` hand the merge to GitHub; without it `land.sh` waits and merges
-itself. The required checks are the check-run names of every `tests.yml`
-job that runs on **every** pull request — none is path-filtered or
-skipped by an `if:` on a pull request, so no required check can wait
-forever. The nightly fuzz (schedule only) and the privacy watch (daily)
-are not required. Renaming a job, or changing the runner image or the
-Python matrix, renames its check: change this list in the same pull
-request, and update the ruleset (`tests/test_fix_release_hardening.py`
-fails when the two disagree).
-
-<!-- ruleset: main -->
-```json
-{
-  "name": "main: pull requests with passing checks",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-  "bypass_actors": [],
-  "rules": [
-    {"type": "deletion"},
-    {"type": "non_fast_forward"},
-    {"type": "required_linear_history"},
-    {"type": "pull_request", "parameters": {
-      "required_approving_review_count": 0,
-      "dismiss_stale_reviews_on_push": false,
-      "require_code_owner_review": false,
-      "require_last_push_approval": false,
-      "required_review_thread_resolution": false,
-      "allowed_merge_methods": ["rebase"]}},
-    {"type": "required_status_checks", "parameters": {
-      "strict_required_status_checks_policy": false,
-      "do_not_enforce_on_create": false,
-      "required_status_checks": [
-        {"context": "ruff (critical tier)", "integration_id": 15368},
-        {"context": "consistency / tax-rules / pii", "integration_id": 15368},
-        {"context": "secrets (gitleaks)", "integration_id": 15368},
-        {"context": "pii / new commits", "integration_id": 15368},
-        {"context": "ubuntu-24.04 / Python 3.9", "integration_id": 15368},
-        {"context": "ubuntu-24.04 / Python 3.10", "integration_id": 15368},
-        {"context": "ubuntu-24.04 / Python 3.11", "integration_id": 15368},
-        {"context": "ubuntu-24.04 / Python 3.12", "integration_id": 15368},
-        {"context": "ubuntu-24.04 / Python 3.13", "integration_id": 15368},
-        {"context": "ubuntu-24.04 / Python 3.12 / all extras", "integration_id": 15368}
-      ]}}
-  ]
-}
-```
-
-(`integration_id` 15368 is GitHub Actions: only its runs satisfy a
-check.) No bypass: in an emergency the owner turns the rule off (below).
+Nothing enforces this on the dev repo but the tooling: land through
+`scripts/land.sh`. Every `tests.yml` job that runs on a pull request runs
+on every one (no path filter, no `if:` that skips one), so a check that
+should have run is never simply missing from the wait
+(`tests/test_fix_release_hardening.py`). The nightly run (the whole
+matrix plus the deep fuzz) and the privacy watch (daily) are not part of
+it, and both run on the public repo only. The dev repo is private, and
+GitHub's runners for private repos are billed by the minute: a nightly
+run there would use more than a month's included minutes, and each
+landing runs the matrix twice. So the dev repo's jobs run on its own
+self-hosted runner (label `taxjson-dev`: the maintainer's machine, as a
+user of its own, set up with the publish kit's `runner/setup.sh`), and
+the public repo's on GitHub's. Each job installs into a fresh virtualenv,
+since a self-hosted runner keeps its Python between jobs.
 
 ### Emergencies
 
 - **A broken `main` that blocks every pull request** (or GitHub Actions
-  down while a fix must ship): turn the rule off —
-  `gh api -X PUT repos/taxjson/taxjson/rulesets/<id> -f enforcement=disabled`
-  (the id from `gh api repos/taxjson/taxjson/rulesets`) — push the fix
-  with `TAXJSON_LAND_DIRECT=1 scripts/land.sh` (the PII gate still runs),
-  turn it back on (`-f enforcement=active`), and **say so in the commit
-  message** ("pushed with the main rule off: <why>"). A release still
-  needs green CI on its version commit; there is no way around that but
-  waiting.
+  down while a fix must ship): push the fix with
+  `TAXJSON_LAND_DIRECT=1 scripts/land.sh` (the PII gate still runs) and
+  **say so in the commit message** ("pushed straight to main: <why>"). A
+  release still needs green CI on its version commit; there is no way
+  around that but waiting.
 - **A bad release:** release a new patch version, and roll a channel back
   with `scripts/promote.sh` and an older tag (Rolling back, below). A bad
   release is not edited.
+- **A release that must not publish:** during its wait, add the label
+  `reject` to its digest issue in the publisher, or set the publisher's
+  hold; or move or delete its dev tag (`git push origin :refs/tags/vX.Y.Z`
+  from your own terminal; the pre-push hook refuses tag deletes by design).
 - **Something private leaked into a release** — see the next section.
 
 ### Something private leaked into a release
@@ -407,28 +443,43 @@ from GitHub does not un-publish it (clones, forks, caches); rotation does.
   and delete the old revision from its edit history (the "edited"
   menu → the revision → "Delete revision from history"); a pull request's
   title and body too.
-- **In code or a commit message that shipped:** the history must be
-  rewritten, and every release whose commit contains the bad commit is
-  lost. In order:
-  1. Move any channel (`stable`, `beta`) that names an affected release
-     back to a release before the bad commit (`scripts/promote.sh`), so
-     no install is sent to a tag about to disappear.
-  2. Delete each affected release (`gh release delete vX.Y.Z --yes`: an
-     immutable release can be deleted).
-  3. Turn the "release tags: never moved or deleted" ruleset off, delete
-     the tags on GitHub (`gh api -X DELETE
-     repos/taxjson/taxjson/git/refs/tags/vX.Y.Z`; the pre-push hook
-     refuses tag deletes by design), and turn it back on.
-  4. Turn "protect main" and the pull-request rule off, rewrite the
-     history (`git filter-repo` on a fresh clone; check it with
-     `git log --all -S '<value>'`), force-push `main`, and turn both rules
-     back on.
-  5. Release the next patch version from the clean history. The deleted
-     version numbers are gone for good: GitHub never lets an immutable
-     release's tag name be used again.
-  6. Ask GitHub Support to remove cached views of the old commits and
-     the pull-request refs that still hold them; forks and clones keep
-     their copies, which is why step 0 is rotation.
+- **In a file of a published release:** the public history must be
+  rewritten, and every release whose tree holds the value is lost (dev
+  commit messages never reach the public repo: each release is one commit
+  with a fixed message). First set the publisher's hold, so nothing
+  publishes meanwhile, and remove the value on the dev `main`. Then:
+  - **When the public repo has no forks**, recreate it rather than rewrite
+    it (no wait on GitHub Support): make it private and rename it (it
+    stays, frozen, never public again), create a new public
+    `taxjson/taxjson`, and put it on the publisher again (`kit adopt`:
+    deploy key, rulesets, immutable releases). Release the next patch
+    version from the clean dev `main`, with `channels.json` naming only
+    releases the new repository will have. The cost: GitHub does not let
+    an immutable release's tag name be created again, even in the new
+    repository, so the current release is re-cut under the next patch
+    number (v0.30.0 became v0.30.1 this way on 2026-10-12), and installs
+    pinned to an older release must move (docs/troubleshooting.md,
+    "channels.json names … but … has no such tag").
+  - **When it has forks:**
+    1. Move any channel (`stable`, `beta`) that names an affected release
+       back to a release before the value (`scripts/promote.sh`), so no
+       install is sent to a tag about to disappear.
+    2. Delete each affected release (`gh release delete vX.Y.Z --yes`: an
+       immutable release can be deleted).
+    3. Turn the public repo's tag rulesets off ("release tags: never
+       moved or deleted", the publisher's `kit-tags`), delete the tags
+       (`gh api -X DELETE repos/taxjson/taxjson/git/refs/tags/vX.Y.Z`),
+       and turn them back on.
+    4. Turn "protect main" and the publisher's `kit-main` off, rewrite
+       the history (`git filter-repo` on a fresh clone; check it with
+       `git log --all -S '<value>'`), force-push `main`, and turn both back
+       on. The publisher then stops ("the public repo changed outside the
+       kit") until `kit accept-public` records the new `main`.
+    5. Release the next patch version. The deleted version numbers are
+       gone for good.
+    6. Ask GitHub Support to remove cached views of the old commits;
+       forks and clones keep their copies, which is why step 0 is
+       rotation.
 
 ## Pinned actions and runners
 
@@ -472,8 +523,9 @@ which renames the matrix checks: update the ruleset's required checks
   request adds — and, on a push to `main`, every commit from `before` to
   the new head — its patch, message and identities, with the base's
   scanner and the generic patterns.
-- **Privacy watch** (`.github/workflows/privacy-watch.yml`, daily and by
-  hand): `scripts/check-public.sh --days 2` with a read-only token and no
+- **Privacy watch** (`.github/workflows/privacy-watch.yml`, daily on the
+  public repo, and by hand): `scripts/check-public.sh --days 2` on
+  `taxjson/taxjson` with a read-only token and no
   secrets — the last two days of issues, pull request titles and bodies,
   comments and the messages of `main`'s commits, and every release note,
   against the generic patterns. A hit fails the run and GitHub e-mails the
@@ -483,8 +535,8 @@ which renames the matrix checks: update the ruleset's required checks
 
 ## Rolling back
 
-Never move or delete a published tag — installers may already have it. Roll the channel back instead: `scripts/promote.sh v0.16.0` (it asks before moving `stable` backwards), and new installs on `stable` get the good release again. Installs already on the bad release stay there — a channel never moves an install backwards — until the fix ships: fix it on `main` (`scripts/land.sh`), release the next patch (`scripts/release.sh v0.17.1 --prepare`, then `scripts/release.sh v0.17.1`), and promote that. A user who cannot wait pins the good release: `--channel v0.16.0`.
+Never move or delete a published tag — installers may already have it. Roll the channel back instead: `scripts/promote.sh v0.16.0` (it asks before moving `stable` backwards; the fast lane has no wait), and new installs on `stable` get the good release again once the publisher has run (start a run by hand to hurry it). Installs already on the bad release stay there — a channel never moves an install backwards — until the fix ships: fix it on `main` (`scripts/land.sh`), release the next patch (`scripts/release.sh v0.17.1 --prepare`, then `scripts/release.sh v0.17.1`; it publishes after its wait), and promote that. A user who cannot wait pins the good release: `--channel v0.16.0`.
 
 ## Your own production install
 
-Develop in the clone (`scripts/dev-setup.sh`, then `source setup.sh`), but run real books on a release: the installer's checkout under `~/.local/share/taxjson` (`TAXJSON_PROD_DIR` tells the release verbs when it is elsewhere) is the production copy, and `taxjson` on your PATH points at it. `tjs deploy` puts each new tag there; `--channel dev` switches that copy to `main` when you want to test a fix on real data before tagging. There is no follow-a-channel timer (Hatchabot's `follow-channel.sh`): a tax tool upgrades when you re-run the installer, not behind your back.
+Develop in the clone (`scripts/dev-setup.sh`, then `source setup.sh`), but run real books on a release: the installer's checkout under `~/.local/share/taxjson` (`TAXJSON_PROD_DIR` tells the release verbs when it is elsewhere) is the production copy, and `taxjson` on your PATH points at it. `tjs deploy` puts each new tag there once it is published. `--channel dev` follows the public `main`, which changes only with releases; to try an unreleased fix on real data, run a build of the dev checkout (a `git archive` export, not a clone) from the tax folder. There is no follow-a-channel timer (Hatchabot's `follow-channel.sh`): a tax tool upgrades when you re-run the installer, not behind your back.

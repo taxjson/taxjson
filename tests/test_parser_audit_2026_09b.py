@@ -327,6 +327,30 @@ class TestKrakenCoinUnitFees(unittest.TestCase):
         self.assertEqual(buy['fee'], 0.0)
         self.assertIn('net of Kraken commission', div['description'])
 
+    def test_2026_net_reward_has_no_binary_tail(self):
+        """gross - fee on the ledger's decimal digits: 0.0027 - 0.00013116
+        is 0.00256884, not 0.0025688399999999998 (what the view and
+        the .tt round trip then print)."""
+        csv = KR_HEAD_2026 + (
+            '"L1","E1","2026-01-14 10:00:00","earn","reward","currency",'
+            '"","QZC","earn / bonded","0.0027000000","0.0001311600",'
+            '"1.00","1.6930","0.0822","600.00","QZC"\n'
+            '"L2","E2","2026-01-14 10:00:00","earn","reward","currency",'
+            '"","QZE","earn / bonded","0.0000001289","0.0000000050",'
+            '"1.00","0.0003","0.0000","600.00","QZE"\n')
+        txs, _ = _parse(KrakenBrokerage(), csv, prefix='kr_ledgers_')
+        q = [t['quantity'] for t in txs if t['symbol'] == 'QZC']
+        self.assertEqual(q, [0.00256884, 0.00256884])
+        self.assertEqual(repr(q[0]), '0.00256884')
+        q = [t['quantity'] for t in txs if t['symbol'] == 'QZE']
+        self.assertEqual(repr(q[0]), '1.239e-07')
+        from taxjson.bin.taxjson_run import _tx_display_line
+        line = _tx_display_line(next(t for t in txs
+                                     if t['symbol'] == 'QZE'
+                                     and t['action'] == 'DIVIDEND'))
+        self.assertIn(' QZE 0.0000001239 USD ', line)
+        self.assertNotIn('e-0', line)
+
     def test_2026_reward_without_feeusd_scales(self):
         csv = KR_HEAD_2026 + (
             '"L1","E1","2026-01-14 10:00:00","earn","reward","currency",'

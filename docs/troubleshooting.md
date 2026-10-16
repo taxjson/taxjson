@@ -19,6 +19,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Installing and upgrading
 
+### Installer: `TAXJSON_DRY_RUN=1` left a full clone (with `.git`) in `TAXJSON_DIR` although it printed "(dry run: nothing checked out or installed)"
+- **Check:** `ls "$TAXJSON_DIR"` (default `~/.local/share/taxjson`) after a dry run into a folder that did not exist before: a clone of `TAXJSON_REPO` is there, and its `origin` is that repository.
+- **Cause:** the installer's "2/4 Source" step cloned (or fetched) before the dry-run exit. Resolving a channel needs the tags and `origin/main:channels.json`, so something has to be fetched, but a missing install folder should not be created for it.
+- **Fix:** upgrade: a dry run with no install resolves the channel in a temporary clone removed on exit and never creates `TAXJSON_DIR` or its parent; on an existing install it only fetches tags (the header, `docs/upgrading.md` and `docs/releasing.md` say so). On an older installer, delete the folder it left (`rm -rf "$TAXJSON_DIR"`) if you did not want an install there.
+- **Fixed in:** `v0.30.4`
+- **Code:** `install.sh` — `DRY_RUN`, `DRY_TMP`, `does not exist and is not created`
+
+### Installer: "✗ channels.json names v0.30.0 for stable, but https://github.com/taxjson/taxjson.git has no such tag."
+- **Check:** `git ls-remote --tags https://github.com/taxjson/taxjson.git` lists the releases the repository has; `cat ~/.config/taxjson/channel` shows the channel or release this install remembers; the message names the release and the channel it came from.
+- **Cause:** the channel (or a release you pinned) names a release the repository does not have. v0.30.0 was withdrawn on 2026-10-12 and published again as v0.30.1 (CHANGELOG.md); an install pinned to it, or one that read `channels.json` in the minutes while it still named it, asks for a tag that is gone.
+- **Fix:** re-run the installer on a channel (`--channel stable`), or pin a release the list above shows (`--channel v0.30.1`).
+- **Fixed in:** —
+- **Code:** `install.sh` — `has no such tag`
+
 ### Installer: "✗ A package pip downloaded does not match the sha256 that taxjson's lock (requirements/core.txt requirements/fx.txt) pins for it — refusing to install it."
 - **Check:** above the message pip prints "THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE" with the package, the file it downloaded and the "Expected" and "Got" sha256; the whole log is in `~/.local/share/taxjson/venv/pip-install.log`. `pip config list` and `env | grep PIP_` show an index or proxy of your own.
 - **Cause:** the installer installs every dependency from the release's hash-pinned locks (`requirements/*.txt`) and refuses a file whose sha256 the lock does not name, so a package uploaded to PyPI later (a hijacked release) never reaches an install. The usual innocent causes: a pip index, mirror or proxy that serves its own builds instead of PyPI's files (`PIP_INDEX_URL`, `pip.conf`), or a corrupted download cache. A file that really differs on pypi.org is a tampered package.
@@ -701,6 +715,41 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Corporate actions and income
 
+### After a merger held in two taxable accounts (US project), `tjs sanity` shows an account short the new shares it received, Form 8949 understates the gain of the account that sold them, and `tjs run --details` has "ATTENTION ... share-conservation" (or, Canada, `tjs t1135` shows a smaller cost amount than `tjs run`'s ACB for the new shares)
+- **Check:** `tjs run --details` says `NOTE: QZOLD.US -> QZNEW.US on 2024-06-03: per-account merger ratios [1, 1.05] applied ...` (Canada) or names the merger in each account; the accounts received different whole-share counts per old share (12 old became 12 new in one account, 40 became 42 in another). US: the account that received more shares than the first account's ratio gives sells them and goes short. Canada: `tjs t1135 --json` `per_symbol` cost for the new shares is below the engine's ACB in the inventory.
+- **Cause:** the merger's rows carry each account's actual delivery ratio. US: the first account's row scaled and renamed every account's lots at its ratio and the second account's row found nothing to rename, so that account held fewer shares than delivered and its sale opened a phantom short at no gain. Canada's gains engine folds the rows into one event at the holdings-weighted ratio, but the T1135 cost walk replayed them raw, with the same loss of shares, and a sale then released too much cost.
+- **Fix:** upgrade. US: each row reaches its own account's lots (an account with no row of its own takes the first ratio; `--per-account-basis`, which `tjs run` passes), and without per-account basis the rows fold as Canada's do. The T1135 walk folds them as the gains engine does, on the project's date basis. Then `tjs run`.
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/core.py` — `_per_account_rename_ratios`, `_split_covers`, `_fold_per_account_rename_ratios`; `src/taxjson/bin/taxjson_t1135.py` — `_fold_merger_ratios`
+
+### Canada: a merger with per-account ratios on shares that had been renamed earlier leaves `tjs sanity` short the new shares and `tjs sum` with a smaller gain on their sale; `tjs run --details` has no "per-account merger ratios" NOTE for it
+- **Check:** `tjs events all | grep SYMBOL` shows a rename (`SPLIT ... OLD NEW 1`) before the merger's per-account `SPLIT` rows, and no purchase under the intermediate ticker. `tjs sanity` on the new shares is short exactly the second account's extra shares.
+- **Cause:** the fold that weights a merger's per-account ratios by each account's holdings read only the rows of the merger's own symbol: shares bought under an earlier ticker and renamed into it weighed nothing, so no weights were found, the rows were not folded, and the first row renamed the whole pool at its ratio (2026-10 audit R01).
+- **Fix:** upgrade and `tjs run`: the weights replay every rename (and own-account move) up to the merger, so the shares renamed into the merger's source count.
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/core.py` — `_fold_per_account_rename_ratios`, `_weights`, `seen_rename`
+
+### `tjs stats` / `tjs win-rates`: a written option bought back shows a larger profit than its premium, or a written option that was split or renamed shows no trade at all
+- **Check:** `tjs events all ACCOUNT | grep SERIES`: the buy-back row carries a negative amount (a `.tt` line entered with the money signed), or a `SPLIT` row renames or redenominates the series before its close. `tjs option-yield` shows the same contract with the right P/L.
+- **Cause:** the statistics' matcher subtracted the signed amount as money paid, so a negative buy-back amount added to the profit; and it read only `BUYSELL` / `ASSIGN` rows, so a split or rename never moved the queued contracts and the close under the new series matched nothing (2026-10 audit R03, R04).
+- **Fix:** upgrade: money is read as a magnitude, the quantity's sign saying which way it went, and a split or rename moves and scales the queued contracts (one event when two rows report it).
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/trade_stats.py` — `written_option_trades`, `dedupe_split_events`
+
+### `tjs div-estimate 1m` (a short forward window) shows a smaller "Rest of tax year" total than `tjs div-estimate 12m` on the same books
+- **Check:** the `Rest of tax year` figure changes with the window asked for; `--details` lists the projected payments only up to the window's end.
+- **Cause:** a regular payer's payments were generated up to the forward window only, and the rest-of-year total summed that list (2026-10 audit R08).
+- **Fix:** upgrade: the projection runs to the later of the window and the tax year's end, the window total is the window's payments and the rest-of-year total the year's, whatever window was asked for.
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/div_estimate.py` — `estimate`, `reach`
+
+### US project: after a stock dividend, Form 8949 shows a short-term loss (or gain) on shares bought after the dividend's record date, and the long-term gain on the old shares is lower than their basis gives; `tjs run --details` has "stock dividend of N share(s) ... spread over"
+- **Check:** `tjs run --details` on the symbol: the "stock dividend" note names the shares whose basis was spread. A lot bought after the record date but before the pay date was scaled with the old ones (the trace, `tjs run --trace`, shows the old lot at 10.5 shares and the new lot at 10.5).
+- **Cause:** the §307 basis spread reached every lot held on the pay date, not only the lots entitled to the dividend (bought before the ex-dividend date; IRS Publication 550, "Stock bought at various times"). A sale then took part of a lot it should not have, moving basis between the lots and gain between the short- and long-term parts.
+- **Fix:** upgrade. With the row's `ex_date` (or `record_date`) the spread reaches the lots bought before it and the later lots keep their basis. A broker's row carries no such date: every lot held on the pay date still shares the basis, and a warning names a lot bought within the 90 days before the pay date as the open question (`ATTENTION: ... carries no record or ex-dividend date`, shown by `tjs run`); check the issuer's record date, and if a lot came after it, give the row its `ex_date` in a JSON book or correct the lots' basis by hand.
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/core.py` — `is_stock_dividend`, `_ent_date`, `_recent_qty`
+
 ### "Info: split QZS.TO x2 is booked on two dates (2025-06-03 and 2025-06-04) — One corporate event reported by two sources; applied ONCE, on 2025-06-03.", and a `[[distributions]]` amount (or an account's share of a blended pool) looks too small
 - **Check:** `tjs list` shows the `[[distributions]]` ADJUST (id `DIST-…`) on the record date; compare its amount with per_share x the shares you held that day. On releases before the fix it came out short when a sale executed before the split settled after it: the sale was scaled by the ratio once per copy of the split.
 - **Cause:** two sources (two brokers, or a `.tt` SPLIT line next to the broker's row) report one split on nearby dates. The gains engine and the holding walk counted it once, but the settle-lag step that re-denominates a trade straddling the split multiplied by every copy, so the record-date holding (and the split-gains apportionment of a blended pool) was wrong and gains were overstated.
@@ -1050,6 +1099,13 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Crypto
 
+### Canada: a coin held below a millionth of a unit (0.0000009 QZCOIN) — Schedule 3 shows a gain equal to a loss that `tjs run --details` says was denied (superficial), and `tjs t1135` lists no property for it although the inventory holds it with its cost
+- **Check:** `tjs run --details` names the sale's loss as denied and the repurchase as its replacement; the replacement's later sale shows a gain of that amount with the original cost only. `tjs t1135 --json`: `max_total_cost` 0 and no `per_symbol` row for the coin while `tjs run`'s inventory holds the units and their cost.
+- **Cause:** the denied loss's cost adjustment and the T1135 cost walk tested the position against the 1e-6 share tolerance, which reads a sub-micro coin position as empty: the adjustment was parked for "the next opening" and the closing sale never recovered it; the T1135 walk valued the holding at nothing. The trades themselves already used the coin tolerance (float noise only).
+- **Fix:** upgrade: the adjustment landing, the parked-deferral recovery on a rename and the T1135 walk use the coin tolerance. Then `tjs run`.
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/core.py` — `_aeps`, `pool_qty_eps`, `pending_wash`; `src/taxjson/bin/taxjson_t1135.py` — `eps`, `cost_amount`
+
 ### "Info: 1 crypto send(s) not yet classified as self / gift / payment"
 - **Check:** `tjs crypto-sends crypto` lists the send as PENDING, with its fair value and the ready `.tt` line. `tjs run --strict` stops on it ("--strict: crypto: 1 crypto send(s) not yet classified").
 - **Cause:** a Coinbase Send or Kraken withdrawal did not arrive in another of your crypto accounts. Only you know whether it went to your own wallet (no tax event) or was a gift or payment (a disposition at fair value).
@@ -1168,6 +1224,20 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/rebuy.py` — `build`, `CLEARED_DAYS`; `src/taxjson/bin/taxjson_run.py` — `cmd_rebuy`
 
+### `tjs divs` / `tjs events`: some rows have one more amount at the end, and their columns are shifted left
+- **Check:** the rows with the extra field are a broker's that books the withholding on the dividend row itself (IB, with a `09:30:00` time): the last two fields are the gross and the net amount. Before the fix, when the first row of the listing had fewer fields than a later one, that later row's account and action were squeezed into one cell and every column after them moved left.
+- **Cause:** the aligner reads the first line as a table header and merges a longer row's leading extras into its first cell (an account name with a space); the row views are positional taxtext with no header, where a dividend with withholding simply has one more field.
+- **Fix:** the row views align without a header (`align_columns(header=False)`), the columns lined up with a single-space gap: a row with one more field keeps its columns. The extra field is by design: the net amount after withholding, so a pasted line re-imports as gross and net (`taxjson events` in docs/commands.md).
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/report_model.py` — `align_columns`, `_tokenize`, `header`; `src/taxjson/bin/taxjson_run.py` — `_run_tx_view`, `_tx_display_line`, `net9`
+
+### `tjs divs` / `tjs events`: a crypto reward's quantity prints as `1.2390000000000002e-07`, `5e-08` or `0.0025688399999999998`
+- **Check:** `tjs events all crypto | grep SYMBOL`: the rows are Kraken Earn rewards with a same-coin commission (`Staking Reward (net of Kraken commission: gross ... - fee ...)` in the description).
+- **Cause:** the net reward was `gross - fee` in binary floating point, which leaves a 17-digit tail on the difference of two 10-decimal ledger amounts; the views then printed the exact value as Python writes it, in scientific notation under 0.0001.
+- **Fix:** the parser subtracts on the ledger's decimal digits (`0.0027 - 0.00013116` is `0.00256884`), and the views write every quantity and rate out in full (`0.0000001239`). `tjs run` rebuilds the books; the rows' ids are Kraken's own, so nothing double-books. A derived price (`627.01799999`, the USD value over the coins) is an 8-decimal quotient and stays.
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/brokerages/kraken.py` — `_dec_sub`, `net_qty`; `src/taxjson/bin/taxjson_run.py` — `_tx_display_line`, `sig`
+
 ### `tjs div-estimate`: "Warning: no native books for margin (work/<account>_raw.json, _raw_gains.json): not estimated"
 - **Check:** the last `tjs run`: did it finish, and did it say "raw holdings skipped for 'margin'"? `ls work/margin_raw.json work/margin_raw_gains.json`.
 - **Cause:** the estimate reads each account's native-currency books (the dividend rows `divs-sum` reads, and the native holdings, one row per listing). An account the run did not build, or whose native holdings it skipped because a symbol would pool two currencies, has none.
@@ -1177,10 +1247,17 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ### `tjs div-estimate`: "! 2 payer(s) to check: QZD.TO, QZE.US — tjs div-estimate --details"
 - **Check:** `tjs div-estimate --details`: each payer's line ends with what to check — a single payment or an irregular schedule, "1 expected payment not in the books", "2 expected payments not in the books", or "no payment in the last 12 months".
-- **Cause:** the estimate follows each payer's own past pay dates. With one payment or uneven gaps it cannot tell the schedule and estimates pro rata from the 12-month amount per share; a payment that the schedule expects more than a few days ago and the books do not have is missing — the exports may end before it, or the payer cut or suspended it (two missing: the projection stops).
+- **Cause:** the estimate follows each payer's own past pay dates. With one payment, or none of the grids (weekly, monthly, quarterly, semi-annual, annual) most of them fall on, it cannot tell the schedule and estimates pro rata from the 12-month amount per share; a payment that the schedule expects more than a few days ago and the books do not have is missing — the exports may end before it, or the payer cut or suspended it (two missing: the projection stops).
 - **Fix:** add the newer broker export and `tjs run` if the books end early; otherwise read the line as a planning caveat (the payer's own announcements are authoritative).
 - **Fixed in:** —
 - **Code:** `src/taxjson/lib/div_estimate.py` — `estimate`, `detect_frequency`, `GRACE_DAYS`
+
+### `tjs div-estimate` calls a regular payer "irregular", or lists a payer you did not expect
+- **Check:** `tjs div-estimate --details`: the payer's line lists its payments and typical gap; `tjs divs all | grep SYMBOL` shows the rows behind it. A listing you did not expect (a currency ETF) is there because the books hold a DIVIDEND row for it: a genuine year-end distribution, or a row to report (`tjs events 1y ACCOUNT | grep SYMBOL`).
+- **Cause:** the frequency was read from the gaps between consecutive payments, so every extra posting (a special beside the regular payment, a year-end reinvested distribution, a second broker's posting, a reversal re-posted later) broke two gaps, a row without a share count (a Questrade, IB or RBC row whose description names none) was dropped from the schedule, and a single payment was labelled irregular.
+- **Fix:** the frequency is the grid most of the last payments fall on (weekly, monthly, quarterly, semi-annual, annual); a special or a stretch not held does not break it, a reversal nets against the payment it cancels, a row without a share count takes the account's nearest, and a single payment reads `1 payment`. Upgrade; a payer still irregular pays on no grid (semi-monthly, every four weeks).
+- **Fixed in:** `v0.30.4`
+- **Code:** `src/taxjson/lib/div_estimate.py` — `detect_frequency`, `payments`, `FREQUENCIES`, `LOOKBACK`
 
 ### `tjs div-estimate`: "! no USD rate in the books: those rows are out of the totals — tjs run"
 - **Check:** `ls work/to_base.csv`; `tjs run` downloads the rates its books need (`TAXJSON_OFFLINE=1` reads the cache only).
@@ -1608,6 +1685,27 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 
 ## Releasing and landing (maintainers)
 
+### `scripts/promote.sh vX.Y.Z`: "vX.Y.Z is not published yet — the publisher publishes it after its wait; promote it then."
+- **Check:** `git ls-remote public refs/tags/vX.Y.Z` (the public repo; empty: not published) and `git ls-remote origin refs/tags/vX.Y.Z` (the dev repo has it). The publisher's issues say whether the release is waiting (its digest names the time), blocked by the gate, or rejected.
+- **Cause:** a tag reaches the public repo only through the publisher: it gates the tag, waits an hour, gates it again and publishes it, on a schedule that GitHub may start hours late (docs/releasing.md, "How a release reaches the public repo"). A channel may name only a published release.
+- **Fix:** wait for the publish, or start a publisher run by hand once the wait is over; a release blocked by the gate never publishes: fix it and release the next patch version. Then promote.
+- **Fixed in:** —
+- **Code:** `scripts/promote.sh` — `is not published yet`; `scripts/release.sh` — `tag_free`
+
+### `scripts/release.sh` or `scripts/promote.sh`: "no remote 'public' for the public repo — add it, read only: …"
+- **Check:** `git remote -v` in the clone: `origin` should be the private dev repo and `public` the public repo with the push URL `DISABLED`.
+- **Cause:** both scripts read the public repo (a release tag name it has is used for good; a channel may name only what it has) through the remote `public`, which a fresh clone of the dev repo lacks.
+- **Fix:** `git remote add --no-tags public https://github.com/taxjson/taxjson.git`, then `git remote set-url --push public DISABLED`, and run the script again. `--no-tags` matters: the public repo's tags are the publisher's own objects and would clash with the dev repo's.
+- **Fixed in:** —
+- **Code:** `scripts/release.sh` — `PUBLIC_REMOTE`; `scripts/promote.sh` — `PUBLIC_REMOTE`, `fast_lane`
+
+### Dev repo CI: every job says "Waiting for a runner to pick up this job" (or "The job was not started because recent account payments have failed or your spending limit needs to be increased")
+- **Check:** `gh api repos/<dev repo>/actions/runners --jq '.runners[] | "\(.name) \(.status)"'`: are the `taxjson-dev` runners online? On the maintainer's machine, `systemctl status 'actions.runner.*'`. The second message means a job asked for GitHub's runners in the dev repo: `runs-on` in `.github/workflows/tests.yml`.
+- **Cause:** the dev repo is private, so its jobs run on its own self-hosted runner (label `taxjson-dev`); GitHub's runners for private repos draw on the account's included minutes, which the full matrix twice per landing used up in a day. A job waits while no runner with that label is online (the machine off, the service stopped, the runner removed), and GitHub cancels it after 24 hours.
+- **Fix:** start the runners (`sudo systemctl start 'actions.runner.*'`), or set them up again with the publish kit's `runner/setup.sh <dev repo>`; waiting jobs then run. If `scripts/land.sh` timed out meanwhile, follow its message once the checks pass.
+- **Fixed in:** —
+- **Code:** `.github/workflows/tests.yml` — `taxjson-dev`, `RUNNER_ARCH`, `RUNNER_TEMP/venv`
+
 ### `scripts/release.sh vX.Y.Z`: "GitHub CI has not passed on the version commit … — nothing tagged" (after "No tests.yml run for the version commit of vX.Y.Z (…) on a push to main", or "CI failed on the version commit of vX.Y.Z (failure): https://github.com/…/actions/runs/…")
 - **Check:** `gh run list --workflow tests.yml --branch main --event push` — is there a run for the version commit (`git log -1 --format=%H -G'^version = ' -- pyproject.toml`), and did it pass? Was the version commit the head of its push?
 - **Cause:** the cut tags only a version commit whose own push to `main` passed `tests.yml` (a pull request's run does not count). No run: the commit reached `main` inside a larger push (GitHub runs on a push's head only) or not at all — `scripts/release.sh vX.Y.Z --prepare` makes and lands it. A failed run: the matrix found something the local gate did not.
@@ -1621,3 +1719,17 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Fix:** fix the cause in a new commit and run `scripts/land.sh` again (for a release: then `scripts/release.sh vX.Y.Z --prepare` says it is prepared once it has landed, and the cut follows). A flaky check: land again as is. An emergency with the rule switched off: docs/releasing.md, "Emergencies".
 - **Fixed in:** `v0.28.3`
 - **Code:** `scripts/land.sh` — `fail`, `Check(s) failed`, `gh pr close`
+
+### `scripts/land.sh` says "Check(s) failed" at once, before the new pull request's checks have started (landing the same commit again)
+- **Check:** does the pull request's head commit match the one a closed pull request had (`gh pr list --state closed --search <sha>`)? On GitHub, the named checks link to an older run.
+- **Cause:** `gh pr checks` lists the head commit's checks, and until the new pull request's run exists those are the last run's on that commit. A commit landed again unchanged (after a runner or minutes problem, not a code fix) showed the earlier pull request's failures, and `land.sh` closed the new one at once.
+- **Fix:** update; `land.sh` now counts an Actions check only when its run is on the branch it pushed (`gh run list --branch`), and waits until that run appears. On an older copy, make the commit new (`git commit --amend --no-edit`) and land again.
+- **Fixed in:** —
+- **Code:** `scripts/land.sh` — `RUNS`, `gh run list`, `mine`
+
+### The publisher's issue "taxjson: vX.Y.Z blocked by the gate" lists `[fingerprint] E` hits on the project's published contact address (`SECURITY.md`, `pyproject.toml`)
+- **Check:** the issue on the publisher repo names the files and lines; the address there is the one meant to be public. Is it in `email_allowlist` in `~/.config/pii-scan/private.json`?
+- **Cause:** the provider `scripts/private-values` built the fingerprint set from every address in `private.json`, the allowlisted ones included, and a fingerprint hit cannot be excepted. v0.30.2 was blocked this way and never published.
+- **Fix:** put the address in `email_allowlist` (it is public there), update, and have the maintainer run `kit values sync taxjson`. A blocked tag is final: prepare and cut the next patch version, with the blocked version's bullets copied into `## Unreleased` (its own section stays as tagged).
+- **Fixed in:** —
+- **Code:** `scripts/private-values` — `private_json`, `email_allowlist`; `tests/test_private_values.py`

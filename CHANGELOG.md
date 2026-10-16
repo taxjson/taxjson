@@ -3,6 +3,168 @@
 ## Unreleased
 
 
+## v0.30.4 (2026-10-15)
+
+### Added
+
+- `taxjson option-yield [UNDERLYING...] [PERIOD] [ACCOUNT]`: how your
+  option trades on an underlying did over a window — contracts written
+  and bought, premiums received and paid, the realized profit or loss of
+  the contracts closed in it and how they closed (expired, bought back,
+  assigned, sold, exercised), the win rate, what is still open, and the yield on the
+  cost of the underlying's shares you hold (on the strike notional
+  where you hold none), annualized (`tjs option-yield QQQ 1y`). Planning numbers only (CA-PLAN-07 /
+  US-PLAN-08): the tax treatment of each premium stays in the gains.
+
+- `taxjson win-rates [SYMBOL...] [PERIOD] [ACCOUNT] [--by symbol|account|month|class]`:
+  the win rate of every closed trade in the window per ticker (an
+  option under its underlying), account, month of the close or asset
+  class — trades, wins, losses, win rate, net P/L, average win and
+  loss, profit factor — on the trades and the economic P/L `taxjson
+  stats` counts (`tjs win-rates QQQ 1y`, `tjs win-rates --by month`).
+
+- `taxjson plot-tax`: an ASCII chart of the tax the year's investment
+  income generated month by month, against the year's estimate — the
+  estimator `taxjson estimate` uses, run through each month's end on
+  the same inputs, a month's tax the difference; the table under it has
+  each month's income, tax and the running total (CA-PLAN-08 /
+  US-PLAN-09). Planning numbers only.
+
+### Changed
+
+- v0.30.3 was tagged but never published: this release replaced it
+  before its publish wait ended, with that wait shortened from 24 hours
+  to one (`wait_hours` in `publish.toml`). This release carries its
+  changes too.
+- v0.30.2 was tagged but never published: the publisher's scan stopped
+  it on the project's contact address, which is meant to be public.
+  This release carries the same changes.
+- **Releases reach this repository through a gated, delayed publisher.**
+  Development moved to a private repository. Each release is now one
+  commit here (`Release vX.Y.Z`) with its tag, published an hour after
+  it is tagged and after two scans for personal data; the GitHub release
+  is created by `.github/workflows/release.yml` from the CHANGELOG
+  section. Channel moves (`channels.json`) follow on the publisher's next run,
+  with no wait. Nothing
+  in how taxjson computes changes, and installs upgrade as before.
+- Pull requests are still welcome here; the maintainer lands them in the
+  development repository and they ship with the next release
+  (CONTRIBUTING.md).
+- `scripts/release.sh` no longer takes `--notes FILE`: the release notes
+  are always the CHANGELOG section.
+
+### Fixed
+
+- **Results audit (2026-10).** Thirteen findings, each pinned by
+  tests/test_fix_result_audit_2026_10.py:
+  - Canada: a merger with per-account ratios on shares renamed into
+    the merger's source earlier was not folded (no weights were found
+    behind the rename), so the first account's ratio renamed the whole
+    pool: fewer shares held, a smaller gain on their sale. The weights
+    now replay the renames (CA-CORP-13).
+  - `taxjson stats` (and `win-rates`): a written option's buy-back
+    entered with a negative amount counted as money received, and a
+    split or renamed series lost its close; money is read as a
+    magnitude and splits move the queued contracts (CA-RPT-16).
+  - `taxjson div-estimate`: a short forward window (`1m`) truncated the
+    rest-of-year total; the projection now runs to the year's end.
+  - In this release's new commands: the T1135 merger fold follows the
+    trade-date basis; `option-yield` finds a renamed series by its new
+    underlying, keeps an unknown premium unknown in the totals (no
+    realized P/L, win rate or yield instead of a loss), adds each
+    underlying's own capital in the combined yield, and leaves earlier
+    windows alone when a later split comes (lots keep their dated
+    splits; the CLOSED and OPEN tables name each row's currency);
+    `div-estimate --date` reads the books as of that date before
+    netting a reversal or borrowing a share count; `plot-tax` labels
+    cent-sized levels in cents and fits a 40-column terminal.
+- `taxjson divs` / `events` / `trades` / `roc`: a dividend row with
+  withholding on the row itself (IB) carries one more field, its net
+  amount; when the listing's first row had fewer fields, that row's
+  account and action were squeezed into one cell and its columns
+  shifted left. The row views now align without a header: the columns
+  lined up, a single-space gap, every row's fields in place.
+- Kraken Earn rewards with a same-coin commission: the net quantity was
+  `gross - fee` in binary floating point (`0.0025688399999999998`); it
+  is now the ledger's decimal difference (`0.00256884`). The row views
+  (`events`, `divs`, ...) write every quantity and rate out in full,
+  never `5e-08`.
+- `taxjson div-estimate`: a regular payer with a special beside the
+  regular payment, a second broker's posting, a later-dated reversal or
+  rows with no share count read `irregular`; the frequency is now the
+  grid most of the last payments fall on (weekly added), a reversal
+  nets against the payment it cancels, a row without a share count
+  takes the account's nearest, and a single payment shows `1 payment`.
+- **Filing figures (2026-10 audit).** Five defects changed exported
+  amounts; each had a regression test added
+  (tests/test_fix_filing_audit_2026_10.py):
+  - US: a merger whose accounts received different whole-share ratios
+    (12 old became 12 new, 40 became 42) applied the first account's
+    ratio to every account's lots; the other account then sold more
+    shares than it held and Form 8949 understated its gain (a phantom
+    short). Each row now reaches its own account's lots (US-CORP-14);
+    without per-account basis the rows fold as Canada's do.
+  - US: a stock dividend's §307 basis spread reached a lot bought after
+    the record date. It now reaches the lots entitled to it (bought
+    before the row's `ex_date` / `record_date`); a broker's row without
+    a date keeps the pay-date spread and warns about a lot bought within
+    the 90 days before the pay date (US-STKDIV-01, US-STKDIV-04).
+  - Canada: a superficial loss on a coin position below a millionth of
+    a unit was denied but never added to the replacement's cost
+    (Schedule 3 overstated the gain by the denied amount): the
+    adjustment used the share tolerance that reads such a position as
+    empty.
+  - T1135: a merger's per-account ratios were replayed raw into the
+    cost walk (fewer shares than delivered, too much cost released on
+    a sale; CA-CORP-13); a coin held below a millionth of a unit was
+    dropped from the property list and the cost amounts.
+- Installer: `TAXJSON_DRY_RUN=1` with no install yet cloned the repository
+  into `TAXJSON_DIR` and left it there. It now resolves the channel in a
+  temporary clone removed on exit and never creates the install folder; on
+  an existing install a dry run only fetches tags. The dev channel's dry
+  run prints `channel dev → main`.
+
+## v0.30.3 (2026-10-15)
+
+### Changed
+
+- v0.30.2 was tagged but never published: the publisher's scan stopped
+  it on the project's contact address, which is meant to be public.
+  This release carries the same changes.
+- **Releases reach this repository through a gated, delayed publisher.**
+  Development moved to a private repository. Each release is now one
+  commit here (`Release vX.Y.Z`) with its tag, published 24 hours after
+  it is tagged and after two scans for personal data; the GitHub release
+  is created by `.github/workflows/release.yml` from the CHANGELOG
+  section. Channel moves (`channels.json`) follow on the publisher's next run,
+  with no wait. Nothing
+  in how taxjson computes changes, and installs upgrade as before.
+- Pull requests are still welcome here; the maintainer lands them in the
+  development repository and they ship with the next release
+  (CONTRIBUTING.md).
+- `scripts/release.sh` no longer takes `--notes FILE`: the release notes
+  are always the CHANGELOG section.
+
+
+## v0.30.2 (2026-10-14)
+
+### Changed
+
+- **Releases reach this repository through a gated, delayed publisher.**
+  Development moved to a private repository. Each release is now one
+  commit here (`Release vX.Y.Z`) with its tag, published 24 hours after
+  it is tagged and after two scans for personal data; the GitHub release
+  is created by `.github/workflows/release.yml` from the CHANGELOG
+  section. Channel moves (`channels.json`) follow on the publisher's next run,
+  with no wait. Nothing
+  in how taxjson computes changes, and installs upgrade as before.
+- Pull requests are still welcome here; the maintainer lands them in the
+  development repository and they ship with the next release
+  (CONTRIBUTING.md).
+- `scripts/release.sh` no longer takes `--notes FILE`: the release notes
+  are always the CHANGELOG section.
+
+
 ## v0.30.1 (2026-10-12)
 
 ### Changed

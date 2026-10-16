@@ -1739,6 +1739,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "before the split and settling after it (re-denominated "
                  "through the ratio once), and in each account's share of "
                  "the pool; a note says it was booked on two dates."),
+            Rule("CA-CORP-13",
+                 "A merger whose accounts received different whole-share "
+                 "ratios (12 old shares became 12 new, 40 became 42) is "
+                 "one event on the symbol-wide pool at the "
+                 "holdings-weighted ratio: the pool lands on exactly the "
+                 "shares delivered in total, cost unchanged — in the "
+                 "gains and in the T1135 cost amounts alike; a note "
+                 "names the ratios.", cont=True),
             Rule("CA-CORP-03",
                  "Mergers: taxable_disposition (old shares sold at FMV; "
                  "new shares cost FMV)"),
@@ -2096,10 +2104,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "history: a superficial loss denied in any year is added "
                  "to the replacement's cost (s.53(1)(f)), an option's "
                  "premium follows the shares on exercise or assignment "
-                 "(s.49(3) for a call, s.49(3.1) for a put), and a "
-                 "futures contract has no cost amount."),
+                 "(s.49(3) for a call, s.49(3.1) for a put), a merger's "
+                 "per-account ratios are folded as the engine folds them "
+                 "(CA-CORP-13), a coin held below a millionth of a unit "
+                 "is property with its cost amount (the share tolerance "
+                 "does not apply to it), and a futures contract has no "
+                 "cost amount."),
             Rule("CA-RPT-16",
-                 "`taxjson stats` is a view, not a filing number: its "
+                 "`taxjson stats` (and `taxjson win-rates`, the same "
+                 "trades per ticker, account or month) is a view, not a "
+                 "filing number: its "
                  "win/lose statistics count each closed trade's economic "
                  "P/L before any superficial-loss denial (the denied total "
                  "on its own line), over the taxable accounts unless a "
@@ -2415,6 +2429,25 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "projected payment by the income rule above (a Canadian "
                  "trust's distribution by its record date): planning "
                  "numbers, never a filed figure."),
+            Rule("CA-PLAN-07",
+                 "`option-yield` sums an underlying's option trades over "
+                 "a window as money: premiums received and paid, the "
+                 "profit or loss of the contracts closed in it (matched "
+                 "per account and series, first in first out) and that "
+                 "profit over the cost of the underlying's shares held "
+                 "now (over the strike notional open in the window where "
+                 "none are held), annualized. Planning numbers, never a "
+                 "filed figure: the s.49 timing of each premium is in the "
+                 "gains."),
+            Rule("CA-PLAN-08",
+                 "`plot-tax` charts the tax the year's investment income "
+                 "generated month by month: the estimator `estimate` "
+                 "uses, run on the taxable accounts' gains and income "
+                 "dated up to each month's end on the same inputs (other "
+                 "income, carry-forwards, deductions, province), a "
+                 "month's tax being that run less the month before's; "
+                 "the running total through December is the year's "
+                 "estimate. Planning numbers, never a filed figure."),
         ]),
         ("Project country", _ownership(c)),
     ]
@@ -3245,11 +3278,22 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "symbol has one snapshot date per account.", cont=True),
             Rule("US-STKDIV-01",
                  "A stock dividend is not income (§305(a)): the basis of "
-                 "the shares held is spread over the old and new shares "
-                 "(§307), the new shares keep the old shares' purchase "
-                 "dates (§1223(5)), and they are not a purchase for the "
+                 "the shares entitled to it — the lots bought before the "
+                 "ex-dividend date (with only a record date, before it; "
+                 "Pub. 550, \"Stock bought at various times\") — is "
+                 "spread over those shares and the new ones (§307), the "
+                 "new shares keep those lots' purchase dates (§1223(5)), "
+                 "a lot bought after the entitlement date keeps its own "
+                 "basis, and the new shares are not a purchase for the "
                  "wash-sale rule (nor a \"recent buy\" in the wash "
                  "radar, sell-check, buy-check or harvest)."),
+            Rule("US-STKDIV-04",
+                 "A broker's stock-dividend row carries no record or "
+                 "ex-dividend date: the lots held on the pay date are "
+                 "taken as entitled, and when one of them was bought "
+                 "within the 90 days before the pay date a warning names "
+                 "it as the open question (a JSON book's row can carry "
+                 "ex_date / record_date).", cont=True),
             Rule("US-STKDIV-02",
                  "A taxable stock dividend (§305(b), e.g. one with a cash "
                  "option) is not detected: enter it by hand. Shares of "
@@ -3479,6 +3523,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "before the split and settling after it (re-denominated "
                  "through the ratio once); a note says it was booked on "
                  "two dates."),
+            Rule("US-CORP-14",
+                 "A merger whose accounts received different whole-share "
+                 "ratios (12 old shares became 12 new, 40 became 42) "
+                 "applies each account's own ratio to that account's "
+                 "lots (basis is per account): each lands on exactly "
+                 "the shares its broker delivered, basis and purchase "
+                 "dates unchanged.", cont=True),
             Rule("US-CORP-03",
                  "Mergers: taxable_exchange (§1001: old shares sold at "
                  "FMV; new shares cost FMV),"),
@@ -3777,7 +3828,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "wash-sale adjustment shows as the allowed gain the other "
                  "reports print."),
             Rule("US-RPT-12",
-                 "`taxjson stats` is a view, not a filing number: its "
+                 "`taxjson stats` (and `taxjson win-rates`, the same "
+                 "trades per ticker, account or month) is a view, not a "
+                 "filing number: its "
                  "win/lose statistics count each closed trade's economic "
                  "P/L before any wash-sale denial (the denied total on its "
                  "own line), over the taxable accounts unless a retirement "
@@ -3937,6 +3990,25 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "per-share amount, shares held now) and dates each "
                  "projected payment by its pay date (a listed RIC's "
                  "January dividend: the year before): planning numbers, "
+                 "never a filed figure."),
+            Rule("US-PLAN-08",
+                 "`option-yield` sums an underlying's option trades over "
+                 "a window as money: premiums received and paid, the "
+                 "profit or loss of the contracts closed in it (matched "
+                 "per account and series, first in first out) and that "
+                 "profit over the cost of the underlying's shares held "
+                 "now (over the strike notional open in the window where "
+                 "none are held), annualized. Planning numbers, never a "
+                 "filed figure: the §1234 treatment of each premium is in the "
+                 "gains."),
+            Rule("US-PLAN-09",
+                 "`plot-tax` charts the tax the year's investment income "
+                 "generated month by month: the estimator `estimate` "
+                 "uses, run on the taxable accounts' gains and income "
+                 "dated up to each month's end on the same inputs (other "
+                 "income, carry-forwards), a month's tax being that run "
+                 "less the month before's; the running total through "
+                 "December is the year's estimate. Planning numbers, "
                  "never a filed figure."),
         ]),
         ("Project country", _ownership(c)),

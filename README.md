@@ -224,8 +224,11 @@ country's commands (`taxjson help --all` lists them). Every command takes
 | [`taxjson estimate`](docs/commands.md#taxjson-estimate) | Estimated tax on the year's investment income (planning only) |
 | [`taxjson fx-cash`](docs/commands.md#taxjson-fx-cash) | Currency gains on foreign cash |
 | [`taxjson instalments`](docs/commands.md#taxjson-instalments) | Canada: instalments due, paid, and the interest owed |
+| [`taxjson option-yield`](docs/commands.md#taxjson-option-yield) | Option premiums, profit or loss and yield on an underlying over a window (planning only) |
+| [`taxjson plot-tax`](docs/commands.md#taxjson-plot-tax) | ASCII chart of the tax each month's investment income generated, against the year's estimate (planning only) |
 | [`taxjson stats`](docs/commands.md#taxjson-stats) | Win/loss statistics on closed trades |
 | [`taxjson sum`](docs/commands.md#taxjson-sum) | The year's realized gains by account, ending with the lines for your return |
+| [`taxjson win-rates`](docs/commands.md#taxjson-win-rates) | Win rate of your closed trades per ticker, account, month or class |
 
 #### Positions
 

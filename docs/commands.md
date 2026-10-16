@@ -813,11 +813,14 @@ carryover rules:
 
 Upcoming dividends estimated from each held position's **own dividend
 history in the books** (planning numbers only, never a filing figure).
-Per payer it reads the payment frequency from the gaps between its past
-pay dates (monthly, quarterly, semi-annual or annual; an irregular payer
-or a single payment is flagged and estimated pro rata from its
-12-month amount per share), its latest and trailing-12-month amount per
-share, and per position the shares held now (the last `taxjson run`'s
+Per payer it reads the payment frequency from its past pay dates (the
+grid — weekly, monthly, quarterly, semi-annual or annual — most of the
+last payments fall on; a special beside a regular payment or a stretch
+the position was not held does not break it; no grid, or a single
+payment, is flagged and estimated pro rata from its 12-month amount per
+share; a reversal posted later nets against the payment it cancels, and
+a row with no share count takes the account's nearest one), its latest
+and trailing-12-month amount per share, and per position the shares held now (the last `taxjson run`'s
 native holdings, one row per listing and account); the next pay date and
 amount follow the payer's own schedule (latest per-share amount x
 shares held). The totals are the rest of the tax year and the next N
@@ -997,6 +1000,69 @@ for the year, which the report says. Configure `[instalments]` in
 `taxjson.toml` ([settings.md](settings.md#instalments)); `--json` for
 machines.
 
+#### taxjson option-yield
+
+`taxjson option-yield [UNDERLYING...] [PERIOD] [ACCOUNT] [--json]`
+
+How your option trades on an underlying did over a window (planning
+numbers only, never a filing figure): `taxjson option-yield QQQ 1y`
+for the last year's QQQ options, `taxjson option-yield 2025 margin`
+for every underlying traded in that account in 2025. The positionals
+are underlyings (`QQQ` matches QQQ on any market, `QQQ.US` that
+listing), a window (`30d`, `6m`, `1y`, `mtd`, `ytd`, `all`, a tax year;
+default: the tax year) and an account (default: all), in any order.
+Three sections: the contracts closed in the window, each with how it
+closed (expired, bought back, assigned, sold, exercised), its days
+open, premium, the money of the close and its P/L; the contracts open
+at the window's end (one past its expiry with no expiry or assignment
+row in the books is marked); then the summary per underlying — the
+contracts written and bought, the money received and paid, the
+realized P/L, the win rate (the contracts closed at a profit over the
+contracts closed in the window), the shares of the underlying held
+now and their cost, and the yield on that cost, annualized — with a
+row per account and side where there are several, and the totals per
+currency. The
+contracts are matched per account and series from the books, first in
+first out: a sale with no long position writes, a purchase with no
+short position buys; the opposite trade closes the oldest open
+contract; a close at price 0 with no money is an expiry; an `ASSIGN`
+row is an assignment (written) or an exercise (bought). The yield is
+the window's realized P/L over the cost of the underlying's shares
+held now in the accounts read (the books' holdings: a covered-call
+writer's capital), annualized by 365 / the window's days; where no
+shares are held (naked or cash-secured contracts) it is over the
+average strike notional open in the window (strike x contract size x
+contracts, each weighted by its days open inside the window) and is
+marked `*`. A contract opened before the data (a missing-history
+opening) has no premium: its money is unknown and the row is flagged.
+The tax treatment of each premium (ITA s.49 timing, §1234) is in the
+gains, not here; `taxjson option-boundary` is the year-end check of
+written options.
+
+#### taxjson plot-tax
+
+`taxjson plot-tax [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--json]`
+
+An ASCII chart of the tax the year's investment income generated month
+by month, against the year's estimate (planning numbers only, never a
+filing figure). The estimator `taxjson estimate` uses runs once per
+month on the taxable accounts' gains and income dated up to that
+month's end, on the same inputs (`[estimate]` other income and the
+flags, the carry-forwards, deductions, province); a month's tax is
+that run less the month before's, so a loss month is negative and a
+month that crosses a bracket costs more than the same income earlier
+in the year. The chart is one bar per month (`#`) with the year's
+estimate spread evenly over the months as a dashed level; the table
+under it has each month's investment income, tax and the running
+total, then the year's figures (the estimated tax on the year's
+investment income, and with the minimum tax where it binds). The
+running total through December is the year's estimate on the same
+inputs; what `taxjson estimate` dates to the year rather than to a
+month (a T5 box 18 capital-gains dividend, a US §1256 fold) is
+reported as one line. Rows are dated as the gains files place them
+(settlement date on a settle-basis project). `--json` emits the
+document. Tax-logic `CA-PLAN-08` / `US-PLAN-09`.
+
 #### taxjson stats
 
 `taxjson stats [YEAR] [ACCOUNT] [--all-history] [--json]`
@@ -1015,6 +1081,28 @@ whatever `option_premium_timing` says (premium minus the buy-back, or
 the premium kept at expiry or assignment; an assigned option's premium
 is taken back out of the shares the tax rules fold it into). A view,
 never a filing number.
+
+#### taxjson win-rates
+
+`taxjson win-rates [SYMBOL...] [PERIOD] [ACCOUNT] [--by symbol|account|month|class] [--all-history] [--json]`
+
+The win rate of every closed trade in the window, one row per share
+listing (an option counts under its underlying, so `taxjson win-rates
+QQQ` is the QQQ shares and the QQQ options together) plus a total:
+trades, wins, losses, win rate, net P/L, average win and loss, profit
+factor, and the asset classes the row's trades fall in. `--by account`,
+`--by month` (the month of the close) and `--by class` group the same
+trades differently. The positionals are symbols (`QQQ` matches QQQ on
+any market, `QQQ.US` that listing), a window (`30d`, `6m`, `1y`,
+`mtd`, `ytd`, `all`, a tax year; default: the tax year) and an
+account (default: every taxable account; a sheltered account only when
+named), in any order; `--all-history` covers every closed trade the
+books hold. The trades, their economic P/L (in the base currency,
+**before** any superficial-loss / wash-sale denial; the denied total is
+its own line) and the counting rules are `taxjson stats`'s: one trade
+per closing disposition, a written option one trade from write to
+close. A break-even trade is neither a win nor a loss. A view, never a
+filing number.
 
 #### taxjson sum
 
@@ -1212,20 +1300,28 @@ in their own currency.
 `taxjson divs [PERIOD] [ACCOUNT]`
 
 `events` filtered to `DIVIDEND` + `DIVIDEND_IN_LIEU`; the footer shows
-the dividend total per currency.
+the dividend total per currency. A row's fields are the action, date,
+time, symbol, shares, currency, per-share amount and gross amount; a
+row whose broker books the withholding on the payment itself (IB)
+ends with one more field, the net amount after tax, so the line
+re-imports as gross and net. A broker that posts the tax as its own
+row (Questrade, RBC) shows the gross alone, and `00:00:00` where the
+export carries no time.
 
 #### taxjson events
 
 `taxjson events [PERIOD] [ACCOUNT]`
 
 All transactions over the window, in native (pre-base-conversion)
-currency, `.tt` text format, oldest to latest. Prints per-currency
-`TOTAL BUY / SELL / DIVIDEND` footers.
+currency, `.tt` text format, oldest to latest, the columns lined up
+with a single-space gap (the padding is whitespace, so a line copies
+into a `.tt` file as it is). Prints per-currency `TOTAL BUY / SELL /
+DIVIDEND` footers.
 
 ```
 $ taxjson events 5d margin
-BUYSELL  2026-06-26  14:23:05  SAMPLE.US    10  USD  50.00   501.00  1.00
-DIVIDEND 2026-06-30  09:30:00  ABC.US   100  USD  0.25    25.00
+BUYSELL  2026-06-26 14:23:00 SAMPLE.US  10 USD 50.00 501.00 1.00
+DIVIDEND 2026-06-30 09:30:00 ABC.US    100 USD  0.25  25.00
 
 TOTAL BUY:      501.00 USD
 TOTAL DIVIDEND: 25.00 USD

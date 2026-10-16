@@ -319,12 +319,61 @@ class TestDisplayHelpers(unittest.TestCase):
             "ADJUST 2025-01-02 09:30:00 A.TO CAD 12.50")
         # actions with no taxtext form
         self.assertIsNone(f({"action": "OPENING_BALANCE", "date": d}))
+        # A tiny crypto quantity or rate is written out, never 5e-08.
+        self.assertEqual(
+            f({"action": "DIVIDEND", "date": d, "symbol": "QZB",
+               "quantity": 5e-08, "currency": "USD", "price": 627.018,
+               "net_amount": 0.0}),
+            "DIVIDEND 2025-01-02 09:30:00 QZB 0.00000005 USD 627.018 0.00")
+        self.assertEqual(
+            f({"action": "DIVIDEND", "date": d, "symbol": "QZB",
+               "quantity": 1.239e-07, "currency": "USD",
+               "price": 2251.43987086, "net_amount": 0.0}),
+            "DIVIDEND 2025-01-02 09:30:00 QZB 0.0000001239 USD "
+            "2251.43987086 0.00")
 
     def test_align_columns(self):
         from taxjson.bin.taxjson_run import _align_columns
         self.assertEqual(
             _align_columns(["A bb ccc", "aaa b c"]),
             ["A   bb ccc", "aaa b  c"])
+
+    def test_align_columns_without_a_header(self):
+        """The row views: a later line with one more field (a dividend's
+        net amount) keeps its columns; the header mode merged its first
+        two tokens into one cell and shifted the rest."""
+        from taxjson.bin.taxjson_run import _align_columns
+        lines = ["rrsp DIVIDEND 2026-10-07 00:00:00 QZD.TO 300 USD 0.07 21.00",
+                 "tfsa DIVIDEND 2026-10-07 09:30:00 QZE.US 200 USD 0.02 5.51 4.30"]
+        merged = _align_columns(lines, numeric_right=True)
+        kept = _align_columns(lines, numeric_right=True, header=False)
+        self.assertNotEqual(merged[1], kept[1])
+        self.assertEqual(kept, [
+            "rrsp DIVIDEND 2026-10-07 00:00:00 QZD.TO 300 USD 0.07 21.00",
+            "tfsa DIVIDEND 2026-10-07 09:30:00 QZE.US 200 USD 0.02  5.51 4.30"])
+        self.assertEqual(kept[0].index("QZD.TO"), kept[1].index("QZE.US"))
+
+    def test_row_views_align_with_a_single_space_gap(self):
+        """Columns lined up, one space between the widest value and the
+        next column: a later row with one more field (a dividend's net
+        amount after withholding) keeps its columns (its account and
+        action were squeezed into one cell and shifted left)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {
+                "rrsp_raw.json": [dict(_tx("DIVIDEND", "2026-10-07",
+                                           "QZD.TO", 300, 0.07, 21.0, "USD",
+                                           time="00:00:00"))],
+                "tfsa_raw.json": [dict(_tx("DIVIDEND", "2026-10-07",
+                                           "QZE.US", 200, 0.02, 4.30, "USD"),
+                                       gross_amount=5.51)]})
+            r = _runsub(root, "divs", "all")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            lines = [ln for ln in r.stdout.splitlines()
+                     if ln.startswith(("rrsp ", "tfsa "))]
+            self.assertEqual(lines, [
+                "rrsp DIVIDEND 2026-10-07 00:00:00 QZD.TO 300 USD 0.07 21.00",
+                "tfsa DIVIDEND 2026-10-07 09:30:00 QZE.US 200 USD 0.02  5.51 "
+                "4.30"])
 
     def test_period_cutoff_units(self):
         from taxjson.bin.taxjson_run import _tx_period_cutoff
