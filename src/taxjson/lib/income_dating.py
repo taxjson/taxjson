@@ -420,15 +420,27 @@ class IncomeRules:
         listed in ric_january_dividends."""
         rows = list(rows)
         out: List[str] = []
-        adj_keys = set()
+        # (symbol, date, amount) -> the (account, currency) of each
+        # ADJUST row there: the pair must be in the ROC's own account
+        # and currency (a row naming none matches any).
+        adj_keys: Dict[tuple, List[tuple]] = {}
         if self.country == _C.CANADA:
             for r in rows:
                 if (str(_get(r, "action")).upper() == "ADJUST"
                         and str(_get(r, "type")).lower() != "roc"):
-                    adj_keys.add((str(_get(r, "symbol")),
-                                  _iso(_get(r, "date")),
-                                  round(float(_get(r, "net_amount", 0.0)
-                                              or 0.0), 2)))
+                    adj_keys.setdefault(
+                        (str(_get(r, "symbol")), _iso(_get(r, "date")),
+                         round(float(_get(r, "net_amount", 0.0) or 0.0),
+                               2)), []).append(
+                        (str(_get(r, "account")),
+                         str(_get(r, "currency")).upper()))
+
+        def _adjusted(r: Any, key: tuple) -> bool:
+            acct = str(_get(r, "account"))
+            cur = str(_get(r, "currency")).upper()
+            return any((not a or not acct or a == acct)
+                       and (not c or not cur or c == cur)
+                       for a, c in adj_keys.get(key, ()))
         for r in rows:
             pay = _iso(_get(r, "date"))
             if not pay:
@@ -450,10 +462,10 @@ class IncomeRules:
                     prev = int(pay[:4]) - 1
                     # The pair this warning prescribes is in the books:
                     # handled (audit A2-0561, A2-0993).
-                    if ((str(sym), f"{prev}-12-31", round(-amt, 2))
-                            in adj_keys
-                            and (str(sym), pay, round(amt, 2))
-                            in adj_keys):
+                    if (_adjusted(r, (str(sym), f"{prev}-12-31",
+                                      round(-amt, 2)))
+                            and _adjusted(r, (str(sym), pay,
+                                              round(amt, 2)))):
                         continue
                     # The export cannot tell a trust from a
                     # corporation (CA-INC-DATE-ISSUER): ask, never call

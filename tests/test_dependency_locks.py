@@ -11,7 +11,9 @@ pinned core only, nothing is ever installed unpinned. A stub python
 records pip; git remotes are local temporary repositories.
 """
 
+import contextlib
 import importlib.util
+import io
 import os
 import shutil
 import subprocess
@@ -300,3 +302,42 @@ class TestInstallerUsesTheLocks(_Repos):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLockTool(unittest.TestCase):
+    """Options of scripts/lock_deps.py that need no network."""
+
+    def test_relative_uv_path_is_made_absolute(self):
+        # uv runs from a temporary folder: a relative --uv would not be found.
+        rel = os.path.join("venv", "bin", "uv")
+        self.assertEqual(lock_deps.find_uv(rel), os.path.abspath(rel))
+        self.assertEqual(lock_deps.find_uv("uv"), "uv")
+
+    def test_security_update_lets_one_package_past_the_cooldown(self):
+        calls = []
+
+        def fake_run(cmd, cwd):
+            calls.append(cmd)
+            if cmd[1:] == ["--version"]:
+                return subprocess.CompletedProcess(cmd, 0, "uv 0.0.0\n", "")
+            out = Path(cwd) / cmd[cmd.index("-o") + 1]
+            out.write_text("certifi==1 \\\n    --hash=sha256:" + "0" * 64 + "\n")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as td:
+            saved = lock_deps.run, lock_deps.LOCK_DIR
+            lock_deps.run, lock_deps.LOCK_DIR = fake_run, Path(td)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    lock_deps.compile_locks("uv", 7, ["Certifi", " "])
+            finally:
+                lock_deps.run, lock_deps.LOCK_DIR = saved
+            header = (Path(td) / "core.txt").read_text().split("\n\n")[0]
+        compiles = [c for c in calls if "compile" in c]
+        self.assertTrue(compiles)
+        for c in compiles:
+            self.assertIn("--exclude-newer", c)
+            i = c.index("--exclude-newer-package")
+            self.assertTrue(c[i + 1].startswith("certifi="), c[i + 1])
+            self.assertEqual(c.count("--exclude-newer-package"), 1)
+        self.assertIn("# security-updates: certifi", header)

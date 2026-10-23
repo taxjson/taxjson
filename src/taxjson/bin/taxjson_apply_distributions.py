@@ -383,6 +383,14 @@ def _snapshot_after(txs: List[dict], symbol: str, date: str
     return min(days) if days else None
 
 
+def _snapshot_on(txs: List[dict], symbol: str, date: str) -> bool:
+    """Whether this book has an opening snapshot (lib/opening) of
+    `symbol` dated exactly `date`."""
+    from taxjson.lib.core import is_opening_row
+    return any(is_opening_row(t) and t.get("symbol") == symbol
+               and str(t.get("date") or "")[:10] == date[:10] for t in txs)
+
+
 def apply_distributions(doc: dict, map_rows, account: str,
                         date_basis: str = "settle",
                         phantoms=None, renames=None,
@@ -455,6 +463,18 @@ def apply_distributions(doc: dict, map_rows, account: str,
                       file=sys.stderr)
             continue
         amount = round(bal * per_share, 6)
+        if _snapshot_on(txs, sym, date):
+            # Dated on the opening snapshot's own day (lib/opening,
+            # CA-OPEN-03 / US-OPEN-03): the snapshot's quantity holds
+            # the shares, but whether its book cost already carries
+            # this distribution taxjson cannot tell — a year-end
+            # statement's often does not yet. Applied, and said
+            # (2026-10 audit #26: it was added silently).
+            emit_line(f"NOTE: [[distributions]]: {key}{via} {date} is "
+                      f"dated on the opening snapshot's own day — "
+                      f"applied on top of the snapshot's cost; if that "
+                      f"statement's book cost already includes it, "
+                      f"remove the entry.", file=sys.stderr)
         # Neutral without a country: the row is saved into the book,
         # and "ACB" is Canada's word (A2-1234).
         from taxjson.lib.country import COST_TERM

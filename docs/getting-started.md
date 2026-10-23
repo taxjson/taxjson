@@ -94,7 +94,10 @@ those pairs, from the list that ships with taxjson (`TOBASE QZAB.US QZA.TO`,
 one line per US listing); you do not edit it. Your own `ticker.map` lines
 win over it (`DISTINCT QZAB.US QZA.TO` keeps a pair apart). Look-alike
 tickers need no line: taxjson never joins two listings because their
-letters match. After an
+letters match. Funds you consider alike (two issuers' funds on one
+index) can be watched together with a `SIMILAR` line: they stay two
+securities, and a loss on one with another bought in the window is
+flagged (docs/settings.md). After an
 upgrade, `tjs update-tobase-map` shows what a newer list changes and
 `tjs update-tobase-map --write` applies it, for every year at once (the
 checklist says when); in a
@@ -972,7 +975,9 @@ finding:
 
 Work through it until every step is done or marked. Each step is
 explained in [filing.md](filing.md). `tjs checklist --walk` goes through
-the open ones one at a time.
+the open ones one at a time; it needs a terminal (piped or scripted it
+stops with `Error: --walk needs a terminal`), so a script marks steps
+with `tjs checklist --done ID` or `--skip ID` instead.
 
 ## One folder of exports for every year
 
@@ -995,6 +1000,13 @@ and a complete project per tax year beside them.
   2025/                 the 2025 project, the same shape
 ```
 
+- **A filed year keeps its own copy of the exports.** `taxjson
+  close-year` copies the files its books were built from into the
+  year folder's `inputs/` (and the shared `tobase.map` beside its
+  `ticker.map`) and the year reads that copy from then on: the shared
+  `inputs/` moves on with the next year while the filed year can be
+  rebuilt as filed (`taxjson compare filed`). `taxjson new-year` points
+  the next year at the shared folders again.
 - **Each year is its own project.** Its `taxjson.toml` and `ticker.map`
   are read exactly as a single-folder project's: a change to 2025's map
   never touches 2024's books. Only `inputs/` is shared, through

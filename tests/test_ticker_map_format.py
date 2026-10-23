@@ -206,7 +206,7 @@ class TestLayout(unittest.TestCase):
         kws = [k for _g, ks, _d in F.GROUPS for k in ks]
         self.assertEqual(sorted(kws), sorted(
             RENAME_KEYWORDS + SIDE_KEYWORDS + tuple(RETIRED_KEYWORDS)))
-        self.assertEqual(len(kws), 17)
+        self.assertEqual(len(kws), 18)
         settings = (REPO_ROOT / "docs" / "settings.md").read_text(
             encoding="utf-8")
         for k in kws:

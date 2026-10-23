@@ -859,6 +859,48 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                     f"out).")
 
 
+def _qt_real_order(path: Path, rows, note: bool = True) -> List[tuple]:
+    """Rows of one day tie (Questrade stamps 00:00:00) and keep the
+    order they are emitted in (CA-DATE-14 / US-DATE-13): a
+    newest-first export is read bottom-up so that order is the real
+    one. Decided per header-delimited SEGMENT (re-audit A2-0100): two
+    newest-first exports concatenated (the header repeated, which
+    the parse accepts) went both ways over the whole file and were
+    read top-down — a same-day sale replayed after its rebuy. The
+    position parser and the v2 cash reader (`questrade_cash_events`)
+    both read rows through it; `note=False` leaves the "not in date
+    order" note to the position parser, which says it once."""
+    segs: List[List[tuple]] = [[]]
+    for item in rows:
+        r = item[1]
+        if [(r.get(c) or '').strip() for c in _QT_COLUMNS[:5]] == \
+                list(_QT_COLUMNS[:5]):
+            segs.append([item])          # the header opens a segment
+        else:
+            segs[-1].append(item)
+    out: List[tuple] = []
+    mixed = False
+    for seg in segs:
+        head = [x for x in seg[:1]
+                if [(x[1].get(c) or '').strip()
+                    for c in _QT_COLUMNS[:5]] == list(_QT_COLUMNS[:5])]
+        body = seg[len(head):]
+        dates = [BaseBrokerage.parse_date(
+            (r.get('Transaction Date') or '')[:10], '%Y-%m-%d')
+            for _, r in body]
+        ds = [d for d in dates if d]
+        if BaseBrokerage.newest_first(dates):
+            body = body[::-1]
+        elif not all(a <= b for a, b in zip(ds, ds[1:])):
+            mixed = True
+        out.extend(head + body)
+    if mixed and note:
+        emit_line(f"note: {shown_name(path)}: rows are not in date order, "
+                  f"so same-day rows keep the file's order (intra-day "
+                  f"order unknown) — check a same-day sale and rebuy.")
+    return out
+
+
 class QuestradeBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Questrade"
 
@@ -974,42 +1016,8 @@ class QuestradeBrokerage(BaseBrokerage):
         emit_line(f"warning: UNBOOKED: {self._where(lineno)}: {msg}")
 
     def _in_real_order(self, path: Path, rows) -> List[tuple]:
-        """Rows of one day tie (Questrade stamps 00:00:00) and keep the
-        order they are emitted in (CA-DATE-14 / US-DATE-13): a
-        newest-first export is read bottom-up so that order is the real
-        one. Decided per header-delimited SEGMENT (re-audit A2-0100): two
-        newest-first exports concatenated (the header repeated, which
-        the parse accepts) went both ways over the whole file and were
-        read top-down — a same-day sale replayed after its rebuy."""
-        segs: List[List[tuple]] = [[]]
-        for item in rows:
-            r = item[1]
-            if [(r.get(c) or '').strip() for c in _QT_COLUMNS[:5]] == \
-                    list(_QT_COLUMNS[:5]):
-                segs.append([item])          # the header opens a segment
-            else:
-                segs[-1].append(item)
-        out: List[tuple] = []
-        mixed = False
-        for seg in segs:
-            head = [x for x in seg[:1]
-                    if [(x[1].get(c) or '').strip()
-                        for c in _QT_COLUMNS[:5]] == list(_QT_COLUMNS[:5])]
-            body = seg[len(head):]
-            dates = [self.parse_date(
-                (r.get('Transaction Date') or '')[:10], '%Y-%m-%d')
-                for _, r in body]
-            ds = [d for d in dates if d]
-            if self.newest_first(dates):
-                body = body[::-1]
-            elif not all(a <= b for a, b in zip(ds, ds[1:])):
-                mixed = True
-            out.extend(head + body)
-        if mixed:
-            emit_line(f"note: {shown_name(path)}: rows are not in date order, so "
-                  f"same-day rows keep the file's order (intra-day order "
-                  f"unknown) — check a same-day sale and rebuy.")
-        return out
+        """Rows in the order they happened: `_qt_real_order`."""
+        return _qt_real_order(path, rows)
 
     def _check_account_mix(self, path: Path, rows) -> None:
         """One export holding rows of SEVERAL Questrade accounts (re-audit
@@ -2546,12 +2554,50 @@ def questrade_cash_events(path) -> List[Dict[str, Any]]:
     (TF6 with no units) as a CASHMOVE; stock-lending income (LFJ, which
     the books do not carry) as a FLOW. A conversion leg with no other
     leg that day is a CASHMOVE the user declares. The export carries no
-    cash balance: a CASHBAL .tt line gives the ledger one."""
+    cash balance: a CASHBAL .tt line gives the ledger one.
+
+    Rows are read in the order they happened (`_qt_real_order`: a
+    newest-first export bottom-up), and the events keep that order — v2
+    replays one day's events in intake order. The two legs of one
+    conversion are adjacent: a leg pairs with the account's previous
+    conversion leg that day when that one moved the other way in
+    another currency. Read in file order, a newest-first export replayed
+    two same-day conversions backward and paired a leg with the wrong
+    conversion (audit finding 75)."""
     from taxjson.bin.taxjson_brokerage import hash_broker_account
     from taxjson.lib import cash_events as CE
     name = shown_name(path)
-    out: List[Dict[str, Any]] = []
-    legs: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+    # One slot per event, in real order; a conversion takes the slot of
+    # its first leg and fills it when its second leg arrives.
+    out: List[Optional[Dict[str, Any]]] = []
+    # (account, day, settle) -> (slot, leg) of the leg awaiting its pair
+    pending: Dict[Tuple[str, str, str], Tuple[int, Dict[str, Any]]] = {}
+
+    def _lone(key, slot, leg):
+        acct, d, s = key
+        ev = CE.move(d, leg["cur"], leg["net"], settle=s, where=name,
+                     account=acct,
+                     desc="FXT conversion leg with no other leg")
+        ev['line_where'] = leg["where"]
+        out[slot] = ev
+
+    def _fx_leg(key, leg):
+        prev = pending.pop(key, None)
+        if prev is not None:
+            slot, first = prev
+            if (first["cur"] != leg["cur"]
+                    and (first["net"] < 0) != (leg["net"] < 0)):
+                o, i = (first, leg) if first["net"] < 0 else (leg, first)
+                acct, d, s = key
+                ev = CE.conv(d, o["cur"], -o["net"], i["cur"], i["net"],
+                             settle=s, where=name, account=acct,
+                             desc="FXT")
+                ev['line_where'] = o["where"]
+                out[slot] = ev
+                return
+            _lone(key, slot, first)
+        out.append(None)
+        pending[key] = (len(out) - 1, leg)
 
     def _day(row, col, lineno):
         raw = (row.get(col) or '').strip()
@@ -2561,7 +2607,8 @@ def questrade_cash_events(path) -> List[Dict[str, Any]]:
                                       f"{raw!r} is not a date")
         return dt.strftime('%Y-%m-%d') if dt else None
 
-    for lineno, row in _read_qt_rows(Path(path)):
+    for lineno, row in _qt_real_order(path, _read_qt_rows(Path(path)),
+                                      note=False):
         action = _canon_action(row.get('Action'))
         atype = (row.get('Activity Type') or '').strip()
         sym = (row.get('Symbol') or '').strip()
@@ -2593,8 +2640,7 @@ def questrade_cash_events(path) -> List[Dict[str, Any]]:
         acct = hash_broker_account(raw_acct) if raw_acct else ''
         where = f"{name}:{lineno}"
         if is_fx:
-            legs.setdefault((acct, d, s), []).append(
-                {"cur": cur, "net": net, "where": where})
+            _fx_leg((acct, d, s), {"cur": cur, "net": net, "where": where})
             continue
         if is_lfj:
             ev = CE.flow(d, cur, net, settle=s, where=name, account=acct,
@@ -2604,31 +2650,6 @@ def questrade_cash_events(path) -> List[Dict[str, Any]]:
                          desc=action or atype)
         ev['line_where'] = where
         out.append(ev)
-    for (acct, d, s), ls in legs.items():
-        outs = [x for x in ls if x["net"] < 0]
-        ins = [x for x in ls if x["net"] > 0]
-        used: set = set()
-        for o in outs:
-            j = next((k for k, i in enumerate(ins) if k not in used
-                      and i["cur"] != o["cur"]), None)
-            if j is None:
-                ev = CE.move(d, o["cur"], o["net"], settle=s, where=name,
-                             account=acct,
-                             desc="FXT conversion leg with no other leg")
-                ev['line_where'] = o["where"]
-                out.append(ev)
-                continue
-            used.add(j)
-            ev = CE.conv(d, o["cur"], -o["net"], ins[j]["cur"],
-                         ins[j]["net"], settle=s, where=name, account=acct,
-                         desc="FXT")
-            ev['line_where'] = o["where"]
-            out.append(ev)
-        for k, i in enumerate(ins):
-            if k not in used:
-                ev = CE.move(d, i["cur"], i["net"], settle=s, where=name,
-                             account=acct,
-                             desc="FXT conversion leg with no other leg")
-                ev['line_where'] = i["where"]
-                out.append(ev)
-    return out
+    for key, (slot, leg) in list(pending.items()):
+        _lone(key, slot, leg)
+    return [ev for ev in out if ev is not None]

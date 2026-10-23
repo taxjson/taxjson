@@ -19,6 +19,9 @@ the CUT-OFF (CA-OPEN-03, US-OPEN-03):
 * position rows only (trades, transfers, splits/renames into the
   symbol, cost adjustments); income rows (dividends, interest,
   withholding) always stay;
+* a row of an old symbol follows only the renames dated on or after
+  it: a ticker reused after its rename (bought under the old name
+  later) is another holding and keeps its rows;
 * a row is "on or before" by its trade date;
 * a SALE or a SHORT COVER left out that falls in the project's tax
   year (or later) stops the run: its gain would silently drop out of
@@ -86,15 +89,19 @@ def snapshots(txs: Iterable) -> Dict[Tuple[str, str], str]:
 
 
 def _final_symbol(sym: str, renames: List[Tuple[str, str, str]],
-                  until: str) -> str:
-    """Follow rename SPLIT rows (date, old, new) dated on or before
-    `until` from `sym` to the symbol it became."""
+                  until: str, since: str = '') -> str:
+    """Follow rename SPLIT rows (date, old, new) dated from `since` (the
+    row's own date) to `until` from `sym` to the symbol it became; each
+    later step only by a rename on or after the one before. A rename
+    dated before the row is another holding's: a ticker reused after
+    its rename (bought under the old name later) keeps its own name."""
     seen = set()
     for _ in range(len(renames) + 1):
         nxt = None
         for d, old, new in renames:
-            if old == sym and d <= until:
+            if old == sym and since <= d <= until:
                 nxt = new
+                since = d
                 break
         if nxt is None or nxt in seen:
             return sym
@@ -160,7 +167,8 @@ def apply_opening_cutoff(txs: List, *, year: Optional[int] = None,
         sym = str(_get(t, 'symbol'))
         hit = None
         for s, d in snap.items():
-            if day <= d and _final_symbol(sym, renames, d) == s:
+            if day <= d and _final_symbol(sym, renames, d,
+                                          since=day) == s:
                 hit = s
                 break
         if hit is None:
@@ -261,7 +269,8 @@ def _realizations_left_out(dropped: Dict[str, List], txs: List,
             for i, t in splits:
                 d = str(_get(t, 'date'))
                 sym = str(_get(t, 'symbol'))
-                if d > day or _final_symbol(sym, renames, day) != hit \
+                if d > day or _final_symbol(sym, renames, day,
+                                             since=d) != hit \
                         or id(t) in split_dups:
                     continue
                 grp.append((i, t))

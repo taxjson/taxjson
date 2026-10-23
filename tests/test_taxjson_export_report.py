@@ -211,3 +211,37 @@ class TestMixedCurrencyBuckets(unittest.TestCase):
         self.assertAlmostEqual(b["cost_by_currency"]["USD"], 1000.0)
         self.assertAlmostEqual(b["cost_by_currency"]["CAD"], 1400.0)
         self.assertIn("omitted", buf.getvalue())
+
+
+class TestMixedCurrencyRoundTrip(unittest.TestCase):
+    """2026-10 audit #64: a holdings TOML this tool wrote for a
+    cross-currency bucket (mixed_currency = true, total_cost_<cur>)
+    is read back with its per-currency costs, not as zero cost."""
+
+    def test_round_trip_keeps_the_per_currency_costs(self):
+        import io
+        from contextlib import redirect_stderr
+        from taxjson.bin.taxjson_export import (_holdings_toml_to_inventory,
+                                                process_data_report)
+        doc = {"holding": [{"symbol": "DLR.TO", "quantity": 200.0,
+                            "mixed_currency": True,
+                            "total_cost_usd": 1000.0,
+                            "total_cost_cad": 1400.0}]}
+        data = _holdings_toml_to_inventory(doc, "h.toml")
+        self.assertEqual(sum(i["qty"] for i in data["inventory"]), 200.0)
+        agg = {}
+        with redirect_stderr(io.StringIO()):
+            process_data_report(data, _args(inputs=["h.toml"]), agg,
+                                mapping={}, drops=set())
+        b = agg["DLR.TO"]
+        self.assertTrue(b.get("mixed_currency"))
+        self.assertEqual(b["qty"], 200.0)
+        self.assertEqual(b["cost_by_currency"], {"CAD": 1400.0,
+                                                 "USD": 1000.0})
+
+    def test_mixed_without_figures_is_refused(self):
+        from taxjson.bin.taxjson_export import _holdings_toml_to_inventory
+        doc = {"holding": [{"symbol": "DLR.TO", "quantity": 200.0,
+                            "mixed_currency": True}]}
+        with self.assertRaises(SystemExit):
+            _holdings_toml_to_inventory(doc, "h.toml")

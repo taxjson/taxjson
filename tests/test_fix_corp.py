@@ -522,6 +522,47 @@ class TestEventInTwoBrokerAccounts(unittest.TestCase):
             'ib_u1_copy.csv': self._file('U5550001', 1000)})  # pii-ok
         self.assertEqual(inv.get('DEF.TO', (0,))[0], 500)
 
+    def test_statements_disagreeing_on_values_reach_the_console(self):
+        """The 2026-10 critique: two statements of one broker account
+        that disagree on an event's values (#104) say so on the run's
+        console, not only in the stage log; --strict stops on it."""
+        def file_(value_per_share):
+            ca = (_ib_ca(f'{self.D} (DEF, DEF CORP, CA0000000002)', 500,
+                         1000 * value_per_share,
+                         when='2026-06-11, 20:25:00')
+                  + _ib_ca(f'{self.D} (ABC, ABC CORP, CA0000000001)', -1000,
+                           -1000 * value_per_share,
+                           when='2026-06-11, 20:25:00'))
+            return (_IB_HEAD.format(acct='U5550001')            # pii-ok
+                    + _IB_TRADES
+                    + _ib_buy('ABC', 1000, 10, when='2026-03-03, 10:00:00')
+                    + _IB_CA + ca)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {'ib_a.csv': file_(12),
+                                  'ib_b.csv': file_(13)})
+            r = _run_cli(root, "run", "--no-input")
+            for p in _pending(root):
+                _run_cli(root, "elect", "margin", "--set",
+                         f"{p['event_id']}=taxable_disposition")
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            out = r.stdout + r.stderr
+            self.assertEqual(out.count("disagree on its value"), 1, out)
+            self.assertIn("ATTENTION: corporate action 'ABC(CA0000000001) "
+                          "Merged(Acquisition) WITH CA0000000002 1 for 2' on "
+                          "2026-06-11: two statements of broker account "
+                          "U5*** disagree on its value (12000.00 vs "
+                          "13000.00); kept 13000.00", out)
+            self.assertNotIn("U5550001", out)                   # pii-ok
+            # One disposal of the 1000 shares, not one per statement.
+            gain, inv = _gains(root)
+            self.assertEqual(inv, {'DEF.TO': (500, 13000.0)})
+            self.assertAlmostEqual(gain, 3000.0, places=2)
+            r = _run_cli(root, "run", "--no-input", "--strict")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("statements disagree on a corporate action",
+                          r.stdout + r.stderr)
+
     def test_rbc_two_accounts_in_one_export(self):
         from taxjson.lib.corp_actions import (combine_broker_copies,
                                               parse_rbc_corporate_actions)
@@ -554,6 +595,113 @@ class TestEventInTwoBrokerAccounts(unittest.TestCase):
         self.assertEqual(len(evs), 1)
         self.assertEqual((evs[0].qty_disposed, evs[0].qty_received),
                          (160.0, 80.0))
+
+
+@rule("CA-CORP-03")
+class TestBrokerCopiesValuesAndListings(unittest.TestCase):
+    """2026-10 audit #104-#106: copies of one event that agree on
+    quantities but not on values, two listings in one broker account,
+    and a fractional-delivery broker merged with a whole-share one."""
+
+    @staticmethod
+    def _ev(**kw):
+        from taxjson.lib.corp_actions import CorporateAction
+        d = dict(date='2025-04-01', time='09:30:00', action_type='merger',
+                 source_symbol='OLDA.TO', source_isin='CA0000000001',
+                 target_symbol='NEWA.TO', target_isin='CA0000000002',
+                 ratio_new=1.0, ratio_old=1.0, qty_disposed=10.0,
+                 qty_received=10.0, fmv=200.0, currency='CAD',
+                 target_currency='CAD', account='margin', target_fmv=200.0,
+                 broker_account='99900001')                     # pii-ok
+        d.update(kw)
+        return CorporateAction(**d)
+
+    @staticmethod
+    def _combine(events):
+        import io
+        from taxjson.lib.corp_actions import combine_broker_copies
+        err = io.StringIO()
+        return combine_broker_copies(events, stream=err), err.getvalue()
+
+    @staticmethod
+    def _gain(events, initial, sales):
+        from taxjson.lib.core import (CanadaTaxRules,
+                                      coerce_transaction_row)
+        from taxjson.lib.corp_actions import resolve_event
+        rows = [r for e in events
+                for r in resolve_event(e, 'taxable_disposition')]
+        tx = (initial + [coerce_transaction_row(r, i, 'synthetic')
+                         for i, r in enumerate(rows)] + sales)
+        return CanadaTaxRules().compute_gains(
+            tx, detect_wash_sales=False)['summary']['total_gain']
+
+    @staticmethod
+    def _trade(sym, q, n, d):
+        return TaxTransaction(action='BUYSELL', date=d, date_settle=d,
+                              time='09:30:00', symbol=sym, quantity=q,
+                              currency='CAD', price=abs(n / q),
+                              net_amount=n, account='margin')
+
+    def test_values_disagree_same_quantities(self):
+        from dataclasses import replace
+        a = self._ev()
+        b = replace(a, fmv=300.0, target_fmv=300.0)
+        ab, err_ab = self._combine([a, b])
+        ba, err_ba = self._combine([b, a])
+        self.assertEqual(len(ab), 1)
+        # The same copy whatever the order, and said.
+        self.assertEqual((ab[0].fmv, ba[0].fmv), (300.0, 300.0))
+        for err in (err_ab, err_ba):
+            self.assertIn("disagree on its values", err)
+            self.assertIn("FMV 200.00 vs 300.00", err)
+            self.assertIn("99***", err)
+            self.assertNotIn("99900001", err)                   # pii-ok
+        # Identical copies: kept once, nothing said.
+        same, err = self._combine([a, replace(a)])
+        self.assertEqual(len(same), 1)
+        self.assertEqual(err, "")
+
+    def test_unnamed_copies_with_different_values(self):
+        from dataclasses import replace
+        a = self._ev(broker_account='')
+        b = replace(a, cash_in_lieu=5.0, cash_in_lieu_currency='CAD')
+        out, err = self._combine([a, b])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].cash_in_lieu, 5.0)
+        self.assertIn("an unnamed broker account", err)
+        self.assertIn("cash in lieu 0.00 vs 5.00", err)
+
+    def test_two_listings_in_one_broker_account(self):
+        a = self._ev()
+        b = self._ev(source_symbol='OLDA.US', target_symbol='NEWA.US',
+                     currency='USD', target_currency='USD')
+        self.assertEqual(a.event_id, b.event_id)
+        out, _err = self._combine([a, b])
+        self.assertEqual(sorted(e.currency for e in out), ['CAD', 'USD'])
+        # Both listings disposed: 100 each (1:1 FX for the test).
+        initial = [self._trade('OLDA.TO', 10, 100, '2025-01-02'),
+                   self._trade('OLDA.US', 10, 100, '2025-01-02')]
+        rows_out = []
+        for e in out:
+            from dataclasses import replace
+            rows_out.append(replace(e, currency='CAD',
+                                    target_currency='CAD'))
+        self.assertAlmostEqual(self._gain(rows_out, initial, []), 200.0, 2)
+
+    def test_fractional_delivery_whatever_the_order(self):
+        ib = self._ev(ratio_new=3.0, ratio_old=20.0, qty_received=1.5,
+                      fractional_delivery=True)
+        rbc = self._ev(ratio_new=3.0, ratio_old=20.0, qty_disposed=20.0,
+                       qty_received=3.0, fractional_delivery=False,
+                       broker_account='99900002')               # pii-ok
+        initial = [self._trade('OLDA.TO', 30, 300, '2025-01-02')]
+        sales = [self._trade('NEWA.TO', -4.5, 900, '2025-07-01')]
+        for order in ([ib, rbc], [rbc, ib]):
+            out, _err = self._combine(order)
+            self.assertEqual(len(out), 1)
+            self.assertTrue(out[0].fractional_delivery)
+            self.assertAlmostEqual(out[0].qty_received, 4.5)
+            self.assertAlmostEqual(self._gain(out, initial, sales), 600.0, 2)
 
 
 # --------------------------------------------------------------- S020-04 / S020-08

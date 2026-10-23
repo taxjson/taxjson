@@ -54,6 +54,10 @@ def _toml(path: Path, holdings, as_of=None, account="55500001"):  # pii-ok
     return path
 
 
+# Synthetic IB-shaped ids: two that mask alike (U1***), one that does not.
+_ID_A, _ID_B, _ID_C = "U1234567", "U1234568", "U7654321"  # pii-ok
+
+
 # A loss sold 10 days after the statement day, half the shares kept.
 HIST = ("BUYSELL 2025-02-10 09:30:00 SAMPB.TO -10 CAD 8 80 0\n"
         "BUYSELL 2025-03-10 09:30:00 SAMPD.TO 10 CAD 30 300 0\n")
@@ -233,17 +237,72 @@ class TestOpeningCanada(unittest.TestCase):
                           "activity; skipped", r.stdout)
 
     def test_clashing_opening_lines_refused(self):
+        # The run reads a .tt in any case (a broker's START.TT): so
+        # does the clash scan.
+        for name in ("old.tt", "OLD.TT"):
+            with self.subTest(name), tempfile.TemporaryDirectory() as td:
+                root = _project(Path(td) / "p", tt={
+                    ("margin", name):
+                        "OPENING 2024-06-30 SAMPB.TO 5 CAD 50\n"})
+                rep = _toml(Path(td) / "pos.toml", [
+                    {"symbol": "SAMPB.TO", "quantity": 20,
+                     "currency": "CAD", "total_cost": 200.0}],
+                    as_of="2024-12-31")
+                for extra in ((), ("--force",)):
+                    r = cli(root, "opening", "margin", str(rep), *extra)
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn(f"inputs/margin/{name} already has "
+                                  f"OPENING lines for SAMPB.TO", r.stderr)
+                self.assertFalse((root / "inputs" / "margin" /
+                                  "opening_2024-12-31.tt").exists())
+
+    @rule("CA-OPEN-01")
+    def test_an_option_average_price_is_per_share(self):
+        # Questrade's snapshot (`tjs fetch --positions`) states an
+        # option's average_entry_price per share: one contract at 2 is
+        # a cost of 200.
         with tempfile.TemporaryDirectory() as td:
-            root = _project(Path(td) / "p", tt={
-                ("margin", "old.tt"):
-                    "OPENING 2024-06-30 SAMPB.TO 5 CAD 50\n"})
+            root = _project(Path(td) / "p")
             rep = _toml(Path(td) / "pos.toml", [
-                {"symbol": "SAMPB.TO", "quantity": 20, "currency": "CAD",
-                 "total_cost": 200.0}], as_of="2024-12-31")
-            r = cli(root, "opening", "margin", str(rep))
-            self.assertNotEqual(r.returncode, 0)
-            self.assertIn("already has OPENING lines for SAMPB.TO",
-                          r.stderr)
+                {"symbol": "SAMPQ260116C00050000.TO", "quantity": 1,
+                 "currency": "CAD", "average_entry_price": 2}],
+                as_of="2024-12-31")
+            r = cli(root, "opening", "margin", str(rep), "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("OPENING 2024-12-31 SAMPQ260116C00050000.TO 1 "
+                          "CAD 200.00", r.stdout)
+
+    def test_two_accounts_that_mask_alike_refused(self):
+        # _ID_A and _ID_B both show as U1***: still two accounts.
+        def _two(path, b):
+            path.write_text(
+                '[meta]\nas_of = "2024-12-31"\n'
+                + "".join(f'\n[[holding]]\naccount = "{a}"\n'
+                          f'symbol = "{s}"\nquantity = 10\n'
+                          f'currency = "CAD"\ntotal_cost = 100\n'
+                          for a, s in ((_ID_A, "SAMPB.TO"),
+                                       (b, "SAMPC.TO"))))
+            return path
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(Path(td) / "p")
+            for b in (_ID_B, _ID_C):
+                r = cli(root, "opening", "margin",
+                        str(_two(Path(td) / "pos.toml", b)))
+                self.assertNotEqual(r.returncode, 0, b)
+                self.assertIn("lists 2 broker accounts", r.stderr)
+                self.assertNotIn(_ID_A, r.stdout + r.stderr)
+                self.assertNotIn(b, r.stdout + r.stderr)
+            self.assertIn("(U1***, U1*** — ids that differ after the two "
+                          "characters shown)",
+                          cli(root, "opening", "margin", str(_two(
+                              Path(td) / "pos.toml", _ID_B))).stderr)
+            self.assertFalse((root / "inputs" / "margin" /
+                              "opening_2024-12-31.tt").exists())
+            # One account written twice (any case) is one account.
+            r = cli(root, "opening", "margin",
+                    str(_two(Path(td) / "pos.toml",
+                             f" {_ID_A.lower()} ")))
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 class TestOpeningUsa(unittest.TestCase):

@@ -122,8 +122,14 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
             f"names a sale that has happened (check the year): {shown!r}")
     qty = None
     if len(toks) == 3:
+        from taxjson.lib.brokerages.base import parse_strict_number
         try:
-            qty = abs(float(toks[2].replace(",", "")))
+            # Strict, like a .tt row's quantity: `1,000` is a thousand,
+            # a decimal comma (`1,5`) is refused, never read as 15
+            # (2026-10 audit #87).
+            if not re.fullmatch(r"[0-9.,eE+-]+", toks[2]):
+                raise ValueError(toks[2])   # no `$`, no parentheses
+            qty = abs(parse_strict_number(toks[2], field="quantity"))
         except ValueError:
             qty = None
         if qty is None or not math.isfinite(qty) or qty == 0:
@@ -294,6 +300,9 @@ class Plan:
         # {index: [the account's sales of the line's root, on any
         # listing, a few days off (NEAR_DAYS)]} (the message's hint).
         self.near_rows: Dict[int, List[Any]] = {}
+        # {index: [(trade date, units) of each sale only some of whose
+        # fills the line's date matches]} (the message's hint).
+        self.split_settle: Dict[int, List[Tuple[str, float]]] = {}
 
     def __bool__(self) -> bool:
         return bool(self.overrides)
@@ -313,6 +322,17 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
         return pl
     rows = list(rows_in_order)
     grp = disposition_groups(rows)
+    # Each sale's units and rows over ALL its fills, not only the fills
+    # traded or settled on the line's date: fills of one sale settling
+    # on different days let a line dated one fill's settle day name that
+    # fill alone (2026-10 audit #88).
+    sale_units: Dict[int, float] = {}
+    sale_rows: Dict[int, int] = {}
+    for t in rows:
+        g = grp.get(id(t))
+        if g is not None:
+            sale_units[g] = sale_units.get(g, 0.0) + float(t.quantity or 0)
+            sale_rows[g] = sale_rows.get(g, 0) + 1
     for i, ov in enumerate(pl.overrides):
         d = ov["date"]
         trades = [t for t in rows
@@ -334,6 +354,22 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
                 continue
             by_g.setdefault(grp.get(id(t), id(t)), []).append(t)
         sales = list(by_g.values())
+
+        def _total(s: List[Any]) -> float:
+            g = grp.get(id(s[0]))
+            return (sale_units[g] if g is not None
+                    else sum(float(t.quantity) for t in s))
+
+        def _fills(s: List[Any]) -> int:
+            g = grp.get(id(s[0]))
+            return sale_rows[g] if g is not None else len(s)
+        # The sale is all of its fills, whatever day each settles: a line
+        # whose date matches only some of them (fills of one same-day
+        # sale settling on different days) names none, with or without
+        # units; the message gives the sale's trade date (audit #88).
+        pl.split_settle[i] = [(str(s[0].date), abs(_total(s)))
+                              for s in sales if len(s) != _fills(s)]
+        complete = [s for s in sales if len(s) == _fills(s)]
         q = ov.get("qty")
         if q:
             def _eq(a: float) -> bool:
@@ -343,13 +379,14 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
             # sale (pre-release review) — a line written for one fill
             # overrode the denial on all of them. Such a line names no
             # sale; the message says which sale the fill belongs to.
-            whole = [s for s in sales
-                     if _eq(sum(float(t.quantity) for t in s))]
+            whole = [s for s in complete if _eq(_total(s))]
             pl.fill_of[i] = [
-                abs(sum(float(t.quantity) for t in s)) for s in sales
-                if s not in whole and len(s) > 1
+                abs(_total(s)) for s in sales
+                if not _eq(_total(s)) and _fills(s) > 1
                 and any(_eq(float(t.quantity)) for t in s)]
             sales = whole
+        else:
+            sales = complete
         pl.groups[i] = sales
         for s in sales:
             for t in s:
@@ -484,6 +521,8 @@ def summarize(pl: Plan, would: Dict[str, Dict[str, Any]], *,
             "reason": ov.get("reason") or "", "country": country,
             "status": status, "sales": sales,
             "fill_of": [round(q, 9) for q in pl.fill_of.get(i, [])],
+            "split_settle": [[d, round(q, 9)]
+                             for d, q in pl.split_settle.get(i, [])],
             "day_trades": _day_trades(ov["symbol"],
                                       pl.day_rows.get(i, [])),
             "near_trades": [_trade(t, ov["symbol"])
@@ -640,6 +679,17 @@ def problems(items: Sequence[Dict[str, Any]],
                        f"{it.get('account')} (one same-day sell-down is "
                        f"one sale): a line names a whole sale — write "
                        f"its units, {_units(fills[0])}, or none")
+            continue
+        split = it.get("split_settle") or []
+        if split:
+            d0, q0 = split[0]
+            out.append(f"{it.get('where')}: {it.get('line')!r} — "
+                       f"{it.get('date')} is the settlement date of only "
+                       f"some fills of the {_units(q0)}-unit sale of "
+                       f"{it.get('symbol')} traded {d0} in account "
+                       f"{it.get('account')} (its fills settle on "
+                       f"different days; a line names a whole sale): "
+                       f"date the line {d0}")
             continue
         days = it.get("day_trades") or []
         seen_txt = ("; that day's trades in account "

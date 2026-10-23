@@ -287,6 +287,28 @@ def latest_rate(history: Dict[str, Dict], cur: str,
     return float(dates[d]), d
 
 
+def _usable_price(value) -> bool:
+    """A live quote is a finite number above 0: NaN (IB's 'no price'),
+    an infinity, zero, a negative or a non-number is not a price — the
+    next candidate or tier is asked (audit finding 57: `x == x` let
+    +inf through and stopped the fallback)."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f) and f > 0
+
+
+def _ibkr_cache_spelling(sym: str) -> str:
+    """The Yahoo spelling an IBKR hit for `sym` is cached under: the
+    listing IB was asked for is the symbol's own (the IB tier never sees
+    a QUOTE remap), so its default Yahoo spelling — not the remapped
+    one. Unmapped, that is the spelling a later run wants and the entry
+    serves offline; remapped, it is not, and the entry is a miss for the
+    remapped spelling (audit finding 69, issue #82)."""
+    return yf_symbol_for(sym) or sym
+
+
 def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
                   verbose: bool) -> Dict[str, float]:
     """Snapshot via a running TWS/Gateway. Any failure — library absent,
@@ -338,7 +360,7 @@ def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
                 continue
             price = None
             for candidate in (t.last, t.close, t.marketPrice()):
-                if candidate and candidate == candidate and candidate > 0:
+                if _usable_price(candidate):
                     price = float(candidate)
                     break
             if price is not None:
@@ -416,7 +438,7 @@ def _ibkr_option_fetcher(symbols: List[str], *, host: str, port: int,
             ib.sleep(IBKR_SNAPSHOT_WAIT)
             price = None
             for candidate in (t.last, t.close, t.marketPrice()):
-                if candidate and candidate == candidate and candidate > 0:
+                if _usable_price(candidate):
                     price = float(candidate)
                     break
             if price is not None:
@@ -673,8 +695,12 @@ def fetch_prices(pairs: Dict[str, str], *,
 
     `fetchers` overrides the live tiers for testing: a list of callables
     taking the remaining {sym: yahoo_sym} dict and returning
-    {sym: (price, source_label)} or {sym: (price, source_label,
-    currency)}. `offline` forces the TAXJSON_OFFLINE policy decision
+    {sym: (price, source_label)}, {sym: (price, source_label,
+    currency)} or {sym: (price, source_label, currency, spelling)} —
+    `spelling` is the one the tier actually priced, cached in place of
+    the asked one (the IBKR tier prices the symbol's own listing, never
+    a QUOTE remap). A price that is not a finite number above 0 is
+    skipped: the next tier is asked and nothing is cached. `offline` forces the TAXJSON_OFFLINE policy decision
     (None: the switch applies unless test fetchers are injected).
     """
     today = date.today().isoformat()
@@ -695,7 +721,8 @@ def fetch_prices(pairs: Dict[str, str], *,
         fetchers = []
         if use_ibkr:
             fetchers.append(lambda rem: {
-                s: (p, "ibkr") for s, p in _ibkr_fetcher(
+                s: (p, "ibkr", None, _ibkr_cache_spelling(s))
+                for s, p in _ibkr_fetcher(
                     list(rem), host=ibkr_host, port=ibkr_port,
                     verbose=verbose).items()})
         fetchers.append(lambda rem: {
@@ -703,6 +730,7 @@ def fetch_prices(pairs: Dict[str, str], *,
                 rem, verbose=verbose).items()})
 
     unit_less: List[str] = []
+    spelled: Dict[str, str] = {}
     for fetcher in fetchers:
         if not remaining:
             break
@@ -716,6 +744,14 @@ def fetch_prices(pairs: Dict[str, str], *,
             if sym not in remaining:
                 continue
             price, source = hit[0], hit[1]
+            if not _usable_price(price):
+                # An infinity or NaN from any tier is not a quote: the
+                # next tier is asked, nothing is cached (finding 57).
+                emit_line(f"warning: price-chain: {source} quote for {sym}: "
+                          f"{price!r} is not a usable price — ignored",
+                          file=sys.stderr)
+                continue
+            price = float(price)
             price, cur, problem = clean_quote_currency(
                 price, hit[2] if len(hit) > 2 else None)
             if problem:
@@ -730,6 +766,8 @@ def fetch_prices(pairs: Dict[str, str], *,
                 continue
             quotes[sym] = PriceQuote(price=price, source=source, asof=today,
                                      currency=cur)
+            if len(hit) > 3 and hit[3]:
+                spelled[sym] = hit[3]
             remaining.pop(sym, None)
 
     cache = _load_cache(cache_path)
@@ -795,7 +833,7 @@ def fetch_prices(pairs: Dict[str, str], *,
         if q.source.startswith("cache"):
             continue
         cache[sym] = {"price": q.price, "asof": q.asof, "source": q.source,
-                      "quote_symbol": pairs[sym]}
+                      "quote_symbol": spelled.get(sym, pairs[sym])}
         if q.currency:
             cache[sym]["currency"] = q.currency
         dirty = True
@@ -804,14 +842,15 @@ def fetch_prices(pairs: Dict[str, str], *,
 
     if remaining and offline:
         from taxjson.lib import out
+        _rem = sorted(remaining)
         out.fail(
-            f"TAXJSON_OFFLINE is set but current prices for "
-            f"{', '.join(sorted(remaining))} are not in the price cache",
+            f"TAXJSON_OFFLINE is set and {len(_rem)} symbol(s) have no "
+            f"current price in the cache: "
+            + ", ".join(_rem[:3]) + (f" +{len(_rem) - 3} more"
+                                     if len(_rem) > 3 else ""),
             prog="taxjson",
-            details=[f"They would need IBKR / Yahoo Finance; the cache is "
-                     f"{cache_path}.",
-                     "Unset TAXJSON_OFFLINE to allow the lookup, or run "
-                     "once online to fill the cache."])
+            details=["Unset TAXJSON_OFFLINE, or run once online to fill "
+                     "the cache."])
     if remaining and verbose:
         print(f"price-chain: unpriced after all tiers: "
               f"{', '.join(sorted(remaining))}", file=sys.stderr)

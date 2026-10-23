@@ -20,7 +20,7 @@ from unittest import mock
 import _cra_pdf as CRA
 from _style import CapturedWidth
 from tax_rules import rule
-from test_slip_audit import (HOLDER, IB_ACCT, _home, _ib_project,
+from test_slip_audit import (HOLDER, IB_ACCT, _apply, _home, _ib_project,
                              _ib_report, tj)
 from test_slip_audit_cra import IB_NAME
 
@@ -329,6 +329,88 @@ class TestPlanImport(unittest.TestCase):
         self.assertEqual((plan.add, plan.replace), ([], []))
         self.assertIn("several slips it may amend", plan.notes[0])
 
+    @rule("CA-SLIP-04")
+    def test_second_amendment_replaces_the_first(self):
+        """Finding 109: the issuer's second amended slip replaces the
+        amended slip slips.toml holds, never adds beside it."""
+        from taxjson.lib.cra_slips import Existing, plan_import
+        amd = Existing(index=2, type="T3", account="margin", security="ZZT",
+                       issuer="ZZT SAMPLE INDEX ETF", status="amended",
+                       currency="CAD", boxes={"42": 5.45},
+                       keys=frozenset({"k" * 10}), imported=True)
+        plan = plan_import([self._pl("b.pdf", "amended", {"42": 6.45})],
+                           [amd])
+        self.assertEqual(plan.add, [])
+        self.assertEqual([(e.index, p.slip.shown) for e, p, _k in
+                          plan.replace], [(2, "b.pdf")])
+        # Another issuer's amended slip of the fund: not this one's.
+        plan = plan_import([self._pl("b.pdf", "amended", {"42": 6.45},
+                                     issuer="OTHER SAMPLE FUND")], [amd])
+        self.assertEqual(plan.replace, [])
+        # An original beside it: the original is what it amends.
+        orig = Existing(**{**amd.__dict__, "index": 1, "status": "original",
+                           "boxes": {"42": 3.45}})
+        plan = plan_import([self._pl("b.pdf", "amended", {"42": 6.45})],
+                           [orig, amd])
+        self.assertEqual([e.index for e, _p, _k in plan.replace], [1])
+        # Two amended slips it may amend: none.
+        amd3 = Existing(**{**amd.__dict__, "index": 3, "boxes": {"42": 1.0}})
+        plan = plan_import([self._pl("b.pdf", "amended", {"42": 6.45})],
+                           [amd, amd3])
+        self.assertEqual((plan.add, plan.replace), ([], []))
+        self.assertIn("several slips it may amend", plan.notes[0])
+        # Two amended slips of the fund in one import: which is the later
+        # cannot be told — none, the original kept.
+        orig.index = 2
+        plan = plan_import([self._pl("b.pdf", "amended", {"42": 5.45}),
+                            self._pl("c.pdf", "amended", {"42": 6.45})],
+                           [orig])
+        self.assertEqual((plan.add, plan.replace), ([], []))
+        self.assertEqual(len(plan.notes), 1)
+        self.assertIn("which is the later cannot be told", plan.notes[0])
+
+    @rule("CA-SLIP-04")
+    def test_another_issuers_equal_slip_is_added(self):
+        """2026-10 audit #108: an imported slip of another issuer with
+        the same boxes is a slip of its own, not "already in
+        slips.toml"; a hand-typed slip (no issuer known) still counts as
+        the same."""
+        from taxjson.lib.cra_slips import Existing, plan_import
+        ex = Existing(index=1, type="T3", account="margin", security="ZZT",
+                      issuer="ZZT SAMPLE INDEX ETF", status="original",
+                      currency="CAD", boxes={"42": 3.45},
+                      keys=frozenset({"k" * 10}), imported=True)
+        plan = plan_import([self._pl("o.pdf", "original", {"42": 3.45},
+                                     issuer="OTHER SAMPLE FUND")], [ex])
+        self.assertEqual([p.slip.shown for p, _k in plan.add], ["o.pdf"])
+        self.assertFalse(any("already in slips.toml" in n
+                             for n in plan.notes))
+        typed = Existing(**{**ex.__dict__, "imported": False, "issuer": ""})
+        plan = plan_import([self._pl("o.pdf", "original", {"42": 3.45},
+                                     issuer="OTHER SAMPLE FUND")], [typed])
+        self.assertEqual(plan.add, [])
+        self.assertIn("already in slips.toml", plan.notes[0])
+
+    @rule("CA-SLIP-04")
+    def test_equal_amendment_replaces_and_keeps_its_status(self):
+        """2026-10 audit #110: an amended slip whose figures equal the
+        original there replaces it (status amended), so a later import
+        of an older original is not added beside it."""
+        from taxjson.lib.cra_slips import Existing, plan_import
+        ex = Existing(index=1, type="T3", account="margin", security="ZZT",
+                      issuer="ZZT SAMPLE INDEX ETF", status="original",
+                      currency="CAD", boxes={"42": 5.45},
+                      keys=frozenset({"k" * 10}), imported=True)
+        plan = plan_import([self._pl("a.pdf", "amended", {"42": 5.45})],
+                           [ex])
+        self.assertEqual([(e.index, p.slip.shown) for e, p, _k in
+                          plan.replace], [(1, "a.pdf")])
+        amd = Existing(**{**ex.__dict__, "status": "amended"})
+        plan = plan_import([self._pl("o.pdf", "original", {"42": 3.45})],
+                           [amd])
+        self.assertEqual(plan.add, [])
+        self.assertIn("holds its amended slip", plan.notes[0])
+
 
 def _toml(root):
     from taxjson.lib.tomlcompat import tomllib
@@ -388,6 +470,25 @@ class TestImportCountsOnce(unittest.TestCase):
             (g,) = rep["accounts"][0]["groups"]
             ln = {x["category"]: x for x in g["buckets"][0]["lines"]}
             self.assertEqual(ln["roc"]["slip"], 5.45)
+            # Finding 109: the issuer's second amendment replaces the
+            # first, never counted beside it.
+            amd2 = tmp / "amd2"
+            amd2.mkdir()
+            CRA.t3(amd2 / "t3 second.pdf", ["ZZT SAMPLE INDEX ETF"],
+                   {"49": "27.00"}, other={"25": "6.55", "42": "6.45"},
+                   status="amended")
+            r = tj(root, home, "slip-audit", "--import-cra", str(amd2),
+                   "--write")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("(amended): replaced by the amended slip "
+                          "t3 second.pdf", r.stdout)
+            self.assertEqual([(s["status"], s["boxes"]["42"])
+                              for s in _toml(root)["slip"]],
+                             [("amended", 6.45)])
+            rep = json.loads(tj(root, home, "slip-audit", "--json").stdout)
+            (g,) = rep["accounts"][0]["groups"]
+            ln = {x["category"]: x for x in g["buckets"][0]["lines"]}
+            self.assertEqual(ln["roc"]["slip"], 6.45)
 
     @rule("CA-SLIP-04")
     def test_original_and_amended_in_one_import_and_json(self):
@@ -561,6 +662,62 @@ class TestReportBesideTypedSlip(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stdout)
             self.assertIn("two different IB dividends reports", r.stderr)
             self.assertNotIn(IB_ACCT, r.stderr)
+            # Finding 89: a download that differs only in the base
+            # amounts (GrossInBase, WithholdInBase; the CAD slips are
+            # built from them) is another report, not a second copy.
+            for old, new in ((",25,34.10,25,", ",25,34.50,25,"),
+                             (",-3.75,-5.12,-3.75", ",-3.75,-5.20,-3.75")):
+                text = _ib_report()
+                self.assertEqual(text.count(old), 2)
+                (d / f"{IB_ACCT}.2025.dividends (1).csv").write_text(
+                    text.replace(old, new))
+                r = tj(root, home, "slip-audit")
+                self.assertEqual(r.returncode, 2, r.stdout)
+                self.assertIn("two different IB dividends reports",
+                              r.stderr)
+
+    @rule("CA-SLIP-03")
+    def test_partial_roc_is_topped_up_with_the_rest(self):
+        """Finding 96: the books hold part of a payment's return of
+        capital (1.45 of IB's 3.45): only the rest is suggested, and
+        once applied the books match the report."""
+        for div in (False, True):
+            with self.subTest(dividend_reduced=div), \
+                    tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                home = _home(tmp)
+                root = _ib_project(tmp)
+                (root / "inputs" / "margin" / "roc.tt").write_text(
+                    "ADJUST 2025-09-30 09:30:00 ZZT.TO CAD -1.45 type=roc\n"
+                    + ("DIVIDEND 2025-09-30 09:30:00 ZZT.TO 0 CAD 0 -1.45\n"
+                       if div else ""))
+                r = tj(root, home, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr)
+                rep = json.loads(tj(root, home, "slip-audit",
+                                    "--json").stdout)
+                lines = [ln for e in rep["suggestions"]["tt_lines"]
+                         for ln in e["lines"]]
+                roc = [ln for ln in lines if "ZZT" in ln]
+                self.assertEqual(roc, [
+                    "ADJUST 2025-09-30 09:30:00 ZZT.TO CAD -2.00 type=roc",
+                    "DIVIDEND 2025-09-30 09:30:00 ZZT.TO 0 CAD 0 -"
+                    + ("2.00" if div else "3.45")])
+                self.assertTrue(any(
+                    "the books hold 1.45 of it" in n
+                    and "change the existing line to -3.45" in n
+                    for n in rep["suggestions"]["notes"]),
+                    rep["suggestions"]["notes"])
+                _apply(root, rep)
+                r = tj(root, home, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr)
+                rep = json.loads(tj(root, home, "slip-audit",
+                                    "--json").stdout)
+                (g,) = rep["accounts"][0]["groups"]
+                ln = {x["category"]: x for x in g["buckets"][0]["lines"]}
+                self.assertEqual((ln["roc"]["books"], ln["roc"]["status"]),
+                                 (3.45, "ok"))
+                self.assertFalse([x for e in rep["suggestions"]["tt_lines"]
+                                  for x in e["lines"] if "ZZT" in x])
 
     def test_report_of_two_accounts_is_refused(self):
         from taxjson.lib.ib_dividends import IBReportError, read_report

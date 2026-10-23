@@ -1208,21 +1208,18 @@ def main(argv: Optional[List[str]] = None,
         return 0
     # What the columns mean.
     legend: List[str] = [
-        "TX_ADD: last buy in the taxable accounts — a rebuy within 30 "
-        "days of a loss sale defers the loss (it moves into the new "
-        "shares' basis) and extends the clear date.",
-        "EXIT@: the NATIVE-currency price at which a full exit today "
-        "books no base-currency loss — book cost converted at today's FX "
-        "rate, plus a 2% buffer for fees/slippage/FX drift. LOSS rows "
-        "(long) only."]
+        "TX_ADD: last buy in the taxable accounts; a rebuy within 30 days "
+        "of a loss sale defers the loss into the new shares and extends "
+        "the clear date.",
+        "EXIT@: the native price of a full exit today with no "
+        "base-currency loss (book cost at today's FX, plus 2% for fees "
+        "and drift); LOSS rows only."]
     if show_options:
-        legend.append("Options: PRICE and COST/SH are per-share premium "
-                      "(UNREALIZED carries the contract size the rows "
-                      "declare, x100 when none is declared); DTE = days "
-                      "to expiry. The radar "
-                      "does not track option contracts — rebuying the "
-                      "SAME contract within 30 days of a loss sale "
-                      "still triggers the wash/superficial rule.")
+        legend.append("Options: PRICE and COST/SH are per-share premium; "
+                      "UNREALIZED uses the declared contract size (100 "
+                      "when none); DTE = days to expiry. Rebuying the SAME "
+                      "contract within 30 days of a loss sale still "
+                      "triggers the rule.")
     if show_sheltered:
         # The two countries' rules differ (re-audit A2-1299): an IRA
         # buy in the window washes the loss for good whether or not
@@ -1230,26 +1227,24 @@ def main(argv: Optional[List[str]] = None,
         # account's buy denies it only for the units it still holds
         # 30 days after the sale (s.54 / s.40(2)(g), CA-SL-02/08).
         if is_usa:
-            legend.append("SH_QTY: shares held across sheltered "
-                          "accounts. SH_ADD: last IRA buy, held or "
-                          "since sold — one within 30 days either side "
-                          "of a loss sale makes the loss PERMANENTLY "
-                          "disallowed, not deferred.")
+            legend.append("SH_QTY: shares held in sheltered accounts; "
+                          "SH_ADD: last IRA buy (held or since sold), one "
+                          "within 30 days either side of a loss sale makes "
+                          "the loss PERMANENTLY disallowed.")
         else:
-            legend.append("SH_QTY: shares held across sheltered "
-                          "accounts. SH_ADD: last registered-account "
-                          "buy — one within 30 days either side of a "
-                          "loss sale makes the loss PERMANENTLY denied "
-                          "(not deferred) for the units the registered "
-                          "account still holds 30 days after the sale.")
+            legend.append("SH_QTY: shares held in sheltered accounts; "
+                          "SH_ADD: last registered-account buy, one within "
+                          "30 days either side of a loss sale makes the "
+                          "loss PERMANENTLY denied for the units the "
+                          "registered account still holds 30 days after "
+                          "the sale.")
     legend.append("Signed days: -Nd = N days ago, +Nd = N days ahead "
-                  "(ADVISORY clear dates). The radar's clear date runs "
-                  "from the MOST RECENT buy on either side.")
+                  "(ADVISORY clear dates), from the most recent buy on "
+                  "either side.")
     if is_usa:
         legend.append("LT_IN approximates from the position start date; "
                       "per-lot ST/LT is decided by the engine at sale "
-                      "time. An open short shows ST: covering it is "
-                      "short-term (US-HOLD-03).")
+                      "time; an open short shows ST (US-HOLD-03).")
     doc.section("COLUMNS")
     doc.items(legend)
 

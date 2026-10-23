@@ -45,7 +45,7 @@ from datetime import date as _date, timedelta
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from taxjson.lib.core import (is_option_symbol, parse_option_right,
-                              parse_option_underlying)
+                              parse_option_strike, parse_option_underlying)
 from taxjson.lib.futures import is_plain_future
 from taxjson.lib.price_chain import is_crypto_symbol
 
@@ -63,8 +63,9 @@ _INCOME = frozenset({"DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST",
                      "FEE", "DISALLOW", "ADJUST"})
 _EPS = 1e-9
 # The engines pair an assignment's stock leg dated up to 3 days BEFORE
-# the option row (tax-logic CA-OPT-08 / US-OPT-05).
+# the option row, or up to 7 after it (tax-logic CA-OPT-08 / US-OPT-05).
 _LEG_LEAD_DAYS = 3
+_LEG_LAG_DAYS = 7
 
 
 def _f(v) -> float:
@@ -108,18 +109,31 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
     holds the whole history) — a close outside it is left out, as the
     other classes' rows are.
 
+    An OPENING_BALANCE row (a missing-history `OPENING ... cost=unknown`
+    line, synthesized by the caller as the gains stage does) is a
+    position held before the data: a long one is sold out of, never
+    read as a write (2026-10 audit #59); a short one is a write whose
+    premium is unknown, so its close is no trade (`unknown`).
+
     Returns {'trades': [ {date, symbol, account, pnl, kind, contracts,
     premium, in_books} ], 'credits': [ {account, underlying, right, shares, amount,
-    date} ] (an assigned option's premium the tax rules folded into its
-    shares), 'exercised_long': n}."""
+    date, strike, delivered} ] (an assigned option's premium the tax rules
+    folded into its shares; `delivered` the assignment row's shares),
+    'exercised_long': n, 'exercises': [ {date, in_books} ] (the exercises
+    of long options, which are not trades), 'unknown': [ {date, in_books} ]
+    (the closes of a write with an unknown premium)}."""
     from taxjson.lib.corporate_timeline import dedupe_split_events
     book = [r for r in rows if isinstance(r, dict)
-            and r.get("action") in ("BUYSELL", "ASSIGN", "SPLIT")
+            and r.get("action") in ("BUYSELL", "ASSIGN", "SPLIT",
+                                    "OPENING_BALANCE")
             and is_option_symbol(str(r.get("symbol") or ""))]
-    # A split first at its stamp, as the engines order it.
+    # A split first at its stamp, then an opening, as the engines order
+    # them.
     book.sort(key=lambda r: (str(r.get("date") or ""),
                              str(r.get("time") or ""),
-                             0 if r.get("action") == "SPLIT" else 1))
+                             0 if r.get("action") == "SPLIT"
+                             else 1 if r.get("action") == "OPENING_BALANCE"
+                             else 2))
     # One split reported twice is one event, per account here; it
     # moves and scales the queued contracts (a renamed series closed
     # against an empty queue and read as a new long: 2026-10 audit R04).
@@ -129,12 +143,20 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
     shorts: Dict[Tuple[str, str], deque] = {}
     trades: List[Dict[str, Any]] = []
     credits: List[Dict[str, Any]] = []
-    exercised_long = 0
+    unknown: List[Dict[str, Any]] = []
+    exercises: List[Dict[str, Any]] = []
     for r in book:
         sym = str(r["symbol"])
         acct = str(r.get("account") or "")
         key = (acct, sym)
         q = _f(r.get("quantity"))
+        if r.get("action") == "OPENING_BALANCE":
+            if q > _EPS:
+                longs[key] = longs.get(key, 0.0) + q
+            elif q < -_EPS:
+                shorts.setdefault(key, deque()).append(
+                    [-q, None, str(r.get("date") or "")])
+            continue
         if r.get("action") == "SPLIT":
             if id(r) not in splits:
                 continue
@@ -142,18 +164,31 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
             new = str(r.get("symbol_new") or "").strip() or sym
             nk = (acct, new)
             if key in longs:
-                longs[nk] = longs.get(nk, 0.0) + longs.pop(key) * ratio
+                # Popped first: a plain split (nk == key) read the old
+                # balance again and added it twice (2026-10 audit #31).
+                moved = longs.pop(key) * ratio
+                longs[nk] = longs.get(nk, 0.0) + moved
             lots = shorts.pop(key, None)
             if lots:
                 for lot in lots:
                     lot[0] *= ratio
-                    lot[1] /= ratio
-                shorts.setdefault(nk, deque()).extend(lots)
+                    if lot[1] is not None:
+                        lot[1] /= ratio
+                # Renamed into a series with open writes of its own:
+                # the queue stays first in, first out by write date
+                # (2026-10 audit #36).
+                dest = shorts.setdefault(nk, deque())
+                dest.extend(lots)
+                shorts[nk] = deque(sorted(dest, key=lambda lot: lot[2]))
             continue
-        # Money as a magnitude: the quantity's sign says which way it
-        # went (a buy-back entered with a negative amount counted as
-        # money received: 2026-10 audit R03).
-        net = abs(_f(r.get("net_amount")))
+        # A purchase's money is a magnitude: the quantity's sign says
+        # which way it went (a buy-back entered with a negative amount
+        # counted as money received: 2026-10 audit R03). A sale's is
+        # signed, as the engine books it: a write whose commission
+        # exceeds the premium nets a loss (2026-10 audit #34).
+        net = _f(r.get("net_amount"))
+        if q > 0:
+            net = abs(net)
         if abs(q) < _EPS:
             continue
         c = abs(q)
@@ -162,7 +197,9 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
             close = min(held, c)
             longs[key] = held - close
             if close > _EPS and r.get("action") == "ASSIGN":
-                exercised_long += 1
+                exercises.append({"date": date_of(r),
+                                  "in_books": in_books is None
+                                  or bool(in_books(r))})
             rest = c - close
             if rest > _EPS:
                 # A write: the premium received, per contract.
@@ -175,9 +212,23 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
         expired = (not assigned and abs(net) < 0.005
                    and abs(_f(r.get("price"))) < _EPS)
         trade = None
+        unknown_said = False
         while rem > _EPS and lots:
             lot = lots[0]
             m = min(lot[0], rem)
+            if lot[1] is None:
+                # A write from before the data: its premium is unknown,
+                # so its close is not a trade (counted, never silent).
+                if not unknown_said:
+                    unknown.append({"date": date_of(r),
+                                    "in_books": in_books is None
+                                    or bool(in_books(r))})
+                    unknown_said = True
+                lot[0] -= m
+                rem -= m
+                if lot[0] <= _EPS:
+                    lots.popleft()
+                continue
             premium = lot[1] * m
             paid = net * (m / c)
             if trade is None:
@@ -201,7 +252,9 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
                     "underlying": parse_option_underlying(sym) or "",
                     "right": parse_option_right(sym) or "",
                     "shares": m * mult, "amount": premium,
-                    "date": str(r.get("date") or "")})
+                    "date": str(r.get("date") or ""),
+                    "strike": _f(parse_option_strike(sym)),
+                    "delivered": c * mult})
             lot[0] -= m
             rem -= m
             if lot[0] <= _EPS:
@@ -209,49 +262,130 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
         if rem > _EPS:
             longs[key] = longs.get(key, 0.0) + rem
     return {"trades": trades, "credits": credits,
-            "exercised_long": exercised_long}
+            "exercised_long": len(exercises), "exercises": exercises,
+            "unknown": unknown}
+
+
+def _day_gap(a: str, b: str) -> Optional[int]:
+    """Days from `a` to `b` (negative when `b` is earlier); None when
+    either is unparsable."""
+    try:
+        return (_date.fromisoformat(b[:10])
+                - _date.fromisoformat(a[:10])).days
+    except ValueError:
+        return None
+
+
+def _call_legs(cr: Dict[str, Any],
+               sales: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The sales an assigned call's premium comes out of: its own share
+    leg, told apart from an unrelated sale as the engines pair them
+    (CA-OPT-08 / US-OPT-05). A sale dated before the option row needs
+    strong identity (a marked ASSIGN leg, or the delivered shares at the
+    strike); one on or after it a single sign (marked, at the strike, or
+    the delivered shares). Best first: at the strike, marked, sized,
+    nearest; extra legs only at the strike or marked. [] when nothing
+    identifies a leg (2026-10 audit #35)."""
+    strike = _f(cr.get("strike"))
+    size = _f(cr.get("delivered")) or _f(cr.get("shares"))
+    cands = []
+    for i, s in enumerate(sales):
+        if (str(s.get("account") or ""),
+                str(s.get("symbol") or "")) != cr["key"]:
+            continue
+        gap = _day_gap(cr["date"], str(s.get("date") or ""))
+        if gap is None or not -_LEG_LEAD_DAYS <= gap <= _LEG_LAG_DAYS:
+            continue
+        marked = s.get("action") == "ASSIGN"
+        at_strike = strike > 0 and abs(_f(s.get("price")) - strike) <= max(
+            0.005, 1e-6 * strike)
+        sized = abs(abs(_f(s.get("quantity"))) - size) < 1e-6
+        if gap < 0:
+            if not (marked or (at_strike and sized)):
+                continue
+        elif not (marked or at_strike or sized):
+            continue
+        cands.append(((not at_strike, not marked, not sized, abs(gap),
+                       gap < 0, i), s, marked or at_strike))
+    cands.sort(key=lambda c: c[0])
+    return [s for n, (_sc, s, strong) in enumerate(cands) if n == 0 or strong]
 
 
 def credits_by_sale(rows: Iterable[Dict[str, Any]],
                     credits: List[Dict[str, Any]]) -> Dict[str, float]:
     """{sale row id: premium to take out of that sale's P/L} — each
     credit drawn by the account's later SALES of the underlying, per
-    delivered share, in date order (a call's from the sale at the strike,
-    which may be dated up to 3 days before the option row)."""
-    open_: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-    for cr in credits:
-        if not cr["underlying"] or cr["shares"] <= _EPS:
-            continue
-        start = (_days_before(cr["date"], _LEG_LEAD_DAYS)
-                 if cr["right"] == "C" else cr["date"])
-        open_.setdefault((cr["account"], cr["underlying"]), []).append(
-            dict(cr, left=cr["shares"], start=start))
+    delivered share, in date order (a call's from its own share leg,
+    which may be dated up to 3 days before the option row; with no leg
+    identified, from the sales from 3 days before it on).
+
+    The underlying's splits and renames after the assignment carry the
+    open credits with them: a split scales the shares still to be sold,
+    a rename moves them to the new symbol (2026-10 audit #32, #33)."""
+    from taxjson.lib.corporate_timeline import dedupe_split_events
+    open_ = [dict(cr, left=cr["shares"],
+                  key=(cr["account"], cr["underlying"]))
+             for cr in credits
+             if cr["underlying"] and cr["shares"] > _EPS]
     if not open_:
         return {}
-    sales = [r for r in rows if isinstance(r, dict)
-             and r.get("action") in ("BUYSELL", "ASSIGN")
-             and _f(r.get("quantity")) < 0
-             and (str(r.get("account") or ""), str(r.get("symbol") or ""))
-             in open_]
-    sales.sort(key=lambda r: (str(r.get("date") or ""),
-                              str(r.get("time") or "")))
+    accts = {cr["account"] for cr in open_}
+    events = [r for r in rows if isinstance(r, dict)
+              and str(r.get("account") or "") in accts
+              and not is_option_symbol(str(r.get("symbol") or ""))
+              and (r.get("action") == "SPLIT"
+                   or (r.get("action") in ("BUYSELL", "ASSIGN")
+                       and _f(r.get("quantity")) < 0))]
+    # One split reported twice is one event, per account here.
+    keep_split = {id(r) for r in dedupe_split_events(
+        [r for r in events if r.get("action") == "SPLIT"], per_account=True)}
+    events = [r for r in events
+              if r.get("action") != "SPLIT" or id(r) in keep_split]
+    events.sort(key=lambda r: (str(r.get("date") or ""),
+                               str(r.get("time") or ""),
+                               0 if r.get("action") == "SPLIT" else 1))
+    sales = [r for r in events if r.get("action") != "SPLIT"]
+    unsold = {id(s): abs(_f(s.get("quantity"))) for s in sales}
     out: Dict[str, float] = {}
-    for s in sales:
-        lst = open_[(str(s.get("account") or ""), str(s["symbol"]))]
-        need = abs(_f(s.get("quantity")))
-        d = str(s.get("date") or "")
-        for cr in lst:
-            if need <= _EPS:
+
+    def draw(cr: Dict[str, Any], s: Dict[str, Any]) -> None:
+        take = min(unsold[id(s)], cr["left"])
+        if take <= _EPS:
+            return
+        sid = str(s.get("id") or "")
+        if sid:
+            out[sid] = out.get(sid, 0.0) + cr["amount"] * take / cr["shares"]
+        cr["left"] -= take
+        unsold[id(s)] -= take
+
+    for cr in open_:
+        cr["start"] = cr["date"]
+        if cr["right"] != "C":
+            continue
+        legs = _call_legs(cr, sales)
+        for s in legs:
+            draw(cr, s)
+        if not legs:
+            cr["start"] = _days_before(cr["date"], _LEG_LEAD_DAYS)
+    for e in events:
+        k = (str(e.get("account") or ""), str(e.get("symbol") or ""))
+        d = str(e.get("date") or "")
+        if e.get("action") == "SPLIT":
+            q = _f(e.get("quantity"))
+            ratio = q if q > 0 else 1.0
+            nk = (k[0], str(e.get("symbol_new") or "").strip() or k[1])
+            for cr in open_:
+                if cr["key"] == k and cr["date"] < d:
+                    cr["left"] *= ratio
+                    cr["shares"] *= ratio
+                    cr["key"] = nk
+            continue
+        for cr in open_:
+            if unsold[id(e)] <= _EPS:
                 break
-            if cr["left"] <= _EPS or cr["start"] > d:
+            if cr["key"] != k or cr["left"] <= _EPS or cr["start"] > d:
                 continue
-            take = min(need, cr["left"])
-            amt = cr["amount"] * take / cr["shares"]
-            sid = str(s.get("id") or "")
-            if sid:
-                out[sid] = out.get(sid, 0.0) + amt
-            cr["left"] -= take
-            need -= take
+            draw(cr, e)
     return out
 
 
@@ -325,7 +459,11 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
     for acct, rows in books.items():
         wo = written_option_trades(rows, date_of, in_books)
         written += wo["trades"]
-        exercised += wo["exercised_long"]
+        # Counted in the window, as the trades are (2026-10 audit #67).
+        exercised += sum(1 for e in wo.get("exercises") or []
+                         if e["in_books"] and keep(e["date"]))
+        tainted += sum(1 for u in wo.get("unknown") or []
+                       if u["in_books"] and keep(u["date"]))
         for sid, amt in credits_by_sale(rows, wo["credits"]).items():
             credit[sid] = credit.get(sid, 0.0) + amt
 

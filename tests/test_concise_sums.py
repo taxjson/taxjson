@@ -126,7 +126,7 @@ class TestT1135(unittest.TestCase):
                        legend="Amounts are cost (ACB)")
         self.assertIn("Maximum total cost in 2024: ", r.stdout)
         self.assertIn("=> below the 100,000.00 CAD threshold", r.stdout)
-        self.assertIn("! BTC, ETH: crypto: check where held", r.stdout)
+        self.assertIn("! BTC, ETH: crypto, check where held", r.stdout)
         d = _run("canada", "t1135", "--details")
         flat = _flat(d.stdout)
         self.assertIn("Registered accounts (RRSP/TFSA/...) are excluded",

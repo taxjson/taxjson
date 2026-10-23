@@ -624,6 +624,7 @@ def render_brief(ledger: Dict[str, Any], cur: str,
         acts.append(f"{len(ledger['filing_positions'])} loss(es) claimed "
                     f"against the {rule} rule (ALLOWLOSS) counted")
     shown = acts[:4]
+    lines.append("")
     for a in shown:
         lines.append(_out.act(a, cmd))
     if len(acts) > len(shown):
@@ -713,29 +714,22 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     lines.append("")
     lines.append("NOTES")
     if country == 'usa':
-        item("Amounts are 100% capital gains/losses, carried "
-             "over short- and long-term on the Schedule D "
-             "Capital Loss Carryover Worksheet.")
+        item("Amounts are 100% capital gains/losses, carried short- and "
+             "long-term (Schedule D Capital Loss Carryover Worksheet).")
     else:
-        item("Amounts are 100% capital gains/losses. Apply "
-             "the 50% inclusion rate on Schedule 3 / form T1A; "
-             "the official 'net capital loss' balance CRA tracks "
-             "is the inclusion-rate-adjusted figure.")
-    item("The ledger reflects what the transaction history "
-         "supports" +
-         (" plus your --claimed records." if claimed_used else
-          "; what you actually claimed on filed returns may "
-          "differ. Record reality with --claimed FILE "
-          "(`YEAR AMOUNT` lines)."))
+        item("Amounts are 100% capital gains/losses. Apply the 50% "
+             "inclusion rate on Schedule 3 / T1A: CRA's 'net capital "
+             "loss' balance is that figure.")
+    item("The ledger is what the transaction history supports"
+         + (" plus your --claimed records." if claimed_used else
+            "; what you claimed on filed returns may differ: "
+            "--claimed FILE (`YEAR AMOUNT` lines)."))
     if country == 'canada':
-        item("Carryback candidates are advisory, capped at each "
-             "earlier year's remaining net gain, never "
-             "double-counted across loss years, and only look back "
-             "3 years (ITA 111(1)(b)).")
+        item("Carryback candidates are advisory: capped at each earlier "
+             "year's remaining net gain, 3 years back (ITA 111(1)(b)).")
     else:
-        item("The $3,000 ordinary-income offset is ASSUMED used "
-             "whenever available; override a year with a --claimed "
-             "line (0 is valid).")
+        item("The $3,000 ordinary-income offset is assumed used whenever "
+             "available; a --claimed line overrides a year (0 is valid).")
     if ledger.get('filing_positions'):
         _fps = ledger['filing_positions']
         item(f"Includes {len(_fps)} filing position(s) taken against the "

@@ -59,6 +59,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -269,7 +270,7 @@ def _amount(v: Any, where: str) -> float:
         f = float(s.replace(",", ""))
     else:
         raise SlipsError(f"{where}: {v!r} is not an amount")
-    if f != f or f in (float("inf"), float("-inf")):
+    if not math.isfinite(f):
         raise SlipsError(f"{where}: {v!r} is not an amount")
     return f
 
@@ -687,11 +688,15 @@ def _report_to_cad(rep: Any, where: str, fx_cache: Optional[dict]):
 
 def report_identity(rep: Any) -> Tuple:
     """What two copies of one dividends report share: the account, the
-    years and every payment."""
+    years and every payment, each component with its slip, category and
+    amounts in the payment and the base currency (the CAD slips are built
+    from the base amounts, so a corrected GrossInBase is another report)."""
     return (rep.account_hash, tuple(rep.years), rep.base_currency,
             tuple((p.symbol, p.pay_date, p.ex_date, p.pil, p.currency,
-                   tuple((c.label, round(c.gross, 4),
-                          round(c.withheld, 4)) for c in p.components))
+                   tuple((c.slip, c.category, c.label, round(c.gross, 4),
+                          round(c.gross_base, 4), round(c.withheld, 4),
+                          round(c.withheld_base, 4))
+                         for c in p.components))
                   for p in rep.payments))
 
 
@@ -723,11 +728,15 @@ def annual_average(currency: str, year: Any,
     for d, v in obs.items():
         if not str(d).startswith(f"{year}-"):
             continue
+        if isinstance(v, bool):
+            continue
         try:
             f = float(v)
         except (TypeError, ValueError):
             continue
-        if f > 0 and f == f:
+        # A positive finite rate (to_base_curr._good_rate): a damaged
+        # cache's Infinity would make the average infinite.
+        if math.isfinite(f) and f > 0:
             vals.append(f)
     if not vals:
         return None
@@ -887,7 +896,10 @@ def _redate_prior_roc(rows: List[BookRow], year: int,
     its pay date; when the distribution paid that day belongs to another
     year by its record date (a December record date paid in January),
     the line is that year's T3 box 42: it is counted there, never netted
-    against this year's slip, and said (CA-INC-DATE-ROC-TRUST)."""
+    against this year's slip, and said (CA-INC-DATE-ROC-TRUST). The
+    distribution is the line's own listing's (its symbol and currency);
+    another listing of its root only when its own has none paid within
+    3 days (an interlisted fund's ROC typed on the other listing)."""
     ystr = str(year)
     divs = [r for r in rows if r.action == "DIVIDEND" and r.root]
     for r in rows:
@@ -895,9 +907,12 @@ def _redate_prior_roc(rows: List[BookRow], year: int,
                 and not r.record and r.source.lower().endswith(".tt")
                 and r.root):
             continue
-        hits = [d for d in divs if d.root == r.root
-                and _days(d.pay_date, r.pay_date) <= 3
-                and d.tax_date[:4] != r.tax_date[:4]]
+        near = [d for d in divs if d.root == r.root
+                and _days(d.pay_date, r.pay_date) <= 3]
+        own = [d for d in near if d.symbol.upper() == r.symbol.upper()
+               and d.currency == r.currency]
+        hits = [d for d in (own or near)
+                if d.tax_date[:4] != r.tax_date[:4]]
         if not hits:
             continue
         d = min(hits, key=lambda x: _days(x.pay_date, r.pay_date))
@@ -1437,7 +1452,7 @@ def _roc_match(r: BookRow, groups: Dict[str, Dict[str, Any]]) -> List[str]:
 def _income_by_source(rows: List[BookRow]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for r in rows:
-        src = r.source or "(no input file)"
+        src = r.source or "(corporate action: no export row)"
         e = out.setdefault(src, {"amounts": {}})
         e["amounts"][r.category] = e["amounts"].get(r.category, 0.0) + r.cad
     return {k: v for k, v in out.items()
@@ -1678,33 +1693,105 @@ def _audit_group(acct, key, g, year, tol, rate, issues, sugg_cgd, sugg_tt,
             "securities": securities, "record_year": record_year}
 
 
+def _pair_in_order(a: List[str], b: List[str]) -> List[Tuple[int, int]]:
+    """Index pairs (i, j) of two date-sorted lists, each date used once,
+    within MATCH_DAYS: the most pairs, then the fewest days apart in all.
+    An order-preserving pairing loses nothing: two crossed pairs within
+    the window uncross into two pairs within it."""
+    n, m = len(a), len(b)
+    # best[i][j]: (pairs, -days) over a[i:] and b[j:]
+    best = [[(0, 0)] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            c = max(best[i + 1][j], best[i][j + 1])
+            d = _days(a[i], b[j])
+            if d <= MATCH_DAYS:
+                n1, nd = best[i + 1][j + 1]
+                c = max(c, (n1 + 1, nd - d))
+            best[i][j] = c
+    out: List[Tuple[int, int]] = []
+    i = j = 0
+    while i < n and j < m:
+        d = _days(a[i], b[j])
+        n1, nd = best[i + 1][j + 1]
+        if d <= MATCH_DAYS and best[i][j] == (n1 + 1, nd - d):
+            out.append((i, j))
+            i, j = i + 1, j + 1
+        elif best[i][j] == best[i + 1][j]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
 def _match_payments(acct, where, slips, rows, year, issues
                     ) -> Dict[str, List[Dict[str, Any]]]:
     """IB's payments (and dated slip lines) against the books' rows of
-    the same security, kind and date (within MATCH_DAYS)."""
+    the same security, kind, currency and date (within MATCH_DAYS). A
+    payment whose only book row within reach is in another currency is
+    a currency mismatch, neither a match nor two missing payments."""
     ystr = str(year)
     out = {"missing_from_books": [], "missing_from_slip": [],
-           "amount_differs": [], "other_year": [], "matched": 0}
+           "amount_differs": [], "currency_differs": [], "other_year": [],
+           "matched": 0}
     pays = [p for s in slips if s.source == "ib" for p in s.payments]
     if not pays:
         return out
-    cand: Dict[Tuple[str, bool], List[BookRow]] = {}
+    # Book payments: one per (root, kind, currency, pay date) — a
+    # reversal and its repost on one day are one payment.
+    bgroups: Dict[Tuple[str, bool, str, str], List[BookRow]] = {}
     for r in rows:
         if r.action in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
-            cand.setdefault((r.root, r.pil), []).append(r)
-    # Book payments: one per (root, kind, pay date) — a reversal and its
-    # repost on one day are one payment.
-    bgroups: Dict[Tuple[str, bool, str], List[BookRow]] = {}
-    for (rt, pil), rs in cand.items():
-        for r in rs:
-            bgroups.setdefault((rt, pil, r.pay_date), []).append(r)
+            bgroups.setdefault((r.root, r.pil, r.currency, r.pay_date),
+                               []).append(r)
+    # Each payment's book group, paired per security, kind and currency
+    # in date order: nearest-first per payment left a weekly payer's
+    # second payment with nothing in reach when the dates drift 4+ days,
+    # though an in-order pairing matched both (finding 99).
+    paired: Dict[int, Tuple[str, bool, str, str]] = {}
+    by_kind: Dict[Tuple[str, bool, str], List[Any]] = {}
+    for p in pays:
+        by_kind.setdefault((_root(p.symbol), p.pil, p.currency),
+                           []).append(p)
+    for (rt, pil, cur), ps in by_kind.items():
+        ps.sort(key=lambda p: (p.pay_date, p.symbol))
+        ks = sorted(k for k in bgroups if k[:3] == (rt, pil, cur))
+        for i, j in _pair_in_order([p.pay_date for p in ps],
+                                   [k[3] for k in ks]):
+            paired[id(ps[i])] = ks[j]
+    # The payments left against the book payments left in another
+    # currency (same security and kind): a currency mismatch.
+    taken = set(paired.values())
+    crossed: Dict[int, Tuple[str, bool, str, str]] = {}
+    for (rt, pil, cur), ps in sorted(by_kind.items()):
+        left = [p for p in ps if id(p) not in paired
+                and abs(p.gross) >= 0.005]
+        ks = sorted(k for k in bgroups if k[:2] == (rt, pil)
+                    and k[2] != cur and k not in taken)
+        for i, j in _pair_in_order([p.pay_date for p in left],
+                                   [k[3] for k in ks]):
+            crossed[id(left[i])] = ks[j]
+            taken.add(ks[j])
     used = set()
     for p in sorted(pays, key=lambda p: (p.pay_date, p.symbol)):
-        rt = _root(p.symbol)
-        opts = [(k, v) for k, v in bgroups.items()
-                if k[0] == rt and k[1] == p.pil and k not in used
-                and _days(k[2], p.pay_date) <= MATCH_DAYS]
-        if not opts:
+        k = paired.get(id(p))
+        x = crossed.get(id(p))
+        if x is not None:
+            grp = bgroups[x]
+            used.add(x)
+            book_amt = sum(r.native for r in grp)
+            out["currency_differs"].append({
+                "symbol": p.symbol, "date": p.pay_date,
+                "currency": p.currency, "slip": round(p.gross, 2),
+                "books": round(book_amt, 2), "books_currency": x[2],
+                "books_date": x[3], "books_symbol": grp[0].symbol})
+            _issue(issues, acct, "currency-differs",
+                   f"{where}: {p.symbol} {p.pay_date} IB's report: "
+                   f"{p.gross:,.2f} {p.currency}; books: {book_amt:,.2f} "
+                   f"{x[2]} on {x[3]} ({grp[0].symbol}) — a currency "
+                   f"mismatch: check the currency of the books' row")
+            continue
+        if k is None:
             if abs(p.gross) < 0.005:
                 continue        # a withholding adjustment, no payment
             if p.pay_date.startswith(ystr) or not p.pay_date:
@@ -1724,7 +1811,7 @@ def _match_payments(acct, where, slips, rows, year, issues
                     "note": f"paid in {p.pay_date[:4]}; IB's {year} report "
                             f"includes it"})
             continue
-        k, grp = min(opts, key=lambda kv: _days(kv[0][2], p.pay_date))
+        grp = bgroups[k]
         used.add(k)
         out["matched"] += 1
         book_amt = sum(r.native for r in grp)
@@ -1780,10 +1867,14 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
     from taxjson.lib.report_model import fmt_money
     ystr = str(year)
     in_year = [r for r in rows if r.tax_date.startswith(ystr)]
-    sec_slip: Dict[str, Dict[str, float]] = {}
-    sec_cur: Dict[str, str] = {}
-    dated_cg: Dict[str, List[Tuple[Any, float]]] = {}
-    dated_roc: Dict[str, List[Tuple[Any, float]]] = {}
+    # Per (security root, currency): a slip's CAD and USD amounts of one
+    # security are two comparisons, never one sum in the last currency.
+    sec_slip: Dict[Tuple[str, str], Dict[str, float]] = {}
+    dated_cg: Dict[Tuple[str, str], List[Tuple[Any, float]]] = {}
+    dated_roc: Dict[Tuple[str, str], List[Tuple[Any, float]]] = {}
+    # A security a slip names with neither box 18 nor ROC: one row
+    # (in CAD) when no slip gives it an amount.
+    bare: set = set()
     # A fund with its own T3 slip (typed, or --import-cra): its return of
     # capital is that slip's box 42, not IB's report's again.
     t3_typed = {s.security for s in slips
@@ -1799,34 +1890,34 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
                     if cat == "roc" and rt in t3_typed:
                         continue
                     if cat in ("cg_div", "roc"):
-                        d = sec_slip.setdefault(rt, {})
+                        k = (rt, p.currency)
+                        d = sec_slip.setdefault(k, {})
                         d[cat] = d.get(cat, 0.0) + c.gross
-                        sec_cur[rt] = p.currency
                         (dated_cg if cat == "cg_div" else dated_roc
-                         ).setdefault(rt, []).append((p, c.gross))
+                         ).setdefault(k, []).append((p, c.gross))
             continue
         if s.security:
-            d = sec_slip.setdefault(s.security, {})
+            bare.add(s.security)
             for c in ("cg_div", "roc"):
                 if s.amounts.get(c):
+                    d = sec_slip.setdefault((s.security, s.currency), {})
                     d[c] = d.get(c, 0.0) + s.amounts[c]
-                    sec_cur[s.security] = s.currency
         for ln in s.lines:
             if ln.category in ("cg_div", "roc"):
-                d = sec_slip.setdefault(ln.root, {})
+                d = sec_slip.setdefault((ln.root, s.currency), {})
                 d[ln.category] = d.get(ln.category, 0.0) + ln.amount
-                sec_cur[ln.root] = s.currency
+    for rt in bare - {k[0] for k in sec_slip}:
+        sec_slip[(rt, "CAD")] = {}
     out = []
-    for rt in sorted(sec_slip):
-        sl = sec_slip[rt]
-        cur = sec_cur.get(rt, "CAD")
+    for rt, cur in sorted(sec_slip):
+        sl = sec_slip[(rt, cur)]
         rrows = [r for r in in_year if r.root == rt]
-        sym = (next((r.symbol for r in rrows
-                     if r.category in ("ca_div", "foreign")), "")
-               or next((r.symbol for r in rrows), "") or rt)
-        bk_cg = sum(r.cg_part for r in rrows if r.currency == cur)
-        bk_roc = sum(r.native for r in rrows
-                     if r.category == "roc" and r.currency == cur)
+        crows = [r for r in rrows if r.currency == cur]
+        sym = next((r.symbol for rs in (crows, rrows) for r in rs
+                    if r.category in ("ca_div", "foreign")), "") \
+            or next((r.symbol for r in crows + rrows), "") or rt
+        bk_cg = sum(r.cg_part for r in crows)
+        bk_roc = sum(r.native for r in crows if r.category == "roc")
         rec = {"symbol": sym, "currency": cur,
                "slip": {k: round(v, 2) for k, v in sl.items()},
                "books": {"cg_div": round(bk_cg, 2),
@@ -1836,7 +1927,8 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
         s_cg = sl.get("cg_div", 0.0)
         if s_cg - bk_cg > max(0.005, min(tol, 0.01 * s_cg) if s_cg else 0):
             _suggest_cgd(acct, rt, sym, cur, s_cg, bk_cg, rrows,
-                         dated_cg.get(rt), year, sugg_cgd, notes, where)
+                         dated_cg.get((rt, cur)), year, sugg_cgd, notes,
+                         where)
         elif bk_cg - s_cg > tol:
             notes.append(f"{where}: [[capital_gains_dividends]] names "
                          f"{fmt_money(bk_cg)} {cur} of {sym} and the slip "
@@ -1845,8 +1937,8 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
         s_roc = sl.get("roc", 0.0)
         if s_roc - bk_roc > max(0.005, 0.0):
             _suggest_roc(acct, rt, sym, cur, s_roc - bk_roc, rrows,
-                         dated_roc.get(rt), year, sugg_tt, notes, where,
-                         slips, acct_rows)
+                         dated_roc.get((rt, cur)), year, sugg_tt, notes,
+                         where, slips, acct_rows)
         elif bk_roc - s_roc > tol and s_roc:
             notes.append(f"{where}: the books return {fmt_money(bk_roc)} "
                          f"{cur} of {sym}'s capital and the slip "
@@ -1960,34 +2052,97 @@ def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
     def add(line: str, action: str, amt: float) -> None:
         r = held_already(action, amt)
         if r is not None:
+            # Its pay and record dates: a row of a prior year's
+            # distribution shows as one.
+            rec = f", record date {r.record}" if r.record else ""
             notes.append(f"{where}: {sym}: the books already hold "
-                         f"{action} {r.pay_date} {fmt_money(abs(amt))} "
-                         f"{cur} ({r.source or 'no input file'}), not "
-                         f"counted against this slip — check its date "
-                         f"(record=) and account rather than adding it "
-                         f"again")
+                         f"{action} {fmt_money(abs(amt))} {cur} paid "
+                         f"{r.pay_date}{rec} ("
+                         f"{r.source or 'corporate action: no export row'}"
+                         f"), not counted against this slip — check its "
+                         f"date (record=) and account rather than adding "
+                         f"it again")
         elif line not in lines:
             lines.append(line)
     divs = [r for r in rrows if r.category in ("ca_div", "foreign")
             and r.currency == cur and r.action == "DIVIDEND"]
+    def roc_row(r: BookRow) -> str:
+        return (f"ADJUST {r.pay_date} {fmt_money(-r.native)} "
+                + (f"in {r.source}" if r.source
+                   else "(a corporate action: no export row)"))
+
     if dated:
-        for p, amt in dated:
+        # Each payment's dividend row, and the return of capital the
+        # books already hold for it (ADJUST type=roc within MATCH_DAYS of
+        # the payment, or on its record date; a row counts once, for the
+        # nearest payment): only the rest is suggested.
+        near: List[Optional[BookRow]] = []
+        for p, _amt in dated:
             hit = [r for r in divs if _days(r.pay_date, p.pay_date)
                    <= MATCH_DAYS]
-            r0 = (min(hit, key=lambda r: _days(r.pay_date, p.pay_date))
-                  if hit else None)
+            near.append(min(hit, key=lambda r: _days(r.pay_date,
+                                                     p.pay_date))
+                        if hit else None)
+        held: Dict[int, List[BookRow]] = {}
+        loose: List[BookRow] = []
+        for r in rrows:
+            if r.category != "roc" or r.currency != cur:
+                continue
+            cand = [(_days(r.pay_date, p.pay_date), i)
+                    for i, (p, _amt) in enumerate(dated)
+                    if _days(r.pay_date, p.pay_date) <= MATCH_DAYS
+                    or (near[i] is not None
+                        and near[i].tax_date != near[i].pay_date
+                        and near[i].tax_date in (r.pay_date, r.tax_date))]
+            if cand:
+                held.setdefault(min(cand)[1], []).append(r)
+            else:
+                loose.append(r)
+        topped = False
+        for i, (p, amt) in enumerate(dated):
+            r0 = near[i]
+            hit = [r for r in divs if _days(r.pay_date, p.pay_date)
+                   <= MATCH_DAYS]
             s = r0.symbol if r0 else sym
             d = r0.pay_date if r0 else p.pay_date
-            add(f"ADJUST {d} 09:30:00 {s} {cur} -{amt:.2f} type=roc",
-                "ADJUST", amt)
+            have = held.get(i, [])
+            roc_booked = sum(r.native for r in have)
+            rest = amt - roc_booked
+            if rest > 0.005:
+                line = f"ADJUST {d} 09:30:00 {s} {cur} -{rest:.2f} type=roc"
+                add(line, "ADJUST", rest)
+                topped = True
+                if have:
+                    notes.append(
+                        f"{where}: {s} {d}: IB's report returns "
+                        f"{fmt_money(amt)} {cur} of capital and the books "
+                        f"hold {fmt_money(roc_booked)} of it "
+                        f"({', '.join(map(roc_row, have))}); "
+                        f"the suggested line adds the "
+                        f"{fmt_money(rest)} rest — or change the existing "
+                        f"line to -{amt:.2f} instead of adding it")
             if r0 is not None:
                 booked = sum(r.native for r in hit
                              if r.pay_date == r0.pay_date)
-                if abs(booked - p.gross) <= 0.01 + 0.0005 * abs(p.gross):
+                tol = 0.01 + 0.0005 * abs(p.gross)
+                if abs(booked - p.gross) <= tol:
                     # The dividend row holds the whole payment, ROC
                     # included: take the ROC back out of income.
                     add(f"DIVIDEND {d} 09:30:00 {s} 0 {cur} 0 -{amt:.2f}",
                         "DIVIDEND", amt)
+                elif roc_booked > 0.005 and rest > 0.005 and abs(
+                        booked - (p.gross - roc_booked)) <= tol:
+                    # The booked part is out of income already: the rest.
+                    add(f"DIVIDEND {d} 09:30:00 {s} 0 {cur} 0 -{rest:.2f}",
+                        "DIVIDEND", rest)
+        if loose and topped:
+            notes.append(
+                f"{where}: {sym}: the books' return of capital "
+                f"{', '.join(map(roc_row, loose))} "
+                f"is on none of the payment dates in IB's report — date "
+                f"it on its payment, or remove it when adding the "
+                f"suggested lines, or the return of capital is counted "
+                f"twice")
         return
     # A typed T3: no date on the slip — the year's last distribution
     # (with its record date when the books date it by that,
@@ -2005,13 +2160,15 @@ def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
     div_line = (f"DIVIDEND {last} 16:00:00 {s} 0 {cur} 0 -{missing:.2f}"
                 + (f"{rec} label=distribution" if rec else ""))
     slip_income = sum(sl.amounts.get(c, 0.0) for sl in slips
-                      if sl.security == rt for c in SPLIT_CATS)
+                      if sl.security == rt and sl.currency == cur
+                      for c in SPLIT_CATS)
     # The cash paid, grossed up by the foreign tax the trust withheld
     # (T3 box 34) when no TAX row holds it.
     s_tax = sum(sl.amounts.get("foreign_tax", 0.0) for sl in slips
-                if sl.security == rt and sl.type == "T3")
+                if sl.security == rt and sl.type == "T3"
+                and sl.currency == cur)
     b_tax = sum(r.native for r in rrows if r.category == "foreign_tax"
-                and r.tax_date.startswith(ystr))
+                and r.currency == cur and r.tax_date.startswith(ystr))
     book_income = sum(r.native for r in yrows) + max(0.0, s_tax - b_tax)
     if slip_income and abs(book_income - slip_income - missing) <= max(
             0.02, 0.0005 * slip_income):
@@ -2053,20 +2210,28 @@ def _t5008(root: Path, slips: List[Slip], year: int, tol: float,
                 continue
             p_cad = c_cad = 0.0
             approx = False
+            no_rate = set()
             for s in ss:
                 r = 1.0 if s.currency == "CAD" else rate.get(s.currency)
                 if r is None:
+                    no_rate.add(s.currency)
                     continue
                 approx = approx or s.currency != "CAD"
                 p_cad += s.amounts.get("proceeds", 0.0) * r
                 c_cad += s.amounts.get("cost", 0.0) * r
-            out.append({"account": acct, "class": k,
-                        "codes": sorted({s.code or "?" for s in ss}),
-                        "slip_proceeds": round(p_cad, 2),
-                        "books_proceeds": round(books[k]["proceeds"], 2),
-                        "slip_cost": round(c_cad, 2),
-                        "books_cost": round(books[k]["cost"], 2),
-                        "at_annual_average": approx})
+            # A slip with no rate to convert it was left out of the sums
+            # and the class shown as a slip total of 0.00 (finding 98):
+            # with one missing, the slip total is unknown.
+            row = {"account": acct, "class": k,
+                   "codes": sorted({s.code or "?" for s in ss}),
+                   "slip_proceeds": None if no_rate else round(p_cad, 2),
+                   "books_proceeds": round(books[k]["proceeds"], 2),
+                   "slip_cost": None if no_rate else round(c_cad, 2),
+                   "books_cost": round(books[k]["cost"], 2),
+                   "at_annual_average": approx}
+            if no_rate:
+                row["no_rate"] = sorted(no_rate)
+            out.append(row)
     return out
 
 
@@ -2265,6 +2430,11 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
                 items.append(f"Amount differs: {e['symbol']} {e['date']} "
                              f"slip {_m(e['slip'])}, books {_m(e['books'])} "
                              f"{e['currency']}")
+            for e in p.get("currency_differs") or []:
+                items.append(f"Currency differs: {e['symbol']} {e['date']} "
+                             f"slip {_m(e['slip'])} {e['currency']}, books "
+                             f"{_m(e['books'])} {e['books_currency']} on "
+                             f"{e['books_date']}")
             for e in p["other_year"]:
                 items.append(f"Another year: {e['symbol']} {e['date']} "
                              f"{_m(e['amount'])} {e['currency']}"
@@ -2307,12 +2477,18 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
                   "reconciles per security)")
         if any(t["at_annual_average"] for t in rep["t5008"]):
             d.line("*: converted at the annual average.")
+        missing = sorted({c for t in rep["t5008"]
+                          for c in t.get("no_rate") or ()})
+        if missing:
+            d.line(f"—: no {'/'.join(missing)} rate for {rep['year']} in "
+                   f"the FX cache (`taxjson run` fetches them).")
         hdr = ["ACCOUNT", "CLASS", "CODES", "SLIP PROCEEDS",
                "BOOKS PROCEEDS", "SLIP COST", "BOOKS COST"]
         body = [[t["account"], t["class"], "/".join(t["codes"]),
-                 _m(t["slip_proceeds"]) + ("*" if t["at_annual_average"]
-                                            else ""),
-                 _m(t["books_proceeds"]), _m(t["slip_cost"]),
+                 ("—" if t.get("no_rate") else _m(t["slip_proceeds"])
+                  + ("*" if t["at_annual_average"] else "")),
+                 _m(t["books_proceeds"]),
+                 "—" if t.get("no_rate") else _m(t["slip_cost"]),
                  _m(t["books_cost"])] for t in rep["t5008"]]
         d.table(hdr, body, drop=(2, 5, 6))
     sg = rep["suggestions"]
@@ -2361,7 +2537,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
             _by = ", ".join(f"{a} {n}" for a, n in sorted(by.items())[:3])
             d.line(act(f"{len(issues)} finding(s) ({_by}"
                        + (" ..." if len(by) > 3 else "")
-                       + "): apply the suggestions or explain each",
+                       + "): apply or explain each",
                        "tjs slip-audit --details"))
     elif not rep["sources"]:
         if details:

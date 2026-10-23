@@ -211,6 +211,7 @@ country's commands (`taxjson help --all` lists them). Every command takes
 | Command | Purpose |
 | --- | --- |
 | [`taxjson run`](docs/commands.md#taxjson-run) | Build the books and every report from your exports (`--fast`, `--strict`, `--account`) |
+| [`taxjson compare`](docs/commands.md#taxjson-compare) | What moved since the run before, a saved snapshot or the reports as filed |
 | [`taxjson crypto-sends`](docs/commands.md#taxjson-crypto-sends) | Decide each crypto send that did not arrive in another of your accounts (an arrival from 10 minutes before to 3 days after the send is yours) |
 | [`taxjson find-missing-history`](docs/commands.md#taxjson-find-missing-history) | Sales and holdings whose purchase is not in your files |
 | [`taxjson opening`](docs/commands.md#taxjson-opening) | An opening balance from a broker's positions report |

@@ -154,7 +154,7 @@ class TestShortPoolAdjust(unittest.TestCase):
         rows = _rows(book, "2026-09-20")
         self.assertEqual(rows["RT.TO"]["category"], "COOLING",
                          rows["RT.TO"]["advisory"])
-        self.assertIn("$500.0000", rows["RT.TO"]["advisory"])
+        self.assertIn("$500.00", rows["RT.TO"]["advisory"])
 
 
 class TestCryptoDeadline(unittest.TestCase):
@@ -206,7 +206,7 @@ class TestProratedDenialText(unittest.TestCase):
                 _row("2026-09-20", "BLK.TO", -100, 1000.0)]
         r = _rows(book, "2026-09-25")["BLK.TO"]
         self.assertEqual(r["category"], "BLOCKED")
-        self.assertIn("$10.0000 of it for each unit bought back",
+        self.assertIn("$10.00 of it for each unit bought back",
                       r["advisory"])
         self.assertEqual(r["recent_loss"], 1000.0)
         self.assertEqual(r["recent_loss_qty"], 100.0)

@@ -956,21 +956,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "wrapper passes it automatically.")
     args = parser.parse_args(argv)
 
+    from taxjson.lib import out as _out
     for sp in args.slip_csv:
         if not sp.exists():
-            print(f"taxjson-reconcile-slips: no such file: {sp}",
-                  file=sys.stderr)
-            return 2
+            if "*" in str(sp) or "?" in str(sp):
+                # The documented `inputs/slips/*.csv` with no slip saved
+                # yet reaches here unexpanded (workflow audit 2026-10).
+                _out.fail(f"no slip CSV matches {sp}: nothing to "
+                          f"reconcile yet", prog="taxjson reconcile-slips",
+                          details=["Save the broker's T5008 / 1099-B slip "
+                                   "CSV there (docs/filing.md), or skip "
+                                   "the step: `taxjson checklist --skip "
+                                   "t5008`."], code=2)
+            _out.fail(f"no such file: {sp}", prog="taxjson reconcile-slips",
+                      code=2)
         if not sp.is_file():
             # A directory raised IsADirectoryError (S036-09).
-            print(f"taxjson-reconcile-slips: {sp}: not a file",
-                  file=sys.stderr)
-            return 2
+            _out.fail(f"{sp} is not a file", prog="taxjson reconcile-slips",
+                      code=2)
     for p in args.gains:
         if not p.exists():
-            print(f"taxjson-reconcile-slips: no such file: {p}",
-                  file=sys.stderr)
-            return 2
+            _out.fail(f"no such file: {p}", prog="taxjson reconcile-slips",
+                      details=["Run `taxjson run` first."], code=2)
 
     # One slip per broker is the norm (R1-207): each file on its own
     # reported every other broker's sales as MISSING_FROM_SLIP.

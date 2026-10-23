@@ -888,9 +888,14 @@ def _timing_issues(cache: Path, cfg: Dict[str, Any],
     return out
 
 
-def _same_row(r: Dict[str, Any], x: Dict[str, Any]) -> bool:
-    """A base row of this project and a record's boundary row are the
-    same row: action, symbol, own date, quantity and amount."""
+def _same_row(r: Dict[str, Any], x: Dict[str, Any],
+              account: Optional[str] = None) -> bool:
+    """A base row of this project (of taxjson account `account`) and a
+    record's boundary row are the same row: account (when both name
+    one: an older record's rows do not), action, symbol, own date,
+    quantity and amount."""
+    if account and x.get("account") and x.get("account") != account:
+        return False
     if str(r.get("action") or "").upper() != x.get("action") \
             or r.get("symbol") != x.get("symbol"):
         return False
@@ -924,17 +929,19 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
     rec_rows = [x for x in record.get("boundary_rows") or []
                 if isinstance(x, dict)]
     here = []
+    acct_of: Dict[int, str] = {}        # id(row) -> its taxjson account
     for _g, names in groups(cfg).items():
         for n in names:
-            here += [r for r in _rows(cache / f"{n}_base.json")
-                     if str(r.get("action") or "").upper()
-                     in _TRADES + _INCOME]
+            for r in _rows(cache / f"{n}_base.json"):
+                if str(r.get("action") or "").upper() in _TRADES + _INCOME:
+                    here.append(r)
+                    acct_of[id(r)] = n
     out: List[Dict[str, Any]] = []
     used: set = set()
 
     def _match(r):
         for i, x in enumerate(rec_rows):
-            if i not in used and _same_row(r, x):
+            if i not in used and _same_row(r, x, acct_of.get(id(r))):
                 used.add(i)
                 return x
         return None
@@ -968,6 +975,9 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
                             f"return. It belongs on the {ry} return — "
                             f"amend {ry} (or confirm the slip reported "
                             f"it).")})
+    # Each row of this project stands for one record row: two identical
+    # record rows need two here.
+    taken: set = set()
     for i, x in enumerate(rec_rows):
         a = x.get("action")
         xd = _d(x.get("tax_date"))
@@ -975,8 +985,9 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
             continue
         hit = None
         for r in here:
-            if _same_row(r, x):
+            if id(r) not in taken and _same_row(r, x, acct_of.get(id(r))):
                 hit = r
+                taken.add(id(r))
                 break
         if a in _INCOME and xd <= ye:
             if hit is None:
@@ -1372,7 +1383,8 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
     from taxjson.lib.out import label, wrap
     y = rep["year"]
     L = [f"HAND-OFF CHECK — {y} (closed) into {y + 1} (this project)"]
-    L += wrap(f"Record: {record_path}")
+    import os as _os
+    L += wrap(f"Record: {_os.path.normpath(str(record_path))}")
     L.append("")
 
     def sec(title, items, line):

@@ -206,7 +206,12 @@ Regenerate and commit them:
   you do;
 - before each release, so new installs get current fixes;
 - on a Dependabot security alert for a pinned package (the alert names
-  the file in `requirements/`). Dependabot's pip updates skip
+  the file in `requirements/`). When the fixed version is newer than the
+  cooldown, let that one package past it:
+  `scripts/lock_deps.py --security-update PKG` (repeatable; the locks'
+  header names it under `security-updates`); every other package keeps
+  the cooldown. `pip-audit --disable-pip --no-deps -r requirements/<lock>.txt`
+  shows what is still flagged. Dependabot's pip updates skip
   `requirements/` (`exclude-paths` in `.github/dependabot.yml`); a pull
   request that edits a lock anyway is closed and replaced by a
   regeneration — the test refuses a hand-edited lock (`body-sha256`).
@@ -397,6 +402,17 @@ still waiting at the timeout; the pull request stays open. Never
 `git push --no-verify`. `TAXJSON_LAND_DIRECT=1` pushes straight to `main`
 after the same gate — only for the script tests' throwaway remotes and
 the emergency below.
+
+**Why a rebase merge**, not a merge commit or a squash: `land.sh` lands
+only when `main` has not moved on, so the rebase replays the commits on
+the base they were gated on: every commit on `main` is a tree the local
+gate passed, and a gate record (keyed by tree, "Reusing a PASS") still
+applies to it. `main` stays linear, with no merge commit whose
+resolution could add content neither parent had (the merge case the PII
+gate had to learn). Unlike a squash, each commit keeps its own message,
+and `git bisect` stays precise. The cost: the landed commits get new ids, hence the
+`git pull --rebase` and `release.sh` finding the version commit by
+content.
 
 Nothing enforces this on the dev repo but the tooling: land through
 `scripts/land.sh`. Every `tests.yml` job that runs on a pull request runs

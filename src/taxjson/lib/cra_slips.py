@@ -42,7 +42,8 @@ by name and amount. What cannot be placed is listed, not guessed. The
 broker account is written as a key salted with the project's own salt
 (lib/slip_audit.broker_key, the salt in work/), never the books' hash
 of the account number. Each slip is written once: a duplicate is
-dropped and an amended slip replaces its original (plan_import).
+dropped and an amended slip replaces its original, or the earlier
+amended slip (plan_import).
 """
 from __future__ import annotations
 
@@ -216,6 +217,14 @@ def _one_slip(lines: List[str], where: str) -> CraSlip:
             continue
         box = r.group(1).lstrip("0") or "0"
         val = r.group(2)
+        if (box in AMOUNT_BOXES[typ] and not _AMOUNT_RE.match(val)
+                and re.search(r"\d", val)):
+            # A figure that is not d,ddd.dd: skipping it would import
+            # the slip without that box. (A value with no digit is a
+            # wrapped label word, skipped.)
+            raise CraSlipError(
+                f"{where}: box {box} reads {val!r}, not an amount — the "
+                f"page cannot be read cleanly; not imported")
         if box in AMOUNT_BOXES[typ] and _AMOUNT_RE.match(val):
             if box in slip.boxes:
                 raise CraSlipError(
@@ -799,6 +808,7 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                     _cad(s.boxes.get("13", 0.0), s.currency, rate)]
             cad.append([v if v is not None else 0.0 for v in vals])
         best = None
+        ties: List[Tuple[float, Tuple[int, ...]]] = []
         if len(gs) ** len(pls) <= 20000:
             for combo in itertools.product(range(len(gs)), repeat=len(pls)):
                 cost = 0.0
@@ -808,11 +818,23 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                     cost += sum(abs(tot[j] - books[gi][j]) for j in range(3))
                 if best is None or cost < best[0] - 1e-6:
                     best = (cost, combo)
+                    ties = [(cost, combo)]
+                elif cost <= best[0] + 1e-6:
+                    ties.append((cost, combo))
         if best is None:
             for pl in pls:
                 pl.how = "too many broker accounts to share the slips out"
             continue
-        for pl, gi in zip(pls, best[1]):
+        for k, (pl, gi) in enumerate(zip(pls, best[1])):
+            # Equally good share-outs that put this slip in different
+            # broker accounts: never placed by a guess (CA-SLIP-04, as
+            # the T3 tie above; finding 112).
+            alts = {c[k] for cost, c in ties if cost <= best[0] + 1e-6}
+            if len(alts) > 1:
+                pl.how = (f"ambiguous: {len(alts)} {shown} broker accounts "
+                          f"match it equally — type it into slips.toml "
+                          f"with broker_account")
+                continue
             g = gs[gi]
             pl.group, pl.account = g, g.account
             pl.how = (f"{broker} broker account by its payments"
@@ -967,12 +989,16 @@ def plan_import(placed: List[Tuple[Placement, str]],
                 existing: List[Existing]) -> ImportPlan:
     """What --import-cra adds to slips.toml: each placed slip (with the
     broker_key it is written with) once. A slip slips.toml already holds
-    (the same type, account, fund, broker account, currency and boxes)
-    is not added again; an amended slip replaces the original of the
+    (the same type, account, fund, broker account, issuer, currency
+    and boxes; an amended slip with the figures of an original there
+    replaces it) is not added again; an amended slip replaces the original of the
     same issuer, account, fund and broker account — in this import or
-    already in slips.toml — and an original whose amended slip is there
-    is not added. Where it cannot be told which original an amended
-    slip replaces, neither is imported (listed)."""
+    already in slips.toml — or, with no original in slips.toml, the
+    earlier amended slip there (the issuer's second amendment), and an
+    original whose amended slip is there is not added. Where it cannot
+    be told which slip an amended slip replaces (two it may amend, two
+    amended slips of one fund in one import), none is imported
+    (listed)."""
     from taxjson.lib.slip_audit import _root
     plan = ImportPlan()
 
@@ -996,6 +1022,28 @@ def plan_import(placed: List[Tuple[Placement, str]],
     for i, (pl, k) in enumerate(live):
         if pl.slip.status != "amended":
             continue
+        later = [j for j, (q, kq) in enumerate(live)
+                 if j != i and q.slip.status == "amended"
+                 and ident(q, kq) == ident(pl, k)
+                 and _norm(q.slip.issuer) == _norm(pl.slip.issuer)]
+        if later:
+            # Two amendments of one slip: which is the later one cannot
+            # be told from the slips (said once, by the first).
+            if i < min(later):
+                plan.notes.append(
+                    ", ".join([pl.slip.shown]
+                              + [live[j][0].slip.shown for j in later])
+                    + " (amended): amendments of the same slip — which "
+                      "is the later cannot be told; none imported "
+                      "(import the earlier one with --write, then the "
+                      "later)")
+            hold.add(i)
+            hold.update(later)
+            hold.update(j for j, (q, kq) in enumerate(live)
+                        if q.slip.status != "amended"
+                        and ident(q, kq) == ident(pl, k)
+                        and _norm(q.slip.issuer) == _norm(pl.slip.issuer))
+            continue
         orig = [j for j, (q, kq) in enumerate(live)
                 if q.slip.status != "amended" and ident(q, kq) == ident(pl, k)
                 and _norm(q.slip.issuer) == _norm(pl.slip.issuer)]
@@ -1016,9 +1064,18 @@ def plan_import(placed: List[Tuple[Placement, str]],
         if i in drop or i in hold:
             continue
         sb = _boxes_key(pl.slip.boxes)
+        # The same slip already there: its issuer too (another issuer's
+        # slip with equal boxes was dropped as "already in slips.toml",
+        # 2026-10 audit #108), and not an original the amended slip
+        # supersedes with the same figures — that one is replaced, so
+        # its status says amended and an older original cannot come
+        # back in beside it (#110).
         dup = [e for e in existing if same_slip(e, pl, k)
+               and same_issuer(e, pl)
                and e.currency == pl.slip.currency
-               and _boxes_key(e.boxes) == sb]
+               and _boxes_key(e.boxes) == sb
+               and not (pl.slip.status == "amended"
+                        and e.status != "amended")]
         if dup:
             plan.notes.append(
                 f"{pl.slip.shown}: already in slips.toml ([[slip]] "
@@ -1028,6 +1085,11 @@ def plan_import(placed: List[Tuple[Placement, str]],
                  and same_issuer(e, pl)]
         if pl.slip.status == "amended":
             origs = [e for e in twins if e.status != "amended"]
+            if not origs:
+                # The issuer's next amendment: it replaces the amended
+                # slip slips.toml holds, never adds beside it (both
+                # would be counted).
+                origs = [e for e in twins if e.status == "amended"]
             if len(origs) == 1:
                 plan.replace.append((origs[0], pl, k))
                 continue

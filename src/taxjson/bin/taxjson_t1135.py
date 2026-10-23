@@ -1259,7 +1259,7 @@ def render_brief(rep: Dict[str, Any]) -> str:
                 by_note.setdefault("unclassified: add a ticker.map T1135 "
                                    "line", []).append(r["symbol"])
             elif r["country"] == CRYPTO:
-                by_note.setdefault("crypto: check where held",
+                by_note.setdefault("crypto, check where held",
                                    []).append(r["symbol"])
         for n, syms in by_note.items():
             acts.append(f"{', '.join(syms[:3])}"
@@ -1431,48 +1431,38 @@ def render_report(rep: Dict[str, Any]) -> str:
         lines.append("")
 
     lines.append("NOTES")
-    item("Amounts are COST (ACB-style, settlement-dated), the "
-         "correct basis for the filing threshold and the 'maximum "
-         "cost amount' columns. The category-7 detailed method asks "
-         "for month-end FAIR MARKET VALUE, which this tool does not "
-         "fetch — use your broker's month-end statements for those "
-         "boxes.")
+    item("Amounts are COST (ACB-style, settlement-dated): the filing "
+         "threshold and the 'maximum cost amount' columns. The "
+         "category-7 method's month-end FAIR MARKET VALUE is not "
+         "fetched: take it from the broker's month-end statements.")
     item("Per-country MAX COST sums per-symbol maxima (an upper "
-         "bound); the filing-threshold test uses the true "
-         "simultaneous total.")
-    item(".TO/.V/.CN/.NE symbols are treated as Canadian (not "
-         "SFP). A foreign-domiciled corp listed on a Canadian "
-         "exchange IS still SFP — add `T1135 SYMBOL <ISO3>` to ticker.map. "
-         "Conversely a Canadian corp held on a US exchange is NOT "
-         "SFP — add `SYMBOL CA`.")
+         "bound); the threshold test uses the true simultaneous total.")
+    item(".TO/.V/.CN/.NE symbols count as Canadian. A foreign corp on "
+         "a Canadian exchange is still SFP (`T1135 SYMBOL <ISO3>` in "
+         "ticker.map); a Canadian corp on a US exchange is not "
+         "(`SYMBOL CA`).")
     if rep.get("futures_symbols"):
         item(f"Futures contracts ({len(rep['futures_symbols'])}: "
              f"{', '.join(rep['futures_symbols'][:6])}"
              f"{' ...' if len(rep['futures_symbols']) > 6 else ''}) "
-             "carry NO cost amount: nothing is paid to open one "
-             "(initial margin is a deposit, variation margin "
-             "settles daily), so their notional is left out of the "
-             "cost columns and the threshold test. Options on "
-             "futures count at their premium cost.")
+             "carry no cost amount (margin is a deposit): out of the "
+             "cost columns and the threshold; options on futures count "
+             "at their premium.")
     if rep.get("crypto_symbols"):
-        item("CRYPTO rows (symbols with no market suffix): crypto "
-             "held on a FOREIGN exchange or platform is generally "
-             "specified foreign property — report it under that "
-             "exchange's country (add `T1135 SYMBOL <ISO3>` to ticker.map). "
-             "Crypto held with a Canadian platform may not be; add "
-             "`SYMBOL CA` once you have checked. Until then it is "
-             "counted toward the threshold (the conservative side).")
-    item("Registered accounts (RRSP/TFSA/...) are excluded by "
-         "law and were not read.")
-    item("The test covers these brokerage books only. Specified "
-         "foreign property held outside them — a foreign bank "
-         "account or cash, shares held in certificate form, a "
-         "foreign rental property — counts toward the same "
-         "threshold at the same time: add its cost by hand.")
-    item("US-situs property inside T1135 does not include US "
-         "property held only through Canadian mutual funds/ETFs.")
-    item("Not tax advice; reconcile against broker statements "
-         "before filing.")
+        item("CRYPTO rows: crypto on a foreign exchange is generally "
+             "SFP under that exchange's country (`T1135 SYMBOL <ISO3>` "
+             "in ticker.map); on a Canadian platform it may not be "
+             "(`SYMBOL CA` once checked). Until then it counts toward "
+             "the threshold.")
+    item("Registered accounts (RRSP/TFSA/...) are excluded by law and "
+         "were not read.")
+    item("Only these brokerage books: foreign bank accounts, cash, "
+         "certificated shares or a foreign property count toward the "
+         "same threshold; add their cost by hand.")
+    item("US property held only through Canadian funds is not US-situs "
+         "property here.")
+    item("Not tax advice; reconcile against broker statements before "
+         "filing.")
     return "\n".join(lines)
 
 

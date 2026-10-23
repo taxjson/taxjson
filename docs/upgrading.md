@@ -59,6 +59,35 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.31.1
+
+- **Re-run `tjs run` for a year with an s.86.1 spin-off paid cash for a
+  fraction (Questrade or RBC).** The fraction is now sold for the cash on
+  its share of the allocated cost (`CA-CORP-05`): its gain and the new
+  shares' ACB change slightly.
+- **ALLOWLOSS quantities are read strictly.** A quantity with a decimal
+  comma (`1,5`) was read as 15 units; it is now refused with the line
+  named. Write `1.5`.
+- **`[carryover] claimed`: one year spelled two ways stops the run.**
+  `2023` and `02023` in one table are one tax year; keep one line.
+- **Holdings TOML dates must be real days.** An `as_of`, `generated_at`
+  or `acquired` such as `2025-02-30` is now refused, naming the field.
+- **FX-on-cash ledger v2: two broker accounts whose hashed ids start
+  alike get longer book names.** An `at=` naming the old 4-character book
+  is refused, and the message lists the new names; point it at one of
+  them. Books without such a clash keep their names.
+- **`.gitignore`: anchor the `reports/` line.** The file `taxjson init`
+  wrote before this release ignores `reports/` at every depth, which
+  also hides `filed/<year>/reports/`, the reports as filed that
+  `close-year` keeps since v0.30.4+. In a project you keep in git,
+  change `reports/` to `/reports/` (and, in the folder holding the year
+  folders, add `/*/reports/`); `close-year` says so when the line is
+  still there. New projects get the anchored file.
+- **`tjs compare` exits 1 when an account figure moved,** even when every report file matches (it exited 0). A script reading the exit code sees a difference there.
+- **An ALLOWLOSS line dated the settlement day of only some fills of a sale now names none,** and the run stops on it: date the line with the sale's trade date.
+- **Refused now, named by line:** an IB dividends report with a blank GrossInBase beside a Gross, an impossible date or an amount like `1,5` (download it again); a CRA slip page whose box figure is not an amount (print it again or type the slip into slips.toml); an RBC Holdings Export whose cost column is neither a total nor per share (rename the column).
+- **US projects with futures from a generic CSV with a settle column:** run `tjs run` again; a gain can change where settle dates ran out of trade order.
+
 ### v0.30.1
 
 - **v0.30.0 can no longer be installed; v0.30.1 is the same program.**

@@ -246,6 +246,36 @@ class TestCutoff(unittest.TestCase):
         self.assertTrue(is_opening_row(out[0]))
 
     @rule("CA-OPEN-03")
+    def test_a_ticker_reused_after_its_rename_is_kept(self):
+        # SAMPOLD.TO became SAMPB.TO in February; a different holding
+        # bought under the reused SAMPOLD.TO in March is not the
+        # snapshot's: its purchase stays, so its 2025 sale has a cost.
+        rows = [tx("BUYSELL", "2024-01-02", "SAMPOLD.TO", 10, 100,
+                   currency="CAD"),
+                tx("SPLIT", "2024-02-03", "SAMPOLD.TO", 1, 0, currency="",
+                   symbol_new="SAMPB.TO"),
+                tx("BUYSELL", "2024-03-03", "SAMPOLD.TO", 10, 100,
+                   currency="CAD"),
+                opening("2024-12-31", "SAMPB.TO", 10, 100, currency="CAD"),
+                tx("BUYSELL", "2025-04-01", "SAMPOLD.TO", -10, 300,
+                   currency="CAD")]
+        out, err = self._apply(rows, year=2025)
+        kept = [(t.action, t.date, t.symbol) for t in out
+                if not is_opening_row(t)]
+        self.assertEqual(kept, [
+            ("BUYSELL", "2024-03-03", "SAMPOLD.TO"),
+            ("BUYSELL", "2025-04-01", "SAMPOLD.TO")])
+        self.assertIn("2 earlier row(s) of SAMPB.TO", err)
+        import contextlib
+        import io
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        with contextlib.redirect_stderr(io.StringIO()):
+            res = run_gains(out, [], [], req=GainsRequest(
+                country="canada", taxable=True, year=2025))
+        self.assertAlmostEqual(_sale_gains(res)[0]["gain"], 200.0,
+                               places=2)
+
+    @rule("CA-OPEN-03")
     def test_sale_of_the_tax_year_refused(self):
         rows = [tx("BUYSELL", "2025-01-10", "SAMPB.TO", 10, 100,
                    currency="CAD"),
@@ -664,3 +694,39 @@ class TestDistributionsBeforeASnapshot(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertNotIn("ATTENTION", err)
         self.assertIn("(before its opening snapshot of 2025-03-03)", err)
+
+    @rule("CA-OPEN-03")
+    @rule("US-OPEN-03")
+    def test_one_on_the_snapshot_day_is_applied_and_said(self):
+        """2026-10 audit #26: a distribution dated on the snapshot's
+        own day is applied on top of its cost (a year-end statement's
+        book cost often does not carry it yet), said in a NOTE."""
+        import io
+        from contextlib import redirect_stderr
+        from taxjson.bin.taxjson_apply_distributions import (
+            apply_distributions)
+        for country in ("canada", "usa"):
+            book = {"transactions": [
+                opening("2025-03-03", "SYN.TO", 10, 110, lot="2024-01-08",
+                        currency="CAD", account="demo").to_dict()]}
+            err = io.StringIO()
+            with redirect_stderr(err):
+                doc, n = apply_distributions(
+                    book, [("SYN.TO", "2025-03-03", 1.0)], "demo",
+                    country=country)
+            self.assertEqual(n, 1, country)
+            self.assertIn("dated on the opening snapshot's own day — "
+                          "applied on top of the snapshot's cost",
+                          err.getvalue())
+            adj = [t for t in doc["transactions"]
+                   if str(t.get("id") or "").startswith("DIST-")]
+            self.assertAlmostEqual(abs(adj[0]["net_amount"]), 10.0)
+        # A later record date says nothing about the snapshot.
+        book = {"transactions": [
+            opening("2025-03-03", "SYN.TO", 10, 110, lot="2024-01-08",
+                    currency="CAD", account="demo").to_dict()]}
+        err = io.StringIO()
+        with redirect_stderr(err):
+            apply_distributions(book, [("SYN.TO", "2025-04-03", 1.0)],
+                                "demo", country="canada")
+        self.assertNotIn("own day", err.getvalue())

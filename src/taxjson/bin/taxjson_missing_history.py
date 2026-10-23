@@ -1155,18 +1155,14 @@ def main(argv=None):
                     "1. Add an older export that holds the purchase to "
                     "inputs/<account>/.",
                     "2. Or enter the purchase as a .tt BUYSELL line with its "
-                    "real date and cost (for shares transferred in: the "
-                    "original purchase at the other broker). `taxjson "
-                    "find-missing-history --write-purchases` drafts these "
-                    "lines from IB's Basis or a transfer's stated book "
-                    "value, for you to review.",
+                    "real date and cost; `--write-purchases` drafts these "
+                    "from IB's Basis or a transfer's book value, to review.",
                     "3. Only when it cannot be recovered: `taxjson "
                     "find-missing-history --write-missing-history` in the "
                     "project writes .tt OPENING cost=unknown lines into "
                     "inputs/<account>/missing_history.tt — review them, "
-                    "then `taxjson run` (it reads them); those sales are "
-                    "then left out of the totals and must be reported by "
-                    "hand."):
+                    "then `taxjson run` (it reads them); those sales leave "
+                    "the totals and are reported by hand."):
                 _P.para(item, "  ", "     ")
         if _zero_open:
             _print_zero_fix(country, _cost)

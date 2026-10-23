@@ -631,6 +631,19 @@ class TestFxWindow(unittest.TestCase):
                          date(2022, 5, 20))
         self.assertEqual(window_start(2024, []), date(2023, 12, 18))
 
+    def test_utf16_export(self):
+        """2026-10 audit #40: a UTF-16 re-save (which every parser
+        reads) gives its dates too."""
+        from taxjson.lib.rates_window import window_start
+        d = _tmp(self)
+        text = "Transaction Date,Action\n2019-12-19,Buy\n2025-03-01,Sell\n"
+        (d / "le.csv").write_bytes(text.encode("utf-16"))       # BOM, LE
+        (d / "be.csv").write_bytes(b"\xfe\xff" + text.encode("utf-16-be"))
+        for name in ("le.csv", "be.csv"):
+            self.assertEqual(window_start(2025, [d / name],
+                                          today=date(2026, 10, 18)),
+                             date(2019, 12, 5), name)
+
     def test_a_2024_project_asks_the_bank_from_december_2023_only(self):
         """A stubbed fetcher counts the requests: the Bank of Canada is
         asked from the window's start, Yahoo never."""

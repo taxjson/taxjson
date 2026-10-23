@@ -2745,9 +2745,9 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         _diag("error", f"{dst}: {e.strerror or e} — nothing written")
         return 2
     step(f"Done. Review {shown_dst} before sharing it."
-         + (f" It is a single-folder project of {root.name} (inputs/ — "
-            f"the shared exports and the year's own —, holdings/, "
-            f"taxjson.toml, ticker.map): `taxjson -C {shown_dst} run` "
+         + (f" It is a single-folder project of {root.name}: inputs/ "
+            f"(the shared exports and the year's own), holdings/, "
+            f"taxjson.toml and ticker.map; `taxjson -C {shown_dst} run` "
             f"runs it." if shared else ""))
     return 0
 

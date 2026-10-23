@@ -509,7 +509,7 @@ class TestSanity(unittest.TestCase):
             (root / "hold" / "h.toml").write_text(
                 '[[holding]]\nsymbol = "XEI.TO"\nquantity = 100\n')
             r = _run_cli(root, "sanity")
-            self.assertIn("UNCHECKED: account(s) tfsa (1 position(s))",
+            self.assertIn("UNCHECKED: 1 account(s) with positions and no holdings file: tfsa",
                           r.stdout)
             j = json.loads(_run_cli(root, "sanity", "--json").stdout)
             self.assertFalse(j["complete"])
@@ -577,7 +577,7 @@ class TestViews(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("F:MBTM6", r.stdout)
             self.assertIn("XYZ.TO", r.stdout)
-            self.assertIn("as of the latest data in the books (2026-02-02)",
+            self.assertIn("As of the books' latest data (2026-02-02)",
                           r.stdout)
             self.assertNotIn("tax year 2025", r.stdout)
             j = json.loads(_run_cli(root, "shares", "--json").stdout)
@@ -646,8 +646,8 @@ class TestViews(unittest.TestCase):
             self.assertEqual(j["totals"]["denied"], 200.0)
             self.assertEqual(j["totals"]["permanently_denied"], 60.0)
             t = _run_cli(root, "wash-sales").stdout
-            self.assertIn("200.00 CAD of losses denied (60.00 "
-                          "permanently denied)", t)
+            self.assertRegex(t, r"DENIED:\s+200\.00 CAD over 1 superficial "
+                                r"loss\(es\) \(60\.00 permanently denied\)")
 
     def test_account_token_is_not_a_window(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -656,8 +656,13 @@ class TestViews(unittest.TestCase):
                 r = _run_cli(root, cmd, "margin")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertNotIn("may exceed", r.stderr)
+            # A window outside the tax year reads the full-history
+            # books (the old "may exceed" warning only without a base
+            # book): the note says so, and the token is a window.
             r = _run_cli(root, "winners", "all")
-            self.assertIn("may exceed", r.stderr)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("read from the full-history books", r.stderr)
+            self.assertNotIn("may exceed", r.stderr)
 
     def test_slip_line_leaves_staking_out(self):
         cfg = _CONFIG + '\n[accounts.kr]\ntype = "taxable"\ncrypto = true\n'
@@ -678,8 +683,7 @@ class TestViews(unittest.TestCase):
                                    "gross_amount": 7.0,
                                    "net_amount": 7.0}]}))
             r = _run_cli(root, "divs-sum")
-            self.assertIn("TAXABLE (compare with T5/T3 slips; crypto "
-                          "staking excluded): 30.00 CAD", r.stdout)
+            self.assertRegex(r.stdout, r"TAXABLE \(T5/T3 slips\):\s+30\.00 CAD")
             j = json.loads(_run_cli(root, "divs-sum", "--json").stdout)
             self.assertEqual(j["totals_slips"], {"CAD": 30.0})
             self.assertEqual(j["totals"], {"CAD": 37.0})

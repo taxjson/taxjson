@@ -203,11 +203,25 @@ def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
     .tt RENAME, a ticker.map rename — dated after `day`) carried in from
     the old symbol, at the change's ratio. A dividend paid under the new
     ticker on a record date before the change was earned on the old
-    one's shares."""
+    one's shares.
+
+    The renames are followed by date, in the books' order: each other
+    symbol's position on `day` moves with the first rename of that
+    symbol after `day`, then with the first rename of where it landed,
+    and so on; it counts (at the ratios so far) when that path reaches
+    `sym`. A rename of a ticker that had already been renamed away
+    (a reused ticker: OLD -> NEW, then a new OLD -> OTHER) carries only
+    the shares bought under the reused ticker, never the ones that left
+    with the earlier rename (audit finding 61)."""
     rows = list(rows)
     pos = positions_on(rows, day, settled=settled, before=before)
-    renames = []
-    for r in rows:
+    # Each held symbol's shares on `day`: where they are now, and the
+    # ratio applied on the way.
+    lots = {s: (s, 1.0) for s in pos if s != sym}
+    total = pos.get(sym, 0.0)
+    for r in _ordered(rows):
+        if not lots:
+            break
         if r.get("action") != "SPLIT":
             continue
         new = str(r.get("symbol_new") or "").strip()
@@ -217,22 +231,21 @@ def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
         d = str((r.get("date_settle") if settled else None)
                 or r.get("date") or "")
         later = (d >= day) if before else (d > day)
-        if later:
-            try:
-                ratio = float(r.get("quantity") or 0.0) or 1.0
-            except (TypeError, ValueError):
-                ratio = 1.0
-            renames.append((old, new, ratio))
-    factor = {sym: 1.0}
-    for _ in range(len(renames) + 1):
-        grew = False
-        for old, new, ratio in renames:
-            if new in factor and old not in factor:
-                factor[old] = factor[new] * ratio
-                grew = True
-        if not grew:
-            break
-    return sum(pos.get(s, 0.0) * f for s, f in factor.items())
+        if not later:
+            continue
+        try:
+            ratio = float(r.get("quantity") or 0.0) or 1.0
+        except (TypeError, ValueError):
+            ratio = 1.0
+        for s, (at, f) in list(lots.items()):
+            if at != old:
+                continue
+            if new == sym:
+                total += pos[s] * f * ratio
+                del lots[s]
+            else:
+                lots[s] = (new, f * ratio)
+    return total
 
 
 # North American markets moved from T+2 to T+1 settlement in May 2024

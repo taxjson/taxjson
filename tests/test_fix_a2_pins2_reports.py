@@ -81,7 +81,7 @@ class TestFeesSumLabels(unittest.TestCase):
         # The split is its own table under a sentence-case heading
         # (docs/output-style.md): BROKERAGE  NON-OPTION  OPTIONS.
         i = lines.index("Non-option vs option fees")
-        self.assertRegex(lines[i + 1], r"^  BROKERAGE\s+NON-OPTION\s+OPTIONS$")
+        self.assertRegex(lines[i + 1], r"^BROKERAGE\s+NON-OPTION\s+OPTIONS$")
         row = next(ln for ln in lines[i + 1:]
                    if ln.strip().startswith("questrade"))
         self.assertRegex(row, r"questrade\s+9\.95\s+0\.00$")

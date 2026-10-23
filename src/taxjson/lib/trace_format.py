@@ -574,6 +574,56 @@ def _strip_hash(line: str) -> str:
     return line[1:] if line.startswith('#') else line
 
 
+# The Canada ACB pool trace's cells: a buy adds cost, a sale removes it
+# (the sale's own proceeds and gain are in the event's figures above).
+_POOL_KEYS = {"FEE", "COST_ADDED", "COST_RMVD", "COST_BASIS", "POOL_QTY",
+              "POOL_ACB", "ACB/SH", "PROCEEDS", "GAIN", "GAIN/SH"}
+
+
+def _trace_table(rows: List[str], w: int, indent: str
+                 ) -> Optional[List[str]]:
+    """The Canada ACB pool trace as one compact table: DATE ACTION QTY
+    PRICE FEE COST+/- POOL_QTY POOL_ACB ACB/SH, one row per entry with
+    the pool after it (cost added positive, removed negative). None for
+    any other trace (the US lot trace keeps its own layout)."""
+    import re
+    from taxjson.lib.out import fit_table
+    body: List[List[str]] = []
+    for r in rows:
+        cells = [c.strip() for c in r.split('|')]
+        head = cells[0].split()
+        if len(head) < 3 or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", head[0]):
+            return None
+        if "@" in head:
+            at = head.index("@")
+            action, qty, price = (" ".join(head[1:at - 1]), head[at - 1],
+                                  " ".join(head[at + 1:]))
+        else:
+            action, qty, price = " ".join(head[1:-1]), head[-1], "-"
+        kv: Dict[str, str] = {}
+        for c in cells[1:]:
+            if ":" not in c:
+                return None
+            k, v = c.split(":", 1)
+            kv[k.strip().upper()] = v.strip()
+        if not set(kv) <= _POOL_KEYS:
+            return None
+        cost = (kv.get("COST_ADDED")
+                or (("-" + kv["COST_RMVD"]) if kv.get("COST_RMVD") else None)
+                or (("-" + kv["COST_BASIS"]) if kv.get("COST_BASIS")
+                    else None)
+                or "-")
+        body.append([head[0], action, qty, price, kv.get("FEE", "-"), cost,
+                     kv.get("POOL_QTY", "-"), kv.get("POOL_ACB", "-"),
+                     kv.get("ACB/SH", "-")])
+    if not body:
+        return None
+    headers = ["DATE", "ACTION", "QTY", "PRICE", "FEE", "COST+/-",
+               "POOL_QTY", "POOL_ACB", "ACB/SH"]
+    return fit_table(headers, body, aligns=["<", "<"] + [">"] * 7,
+                     indent=indent, width_=w or None, drop=(4, 3))
+
+
 def _trace_records(trace: List[str], width_: Optional[int],
                    indent: str) -> List[str]:
     """The engine's pool-history lines ('# DATE ACTION QTY @ PRICE |
@@ -585,6 +635,9 @@ def _trace_records(trace: List[str], width_: Optional[int],
     w = _width() if width_ is None else width_
     rows = [_strip_hash(l).strip() for l in trace]
     rows = [r for r in rows if r and not r.startswith('---')]
+    table = _trace_table(rows, w, indent)
+    if table is not None:
+        return table
     aligned = [indent + r for r in align_pipe_lines(rows)]
     if w <= 0 or max((len(r) for r in aligned), default=0) <= w:
         return aligned

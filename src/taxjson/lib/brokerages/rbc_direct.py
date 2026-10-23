@@ -1252,11 +1252,19 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
         _unm[_file_of[id(x)]].append(x)
     for x in _acct.unmatched_cil:
         _unm_cil[_file_of[id(x)]].append(x)
+    # A spin-off's cash in lieu: taxjson-corp-actions books it with the
+    # spin-off's election (CA-CORP-05); each CIL row is consumed in its
+    # own file.
+    _spin_cil: Dict[str, list] = {k: [] for k in files}
+    for sp, cils in _acct.spinoff_cil:
+        for c in cils:
+            _spin_cil[_file_of[id(c)]].append((sp, [c]))
     adjusts = []
     for k in files:
         ctx.pairings[k] = RbcReorgPairing(events=_events[k],
                                           unmatched=_unm[k],
-                                          unmatched_cil=_unm_cil[k])
+                                          unmatched_cil=_unm_cil[k],
+                                          spinoff_cil=_spin_cil[k])
         # An option adjustment's new code inherits the old contract
         # unless its own trade rows describe another — resolved in date
         # order across files so a later file's close finds it.
@@ -1603,6 +1611,11 @@ class RbcBrokerage(BaseBrokerage):
             anchor = ev.removal.order
             reorg_out.setdefault(anchor, []).extend(out)
         leg_done |= ctx.foreign_legs.get(key, set())
+        spinoff_cil = 0
+        for _sp, cils in pairing.spinoff_cil:
+            for c in cils:
+                leg_done.add(id(c))
+                spinoff_cil += 1
         for leg in pairing.unmatched:
             self._warn(
                 f"UNMATCHED reorganization leg — {leg.label()}. RBC books a "
@@ -1692,8 +1705,10 @@ class RbcBrokerage(BaseBrokerage):
             # rules for every supported country, and `taxjson run` runs
             # it — the old text cited Canadian law and told a US project
             # to add a .tt row the stage already books (double-booked).
+            _cil = (f" and {spinoff_cil} cash-in-lieu row(s) for their "
+                    f"fractions" if spinoff_cil else "")
             self._note(
-                f"{spinoffs} RBC spin-off row(s) (DIS - ... SPINOFF) are "
+                f"{spinoffs} RBC spin-off row(s) (DIS - ... SPINOFF){_cil} are "
                 f"left to taxjson-corp-actions, which asks for your "
                 f"country's tax election (`taxjson run` runs it). Parsing "
                 f"outside `taxjson run`, run taxjson-corp-actions on this "

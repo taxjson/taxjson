@@ -100,7 +100,14 @@ fast_lane() {
   if git ls-remote origin 'refs/tags/channels-*' | grep -q "^$c[[:space:]].*\^{}\$"; then
     echo "✓ $CH → $TAG is waiting for the publisher (a fast-lane tag names $(git rev-parse --short "$c"))."; return 0
   fi
+  # A tag is named for its second: a second promote within that second
+  # (a stable and a beta move back to back) waits for the next one.
   name="channels-$(date -u +%Y%m%dT%H%M%SZ)"
+  while git rev-parse -q --verify "refs/tags/$name" >/dev/null \
+      || git ls-remote --exit-code origin "refs/tags/$name" >/dev/null 2>&1; do
+    sleep 1
+    name="channels-$(date -u +%Y%m%dT%H%M%SZ)"
+  done
   git tag -a "$name" "$c" -m "taxjson channels: $CH → $TAG"
   if ! printf 'refs/tags/%s %s refs/tags/%s %s\n' "$name" "$(git rev-parse "$name")" "$name" "$Z" \
        | bash scripts/hooks/pre-push origin "$(git remote get-url origin)"; then

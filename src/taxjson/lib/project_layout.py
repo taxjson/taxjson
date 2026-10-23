@@ -1222,13 +1222,29 @@ def _edit_text(text: str, doc: Dict[str, Any], path: KeyPath, value: Any,
     return "\n".join(res) + "\n"
 
 
+def frozen_year(d, year) -> bool:
+    """The year project `d` was closed with its inputs frozen (its
+    filed/<year>.json lock carries a `frozen` record: `taxjson
+    close-year` copied the shared exports and tobase.map into the
+    year's own folders, which the year reads from then on)."""
+    import json
+    try:
+        doc = json.loads((Path(d) / "filed" / f"{year}.json").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(doc, dict) and isinstance(doc.get("frozen"), dict)
+
+
 def tobase_layout(folder) -> Dict[str, Any]:
     """The tobase.map files of a multi-year folder's year projects:
     {"shared": {resolved path: [years naming it]}, "own": {year: its
-    own tobase.map}, "both": [years holding one beside the setting],
-    "problems": {year: why its setting cannot be used}}."""
-    out: Dict[str, Any] = {"shared": {}, "own": {}, "both": [],
-                           "problems": {}}
+    own tobase.map}, "frozen": {year: the copy close-year froze — a
+    filed year's own file by design, never a copy to merge},
+    "both": [years holding one beside the setting], "problems": {year:
+    why its setting cannot be used}}."""
+    out: Dict[str, Any] = {"shared": {}, "own": {}, "frozen": {},
+                           "both": [], "problems": {}}
     for y, d in year_dirs(folder):
         st = _settings(d)
         try:
@@ -1240,6 +1256,9 @@ def tobase_layout(folder) -> Dict[str, Any]:
             out["shared"].setdefault(p, []).append(y)
         own = d / TOBASE_MAP
         if own.is_file() and not own.is_symlink():
+            if p is None and frozen_year(d, y):
+                out["frozen"][y] = own
+                continue
             out["own"][y] = own
             if p is not None and _resolved(own) != p:
                 out["both"].append(y)
@@ -1272,6 +1291,7 @@ def years_report(folder: Path) -> Dict[str, Any]:
                                "changed": None, "problem": None,
                                "differs_from_newest": None,
                                "tobase_map": None, "tobase_shared": False,
+                               "tobase_frozen": False,
                                "marks": {"done": 0, "skipped": 0}}
         lock = d / "filed" / f"{y}.json"
         if lock.is_file():
@@ -1317,6 +1337,9 @@ def years_report(folder: Path) -> Dict[str, Any]:
                              else f"{d.name}/{TOBASE_MAP}"
                              if (d / TOBASE_MAP).is_file() else None)
         rec["tobase_shared"] = p is not None
+        # The copy close-year froze: the filed year's own by design.
+        rec["tobase_frozen"] = (p is None and (d / TOBASE_MAP).is_file()
+                                and frozen_year(d, y))
         if newest is not None and d != newest:
             try:
                 c = compare(d, newest)

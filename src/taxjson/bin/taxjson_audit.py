@@ -44,6 +44,7 @@ from taxjson.lib.out import exit_text
 from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
+import re
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -785,11 +786,9 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                 f"holding period tacks (\u00a71223(3))")
         if perm > TIE:
             dests.append(
-                f"{_fmt(perm)} denied loss PERMANENTLY lost: the "
-                f"replacement is in a registered account or held by an "
-                f"affiliated person — no ACB addition on this return (an "
-                f"affiliated person adds it to their own ACB, "
-                f"s.53(1)(f))" if not _us else
+                f"{_fmt(perm)} denied loss PERMANENTLY lost: replacement "
+                f"in a registered account or an affiliated person's "
+                f"(s.53(1)(f))" if not _us else
                 f"{_fmt(perm)} denied loss PERMANENTLY lost (replacement "
                 f"in a sheltered account — Rev. Rul. 2008-5)")
         for dest in dests:
@@ -872,9 +871,12 @@ def render_reconciliation(events: List[Dict[str, Any]],
             return paint("\u2717", "bad")
         return OK if all_ok else ""
 
+    # The accounts tied out, not their file names.
+    _accts = [re.sub(r"_gains(_wash)?\.json$", "", lb)
+              for lb in check_labels]
     out = [paint("\u2550" * W, "dim"),
            paint("RECONCILIATION", "h")
-           + (paint(f"   {', '.join(check_labels)}", "dim")
+           + (paint(f"   {', '.join(_accts)}", "dim")
               if check_labels else ""),
            paint("\u2500" * W, "dim"),
            f"  events audited     {n:>14,}",

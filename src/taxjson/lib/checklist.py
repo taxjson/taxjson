@@ -178,8 +178,8 @@ STEPS: List[Tuple[str, str, str, str, str]] = [
      "broker statements (`taxjson events` lists the INTEREST rows)",
      "Interest on money borrowed to invest is deductible on line 22100; trade "
      "commissions are not (they are already in the ACB and proceeds). The "
-     "account .sum's CASH INTEREST line nets credit against debit interest, "
-     "so it is not the interest paid."),
+     "account .sum's CASH INTEREST line is interest earned; its INTEREST PAID "
+     "line, per currency, is the interest charged (margin interest)."),
     ("estimate", "Results", "Tax estimate and instalment position checked",
      "taxjson estimate, taxjson instalments",
      "A sanity check on the tax owed and on what was already paid."),
@@ -256,9 +256,9 @@ US_STEPS: Dict[str, Any] = {
     "fees": ("Margin interest collected (Form 4952, if itemizing)",
              "broker statements (`taxjson events` lists the INTEREST rows)",
              "Investment interest is deductible only when itemizing; the account "
-             ".sum's CASH INTEREST line nets credit against debit interest, so it "
-             "is not the interest paid, and trade commissions are not investment "
-             "interest."),
+             ".sum's CASH INTEREST line is interest earned and its INTEREST PAID "
+             "line the interest charged, per currency; trade commissions are not "
+             "investment interest."),
     "estimate": ("Tax estimate and estimated payments checked", "taxjson estimate",
                  "A sanity check on the tax owed."),
     "amt": "US project (the US alternative minimum tax, Form 6251, is not modelled)",
@@ -322,6 +322,10 @@ class Result:
     # finding stays shown beside the mark (option-boundary's transition
     # question CA-OPT-11, export-coverage).
     question: bool = False
+    # The command the summary's `! ` line names for this result, when
+    # the item's first command is not the one for the problem (the
+    # configure step: edit taxjson.toml, not `tjs migrate`).
+    cmd: str = ""
     # The questions asked, one key each (export-coverage: account|broker|
     # end; option-boundary: account|contract|write date): a DONE mark
     # answers the keys it recorded (question_answers) and no others — a
@@ -1005,6 +1009,12 @@ _PLANNING_TABLES = ("instalments", "estimate", "carryover",
                     "capital_gains_dividends")
 _PLANNING_SETTINGS = ("province", "prior_year_record", "holdings_dir",
                       "exports_dir",
+                      # Where the exports are: each file is
+                      # fingerprinted by content under the same key
+                      # (inputs/<account>/...) shared or the project's
+                      # own, so close-year's freeze (the shared files
+                      # copied in) is not a change.
+                      "inputs_dir",
                       # Where the shared tobase.map is: its content is
                       # fingerprinted itself (_input_paths), so the year
                       # that starts reading an identical shared copy
@@ -1129,7 +1139,28 @@ def _fp_key(root: Path, p: Path) -> str:
     if p == _PL.tobase_map_path(root):
         import os as _os
         return Path(_os.path.relpath(p, Path(root).resolve())).as_posix()
-    return p.relative_to(_PL.inputs_dir(root).parent).as_posix()
+    folder = _PL.inputs_dir(root)
+    try:
+        rel = p.relative_to(folder)
+    except ValueError:
+        return p.relative_to(folder.parent).as_posix()
+    # The folder as the setting names it: a link `inputs` to another
+    # folder keys its files `inputs/...`, as a close-year copy of them
+    # does — the books were read as changed by the freeze alone
+    # (workflow audit 2026-10).
+    return f"{_inputs_folder_name(root, folder)}/{rel.as_posix()}"
+
+
+def _inputs_folder_name(root: Path, folder: Path) -> str:
+    """The last part of `[settings] inputs_dir` as written (or the
+    folder's own name)."""
+    try:
+        v = _PL._settings(root).get(_PL.INPUTS_KEY)      # noqa: SLF001
+    except Exception:                                   # noqa: BLE001
+        v = None
+    if isinstance(v, str) and v.strip():
+        return Path(v.strip()).expanduser().name or folder.name
+    return folder.name
 
 
 # A fingerprint key of the tobase.map every year shares, said as such in
@@ -1218,6 +1249,26 @@ def _load_fingerprint_doc(root: Path) -> Optional[Dict[str, Any]]:
     return doc
 
 
+def recorded_fingerprint(root: Path
+                         ) -> Optional[Tuple[Dict[str, str], "datetime"]]:
+    """What the last full run recorded the books were built from
+    (`work/.inputs_fingerprint.json`: {key: sha256}) and when it was
+    written, or None when there is no readable record."""
+    from datetime import datetime
+    try:
+        doc = _load_fingerprint_doc(root)
+    except FingerprintUnreadable:
+        return None
+    if not doc:
+        return None
+    try:
+        when = datetime.fromtimestamp(
+            (root / "work" / FINGERPRINT_FILE).stat().st_mtime)
+    except OSError:
+        when = datetime.now()
+    return dict(doc["files"]), when
+
+
 def _load_fingerprint(root: Path) -> Optional[Dict[str, str]]:
     try:
         doc = _load_fingerprint_doc(root)
@@ -1264,6 +1315,56 @@ def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
     return ""
 
 
+def input_files(root: Path, cfg: Dict[str, Any]) -> List[Path]:
+    """Every file `taxjson run` reads to build the books (what
+    close-year's freeze copies): _input_paths."""
+    return _input_paths(root, cfg)
+
+
+def fingerprint_changes(before: Dict[str, str], now: Dict[str, str]
+                        ) -> List[str]:
+    """The keys whose content differs between two fingerprints, with
+    the added and the missing ones (a lock's frozen inputs against
+    the project now), sorted; the shared / own tobase.map treated as
+    _fingerprint_diff does."""
+    changed, added, removed = fingerprint_delta(before, now)
+    return sorted(changed + added + removed)
+
+
+def fingerprint_delta(before: Dict[str, str], now: Dict[str, str]
+                      ) -> Tuple[List[str], List[str], List[str]]:
+    """(changed, added, removed) keys between two fingerprints, each
+    sorted — `taxjson compare`'s inputs lines; the shared / own
+    tobase.map treated as _fingerprint_diff does."""
+    before, now = _same_tobase(_canon_fingerprint(before),
+                               _canon_fingerprint(now))
+    return (sorted(k for k in before.keys() & now.keys()
+                   if before[k] != now[k]),
+            sorted(now.keys() - before.keys()),
+            sorted(before.keys() - now.keys()))
+
+
+def _same_tobase(before: Dict[str, str], now: Dict[str, str]
+                 ) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """The year's own tobase.map made the shared one (`taxjson
+    migrate`), or the shared one copied in as the year's own
+    (close-year's freeze), with the same content: the books read the
+    same pairs, so `before` is keyed as `now` is."""
+    own = _PL.TOBASE_MAP
+    for k in [k for k in now if _shared_key(k)]:
+        if k not in before and own in before and own not in now \
+                and before[own] == now[k]:
+            before = dict(before)
+            before[k] = before.pop(own)
+    if own in now and own not in before:
+        for k in [k for k in before if _shared_key(k)]:
+            if k not in now and before[k] == now[own]:
+                before = dict(before)
+                before[own] = before.pop(k)
+                break
+    return before, now
+
+
 def _canon_fingerprint(files: Dict[str, str]) -> Dict[str, str]:
     """A fingerprint's files with legacy names keyed by their new name
     (phantoms.json -> missing_history.json), so a rename alone — or a
@@ -1272,15 +1373,8 @@ def _canon_fingerprint(files: Dict[str, str]) -> Dict[str, str]:
 
 
 def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
-    before, now = _canon_fingerprint(before), _canon_fingerprint(now)
-    # The year's own tobase.map made the shared one (`taxjson migrate`)
-    # with the same content: the books read the same pairs.
-    own = _PL.TOBASE_MAP
-    for k in [k for k in now if _shared_key(k)]:
-        if k not in before and own in before and own not in now \
-                and before[own] == now[k]:
-            before = dict(before)
-            before[k] = before.pop(own)
+    before, now = _same_tobase(_canon_fingerprint(before),
+                               _canon_fingerprint(now))
     changed = sorted(k for k in before.keys() & now.keys()
                      if before[k] != now[k])
     added = sorted(now.keys() - before.keys())
@@ -1551,6 +1645,15 @@ def d_audit(ctx: Ctx) -> Result:
     if st is not None:
         st.id = "audit"
         return st
+    # A run deferred at a corp-action election: the account's book is
+    # incomplete, nothing can tie yet (2026-10 workflow audit).
+    pending = sorted(n for n in ctx.accounts
+                     if (ctx.cache / f"{n}_pending_elections.json").is_file())
+    if pending:
+        return Result("audit", "blocked",
+                      f"corp-action elections pending for "
+                      f"{', '.join(pending)} — `taxjson elect --pending`, "
+                      f"then `taxjson run`")
     code, out, err = ctx.sub("audit", LONG_FORM)
     if not out:
         return Result("audit", "blocked", _last_line(err) or f"exit {code}")
@@ -1685,6 +1788,11 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                      f"{', '.join(shown[:4])}"
                      f"{' ...' if len(shown) > 4 else ''} — decide each "
                      f"by hand (`taxjson wash-sales` lists them)")
+    # A loss with a fund ticker.map declares SIMILAR bought in the
+    # window (lib/similar): the books deny nothing; the user decides.
+    from taxjson.lib import similar as _SIM
+    sim_note = _SIM.checklist_note(_SIM.open_findings(ctx.root))
+    flag_note = "; ".join(n for n in (flag_note, sim_note) if n)
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
                       f"{perm:,.2f} permanently denied ("
@@ -1793,6 +1901,27 @@ def _tax_date_of(ctx: Ctx) -> str:
     return settings_tax_date(ctx.settings)
 
 
+_ATTENTION_PHRASES = (
+    ("import the expiry", "past expiry, no expiry row"),
+    ("add the missing purchase", "a purchase row is missing"),
+    ("records CLOSE timing", "a locked year on close timing"),
+    ("is locked", "a locked year to amend"),
+)
+
+
+def _attention_reason(row: Dict[str, Any]) -> str:
+    """Why an option-boundary row needs attention, in a few words (the
+    `! ` line is short; the contract is in `taxjson option-boundary`):
+    a phrase for each ATTENTION action, else its first clause."""
+    act = str(row.get("action") or "")
+    if act.startswith("ATTENTION:"):
+        act = act[len("ATTENTION:"):].strip()
+    for key, phrase in _ATTENTION_PHRASES:
+        if key in act:
+            return phrase
+    return re.split(r"; | — | until | \(the ", act, 1)[0].strip().rstrip(".")
+
+
 def d_option_boundary(ctx: Ctx) -> Result:
     if not _accounts_of(ctx, "taxable"):
         return Result("option-boundary", "n/a",
@@ -1815,9 +1944,13 @@ def d_option_boundary(ctx: Ctx) -> Result:
         if amend:
             parts.append(f"{amend} contract(s) require a T1-ADJ")
         if att:
-            parts.append(f"{att} need attention (a locked year on transition close "
-                         f"timing, a premium no filed return reports, or an "
-                         f"expired contract with no expiry row)")
+            # The reason of the first flagged contract, not the list of
+            # every possible one (workflow audit 2026-10).
+            _why = [_attention_reason(r) for r in rows if r.get("attention")]
+            _why = [w for w in _why if w]
+            parts.append(f"{att} need attention"
+                         + (f": {_why[0]}" if _why else "")
+                         + (f" +{att - 1} more" if _why and att > 1 else ""))
         _asked = [r for r in rows if r.get("question")]
         if _asked:
             from taxjson.lib.option_boundary import question_detail
@@ -2855,7 +2988,9 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                (Cmd("tjs run", "every file read, reports/ written; asks "
                     "about mergers and spin-offs"),
                 Cmd("tjs run --no-input", "never asks: an open election "
-                    "exits 3 (next step)"))),
+                    "exits 3 (next step)"),
+                Cmd("tjs compare", "what moved since the run before: "
+                    "figures, reports, inputs"))),
         _check("elections",
                "An account with an open election is left out of the run; "
                "a spin-off valued at $0 books no income and a $0 cost.",
@@ -3323,7 +3458,8 @@ def s_configure(ctx: Ctx, f: _Facts) -> Result:
         # own, ...): the loader's own message names it.
         issues.append(ctx.config_error)
     if issues:
-        return Result("configure", "attention", "; ".join(issues))
+        return Result("configure", "attention", "; ".join(issues),
+                      cmd="edit taxjson.toml")
     return Result("configure", "done", ", ".join(
         f"{n} ({'crypto' if a.get('crypto') else a.get('type', '?')})"
         for n, a in accounts.items()))
@@ -3572,12 +3708,37 @@ def next_result(results: List[Result]) -> Optional[Result]:
     return next((r for r in results if r.effective == "manual"), None)
 
 
-def _do(it: Item, r: Optional[Result] = None) -> str:
-    """What the closing line tells the user to do for item `it`."""
+_DETAIL_CMD_RE = re.compile(r"`((?:taxjson|tjs) [^`]+)`")
+
+
+def _detail_cmd(detail: str) -> str:
+    """The `tjs ...` command a result's detail names (the last one),
+    as the summary prints commands (`tjs`), else ""."""
+    found = _DETAIL_CMD_RE.findall(str(detail or ""))
+    if not found:
+        return ""
+    cmd = found[-1].strip()
+    return "tjs " + cmd[len("taxjson "):] if cmd.startswith("taxjson ") \
+        else cmd
+
+
+def _do(it: Item, r: Optional[Result] = None,
+        inputs_label: str = "inputs") -> str:
+    """What the closing line tells the user to do for item `it`. A
+    blocked result whose detail names the command that unblocks it
+    (`run \`taxjson run\``) says that, not the item's standing advice
+    (2026-10 workflow audit: the first checklist said "download the
+    exports" while its own detector asked for a run). `inputs_label`:
+    the exports folder as the project sees it (`../inputs` when every
+    year shares one)."""
     if r is not None and r.effective == "manual":
         return f"confirm it, then `tjs checklist --done {it.id}`"
+    if r is not None and r.effective == "blocked" and r.detail \
+            and _detail_cmd(r.detail):
+        return " ".join(str(r.detail).split())
     if it.do:
-        return it.do
+        return it.do.replace("inputs/<account>/",
+                             f"{inputs_label}/<account>/")
     return f"`{it.cmds[0].command}`" if it.cmds else it.title
 
 
@@ -3652,9 +3813,20 @@ def counts(results: List[Result]) -> Dict[str, int]:
     return {s: sum(1 for r in results if r.effective == s) for s in STATUSES}
 
 
+def _inputs_label(root: Optional[Path]) -> str:
+    """The exports folder as the project sees it (`../inputs` when
+    every year shares one), for the closing line."""
+    if root is None:
+        return "inputs"
+    try:
+        return _PL.shown(_PL.inputs_dir(root), root)
+    except Exception:                               # noqa: BLE001
+        return "inputs"
+
+
 def render(results: List[Result], year: int, country: str,
            quick: bool = False, width_: Optional[int] = None,
-           show_all: bool = False) -> str:
+           show_all: bool = False, root: Optional[Path] = None) -> str:
     """The list in the house layout (docs/output-style.md): a title and
     the counts, then one section per SECTIONS entry; each item is its
     mark, number, id and title on one line, its state wrapped under the
@@ -3722,7 +3894,7 @@ def render(results: List[Result], year: int, country: str,
            "and why: `tjs checklist --all`")
     if nxt is not None:
         d.para(f"Next (step {num[nxt.id]}, {nxt.id}): "
-               f"{_do(its[nxt.id], nxt)}")
+               f"{_do(its[nxt.id], nxt, _inputs_label(root))}")
     elif all(r.passed for r in results):
         d.para("Nothing left to do now: the [?] items are yours to run "
                "and read.")
@@ -3756,7 +3928,8 @@ def _act_line(head: str, detail: str, cmd: str,
 
 def render_summary(results: List[Result], year: int, country: str,
                    quick: bool = False,
-                   width_: Optional[int] = None) -> str:
+                   width_: Optional[int] = None,
+                   root: Optional[Path] = None) -> str:
     """The default view (docs/output-style.md, Essentials first): the
     title with the done count, one table row per section with its
     counts, one `! ` line per item needing attention or blocked (id,
@@ -3805,7 +3978,11 @@ def render_summary(results: List[Result], year: int, country: str,
         if eff not in ("attention", "blocked"):
             continue
         it = its[r.id]
-        cmd = it.cmds[0].command if it.cmds else ""
+        # The command for THIS problem: the result's own, else the one
+        # its detail names, else the item's first (2026-10 audit: a
+        # missing local_timezone said "— tjs migrate").
+        cmd = (r.cmd or _detail_cmd(r.detail)
+               or (it.cmds[0].command if it.cmds else ""))
         group = blocked.get(" ".join((r.detail or "").split()), [])
         if eff == "blocked" and len(group) > 1:
             if group[0] is not r:
@@ -3829,7 +4006,7 @@ def render_summary(results: List[Result], year: int, country: str,
     nxt = next_result(results)
     if nxt is not None:
         d.para(f"Next (step {num[nxt.id]}, {nxt.id}): "
-               f"{_do(its[nxt.id], nxt)}")
+               f"{_do(its[nxt.id], nxt, _inputs_label(root))}")
     elif all(r.passed for r in results):
         d.para("Nothing left to do now: the READ items are yours to run "
                "and read.")

@@ -105,6 +105,15 @@ def earliest_in_files(paths: Iterable[Path],
             data = Path(p).read_bytes()
         except OSError:
             continue
+        if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            # A UTF-16 re-save, which every parser reads
+            # (brokerages/base.decode_broker_text): its NUL-stuffed
+            # bytes matched no date, and the window started at the
+            # project year (2026-10 audit #40).
+            try:
+                data = data.decode("utf-16").encode("utf-8")
+            except UnicodeDecodeError:
+                continue
         d = earliest_in_text(data, last_year)
         if d is not None and (best is None or d < best):
             best = d

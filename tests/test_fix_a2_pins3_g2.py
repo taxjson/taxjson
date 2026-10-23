@@ -550,7 +550,7 @@ class TestFeesNonOptionLabel(unittest.TestCase):
                       '--rates', rates)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('Non-option vs option fees\n', r.stdout)
-        self.assertRegex(r.stdout, r'\n  BROKERAGE +NON-OPTION +OPTIONS\n')
+        self.assertRegex(r.stdout, r'\nBROKERAGE +NON-OPTION +OPTIONS\n')
         self.assertNotIn(' stocks ', r.stdout)
 
 

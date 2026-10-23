@@ -300,8 +300,8 @@ class TestEndToEndWording(unittest.TestCase):
     def test_trades_sum_names_the_sheltered_kind(self):
         us = self._out(USA, "trades-sum")
         ca = self._out(CANADA, "trades-sum")
-        self.assertIn("including retirement (IRA) ira", us)
-        self.assertIn("including registered ira", ca)
+        self.assertIn("the totals include the retirement (IRA) ira", us)
+        self.assertIn("the totals include the registered ira", ca)
 
 
 class TestAuditCryptoLabel(unittest.TestCase):

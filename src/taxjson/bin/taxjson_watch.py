@@ -266,9 +266,10 @@ def render_report(changes: List[Dict[str, Any]], as_of: str,
     from taxjson.lib import out
     from taxjson.lib.wash_scope import advisory_lines
     w = out.width() if width_ is None else width_
-    prev = f" (previous baseline {since})" if since else ""
+    when = (f"previous baseline {since}, as of {as_of}" if since
+            else f"as of {as_of}")
     lines = out.wrap(f"WATCH — {len(changes)} change(s) since the last "
-                     f"run{prev} (as of {as_of})", w)
+                     f"run ({when})", w)
     lines.append("")
     for ch in changes:
         lines += advisory_lines(ch["line"], w, "- ", "  ")

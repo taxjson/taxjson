@@ -244,7 +244,7 @@ class TestRedactProject(unittest.TestCase):
 
     def test_init_gitignore_lists_the_copy(self):
         from taxjson.bin.taxjson_run import _TEMPLATE_GITIGNORE
-        self.assertIn("\ninputs_redact/\n", _TEMPLATE_GITIGNORE)
+        self.assertIn("\n/inputs_redact/\n", _TEMPLATE_GITIGNORE)
 
 
 def small_project(tmp: Path) -> Path:

@@ -809,8 +809,8 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
                                 path: Any = "<toml>") -> Dict[str, Any]:
     """Adapt a taxjson holdings TOML document (`[[holding]]` tables) to
     the `inventory`-shaped dict the rest of this tool consumes: `quantity`
-    maps to `qty`; symbol / total_cost / currency / position_start_date
-    pass through. The TOML [meta] table and derived `cost_per_share`
+    maps to `qty`, `contract_multiplier` to `multiplier`; symbol /
+    total_cost / currency / position_start_date pass through. The TOML [meta] table and derived `cost_per_share`
     are ignored. TOML parses a bare YYYY-MM-DD as a date object, so the
     adapter stringifies it for downstream consistency."""
     holdings = doc.get("holding")
@@ -847,12 +847,52 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
         psd = h.get("position_start_date")
         if psd is not None and not isinstance(psd, str):
             psd = psd.isoformat()
+        # The contract size this tool wrote (`contract_multiplier`): read
+        # back, or a 10-share option came back as the default 100.
+        mult = h.get("contract_multiplier")
+        if mult is not None and (
+                isinstance(mult, bool) or not isinstance(mult, (int, float))
+                or not math.isfinite(mult) or mult <= 0):
+            _die(f"{path}: [[holding]] {i} ({sym}): contract_multiplier "
+                 f"is {mult!r}, not a positive number")
+        if h.get("mixed_currency"):
+            # A JOURNAL-folded cross-currency bucket this tool wrote: no
+            # flat total_cost, one total_cost_<cur> per currency. Read
+            # as zero cost, silently (2026-10 audit #64); one item per
+            # currency (the quantity on the first) rebuilds the bucket's
+            # per-currency costs in the aggregation.
+            parts = []
+            for k, v in sorted(h.items()):
+                if not (isinstance(k, str) and k.startswith("total_cost_")
+                        and len(k) > len("total_cost_")):
+                    continue
+                if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                        or not math.isfinite(v):
+                    _die(f"{path}: [[holding]] {i} ({sym}): {k} is {v!r}, "
+                         f"not a number")
+                parts.append((k[len("total_cost_"):].upper(), float(v)))
+            if not parts:
+                _die(f"{path}: [[holding]] {i} ({sym}): mixed_currency = "
+                     f"true but no total_cost_<currency> figure — its "
+                     f"cost is unknown; regenerate the file with "
+                     f"`taxjson run`")
+            for j, (cur, cost) in enumerate(parts):
+                inventory.append({
+                    "symbol": sym,
+                    "qty": h.get("quantity", 0) if j == 0 else 0,
+                    "total_cost": cost,
+                    "currency": cur,
+                    "position_start_date": psd,
+                    "multiplier": mult,
+                })
+            continue
         inventory.append({
             "symbol": h.get("symbol"),
             "qty": h.get("quantity", 0),
             "total_cost": h.get("total_cost", 0),
             "currency": h.get("currency", ""),
             "position_start_date": psd,
+            "multiplier": mult,
         })
     return {"inventory": inventory}
 

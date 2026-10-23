@@ -116,6 +116,27 @@ fail() {   # fail MESSAGE — nothing may merge later behind the caller's back
   gh pr close "$URL" --repo "$SLUG" --delete-branch >/dev/null 2>&1 || true
   die "$1 — the pull request is closed and its branch deleted; the commits stay on local main: fix, commit, and land again." 1
 }
+# Every check of the pushed commit, one "name<TAB>pass|fail|cancel|skipping|pending" line each:
+# the jobs of its Actions runs on this branch, and its commit statuses. Not `gh pr checks`: the
+# check-runs API it reads needs a permission fine-grained personal tokens cannot have, and the
+# everyday token is one (publish kit D8, 2026-10-17). A run not finished yet, or one whose jobs
+# cannot be read, counts as pending; one that ended with no job is a failure (a broken workflow).
+checks() {
+  local id status name jobs
+  gh api "repos/$SLUG/actions/runs?branch=$BRANCH&head_sha=$HEAD_SHA&per_page=100" \
+      --jq '.workflow_runs[] | [(.id | tostring), .status, .name] | @tsv' 2>/dev/null |
+  while IFS="$(printf '\t')" read -r id status name; do
+    [ -n "$id" ] || continue
+    [ "$status" = completed ] || { printf '%s\tpending\n' "$name"; continue; }
+    jobs="$(gh api "repos/$SLUG/actions/runs/$id/jobs?per_page=100" --jq '.jobs[] | [.name,
+        (if .status != "completed" then "pending" elif .conclusion == "success" or .conclusion == "neutral" then "pass"
+         elif .conclusion == "skipped" then "skipping" elif .conclusion == "cancelled" then "cancel" else "fail" end)] | @tsv' 2>/dev/null)" \
+      || { printf '%s\tpending\n' "$name"; continue; }
+    [ -n "$jobs" ] && printf '%s\n' "$jobs" || printf '%s\tfail\n' "$name"
+  done
+  gh api "repos/$SLUG/commits/$HEAD_SHA/status" --jq '.statuses[] | [.context,
+      (if .state == "success" then "pass" elif .state == "pending" then "pending" else "fail" end)] | @tsv' 2>/dev/null || true
+}
 END=$(( $(date +%s) + TIMEOUT * 60 ))
 while :; do
   STATE="$(gh pr view "$URL" --repo "$SLUG" --json state -q .state 2>/dev/null || echo UNKNOWN)"
@@ -123,18 +144,7 @@ while :; do
     MERGED) break ;;
     CLOSED) die "The pull request was closed without merging: $URL" 1 ;;
   esac
-  # `gh pr checks` prints "name<TAB>state<TAB>elapsed<TAB>link" and exits
-  # non-zero while a check is pending or failed: read the states, not the
-  # exit code. Its checks are the head commit's, so landing a commit again
-  # shows the last pull request's results until this one's run exists:
-  # an Actions check counts only when its run is on this branch.
-  RUNS="$(gh run list --repo "$SLUG" --branch "$BRANCH" --json databaseId --jq '[.[].databaseId | tostring] | join(" ")' 2>/dev/null || true)"
-  CHECKS="$({ gh pr checks "$URL" --repo "$SLUG" 2>/dev/null || true; } | awk -F'\t' -v runs="$RUNS" '
-    BEGIN { n = split(runs, r, " "); for (i = 1; i <= n; i++) mine[r[i]] = 1 }
-    NF >= 2 {
-      if (match($4, /\/actions\/runs\/[0-9]+\//) && !(substr($4, RSTART + 14, RLENGTH - 15) in mine)) next
-      print
-    }')"
+  CHECKS="$(checks)"
   FAILED="$(printf '%s\n' "$CHECKS" | awk -F'\t' '$2 == "fail" || $2 == "cancel" { printf "%s, ", $1 }')"
   [ -z "$FAILED" ] || fail "Check(s) failed: ${FAILED%, } ($URL)"
   # Counted whole (wc reads everything): `grep -q` would stop early and,

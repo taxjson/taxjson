@@ -3,6 +3,380 @@
 ## Unreleased
 
 
+## v0.31.1 (2026-10-22)
+
+### Changed: tax figures
+
+- **An s.86.1 spin-off paid cash for a fraction sells the fraction at the
+  cash, on its share of the allocated cost** (Questrade and RBC,
+  `CA-CORP-05`). The spun-off shares and the fraction take the full
+  allocated cost and the parent gives up all of it; the fraction's gain is
+  the cash less its share. RBC's cash-in-lieu row was not booked, and
+  Questrade's own $0 purchase and sale of the fraction is replaced, so it
+  is sold once. A taxable spin-off, IB and the US §355 path are unchanged.
+
+### Fixed: release tooling
+
+- **The release cut and `promote.sh` wait for a CI run still going** instead of
+  calling it failed: `scripts/github-ci.sh` polls the run through `gh api`
+  rather than `gh run watch`, which a fine-grained token cannot use (it
+  reads check-run annotations).
+- **`promote.sh` twice within one second no longer fails** with "tag
+  'channels-…' already exists": the second fast-lane tag waits for the
+  next second's name.
+- **`scripts/lock_deps.py` takes a relative `--uv` path** (it ran uv from
+  a temporary folder, where the path did not resolve).
+
+### Changed
+
+- **Dependency locks regenerated** (the 7-day cooldown, to 2026-10-15),
+  with `certifi` 2026.10.19 let past it for PYSEC-2026-4320:
+  `scripts/lock_deps.py --security-update PKG` lets one named package past
+  the cooldown for a security fix and names it in the locks' header.
+  `pip-audit` finds no known vulnerability in any lock.
+
+### Fixed: option statistics and option-yield
+
+- **Option statistics: a split long option is counted once.** A plain split of an option you bought no longer doubles the contracts held, so a later over-sale and buy-back shows as a written-option trade in `tjs stats` / `tjs win-rates`.
+- **Option statistics: an assigned put's premium follows a split or ticker change of the shares.** The premium taken out of the delivered shares' later sales is scaled through a split and carried across a rename, instead of being drawn at the old rate or stranded.
+- **Option statistics and option-yield: a write that nets less than its commission is a loss.** A sale with a negative net amount keeps its sign in `tjs stats` and `tjs option-yield`, as the engine books it; buy-back amounts are still read as money paid.
+- **Option statistics: an assigned call's premium comes out of its own share sale.** The share leg is chosen as the engine pairs it (marked, at the strike, the delivered quantity, nearest), not an unrelated sale up to 3 days earlier, so the right trade and month carry it in `tjs win-rates`.
+- **Option statistics and option-yield: a series renamed into another stays first in, first out.** Contracts moved into a series that already has open contracts queue by their open date.
+- **Option statistics: exercised long options are counted in the period asked for.** `tjs stats YEAR --details` and `exercised_long_options` in the JSON no longer count exercises from other years.
+- **Option-yield: a split later on the day a contract was opened counts once.** A split stamped after the open on the same day re-denominates the contracts, instead of skewing the P/L and leaving negative contracts open.
+- **Option-yield: a contract closed in another currency than it was opened in is money-unknown.** Its premium and P/L are blank instead of one currency subtracted from the other, and a `!` line names the row to check (#37).
+- **Option-yield: a contract renamed into another strike's series shows the new strike.** An RBC special-dividend strike adjustment (or a ratio-1 `SPLIT` into another series) kept the old strike, and the strike-notional yield used it (#81).
+
+### Fixed: dividend estimates, income dating and the hand-off
+
+- **div-estimate: a weekly payer held at two brokers stays weekly.** Postings of one payment a few days apart were chained week to week, so four weekly payments became one payment of four times the amount; a posting more than five days after an earlier one of the same account now starts the next payment.
+- **div-estimate: a positional window has the 120-month limit.** `tjs div-estimate 100000y` printed a traceback; a window over 120 months is now refused with one error line, like `--months 121`.
+- **div-estimate: two broker accounts in one account are not doubled.** With `combined_broker_accounts = true`, the same dividend paid to both broker accounts on one day was read as twice the per-share amount; each broker account is now a holding of its own.
+- **January ROC warning: the .tt pair must be in the same account.** The two ADJUST lines that silence a Canadian trust's January return-of-capital warning now count only in that ROC's account and currency; the same pair in another account no longer hides it.
+- **handoff: Dec 31 / early-January rows are matched one to one, per account.** An identical income row in another account no longer stands in for a row the closed year never had, and one row here no longer answers two identical rows of the closed year's record; both now give the "in neither return" warning.
+
+### Fixed: FX-on-cash ledger v2 and importers
+
+- **Two broker accounts no longer share one cash book.** In the FX-on-cash ledger v2, two accounts of one broker in an account folder whose hashed ids begin with the same 4 characters got one merged book that no `at=` could name. Their books now get longer names (`ib:31355`, `ib:31357`); books without such a clash keep their names.
+- **A CASHOPEN with no book is reported.** In the FX-on-cash ledger v2, a foreign-currency `CASHOPEN` in a `.tt` file whose folder holds several books, with no `at=` or `CASHBOOK` line, was dropped silently. It is now a problem naming the line and saying to add `at=<book>` or a `CASHBOOK` line.
+- **FXCONV with `value=` needs no exchange rate.** In the FX-on-cash ledger v2, a conversion between two foreign currencies that gives its base-currency `value=` was refused when the from-currency had no rate on file for that day; the value now prices it.
+- **Generic importer: a futures sale at a negative price is booked.** An export with unsigned quantities refused a futures sale at a negative price (which pays cash) as "a buy by its own signs"; it is now read like the same sale with a signed quantity.
+- **ALLOWLOSS refuses a decimal-comma quantity.** `ALLOWLOSS <date> <symbol> 1,5 …` was read as 15 units; a quantity is now read like a `.tt` row's (`1,000` is a thousand, `1,5` is refused with the line named).
+- **Ledger v2, Kraken: the cash reader reads the ledger as the parser does.** An upper-case header is read, a missing column stops naming the file (it gave no cash events), a day's balance is the one after its latest row by time (not file order), and a fee is booked in its `feecurrency` (#71, #72, #78).
+- **Ledger v2: one cash event two files settle on different dates is kept once with a Warning** naming both files and both dates, instead of silently keeping one file's date (#86).
+- **Ledger v2: a `.tt` file that cannot be read is named** ("inputs/<account>/<file>: cannot be read (…)") instead of skipped, which refused the ledger for the wrong reason (#91).
+- **Ledger v2: a futures commission leaves the cash on its own fill's date.** An opening fee was valued at the close date's rate; the books' gains are unchanged (#103).
+- **US futures: partial closes are FIFO in trade-date order**, not settlement-date order, matching the US engine; only a generic CSV with out-of-order settle dates was affected (#102).
+- **ALLOWLOSS: a line dated the settlement day of only some fills of a sale names none.** When a same-day sale's fills settle on different days, a line dated one fill's settlement day overrode that fill alone; the message now gives the sale's trade date (#88).
+- **crypto-sends: a send's fair value uses the full-precision price.** The value and the `crypto_sends.tt` proceeds came from the six-digit displayed price (at most a few parts per million); lines already written are kept (#47).
+
+### Fixed: opening, sanity, holdings and views
+
+- **Export gap check follows splits.** A split between a broker export's end and the year end now scales the shares left, so selling part of the post-split shares no longer hides the missing-export warning. A ticker change is followed to the new symbol.
+- **`tjs opening` writes exact quantities.** A quantity with more than 8 significant digits (e.g. 12345.678912 or 123456789) is written exactly instead of being rounded (`1.2345679e+08`).
+- **Impossible dates in a holdings TOML are refused.** A `[meta] as_of`, `generated_at` or `acquired` that is not a real calendar day (2025-02-30) is now an error naming the field. `tjs sanity` used to accept it and report clean.
+- **`tjs sanity` keeps a holdings file's date when its cost is malformed.** A non-numeric cost field no longer makes sanity compare the latest books instead of the file's `as_of` date. The quantities are compared at that date, and a note says the cost was not compared.
+- **`tjs splits` sees shares received through a ticker change.** A split of a renamed symbol now shows the holdings before and after it, instead of "nothing held".
+- **`taxjson-export` keeps a holdings TOML's contract size.** Reading a holdings TOML back (`--report`, `--holdings-toml`) keeps its `contract_multiplier` instead of falling back to 100 (or unknown, for a futures option).
+- **Huge look-back periods mean "all".** A period like `24311m` or `2026y` on a period-aware command (`tjs events ...`) now covers the whole history instead of crashing with a traceback.
+- **RBC Holdings Export: a per-share cost column is read per share.** 'Book Cost Per Share', 'Average Book Cost' and 'Book Cost/Share' were read as the position's total; a cost label that is neither a total nor per share is refused, naming it (#46).
+- **Sanity: the income-on-unheld-shares check follows renames by date,** so a reused old ticker no longer carries shares that left with an earlier rename (#61).
+- **`tjs compare`: a moved account figure is a difference even when every report file matches.** The table is shown, `--json` `different` is true and the exit is 1 (#66).
+- **`tjs compare`: an unreadable report file or folder is an error naming it,** never counted as removed or left out of the snapshot (#84).
+- **Prices: a non-finite quote from any tier is ignored** and the next tier asked; nothing non-finite is cached (#57).
+- **Prices: an IBKR hit is cached under the spelling IB priced,** not a ticker.map `QUOTE` remap, so an offline run no longer serves it as the remapped symbol's price (#69).
+
+### Fixed: slips, carryover and tools
+
+- **Loss carryover: one year typed two ways is an error.** `[carryover] claimed = { 2023 = 100, 02023 = 200 }` silently kept one of the two amounts; every command now stops with "2023 is given twice" and asks for one line.
+- **`tjs fetch`: a malformed Questrade response is a one-line error.** A token or API reply that was valid JSON but not an object (an array or a string, e.g. from a broken proxy) crashed with a traceback.
+- **`taxjson-diff --by` a list or dict field works.** Matching on a structured field such as `wash_replacements` crashed with "unhashable type"; it now matches on the field's canonical JSON.
+- **`tjs slip-audit`: a foreign T5008 with no exchange rate no longer shows 0.00.** Its slip proceeds and cost now show "—" with a note that the FX cache has no rate for the year (`tjs run` fetches it), instead of an unmarked 0.00 total.
+- **`tjs slip-audit`: weekly dividends whose dates drift all match.** When IB's dividends report and the export dated one security's weekly payments 4 or more days apart, one payment showed as missing from the books and another as missing from the slip; payments now pair in date order.
+- **`tjs slip-audit --import-cra`: a T5 two broker accounts match equally is not guessed.** It was placed in whichever account came first; it is now left unplaced as "ambiguous", naming `broker_account` in slips.toml as the fix (CA-SLIP-04).
+- **IB dividends report: withholding and base-currency amounts are checked against the Summary row,** like Gross; a mismatch is listed with the report's problems (#54).
+- **IB dividends report: a blank GrossInBase beside a Gross is refused,** naming the line, instead of counting the payment as 0 in a CAD-base account's boxes (#55).
+- **IB dividends report: an impossible date is refused,** naming the file, line and value; a USD-base report showed a traceback (#56).
+- **IB dividends report: amounts are read strictly:** '1,5' is refused, not read as 15 (#90).
+- **`slip-audit --import-cra`: a known box whose figure is not an amount refuses the slip** instead of importing it without that box; a wrapped label word is still skipped (#111).
+- **slip-audit: payments are matched within one currency.** A payment whose only nearby book row is in another currency is a currency mismatch (`payments.currency_differs`), not a match (#94).
+- **slip-audit: a security's slips in two currencies are compared and suggested per currency,** never summed in the last slip's currency (#95).
+- **slip-audit: a `.tt` ROC line with no `record=` is redated by its own listing's distribution,** another listing of the root only when its own paid nothing (#93).
+- **slip-audit: the "books already hold" note names the row's pay and record dates,** so a prior year's row shows as one (#97).
+- **slip-audit: the annual-average rate ignores a non-finite cached rate** (#100).
+
+## v0.31.0 (2026-10-21)
+
+### Added
+
+- **`sum --json` and `form-export --json` say whether the figures are
+  complete.** A `readiness` record carries `complete` and the open
+  `issues` (books not built from the current inputs, sales left out of
+  or in no total, a cost or quantity the engine's conservation check
+  found the books lost track of), each with the command that resolves
+  it; `sum` prints a conservation problem as a `! ` line, which reached
+  only the account's `.sum` diagnostics before. The US engine's
+  sub-1e-8-unit rows that carry money count as one.
+- **`taxjson compare`: what changed since an earlier run.** Every
+  full `taxjson run` keeps the reports it replaces (`work/compare/
+  prev/`, with the inputs fingerprint they were built from);
+  `compare` diffs the current `reports/` against them, a snapshot
+  saved with `--save NAME`, or the reports as filed (`filed`): the
+  account figures that moved, the report files that differ and the
+  inputs that changed; exit 1 on a difference. `--details` adds the
+  unified diffs.
+- **`close-year` freezes the inputs.** With exports shared by every
+  year, the files the filed books were built from are copied into the
+  year's own `inputs/` (and the shared `tobase.map` beside
+  `ticker.map`), and the year reads that copy from then on
+  (`inputs_dir` / `tobase_map` commented out), so the filed year can
+  be rebuilt as filed while the shared exports move on. The lock
+  records every input's hash, `check-filed` names a frozen input that
+  changed since, `reports/` is kept as `filed/<year>/reports/`,
+  `new-year` points the next year at the shared folders again and
+  `migrate --to-years` gives a frozen year its own copy.
+- **ticker.map `SIMILAR A B [C ...]`: look-alike funds watched
+  together.** Two issuers' funds on one index, or a fund and its
+  Canadian wrapper, stay separate securities (their own pools, nothing
+  denied: the superficial-loss rule reaches identical property, §1091
+  substantially identical securities, and whether such a pair is one is
+  your call), but with the line a loss on one with another bought in
+  the window is a Warning of every `taxjson run`, a manual item of the
+  checklist's wash-reviewed step, a caveat in `buy-check` and
+  `sell-check` (SAFE\*), the flagged listings in `rebuy --details`
+  and a `SIMILAR` block in `wash-radar` (tax-logic CA-SL-20 /
+  US-WASH-26; docs/settings.md).
+
+### Changed
+
+- **`stats 2y`, `winners all`, `ccd-sum 2023`: a window outside the
+  tax year reads the full history.** `stats`, `win-rates`, `winners`,
+  `losers`, `ccd-sum`, `leaps` and `leaps-sum` read the tax year's
+  gains files, which hold one year; a wider window warned that the
+  rows outside it were missing and showed the year alone. Such a
+  window now builds `work/<account>_gains_all.json` on demand from
+  the same consolidated base-currency book the tax year's gains come
+  from (ticker.map's TOBASE pooling, per-transaction FX, the same
+  engine flags; rebuilt when the book, the config or the engine is
+  newer) and reads that, said in an `Info:` line: the rows inside the
+  tax year equal the filing file's, the superficial-loss / wash-sale
+  denials are the engine's own within each account (the
+  cross-account pass runs for the tax year), and the basis reads
+  `pre-wash, full history`. The default window and `--json` are
+  unchanged.
+- **Output audit (2026-10): crisper default views.** Every command's
+  text output was reviewed against docs/output-style.md. Legends are
+  one or two lines directly above their table (`ccd-sum`, `winners` /
+  `losers`, `leaps`, `leaps-sum`, `fees`, `gains`, `shares`); the lines
+  after a table are aligned `label:  value` figures (`divs-sum`,
+  `trades-sum`, `wash-sales`, `winners`, `list`, `fx-cash`, `estimate`)
+  or one-line `! ` items; `sanity` says which accounts were not compared
+  in one line and shows both quantities at one precision; `audit`
+  prints the ACB pool history as one compact table and separates its
+  account groups with a blank line; `fees-sum` sub-tables are
+  flush-left with `-` for a rate with no units; titles that named every
+  account (`stats`, `win-rates`, the run's pooling step) count them
+  instead; the `--details` explanations of `rebuy`, `wash-radar`,
+  `harvest`, `div-estimate`, `find-missing-history`, `t1135` and
+  `carryover` are one-line bullets; empty states say `None in the
+  books.`; the Kraken, harvest and instalments errors are one `Error:`
+  line with a one-line hint. `--json` is unchanged.
+
+### Fixed: engine, opening balances and holdings
+
+- **A share position under a millionth of a share is still a holding
+  when it carries cost.** The Canadian engine read it as flat, so its
+  sale opened a short and the cost was stranded out of every total;
+  it is closed at its cost (2026-10 audit #101; docs/limits.md).
+- **The `tjs fetch` holdings snapshot carries each holding's
+  currency**, so `taxjson opening` can use it and `sanity` compares
+  like with like (#43); **`taxjson-export` reads back a
+  mixed-currency holding** it wrote instead of a zero cost (#64).
+- **IB partial cancellations keep the commission IB did not refund,
+  and pair with the order at their own time** rather than an
+  exact-size fill at another time (#29, #62).
+- **A `[[distributions]]` entry dated on an opening snapshot's own day
+  is said in a NOTE**: it is applied on top of the snapshot's cost,
+  which a year-end statement often does not include yet; remove the
+  entry if it does (#26, CA-OPEN-03).
+- **An opening snapshot no longer deletes purchases of a reused
+  ticker.** The cut-off follows only renames dated on or after a row's
+  own date, so shares bought under an old ticker after its rename keep
+  their cost and their sale is in the totals (CA-OPEN-03; 2026-10
+  audit #27).
+- **An option's `average_entry_price` in a holdings TOML is per
+  share.** `taxjson opening` multiplies it by `multiplier`, else 100
+  for an equity option, so the Questrade snapshot no longer opens a
+  contract at a hundredth of its cost; `cost_per_share` stays per
+  holding unit and `total_cost` is unchanged (#28).
+- **`taxjson opening` sees OPENING lines in `.TT` files** and no
+  longer opens a symbol twice (#30), **and refuses two broker accounts
+  whose ids mask alike** (`U1***`): accounts are told apart by the
+  whole id, while output shows only the masked one (#48).
+- **`stats`, `win-rates` and `option-yield` see a missing-history
+  option opening.** A long contract held before the data (a `.tt`
+  `OPENING … cost=unknown` line) and sold read as a write bought back
+  with a profit: the views now add the opening the gains stage adds
+  (2026-10 audit #59).
+- **The exchange rates cover a UTF-16 export's older rows.** The rates
+  window read no date from a UTF-16 file and started at the project's
+  year, so an older row stopped the run with "no exchange rate" (#40).
+
+### Fixed: corporate actions
+
+- **Two overlapping IB statements with a corrected corporate-action
+  value no longer dispose of the shares twice.** A row repeated with
+  another value counted as a second row of the event (twice the
+  quantity, the old shares short); it is one row, the larger value is
+  kept and an ATTENTION line says so. The corporate-action stage's
+  ATTENTION lines (statements that disagree) now reach the run's
+  console instead of only `work/*.diag`, and `run --strict` stops on
+  them.
+- **Two statements of one corporate event that agree on quantities
+  but not on values are no longer kept by file order.** A corrected
+  FMV, target value or cash in lieu in one of two overlapping
+  statements of a broker account kept whichever file was read first,
+  silently; the larger copy is kept whatever the order and a warning
+  says what differs (2026-10 audit #104).
+- **A merger held in both listings of one security in one broker
+  account disposes of both.** Two equal-quantity copies on different
+  listings or currencies were taken for an overlapping statement and
+  one was dropped; they are two holdings under one election (#105).
+- **A merger held at IB and at a whole-share broker in one taxjson
+  account keeps IB's fractional shares whatever the file order.** The
+  combined event inherited the first copy's fractional-delivery flag
+  and snapped 4.5 delivered shares to 4 plus phantom cash in lieu
+  (#106).
+
+### Fixed: slips and CRA import
+
+- **`--import-cra` compares the issuer before calling a slip "already
+  in slips.toml"**, so another issuer's slip with equal boxes is
+  added (#108), and an amended slip with an original's figures
+  replaces it, so the older original cannot come back beside it
+  (#110).
+- **Two IB dividends reports that differ only in base-currency
+  amounts are refused, not read as one** (#89).
+- **`tjs slip-audit` tops up a partly booked return of capital with
+  the rest only.** For IB's dividends report it suggested the
+  payment's whole ROC again, lowering the ACB twice; it now suggests
+  the difference and names the existing line to change (#96).
+- **An issuer's second amended slip replaces the first on
+  `--import-cra`.** It was added beside the earlier amendment and both
+  were counted (#109).
+
+### Fixed: FX on cash and crypto
+
+- **A blank Coinbase Total is no longer a zero-cost stablecoin buy.**
+  The FX-on-cash ledger v2 and the crypto-sends pool read a CAD-priced
+  USDC Buy with a blank Total as costing 0; they derive it as the
+  parser does and refuse a row with nothing to derive it from (2026-10
+  audit #74). A USDC bought or sold for US dollars spends its fee from
+  the pool (#73).
+- **Questrade's newest-first export: same-day conversions in order.**
+  Ledger v2 replayed two conversions of one day backward and paired
+  legs of different conversions; rows are read in real order and the
+  two adjacent legs of each conversion pair (#75).
+- **crypto-sends reads overlapping exports once.** The stablecoin pool
+  counted an entry once per overlapping Kraken ledger or Coinbase
+  export holding it, diluting the average cost of a send (#79).
+- **FX cash ledger v2: a `CASHMOVE` declaration stays in its
+  `CASHBOOK`'s book, and internal transfers pair inside one
+  statement.** A declaration without `at=` matched another broker
+  account's identical move (#85); two accounts' IB statements with the
+  same file name had their transfer legs paired and dropped (#60).
+
+### Fixed: workflow and commands
+
+- **The polish pass of the 2026-10 workflow audit.** An unknown flag
+  after a command gets that command's usage line, not `taxjson`'s;
+  `amt` relays the estimate's refusal under one `Error:` label;
+  `close-year` writes one frozen note over adjacent keys, announces
+  its recording as a `==>` step and puts its notes under the CARRIED
+  INTO block, flush-left; `check-filed`'s title reaches a pipe before
+  its warnings and its notes are flush-left; `migrate` says "nothing
+  to migrate" as an `Info:` line; `migrate --to-years` says the files
+  are moved (`git add -A` records the renames); `init --demo` sets a
+  province, so `estimate`, `plot-tax` and the checklist's amt step run
+  as they are; `init` makes the folder it scaffolds into owner-only;
+  `init --help` says what `--force` overwrites and that a `.bak` is
+  kept; `new-year` writes the copied `taxjson.toml` in the template
+  layout; `sanity` and `opening` look for a relative FILE in the
+  project folder when the shell's folder has none (`-C DIR`);
+  `reconcile-slips inputs/slips/*.csv` with no slip saved says so with
+  a fix; `run` with every `inputs/` folder empty names the fix on its
+  one line, and `run --account` ends its line with the fix; `checklist
+  --done` says a check's finding outranks the mark (`--skip` accepts
+  it); the checklist's option-boundary line names the flagged
+  contract's reason; `option-yield`'s past-expiry line asks for the
+  export covering the expiry (not `option-boundary`, which shows it
+  open), and no empty stderr line precedes its report; `slip-audit`
+  names a corporate action's income "(corporate action: no export
+  row)"; `handoff` prints a normalized record path; `watch`'s title
+  has one parenthesis; `wash-radar`'s advice shows money with two
+  decimals, and `--all` is described as it works (the OTHER rows);
+  the stale-wash warning is given once per process; `redact`'s Done
+  line; a shared `inputs/` that is a symlink keys its fingerprints
+  as the setting names it, so a freeze no longer reads as changed
+  inputs; `events` documents its dates; `commands.md` usage lines
+  list `--details` / `--json` where `--help` has them, and follow
+  `taxjson help`'s order; `checklist --walk` is documented as needing
+  a terminal.
+- **A filed year's frozen `tobase.map` was taken for a copy to merge.**
+  After `close-year` froze a year, `taxjson years` asked for
+  `taxjson migrate`, which (once a later year existed) removed the
+  frozen copy and pointed the filed year at the shared file again. The
+  frozen copy is now recognised (`years` says "frozen copy of its own
+  in 2024 (filed)"; `migrate` and `update-tobase-map` leave it alone),
+  and the freeze writes its note once (the second commented key gets a
+  short one) (2026-10 workflow audit).
+- **The scaffold `.gitignore` hid `filed/<year>/reports/`.** Its
+  unanchored `reports/` line also ignored the reports as filed that
+  `close-year` keeps, so they were never committed. `taxjson init` now
+  writes anchored rules (`/reports/`, `/*/reports/` ...); in an
+  existing project `close-year` names the line to change.
+- **ticker.map `SIMILAR`: a member a `TOBASE` line moves.** The
+  checklist's wash-reviewed step and `wash-radar`'s SIMILAR block read
+  the group as written and missed the member booked under its other
+  listing; both now read the booked symbols, as the run does.
+- **Interest paid is no longer netted against interest earned.** Each
+  account's `.sum` shows `CASH INTEREST` (earned) and, when there is
+  any, `INTEREST PAID (not in total)` per currency: the margin interest
+  for line 22100 (US: investment interest), kept out of the income
+  total (`taxjson-sum-income --json`: `interest_paid_totals`). Was in
+  KNOWN_ISSUES.
+- **A negative futures price in a generic CSV** kept its magnitude, so
+  the P/L sign was wrong; the notional's sign is now kept, as the IB
+  parser keeps it. (A `.tt` line's case stays in KNOWN_ISSUES.)
+- **`tips --online` probed the wrong symbols:** the 80-symbol cap was
+  spent on tobase.map's alphabetical head, never the holdings. It now
+  probes the held listings and their map partners, and yfinance's raw
+  miss lines are silenced.
+- **`audit` over a pending election** reported MISMATCHED and FAILED
+  for the account the run deferred; the account is left out and named,
+  and the checklist's audit step is blocked on the election instead.
+- **Checklist hints:** the closing "Next" line follows a blocked step's
+  own remedy (the first checklist said "download the exports" while the
+  step asked for `taxjson run`); a `! ` line names the command for the
+  problem, not the step's first command (a missing `local_timezone`
+  said `tjs migrate`); in a year folder the exports folder is named as
+  `../inputs/<account>/`.
+- **`init` on a machine whose `/etc/timezone` says UTC** beside an
+  `/etc/localtime` link to a real zone left `local_timezone`
+  commented; the link's zone is taken (`TZ`, when set, still decides).
+- **Single-folder project:** `years` and `new-year` point at
+  `taxjson migrate --to-years` instead of a `new-year` that refuses.
+- **`sanity` with no holdings file at all** names the unchecked
+  accounts and exits 0, as commands.md said, instead of an error.
+- **A headless run** said "but --no-input" when no flag was given: the
+  message now says `--no-input` or "no terminal to answer on".
+- **`run` wrote an empty `manifest.json`** into every account folder of
+  a project reading its own `inputs/` (a frozen year's committed copy
+  included); nothing is written until an election is saved.
+- **`compare` exits 2** when there is nothing to compare with (no
+  `reports/`, no run kept yet, no such snapshot); 1 stays "a report
+  differs".
+
 ## v0.30.4 (2026-10-15)
 
 ### Added

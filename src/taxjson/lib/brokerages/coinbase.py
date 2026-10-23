@@ -1065,6 +1065,26 @@ class CoinbaseBrokerage(BaseBrokerage):
         return row[idx]
 
 
+def coinbase_row_total(cb: "CoinbaseBrokerage", row, header_map,
+                       type_raw: str, is_sell: bool, where: str) -> float:
+    """|Total| of a Buy / Sell row for the readers outside the parser
+    (the v2 cash book, the crypto-sends pool). A blank Total is derived
+    as the parser derives it (`_derive_blank_total`: Subtotal +/- fee,
+    else quantity x price +/- fee), and refused, naming `where`, when
+    nothing is there to derive it from: read as 0 it booked a CAD-priced
+    stablecoin buy as a zero-cost acquisition (audit finding 74)."""
+    if cb._col(row, header_map, 'total').strip():
+        return abs(cb._num(row, header_map, 'total'))
+    try:
+        return abs(cb._derive_blank_total(
+            row, header_map, type_raw, is_sell,
+            cb._num(row, header_map, 'quantity transacted'),
+            cb._num(row, header_map, 'price at transaction'),
+            cb._num(row, header_map, 'fees')))
+    except ValueError as e:
+        raise ValueError(f"{where}: {e}") from None
+
+
 def coinbase_cash_events(path, stable_cash: bool = True
                          ) -> List[Dict[str, Any]]:
     """The cash events of a Coinbase transactions export for the FX-on-
@@ -1115,9 +1135,21 @@ def coinbase_cash_events(path, stable_cash: bool = True
             pc = (cb._col(row, header_map, 'price currency') or 'USD'
                   ).strip().upper() or 'USD'
             pc = 'USD' if pc in cash_coins else pc
+            total = coinbase_row_total(
+                cb, row, header_map,
+                cb._col(row, header_map, 'transaction type'),
+                typ == 'sell', where)
             if pc == cur:
-                continue                # USDC for USD: the same currency
-            total = abs(cb._num(row, header_map, 'total'))
+                # USDC for USD: the same currency, no conversion — but
+                # the fee or spread is US dollars spent (CA-FX-07): it
+                # was dropped with the row, leaving the pool that many
+                # units too large (2026-10 audit #73).
+                spent = (total - qty) if typ == 'buy' else (qty - total)
+                if spent > 0.005:
+                    ev = CE.flow(day, cur, -spent, where=where,
+                                 desc=f"Coinbase {typ} {asset} fee")
+                    out.append(ev)
+                continue
             if typ == 'buy':
                 out.append(CE.conv(day, pc, total, cur, qty, where=where,
                                    desc=f"Coinbase buy {asset}"))

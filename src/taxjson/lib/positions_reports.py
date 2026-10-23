@@ -8,8 +8,10 @@ one (a positions-only file dropped into inputs/<account>/ is skipped
 with a note — lib/brokerages/detect).
 
 Every reader returns the same row (PositionRow): the broker account
-MASKED, the symbol spelled exactly as that broker's TRADE parser spells
-it (ticker.map is the caller's job, as for the books), the signed
+MASKED (`account`, for every label) with a one-way key of the whole id
+(`account_key`, to tell two accounts apart that mask alike), the
+symbol spelled exactly as that broker's TRADE parser spells it
+(ticker.map is the caller's job, as for the books), the signed
 quantity, the position's currency, and the cost the report states with
 what KIND of cost it is:
 
@@ -54,7 +56,9 @@ Supported reports (detected by CONTENT, never by file name):
                       has always read; taxjson-fetch's Questrade
                       snapshot; other tools' exports): symbol,
                       quantity, currency, total_cost (or book_cost /
-                      cost_basis), else average_entry_price x quantity;
+                      cost_basis), else average_entry_price (a price
+                      per share) x quantity, x the contract multiplier
+                      for an option (100 when none is declared);
                       `cost_kind = "average" | "lots"`; `acquired =
                       "YYYY-MM-DD"` dates THAT lot (several tables of
                       one symbol are several lots); as of [meta]
@@ -65,13 +69,14 @@ Coinbase and Kraken have no positions export the parser code knows.
 """
 
 import csv
+import hashlib
 import io
 import math
 import re
 from dataclasses import dataclass, field
 from datetime import date as _date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 COST_AVERAGE = "average cost"
 COST_LOTS = "lot basis"
@@ -131,6 +136,10 @@ class PositionRow:
     lot_date: str = ''
     multiplier: float = 0.0
     source: str = ''
+    # A one-way key of the whole broker account id (account_key()):
+    # two accounts that mask alike (the same first two characters) keep
+    # distinct keys. Never shown; `account` is the label.
+    account_key: str = field(default='', repr=False)
 
 
 @dataclass
@@ -148,6 +157,17 @@ def mask_account(acct) -> str:
     """First two characters + *** (the parsers' rule); '' for none."""
     a = str(acct or '').strip()
     return (a[:2] + '***') if a else ''
+
+
+def account_key(acct) -> str:
+    """A one-way key of a broker account id (case and surrounding space
+    ignored), '' for none: equal for one account, distinct for two that
+    mask alike. Never a label: `mask_account` is."""
+    a = str(acct or '').strip().upper()
+    if not a:
+        return ''
+    return hashlib.sha256(f"taxjson-position-account:{a}"
+                          .encode('utf-8')).hexdigest()[:16]
 
 
 def kind_label(kind: str) -> str:
@@ -430,10 +450,18 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
             info = (fii.get((cat, raw))
                     or fii.get((cat, re.sub(r'\s+', ' ', raw))) or {})
             mult = info.get('mult')
-        acct = mask_account(g('Account')) if 'Account' in hm else (
-            accounts[0] if len(accounts) == 1 else '')
+        if 'Account' in hm:
+            acct, akey = mask_account(g('Account')), account_key(
+                g('Account'))
+        else:
+            acct = accounts[0] if len(accounts) == 1 else ''
+            # A consolidated statement lists one position for all its
+            # accounts combined: no one account's key.
+            akey = (account_key(next(iter(pre['accounts'])))
+                    if len(pre['accounts']) == 1 else '')
         rep.rows.append(PositionRow(
-            broker='ib', account=acct, symbol=sym, raw_symbol=raw,
+            broker='ib', account=acct, account_key=akey, symbol=sym,
+            raw_symbol=raw,
             quantity=qty, currency=cur, cost=cost, cost_currency=cur,
             cost_kind=COST_LOTS if cost is not None else COST_NONE,
             market_value=value, as_of=as_of, asset_type=atype,
@@ -455,8 +483,30 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
 
 _RBC_COST_TOTAL_RE = re.compile(r'\bbook\s+(cost|value)\b', re.I)
 _RBC_COST_AVG_RE = re.compile(r'\baverage\s+(cost|price)\b', re.I)
+# A per-share qualifier on a cost or price label: the figure is per
+# share, whatever else the label says ('Book Cost Per Share', 'Average
+# Book Cost', 'Book Cost/Share' — audit finding 46: read as totals).
+_RBC_PER_SHARE_RE = re.compile(
+    r'\bper\s+share\b|/\s*share\b|\baverage\b|\bavg\b', re.I)
+_RBC_COST_WORD_RE = re.compile(r'\bcost\b|\bbook\s+value\b', re.I)
+_RBC_PRICE_WORD_RE = re.compile(r'\bprice\b', re.I)
+# A price is a cost only when averaged ('Average Price', 'Avg Price'):
+# 'Price Per Share' is the market price, not a cost column.
+_RBC_AVERAGE_RE = re.compile(r'\baverage\b|\bavg\b', re.I)
+_RBC_TOTAL_WORD_RE = re.compile(r'\btotal\b', re.I)
 _RBC_MV_RE = re.compile(r'\bmarket\s+value\b', re.I)
 _LABEL_CUR_RE = re.compile(r'\b(CAD|USD)\b')
+
+
+def _rbc_cost_label_error(name: str, label: str) -> PositionsReportError:
+    """A cost column whose label says neither a total nor a per-share
+    figure: refused, never guessed (a per-share cost read as a total
+    understates the position's cost by its share count)."""
+    return PositionsReportError(
+        f"{name}: cost column {label!r} is neither a total (Book Cost, "
+        f"Book Value) nor a per-share figure (Average Cost, Book Cost "
+        f"Per Share) — refusing to guess which; rename the column to "
+        f"one of these")
 
 
 def _read_rbc(path: Path, text: str) -> PositionsReport:
@@ -491,10 +541,21 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
             col.setdefault('acct', i)
         elif _RBC_MV_RE.search(h):
             col.setdefault('mv', i)
+        elif (_RBC_PER_SHARE_RE.search(h)
+              and (_RBC_COST_WORD_RE.search(h)
+                   or (_RBC_PRICE_WORD_RE.search(h)
+                       and _RBC_AVERAGE_RE.search(h)))):
+            # Per share before the total match: 'Book Cost Per Share'
+            # names a book cost but is not the position's total.
+            if _RBC_TOTAL_WORD_RE.search(h):
+                raise _rbc_cost_label_error(name, header[i])
+            col.setdefault('avg', i)
         elif _RBC_COST_TOTAL_RE.search(h):
             col.setdefault('cost', i)
         elif _RBC_COST_AVG_RE.search(h):
             col.setdefault('avg', i)
+        elif _RBC_COST_WORD_RE.search(h):
+            raise _rbc_cost_label_error(name, header[i])
         elif h in ('name', 'description', 'security', 'symbol description'):
             col.setdefault('name', i)
     if 'cur' not in col:
@@ -556,10 +617,12 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
         mv = (_num(g('mv'), field=header[col['mv']], where=where,
                    blank_ok=True) if 'mv' in col else None)
         acct = mask_account(g('acct')) if 'acct' in col else ''
+        akey = account_key(g('acct')) if 'acct' in col else ''
         if acct:
             accts.add(acct)
         rep.rows.append(PositionRow(
-            broker='rbc_direct', account=acct, symbol=sym, raw_symbol=raw,
+            broker='rbc_direct', account=acct, account_key=akey,
+            symbol=sym, raw_symbol=raw,
             quantity=qty, currency=cur, cost=cost, cost_currency=cost_cur,
             cost_kind=COST_AVERAGE if cost is not None else COST_NONE,
             market_value=mv, as_of=as_of,
@@ -580,8 +643,33 @@ def _iso_day(v) -> str:
         return v.date().isoformat()
     if isinstance(v, _date):
         return v.isoformat()
-    s = str(v or '').strip()
-    return s[:10] if _ISO_DAY_RE.match(s[:10]) else ''
+    s = str(v or '').strip()[:10]
+    if not _ISO_DAY_RE.match(s):
+        return ''
+    try:
+        _date.fromisoformat(s)      # 2025-02-30 is digit-shaped, not a day
+    except ValueError:
+        return ''
+    return s
+
+
+def toml_as_of(meta: Any, name: str) -> str:
+    """A holdings TOML's date: [meta] as_of, else the day of [meta]
+    generated_at ('' when it has neither). PositionsReportError naming
+    the field when one is given but is not a calendar day (2025-02-30):
+    the date decides which books the file is compared with. generated_at
+    is a note of when the file was made: only a date-shaped value that is
+    no calendar day is refused; other text in it is ignored, as before."""
+    meta = meta if isinstance(meta, dict) else {}
+    for key in ('as_of', 'generated_at'):
+        v = meta.get(key)
+        if v in (None, '') or _iso_day(v):
+            continue
+        if key == 'as_of' or _ISO_DAY_RE.match(str(v).strip()[:10]):
+            raise PositionsReportError(
+                f"{name}: [meta] {key} {str(v)!r} is not a calendar "
+                f"date (YYYY-MM-DD)")
+    return _iso_day(meta.get('as_of')) or _iso_day(meta.get('generated_at'))
 
 
 def _read_toml(path: Path) -> PositionsReport:
@@ -604,9 +692,11 @@ def _read_toml(path: Path) -> PositionsReport:
             f"{name} has no [[holding]] array (a holdings file has "
             f"[[holding]] tables)")
     meta = doc.get('meta') if isinstance(doc.get('meta'), dict) else {}
-    as_of = _iso_day(meta.get('as_of')) or _iso_day(meta.get('generated_at'))
+    as_of = toml_as_of(meta, name)
     meta_acct = mask_account(meta.get('broker_account')
                              or meta.get('account'))
+    meta_key = account_key(meta.get('broker_account')
+                           or meta.get('account'))
     rep = PositionsReport(path=path, broker='toml',
                           kind=kind_label('holdings_toml'), as_of=as_of)
     accts = set([meta_acct] if meta_acct else [])
@@ -670,6 +760,9 @@ def _read_toml(path: Path) -> PositionsReport:
                 raise PositionsReportError(f"{where} ({sym}): {key} is "
                                            f"not finite")
             return f
+        atype = ('crypto' if atype_raw == 'crypto'
+                 else _asset_type_of(sym))
+        mult = _money('multiplier') or _money('contract_multiplier') or 0.0
         cost = None
         for key in ('total_cost', 'book_cost', 'cost_basis'):
             cost = _money(key)
@@ -677,15 +770,27 @@ def _read_toml(path: Path) -> PositionsReport:
                 break
         if cost is None:
             aep = _money('average_entry_price')
-            if aep is None:
-                aep = _money('cost_per_share')
             if aep is not None:
-                cost = aep * abs(qty)
+                # Questrade's averageEntryPrice (the `tjs fetch
+                # --positions` snapshot) is a price per SHARE: an option
+                # contract is `multiplier` shares, else the equity
+                # option's 100 (as the RBC reader and sanity's per-share
+                # view take it; 2026-10 audit #28).
+                cost = aep * abs(qty) * (
+                    mult if mult else 100.0 if atype == 'option' else 1.0)
+            else:
+                # taxjson-export's own cost_per_share is per HOLDING
+                # UNIT (per contract for an option: its file header
+                # says so), so it is never scaled.
+                cps = _money('cost_per_share')
+                if cps is not None:
+                    cost = cps * abs(qty)
         lot = h.get('acquired')
         lot_date = _iso_day(lot) if lot not in (None, '') else ''
         if lot not in (None, '') and not lot_date:
             raise PositionsReportError(f"{where} ({sym}): acquired "
-                                       f"{lot!r} is not a YYYY-MM-DD date")
+                                       f"{lot!r} is not a calendar date "
+                                       f"(YYYY-MM-DD)")
         ck = str(h.get('cost_kind') or '').strip().lower()
         if ck and ck not in ('average', 'lots'):
             raise PositionsReportError(f"{where} ({sym}): cost_kind "
@@ -696,13 +801,12 @@ def _read_toml(path: Path) -> PositionsReport:
                 else COST_AVERAGE)
         cur = str(h.get('currency') or '').strip().upper()
         acct = mask_account(h.get('account')) or meta_acct
+        akey = account_key(h.get('account')) or meta_key
         if acct:
             accts.add(acct)
-        atype = ('crypto' if atype_raw == 'crypto'
-                 else _asset_type_of(sym))
-        mult = _money('multiplier') or _money('contract_multiplier') or 0.0
         rep.rows.append(PositionRow(
-            broker='toml', account=acct, symbol=sym, raw_symbol=sym,
+            broker='toml', account=acct, account_key=akey, symbol=sym,
+            raw_symbol=sym,
             quantity=qty, currency=cur, cost=cost,
             cost_currency=(str(h.get('cost_currency') or '').strip()
                            .upper() or cur),

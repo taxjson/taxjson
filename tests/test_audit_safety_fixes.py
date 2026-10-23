@@ -217,9 +217,11 @@ class TestResolveManifest(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 p = _resolve_manifest(acct, cache, "margin", create=True)
             self.assertEqual(p, acct / "manifest.json")
-            self.assertTrue(p.exists())
+            # Nothing written until an election is saved (2026-10
+            # workflow audit: an empty file dirtied a frozen year's
+            # committed inputs/ on every run); never in work/.
+            self.assertFalse(p.exists())
             self.assertFalse((cache / "margin_manifest.json").exists())
-            self.assertEqual(json.loads(p.read_text()), {"elections": {}})
 
     def test_migrates_legacy_work_manifest(self):
         with tempfile.TemporaryDirectory() as td:
@@ -349,8 +351,12 @@ class TestCorpActionsUnavailableGuard(unittest.TestCase):
                                       rates, None, None, False)
                 except _StopStage:
                     pass
-                manifest = acct / "manifest.json"
-                return err.getvalue(), out_.getvalue(), manifest.exists()
+                # The manifest's canonical home is inputs/<account>/:
+                # nothing is written there until an election is saved,
+                # and nothing ever lands in work/ (2026-10 audit).
+                in_inputs = (not (root / "work" / "margin_manifest.json")
+                             .exists())
+                return err.getvalue(), out_.getvalue(), in_inputs
         finally:
             run_mod.run_to_file = orig
 

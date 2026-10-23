@@ -159,6 +159,7 @@ def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
             f"{where} must be a table by tax year, e.g. `{CLAIMED_KEY} = "
             f"{{ 2023 = 4000.00, 2024 = 1500 }}`, got {v!r}"]
     out: Dict[int, float] = {}
+    spelled: Dict[int, str] = {}
     for k, a in v.items():
         try:
             y = int(str(k).strip())
@@ -168,6 +169,14 @@ def claimed_losses(cfg: Dict[str, Any]) -> Tuple[Dict[int, float], List[str]]:
         if not _plausible_year(y):
             problems.append(f"{where}: {y} is not a plausible tax year")
             continue
+        if y in spelled:
+            # `2023` and `02023` are two TOML keys but one tax year:
+            # never keep one of two contradictory claims silently.
+            problems.append(f"{where}: {y} is given twice ({spelled[y]!r} "
+                            f"and {str(k)!r}); keep one line for {y}")
+            out.pop(y, None)
+            continue
+        spelled[y] = str(k)
         amt = _number(a)
         if amt is None or amt < 0:
             problems.append(f"{where}: {y} must be an amount >= 0 (a "

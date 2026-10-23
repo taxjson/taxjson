@@ -183,7 +183,7 @@ class TestViewsRefuseUnreadable(unittest.TestCase):
                 splits(root, cfg)
             self.assertIn("m_base.json", str(cm.exception))
             base.unlink()                   # never built: just empty
-            self.assertIn("No splits in the books.",
+            self.assertIn("None in the books.",
                           render_splits(splits(root, cfg)))
 
     def test_a2_0979_corrupt_manifest_advice(self):

@@ -75,7 +75,7 @@ class TestSlipAudit(unittest.TestCase):
         self.assertIn("margin: Canadian dividends 50.00 CAD", r.stdout)
         d = _run("canada", "slip-audit", "--details")
         for frag in ("type them into inputs/slips/slips.toml",
-                     "from (no input file), ib_demo.csv",
+                     "from (corporate action: no export row), ib_demo.csv",
                      "explain each difference and mark the checklist's "
                      "t5-t3 step done", "Annual average USD/CAD"):
             self.assertIn(frag, _flat(d.stdout))

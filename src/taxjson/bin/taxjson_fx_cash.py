@@ -107,8 +107,29 @@ def _cash_legs(tx: Dict[str, Any]) -> List[tuple]:
     """[(currency, signed native flow)] a row moves through the ledger.
     A corporate-action row with `corp_cash` ("<amount> <CUR>; ...")
     received exactly that cash, in that currency, whatever its
-    description says (re-audit A2-1014); any other row is `_flows` in
-    its own currency."""
+    description says (re-audit A2-1014). A futures settlement row that
+    carries `_open_fee` (lib/futures.settle_futures_dicts, fee_basis)
+    pays its own commissions on its own date, and a close's P/L leg
+    leaves out every commission (its own and the openings' inside its
+    basis, `_open_fee`; None on an opening part): an opening fee
+    leaves the cash at the opening date's rate, not the close's
+    (2026-10 audit #103); the total is unchanged. Any other row is
+    `_flows` in its own currency."""
+    if (tx.get("type") or "") == "futures_settlement" and \
+            "_open_fee" in tx and tx.get("action") == "BUYSELL":
+        cur = str(tx.get("currency") or "").upper()
+        own = float(tx.get("commission") or 0.0) + \
+            float(tx.get("fee") or 0.0)
+        legs = []
+        if tx.get("_open_fee") is not None:
+            # A close: its settled P/L before every commission.
+            pl = float(tx.get("net_amount") or 0.0) + \
+                float(tx["_open_fee"]) + own
+            if abs(pl) > 1e-9:
+                legs.append((cur, pl))
+        if abs(own) > 1e-9:
+            legs.append((cur, -own))
+        return legs
     cc = str(tx.get("corp_cash") or "").strip()
     if tx.get("corp_event_id") and cc:
         out = []
@@ -425,8 +446,9 @@ def render_brief(doc: Dict[str, Any], base: str, year: int,
     if ye:
         bal = ", ".join(f"{c} {fmt_money(v['units'])}"
                         for c, v in sorted(ye.items()))
-        lines.append(f"Ledger balance at {year}-12-31: {bal} — compare "
-                     f"with the brokers' year-end cash")
+        lines += out.kv_lines([(f"Ledger balance {year}-12-31",
+                                f"{bal} (compare with the brokers' "
+                                f"year-end cash)")], width_=w)
     if doc["unrated"]:
         lines.append(out.act("Cash events skipped with no FX rate on file",
                              "tjs run"))

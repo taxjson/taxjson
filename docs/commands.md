@@ -142,6 +142,8 @@ What a run writes:
   purchase dates) to the receiver with no sale (tax-logic US-BASIS-05).
 - `reports/crosslistings.rpt`: cross-listed (`.TO` / `.US`) tickers the
   radar may not consolidate.
+- `work/compare/prev/`: the reports the run replaced, with the inputs
+  they were built from, for `taxjson compare` (a full run only).
 - `reports/fees.rpt`: trading fees by brokerage, with comparison stats.
 - `reports/ccd.rpt`, `reports/leaps.rpt`: cross-account covered-call and
   long-option views. `leaps.rpt` lists every long option close of any
@@ -217,7 +219,7 @@ dropped. `--json` is the same either way.
 
 #### taxjson checklist
 
-`taxjson checklist [--all] [--walk] [--done ID] [--skip ID] [--undo ID] [--note TEXT] [--reset] [--only ID] [--quick] [--show] [--json]`
+`taxjson checklist [--all] [--walk] [--done ID] [--skip ID] [--undo ID] [--note TEXT] [--reset] [--only ID] [--quick] [--show] [--json] [--details]`
 
 Every step from install to filing, in order, each with the exact
 command(s) and a one-line why, in ten sections: Set up (install or
@@ -271,7 +273,7 @@ stable schema ([settings.md](settings.md#taxjson-checklist---json)).
 
 #### taxjson init
 
-`taxjson init --country canada|usa [PATH] [--year YYYY] [--single] [--force]`
+`taxjson init --country canada|usa [PATH] [--year YYYY] [--single] [--demo] [--force] [--details]`
 
 Scaffold a new project. By default it makes **one folder of exports for
 every year**: `PATH/inputs/<account>/` (every year's broker exports,
@@ -284,7 +286,7 @@ broker's positions snapshots. `--year` picks the year (default: the
 current year). `--single` scaffolds one folder for one year instead
 (`inputs/` inside it). See "One folder of exports for every year" in
 [getting-started.md](getting-started.md#one-folder-of-exports-for-every-year).
-`--force` re-templates an existing `taxjson.toml` (kept as `.bak`).
+`--force` re-templates an existing `taxjson.toml` (kept as `.bak`; `ticker.map` and `inputs/` are left alone). A folder made for the project (`mkdir -p ~/taxes` before the init) is made owner-only, as the scaffold's own folders are.
 
 The generated `taxjson.toml` lists every key the country's projects
 read, documented: the scaffold's values active, every other key
@@ -297,7 +299,7 @@ commented-out example in each.
 
 #### taxjson years
 
-`taxjson years [--json] [--diff YEAR YEAR]`
+`taxjson years [--json] [--diff YEAR YEAR] [--details]`
 
 The year projects sharing one folder of exports (run it there or in a
 year folder): each year filed (its `filed/<year>.json` lock, its date
@@ -310,20 +312,31 @@ and keys that differ between two years. `--json`: a stable schema
 
 #### taxjson new-year
 
-`taxjson new-year YYYY`
+In a single-folder project (no year folders) both `years` and
+`new-year` point at `taxjson migrate --to-years`, which makes the
+project the first year folder.
+
+`taxjson new-year YYYY [--details]`
 
 Start the year's folder beside the others from the previous year's: its
 `taxjson.toml` (year set, `prior_year_record` pointed at last year's
 lock, last year's `[estimate]` / `[instalments]` and the accounts'
-`holdings` commented out for reference) and its `ticker.map` copied, and
-an empty `holdings/`. In Canada the new year keeps reading the
+`holdings` commented out for reference, written in the template layout
+`taxjson format` keeps) and its `ticker.map` copied, and an empty
+`holdings/`. In Canada the new year keeps reading the
 `tobase.map` every year shares (a year from before v0.27.1 that has its
-own copy passes it on), and keeps the option grant-timing cutoff the
+own copy passes it on; a filed year's frozen copy is its own by design,
+which `taxjson years` says as "frozen copy of its own"), and keeps the
+option grant-timing cutoff the
 previous year applied by default (`option_grant_timing_since`, set to
 that year when it was not set). The files are made in a staging folder
 and moved into place when complete: a failure leaves no `taxjson.toml`
 behind, so the command can be run again. It prints where to save the
-year's downloads.
+year's downloads. When the previous year was closed with its inputs
+frozen (`close-year`: it reads its own copy of the exports), the new
+year names the shared folders again (`inputs_dir`, `tobase_map`: the
+ones the lock recorded, else `../inputs` and `../tobase.map` beside
+the year folders).
 
 #### taxjson align
 
@@ -342,7 +355,7 @@ and the accounts' order is shown, never rewritten.
 
 #### taxjson format
 
-`taxjson format [--write [--no-backup] | --check]`
+`taxjson format [--write [--no-backup] | --check] [--details]`
 
 Lay an existing `taxjson.toml` out like the template `init` writes, so
 two years' files diff only where their values differ. Every key of the
@@ -428,7 +441,7 @@ refuses the map (CI). Formatting a formatted file changes nothing.
 
 #### taxjson migrate
 
-`taxjson migrate [--dry-run] [--write] [--to-years]`
+`taxjson migrate [--dry-run] [--write] [--to-years] [--details]`
 
 Moves an older project's files into the ones that hold them now.
 
@@ -462,7 +475,10 @@ Moves an older project's files into the ones that hold them now.
   `checklist.json`, `work/`, `reports/`, `filed/`, `inputs/slips/`) move
   into the folder of its year, with `inputs_dir` and `exports_dir` set.
   In Canada `tobase.map` stays at the top, the one file every year reads
-  (`tobase_map = "../tobase.map"`).
+  (`tobase_map = "../tobase.map"`). A year closed with its inputs
+  frozen (`close-year`) gets its own copy of the account folders (and
+  `tobase.map`) in its year folder and keeps reading it; the shared
+  ones at the top serve the years to come.
 - In a multi-year project made before v0.27.1 (run in the folder holding
   the years, or in a year folder) it makes the years' `tobase.map`
   copies one file beside the year folders that every year reads.
@@ -502,7 +518,7 @@ summary. Chain it: `taxjson fetch run`.
 
 #### taxjson elect
 
-`taxjson elect [ACCOUNT] [--redo] [--reset] [--event ID] [--set EVENT_ID=ELECTION] [--hint KEY=VALUE] [--pending] [--json]`
+`taxjson elect [ACCOUNT] [--redo] [--reset] [--event ID] [--set EVENT_ID=ELECTION] [--hint KEY=VALUE] [--pending] [--json] [--details]`
 
 Lists the corporate-action events in the books (mergers, spin-offs,
 reorganisations) with the tax election recorded for each. `--redo`
@@ -517,7 +533,7 @@ lines; `--json` with it prints the raw document.
 
 #### taxjson ticker-map
 
-`taxjson ticker-map --suggest [--write [--all]] [--json]`
+`taxjson ticker-map --suggest [--write [--all]] [--json] [--details]`
 
 Every ticker.map line the last `taxjson run` suggested, each with its
 reason, read from `work/` (the run's `.diag` files and states):
@@ -595,7 +611,7 @@ schema.
 
 #### taxjson update-tobase-map
 
-`taxjson update-tobase-map [--write [--no-backup]] [--json]` (Canada)
+`taxjson update-tobase-map [--write [--no-backup]] [--json] [--details]` (Canada)
 
 Bring the project's `tobase.map` (the interlisted master's pairs: a TSX
 share's US exchange and OTC listings, one security; tax-logic
@@ -629,7 +645,7 @@ refused (Canada only for now). See [settings.md](settings.md#tobasemap).
 
 #### taxjson run
 
-`taxjson run [--fast] [--account NAME] [--strict] [--no-input]`
+`taxjson run [--fast] [--account NAME] [--strict] [--no-input] [--details]`
 
 Run the full pipeline, rebuilding every stage: the recommended everyday
 command, so results always reflect the current inputs, config and code.
@@ -649,6 +665,12 @@ project has holdings files.
   for speed.
 - `--account NAME`: re-run a single account. It skips the cross-account
   wash-sale and cross-listing detection, which need a full run.
+- A full run ends with the checks a complete book allows, each a
+  `Warning:` with its answer: a loss on one listing with the other
+  listing bought in the window (the `TOBASE` / `DISTINCT` line to add),
+  and a loss on a fund with a fund ticker.map declares `SIMILAR` bought
+  in the window (the pair, the dates, the line; nothing denied, the
+  decision is yours: docs/settings.md `SIMILAR`).
 - `--strict`: per-account validation ERRORs (oversold positions,
   malformed rows) and an input file that parsed to 0 transactions stop
   the run instead of publishing reports with a DIAGNOSTICS banner. Also
@@ -675,9 +697,38 @@ command's own. `--` always separates two commands: `taxjson events --
 sum` runs `events`, then `sum`. With no account of that name, `taxjson
 events sum` and `taxjson fetch run` chain as written.
 
+#### taxjson compare
+
+`taxjson compare [NAME] [--save NAME] [--delete NAME] [--list] [--details] [--json]`
+
+Compare `reports/` with a snapshot of an earlier run: did a batch of
+corrected exports, a new `.tt` line or an upgrade change the result?
+`NAME` is `prev` (the default: the run before — every full `taxjson
+run` keeps the reports it is about to replace in `work/compare/prev/`),
+`filed` (the reports as filed, kept by `taxjson close-year` in
+`filed/<year>/reports/`) or a snapshot saved with `--save NAME`
+(`work/compare/NAME/`, kept until `--delete NAME`; `--list` names
+them). Each snapshot records what its reports were built from: the
+inputs fingerprint the run recorded (name and SHA-256 of every file it
+read) and each taxable account's filing aggregates.
+
+The default view is one line saying whether the reports match, then a
+table of the account figures that moved (realized, disallowed, income,
+dividend, dispositions; the US term gains too), BEFORE, AFTER and
+CHANGE, the accounts that did not move, the report files that differ
+(a line that only says when a file was written is ignored) and the
+inputs that changed, were added or vanished since the snapshot.
+`--details` adds a unified diff of each changed report. `--json` is the
+same document for scripts. Exit 1 when a report differs or an account
+figure moved (the first line says when the report files match but a
+figure moved), 0 when neither did (a changed input that moved nothing is
+reported, exit 0), 2 when there is nothing to compare with (no
+`reports/`, no run kept yet, no snapshot of that name) or a report
+folder or file cannot be read.
+
 #### taxjson crypto-sends
 
-`taxjson crypto-sends [ACCOUNT] [--set ID=DECISION] [--unpair] [--unset ID] [--note TEXT] [--price P] [--write] [--json]`
+`taxjson crypto-sends [ACCOUNT] [--set ID=DECISION] [--unpair] [--unset ID] [--note TEXT] [--price P] [--write] [--json] [--details]`
 
 Every crypto withdrawal or send that did **not** arrive in another of
 your crypto accounts, with your decision or PENDING. A send is paired
@@ -706,7 +757,8 @@ removes one) are US-dollar cash in a Canadian project's books, so a gift
 or payment of one gets no sale line. The command shows the **currency
 gain** instead: the value at the send-date Bank of Canada rate minus the
 average CAD cost of the USD-cash / stablecoin pool rebuilt from the
-ledgers, flagged when likely superficial (USD or stablecoins acquired
+Kraken ledgers and Coinbase exports (overlapping exports read once),
+flagged when likely superficial (USD or stablecoins acquired
 within 30 days and still held), with the year's total.
 
 - `--set ID=self|gift|payment [--note TEXT] [--price P]` records a
@@ -731,7 +783,7 @@ quantity, never a txid or address; refs are masked (`LG***`). A
 
 #### taxjson find-missing-history
 
-`taxjson find-missing-history [ACCOUNT] [--year YEAR] [--include-options] [--write-missing-history [--all-history] [--outside-year]] [--write-purchases [FILE]] [--force]`
+`taxjson find-missing-history [ACCOUNT] [--year YEAR] [--include-options] [--write-missing-history [--all-history] [--outside-year]] [--write-purchases [FILE]] [--force] [--details]`
 
 Report positions with a missing cost basis (a truncated buy history, or
 $0-basis corporate-action shares) that distort a year's gain. Pairs the
@@ -759,28 +811,34 @@ walks through filling the gaps.
 
 #### taxjson opening
 
-`taxjson opening ACCOUNT FILE [--date D] [--dry-run] [--force]`
+`taxjson opening ACCOUNT FILE [--date D] [--dry-run] [--force] [--details]`
 
 An **opening balance** from a broker's positions report: an Interactive
 Brokers Activity Statement (its Open Positions section), an RBC Holdings
 Export, or a `[[holding]]` TOML. It writes `inputs/ACCOUNT/opening_<date>.tt`,
 one `OPENING <date> <symbol> <qty> <currency> <total-cost> [<lot-date>]`
 line per long position with the report's **book cost** (never its market
-value). A position with no cost, a short or a futures contract is listed
+value). A relative FILE is looked for from the shell's folder, then
+from the project's. A position with no cost, a short or a futures contract is listed
 and skipped, as is one whose symbol, currency or lot date a `.tt` line
 cannot carry; a report cell with a control character is refused. The
 date is the report's own (`--date` when it has none). `--dry-run` prints
 the lines instead; `--force` replaces an existing file, keeping it as
-`.bak` (or the next free `.bakN`).
+`.bak` (or the next free `.bakN`). A report of several broker accounts
+is refused (two ids are two accounts even when they show alike, masked
+to their first two characters; a consolidated IB statement is one
+position for all its accounts), and so is a symbol another `.tt` of the
+account (`.TT` too) already has an OPENING line for.
 
 An OPENING line sets the position and its cost but is **not a
 purchase**: no superficial-loss / wash-sale window, no "recent buy"
 (CA-OPEN-01 / US-OPEN-01). The snapshot replaces the account's earlier
 rows of its symbols: trades, transfers, renames and cost adjustments
 dated on or before it are left out of the books with an `ATTENTION:
-opening:` line (income rows stay); a left-out sale, short cover or
-return of capital that may go beyond the cost, of the tax year, stops
-the run (CA-OPEN-03). A US project needs one line per lot
+opening:` line (income rows stay; a ticker reused after its rename into
+a snapshot symbol is another holding and keeps its rows); a left-out
+sale, short cover or return of capital that may go beyond the cost, of
+the tax year, stops the run (CA-OPEN-03). A US project needs one line per lot
 with its purchase date and a US-dollar cost (a holdings TOML with
 `acquired = "YYYY-MM-DD"` per lot); Canada pools the lines (s.47) and
 converts a foreign-currency cost at the snapshot day's Bank of Canada
@@ -790,7 +848,7 @@ rate (a broker's CAD book value is used as is).
 
 #### taxjson amt
 
-`taxjson amt [YEAR] [--other-income AMT] [--other-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--json]` (Canada)
+`taxjson amt [YEAR] [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--json] [--details]` (Canada)
 
 The year's **minimum tax (AMT)** line by line (ITA s.127.5-127.55, form
 T691): regular tax; the adjusted taxable income item by item (gains at
@@ -809,7 +867,7 @@ carryover rules:
 
 #### taxjson div-estimate
 
-`taxjson div-estimate [PERIOD] [ACCOUNT] [--months N] [--date YYYY-MM-DD] [--json]`
+`taxjson div-estimate [PERIOD] [ACCOUNT] [--months N] [--date YYYY-MM-DD] [--json] [--details]`
 
 Upcoming dividends estimated from each held position's **own dividend
 history in the books** (planning numbers only, never a filing figure).
@@ -845,7 +903,7 @@ left out.
 
 #### taxjson estimate
 
-`taxjson estimate [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--verbose] [--json]`
+`taxjson estimate [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--verbose] [--json] [--details]`
 
 A marginal tax **estimate** for the year's investment income
 (`--details` puts the realized-gains summary table of `taxjson sum` in
@@ -965,7 +1023,7 @@ and
 
 #### taxjson fx-cash
 
-`taxjson fx-cash [--ledger v1|v2] [--events] [--cash-events] [--json]`
+`taxjson fx-cash [--ledger v1|v2] [--events] [--cash-events] [--json] [--details]`
 
 FX capital gains on foreign-currency **cash**: foreign cash is property,
 so spending USD realizes the rate move since it was acquired. Canada:
@@ -986,7 +1044,7 @@ the end of every run; off by default.
 
 #### taxjson instalments
 
-`taxjson instalments [--json]` (Canada)
+`taxjson instalments [--json] [--details]` (Canada)
 
 Canadian tax instalments: what each of the four dates (Mar / Jun / Sep /
 Dec 15) calls for under your chosen basis, what you have paid, and the
@@ -1065,7 +1123,7 @@ document. Tax-logic `CA-PLAN-08` / `US-PLAN-09`.
 
 #### taxjson stats
 
-`taxjson stats [YEAR] [ACCOUNT] [--all-history] [--json]`
+`taxjson stats [YEAR] [ACCOUNT] [--all-history] [--json] [--details]`
 
 Win/lose statistics on closed trades, one row per asset class (long
 shares and ETFs, short shares, long options, written options, futures,
@@ -1075,38 +1133,17 @@ Economic P/L in the base currency **before** any superficial-loss /
 wash-sale denial (the denied total is its own line); taxable accounts
 unless a sheltered one is named. `YEAR` defaults to the project's year
 and takes any window token too (`30d`, `ytd`, `all` ...);
-`--all-history` covers every closed trade the books hold. One trade per
+`--all-history` covers every closed trade the books hold. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+One trade per
 closing disposition; a written option is one trade from write to close
 whatever `option_premium_timing` says (premium minus the buy-back, or
 the premium kept at expiry or assignment; an assigned option's premium
 is taken back out of the shares the tax rules fold it into). A view,
 never a filing number.
 
-#### taxjson win-rates
-
-`taxjson win-rates [SYMBOL...] [PERIOD] [ACCOUNT] [--by symbol|account|month|class] [--all-history] [--json]`
-
-The win rate of every closed trade in the window, one row per share
-listing (an option counts under its underlying, so `taxjson win-rates
-QQQ` is the QQQ shares and the QQQ options together) plus a total:
-trades, wins, losses, win rate, net P/L, average win and loss, profit
-factor, and the asset classes the row's trades fall in. `--by account`,
-`--by month` (the month of the close) and `--by class` group the same
-trades differently. The positionals are symbols (`QQQ` matches QQQ on
-any market, `QQQ.US` that listing), a window (`30d`, `6m`, `1y`,
-`mtd`, `ytd`, `all`, a tax year; default: the tax year) and an
-account (default: every taxable account; a sheltered account only when
-named), in any order; `--all-history` covers every closed trade the
-books hold. The trades, their economic P/L (in the base currency,
-**before** any superficial-loss / wash-sale denial; the denied total is
-its own line) and the counting rules are `taxjson stats`'s: one trade
-per closing disposition, a written option one trade from write to
-close. A break-even trade is neither a win nor a loss. A view, never a
-filing number.
-
 #### taxjson sum
 
-`taxjson sum [ACCOUNT] [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--verbose] [--json]`
+`taxjson sum [ACCOUNT] [--other-income AMT] [--other-losses AMT] [--long-term-losses AMT] [--deductions AMT] [--carrying-charges AMT] [--province P] [--verbose] [--json] [--details]`
 
 Cross-account realized-gains tables for the tax year in the base
 currency, one row per account (NON-OPT / OPTION / REALIZED / DIVIDEND /
@@ -1197,11 +1234,37 @@ The estimate flags (`--other-income`, `--other-losses` ...) add the tax
 estimate block of [`taxjson estimate`](#taxjson-estimate) under the
 tables; `--verbose` adds its calculation trace.
 
+`--json` carries a `readiness` record: `complete` (true only when nothing below is open) and `issues`, each with its `kind`, what it is and the command that resolves it — `run-state` (the books are not the clean result of the current inputs), `unknown-cost` (sales left out of the totals), `no-purchase` (sales in no total) and `conservation` (a cost or quantity the engine's conservation check found the books lost track of). The figures themselves are the same either way. A conservation problem is also a `! ` line under the
+tables.
+
+#### taxjson win-rates
+
+`taxjson win-rates [SYMBOL...] [PERIOD] [ACCOUNT] [--by symbol|account|month|class] [--all-history] [--json]`
+
+The win rate of every closed trade in the window, one row per share
+listing (an option counts under its underlying, so `taxjson win-rates
+QQQ` is the QQQ shares and the QQQ options together) plus a total:
+trades, wins, losses, win rate, net P/L, average win and loss, profit
+factor, and the asset classes the row's trades fall in. `--by account`,
+`--by month` (the month of the close) and `--by class` group the same
+trades differently. The positionals are symbols (`QQQ` matches QQQ on
+any market, `QQQ.US` that listing), a window (`30d`, `6m`, `1y`,
+`mtd`, `ytd`, `all`, a tax year; default: the tax year) and an
+account (default: every taxable account; a sheltered account only when
+named), in any order; `--all-history` covers every closed trade the
+books hold. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+The trades, their economic P/L (in the base currency,
+**before** any superficial-loss / wash-sale denial; the denied total is
+its own line) and the counting rules are `taxjson stats`'s: one trade
+per closing disposition, a written option one trade from write to
+close. A break-even trade is neither a win nor a loss. A view, never a
+filing number.
+
 ### Positions
 
 #### taxjson list
 
-`taxjson list [ACCOUNT] [YYYY-MM-DD] [--date YYYY-MM-DD] [--negative] [--json]`
+`taxjson list [ACCOUNT] [YYYY-MM-DD] [--date YYYY-MM-DD] [--negative] [--json] [--details]`
 
 Open positions per account, taken from the gains files' `inventory` (the
 wash-adjusted `<account>_gains_wash.json` when the pipeline built it,
@@ -1289,7 +1352,7 @@ warning.
 
 #### taxjson dil
 
-`taxjson dil [PERIOD] [ACCOUNT]`
+`taxjson dil [PERIOD] [ACCOUNT] [--json]`
 
 Like `events`, but only payments in lieu (DIVIDEND_IN_LIEU rows): what
 you received while your shares were lent out or short over the ex-date,
@@ -1297,7 +1360,7 @@ in their own currency.
 
 #### taxjson divs
 
-`taxjson divs [PERIOD] [ACCOUNT]`
+`taxjson divs [PERIOD] [ACCOUNT] [--json]`
 
 `events` filtered to `DIVIDEND` + `DIVIDEND_IN_LIEU`; the footer shows
 the dividend total per currency. A row's fields are the action, date,
@@ -1310,13 +1373,14 @@ export carries no time.
 
 #### taxjson events
 
-`taxjson events [PERIOD] [ACCOUNT]`
+`taxjson events [PERIOD] [ACCOUNT] [--json]`
 
 All transactions over the window, in native (pre-base-conversion)
 currency, `.tt` text format, oldest to latest, the columns lined up
 with a single-space gap (the padding is whitespace, so a line copies
 into a `.tt` file as it is). Prints per-currency `TOTAL BUY / SELL /
-DIVIDEND` footers.
+DIVIDEND` footers. With an account named, the rows carry that account's
+settlement dates; the merged view with no account carries trade dates.
 
 ```
 $ taxjson events 5d margin
@@ -1329,7 +1393,7 @@ TOTAL DIVIDEND: 25.00 USD
 
 #### taxjson fees
 
-`taxjson fees [PERIOD] [ACCOUNT]`
+`taxjson fees [PERIOD] [ACCOUNT] [--json]`
 
 One row per fee-bearing trade in the window (account, date, symbol,
 action, fee) plus a per-currency `TOTAL FEES`. This view counts
@@ -1341,7 +1405,7 @@ here.
 
 #### taxjson gains
 
-`taxjson gains [PERIOD] [ACCOUNT] [--options] [--equities] [--futures] [--puts] [--calls]`
+`taxjson gains [PERIOD] [ACCOUNT] [--options] [--equities] [--futures] [--puts] [--calls] [--json]`
 
 Realized gains in **native** terms (before TOBASE consolidation and
 before conversion to the base currency), one row per disposition (date,
@@ -1357,12 +1421,12 @@ both a future and an option, so it matches `--futures` **and**
 
 #### taxjson leaps
 
-`taxjson leaps [PERIOD] [ACCOUNT]`
+`taxjson leaps [PERIOD] [ACCOUNT] [--json]`
 
 Closed LEAPS positions: one row per disposition (date, contract, qty,
 proceeds, cost, gain, days held) plus the total realized gain. Partial
 closes appear as realized; still-open contracts are absent (no
-mark-to-market).
+mark-to-market). A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
 
 A **LEAPS** position here is a **long option buy placed more than
 `[settings] leaps_months` calendar months before expiry** (default 9,
@@ -1376,7 +1440,7 @@ from the wash-adjusted gains files.
 
 #### taxjson roc
 
-`taxjson roc [PERIOD] [ACCOUNT]`
+`taxjson roc [PERIOD] [ACCOUNT] [--json]`
 
 Like `events`, but only ADJUST rows: return-of-capital ACB / basis
 reductions as the broker classified them, manual `.tt` adjustments, and
@@ -1384,7 +1448,7 @@ the `[[distributions]]` adjustments `run` books.
 
 #### taxjson trades
 
-`taxjson trades [PERIOD] [ACCOUNT] [--options] [--equities] [--futures] [--puts] [--calls]`
+`taxjson trades [PERIOD] [ACCOUNT] [--options] [--equities] [--futures] [--puts] [--calls] [--json]`
 
 `events` filtered to `BUYSELL` + `ASSIGN`; the footer shows buy / sell
 totals per currency. The instrument-class filters are described under
@@ -1392,7 +1456,7 @@ totals per currency. The instrument-class filters are described under
 
 #### taxjson transfers
 
-`taxjson transfers [ACCOUNT] [--json]`
+`taxjson transfers [ACCOUNT] [--json] [--details]`
 
 The custody-transfer **evidence** view: depot flips, listing journals,
 broker migrations, and crypto withdrawals and sends (a send that arrived
@@ -1422,16 +1486,16 @@ year`.
 
 #### taxjson ccd-sum
 
-`taxjson ccd-sum [PERIOD] [ACCOUNT]`
+`taxjson ccd-sum [PERIOD] [ACCOUNT] [--json]`
 
 Covered-call (short call) realized-gain summary per underlying over a
 window (default: the tax year): the windowed twin of
 `reports/ccd.rpt`. Covers every account; the total is split into TAXABLE
-and SHELTERED parts when registered accounts contribute.
+and SHELTERED parts when registered accounts contribute. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
 
 #### taxjson dil-sum
 
-`taxjson dil-sum [PERIOD] [ACCOUNT]`
+`taxjson dil-sum [PERIOD] [ACCOUNT] [--json]`
 
 Payment-in-lieu total per symbol (DIVIDEND_IN_LIEU rows only), with each
 row's treatment: ordinary income (no dividend gross-up or credit, no
@@ -1443,7 +1507,7 @@ estimate's eligible dividends). Registered accounts are split out as in
 
 #### taxjson divs-sum
 
-`taxjson divs-sum [PERIOD] [ACCOUNT]`
+`taxjson divs-sum [PERIOD] [ACCOUNT] [--json]`
 
 Dividends received per ticker over the window (DIVIDEND rows, plus in a
 Canada project the payments in lieu ITA s.260 deems dividends; the
@@ -1467,7 +1531,7 @@ proceeds are `trades-sum`'s taxable "sold" figure).
 
 #### taxjson fees-sum
 
-`taxjson fees-sum [PERIOD] [ACCOUNT] [--by-account | --no-by-account] [--json]`
+`taxjson fees-sum [PERIOD] [ACCOUNT] [--by-account | --no-by-account] [--json] [--details]`
 
 Trading-fee report by **brokerage** (commission and fee totals with
 per-trade averages, $/share, % of notional), converted to the base
@@ -1483,18 +1547,30 @@ fees, not counted in $/share).
 
 #### taxjson leaps-sum
 
-`taxjson leaps-sum [PERIOD] [ACCOUNT]`
+`taxjson leaps-sum [PERIOD] [ACCOUNT] [--json]`
 
 The LEAPS gain summary (see [`taxjson leaps`](#taxjson-leaps) for what
 counts as LEAPS): per contract, quantity closed, proceeds, cost, gain
 and expiry, plus the total (period defaults to the tax year). Only the
 long position's dispositions count; a later write and buy-back of the
 same contract is covered-call P&L, in `ccd-sum`. The total is split into
-TAXABLE and SHELTERED parts when registered accounts contribute.
+TAXABLE and SHELTERED parts when registered accounts contribute. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+
+#### taxjson losers
+
+`taxjson losers [PERIOD] [ACCOUNT] [--top N] [--json]`
+
+The biggest realized **losers**: `winners`' other side, from the same
+code — per ticker, gains below zero only, worst first, options grouped
+under their underlying, the losers' total with its taxable / sheltered
+split. `--json` carries every ticker, worst first, with the losers' own
+totals as `side_*` keys. A loss denied by the superficial-loss or
+wash-sale rule is not in it (the engine-allowed amount is what ranks);
+`taxjson wash-sales` lists those. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
 
 #### taxjson roc-sum
 
-`taxjson roc-sum [PERIOD] [ACCOUNT]`
+`taxjson roc-sum [PERIOD] [ACCOUNT] [--json]`
 
 Return-of-capital total per ticker (default: the tax year): the ACB
 (Canada, T3 box 42) or basis (USA, Form 1099-DIV box 3) adjustments,
@@ -1518,7 +1594,7 @@ and what happens when the ACB goes below zero:
 
 #### taxjson trades-sum
 
-`taxjson trades-sum [PERIOD] [ACCOUNT]`
+`taxjson trades-sum [PERIOD] [ACCOUNT] [--json]`
 
 Per ticker: buy and sell counts, value bought and sold, and fees, with
 per-currency totals (all accounts; when a registered account
@@ -1538,25 +1614,13 @@ ticker. `--json` carries every ticker, best first, with the overall
 totals as before, and the winners' own (`side_tickers`,
 `side_total_gain`, `side_total_gain_taxable`,
 `side_total_gain_sheltered`). Before v0.29.0 the text view also listed
-the worst N under the best: that is `taxjson losers` now.
-
-#### taxjson losers
-
-`taxjson losers [PERIOD] [ACCOUNT] [--top N] [--json]`
-
-The biggest realized **losers**: `winners`' other side, from the same
-code — per ticker, gains below zero only, worst first, options grouped
-under their underlying, the losers' total with its taxable / sheltered
-split. `--json` carries every ticker, worst first, with the losers' own
-totals as `side_*` keys. A loss denied by the superficial-loss or
-wash-sale rule is not in it (the engine-allowed amount is what ranks);
-`taxjson wash-sales` lists those.
+the worst N under the best: that is `taxjson losers` now. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
 
 ### Before you trade
 
 #### taxjson wash-radar
 
-`taxjson wash-radar [ACCOUNT] [--date YYYY-MM-DD] [--verbose] [--all] [--json]`
+`taxjson wash-radar [ACCOUNT] [--date YYYY-MM-DD] [--verbose] [--all] [--json] [--details]`
 
 The superficial-loss / wash-sale radar per taxable account, recomputed
 **live as of today** (or `--date`), so cooling-down windows reflect the
@@ -1567,10 +1631,16 @@ loss sale's window closes, ticker by ticker: [`taxjson rebuy`](#taxjson-rebuy). 
 to every taxable account (sheltered accounts are never targets); pass an
 account to scope to one. The combined `sheltered_base.json` is included
 automatically for cross-account detection when present. `--verbose` for
-more detail; `--all` to also list CLEAR (no-risk) positions; `--json`
+more detail. CLEAR (no-risk) positions are in the default view; `--all`
+adds the OTHER rows, listings with no open position and no loss in the
+window (held nowhere, nothing to watch). `--json`
 for the structured document with absolute `clears_at` dates. The same
 reports are written to `reports/wash_radar_<account>.rpt` during
-`taxjson run`.
+`taxjson run`. With ticker.map `SIMILAR` lines, a `SIMILAR` block lists
+each group that has a member with an advisory, every member with its
+status (the `--json` document's `similar`): look-alike funds are two
+securities for the rule, so one's status is a caveat for the others,
+not a verdict.
 
 The default view is one STATUS table, one row per position (the most
 urgent status first), then one `! ` line per status that asks something
@@ -1659,7 +1729,7 @@ bought in the window is a note, not a denial (US-PLAN-02).
 
 #### taxjson buy-check
 
-`taxjson buy-check SYMBOL ... [--json]`
+`taxjson buy-check SYMBOL ... [--json] [--details]`
 
 Is buying this ticker today safe? **UNSAFE** when a loss was sold within
 the past 30 days (the rebuy cancels it, permanently if bought in a
@@ -1667,13 +1737,16 @@ sheltered account), with the safe-from date when one can be determined
 (violations defer to `wash-radar` rather than print a date that would
 invite an early rebuy); **SAFE\*** when buying merely extends an open
 wash window. Root-matched (`buy-check SAMPLU` covers `SAMPLU.US` and
-cross-listings, folding in `ticker.map` pairs). `--json` for machines;
+cross-listings, folding in `ticker.map` pairs). A fund ticker.map
+declares `SIMILAR` to the queried one that was sold at a loss within
+the past 30 days adds a caveat line (**SAFE\***, never UNSAFE: the
+books keep the two apart). `--json` for machines;
 exit 1 when any symbol is unsafe. Every loss whose window is open, with the
 day it closes: [`rebuy`](#taxjson-rebuy).
 
 #### taxjson sell-check
 
-`taxjson sell-check SYMBOL ... [--json]`
+`taxjson sell-check SYMBOL ... [--json] [--details]`
 
 Is selling this ticker **at a loss** today safe? **UNSAFE** when a
 registered account's recent buy it still holds would deny the loss on
@@ -1684,13 +1757,14 @@ at risk (the line says how many; the rest of the loss stands);
 replacement before the deadline (Canada only: a US wash sale cannot be
 rescued, and a WASHED row is SAFE\* with the reason); **SAFE\*** /
 **SAFE** with the applicable caveats (the window caveat in full with
-`--details`). Whether it *is* a loss at today's
+`--details`); a fund ticker.map declares `SIMILAR` to the queried one
+bought within the past 30 days is one such caveat. Whether it *is* a loss at today's
 price is `harvest`'s job. `--json` for machines; exit 1 on UNSAFE or
 PARTIAL.
 
 #### taxjson rebuy
 
-`taxjson rebuy [SYMBOL ...] [--date YYYY-MM-DD] [--json]`
+`taxjson rebuy [SYMBOL ...] [--date YYYY-MM-DD] [--json] [--details]`
 
 "I sold at a loss: when can I buy it back?" Every ticker sold at a loss
 whose repurchase window is still open, with the date of the sale, the
@@ -1718,11 +1792,11 @@ are shown. Exit 0 (advice, never a failure). How it differs:
 a sale **or** a buy does today, in every account), and
 [`buy-check`](#taxjson-buy-check) answers one ticker you are about to buy
 **today**; `rebuy` is the list of every loss whose window is open and the
-day each one closes (tax-logic `CA-PLAN-05` / `US-PLAN-06`).
+day each one closes (tax-logic `CA-PLAN-05` / `US-PLAN-06`). With a ticker.map `SIMILAR` line, `--details` also names the similar listings a buy of which is flagged, not counted (the `--json` row's `similar`).
 
 #### taxjson harvest
 
-`taxjson harvest [SYMBOL ...] [--crypto] [--options] [--no-ibkr] [--ibkr-port PORT] [--verbose] [--json]`
+`taxjson harvest [SYMBOL ...] [--crypto] [--options] [--no-ibkr] [--ibkr-port PORT] [--verbose] [--json] [--details]`
 
 "If I sold this today, would it be a loss, and may I claim it?" One
 table over every taxable account's OPEN positions: base-currency book
@@ -1864,7 +1938,7 @@ the write ([tax-rules.md](tax-rules.md#options-premium-timing-s49)).
 
 #### taxjson tips
 
-`taxjson tips [--online] [--json]`
+`taxjson tips [--online] [--json] [--details]`
 
 Advice for next year on where you hold what. It changes no number of
 this year:
@@ -1930,7 +2004,7 @@ coexist). `--no-ibkr` is passed on to harvest.
 
 #### taxjson form-export
 
-`taxjson form-export [--form 8949|schedule3|txf] [--box A|B|C] [--out FILE] [--csv FILE] [--json]`
+`taxjson form-export [--form 8949|schedule3|txf] [--box A|B|C] [--out FILE] [--csv FILE] [--json] [--details]`
 
 Renders the year's computed gains in the shape the forms want, so filing
 day is transcription rather than arithmetic. The form follows the
@@ -2020,11 +2094,12 @@ never dropped silently: a stderr warning names each one with its
 proceeds, the text report ends with a **MANUAL REPORTING REQUIRED**
 section, the CSV carries them as `MANUAL` rows (blank cost and gain),
 the JSON as `manual_reporting_required`, and `taxjson checklist` keeps
-the form-export step open until they are reported by hand.
+the form-export step open until they are reported by hand. `--json`
+carries the same `readiness` record as `taxjson sum --json`.
 
 #### taxjson t1135
 
-`taxjson t1135 [--json]` (Canada)
+`taxjson t1135 [--json] [--details]` (Canada)
 
 A helper for CRA **Form T1135** (Foreign Income Verification Statement),
 for Canadian filers holding foreign securities. It answers the filing
@@ -2138,12 +2213,15 @@ not fetch. Not tax advice. The rule: [tax-rules.md](tax-rules.md#t1135-foreign-p
 
 #### taxjson reconcile-slips
 
-`taxjson reconcile-slips SLIP.csv [SLIP.csv ...] [--tolerance N] [--json]`
+`taxjson reconcile-slips SLIP.csv [SLIP.csv ...] [--tolerance N] [--json] [--details]`
 
 Diffs the broker's official slips (CRA **T5008**, IRS **1099-B**) against
 the computed dispositions, per symbol: disposition count, quantity,
 proceeds, and (when the slip carries cost) basis. Several slip files
-(one per broker) are reconciled together. CRA and the IRS machine-match
+(one per broker) are reconciled together. With no slip saved yet, the
+documented `inputs/slips/*.csv` is refused with "no slip CSV matches
+... nothing to reconcile yet" (exit 2): save the slip there, or
+`taxjson checklist --skip t5008`. CRA and the IRS machine-match
 returns against these slips: run this before filing and decide, for
 every flagged row, whether it is a tool-side problem (dropped rows,
 missing statement months) or a legitimate, documentable difference
@@ -2191,7 +2269,7 @@ passes both.
 
 #### taxjson slip-audit
 
-`taxjson slip-audit [ACCOUNT] [--template] [--import-cra PDF|DIR ... [--write]] [--tolerance N] [--json]` (Canada)
+`taxjson slip-audit [ACCOUNT] [--template] [--import-cra PDF|DIR ... [--write]] [--tolerance N] [--json] [--details]` (Canada)
 
 Checks the T5 and T3 slips against the books' income, per account and
 slip box: Canadian dividends (T5 24/10, T3 49/23), box 18 capital-gains
@@ -2209,8 +2287,9 @@ places in `inputs/slips/`:
   whose payments it matches, a T5 by its issuer, the broker's name or its
   carrying dealer's (Webull Canada's slips come from CI Investment
   Services; `src/taxjson/data/slip_issuers.toml`), each slip once; an
-  amended slip replaces its original; `--write` appends them to
-  `slips.toml`);
+  amended slip replaces its original, or with none in `slips.toml`
+  the earlier amended slip (the issuer's second amendment); `--write`
+  appends them to `slips.toml`);
 - IBKR's dividends report (`U*.YYYY.dividends.csv`, its per-payment
   T5 / T3 split), matched to the account whose books carry that IB
   account, payment by payment (a USD-base account's payments converted to
@@ -2221,12 +2300,17 @@ both ways: each payment at the Bank of Canada rate of its date (what the
 books do) and the year's average rate (the mean of the Bank's daily
 rates in the FX cache); for a CAD slip holding converted payments (IBKR)
 the report says which of the two its figure is closer to. It lists
-payments on the slip and not in the books (and the reverse), trust
+payments on the slip and not in the books (and the reverse), a payment
+whose only book row near its date is in another currency (never
+matched across currencies; a security's CAD and USD slip amounts are
+compared apart), trust
 distributions counted in another year by their record date, accounts
 with income and no slip, slips with no income behind them, and prints
 the exact `[[capital_gains_dividends]]` entries and `.tt` lines
 (`ADJUST ... type=roc`, and a negative `DIVIDEND` when the dividend row
-holds the return of capital) that bring the books to the slips.
+holds the return of capital) that bring the books to the slips; where
+the books hold part of a payment's return of capital, the line is the
+rest, and a note names the existing line to change instead.
 `--tolerance` is the allowed difference per box in CAD (default 1.00; a
 box holding converted money also allows 0.5% of that part). It changes
 nothing; exit 1 on a finding. `--json`: a stable schema
@@ -2235,7 +2319,7 @@ nothing; exit 1 on a finding. `--json`: a stable schema
 
 #### taxjson carryover
 
-`taxjson carryover [--json]`
+`taxjson carryover [--json] [--details]`
 
 A multi-year **capital-loss carryforward / carryback ledger** over the
 taxable accounts' full history (the same engine as the yearly pipeline:
@@ -2295,7 +2379,7 @@ cash (`taxjson fx-cash`) are not in it. The rules:
 
 #### taxjson option-boundary
 
-`taxjson option-boundary [--json]` (Canada)
+`taxjson option-boundary [--json] [--details]` (Canada)
 
 Written options whose write and close straddle a tax-year boundary, or
 that are open at year end: where the premium and any later amount land
@@ -2309,7 +2393,7 @@ its expiry date with no expiry or assignment row in the export. How
 
 #### taxjson close-year
 
-`taxjson close-year [--year YEAR] [--force] [--filed-dispositions CSV]`
+`taxjson close-year [--year YEAR] [--force] [--yes] [--filed-dispositions CSV] [--details]`
 
 Snapshot the current tax year's filing aggregates to
 `filed/<year>.json`, the filed-year lock that `check-filed` (and every
@@ -2337,11 +2421,35 @@ recorded other totals. It refuses books whose last run did not finish
 it refuses a year that has not ended and a year with no disposition and
 no income in the taxable books (a typo'd `year`); books built with
 another option timing than `taxjson.toml` now says are refused even
-with `--force`.
+with `--force`. It also stops while checklist items before the lock
+still need attention (it lists them: a January export not in yet,
+missing history, uncommitted inputs, an unreliable fx-cash year ...):
+on a terminal it asks whether to lock anyway, piped it refuses unless
+`--yes` is given. A project that is not a git repository always has
+`inputs-committed` open, so there `--yes` (or answering yes) is the
+way to close.
+
+It also **freezes the inputs** the filed books were built from, so
+the year can be rebuilt as filed years later while the shared exports
+move on with the next year. With exports shared by every year
+(`inputs_dir`), every file the run read is copied into this
+project's own `inputs/<account>/` (and the shared `tobase.map`
+beside `ticker.map`), and `taxjson.toml` stops naming the shared
+ones (`inputs_dir` and `tobase_map` commented out under a `## frozen
+by` note): from then on this year reads its own copy, like a
+single-folder project. A project that already reads its own files
+copies nothing. Either way the lock records the name and SHA-256 of
+every input (`frozen`), `check-filed` names a frozen input that
+changes afterwards, and `reports/` is kept as `filed/<year>/reports/`
+for `taxjson compare filed`. It refuses, writing nothing, when
+`inputs/<account>/` already holds files this project does not read
+(move them away, or into the shared folder if they belong to the
+books). `taxjson new-year` points the next year at the shared
+folders again.
 
 #### taxjson check-filed
 
-`taxjson check-filed`
+`taxjson check-filed [--details]`
 
 Recompute every filed year from the current books and report drift
 against the locks; exit 1 on drift. A taxable account the books have but
@@ -2354,7 +2462,9 @@ separately, and so are the amounts the export puts on each return line
 (Schedule 3 line codes, Form 8949 part totals), so a change that moves
 an amount between lines is drift even when the gain is unchanged;
 interest, foreign tax withheld and the FX gain on foreign cash are not
-locked (every OK says so).
+locked (every OK says so). A lock that froze its inputs (every lock
+`close-year` writes now) names each frozen input that changed since
+the year was closed, so a DRIFT is not blamed on the code.
 
 An unreadable lock is named and counts as a failure. A lock closed under
 the other country (every lock records its `country`) is refused by name
@@ -2372,7 +2482,7 @@ drift or an unreadable lock).
 
 #### taxjson handoff
 
-`taxjson handoff [--prior PATH] [--json]`
+`taxjson handoff [--prior PATH] [--json] [--details]`
 
 Checks that this year's project starts from exactly what last year's
 return carried forward, using last year's `close-year` record
@@ -2407,7 +2517,7 @@ runs it.
 
 #### taxjson audit
 
-`taxjson audit [SYMBOL ...] [--id ID] [--date D] [--account NAME] [--year Y | --all-years] [--summary] [--no-trace] [--no-color] [--json]`
+`taxjson audit [SYMBOL ...] [--id ID] [--date D] [--account NAME] [--year Y | --all-years] [--summary] [--no-trace] [--no-color] [--json] [--details]`
 
 The **authoritative justification** of every capital-gain figure: one
 block per disposition tracing the parsed broker row (nominal currency,
@@ -2418,7 +2528,10 @@ superficial-loss determination with replacement lots resolved, ending in
 a tie-out against the pipeline's saved gains files and the full pool
 trace. It runs the same blended computation the pipeline runs, so the
 audited numbers ARE the filed numbers. Exit 1 when any cross-check
-disagrees.
+disagrees. An account the last run deferred at a corp-action election
+(`work/<account>_pending_elections.json`) is left out and named: its
+book is incomplete, so nothing of it can tie until the election is
+made (`taxjson elect --pending`, then `taxjson run`).
 
 `--summary` prints one line per event (to find ids to dive into). The
 filters: symbol prefixes, `--id` (a transaction id prefix), `--date`,
@@ -2434,7 +2547,7 @@ honoured too), `--json` prints the full audit.
 
 #### taxjson wash-sales
 
-`taxjson wash-sales [ACCOUNT] [--explain] [--json]`
+`taxjson wash-sales [ACCOUNT] [--explain] [--json] [--details]`
 
 Each wash sale (superficial loss) that **occurred** in the tax year and
 the loss the engine **denied**, which `<account>.sum` otherwise folds
@@ -2520,7 +2633,7 @@ their sources: [tax-rules.md](tax-rules.md).
 
 #### taxjson edge-cases
 
-`taxjson edge-cases [ACCOUNT] [--margin DAYS] [--json]`
+`taxjson edge-cases [ACCOUNT] [--margin DAYS] [--json] [--details]`
 
 Everything whose treatment turns on a boundary, with where it lands and
 why: trades that settle in a different year than they trade (and the
@@ -2552,7 +2665,7 @@ year boundary.
 
 #### taxjson check-dates
 
-`taxjson check-dates [ACCOUNT] [--all] [--json]`
+`taxjson check-dates [ACCOUNT] [--all] [--json] [--details]`
 
 Checks every trade and settlement date the parsers produced against
 what was traded: crypto any day and hour; futures and futures options
@@ -2580,7 +2693,7 @@ row). A `checklist` step.
 
 #### taxjson sanity
 
-`taxjson sanity [ACCOUNT | FILE.toml | ACCOUNT[+ACCOUNT]=FILE[+FILE] ...] [--tolerance N] [--cost-tolerance N] [--json]`
+`taxjson sanity [ACCOUNT | FILE.toml | ACCOUNT[+ACCOUNT]=FILE[+FILE] ...] [--tolerance N] [--cost-tolerance N] [--json] [--details]`
 
 Cross-checks the open positions against holdings files produced outside
 taxjson (a `[[holding]]` array of `symbol` / `quantity` tables), per
@@ -2609,6 +2722,9 @@ could not check.
   `[[holding]]`) is an account that holds nothing. An
   account with open positions and no holdings at all is listed as
   `UNCHECKED` (the checklist's sanity step is then attention, not done).
+- A relative FILE is looked for from the shell's folder, then from the
+  project's (`taxjson -C ~/taxes/2024 sanity ib=ib_positions.toml`
+  finds the project's copy).
 
 A holdings row with a quantity but no symbol, or a symbol with no
 quantity, is refused, not skipped. Option rows whose root the file
@@ -2635,7 +2751,7 @@ are in [settings.md](settings.md#holdings-toml).
 
 #### taxjson journals
 
-`taxjson journals [--account NAME] [--year YYYY] [--pending] [--json]`
+`taxjson journals [--account NAME] [--year YYYY] [--pending] [--json] [--details]`
 
 Every broker journal between two listings of one security, per account,
 read from the last run (no network): its date, FROM → TO, quantity,
@@ -2660,7 +2776,7 @@ a stable schema ([settings.md](settings.md#taxjson-journals---json)).
 
 #### taxjson renames
 
-`taxjson renames [ACCOUNT] [--pending] [--json]`
+`taxjson renames [ACCOUNT] [--pending] [--json] [--details]`
 
 Every ticker change in the books as a dated event: its date, its source
 (a broker corporate-action row, IB's one contract id under two symbols,
@@ -2679,7 +2795,7 @@ rename is booked: [Renames](#renames) below.
 
 #### taxjson spinoffs
 
-`taxjson spinoffs [ACCOUNT] [--json]`
+`taxjson spinoffs [ACCOUNT] [--json] [--details]`
 
 Every spin-off in the books: parent and new security, ratio, the
 election, the value per share used, what was booked (income and the new
@@ -2701,7 +2817,7 @@ needs attention. The rules:
 
 #### taxjson splits
 
-`taxjson splits [ACCOUNT] [--json]`
+`taxjson splits [ACCOUNT] [--json] [--details]`
 
 Every split, consolidation and rename with the holdings just before and
 after. It notes a split recorded twice within a week (two sources:
@@ -2760,7 +2876,7 @@ found. The release process: [releasing.md](releasing.md).
 
 #### taxjson redact
 
-`taxjson redact [FILE ...] [--out DIR] [--also REGEX] [--no-denylist] [--force] [--check]`
+`taxjson redact [FILE ...] [--out DIR] [--also REGEX] [--no-denylist] [--force] [--check] [--details]`
 
 Strips the account numbers, names and contact details it recognises
 from broker exports while keeping every row shape, so a statement can be

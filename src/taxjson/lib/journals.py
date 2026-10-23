@@ -484,8 +484,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
             f"listings", width_=width_)
     if not js:
         d.blank()
-        d.para("No journal between two listings is pending." if pending
-               else "No journal between two listings in the books.")
+        d.para("None pending." if pending else "None in the books.")
     by_acct: Dict[str, List[Dict[str, Any]]] = {}
     for j in js:
         by_acct.setdefault(j["account"], []).append(j)

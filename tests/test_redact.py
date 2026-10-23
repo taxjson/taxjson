@@ -210,7 +210,7 @@ def _cli(*args, cwd=REPO_ROOT):
 # carries no address/postal/SSN-shaped literal for PII scanners to flag.
 _STREET1 = "123 " + "Maple Street, Unit 4"
 _STREET2 = "42 " + "Example Crescent East"
-_POSTAL1 = "M5V" + " 2T6"
+_POSTAL1 = "S4P" + " 3Y2"
 _POSTAL2 = "K1A" + " 0B1"
 _POSTAL3 = "H0H" + "0H0"
 _NOT_POSTAL = "D1A" + " 1A1"          # D is outside the Canada Post alphabet
@@ -246,13 +246,13 @@ class TestRedactIdentifierShapes(unittest.TestCase):
         text = ('Webull Securities Statement\n'
                 'JANE SAMPLE\n'
                 + _STREET1 + '\n'
-                'Toronto, ON ' + _POSTAL1 + '\n'
+                'Regina, SK ' + _POSTAL1 + '\n'
                 'Phone: 416-555-0123\n'
                 'Account Number: 5MV07654\n'
                 '"Currency","Date","Action Code","Symbol","Security Description","Quantity","Price"\n'
                 'USD,2025-01-02,BUY,AAPL,APPLE INC,10,150.00\n')
         out, rep = redact_text(text)
-        for gone in ("JANE", "Maple", "M5V", "Toronto", "416", "5MV07654"):
+        for gone in ("JANE", "Maple", "S4P", "Regina", "416", "5MV07654"):
             self.assertNotIn(gone, out, gone)
         self.assertIn("Webull Securities Statement\n", out)     # a title is not a name
         self.assertIn("USD,2025-01-02,BUY,AAPL,APPLE INC,10,150.00\n", out)

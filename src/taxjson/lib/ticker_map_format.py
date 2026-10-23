@@ -10,8 +10,8 @@ naming its keywords:
   Clean-up                  DELETE
   Dated events              legacy: RENAME with a date, JOURNAL (only when
                             the file has one; migrate() moves them out)
-  Lookups                   QUOTE, EXTRACT, CRYPTO, T1135 and the market
-                            lists (STABLE ... VENUE)
+  Lookups                   QUOTE, EXTRACT, CRYPTO, T1135, SIMILAR and the
+                            market lists (STABLE ... VENUE)
   Retired                   TRADINGVIEW (only when the file has one)
   Unrecognized              lines taxjson cannot use (only when present)
 
@@ -116,7 +116,7 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
              "a ticker change on that date"),
             ("JOURNAL FROM TO", "read as TOBASE FROM TO"),
         ))),
-    (LOOKUPS, ("QUOTE", "EXTRACT", "CRYPTO", "T1135", "STABLE",
+    (LOOKUPS, ("QUOTE", "EXTRACT", "CRYPTO", "T1135", "SIMILAR", "STABLE",
                "SPLITSHARE", "INDEXOPT", "EVENING", "MULT", "VENUE"),
      ("They change no symbol in the books.", (
          ("QUOTE SYMBOL YAHOO_SYMBOL [RATIO]",
@@ -125,6 +125,9 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
           "the symbol of a broker row with these words"),
          ("CRYPTO SYMBOL YAHOO_ID", "a coin's Yahoo id"),
          ("T1135 SYMBOL COUNTRY", "the T1135 domicile of a symbol (Canada)"),
+         ("SIMILAR A B [C ...]", "look-alike funds, kept as separate "
+          "securities: a loss on one with another bought in the window "
+          "is flagged"),
          ("STABLE SYMBOL USD|NO", "a US-dollar stablecoin, or not one"),
          ("SPLITSHARE ROOT [NO]", "a Canadian split-share corporation"),
          ("INDEXOPT ROOT [NO]", "a broad-based index option root (US)"),
@@ -631,6 +634,7 @@ def meaning(text: str) -> tuple:
             tuple((d.old, d.new, d.date, d.late) for d in tmap.dated),
             frozenset(tmap.undated_rename), frozenset(tmap.lookup_named),
             side.quote, side.crypto, tuple(side.extract), side.t1135,
+            tuple(s for s, _w, _l in side.similar),
             side.stable, side.splitshare, side.indexopt, side.evening,
             side.mult, side.venue, len(problems), len(notes),
             len(side.problems), len(side.retired))
@@ -918,6 +922,7 @@ _INIT_EXAMPLES = (
     "# EXTRACT Example US Dollar Unit Fund | USD | ABCX.U.TO",
     "# CRYPTO ABC ABC12345",
     "# T1135 XYZQ.US CA",
+    "# SIMILAR XYZQ.US ABCX.TO",
     "# STABLE ZZUSD USD",
     "# SPLITSHARE ZZQ",
     "# MULT ZZQ1 50",

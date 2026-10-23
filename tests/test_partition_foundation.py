@@ -406,6 +406,7 @@ class TestCommandOwnership(unittest.TestCase):
         import argparse
         seen = set()
         orig = argparse.ArgumentParser.parse_args
+        orig_known = argparse.ArgumentParser.parse_known_args
 
         def grab(self, args=None, namespace=None):
             for a in self._actions:
@@ -413,6 +414,7 @@ class TestCommandOwnership(unittest.TestCase):
                     seen.update(a.choices)
             raise SystemExit(0)
         argparse.ArgumentParser.parse_args = grab
+        argparse.ArgumentParser.parse_known_args = grab   # main's call
         try:
             argv = sys.argv
             sys.argv = ["taxjson", "tax-logic"]
@@ -421,6 +423,7 @@ class TestCommandOwnership(unittest.TestCase):
                     R.main()
         finally:
             argparse.ArgumentParser.parse_args = orig
+            argparse.ArgumentParser.parse_known_args = orig_known
             sys.argv = argv
         for key in C.COMMAND_COUNTRY:
             self.assertIn(key.partition(":")[0], seen, key)

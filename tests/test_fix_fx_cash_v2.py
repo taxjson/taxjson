@@ -664,6 +664,47 @@ if __name__ == "__main__":
 
 
 # ------------------------------------------------------------------ CLI
+class TestBooksAndFiles(unittest.TestCase):
+    """2026-10 audit #85 (a declaration scoped by its file's CASHBOOK
+    line) and #60 (internal pairing stays inside one statement)."""
+
+    def test_cashbook_scoped_declaration_matches_its_own_book(self):
+        a_book, b_book = "margin/ib:aaaa", "margin/ib:bbbb"
+        a = broker(CE.move("2025-02-03", "USD", -100.0, where="a.csv"),
+                   book=a_book)
+        b = broker(CE.move("2025-02-03", "USD", -100.0, where="b.csv"),
+                   book=b_book)
+        # No at=: the book comes from the file's CASHBOOK line (collect
+        # resolves it into `book`).
+        decl = tt("CASHMOVE 2025-02-03 USD -100 proceeds=200", book=b_book)
+        ledger([], cash([a, b], [decl]))
+        self.assertIsNone(a["decl"])
+        self.assertEqual(b["decl"], {"how": "proceeds", "value": 200.0})
+        # A line with no book (several books, no CASHBOOK) still matches
+        # the first identical move, as before.
+        a2 = broker(CE.move("2025-02-03", "USD", -100.0, where="a.csv"),
+                    book=a_book)
+        b2 = broker(CE.move("2025-02-03", "USD", -100.0, where="b.csv"),
+                    book=b_book)
+        loose = tt("CASHMOVE 2025-02-03 USD -100 proceeds=200", book=None)
+        ledger([], cash([a2, b2], [loose]))
+        self.assertEqual([x["decl"] is not None for x in (a2, b2)],
+                         [True, False])
+
+    def test_internal_transfer_pairs_inside_one_statement_only(self):
+        def m(label, amount):
+            e = CE.move("2025-02-03", "USD", amount, where="activity.csv",
+                        internal="transfer")
+            e.update(label=label, file="activity.csv")
+            return e
+        # Two accounts' statements, both named activity.csv: kept.
+        self.assertEqual(len(CE.pair_internal([m("acca", -100.0),
+                                               m("accb", 100.0)])), 2)
+        # One statement's out and in: they cancel.
+        self.assertEqual(CE.pair_internal([m("acca", -100.0),
+                                           m("acca", 100.0)]), [])
+
+
 from datetime import date as _date, timedelta as _td  # noqa: E402
 
 _TOML = """\

@@ -153,10 +153,17 @@ def _http_json(url: str, http_get: Callable[[str], bytes],
         raise RuntimeError(
             f"request failed: {scrub_detail(e, secrets)}") from e
     try:
-        return json.loads(raw.decode("utf-8"))
+        doc = json.loads(raw.decode("utf-8"))
     except ValueError as e:
         raise RuntimeError(f"non-JSON response from {url.split('?')[0]}: "
                            f"{e}") from e
+    # Every caller reads named fields: a JSON array or scalar from a
+    # broken upstream or proxy was an AttributeError traceback, not the
+    # one-line error the fetch command catches (finding 82).
+    if not isinstance(doc, dict):
+        raise RuntimeError(f"unexpected response from {url.split('?')[0]}: "
+                           f"a JSON {type(doc).__name__}, not an object")
+    return doc
 
 
 # ------------------------------------------------------------ Questrade
@@ -292,10 +299,15 @@ def _qt_get(api_server: str, access_token: str, path: str,
         raise RuntimeError(
             f"request failed: {scrub_detail(e, secrets)}") from e
     try:
-        return json.loads(raw.decode("utf-8"))
+        doc = json.loads(raw.decode("utf-8"))
     except ValueError as e:
         raise RuntimeError(f"non-JSON response from "
                            f"{_masked_path(path.split('?')[0])}: {e}") from e
+    if not isinstance(doc, dict):
+        raise RuntimeError(f"unexpected response from "
+                           f"{_masked_path(path.split('?')[0])}: a JSON "
+                           f"{type(doc).__name__}, not an object")
+    return doc
 
 
 def _eastern_dst(local: datetime) -> bool:
@@ -566,6 +578,15 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
         lines += ["", "[[holding]]",
                   f"symbol = {q(sym)}",
                   f"quantity = {qty!r}"]
+        # The currency of the average price, from the listing's suffix
+        # (Questrade's payload carries none): without it `taxjson
+        # opening` skipped every holding ("no currency for its cost")
+        # and sanity compared a USD average with CAD books (2026-10
+        # audit #43). A spelling that does not say is left out.
+        from taxjson.lib.price_chain import quote_currency
+        cur = quote_currency(sym)
+        if cur:
+            lines.append(f"currency = {q(cur)}")
         aep = p2.get("averageEntryPrice")
         if aep is not None:
             lines.append(f"average_entry_price = {float(aep)!r}")

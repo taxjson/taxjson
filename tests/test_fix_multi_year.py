@@ -216,8 +216,8 @@ class TestYearTools(unittest.TestCase):
         r = tjs("new-year", "2026", cwd=top)
         self.assertEqual(r.returncode, 0, r.stderr)
         new = (top / "2026" / "taxjson.toml").read_text()
-        self.assertIn("year = 2026", new)
-        self.assertIn('prior_year_record = "../2025/filed/2025.json"', new)
+        self.assertRegex(new, r"(?m)^year\s+= 2026$")
+        self.assertRegex(new, r'(?m)^prior_year_record\s+= "\.\./2025/filed/2025\.json"$')
         self.assertIn("# other_income = 900", new)
         self.assertNotIn("\nother_income", new)
         self.assertEqual((top / "2026" / "ticker.map").read_text(),
@@ -271,8 +271,20 @@ class TestFiledYearAndSharedInputs(unittest.TestCase):
         run_ok(self, y24)
         r = tjs("-C", str(y24), "close-year", "--yes")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        # A 2024 sale downloaded later, into the shared inputs.
+        # A 2024 sale downloaded later, into the shared inputs: the
+        # closed year froze its own copy of the exports and reads that,
+        # so the late download moves nothing there.
         (top / "inputs" / "margin" / "late.tt").write_text(
+            "BUYSELL 2024-08-01 10:00:00 QZQ.TO -10 CAD 28.00 270.05 9.95\n")
+        r = tjs("-C", str(y24), "sum")
+        self.assertNotIn("added:", r.stderr)
+        self.assertNotIn("2024 is filed", r.stderr)
+        r = tjs("-C", str(y24), "run", "--no-input")
+        self.assertIn("filed 2024: OK", (r.stdout + r.stderr).lower()
+                      .replace("filed 2024: ok", "filed 2024: OK"))
+        # Dropped into the frozen copy itself: reported against the
+        # filed year, and named as a frozen input that changed.
+        (y24 / "inputs" / "margin" / "late.tt").write_text(
             "BUYSELL 2024-08-01 10:00:00 QZQ.TO -10 CAD 28.00 270.05 9.95\n")
         r = tjs("-C", str(y24), "sum")
         self.assertIn("added: inputs/margin/late.tt", r.stderr)
@@ -288,6 +300,8 @@ class TestFiledYearAndSharedInputs(unittest.TestCase):
         self.assertTrue(y[2024]["stale"])
         r = tjs("-C", str(y24), "run", "--no-input")
         self.assertIn("filed 2024 DRIFTED", r.stdout + r.stderr)
+        self.assertIn("1 frozen input(s) changed since the year was closed: "
+                      "inputs/margin/late.tt", r.stdout + r.stderr)
 
 
 class TestHoldingsAndExports(unittest.TestCase):

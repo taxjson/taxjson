@@ -14,9 +14,10 @@ BUYS one; the opposite trade closes the oldest open contract of that
 series. A close at price 0 with no money is an expiry; an ASSIGN row
 is an assignment (of a written contract) or an exercise (of a bought
 one). A SPLIT on the series re-denominates and renames the open
-contracts. Money keeps the books' convention — the quantity carries
-the direction, the amount is a magnitude — so a .tt book's negative
-buy-back amount and a parser's positive one read the same.
+contracts. Money keeps the engine's convention — the quantity carries
+the direction, a purchase's amount is a magnitude (a .tt book's negative
+buy-back amount and a parser's positive one read the same), a sale's is
+signed (a write whose commission exceeds the premium nets a loss).
 
 The yield is the realized profit or loss of the window over the cost
 of the underlying's shares held now in the accounts read (the books'
@@ -26,7 +27,9 @@ it is over the average strike notional open in the window instead
 (strike x contract size x contracts, each contract weighted by its
 days open inside the window), and the row says so. A contract opened
 before the data (a missing-history opening) has no premium: its closes
-are listed, its money is unknown, and the row is flagged.
+are listed, its money is unknown, and the row is flagged. So is a
+contract closed in another currency than it was opened in (never
+converted here): its money is unknown, and the close's row is named.
 
 This module is pure: the command (taxjson_run.cmd_option_yield) reads
 the books and hands the rows in.
@@ -61,16 +64,19 @@ class Close:
     units: float
     cash: float          # signed: money received (+) or paid (-)
     pnl: float           # this close's share of the contract's premium + cash
+    splits_seen: int = 0  # how many of the lot's splits came before it
+    currency: str = ""   # the row's currency when not the lot's (money unknown)
 
 
 @dataclass
 class Lot:
     """One opened position in a series. `units`, `symbol`, `strike` and
     `expiry` are as OPENED; the splits and renames the series went
-    through later are dated in `splits`, and the `_on(end)` accessors
-    give the lot as it stood at a window's end (a later split used to
-    rewrite an earlier window's counts: 2026-10 audit R10). A close's
-    `units` are the contracts of its own day."""
+    through later are dated in `splits` (in replay order: each came
+    after the open), and the `_on(end)` accessors give the lot as it
+    stood at a window's end (a later split used to rewrite an earlier
+    window's counts: 2026-10 audit R10). A close's `units` are the
+    contracts of its own moment."""
     account: str
     symbol: str
     underlying: str
@@ -89,17 +95,20 @@ class Lot:
     notional: float = 0.0    # strike x size x units at the open (split-invariant)
     splits: List[Tuple[str, float, str]] = field(default_factory=list)
 
-    def factor(self, since: str, through: str) -> float:
-        """The split ratios applied after `since` up to and including
-        `through` (a split on a lot's own day came first)."""
+    def factor(self, through: str, first: int = 0) -> float:
+        """The ratios of the lot's splits from the `first`-th on, dated
+        up to and including `through`. The splits are the ones replayed
+        after the open, so one stamped later on the open's own day counts
+        and one stamped before it never reached the lot (a date
+        comparison dropped the first: 2026-10 audit #80)."""
         f = 1.0
-        for d, ratio, _new in self.splits:
-            if since < d <= through:
+        for d, ratio, _new in self.splits[first:]:
+            if d <= through:
                 f *= ratio
         return f
 
     def units_on(self, through: str) -> float:
-        return self.units * self.factor(self.open_date, through)
+        return self.units * self.factor(through)
 
     def per_unit_on(self, through: str) -> float:
         u = self.units_on(through)
@@ -108,7 +117,7 @@ class Lot:
     def symbol_on(self, through: str) -> str:
         sym = self.symbol
         for d, _ratio, new in self.splits:
-            if self.open_date < d <= through and new:
+            if d <= through and new:
                 sym = new
         return sym
 
@@ -119,8 +128,26 @@ class Lot:
         return parse_option_underlying(sym) or sym
 
     def strike_on(self, through: str) -> float:
-        f = self.factor(self.open_date, through)
+        """The strike at `through`: the renamed series' own strike when
+        a split moved the lot into another series (a strike adjustment
+        booked as a ratio-1 SPLIT kept the old strike: 2026-10 audit
+        #81), else the opened strike over the split ratios."""
+        sym = self.symbol_on(through)
+        if sym != self.symbol:
+            s = parse_option_strike(sym)
+            if s:
+                return float(s)
+        f = self.factor(through)
         return self.strike / f if f else self.strike
+
+    def notional_on(self, through: str) -> float:
+        """The lot's strike notional in the series of `through`: the
+        opened notional, rescaled when the series' strike is not the
+        opened one over the split ratios (a renamed strike)."""
+        f = self.factor(through)
+        base = self.strike / f if f else self.strike
+        now = self.strike_on(through)
+        return self.notional * (now / base) if base and now else self.notional
 
     def expiry_on(self, through: str) -> str:
         sym = self.symbol_on(through)
@@ -129,7 +156,7 @@ class Lot:
 
     def close_units_on(self, c: "Close", through: str) -> float:
         """A close's contracts in the units of `through`."""
-        return c.units * self.factor(c.date, through)
+        return c.units * self.factor(through, c.splits_seen)
 
     def units_open_on(self, end: str) -> float:
         """Contracts still open at the end of `end` (closes after it
@@ -199,12 +226,21 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
             nk = (acct, new)
             pos[nk] = pos.get(nk, 0.0) + p_old
             if moved:
-                open_lots.setdefault(nk, []).extend(moved)
+                # Renamed into a series with open contracts of its own:
+                # the queue stays first in, first out by open date
+                # (2026-10 audit #36).
+                dest = open_lots.setdefault(nk, [])
+                dest.extend(moved)
+                dest.sort(key=lambda lot: lot.open_date)
             continue
         if q == 0:
             continue
         p = pos.get(key, 0.0)
-        money = abs(float(_row(t, "net_amount", 0.0) or 0.0))
+        # A purchase's money is a magnitude, a sale's signed (2026-10
+        # audit #34: a write netting less than its commission is a loss).
+        money = float(_row(t, "net_amount", 0.0) or 0.0)
+        if q > 0:
+            money = abs(money)
         und = parse_option_underlying(sym) or sym
         strike = float(parse_option_strike(sym) or 0.0)
         size = float(size_of(t) or 0.0) or 100.0
@@ -245,10 +281,19 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
                 if take <= _EPS:
                     continue
                 c_cash = per_close * take
+                # A close in another currency than the open: its money
+                # is not the lot's, so the lot's premium and P/L are
+                # unknown (never converted here: 2026-10 audit #37).
+                other = (cur if cur and lot.currency and cur != lot.currency
+                         else "")
+                if other:
+                    lot.unknown_cost = True
                 lot.closes.append(Close(date=d, kind=kind, units=take,
                                         cash=c_cash,
                                         pnl=lot.per_unit_on(d) * take
-                                        + c_cash))
+                                        + c_cash,
+                                        splits_seen=len(lot.splits),
+                                        currency=other))
                 lot.open_units -= take
                 rem -= take
             open_lots[key] = [l for l in open_lots.get(key, [])
@@ -298,13 +343,13 @@ def _blank() -> Dict[str, Any]:
             "outcomes": {}, "wins": 0.0,
             "open_contracts": 0.0, "open_cash": 0.0,
             "notional_days": 0.0, "unknown_cost": 0,
-            "unknown_closes": 0.0}
+            "unknown_closes": 0.0, "currency_mismatch": []}
 
 
 def _add_notional_days(acc: Dict[str, Any], lot: Lot, start: str,
                        end: str, end_excl: str) -> None:
     units = lot.units_on(end)
-    per_unit = lot.notional / units if units else 0.0
+    per_unit = lot.notional_on(end) / units if units else 0.0
     opened = lot.open_date
     # Each close ends the exposure of its units; the rest runs to the
     # window's end.
@@ -327,6 +372,13 @@ def _add_notional_days(acc: Dict[str, Any], lot: Lot, start: str,
 def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
     """Add a lot's window figures, in the units of `end`."""
     end_excl = _next_day(end)
+    # Opened before the data (a missing-history lot), not unknown for a
+    # close in another currency alone: that close is named on its own,
+    # whenever it is (it makes the lot's every P/L unknown).
+    mixed = [c for c in lot.closes if c.currency]
+    before_data = lot.unknown_cost and not mixed
+    acc["currency_mismatch"].extend(
+        f"{lot.underlying_on(end)} {c.date} {c.currency}" for c in mixed)
     # Received / paid: every dollar in and out of the window, the opens
     # and the closes alike (a put written and bought back: received
     # its premium, paid the buy-back).
@@ -338,22 +390,24 @@ def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
         acc["received"] += max(lot.cash_open, 0.0)
         acc["paid"] += max(-lot.cash_open, 0.0)
         acc["cash_flow"] += lot.cash_open
-        if lot.unknown_cost:
+        if before_data:
             acc["unknown_cost"] += 1
     for c in lot.closes:
         if start <= c.date <= end:
             cu = lot.close_units_on(c, end)
             acc["closed_contracts"] += cu
-            acc["received"] += max(c.cash, 0.0)
-            acc["paid"] += max(-c.cash, 0.0)
-            acc["cash_flow"] += c.cash
+            if not c.currency:
+                # (money in another currency is not added to this one's)
+                acc["received"] += max(c.cash, 0.0)
+                acc["paid"] += max(-c.cash, 0.0)
+                acc["cash_flow"] += c.cash
             acc["outcomes"][c.kind] = acc["outcomes"].get(c.kind, 0.0) + cu
             if lot.unknown_cost:
                 # The premium is unknown: no P/L, no win or loss (a
                 # zero placeholder read as a definite loss: 2026-10
                 # audit R06).
                 acc["unknown_closes"] += cu
-                if lot.open_date < start:
+                if before_data and lot.open_date < start:
                     acc["unknown_cost"] += 1
                 continue
             acc["realized"] += c.pnl
@@ -386,7 +440,9 @@ def _finish(acc: Dict[str, Any], days: int,
     else:
         basis, cap = "", 0.0
     unknown = acc["unknown_closes"] > _EPS
-    y = (acc["realized"] / cap) if cap > 0.005 and not unknown else None
+    y = ((acc["realized"] / cap)
+         if cap > 0.005 and not unknown and acc["closed_contracts"] > _EPS
+         else None)
     out = {k: (round(v, 2) if isinstance(v, float) else v)
            for k, v in acc.items() if k != "notional_days"}
     out["outcomes"] = {k: round(v, 4) for k, v in
@@ -471,7 +527,8 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
                     "how": c.kind, "contracts": round(cu, 4),
                     "premium": (None if lot.unknown_cost
                                 else round(per_unit * cu, 2)),
-                    "close_cash": round(c.cash, 2),
+                    "close_cash": (None if c.currency
+                                   else round(c.cash, 2)),
                     "pnl": (None if lot.unknown_cost else round(c.pnl, 2)),
                     "days_open": _days(lot.open_date, c.date)})
         left = lot.units_open_on(end)
@@ -592,9 +649,8 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
                            f"underlying's ticker, e.g. QQQ or QQQ.US)",
                            "tjs events"), bullet="")
         return d
-    d.para("Planning numbers, not filing. WIN% = contracts closed at a "
-           "profit / contracts closed; YIELD = realized P/L / cost of the "
-           "shares held (* strike notional), annualized.")
+    d.para("Planning numbers, not filing. WIN% = closed at a profit; "
+           "YIELD = P/L / share cost (* strike notional), annualized.")
     if doc["closed"]:
         body = []
         for c in doc["closed"]:
@@ -603,12 +659,12 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
                 _side_right(c["side"], c["right"]), _n(c["contracts"]),
                 c["how"], str(c["days_open"]),
                 ("?" if c["premium"] is None else fmt_money(c["premium"])),
-                fmt_money(c["close_cash"]),
+                _money(c["close_cash"]),
                 ("?" if c["pnl"] is None else fmt_money(c["pnl"]))])
         d.table(["CLOSED", "SERIES", "ACCOUNT", "CUR", "SIDE", "QTY", "HOW",
                  "DAYS", "PREMIUM", "CLOSE", "P/L"],
                 body, aligns=["<", "<", "<", "<", "<", ">", "<", ">", ">",
-                              ">", ">"], drop=(2, 7, 4))
+                              ">", ">"], drop=(7, 4, 3, 2))
     else:
         d.para("No contract closed in the window.")
     d.section(f"OPEN AT {doc['end']}")
@@ -624,7 +680,7 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
         d.table(["OPENED", "SERIES", "ACCOUNT", "CUR", "SIDE", "QTY",
                  "EXPIRY", "DAYS", "PREMIUM"],
                 body, aligns=["<", "<", "<", "<", "<", ">", "<", ">", ">"],
-                drop=(2, 7))
+                drop=(7, 4, 3, 2))
     else:
         d.para("None.")
     d.section("SUMMARY")
@@ -644,7 +700,7 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
              "ANNUAL"],
             body, aligns=["<", "<", ">", ">", ">", ">", ">", ">", ">", ">",
                           ">", ">", ">"],
-            drop=(3, 5, 8, 1, 9))
+            drop=(9, 10, 1, 8, 3, 5))
     if len(doc["parts"]) > len(rows):
         d.blank()
         body = []
@@ -699,13 +755,20 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
         acts.append(out.act(
             f"{_n(sum(o['contracts'] for o in opened))} open contract(s) "
             f"past expiry with no expiry or assignment row: add the "
-            f"missing export", "tjs option-boundary"))
+            f"export covering the expiry date"))
     unk = [r["underlying"] for r in rows if r["unknown_cost"]]
     if unk:
         acts.append(out.act(
             f"{len(unk)} underlying(s) with a contract opened before the "
             f"data (premium unknown): {', '.join(unk[:3])}",
             "tjs find-missing-history"))
+    # (one close row taking two contracts is one row to check)
+    mixed = list(dict.fromkeys(m for r in rows
+                               for m in r["currency_mismatch"]))
+    if mixed:
+        acts.append(out.act_list(
+            f"{len(mixed)} close(s) not in the open's currency: check "
+            f"that row's currency", mixed))
     for w in doc["unmatched_underlyings"]:
         acts.append(out.act(f"{w}: no option on it in the books",
                             "tjs events"))

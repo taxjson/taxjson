@@ -126,6 +126,15 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #       (an interlisted company): an ISO 3166 alpha-3 code, or
 #       CA/CAN/CANADA/EXCLUDE for "not specified foreign property"
 #       (lib/t1135_country). Read by taxjson-t1135 / `taxjson t1135`.
+#   SIMILAR     A B [C ...]
+#       share listings you treat as look-alikes (two index funds on one
+#       index, a fund and its Canadian wrapper): two or more, each with
+#       its listing suffix, never an option or a future. They stay
+#       separate securities (their own ACB pools; nothing is denied),
+#       but a loss on one with another bought inside the loss window is
+#       a Warning of `taxjson run` and a caveat of the planning tools
+#       (lib/similar; tax-logic CA-SL-20 / US-WASH-26). Lines sharing a
+#       symbol are one group.
 #
 # and the market-list keywords, each extending or overriding one entry
 # of the shipped market data (taxjson/data/markets.toml, lib/markets):
@@ -154,7 +163,7 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 # ---------------------------------------------------------------------------
 
 TICKER_MAP_NAME = "ticker.map"
-SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT", "T1135", "STABLE",
+SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT", "T1135", "SIMILAR", "STABLE",
                  "SPLITSHARE", "INDEXOPT", "EVENING", "MULT", "VENUE")
 # The market-list keywords (lib/markets): each extends or overrides one
 # entry of taxjson's shipped market data (taxjson/data/markets.toml).
@@ -196,7 +205,9 @@ class SideRules:
     ticker.map. quote: {SYMBOL: (yahoo, ratio)}; crypto: {SYMBOL: yahoo
     id}; extract: [(description words lower-cased, CURRENCY, symbol)] in
     file order; t1135: {SYMBOL: ISO3 code, or "CA" for not foreign
-    property} (lib/t1135_country); problems: the lines that cannot be
+    property} (lib/t1135_country); similar: the SIMILAR groups as
+    written, [(symbols, where, line)] (similar_groups merges the lines
+    that share a symbol); problems: the lines that cannot be
     read or that contradict an earlier line, as `<file>:<lineno>:
     <message>`; t1135_problems: the ones a T1135 reader must not skip —
     a T1135 line, or a line with no keyword at all (an old t1135.map
@@ -208,6 +219,7 @@ class SideRules:
         self.crypto: dict = {}
         self.extract: list = []
         self.t1135: dict = {}
+        self.similar: list = []
         # market-list lines (lib/markets): {KEY: value}
         self.stable: dict = {}
         self.splitshare: dict = {}
@@ -221,9 +233,9 @@ class SideRules:
 
     def empty(self) -> bool:
         return not (self.quote or self.crypto or self.extract
-                    or self.t1135 or self.stable or self.splitshare
-                    or self.indexopt or self.evening or self.mult
-                    or self.venue)
+                    or self.t1135 or self.similar or self.stable
+                    or self.splitshare or self.indexopt or self.evening
+                    or self.mult or self.venue)
 
 
 def _comment_free(raw: str) -> str:
@@ -285,6 +297,21 @@ def parse_side_line(kw: str, line: str):
                 f"alpha-3 code, or {'/'.join(NOT_FOREIGN_WORDS)} for not "
                 f"foreign property)")
         return "t1135", toks[0].upper(), parse_country(toks[1])
+    if kw == "SIMILAR":
+        syms = []
+        for t in toks:
+            if t.upper() not in syms:
+                syms.append(t.upper())
+        if len(syms) < 2:
+            raise ValueError("SIMILAR needs `SIMILAR A B [C ...]`: two or "
+                             "more share listings")
+        for s in syms:
+            if not _share_listing_spelling(s):
+                raise ValueError(
+                    f"SIMILAR symbol {s!r} must be a share listing with its "
+                    f"suffix (ZZSP.US, ZZVF.TO): never an option, a future "
+                    f"or a bare ticker")
+        return "similar", tuple(syms), tuple(syms)
     if kw in ("SPLITSHARE", "INDEXOPT", "EVENING"):
         if len(toks) not in (1, 2) or (
                 len(toks) == 2 and toks[1].upper() not in ("YES", "NO")):
@@ -325,10 +352,75 @@ def parse_side_line(kw: str, line: str):
     raise ValueError(f"{kw} is not a ticker.map lookup keyword")
 
 
+def _share_listing_spelling(sym: str) -> bool:
+    """`sym` is a share listing as the books spell it: ROOT.SFX with a
+    suffix taxjson/data/markets.toml knows, not an option contract or a
+    future."""
+    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.markets import known_suffixes, suffix_of
+    s = str(sym or "").strip().upper()
+    return (suffix_of(s) in known_suffixes()
+            and not s.startswith(("F:", "/", "\\"))
+            and not is_option_symbol(s))
+
+
+def similar_groups(rules: "SideRules") -> list:
+    """The SIMILAR groups of a map, lines sharing a symbol merged (a
+    symbol is in one group): [[symbols, sorted]], sorted."""
+    parent: dict = {}
+
+    def find(x):
+        while parent.get(x, x) != x:
+            x = parent[x]
+        return x
+    for syms, _where, _line in rules.similar:
+        first = find(syms[0])
+        for s in syms[1:]:
+            r = find(s)
+            if r != first:
+                parent[r] = first
+    groups: dict = {}
+    for syms, _where, _line in rules.similar:
+        for s in syms:
+            groups.setdefault(find(s), set()).add(s)
+    return sorted(sorted(g) for g in groups.values())
+
+
+def similar_index(groups) -> dict:
+    """{symbol: the other symbols of its group (sorted)}."""
+    out: dict = {}
+    for g in groups:
+        for s in g:
+            out[s] = [x for x in g if x != s]
+    return out
+
+
+def similar_where(rules: "SideRules", a: str, b: str) -> tuple:
+    """(where, line) of the first SIMILAR line naming both `a` and `b`,
+    else of the first line naming either (two lines joined through a
+    third symbol), else ("", "")."""
+    a, b = str(a).upper(), str(b).upper()
+    either = None
+    for syms, where, line in rules.similar:
+        if a in syms and b in syms:
+            return where, line
+        if either is None and (a in syms or b in syms):
+            either = (where, line)
+    return either or ("", "")
+
+
 def add_side_rule(rules: "SideRules", kind: str, key, value,
                   where: str, line: str) -> None:
     """Record one parsed side rule; a second line giving the same key
-    another value is a problem (one symbol, one answer)."""
+    another value is a problem (one symbol, one answer). A SIMILAR line
+    is a group: lines sharing a symbol merge (similar_groups), so no
+    second line contradicts a first; a line repeating one exactly is
+    recorded once."""
+    if kind == "similar":
+        if any(set(s) == set(key) for s, _w, _l in rules.similar):
+            return
+        rules.similar.append((tuple(key), where, line))
+        return
     if kind == "extract":
         for (d, c, s) in rules.extract:
             if (d, c) == key and s != value:

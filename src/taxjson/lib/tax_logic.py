@@ -1414,7 +1414,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-OPEN-03",
                  "The snapshot replaces the account's earlier history of "
                  "its symbols: the account's other trade, transfer, split "
-                 "and cost-adjustment rows of a snapshot symbol dated on or "
+                 "and cost-adjustment rows of a snapshot symbol (or of one "
+                 "renamed into it on or after the row's own date: a "
+                 "ticker reused after its rename is another holding and "
+                 "keeps its rows) dated on or "
                  "before the snapshot day are left out of the books "
                  "(income rows stay; other symbols and other accounts keep "
                  "theirs), so no share is counted twice. A sale of the tax "
@@ -1432,7 +1435,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "transfer or a sale between). A taxjson.toml "
                  "[[distributions]] return of capital dated before the "
                  "snapshot is not applied (the snapshot's cost stands "
-                 "for it) and is named as ATTENTION. One "
+                 "for it) and is named as ATTENTION; one dated on the "
+                 "snapshot day itself is applied on top of the "
+                 "snapshot's cost (a year-end statement's book cost "
+                 "often does not carry it yet) and said in a NOTE, to "
+                 "be removed if the statement's cost does. One "
                  "symbol has one snapshot date per account.", cont=True),
         ]),
         ("Dispositions (Schedule 3)", [
@@ -1621,6 +1628,29 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "noted on its Schedule 3 row in `form-export` (text, "
                  "--json, --csv): the row claims the loss, its ACB not "
                  "reduced by the denial."),
+            Rule("CA-SL-20",
+                 "Funds you declare look-alikes in ticker.map (`SIMILAR A "
+                 "B [C ...]`: two or more share listings with their "
+                 "suffix, never an option or a future — two issuers' "
+                 "funds on one index, a fund and its Canadian wrapper; "
+                 "lines sharing a symbol are one group, a member a GLOBAL "
+                 "or TOBASE line moves is read under its booked symbol) "
+                 "stay separate securities: their own ACB pools, nothing "
+                 "denied, since s.54 reaches identical property only "
+                 "(IT-387R2) and whether such a fund is one is your call. "
+                 "A loss on one in a taxable account, in the tax year, "
+                 "with another bought within 30 days before or after it "
+                 "(settle dates) in any of your accounts, taxable or "
+                 "registered, and still held at the end of day 30 is a "
+                 "Warning of every `taxjson run` naming the pair, the "
+                 "dates and the line (`--strict` never stops for it), "
+                 "written to work/similar.state and listed by the "
+                 "checklist's wash-reviewed step as a manual decision; "
+                 "`buy-check` and `sell-check` add a caveat line (SAFE*, "
+                 "never UNSAFE) when a similar fund was sold at a loss, "
+                 "or bought, inside the window; `rebuy` names the similar "
+                 "listings a buy of which is flagged, not counted; "
+                 "`wash-radar` lists each group's statuses."),
         ]),
         ("In-kind moves to and from registered plans", [
             Rule("CA-INKIND-01",
@@ -1757,7 +1787,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Cash in lieu of a fractional share is a sale of the "
                  "fraction for the cash, on the pool's average cost "
                  "(Questrade books the fraction at $0 the same day "
-                 "first).", cont=True),
+                 "first); an s.86.1 spin-off's fraction is received with "
+                 "the whole shares and sold for the cash, on its share of "
+                 "the allocated cost.", cont=True),
             Rule("CA-CORP-09",
                  "A merger paid wholly in cash (IB \"Merged(Acquisition) "
                  "FOR CAD 30.00 PER SHARE\") is a sale of the shares at "
@@ -1873,7 +1905,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "no figure. It lists the [[capital_gains_dividends]] "
                  "entries and the .tt `ADJUST ... type=roc` lines (with a "
                  "negative DIVIDEND line when the dividend row holds the "
-                 "return of capital) that bring the books to the slips.",
+                 "return of capital) that bring the books to the slips; "
+                 "where the books hold part of a payment's return of "
+                 "capital, only the rest.",
                  cont=True),
             Rule("CA-SLIP-04",
                  "A slip downloaded from CRA My Account (`slip-audit "
@@ -1896,8 +1930,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "slip read twice (a second download, a file named with "
                  "its folder) is kept once, and an amended slip replaces "
                  "the original of the same issuer, account, fund and "
-                 "broker account (in the import or already in slips.toml); "
-                 "where that cannot be told neither is imported.",
+                 "broker account (in the import or already in slips.toml) "
+                 "or, with no original there, the earlier amended slip; "
+                 "where that cannot be told none is imported.",
                  cont=True),
         ]),
         ("Crypto", [
@@ -3255,7 +3290,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-OPEN-03",
                  "The snapshot replaces the account's earlier history of "
                  "its symbols: the account's other trade, transfer, split "
-                 "and basis-adjustment rows of a snapshot symbol dated on "
+                 "and basis-adjustment rows of a snapshot symbol (or of one "
+                 "renamed into it on or after the row's own date: a "
+                 "ticker reused after its rename is another holding and "
+                 "keeps its rows) dated on "
                  "or before the snapshot day are left out of the books "
                  "(income rows stay; other symbols and other accounts keep "
                  "theirs), so no share is counted twice. A sale of the tax "
@@ -3274,7 +3312,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "share of a return of capital). A taxjson.toml "
                  "[[distributions]] return of capital dated before the "
                  "snapshot is not applied (the snapshot's cost stands "
-                 "for it) and is named as ATTENTION. One "
+                 "for it) and is named as ATTENTION; one dated on the "
+                 "snapshot day itself is applied on top of the "
+                 "snapshot's cost (a year-end statement's book cost "
+                 "often does not carry it yet) and said in a NOTE, to "
+                 "be removed if the statement's cost does. One "
                  "symbol has one snapshot date per account.", cont=True),
             Rule("US-STKDIV-01",
                  "A stock dividend is not income (§305(a)): the basis of "
@@ -3468,6 +3510,28 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "and the Form 8949 instructions for a 1099-B amount "
                  "believed incorrect apply (taxjson does not pick that "
                  "code)."),
+            Rule("US-WASH-26",
+                 "Funds you declare look-alikes in ticker.map (`SIMILAR A "
+                 "B [C ...]`: two or more share listings with their "
+                 "suffix, never an option or a future; lines sharing a "
+                 "symbol are one group, a member a GLOBAL or TOBASE line "
+                 "moves is read under its booked symbol) stay separate "
+                 "securities: their own lots, nothing disallowed, since "
+                 "§1091 reaches substantially identical securities, which "
+                 "the IRS has not defined for funds of different issuers, "
+                 "and whether such a pair is one is your call. A loss on "
+                 "one in a taxable account, in the tax year, with another "
+                 "bought within 30 days before or after it (trade dates; "
+                 "no still-held test) in any of your accounts, IRAs "
+                 "included, is a Warning of every `taxjson run` naming "
+                 "the pair, the dates and the line (`--strict` never "
+                 "stops for it), written to work/similar.state and listed "
+                 "by the checklist's wash-reviewed step as a manual "
+                 "decision; `buy-check` and `sell-check` add a caveat "
+                 "line (SAFE*, never UNSAFE) when a similar fund was sold "
+                 "at a loss, or bought, inside the window; `rebuy` names "
+                 "the similar listings a buy of which is flagged, not "
+                 "counted; `wash-radar` lists each group's statuses."),
         ]),
         ("In-kind moves to and from retirement accounts", [
             Rule("US-INKIND-01",

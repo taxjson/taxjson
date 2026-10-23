@@ -602,10 +602,10 @@ def main():
     if missing:
         if args.no_input or not sys.stdin.isatty():
             reason = ("--no-input" if args.no_input
-                      else "stdin is not a TTY")
+                      else "no terminal to answer on")
             _out.error(
                 f"{len(missing)} corp-action event(s) need an election "
-                f"but {reason}", prog="taxjson-corp-actions",
+                f"— not asked: {reason}", prog="taxjson-corp-actions",
                 details=[f"- {ev.event_id}: {ev.summary()}"
                          for ev in missing]
                 + [f"Answer at a terminal (`taxjson run`), or set each "

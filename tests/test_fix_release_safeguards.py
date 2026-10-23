@@ -31,8 +31,7 @@ _AMOUNT = "4" + ",321.09"
 # `gh auth status` fails when GH_STUB_AUTH=fail. `gh api PATH` answers
 # from the JSON map in $GH_STUB_API (the first key that is a substring of
 # PATH; its value is the response body, or {"__fail__": 1} for an HTTP
-# error), through the real jq when --jq is given. `gh run watch` exits
-# $GH_STUB_WATCH (default 0).
+# error), through the real jq when --jq is given.
 _GH_STUB = r"""#!/usr/bin/env python3
 import json, os, subprocess, sys
 args = sys.argv[1:]
@@ -44,8 +43,6 @@ if "-F" in args:
         dst.write(src.read())
 if args[:2] == ["auth", "status"]:
     sys.exit(1 if os.environ.get("GH_STUB_AUTH") == "fail" else 0)
-if args[:2] == ["run", "watch"]:
-    sys.exit(int(os.environ.get("GH_STUB_WATCH", "0")))
 if args[:1] == ["api"]:
     path = [a for a in args[1:] if not a.startswith("-")][0]
     table = json.load(open(os.environ["GH_STUB_API"])) if os.environ.get("GH_STUB_API") else {}
@@ -105,6 +102,7 @@ class _Sandbox(unittest.TestCase):
         # escape hatch for tests), and a missing CI run is not waited for.
         self.env["TAXJSON_LAND_DIRECT"] = "1"
         self.env["TAXJSON_CI_APPEAR_SECS"] = "0"
+        self.env["TAXJSON_CI_POLL_SECS"] = "0"
         self.bin = self.d / "bin"
         self.bin.mkdir()
         self.gh_log = self.d / "gh.log"
@@ -227,13 +225,17 @@ class _ReleaseRepo(_Sandbox):
     def prepare(self, *args, **kw):
         return self.release("v0.2.0", "--prepare", *args, **kw)
 
-    def ci(self, *runs):
-        """The stub's answer about tests.yml runs (default: one green)."""
+    def ci(self, *runs, then=None):
+        """The stub's answer about tests.yml runs (default: one green);
+        `then`: the run's own state once it has finished (polled)."""
         runs = runs or (("completed", "success"),)
         f = self.d / "api.json"
-        f.write_text(json.dumps({"actions/workflows/tests.yml/runs": {
+        table = {"actions/workflows/tests.yml/runs": {
             "workflow_runs": [{"id": 4242, "status": st, "conclusion": co}
-                              for st, co in runs]}}))
+                              for st, co in runs]}}
+        if then:
+            table["actions/runs/4242"] = {"status": then[0], "conclusion": then[1]}
+        f.write_text(json.dumps(table))
         self.env["GH_STUB_API"] = str(f)
 
     def prepared(self):
@@ -397,16 +399,20 @@ class TestReleaseCutGates(_ReleaseRepo):
         self.assertNothingTagged(self.release("v0.2.0"),
                                  f"No tests.yml run for the version commit "
                                  f"of v0.2.0 ({vc[:9]}) on a push to main")
-        self.ci(("in_progress", None))
-        self.env["GH_STUB_WATCH"] = "1"
+        self.ci(("in_progress", None), then=("completed", "failure"))
         r = self.release("v0.2.0")
         self.assertIn("still running", r.stdout)
-        self.assertNothingTagged(r, "CI failed on the version commit")
-        self.env["GH_STUB_WATCH"] = "0"
+        self.assertNothingTagged(r, "CI failed on the version commit of "
+                                 "v0.2.0 (failure)")
+        self.ci(("in_progress", None))     # the run can no longer be read
+        r = self.release("v0.2.0")
+        self.assertNothingTagged(r, "Could not ask GitHub about CI")
+        self.ci(("in_progress", None), then=("completed", "success"))
         r = self.release("v0.2.0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn(["run", "watch", "4242", "--repo", "taxjson/taxjson",
-                       "--exit-status"], self.gh_calls())
+        self.assertTrue(any(c[0] == "api" and "repos/taxjson/taxjson/actions/runs/4242" in c
+                            for c in self.gh_calls()), self.gh_calls())
+        self.assertFalse([c for c in self.gh_calls() if c[:2] == ["run", "watch"]])
         self.assertTrue(self.origin_tags())
 
     def test_local_main_must_be_origin_main(self):
@@ -718,9 +724,12 @@ class _PromoteRepo(_Sandbox):
         self.env["GH_STUB_API"] = str(f)
 
     @staticmethod
-    def runs(*runs):
-        return {"actions/workflows/tests.yml/runs": {"workflow_runs": [
+    def runs(*runs, then=None):
+        table = {"actions/workflows/tests.yml/runs": {"workflow_runs": [
             {"id": 4242, "status": st, "conclusion": co} for st, co in runs]}}
+        if then:
+            table["actions/runs/4242"] = {"status": then[0], "conclusion": then[1]}
+        return table
 
     def promote(self, *args, stdin="", path=None, **env):
         e = dict(self.env, **env)
@@ -775,20 +784,20 @@ class TestPromoteGates(_PromoteRepo):
         self.api({"actions/workflows": {"__fail__": 1}})
         self.assertRefused(self.promote("v0.3.0"),
                            "Could not ask GitHub about CI", h)
-        self.api(self.runs(("in_progress", None)))
-        r = self.promote("v0.3.0", GH_STUB_WATCH="1")
+        self.api(self.runs(("in_progress", None), then=("completed", "failure")))
+        r = self.promote("v0.3.0")
         self.assertIn("still running", r.stdout)
-        self.assertRefused(r, "CI failed on v0.3.0", h)
+        self.assertRefused(r, "CI failed on v0.3.0 (failure)", h)
         self.assertRefused(self.promote("v0.3.0", path=self.path_without_gh()),
                            "the gh command is not installed", h)
 
     def test_running_ci_is_waited_for(self):
-        self.api(self.runs(("in_progress", None)))
+        self.api(self.runs(("in_progress", None), then=("completed", "success")))
         r = self.promote("v0.3.0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("still running", r.stdout)
-        self.assertIn(["run", "watch", "4242", "--repo", "taxjson/taxjson",
-                       "--exit-status"], self.gh_calls())
+        self.assertTrue(any(c[0] == "api" and "repos/taxjson/taxjson/actions/runs/4242" in c
+                            for c in self.gh_calls()), self.gh_calls())
 
     def test_ignore_ci_warns_and_backwards_is_not_held_to_ci(self):
         r = self.promote("v0.3.0", TAXJSON_PROMOTE_IGNORE_CI="1")

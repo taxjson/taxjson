@@ -185,15 +185,24 @@ def render(doc: Dict[str, Any], width: int = 120, cmd: str = "tjs plot-tax"):
     yr = doc["tax_year"]
     d = out.Doc(f"TAX BY MONTH — planning numbers, tax year {yr} "
                 f"({doc['label']}, {base})")
-    d.para(f"Planning numbers, not filing: the tax on each month's "
-           f"investment income, as the year's estimate (tjs estimate) "
-           f"stands through that month.")
     rows = doc["rows"]
+    flat = (all(abs(r["tax"]) < 0.005 for r in rows)
+            and abs(doc["year_estimate"]) < 0.005)
+    if flat:
+        # Nothing to chart: the legend says so and the table follows.
+        d.para(f"Planning numbers, not filing: no tax on the year's "
+               f"investment income ({fmt_money(doc['year_income'])} "
+               f"{base}), nothing to chart.")
+    else:
+        d.para(f"Planning numbers, not filing: the tax on each month's "
+               f"investment income, as the year's estimate (tjs estimate) "
+               f"stands through that month.")
     if not rows:
         d.para("No month to plot.")
         return d
-    for ln in chart(rows, doc["year_estimate"], width, base):
-        d.line(ln)
+    if not flat:
+        for ln in chart(rows, doc["year_estimate"], width, base):
+            d.line(ln)
     d.blank()
     body = [[r["month"], fmt_money(r["income"]), fmt_money(r["tax"]),
              fmt_money(r["cum_tax"])] for r in rows]

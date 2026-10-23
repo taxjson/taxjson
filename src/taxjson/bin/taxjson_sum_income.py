@@ -103,6 +103,11 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
     payment in lieu is kept in its own column."""
     ticker_stats: Dict[str, Dict] = {}
     interest_totals: Dict[str, float] = {}
+    # Interest charged (margin interest; IB and Questrade rows keep
+    # their sign): a carrying charge, never netted against interest
+    # earned (KNOWN_ISSUES "Margin interest paid is netted", fixed
+    # 2026-10). {currency: amount paid, positive}.
+    interest_paid_totals: Dict[str, float] = {}
     # Income rows with no amount at all (every amount key missing or
     # null) — booked as $0 without a word before (audit S051-14). The
     # CLI refuses them; library callers see the count.
@@ -191,6 +196,10 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
             ticker_stats[base_ticker][currency]['tax'] += amount
 
         elif action == 'INTEREST' or type_ == 'interest':
+            if amount < 0:
+                interest_paid_totals[currency] = (
+                    interest_paid_totals.get(currency, 0.0) - amount)
+                continue
             if currency not in interest_totals:
                 interest_totals[currency] = 0.0
             interest_totals[currency] += amount
@@ -206,6 +215,7 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
     return {
         'ticker_stats': ticker_stats,
         'interest_totals': interest_totals,
+        'interest_paid_totals': interest_paid_totals,
         'total_year': target_year or 'all',
         'missing_amount': missing_amount,
     }
@@ -216,6 +226,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker') -> str:
     lines = []
     ticker_stats = data['ticker_stats']
     interest_totals = data.get('interest_totals', {})
+    interest_paid = data.get('interest_paid_totals', {}) or {}
     total_year = data.get('total_year', 'all')
     
     all_currencies = set()
@@ -225,6 +236,8 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker') -> str:
     # Interest-only currencies (no dividend rows) need to render too —
     # otherwise CASH INTEREST silently disappears from the report.
     for curr in interest_totals:
+        all_currencies.add(curr)
+    for curr in interest_paid:
         all_currencies.add(curr)
     # Zero-income input still produces an empty table so downstream
     # consumers and visual inspection see a consistent layout.
@@ -314,6 +327,17 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker') -> str:
             "".rjust(17) +
             f"{interest:17,.2f}"
         )
+        paid = interest_paid.get(currency, 0)
+        if paid:
+            # Interest charged: a deduction (a carrying charge), shown
+            # beside the income and kept out of the total.
+            lines.append(
+                "INTEREST PAID (not in total)".ljust(26) +
+                "".rjust(17) +
+                "".rjust(17) +
+                "".rjust(17) +
+                f"{paid:17,.2f}"
+            )
         lines.append("-" * 94)
         lines.append(
             "TOTAL NET INCOME".ljust(26) +

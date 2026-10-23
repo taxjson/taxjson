@@ -99,6 +99,10 @@ def make_key(rec: Dict[str, Any], fields: List[str]) -> Tuple:
         v = rec.get(f)
         if isinstance(v, float):
             parts.append(_key_float(v))
+        elif isinstance(v, (list, dict)):
+            # A structured field (--by wash_replacements) is unhashable:
+            # its canonical JSON text is the key part (finding 83).
+            parts.append(json.dumps(v, sort_keys=True, default=str))
         else:
             parts.append(v)
     return tuple(parts)

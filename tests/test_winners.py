@@ -54,8 +54,8 @@ class TestWinners(unittest.TestCase):
         self.assertNotIn("LOSE.US", out.split("WINNERS TOTAL")[0])
         self.assertNotIn("-3,000.00", out)
         self.assertRegex(out, r"WIN\.TO\s+2\s+.*5,250\.00")
-        self.assertIn("WINNERS TOTAL: 5,350.00 CAD (all 2 shown)", out)
-        self.assertIn("TOTAL REALIZED GAIN: 2,350.00 CAD", out)
+        self.assertRegex(out, r"WINNERS TOTAL:\s+5,350\.00 CAD \(all 2 shown\)")
+        self.assertRegex(out, r"TOTAL REALIZED GAIN:\s+2,350\.00 CAD")
         self.assertIn("tjs losers", out)
         self.assertNotIn("99,999", out)             # dividends excluded
         self.assertNotIn("OLD.TO", out)             # window (tax year)
@@ -69,7 +69,7 @@ class TestWinners(unittest.TestCase):
         self.assertIn("LOSE.US", out)
         self.assertNotIn("WIN.TO", out)
         self.assertNotIn("MID.TO", out)
-        self.assertIn("LOSERS TOTAL: -3,000.00 CAD (1 shown)", out)
+        self.assertRegex(out, r"LOSERS TOTAL:\s+-3,000\.00 CAD \(1 shown\)")
         self.assertIn("tjs winners", out)
 
     def test_losers_ranked_worst_first(self):

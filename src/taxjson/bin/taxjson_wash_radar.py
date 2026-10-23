@@ -324,7 +324,11 @@ def main():
                         help="Sheltered transaction JSON files (repeatable)")
     parser.add_argument("--date", help="Target date (YYYY-MM-DD), defaults to today")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    parser.add_argument("--all", "-a", action="store_true", help="Show all tickers, not just relevant ones")
+    parser.add_argument("--all", "-a", action="store_true",
+                        help="Also the OTHER rows: listings with no open "
+                             "position and no loss in the window (nothing "
+                             "to watch); the default view already has the "
+                             "CLEAR rows")
     parser.add_argument("--json-out", metavar="PATH", default=None,
                         help="Also write the report as structured JSON (the "
                              ".rpt text is unchanged; readers such as "
@@ -386,6 +390,13 @@ def main():
                              "losses whose re-entry date passed in the "
                              "last N days (marked cleared; `taxjson "
                              "rebuy` shows them as one line). Default 0")
+    parser.add_argument("--similar", action="append", default=[],
+                        metavar="\"A B [C ...]\"",
+                        help="A group of look-alike funds (a ticker.map "
+                             "SIMILAR line; repeatable): listed with each "
+                             "member's status, a caveat only — they stay "
+                             "separate securities for the rule "
+                             "(lib/similar)")
     from taxjson.lib.pipeline import (add_loss_override_args,
                                       loss_overrides_from_args)
     add_loss_override_args(parser)
@@ -1754,7 +1765,7 @@ def main():
                                  "date": last['date'],
                                  "reshort_ok_from": safe_d}
                 _short_cover_note = (
-                    f"NOTE: the loss of ${_amt:.4f} on covering a short "
+                    f"NOTE: the loss of ${_amt:.2f} on covering a short "
                     f"on {last['date']} is disallowed only by a new SHORT "
                     f"sale before {safe_d} (§1091(e)); buying the shares "
                     f"does not replace it.")
@@ -1775,20 +1786,20 @@ def main():
                 # loss (min(bought, sold, still held) / sold), never the
                 # whole loss by itself — a 1-share DRIP after a 100-share
                 # loss sale costs 1% of it (audit S054-07).
-                _per = (f" — ${loss_amt / loss_units:.4f} of it for each "
+                _per = (f" — ${loss_amt / loss_units:.2f} of it for each "
                         f"unit bought back" if loss_units > 1e-9 else "")
                 if held_any > _eps:
                     # Still holding, but no replacement bought in the
                     # window is held: the loss is allowed so far —
                     # buying MORE before the window closes would disallow.
-                    adv = (f"BLOCKED: Recent loss of ${loss_amt:.4f} on "
+                    adv = (f"BLOCKED: Recent loss of ${loss_amt:.2f} on "
                            f"{last['date']}. Re-entry before {safe_d} "
                            f"disallows the loss on as many units as you "
                            f"buy{_per}.")
                 else:
                     # Fully exited at a loss: safe, just don't re-enter
                     # until the window closes.
-                    adv = f"COOLING: Loss of ${loss_amt:.4f} on {last['date']}. Safe to re-enter on {safe_d}."
+                    adv = f"COOLING: Loss of ${loss_amt:.2f} on {last['date']}. Safe to re-enter on {safe_d}."
             if us_mode and not is_option_ticker(ticker) and any(
                     abs(e['epoch'] - l['epoch']) <= window_sec
                     for l in in_window_losses
@@ -2042,7 +2053,7 @@ def main():
         if not adv and _short_cover_note:
             # Nothing else to say about the position: the short-cover
             # loss's own window (a re-short is what disallows it).
-            adv = (f"COOLING: Loss of ${short_cover_j['loss']:.4f} on "
+            adv = (f"COOLING: Loss of ${short_cover_j['loss']:.2f} on "
                    f"covering a short on {short_cover_j['date']}. Do not "
                    f"short it again before "
                    f"{short_cover_j['reshort_ok_from']} — a new short sale "
@@ -2087,21 +2098,22 @@ def main():
                     # identical contract ever replaces it (CA-SL-06 /
                     # US-WASH-03) — never "the shares".
                     adv = ("CLEAR: "
-                           + ("No recent writes of this contract. "
-                              if us_mode else "No recent buys. ")
-                           + "Safe to buy it back at a loss (do not "
+                           + ("no recent writes of this contract; "
+                              if us_mode else "no recent buys; ")
+                           + "safe to buy it back at a loss (do not "
                            + ("write it again" if us_mode
                               else "buy the same contract again")
                            + " for 30 days).")
                 elif _short_pos and us_mode:
-                    adv = ("CLEAR: No recent short sales. Safe to cover at "
-                           "a loss (do not short it again for 30 days — a "
+                    adv = ("CLEAR: no recent short sales; safe to cover at "
+                           "a loss (do not short it again for 30 days: a "
                            "new short sale is the replacement, §1091(e)).")
                 elif _short_pos:
-                    adv = ("CLEAR: No recent buys. Safe to cover at a loss "
+                    adv = ("CLEAR: no recent buys; safe to cover at a loss "
                            "(do not buy the shares for 30 days).")
                 else:
-                    adv = "CLEAR: No recent buys. Safe to sell at a loss (do not repurchase for 30 days)."
+                    adv = ("CLEAR: no recent buys; safe to sell at a loss "
+                           "(do not repurchase for 30 days).")
             # (Fully-exited recent losses are routed to COOLING in the loss
             # branch above.)
 
@@ -2253,11 +2265,18 @@ def main():
     # glance rather than silently absent. Any extra category (e.g. OTHER
     # from --all) follows.
     extras = [c for c in by_cat if c not in _order]
+    # The SIMILAR groups (lib/similar): each member's status, a caveat.
+    from taxjson.lib.similar import radar_lines
+    _groups = [[s.strip().upper() for s in g.split()] for g in args.similar
+               if g.strip()]
+    _status = {str(r[0]).strip().upper(): cat for cat, rows_ in by_cat.items()
+               for r in rows_ if cat}
+    similar_lines = radar_lines(_groups, _status)
     report = (_render_brief(_order + extras, by_cat, args.country,
-                            _today_iso, bool(args.all))
+                            _today_iso, bool(args.all), similar_lines)
               if args.brief else
               _render_text(_order + extras, by_cat, args.country,
-                           _today_iso, bool(args.all)))
+                           _today_iso, bool(args.all), similar_lines))
 
     if args.json_out or args.json:
         # Structured sidecar: same rows/grouping as the printed .rpt, plus
@@ -2284,6 +2303,11 @@ def main():
             "include_all": bool(args.all),
             "scope_note": scope_note(args.country),
             "sections": sections_j,
+            # The SIMILAR groups with a member's status (lib/similar).
+            "similar": [{"members": g,
+                         "status": {s: _status.get(s) for s in g
+                                    if _status.get(s)}}
+                        for g in _groups if any(_status.get(s) for s in g)],
         }
         if args.json_out:
             out_path = Path(args.json_out)
@@ -2313,67 +2337,51 @@ def main():
 
 
 _US_DEFINITIONS = (
-    "WASHED: You sold at a loss and a replacement was bought within 30 "
-    "days before or after the sale (trade dates) in any of your accounts, "
-    "IRAs included: the US engine disallowed it (§1091). There is no "
-    "still-held test, so no later sale undoes it; the disallowed loss is "
-    "added to the replacement's basis (lost for good when the replacement "
-    "is in an IRA).",
-    "BLOCKED: You sold at a loss in the last 30 days and still hold some. "
-    "Buying again before the printed date disallows the loss on as many "
-    "shares as you buy.",
-    "LOCKED: An IRA bought in the last 30 days. A taxable loss sale is a "
-    "wash sale for up to that many shares, permanently — even if the IRA "
-    "has sold them since (Rev. Rul. 2008-5).",
-    "EXITABLE: You bought in the last 30 days in a taxable account. "
-    "Selling the FULL position at a loss is fine; a partial loss sale is "
-    "a wash sale (basis defers into the rest).",
-    "COOLING: You recently sold out at a loss. Wait 31 days from the sale "
+    "WASHED: a loss sale with a replacement bought within 30 days either "
+    "side (trade dates), IRAs included: disallowed (§1091), no still-held "
+    "test; the loss moves into the replacement's basis (lost in an IRA).",
+    "BLOCKED: a loss sale in the last 30 days, some still held: a buy "
+    "before the printed date disallows the loss on as many shares as you "
+    "buy.",
+    "LOCKED: an IRA bought in the last 30 days: a taxable loss sale is a "
+    "wash sale for that many shares, permanently (Rev. Rul. 2008-5).",
+    "EXITABLE: bought in a taxable account in the last 30 days: a FULL "
+    "exit at a loss is fine, a partial loss sale is a wash sale.",
+    "COOLING: sold out at a loss recently: wait 31 days from the sale "
     "(trade date) before buying back.",
-    "RISK: Sellable at a loss NOW — but an IRA still holds, so an IRA buy "
-    "(dividend reinvestment too) within 30 days AFTER the sale disallows "
-    "the loss permanently on as many shares as it buys.",
-    "CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 "
+    "RISK: sellable at a loss NOW, but an IRA still holds: an IRA buy "
+    "(a DRIP too) within 30 days after disallows the loss permanently.",
+    "CLEAR: no recent buys; safe to sell at a loss (no buy-back for 30 "
     "days).",
-    "A long call on the shares bought in a loss's window is noted, not "
-    "enforced (the US engine only warns).",
-    "After a loss on covering a short, only a new short sale within 30 "
-    "days is a replacement (§1091(e)); buying the shares is not.",
-    "A futures contract or an option on one is a §1256 contract, outside "
-    "§1091: its loss is never disallowed (a re-purchase is only flagged).",
+    "A long call bought in a loss's window is noted, not enforced; after "
+    "a loss on covering a short only a new short sale replaces it "
+    "(§1091(e)); futures and their options are §1256, outside §1091.",
 )
 
 
 _CA_DEFINITIONS = (
-    "VIOLATION: You sold at a loss and a holder that BOUGHT the same "
-    "security inside the ±30-day window still holds it (your taxable "
-    "accounts, or a registered account). That holder sells ALL of it by "
-    "the printed TRADE date to rescue the loss — the rescue sale must "
-    "SETTLE within 30 days of the loss's settlement (the printed date "
-    "already allows for the settlement lag and any settlement holiday "
-    "inside it; a crypto asset settles on its trade date). Shares a "
-    "registered account held before the window never make a loss "
-    "superficial.",
-    "BLOCKED: You sold at a loss in the last 30 days. Buying back now "
-    "cancels the loss on as many shares as you buy and still hold 30 days "
-    "after the sale (s.54; the per-unit amount is printed).",
-    "LOCKED: A registered account bought in the last 30 days and still "
-    "holds those shares. A taxable loss sale is superficial for up to "
-    "that many shares (the rest of the loss stands) — permanently denied "
-    "unless that account sells them within 30 days after your sale.",
-    "EXITABLE: You bought in the last 30 days in a taxable account. "
-    "Selling the FULL position at a loss is fine; a partial loss sale is "
-    "superficial (basis defers into the rest).",
-    "CAUTION: A registered account bought recently but has since sold "
-    "what it bought. A loss sale (whole or partial) stands unless an "
-    "affiliated account re-buys within 30 days after.",
-    "COOLING: You recently sold out at a loss. Wait 30 days from the sale "
+    "VIOLATION: a loss sale, and a holder that bought the same security "
+    "inside the 30-day window either side still holds it: that holder "
+    "sells ALL of it by the printed TRADE date (its settlement within 30 "
+    "days of the loss's; crypto settles on its trade date) to rescue the "
+    "loss. Shares held before the window never make a loss superficial.",
+    "BLOCKED: a loss sale in the last 30 days: buying back cancels the "
+    "loss on as many shares as you buy and still hold 30 days after it "
+    "(s.54; the per-unit amount is printed).",
+    "LOCKED: a registered account bought in the last 30 days and still "
+    "holds: a taxable loss sale is superficial for that many shares, "
+    "permanently unless that account sells them within 30 days after.",
+    "EXITABLE: bought in a taxable account in the last 30 days: a FULL "
+    "exit at a loss is fine, a partial loss sale is superficial.",
+    "CAUTION: a registered account bought recently and has since sold: "
+    "a loss sale stands unless an affiliated account re-buys within 30 "
+    "days after.",
+    "COOLING: sold out at a loss recently: wait 30 days from the sale "
     "before buying back.",
-    "RISK: Sellable at a loss NOW — but a sheltered account still holds, "
-    "so an affiliated buy (e.g. a DRIP) within 30 days AFTER the sale "
-    "denies the loss permanently on as many shares as it buys. Pause "
-    "sheltered adds for 30 days.",
-    "CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 "
+    "RISK: sellable at a loss NOW, but a sheltered account still holds: "
+    "an affiliated buy (a DRIP too) within 30 days after denies the loss "
+    "permanently; pause sheltered adds for 30 days.",
+    "CLEAR: no recent buys; safe to sell at a loss (no buy-back for 30 "
     "days).",
 )
 
@@ -2404,8 +2412,25 @@ def _few(names, n: int = 3) -> str:
                                    if len(names) > n else "")
 
 
+_SIMILAR_NOTE = ("Similar funds (ticker.map SIMILAR) are two securities "
+                 "for the rule: one's status is a caveat for the others, "
+                 "not a verdict.")
+
+
+def _similar_block(doc: "_out.Doc", similar_lines) -> None:
+    """The SIMILAR groups that have a member with an advisory: one line
+    each, then the one-sentence note."""
+    if not similar_lines:
+        return
+    doc.blank()
+    doc.line("SIMILAR")
+    for ln in similar_lines:
+        doc.item(ln, indent="  ")
+    doc.para(_SIMILAR_NOTE)
+
+
 def _render_brief(sections, by_cat, country: str, as_of: str,
-                  include_all: bool) -> "_out.Doc":
+                  include_all: bool, similar_lines=()) -> "_out.Doc":
     """The radar's essentials (docs/output-style.md, Essentials first):
     a legend, ONE table of the positions with an advisory (its STATUS
     first, in the fixed order), then one `! ` line per status that asks
@@ -2454,14 +2479,15 @@ def _render_brief(sections, by_cat, country: str, as_of: str,
                 doc.item(a[len(_out.ACT):], bullet=_out.ACT)
             else:
                 doc.para(a)
-    if not acts:
+    _similar_block(doc, similar_lines)
+    if not acts and not similar_lines:
         doc.blank()
     doc.para(scope_more("tjs wash-radar --details", country))
     return doc
 
 
 def _render_text(sections, by_cat, country: str, as_of: str,
-                 include_all: bool) -> "_out.Doc":
+                 include_all: bool, similar_lines=()) -> "_out.Doc":
     """The radar report in the house layout (docs/output-style.md): a
     title, one section per advisory category (heading with its count;
     `(none)` when empty) holding a TICKER / TAXABLE / SHELTERED / CLEARS
@@ -2505,6 +2531,7 @@ def _render_text(sections, by_cat, country: str, as_of: str,
             i += len(grp)
             if adv:
                 doc.line("\n".join(advisory_lines(adv, doc.w, "    ")))
+    _similar_block(doc, similar_lines)
     doc.section("DEFINITIONS")
     for d in (_US_DEFINITIONS if us else _CA_DEFINITIONS):
         doc.item(d, indent="  ")

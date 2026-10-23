@@ -630,23 +630,35 @@ def closed_later(held: List[Tuple[str, float]],
     account's later rows of any source in date order (a .tt BUYSELL or
     expiry, another broker's sale, a transfer-out). A position counts as
     closed once the later rows bring it to zero or past it; it is
-    closed by .tt when the row that closed it is a .tt line."""
-    rows = sorted(later, key=lambda r: (str(r.get("date") or ""),
-                                       str(r.get("time") or "")))
+    closed by .tt when the row that closed it is a .tt line. A SPLIT row
+    scales the units left by its ratio, or moves them to its new symbol,
+    as open_positions does."""
+    from taxjson.lib.corporate_timeline import split_copies
+    dup = split_copies(later)
+    rows = sorted((r for r in later if id(r) not in dup),
+                  key=lambda r: (str(r.get("date") or ""),
+                                 str(r.get("time") or "")))
     still: List[Tuple[str, float]] = []
     by_tt: List[str] = []
     by_other: List[str] = []
     for sym, q in held:
         left = q
+        cur = sym                       # the symbol after any rename
         closer = None
         for r in rows:
-            if str(r.get("symbol") or "").upper() != sym \
-                    or str(r.get("action")) == "SPLIT":
+            if str(r.get("symbol") or "").upper() != cur:
                 continue
             try:
-                left += float(r.get("quantity") or 0.0)
+                rq = float(r.get("quantity") or 0.0)
             except (TypeError, ValueError):
                 continue
+            if str(r.get("action")) == "SPLIT":
+                new = str(r.get("symbol_new") or "").upper()
+                left *= rq if rq > _EPS else 1.0
+                if new:
+                    cur = new
+                continue
+            left += rq
             if abs(left) <= 1e-6 or (left > 0) != (q > 0):
                 closer = r
                 break

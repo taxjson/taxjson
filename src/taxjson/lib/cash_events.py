@@ -39,7 +39,8 @@ instead of adding one.
 
 Every event belongs to a BOOK: one broker account's cash, named
 `<account label>/<broker>` (plus `:<first 4 of the hashed broker
-account>` when a label holds several accounts of one broker), or a book
+account>`, or more when two share those 4, when a label holds several
+accounts of one broker), or a book
 a `.tt` line names with `at=<name>` (a bank account kept by hand).
 """
 from __future__ import annotations
@@ -280,7 +281,8 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
     """Every cash line of the TAXABLE accounts' .tt files (each with
     `label`, `file` and `where` "inputs/<acct>/<file>:<line>"), and the
     problems: a malformed line, a line in a sheltered account (its cash
-    is outside s.39(1.1) / §988)."""
+    is outside s.39(1.1) / §988), a .tt file that cannot be read (its
+    lines would be missing from the ledger)."""
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.dated_events import _where, tt_files
     out: List[Dict[str, Any]] = []
@@ -290,8 +292,17 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
         for tt in tt_files(_PL.inputs_dir(Path(root)) / acct):
             try:
                 text = read_text_utf8(tt)
-            except (OSError, ValueError):
-                continue        # the .tt stage names an unreadable file
+            except (OSError, ValueError) as e:
+                # Said, not skipped: its CASHOPEN/CASHMOVE lines would
+                # be missing and the ledger refuse for the wrong reason
+                # (2026-10 audit #91).
+                from taxjson.lib.brokerages.base import shown_name
+                why = getattr(e, "strerror", None) or str(e)
+                if why.startswith(f"{tt}: "):
+                    why = why[len(f"{tt}: "):]
+                problems.append(f"inputs/{acct}/{shown_name(tt)}: cannot "
+                                f"be read ({why})")
+                continue
             for n, raw in enumerate(text.splitlines(), 1):
                 if not any(k in raw for k in KEYWORDS):
                     continue
@@ -371,9 +382,14 @@ def pair_internal(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_class: Dict[Tuple, List[int]] = {}
     for i, e in enumerate(events):
         if e.get("kind") == "CASHMOVE" and e.get("internal"):
-            by_class.setdefault((e["internal"], e.get("where", ""),
+            # One statement: its account folder (label) and file too —
+            # two accounts' statements both named activity.csv paired
+            # one's transfer out with the other's transfer in (2026-10
+            # audit #60). (`where` is the file's base name.)
+            by_class.setdefault((e["internal"], e.get("label", ""),
+                                 e.get("file", ""), e.get("where", ""),
                                  e["currency"]), []).append(i)
-    for (cls, _w, _c), idx in by_class.items():
+    for (cls, _l, _f, _w, _c), idx in by_class.items():
         pos = [i for i in idx if events[i]["amount"] > 0]
         neg = [i for i in idx if events[i]["amount"] < 0]
         used: set = set()
@@ -411,17 +427,40 @@ def _identity(e: Dict[str, Any]) -> Tuple:
     return (k, id(e))
 
 
-def dedup_across_files(events: List[Dict[str, Any]]
+def dedup_across_files(events: List[Dict[str, Any]],
+                       warnings: Optional[List[str]] = None
                        ) -> List[Dict[str, Any]]:
     """Two exports of one account that overlap (a year's statement and a
     year-to-date one) carry the same cash event twice: an event repeated
     in ANOTHER file of the book is one event, the most any one file
     holds of it kept (two identical conversions in one file are two) —
-    the position books' cross-file rule."""
+    the position books' cross-file rule. The settlement date is not part
+    of an event's identity; when two files date one event's settlement
+    differently, a line saying so (both files, both dates) is added to
+    `warnings` (2026-10 audit #86)."""
     per: Dict[Tuple, Dict[str, int]] = {}
+    settles: Dict[Tuple, Dict[str, str]] = {}
     for e in events:
-        f = per.setdefault(_identity(e), {})
+        k = _identity(e)
+        f = per.setdefault(k, {})
         f[e.get("file", "")] = f.get(e.get("file", ""), 0) + 1
+        if e["kind"] in ("FXCONV", "CASHMOVE", "FLOW"):
+            settles.setdefault(k, {}).setdefault(
+                e.get("file", ""), str(e.get("settle") or e["date"]))
+    if warnings is not None:
+        for k, by_file in settles.items():
+            if len(set(by_file.values())) < 2:
+                continue
+            files = sorted(by_file)
+            e0 = next(e for e in events if _identity(e) == k)
+            said = "; ".join(f"{f or '?'} settles it {by_file[f]}"
+                             for f in files)
+            warnings.append(
+                f"{e0.get('book') or e0.get('label') or '?'}: one "
+                f"{e0['kind']} of {e0['date']} is in {len(files)} files "
+                f"with different settlement dates ({said}) — kept once, "
+                f"dated {by_file[max(per[k], key=lambda f: (per[k][f], f))]}"
+                f"; check which file is right")
     keep_n = {k: max(v.values()) for k, v in per.items()}
     keep_file = {k: max(v, key=lambda f: (v[f], f)) for k, v in per.items()}
     out: List[Dict[str, Any]] = []
@@ -443,12 +482,25 @@ def _d(s: str) -> _date:
 # ------------------------------------------------------------ books
 
 def book_name(label: str, broker: str, account: str = "",
-              several: bool = False) -> str:
-    """`<label>/<broker>[:<first 4 of the hashed account>]`."""
+              several: bool = False, width: int = 4) -> str:
+    """`<label>/<broker>[:<first `width` (4) of the hashed account>]`."""
     short = BROKER_SHORT.get(broker, broker)
     if account and several:
-        return f"{label}/{short}:{account[:4]}"
+        return f"{label}/{short}:{account[:width]}"
     return f"{label}/{short}"
+
+
+def _short_width(accounts: Any) -> int:
+    """The shortest prefix (4 hex at least) that tells the hashed
+    `accounts` apart: two accounts whose hashes share the first 4 get
+    longer book names (`ib:31350`, `ib:3135a`), never one merged book."""
+    accts = sorted({a for a in accounts if a})
+    width = 4
+    longest = max((len(a) for a in accts), default=width)
+    while width < longest and \
+            len({a[:width] for a in accts}) < len(accts):
+        width += 1
+    return width
 
 
 class Books:
@@ -483,7 +535,7 @@ class Books:
         if not account and len(accts) == 1:
             account = next(iter(accts))
         return book_name(label, broker, account,
-                         self._several(label, broker))
+                         self._several(label, broker), _short_width(accts))
 
     def all_names(self, label: str) -> List[str]:
         out = []
@@ -624,7 +676,8 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
             if len(accts) == 1:
                 acct = next(iter(accts))
         ev["book"] = books.name(ev["label"], ev["broker"], acct)
-    events = dedup_across_files(pair_internal(events))
+    warnings: List[str] = []
+    events = dedup_across_files(pair_internal(events), warnings)
     lines, lp = read_project_lines(root, accounts)
     problems.extend(lp)
     for ev in [x for x in lines if x["kind"] == "CASHBOOK"]:
@@ -654,7 +707,8 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
         ev["book"] = b
         ev["book_problem"] = why
     return {"events": events, "lines": lines, "books": books,
-            "problems": problems, "stablecoins_as_cash": stable_cash}
+            "problems": problems, "warnings": warnings,
+            "stablecoins_as_cash": stable_cash}
 
 
 def _extract(broker: str, path: Path, stable_cash: bool,

@@ -140,7 +140,7 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
         self.assertAlmostEqual(r["recent_loss"], 1030.0, places=4)
         self.assertAlmostEqual(r["recent_loss_qty"], 130.0, places=4)
         self.assertEqual(r["clears_at"], "2026-06-05")
-        self.assertIn("$7.9231 of it for each unit bought back",
+        self.assertIn("$7.92 of it for each unit bought back",
                       r["advisory"])
 
     def test_exitable_safe_date_and_countdown(self):
@@ -363,7 +363,7 @@ class TestUsRadarEngineAmounts(unittest.TestCase):
         self.assertEqual(r["category"], "COOLING")
         self.assertEqual((r["recent_loss"], r["recent_loss_qty"]),
                          (1000.0, 100.0))
-        self.assertIn("Loss of $1000.0000 on 2026-05-01. Safe to re-enter "
+        self.assertIn("Loss of $1000.00 on 2026-05-01. Safe to re-enter "
                       "on 2026-06-01.", r["advisory"])
         self.assertEqual(r["clears_in_at_generation"], "2026-06-01 (12d)")
 
@@ -601,7 +601,7 @@ class TestUsRadarGates(unittest.TestCase):
                 self._r("2026-09-22", "2026-09-23", 100, 49.0, 4900.0)]
         r = _rows("usa", book, as_of="2026-10-01")["XYZ.US"]
         self.assertEqual(r["category"], "EXITABLE", r["advisory"])
-        self.assertIn("NOTE: the loss of $1000.0000 on covering a short on "
+        self.assertIn("NOTE: the loss of $1000.00 on covering a short on "
                       "2026-09-15 is disallowed only by a new SHORT sale "
                       "before 2026-10-16", r["advisory"])
         self.assertEqual(r["short_cover_loss"]["reshort_ok_from"],

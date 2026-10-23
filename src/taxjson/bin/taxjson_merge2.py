@@ -56,6 +56,7 @@ from taxjson.bin.taxjson_convert_currency import (
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
 from taxjson.lib.corporate_timeline import normalize_symbol_new
 from taxjson.lib.trade_cancel import pair_cancellations, trade_cancel_what
+from taxjson.lib.corp_actions import drop_broker_cil_pairs
 
 
 def warn_duplicate_splits(txs, conflicts=None) -> int:
@@ -507,6 +508,10 @@ def main():
     # parse as a marked cancellation leg; drop it with its original here
     # (lib/trade_cancel, audit R1-51). Always on: a no-op without marks.
     txs = cancel_trade_pairs(txs)
+    # An s.86.1 spin-off's sale of a fraction paid in cash replaces the
+    # broker parser's own pair for that cash (Questrade's $0 buy and its
+    # sale; CA-CORP-05): the fraction is sold once. No-op without one.
+    txs = drop_broker_cil_pairs(txs)
 
     # --- Stage 3: ticker-map ------------------------------------------
     if args.map_file:

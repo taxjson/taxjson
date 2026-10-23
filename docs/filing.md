@@ -16,7 +16,10 @@ that runs the command named beside it and reports done, attention, to
 do, blocked, or — for the steps no command can prove — manual, which
 you confirm with `taxjson checklist --done ID` (marks are kept in
 `checklist.json`; commit it). `taxjson checklist --walk` visits the open
-steps one at a time; `--quick` skips the slow detectors.
+steps one at a time; it needs a terminal (piped or scripted it stops with
+`Error: --walk needs a terminal`; `taxjson checklist --done ID` and
+`--skip ID` are the non-interactive way). `--quick` skips the slow
+detectors.
 
 ## 1. Freeze the inputs
 
@@ -124,7 +127,9 @@ steps one at a time; `--quick` skips the slow detectors.
 - [ ] **T5 / T3 slips**: `taxjson slip-audit` agrees with the books.
       Download them from CRA My Account (Tax information slips, one PDF
       per slip) and import them: `taxjson slip-audit --import-cra
-      <folder> --write`; or type each slip into `inputs/slips/slips.toml`
+      <folder> --write`: an amended slip, the issuer's second amendment
+      too, replaces the one it amends; or type each slip into
+      `inputs/slips/slips.toml`
       (`taxjson slip-audit --template` prints one per account), or drop
       IB's dividends report
       (`U*.YYYY.dividends.csv`) in `inputs/slips/`. It compares each box
@@ -133,7 +138,8 @@ steps one at a time; `--quick` skips the slow detectors.
       lists the payments missing on either side and the accounts with
       income and no slip, and prints the `[[capital_gains_dividends]]`
       entries (box 18, line 17400) and the `.tt` return-of-capital lines
-      (T3 box 42) that bring the books to the slips. Trust units report
+      (T3 box 42; the rest only, where the books hold part of a payment's)
+      that bring the books to the slips. Trust units report
       on a T3, often weeks after the T5s; split-share and mutual-fund
       corporations report on a T5. A difference you accept is answered
       per account by `taxjson checklist --done t5-t3`. **NR4 slips**: by
@@ -167,10 +173,10 @@ steps one at a time; `--quick` skips the slow detectors.
       its figure. The opt-in ledger v2 (`--ledger v2`, under audit) reads
       them and says what it computed or what it needs; mark a computed
       figure reviewed with `taxjson checklist --done fx-cash`.
-- [ ] Carrying charges for line 22100 — the margin interest you paid,
-      from the broker statements (`taxjson events` lists the INTEREST
-      rows; the CASH INTEREST line of reports/<account>.sum nets credit
-      against debit interest, so it is not the amount paid). Trade
+- [ ] Carrying charges for line 22100 — the margin interest you paid:
+      the INTEREST PAID line of reports/<account>.sum, per currency
+      (CASH INTEREST is the interest earned; `taxjson events` lists
+      the INTEREST rows; convert a USD figure yourself). Trade
       commissions are not carrying charges: they are already in the ACB
       and proceeds, so do not take the `taxjson fees` total to line
       22100 (CRA, line 22100).
@@ -189,15 +195,23 @@ steps one at a time; `--quick` skips the slow detectors.
 - [ ] Enter the figures (or file the T1-ADJ). Keep `reports/` as the
       working papers — the CRA can ask for the ACB computation years
       later.
-- [ ] `taxjson close-year` **immediately after filing** (`--force` when
+- [ ] `taxjson close-year` **immediately after filing** (it lists the
+      checklist items still open and asks before locking; `--force` when
       re-filing). The lock is what `check-filed`, `option-boundary` and
       every later `run` use to detect drift, and what makes next year's
       T1-ADJ instructions accurate. It also records the year's
       carry-forwards (net capital loss; minimum tax carryover by year of
       origin), which next year's `estimate`, `carryover` and `amt` read
-      and its `handoff` checks.
-- [ ] Commit the `filed/<year>.json` lock; tag the data repo with the
-      filing date.
+      and its `handoff` checks. And it freezes the inputs: the exports
+      the filed books were built from are copied into the year's own
+      `inputs/`, which the year reads from then on, and `reports/` is
+      kept as `filed/<year>/reports/` (`taxjson compare filed` shows
+      whether a later run still reproduces them).
+- [ ] Commit the `filed/<year>.json` lock, the frozen `inputs/` copy and
+      `filed/<year>/reports/`; tag the data repo with the filing date.
+      A `.gitignore` written by an earlier `taxjson init` has an
+      unanchored `reports/` line that also hides `filed/<year>/reports/`
+      (`close-year` says so): change it to `/reports/`.
 
 ## 6. After assessment
 

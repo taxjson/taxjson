@@ -35,15 +35,15 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
   brokers' holdings of one symbol a common snapshot date; give a retirement account's lines any lot date.
 - **Code:** `src/taxjson/lib/opening.py` — `snapshots`
 
-## A negative futures price in a generic or `.tt` file
+## A negative futures price in a `.tt` file
 
-- **What happens:** IB futures rows keep the sign of a negative price, but a generic-importer futures row
-  at a negative price is read as its magnitude, so its P/L sign is wrong. In a `.tt` file a negative-price
-  buy keeps its signed total; a negative-price sell with a negative total is accepted only with its
-  contract size on the line and refused otherwise; a negative price with a positive total is not caught.
-- **Meanwhile:** book such a fill from the IB statement, or as a `.tt` line with the signed total (and
-  the contract size on a sell), or enter the close's realized P/L by hand.
-- **Code:** `src/taxjson/lib/brokerages/generic.py` — `_trade_net`; `src/taxjson/bin/taxjson_convert_tt.py` — `_excess_commission_sale`
+- **What happens:** IB and generic-importer futures rows keep the sign of a negative price (a buy at a
+  negative price receives money). In a `.tt` file a negative-price buy keeps its signed total; a
+  negative-price sell with a negative total is accepted only with its contract size on the line and
+  refused otherwise; a negative price with a positive total is not caught.
+- **Meanwhile:** book such a fill from the IB statement or a generic CSV, or as a `.tt` line with the
+  signed total (and the contract size on a sell), or enter the close's realized P/L by hand.
+- **Code:** `src/taxjson/bin/taxjson_convert_tt.py` — `_excess_commission_sale`
 
 ## Kraken fees taken in the traded coin are not in the fee reports
 
@@ -74,16 +74,6 @@ until it is fixed. A fixed bug leaves this file, and the CHANGELOG names the rel
 - **Meanwhile:** when the two sales fall in different years, check the split in `tjs wash-sales` and
   correct it by hand.
 - **Code:** `src/taxjson/lib/core.py`
-
-## Margin interest paid is netted against interest earned
-
-- **What happens:** IB `INTEREST` rows keep their sign, and the income summary nets interest paid
-  against interest earned, so margin interest (deductible as a carrying charge, line 22100) shrinks the
-  interest income instead of being shown as a deduction. `tjs estimate` does not read interest paid from
-  the books.
-- **Meanwhile:** take interest earned and paid from the broker's statement or slip, and enter the year's
-  carrying charges with `tjs estimate --carrying-charges` (or `[estimate] carrying_charges`).
-- **Code:** `src/taxjson/bin/taxjson_sum_income.py`
 
 ## Limitations and things taxjson does not do
 

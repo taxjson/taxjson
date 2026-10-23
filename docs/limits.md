@@ -190,13 +190,22 @@ Questrade, Webull, Coinbase and Kraken have no positions export the parsers know
 taxjson-fetch plugin's `tjs fetch --positions` writes one.
 **Code:** `src/taxjson/lib/positions_reports.py`
 
+#### A US §355 spin-off's cash in lieu of a fraction
+
+Under the US `tax_free_355` election the fraction a whole-share broker (Questrade, RBC) pays in cash keeps
+its basis in the parent and no sale of it is booked; an RBC cash-in-lieu row is said as UNBOOKED. (A
+Canadian s.86.1 rollover sells the fraction for the cash, tax-logic CA-CORP-05.)
+**Instead:** book the fraction's sale in a `.tt` file.
+**Code:** `src/taxjson/lib/corp_actions.py` — `_us_spinoff_tax_free_355`, `warn_unsold_spinoff_cil`
+
 #### Export rows modelled without a real sample
 
 A few row shapes were written from the broker's documentation or a made-up row, because no real export
 holding them was available: IB's cash-in-lieu row (a Corporate Actions row containing `cash in lieu` with
 a negative quantity: booked as a sale of the fraction for its Proceeds and folded into the nearest split
 within a week, in this or another statement of the account), IB's `Stock Dividend` row, and a Questrade
-reversal (a CIL, REI or stock dividend cancelled in a later export). If a broker words the row
+reversal (a CIL, REI or stock dividend cancelled in a later export), and an RBC spin-off's cash-in-lieu
+row that states its fraction (`CASH IN LIEU OF 0.5 SHS`, or the fraction in Quantity). If a broker words the row
 differently, an IB row falls into the unhandled corporate actions (warned at the end of the parse) and an
 unpaired Questrade reversal stops the parse; nothing is booked silently.
 **Instead:** book the event in a `.tt` file, and send a redacted sample with a bug report so the shape can
@@ -366,6 +375,19 @@ but the loss stays allowed. Different roots, other name differences, known depos
 different-root listings by issuer name.
 **Code:** `src/taxjson/lib/xlist_loss_radar.py` (tax-logic CA-XLIST-05 / US-XLIST-04)
 
+#### Look-alike funds are watched, never denied
+
+A ticker.map `SIMILAR A B [C ...]` line (two issuers' funds on one index, a fund and its Canadian
+wrapper) flags a loss on one with another bought in the window — on the run, in the checklist, in
+`buy-check` / `sell-check`, `rebuy` and `wash-radar` — and changes no figure: s.54 reaches identical
+property, which CRA does not read as another issuer's fund (IT-387R2), and §1091 substantially identical
+securities, undefined for funds of different issuers. A computed denial for such a pair (a `deny=` mode
+matching the two funds by value and moving the denied amount into the other fund's ACB) was considered
+and not built: it would serve a filing position almost nobody takes, with a matching formula no
+authority has written. The practical question is answered before the trade (`buy-check`).
+**Instead:** to take the conservative position, wait out the window (`rebuy`), or adjust the loss by hand.
+**Code:** `src/taxjson/lib/similar.py` (tax-logic CA-SL-20 / US-WASH-26)
+
 #### `days_held` counts from trade dates
 
 The days-held figure counts from trade dates while every other Canadian date is settlement-based. Canada
@@ -442,11 +464,18 @@ An IRA purchase (US-WASH-11) or a purchase in another taxable account (US-WASH-2
 sold before it. Within the loss's own account, a replacement bought and sold before the loss shares were
 bought is not matched (US-WASH-21): applying the rule there would chain through every buy/sell cycle.
 
+#### Sub-micro quantity tolerance in the Canadian engine
+
+A share or option position under 1e-6 units is read as flat (broker exports round share counts). One that
+still carries a cost of a cent or more is a holding: a sale of it closes it at its cost instead of opening a
+short (tax-logic CA-ACB-01). A coin's tolerance is relative to the quantities, far below that.
+
 #### Sub-micro quantity tolerance in the US engine
 
 A US row under 1e-8 units is left out, a lot residue of at most 1e-8 units is folded into the closing sale,
 and a sale's excess of at most 1e-8 units opens no position; each case is named in a warning (tax-logic
-US-CRYPTO-08). The effect is cents.
+US-CRYPTO-08). The effect is cents; rows under the tolerance that carry a cent or more are also a
+conservation problem, in `tjs sum` and its `--json` readiness record.
 
 ### Estimate, instalments and AMT
 
@@ -506,7 +535,8 @@ whose export has no balance (RBC, Questrade, Webull, Coinbase, a bank). It reads
 conversions, deposits, withdrawals and cash-only transfers, but no Webull or generic-importer cash event:
 such an account is refused until its `.tt` cash lines are declared complete (`CASHBOOK <book> complete`).
 IB's daily futures cash settlement is not modelled (an IB account holding futures at a statement end does
-not reconcile), and a combined IB statement is one cash account. Rows from corporate actions,
+not reconcile); a futures commission leaves the cash on its own fill's date, and a close brings in its
+P/L before commissions. A combined IB statement is one cash account. Rows from corporate actions,
 crypto-for-crypto swaps and fees or rewards paid in a coin move no foreign cash; the cash a corporate
 action paid (cash in lieu, boot) is ledgered.
 **Instead:** use v2 only with those lines declared; it stays opt-in until it has been checked on real
@@ -538,7 +568,7 @@ other than a trade (an opening balance, a transfer) stops the conversion. In Can
 the average cost of the contract's open positions of the same direction in all your taxable accounts
 (s.47), so its gain can differ from the P/L that account's broker (and its T5008) shows; each account's
 fills still close only that account's position. US books close partial positions FIFO within the
-account; §1256 is above.
+account, in trade-date order; §1256 is above.
 **Code:** `src/taxjson/lib/futures.py`
 
 #### T1135 sees only the brokerage books

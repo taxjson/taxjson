@@ -135,7 +135,7 @@ class TestSanityMissingHoldingsFile(unittest.TestCase):
                          run_sub=cl.default_run_sub(root))
             res = cl.d_sanity(ctx)
         self.assertEqual(res.status, "attention", res.detail)
-        self.assertIn("NOT checked", res.detail)
+        self.assertIn("not checked", res.detail)
 
 
 # ------------------------------------------- R1-336 / S047-18 missing-history

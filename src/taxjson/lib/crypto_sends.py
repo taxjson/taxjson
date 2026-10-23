@@ -823,16 +823,53 @@ def fair_value(send: Dict[str, Any], rates: Rates,
             price = usd * r[0]
             src = (f"Yahoo {ysym}-USD daily close {fmt_price(usd)} USD "
                    f"({day}) x {_rate_text('USD', base, r, day)}")
-    p = float(fmt_price(price))
+    # The value is the full-precision price x the units, only the money
+    # rounded; fmt_price's six digits are for showing the price (a value
+    # of the shown price was cents off on a five-figure send: 2026-10
+    # audit #47).
+    p = float(price)
     return {"price": p, "value": round(qty * p, 2), "currency": base,
             "source": src}
 
 
 def tt_line(send: Dict[str, Any], fv: Dict[str, Any], base: str) -> str:
+    """The send's .tt sale line: the price as shown (six digits), the
+    proceeds from the full-precision price (within the .tt reader's
+    1% typo check of the shown price x the units)."""
     qty = -send["quantity"]
     return (f"BUYSELL {send['date']} {send['time']} {send['symbol']} "
             f"-{fmt_qty(qty)} {base} {fmt_price(fv['price'])} "
-            f"{round(qty * fv['price'], 2):.2f} 0")
+            f"{round(qty * float(fv['price']), 2):.2f} 0")
+
+
+def _shown_price_line(line: str) -> str:
+    """`line` (a tt_line) with its proceeds of the price as shown — the
+    line written before the full-precision value (2026-10 audit #47)."""
+    parts = line.split()
+    try:
+        qty, price = abs(float(parts[4])), float(parts[6])
+    except (IndexError, ValueError):
+        return line
+    parts[7] = f"{round(qty * price, 2):.2f}"
+    return " ".join(parts)
+
+
+def keep_written_lines(entries: Iterable[Dict[str, Any]],
+                       path: Path) -> None:
+    """A send's line already in crypto_sends.tt with the proceeds of its
+    shown price (written before the full-precision value) stays as
+    written: the same send at the same price is not rewritten for a
+    rounding cent."""
+    try:
+        have = set((read_tt(path) or "").splitlines())
+    except ValueError:
+        return
+    for e in entries:
+        t = e.get("tt")
+        if t and t not in have:
+            old = _shown_price_line(t)
+            if old != t and old in have:
+                e["tt"] = old
 
 
 # ------------------------------------------------ USD / stablecoin pool
@@ -843,13 +880,17 @@ def _kraken_norm(asset: str, fold: bool = False) -> str:
 
 def kraken_pool_flows(path: Path) -> List[Dict[str, Any]]:
     """USD-family cash flows from one Kraken LEDGER export, one per
-    refid: {'dt', 'units' (signed), 'cad' (CAD leg of the same refid)}.
-    Custody rows (withdrawal/deposit/p2p/hybridearnwithdrawal of a
-    non-fiat asset) are skipped — they come from the sidecar with their
-    pairing — and so are Earn-wallet shuffles (never left the account)."""
+    refid: {'dt', 'units' (signed), 'cad' (CAD leg of the same refid),
+    'key' (the refid, so `build_report` reads an entry once across
+    overlapping exports; None for a row with no refid)}. A row repeated
+    under one ledger txid is the same entry and is read once, the
+    parser's rule (`_ledger_identity`). Custody rows
+    (withdrawal/deposit/p2p/hybridearnwithdrawal of a non-fiat asset)
+    are skipped — they come from the sidecar with their pairing — and
+    so are Earn-wallet shuffles (never left the account)."""
     from taxjson.lib.brokerages.kraken import (
-        _classify_header, _fee_ccy, _lower_row, _STAKING_WALLET_MOVES,
-        _FIAT_CURRENCIES)
+        _classify_header, _fee_ccy, _ledger_identity, _lower_row,
+        _STAKING_WALLET_MOVES, _FIAT_CURRENCIES)
     from taxjson.lib.brokerages._crypto_common import (strict_money,
                                                        utc_to_local)
     import io
@@ -863,8 +904,23 @@ def kraken_pool_flows(path: Path) -> List[Dict[str, Any]]:
         f.seek(0)
         groups: Dict[str, Dict[str, Any]] = {}
         order: List[str] = []
-        for n, (raw, _line) in enumerate(_dict_rows(f, path, "ledger")):
+        seen_tx: Dict[str, tuple] = {}
+        for n, (raw, line) in enumerate(_dict_rows(f, path, "ledger")):
             row = _lower_row(raw)
+            tx_id = (row.get("txid") or "").strip()
+            if tx_id:
+                ident = _ledger_identity(row)
+                prev = seen_tx.get(tx_id)
+                if prev is not None:
+                    if prev != ident:
+                        raise ValueError(
+                            f"Kraken ledger {path.name} line {line}: "
+                            f"ledger txid {tx_id[:2]}*** appears twice "
+                            f"with DIFFERENT content — the file is "
+                            f"corrupt or two accounts' exports were "
+                            f"merged; fix it before parsing.")
+                    continue            # the same entry pasted twice
+                seen_tx[tx_id] = ident
             type_ = (row.get("type") or "").strip().lower()
             sub = (row.get("subtype") or "").strip().lower()
             name = _kraken_norm(row.get("asset") or "")
@@ -886,13 +942,16 @@ def kraken_pool_flows(path: Path) -> List[Dict[str, Any]]:
                    - (fee if fccy == "CAD" else 0.0))
             if not fam and not cad:
                 continue
-            ref = (row.get("refid") or "").strip() or f"#{n}"
+            refid = (row.get("refid") or "").strip()
+            ref = refid or f"#{n}"
             g = groups.get(ref)
             if g is None:
                 t = (row.get("time") or "").split(".")[0]
                 dt = utc_to_local(datetime.strptime(t, "%Y-%m-%d %H:%M:%S"))
                 g = groups[ref] = {"dt": dt, "units": 0.0, "cad": 0.0,
-                                   "what": f"Kraken {type_}"}
+                                   "what": f"Kraken {type_}",
+                                   "key": (("kraken", refid) if refid
+                                           else None)}
                 order.append(ref)
             g["units"] += fam
             g["cad"] += cad
@@ -902,7 +961,9 @@ def kraken_pool_flows(path: Path) -> List[Dict[str, Any]]:
 def coinbase_pool_flows(path: Path) -> List[Dict[str, Any]]:
     """Stablecoin flows from one Coinbase export: buys/sells/rewards of
     a stablecoin, and the stablecoin leg of Advanced Trades on X-USDC
-    and of Converts. Send/Receive come from the sidecar."""
+    and of Converts. Send/Receive come from the sidecar. Each flow's
+    'key' is its row's identity (the ID column, else the row's cells):
+    `build_report` reads a row once across overlapping exports."""
     from taxjson.lib.brokerages import coinbase as C
     from taxjson.lib.brokerages._crypto_common import (strict_money,
                                                        utc_to_local)
@@ -933,9 +994,14 @@ def coinbase_pool_flows(path: Path) -> List[Dict[str, Any]]:
     def num(row, key):
         return strict_money(col(row, key), key, path.name)
 
-    for row in rows[start:]:
+    for i, row in enumerate(rows[start:], start):
         if not row or len(row) < 3:
             continue
+        # The row's identity across overlapping exports: Coinbase's
+        # per-event ID, or (an export with no ID) the row's cells.
+        cb_id = col(row, "id").strip()
+        key = (("coinbase", "id", cb_id) if cb_id
+               else ("coinbase", "row", tuple(c.strip() for c in row)))
         type_raw = col(row, "transaction type").strip()
         tl = type_raw.lower()
         if tl in ("send", "receive"):
@@ -974,28 +1040,64 @@ def coinbase_pool_flows(path: Path) -> List[Dict[str, Any]]:
                                           ctx)
                 if units:
                     out.append({"dt": dt, "units": units, "cad": 0.0,
-                                "what": "Coinbase Convert"})
+                                "what": "Coinbase Convert", "key": key})
             continue
         if asset in STABLECOINS:
             qty = abs(num(row, "quantity transacted"))
             if C._STAKING_RE.search(type_raw):
                 out.append({"dt": dt, "units": qty, "cad": 0.0,
-                            "what": f"Coinbase {type_raw}"})
+                            "what": f"Coinbase {type_raw}",
+                            "key": key})
             elif C._BUY_RE.search(type_raw):
-                total = abs(num(row, "total")) if col(row, "total") else 0.0
+                # A blank Total is derived as the parser derives it, or
+                # refused: read as 0 it was a zero-cost acquisition
+                # (audit finding 74).
+                total = (C.coinbase_row_total(
+                    C.CoinbaseBrokerage(), row, hmap, type_raw, False,
+                    f"{path.name}:{i + 1}") if cur == "CAD" else 0.0)
                 out.append({"dt": dt, "units": qty,
                             "cad": -total if cur == "CAD" else 0.0,
-                            "what": f"Coinbase {type_raw}"})
+                            "what": f"Coinbase {type_raw}",
+                            "key": key})
             elif C._SELL_RE.search(type_raw):
                 out.append({"dt": dt, "units": -qty, "cad": 0.0,
-                            "what": f"Coinbase {type_raw}"})
+                            "what": f"Coinbase {type_raw}",
+                            "key": key})
             continue
         m = C._ADV_NOTES_RE.search(notes)
         if m and m.group(5).upper() in STABLECOINS:
             n = strict_money(m.group(4), "Advanced Trade quantity", ctx)
             out.append({"dt": dt,
                         "units": -n if m.group(1).lower() == "bought" else n,
-                        "cad": 0.0, "what": f"Coinbase {type_raw}"})
+                        "cad": 0.0, "what": f"Coinbase {type_raw}",
+                        "key": key})
+    return out
+
+
+def merge_pool_flows(per_file: List[List[Dict[str, Any]]]
+                     ) -> List[Dict[str, Any]]:
+    """The pool flows of several exports, each ledger entry or row once.
+    Overlapping exports (a copy, an all-history file beside the yearly
+    ones) repeat entries under one `key`; the first file's copy is kept
+    (docs/brokers.md: overlapping exports are read once; audit finding
+    79). Within one file every flow counts: two genuine rows with the
+    same content are two events, and a later file adds only the copies
+    beyond what an earlier file already gave. A flow with no key (a
+    Kraken row with no refid) always counts."""
+    kept: Dict[Any, int] = {}
+    out: List[Dict[str, Any]] = []
+    for flows in per_file:
+        here: Dict[Any, int] = {}
+        for f in flows:
+            k = f.get("key")
+            if k is None:
+                out.append(f)
+                continue
+            here[k] = here.get(k, 0) + 1
+            if here[k] > kept.get(k, 0):
+                out.append(f)
+        for k, n in here.items():
+            kept[k] = max(kept.get(k, 0), n)
     return out
 
 
@@ -1177,14 +1279,14 @@ def build_report(root: Path, cfg: Dict[str, Any],
     if with_pool and broker_files is not None and base != "USD" and any(
             is_cash_stablecoin(s["symbol"], s["exchange"])
             for s in unmatched):
-        flows: List[Dict[str, Any]] = []
+        per_file: List[List[Dict[str, Any]]] = []
         for acct in accts:
             for broker, p in broker_files.get(acct, []):
                 if broker == "kraken":
-                    flows += kraken_pool_flows(p)
+                    per_file.append(kraken_pool_flows(p))
                 elif broker == "coinbase":
-                    flows += coinbase_pool_flows(p)
-        pool = usd_pool(flows, rows, pairs, ids, rates)
+                    per_file.append(coinbase_pool_flows(p))
+        pool = usd_pool(merge_pool_flows(per_file), rows, pairs, ids, rates)
     out: Dict[str, Any] = {"base_currency": base, "country": country,
                            "accounts": {}}
     for acct in accts:
@@ -1267,6 +1369,7 @@ def build_report(root: Path, cfg: Dict[str, Any],
                     cross.append({
                         "id": o["sid"], "summary": _summary(o),
                         "to": sorted(dest - {acct})})
+        keep_written_lines(sends + fees, tt_path(root, acct))
         out["accounts"][acct] = {
             "sends": sends,
             "matched": len(mine),

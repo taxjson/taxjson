@@ -124,6 +124,8 @@ class TestIbOpenPositions(unittest.TestCase):
                          (100.0, 1050.0, "CAD", P.COST_LOTS, 1200.0,
                           "stock", "U5***"))
         self.assertEqual(a.source, "U5***.csv")
+        self.assertEqual(a.account_key,
+                         P.account_key("U5550001"))  # pii-ok
         b = by["ZZB.US"]
         self.assertEqual((b.quantity, b.cost, b.currency),
                          (-20.0, -600.0, "USD"))
@@ -136,6 +138,9 @@ class TestIbOpenPositions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             rep = P.read_positions(_write(td, "s.csv", _IB_CONSOLIDATED))
         self.assertEqual(rep.accounts, ["U5***"])
+        # One position for all its accounts combined: no one account's
+        # key (taxjson opening does not count it as two accounts).
+        self.assertEqual({r.account_key for r in rep.rows}, {""})
         self.assertTrue(any("consolidated" in n and "combined" in n
                             for n in rep.notes))
         self.assertNotIn("5550002", repr(rep))  # pii-ok
@@ -170,6 +175,8 @@ class TestRbcHoldings(unittest.TestCase):
         self.assertEqual((by["ZZU.US"].cost, by["ZZU.US"].cost_currency),
                          (80.0, "USD"))
         self.assertEqual(rep.accounts, ["55***"])
+        self.assertEqual({x.account_key for x in rep.rows},
+                         {P.account_key("55500001")})  # pii-ok
 
     def test_a_cad_labelled_book_value_is_cad(self):
         # A broker's CAD book value for a USD position is already
@@ -212,6 +219,57 @@ class TestHoldingsToml(unittest.TestCase):
         self.assertEqual([(r.lot_date, r.cost_kind) for r in rows[2:]],
                          [("2019-03-04", P.COST_LOTS),
                           ("2021-06-01", P.COST_LOTS)])
+
+    def test_an_option_average_price_is_per_share(self):
+        # average_entry_price is a price per share: an option contract
+        # is its multiplier's shares (else the equity 100, as the RBC
+        # reader takes it). cost_per_share is taxjson-export's per
+        # holding unit (per contract) and total_cost the total.
+        cases = [('average_entry_price = 2\nmultiplier = 100', 200.0),
+                 ('average_entry_price = 2', 200.0),
+                 ('cost_per_share = 200', 200.0),
+                 ('average_entry_price = 2\nmultiplier = 10', 20.0),
+                 ('cost_per_share = 20\ncontract_multiplier = 10', 20.0),
+                 ('total_cost = 2\nmultiplier = 100', 2.0)]
+        for extra, cost in cases:
+            with self.subTest(extra), tempfile.TemporaryDirectory() as td:
+                rep = P.read_positions(_write(
+                    td, "h.toml",
+                    '[[holding]]\nsymbol = "ZZQ260116C00050000.TO"\n'
+                    f'quantity = 1\ncurrency = "CAD"\n{extra}\n'))
+                (r,) = rep.rows
+                self.assertEqual(r.asset_type, "option")
+                self.assertAlmostEqual(r.cost, cost)
+        # A share is one share whatever the price key.
+        with tempfile.TemporaryDirectory() as td:
+            rep = P.read_positions(_write(
+                td, "h.toml", '[[holding]]\nsymbol = "ZZQ.TO"\n'
+                              'quantity = 3\ncurrency = "CAD"\n'
+                              'cost_per_share = 2\n'))
+        self.assertAlmostEqual(rep.rows[0].cost, 6.0)
+
+    def test_accounts_that_mask_alike_keep_distinct_keys(self):
+        a, b, m = "U1234567", "U1234568", "U1234569"  # pii-ok
+        with tempfile.TemporaryDirectory() as td:
+            rep = P.read_positions(_write(
+                td, "h.toml",
+                f'[meta]\naccount = "{m}"\n'
+                + "".join(f'[[holding]]\n{acct}symbol = "{s}"\n'
+                          'quantity = 1\ncurrency = "CAD"\n'
+                          for acct, s in ((f'account = "{a}"\n', "ZZA.TO"),
+                                          (f'account = "{b}"\n', "ZZB.TO"),
+                                          ("", "ZZC.TO")))))
+        self.assertEqual([r.account for r in rep.rows], ["U1***"] * 3)
+        self.assertEqual(rep.accounts, ["U1***"])
+        keys = [r.account_key for r in rep.rows]
+        self.assertEqual(len(set(keys)), 3)
+        self.assertEqual(keys[2], P.account_key(m))
+        # Never the id itself, nor in the row's repr.
+        self.assertNotIn(a[1:], keys[0])
+        self.assertNotIn(keys[0], repr(rep.rows[0]))
+        self.assertEqual(P.account_key(f" {a.lower()} "),
+                         P.account_key(a))
+        self.assertEqual(P.account_key(""), "")
 
     def test_bool_blank_and_bad_dates_refused(self):
         for bad in ('quantity = true', 'quantity = ""',

@@ -69,6 +69,9 @@ class Payment:
     account: str
     tax: float
     row: Dict[str, Any] = field(repr=False, default_factory=dict)
+    # The broker account of a taxjson account that combines several
+    # (combined_broker_accounts; "" when the rows do not name one).
+    source: str = ""
 
 
 def _iso(d: date) -> str:
@@ -106,12 +109,15 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
     """{symbol: [Payment] by pay date} from (account, native row) pairs
     dated up to `as_of` (all of them when None):
     DIVIDEND (and DIVIDEND_IN_LIEU: the same stream, paid while the
-    shares were lent) rows netted per account, symbol and pay date (a
-    reversal and its re-posting are one payment), their withholding
-    from the TAX rows of that account, symbol and date. A reversal
-    posted on a later date nets against the latest earlier posting of
-    that account and symbol (the original it cancels), so a correction
-    counts once. A corporate action's deemed dividend (a spin-off
+    shares were lent) rows netted per account, broker account (the
+    rows' source_account: two broker accounts in one taxjson account
+    are two holdings, not one payment of both amounts on the larger
+    share count), symbol and pay date (a reversal and its re-posting
+    are one payment), their withholding from the TAX rows of that
+    account, broker account, symbol and date. A reversal posted on a
+    later date nets against the latest earlier posting of that account,
+    broker account and symbol (the original it cancels), so a
+    correction counts once. A corporate action's deemed dividend (a spin-off
     election) is not part of a payer's schedule; a row with no share
     count (the broker's description names none) takes the count of the
     account's nearest dated payment of that symbol that has one, or is
@@ -129,7 +135,7 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
             continue
         if as_of is not None and d > as_of:
             continue
-        k = (acct, sym, d)
+        k = (acct, str(t.get("source_account") or ""), sym, d)
         if act == "TAX" or str(t.get("type") or "").lower() == "tax":
             tax[k] = tax.get(k, 0.0) + float(t.get("net_amount") or 0.0)
             continue
@@ -145,44 +151,61 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
         q = abs(float(t.get("quantity") or 0.0))
         if q > e["qty"]:
             e["qty"], e["row"] = q, t
+    # A TAX row naming no broker account (or another one) on a date
+    # with no income of its own broker account: the withholding of that
+    # date's largest holding in the account.
+    for (acct, src, sym, d) in list(tax):
+        if (acct, src, sym, d) in inc:
+            continue
+        same = [k for k in inc if k[0] == acct and k[2:] == (sym, d)]
+        if same:
+            k = max(same, key=lambda k: inc[k]["qty"])
+            tax[k] = tax.get(k, 0.0) + tax.pop((acct, src, sym, d))
     # Per account and symbol, in date order: a net-negative date (a
-    # reversal) cancels the latest earlier positive posting(s); a date
+    # reversal) cancels the latest earlier positive posting(s) of its
+    # broker account (any, when one of the two names none); a date
     # with no share count borrows the nearest dated one.
     by_pair: Dict[tuple, List[tuple]] = {}
-    for (acct, sym, d), e in inc.items():
-        by_pair.setdefault((acct, sym), []).append((d, e))
+    for (acct, src, sym, d), e in inc.items():
+        by_pair.setdefault((acct, sym), []).append((d, src, e))
+
+    def _same_src(a: str, b: str) -> bool:
+        return not a or not b or a == b
     for ents in by_pair.values():
         ents.sort(key=lambda x: x[0])
-        for i, (_d, e) in enumerate(ents):
+        for i, (d, src, e) in enumerate(ents):
             if e["gross"] >= -0.005:
                 continue
             left = -e["gross"]
             e["gross"] = 0.0
-            for _pd, pe in reversed(ents[:i]):
-                if pe["gross"] <= 0.005:
+            for _pd, psrc, pe in reversed([x for j, x in enumerate(ents)
+                                           if j != i and x[0] <= d]):
+                if pe["gross"] <= 0.005 or not _same_src(src, psrc):
                     continue
                 take = min(left, pe["gross"])
                 pe["gross"] -= take
                 left -= take
                 if left <= 0.005:
                     break
-        for i, (d, e) in enumerate(ents):
+        for i, (d, src, e) in enumerate(ents):
             if e["qty"] > 1e-9 or e["gross"] <= 0.005:
                 continue
             near = [(abs((date.fromisoformat(d)
                           - date.fromisoformat(pd)).days), pe["qty"])
-                    for pd, pe in ents if pe["qty"] > 1e-9]
+                    for pd, psrc, pe in ents
+                    if pe["qty"] > 1e-9 and _same_src(src, psrc)]
             if near:
                 e["qty"] = min(near)[1]
     out = Payments()
     out.rows = rows
-    for (acct, sym, d), e in inc.items():
+    for (acct, src, sym, d), e in inc.items():
         if e["gross"] <= 0.005 or e["qty"] <= 1e-9:
             continue
         out.setdefault(sym, []).append(Payment(
             pay_date=d, per_share=e["gross"] / e["qty"], gross=e["gross"],
             qty=e["qty"], currency=e["currency"].upper(), account=acct,
-            tax=max(0.0, tax.get((acct, sym, d), 0.0)), row=e["row"]))
+            tax=max(0.0, tax.get((acct, src, sym, d), 0.0)), row=e["row"],
+            source=src))
     for ps in out.values():
         ps.sort(key=lambda p: (p.pay_date, -p.qty))
     return out
@@ -200,33 +223,42 @@ def schedule(pays: List[Payment]) -> List[Payment]:
     """One payment per pay date across accounts: postings within
     CLUSTER_DAYS of each other are one payment, its per-share amount
     the largest holding's (an account's two rows of it, a special and a
-    regular dividend, added)."""
+    regular dividend, added; each broker account of a combined taxjson
+    account a holding of its own). A posting more than CLUSTER_DAYS
+    after an earlier one of its own holding in the cluster starts the
+    next payment: a weekly payer posted a few days apart by two brokers
+    is not one chain of every week's postings."""
     out: List[Payment] = []
     group: List[Payment] = []
 
     def _flush():
         if not group:
             return
-        by: Dict[str, List[Payment]] = {}
+        by: Dict[tuple, List[Payment]] = {}
         for p in group:
-            by.setdefault(p.account, []).append(p)
+            by.setdefault((p.account, p.source), []).append(p)
         best = None
-        for acct, ps in by.items():
+        for (acct, src), ps in by.items():
             qty = max(p.qty for p in ps)
             per = sum(p.gross for p in ps) / qty if qty else 0.0
             last = max(ps, key=lambda p: (p.pay_date, p.qty))
             cand = Payment(pay_date=last.pay_date, per_share=per,
                            gross=sum(p.gross for p in ps), qty=qty,
                            currency=last.currency, account=acct,
-                           tax=sum(p.tax for p in ps), row=last.row)
+                           tax=sum(p.tax for p in ps), row=last.row,
+                           source=src)
             if best is None or cand.qty > best.qty:
                 best = cand
         out.append(best)
         group.clear()
+    def _days(a: Payment, b: Payment) -> int:
+        return (date.fromisoformat(b.pay_date)
+                - date.fromisoformat(a.pay_date)).days
     for p in sorted(pays, key=lambda p: p.pay_date):
-        if group and (date.fromisoformat(p.pay_date)
-                      - date.fromisoformat(group[-1].pay_date)).days \
-                > CLUSTER_DAYS:
+        if group and (_days(group[-1], p) > CLUSTER_DAYS
+                      or any(_days(q, p) > CLUSTER_DAYS for q in group
+                             if (q.account, q.source)
+                             == (p.account, p.source))):
             _flush()
         group.append(p)
     _flush()
@@ -494,9 +526,8 @@ def render(doc: Dict[str, Any], details: bool = False,
                 f"{doc['as_of_date']} ({base})")
     rows = doc["rows"]
     if rows:
-        d.para("Planning numbers, not filing figures: each payer's last "
-               "per-share amount x shares held now, on its own past "
-               "schedule.")
+        d.para("Planning numbers, not filing: last per-share amount x "
+               "shares held, on the payer's own schedule.")
         body = []
         for r in rows:
             body.append([
@@ -576,7 +607,10 @@ def render(doc: Dict[str, Any], details: bool = False,
         fl = (" Check: " + "; ".join(r["flags"]) + "."
               if r["flags"] else "")
         d.item(f"{r['symbol']} ({r['account']}): {r['payments']} "
-               f"payment(s), {r['frequency']}{gap}; last "
+               f"payment(s)"
+               + (f", {r['frequency']}" if r['frequency'] != "1 payment"
+                  else "")
+               + f"{gap}; last "
                f"{r['last_pay_date']} at {_ps(r['last_per_share'])} "
                f"{r['currency']}/share, 12-month {_ps(r['ttm_per_share'])}"
                f"/share; projected: {proj}{wh}{fxs}.{fl}", indent="  ")
@@ -587,19 +621,16 @@ def render(doc: Dict[str, Any], details: bool = False,
     else:
         d.line("  (none)")
     d.section("HOW IT IS ESTIMATED")
-    d.para("The frequency is the grid (weekly, monthly, quarterly, "
-           "semi-annual, annual) most of the last payments fall on, "
-           "anchored at the latest one: a payment off the grid (a "
-           "special) or a stretch of empty slots (the position not "
-           "held) does not break it, and postings a few days apart are "
-           "one payment; no grid, or a single payment, is estimated pro "
-           "rata from the 12-month amount per share. Each projected "
-           "payment is the "
-           "latest per-share amount x the shares held now, converted at "
-           "the books' latest rate, and counts in the tax year of its "
-           "pay date (a Canadian trust's distribution: its record date), "
-           "as in divs-sum. A payment more than a few days overdue is "
-           "taken as missing from the books; two missing ones stop the "
-           "projection. Planning numbers only: a payer can cut, raise or "
-           "skip a dividend at any time.", indent="  ")
+    d.items([
+        "Frequency: the grid (weekly, monthly, quarterly, semi-annual, "
+        "annual) most of the last payments fall on, anchored at the "
+        "latest; a special or a stretch not held does not break it.",
+        "No grid, or a single payment: pro rata from the 12-month amount "
+        "per share.",
+        "Each projected payment: the latest per-share amount x the shares "
+        "held now, at the books' latest rate, in the tax year of its pay "
+        "date (a Canadian trust's: its record date), as in divs-sum.",
+        "A payment more than a few days overdue is missing from the books; "
+        "two missing stop the projection. Planning numbers: a payer can "
+        "change a dividend at any time."], "  ")
     return d

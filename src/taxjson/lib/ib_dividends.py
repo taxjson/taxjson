@@ -33,11 +33,15 @@ do not say which account they are in.
 from __future__ import annotations
 
 import csv
+import datetime
 import io
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                         parse_strict_number)
 
 # The marker a dividends report carries (a header line of its detail
 # section); enough to tell it from a T5008 CSV in inputs/slips/.
@@ -177,20 +181,24 @@ def _iso(raw: str, where: str) -> str:
     m = re.fullmatch(r"(\d{4})-?(\d{2})-?(\d{2})", s)
     if not m:
         raise IBReportError(f"{where}: date {s!r} is not YYYYMMDD")
-    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    iso = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    try:
+        datetime.date.fromisoformat(iso)
+    except ValueError:
+        raise IBReportError(f"{where}: date {s!r} is not a calendar "
+                            f"day") from None
+    return iso
 
 
 def _num(raw: str, col: str, where: str) -> float:
-    s = (raw or "").strip()
-    if not s:
-        return 0.0
+    """A money or share cell: blank is 0; a decimal comma or a
+    misplaced thousands comma ('1,5') is refused, never read as 15."""
     try:
-        v = float(s.replace(",", ""))
-    except ValueError:
-        raise IBReportError(f"{where}: {col} {s!r} is not a number") \
-            from None
-    if v != v or v in (float("inf"), float("-inf")):
-        raise IBReportError(f"{where}: {col} {s!r} is not a number")
+        v = parse_strict_number(raw, field=col, where=where,
+                                allow_blank=True, blank=0.0)
+    except BrokerageParseError as e:
+        raise IBReportError(str(e)) from None
+    assert v is not None
     return v
 
 
@@ -268,6 +276,14 @@ def read_report(path: Path) -> Report:
         else:
             continue
         slip, cat = component_category(label, groups[key].country)
+        if (not (d.get("GrossInBase") or "").strip()
+                and _num(d.get("Gross", ""), "Gross", where)):
+            # Read as 0, the payment would drop out of a CAD-base
+            # account's T5 / T3 boxes.
+            raise IBReportError(
+                f"{where}: Gross {(d.get('Gross') or '').strip()!r} with "
+                f"a blank GrossInBase — the amount in the account's base "
+                f"currency is missing; download the report again")
         comp = Component(
             slip=slip, category=cat, label=label,
             gross=_num(d.get("Gross", ""), "Gross", where),
@@ -299,11 +315,23 @@ def read_report(path: Path) -> Report:
             rep.problems.append(
                 f"{p.symbol} {p.pay_date}: a payment with no "
                 f"RevenueComponent rows — read as an ordinary dividend")
-        elif summ is not None and abs(summ.gross - p.gross) > 0.01:
-            rep.problems.append(
-                f"{p.symbol} {p.pay_date}: the components add up to "
-                f"{p.gross:.2f} {p.currency}, the payment to "
-                f"{summ.gross:.2f}")
+        elif summ is not None:
+            # Each component's base amount is IB's own rounding: a cent
+            # per component apart is not a discrepancy.
+            n = len(p.components)
+            for attr, cur, what, tol in (
+                    ("gross", p.currency, "", 0.01),
+                    ("withheld", p.currency, " withheld", 0.01),
+                    ("gross_base", rep.base_currency, " (GrossInBase)",
+                     0.01 * n + 1e-9),
+                    ("withheld_base", rep.base_currency,
+                     " withheld (WithholdInBase)", 0.01 * n + 1e-9)):
+                got, want = getattr(p, attr), getattr(summ, attr)
+                if abs(want - got) > tol:
+                    rep.problems.append(
+                        f"{p.symbol} {p.pay_date}: the components add up "
+                        f"to {got:.2f} {cur}{what}, the payment to "
+                        f"{want:.2f}")
         rep.payments.append(p)
     rep.unknown = sorted(unknown.items())
     return rep

@@ -3566,9 +3566,20 @@ class CanadaTaxRules(TaxRules):
                     # A coin pool's residue is real property (S069-13):
                     # per-asset tolerance (pool_qty_eps).
                     _qeps = pool_qty_eps(symbol, pool['qty'], qty)
+                    # A position under the tolerance that still carries
+                    # real cost, reversed by this trade, is a holding,
+                    # not rounding noise: closed, not read as flat —
+                    # the sale opened a short and stranded the cost
+                    # (2026-10 audit #101). A true zero still opens.
+                    _dust_close = (abs(pool['qty']) <= _qeps
+                                   and pool['qty'] != 0
+                                   and abs(float(pool['total_cost']))
+                                   >= 0.005
+                                   and (pool['qty'] > 0) == (qty < 0))
                     is_opening = (pool['qty'] > _qeps and qty > 0) or \
                                  (pool['qty'] < -_qeps and qty < 0) or \
-                                 (abs(pool['qty']) <= _qeps)
+                                 (abs(pool['qty']) <= _qeps
+                                  and not _dust_close)
 
                     if is_other_scope:
                         # Sheltered (RRSP/TFSA/LIRA/RESP) and affiliated
@@ -3639,7 +3650,9 @@ class CanadaTaxRules(TaxRules):
                                 symbol_acb_traces[symbol].append(f"# {tx.date} {_lbl} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Cost_Added: {effective_cost:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
                         else:
                             # SELL (or Short covering) — divide in exact arithmetic.
-                            if abs(pool['qty']) > _qeps:
+                            if abs(pool['qty']) > _qeps or _dust_close:
+                                # (A sub-tolerance position with real
+                                # cost is closed at its cost: #101.)
                                 # SIGNED per-unit basis: total/|qty|,
                                 # not abs(total/qty) (FUZZ #F11). A
                                 # short pool whose opening proceeds
@@ -3914,7 +3927,15 @@ class CanadaTaxRules(TaxRules):
                     trace_line = f"# {account:<26} | {note:<12} | {tx.date} {tx.time} | {symbol:<26} | {action:<8} | {qty:10.4f} | {tx.price:10.4f} | {fee_sh:10.4f} | {price_fee:10.4f} | {tx.net_amount:10.2f} | {adjustment_shown:10.2f} | {pool['qty']:11.4f} | {pool_cost_f:10.2f} | {acb_sh:10.4f} | {realized_pl_str} | {disallowed_amt_str} | {trigger_info}"
                     iteration_trace.append(trace_line)
 
-                if abs(pool['qty']) < pool_qty_eps(symbol, _pre_qty, qty):
+                # A residue under the tolerance is drained to zero — but
+                # not a position this trade OPENED that carries real
+                # cost: zeroed right after its buy, its sale found an
+                # empty pool and the cost was stranded (2026-10 audit
+                # #101; the cash-conservation fuzz).
+                _opened_dust = (abs(pool['qty']) > abs(_pre_qty)
+                                and abs(float(pool['total_cost'])) >= 0.005)
+                if (abs(pool['qty']) < pool_qty_eps(symbol, _pre_qty, qty)
+                        and not _opened_dust):
                     pool['qty'] = 0.0
                     # Pool drained — clear position_start_date so the
                     # next open seeds a fresh start. Critical for the
@@ -8002,6 +8023,21 @@ class USATaxRules(TaxRules):
                       for s_, q in sorted(_by.items()))
                   + " — their units and money are left out of the lots "
                   "and Form 8949.")
+            # Money left out is a conservation problem, not dust: said in
+            # that channel too, so `sum --json`'s readiness counts it
+            # (2026-10 critique, the US twin of audit #101).
+            _money: Dict[str, float] = {}
+            for _t in _us_dust:
+                _money[_t.symbol] = (_money.get(_t.symbol, 0.0)
+                                     + abs(float(_t.net_amount or 0.0)))
+            _material = {k: v for k, v in _money.items() if v >= 0.01}
+            if _material:
+                emit_line("warning: conservation: rows under 1e-08 units "
+                          "carrying money are left out of the US lots: "
+                          + ", ".join(f"{k} {v:,.2f}"
+                                      for k, v in sorted(_material.items()))
+                          + " (their buy and sale amounts) — enter the "
+                          "position with its real units.")
         for _what, _rows in (
                 ("a lot residue of at most 1e-08 units was folded into "
                  "the sale that closed the lot (its cost is in that "

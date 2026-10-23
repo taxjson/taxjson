@@ -509,5 +509,5 @@ def render(doc: Dict[str, Any], show_all: bool = False,
         d.para(f"{doc['errors']} date(s) cannot be right; fix the "
                f"source file or the parser.")
     else:
-        d.para("No impossible dates; review the warnings.")
+        d.para("No impossible dates.")
     return d.lines()

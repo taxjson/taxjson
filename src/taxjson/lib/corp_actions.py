@@ -86,6 +86,14 @@ class CorporateAction:
     # cleanly or the broker reported no cash-in-lieu.
     cash_in_lieu: float = 0.0
     cash_in_lieu_currency: str = ""
+    # A spin-off's cash in lieu (Questrade / RBC CIL row): the fraction
+    # paid in cash ON TOP of `qty_received` (0: not stated), the day the
+    # cash was paid, and whether the brokerage parser books that fraction
+    # itself (Questrade's same-day $0 pair). The s.86.1 rollover sells
+    # the fraction at the cash (CA-CORP-05). NOT part of the event id.
+    fraction_in_lieu: float = 0.0
+    cash_in_lieu_date: str = ""
+    cil_broker_booked: bool = False
     # True when the broker actually DELIVERS fractional shares (IB):
     # qty_received is the exact delivered quantity, so emitters must
     # not snap a real 0.5-share delivery to whole+cash-in-lieu — that
@@ -602,7 +610,8 @@ def _ib_union(own_rows: List[Dict[str, Any]],
     statement holds."""
     own_ids = {_ib_row_ident(r) for r in own_rows}
     union: Dict[tuple, Tuple[Dict[str, Any], int]] = {}
-    for src_rows in [own_rows] + list(other_rows):
+    sources: Dict[tuple, set] = defaultdict(set)
+    for si, src_rows in enumerate([own_rows] + list(other_rows)):
         counts: Dict[tuple, int] = defaultdict(int)
         firsts: Dict[tuple, Dict[str, Any]] = {}
         for r in src_rows:
@@ -610,13 +619,57 @@ def _ib_union(own_rows: List[Dict[str, Any]],
             counts[i] += 1
             firsts.setdefault(i, r)
         for i, n in counts.items():
+            sources[i].add(si)
             if i not in union or union[i][1] < n:
                 union[i] = (firsts[i], n)
+    # The same row in two statements with another Value (a corrected
+    # statement beside the original): the value is in the identity, so
+    # both copies were booked and the event disposed of the shares twice
+    # (found checking the 2026-10 critique's #104 path). When each
+    # statement holds only one of the values, it is one row: the larger
+    # value is kept, whatever the order, and said.
+    by_row: Dict[tuple, List[tuple]] = defaultdict(list)
+    for i in union:
+        by_row[i[:-1]].append(i)
+    for key, idents in by_row.items():
+        if len(idents) < 2:
+            continue
+        srcs = [sources[i] for i in idents]
+        if any(a & b for x, a in enumerate(srcs) for b in srcs[x + 1:]):
+            continue        # one statement holds both: distinct rows
+        keep = max(idents, key=lambda i: (abs(i[-1]), i[-1]))
+        vals = sorted(abs(i[-1]) for i in idents)
+        # One line per event: its out- and in-leg rows (the description
+        # less its trailing "(SYMBOL, NAME, ISIN)") disagree together.
+        event = re.sub(r"\s*\([^()]*\)\s*$", "", str(key[4]))
+        said = (key[0], key[1], key[3], event)
+        if said not in _IB_VALUE_CONFLICTS_SAID:
+            _IB_VALUE_CONFLICTS_SAID.add(said)
+            acct = key[1] or key[0]
+            emit_line(f"warning: ATTENTION: corporate action '{event}' on "
+                      f"{str(key[3])[:10]}: two statements of broker "
+                      f"account {_mask_account(acct)} disagree on its "
+                      f"value ({' vs '.join(f'{v:.2f}' for v in vals)}); "
+                      f"kept {abs(keep[-1]):.2f}. Keep only the current "
+                      f"statement in the account folder.",
+                      file=sys.stderr)
+        n = max(union[i][1] for i in idents)
+        for i in idents:
+            if i != keep:
+                if i in own_ids:
+                    own_ids.add(keep)
+                del union[i]
+        union[keep] = (union[keep][0], n)
     out = []
     for i, (r, n) in union.items():
         for _ in range(n):
             out.append(dict(r, own=i in own_ids))
     return out
+
+
+# (row, values) of the value conflicts said this process: the IB
+# extractor reads every statement of the account once per statement.
+_IB_VALUE_CONFLICTS_SAID: set = set()
 
 
 def _ib_apply_cancellations(cancels: List[Dict[str, Any]],
@@ -1342,7 +1395,8 @@ def parse_questrade_corporate_actions(
     # name, and the ticker the parent position is BOOKED under lives on
     # the Trade/Transfer rows describing that same company. Imported
     # lazily — this module is broker-agnostic apart from the extractors.
-    from taxjson.lib.brokerages.questrade import (_FX_SETTLED_RE,
+    from taxjson.lib.brokerages.questrade import (_CIL_RE as _QT_CIL_RE,
+                                                  _FX_SETTLED_RE,
                                                   _INTERNAL_CODE_RE,
                                                   QuestradeBrokerage,
                                                   _get_desc_key)
@@ -1454,6 +1508,24 @@ def parse_questrade_corporate_actions(
             if i not in union or union[i][1] < n:
                 union[i] = (firsts[i], n)
     dis_rows = [(r, i) for i, (r, n) in union.items() for _ in range(n)]
+    # The same union of the CIL rows: a spin-off's cash in lieu of the
+    # fraction, which the s.86.1 rollover books as its sale (CA-CORP-05).
+    cil_union: Dict[tuple, Tuple[Dict[str, str], int]] = {}
+    for rows_f in [all_rows] + others:
+        counts = defaultdict(int)
+        firsts = {}
+        for r in rows_f:
+            if ((r.get('Action') or '').strip() != 'CIL'
+                    or not _QT_CIL_RE.search(r.get('Description') or '')):
+                continue
+            i = _ident(r)
+            counts[i] += 1
+            firsts.setdefault(i, r)
+        for i, n in counts.items():
+            if i not in cil_union or cil_union[i][1] < n:
+                cil_union[i] = (firsts[i], n)
+    cil_rows = [r for r, n in cil_union.values() for _ in range(n)]
+    cil_used: set = set()
 
     by_target: Dict[tuple, list] = defaultdict(list)
     for row, ident in dis_rows:
@@ -1517,8 +1589,12 @@ def parse_questrade_corporate_actions(
                       f"the disposition (a $0 sale) in a .tt file: "
                       f"{rows[0]['description'][:90]}")
             continue
-        if net_qty <= 0:
+        if net_qty <= 0 and not (
+                all(abs(r['qty']) < 1e-12 for r in rows)
+                and _qt_spinoff_cil(rows, cil_rows, set(), dry=True)[0]):
             # Net zero: a posting and its reversal — nothing received.
+            # (A zero-quantity distribution paid wholly as cash in lieu
+            # of a fraction is still the spin-off: under one share.)
             continue
         # The chain's target symbol: the first row that carries one
         # (placeholder rows don't). Suffix it by currency exactly like
@@ -1647,6 +1723,8 @@ def parse_questrade_corporate_actions(
                 break
 
         currency = rows[0]['currency']
+        cil_cash, cil_frac, cil_cur, cil_date = _qt_spinoff_cil(
+            rows, cil_rows, cil_used)
 
         events.append(CorporateAction(
             date=event_date, time='09:30:00',
@@ -1665,6 +1743,13 @@ def parse_questrade_corporate_actions(
             currency=currency,
             target_currency=currency,
             account=account,
+            # The parser books the CIL row itself (a same-day $0 pair);
+            # the s.86.1 rollover takes it over (drop_broker_cil_pairs).
+            cash_in_lieu=cil_cash,
+            cash_in_lieu_currency=cil_cur,
+            fraction_in_lieu=cil_frac,
+            cash_in_lieu_date=cil_date,
+            cil_broker_booked=cil_cash > 0,
             raw_descriptions=[r['description'] for r in rows],
             broker_account=','.join(sorted({r['account'] for r in rows}
                                            - {''})),
@@ -1674,6 +1759,59 @@ def parse_questrade_corporate_actions(
         events[-1].target_symbol = symbol
 
     return events
+
+
+def _qt_spinoff_cil(chain: List[dict], cil_rows: List[Dict[str, str]],
+                    used: set, dry: bool = False
+                    ) -> Tuple[float, float, str, str]:
+    """(cash, fraction, currency, date) of the Questrade CIL rows paying a
+    spin-off chain's fraction ("CASH IN LIEU OF .5"): the chain's symbol,
+    its broker account, paid from 3 days before to 45 days after the
+    distribution (the RBC pairing's window). SIGNED: a reversal (negative
+    Net Amount) cancels its posting, as in the parser. (0, 0, '', '')
+    when none. Each row pays one chain (`used`; untouched when `dry`)."""
+    from taxjson.lib.brokerages.base import desc_number, parse_strict_number
+    from taxjson.lib.brokerages.questrade import _CIL_RE as _QT_CIL_RE
+
+    def _bare(sym: str) -> str:
+        return re.sub(r'\.TO$', '', (sym or '').strip().lstrip('.'),
+                      flags=re.I).upper()
+    syms = {_bare(r['symbol']) for r in chain if r['symbol']}
+    accts = {r['account'] for r in chain if r['account']}
+    start = min(r['date'] for r in chain)
+    cash = frac = 0.0
+    cur, dates, took = '', [], []
+    for row in cil_rows:
+        if id(row) in used or _bare(row.get('Symbol')) not in syms:
+            continue
+        acct = (row.get('Account #') or '').strip()
+        if accts and acct and acct not in accts:
+            continue
+        day = _parse_qt_date(row.get('Transaction Date', ''))
+        lag = _rbc_lag(start, day)
+        if lag is None or not -3 <= lag <= 45:
+            continue
+        desc = row.get('Description') or ''
+        where = f"Questrade CIL row of {day} {desc[:50]!r}"
+        m = _QT_CIL_RE.search(desc)
+        f = desc_number(m.group(1), where=where,
+                        field='CASH IN LIEU fraction') if m else 0.0
+        net = parse_strict_number(row.get('Net Amount'), field='Net Amount',
+                                  where=where, allow_blank=True, blank=0.0)
+        if f <= 0 or abs(net) < 0.005:
+            continue
+        sign = 1.0 if net > 0 else -1.0
+        cash += net
+        frac += sign * f
+        cur = cur or (row.get('Currency') or '').strip().upper()
+        if net > 0:
+            dates.append(day)
+        took.append(id(row))
+    if cash < 0.005 or frac <= 1e-9:
+        return 0.0, 0.0, '', ''
+    if not dry:
+        used.update(took)
+    return cash, frac, cur, min(dates)
 
 
 parse_questrade_corporate_actions.accepts_context = True
@@ -1931,6 +2069,9 @@ class RbcReorgPairing:
     events: List[RbcReorgEvent]
     unmatched: List[Any]                   # reorg legs with no partner
     unmatched_cil: List[Any]               # CIL rows with no event
+    # (spin-off row, [its CIL rows]): cash in lieu of a spin-off's
+    # fraction, taxjson-corp-actions' (rbc_spinoff_cil_fraction).
+    spinoff_cil: List[Tuple[Any, List[Any]]] = field(default_factory=list)
 
 
 def _rbc_same_account(a, b) -> bool:
@@ -2205,7 +2346,72 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
             unmatched_cil.append(c)
         else:
             best[1].cil.append(c)
-    return RbcReorgPairing(events, unmatched, unmatched_cil)
+
+    # 4) A spin-off's cash in lieu of the fraction (CA-CORP-05): the
+    #    same account, the spun-off ticker or its full name, paid within
+    #    the same window. Owned by taxjson-corp-actions, which books it
+    #    with the spin-off's election; it was a "NOT booked" warning.
+    spins = [r for r in rows if getattr(r, 'cls', '') == 'spinoff'
+             and r.qty >= 0 and 'REVERSE ENTRY' not in (r.desc or '').upper()]
+    by_spin: Dict[int, List[Any]] = {}
+    still = []
+    for c in unmatched_cil:
+        best = None
+        for sp in spins:
+            if not _rbc_same_account(c, sp):
+                continue
+            lag = _rbc_lag(sp.date, c.date)
+            if lag is None or not -3 <= lag <= 45:
+                continue
+            if c.symbol and c.symbol == sp.symbol:
+                s = 2.0
+            else:
+                s = rbc_name_similarity(c.symdesc or _rbc_body(c.desc),
+                                        sp.symdesc or '')
+                if s < 1.0:
+                    continue
+            key = (s, -abs(lag))
+            if best is None or key > best[0]:
+                best = (key, sp)
+        if best is None:
+            still.append(c)
+        else:
+            by_spin.setdefault(id(best[1]), []).append(c)
+    spinoff_cil = [(sp, by_spin[id(sp)]) for sp in spins if id(sp) in by_spin]
+    return RbcReorgPairing(events, unmatched, still, spinoff_cil)
+
+
+def _rbc_lag(event_date: str, paid: str) -> Optional[int]:
+    """Days from an event to its cash in lieu; None when undated."""
+    try:
+        return (datetime.strptime(paid, '%Y-%m-%d')
+                - datetime.strptime(event_date, '%Y-%m-%d')).days
+    except ValueError:
+        return None
+
+
+# "CASH IN LIEU OF 0.5 SHS" / "... OF .5 FRAC SHARES": the fraction, when
+# the row states it (RBC's usual "OF FRAC SHARES" does not).
+_RBC_CIL_QTY_RE = re.compile(
+    rf'CASH\s+IN\s+LIEU\s+OF\s+({_RBC_NUM})\s+(?:FRAC\w*\s+)?SH', re.I)
+
+
+def rbc_spinoff_cil_fraction(cils: List[Any]) -> float:
+    """The fraction RBC paid cash for, from its CIL rows: the row's own
+    quantity (under one share), else the number its description states;
+    0 when no row states it (the sale cannot be sized)."""
+    total = 0.0
+    for c in cils:
+        if c.value <= 0:
+            continue                    # a reversal states no fraction
+        q = abs(c.qty or 0.0)
+        if not 0 < q < 1:
+            m = _RBC_CIL_QTY_RE.search(c.desc or '')
+            q = _num_text(m.group(1), where=c.desc[:60]) if m else 0.0
+        if not 0 < q < 1:
+            return 0.0
+        total += q
+    return total
 
 
 _RBC_SUFFIXER = None
@@ -2457,6 +2663,17 @@ def parse_rbc_corporate_actions(
     spin_all += [x for f_rows in other_files for x in f_rows
                  if getattr(x, 'cls', '') == 'spinoff'
                  and _spin_key(x) not in _own_spin]
+    # Cash in lieu of a spin-off's fraction, in whichever statement of
+    # the account it posts — the pairing the parser makes over every
+    # statement, so the rows it leaves to this stage are the ones booked.
+    def _row_key(x):
+        return (x.date, x.symbol, round(x.qty, 9), x.desc, x.currency,
+                x.account, round(x.value, 2))
+    _own_keys = {_row_key(x) for x in rows}
+    _all_rows = list(rows) + [x for f_rows in other_files for x in f_rows
+                              if _row_key(x) not in _own_keys]
+    spin_cil = {id(sp): cils for sp, cils
+                in pair_rbc_reorganizations(_all_rows).spinoff_cil}
     reversed_ids: set = set()
     for rev in sorted((x for x in spin_all if x.qty < 0
                        and 'REVERSE ENTRY' in (x.desc or '').upper()),
@@ -2531,6 +2748,9 @@ def parse_rbc_corporate_actions(
                       f"temporary code {tgt} ({r.symdesc or r.desc[:60]!r}) "
                       f"— once the listed ticker is known, add to ticker.map:  "
                       f"GLOBAL {tgt} <TICKER>.{tgt.rsplit('.', 1)[-1]}")
+        # SIGNED: a reversal CIL row cancels its posting (S063-19).
+        cils = spin_cil.get(id(r), [])
+        cil_amount = max(0.0, sum(c.value for c in cils))
         events.append(CorporateAction(
             date=r.date, time='09:30:00', action_type='spinoff',
             source_symbol=src, source_isin=parent_code or src,
@@ -2539,7 +2759,13 @@ def parse_rbc_corporate_actions(
             qty_disposed=0.0, qty_received=r.qty,
             fmv=0.0, currency=r.currency or 'USD',
             target_currency=r.currency or 'USD',
-            account=account, raw_descriptions=[r.desc],
+            account=account,
+            cash_in_lieu=cil_amount,
+            cash_in_lieu_currency=(cils[0].currency or '' if cils else ''),
+            fraction_in_lieu=(rbc_spinoff_cil_fraction(cils)
+                              if cil_amount > 0 else 0.0),
+            cash_in_lieu_date=min((c.date for c in cils), default=''),
+            raw_descriptions=[r.desc] + [c.desc for c in cils],
             broker_account=_rbc_account(r),
         ))
     events.sort(key=lambda e: (e.date, e.source_symbol))
@@ -3696,7 +3922,7 @@ def _emit_distribution(event: CorporateAction, hints: dict,
         description += "; ZERO VALUE — no FMV given"
     # The fraction is paid in cash (fx-cash, A2-1014).
     _cash = _corp_cash(_fraction_cash(
-        event, float(getattr(event, 'cash_in_lieu', 0.0) or 0.0),
+        event, _cil_evidence(event),
         event.cash_in_lieu_currency or currency, frac_qty,
         total_fmv - adjusted_fmv, currency))
     rows = [
@@ -3845,11 +4071,140 @@ def _canada_spinoff_deemed_dividend(event: CorporateAction, option: str, hints: 
     )
 
 
+def _spinoff_cil_row(event: CorporateAction) -> bool:
+    """Whether the event's cash in lieu is a spin-off's Questrade / RBC
+    cash-in-lieu row (the extractors date it: `cash_in_lieu_date`)."""
+    return (event.action_type == 'spinoff'
+            and bool(getattr(event, 'cash_in_lieu_date', '')))
+
+
+def _cil_evidence(event: CorporateAction) -> float:
+    """The event's cash in lieu for a row's `corp_cash` evidence. A
+    spin-off's cash-in-lieu row is read only by the s.86.1 sale of the
+    fraction (CA-CORP-05): every other booking of the spin-off stays as
+    it was, and resolve_event says the cash is not booked
+    (warn_unsold_spinoff_cil)."""
+    if _spinoff_cil_row(event):
+        return 0.0
+    return float(getattr(event, 'cash_in_lieu', 0.0) or 0.0)
+
+
+def warn_unsold_spinoff_cil(event: CorporateAction, election_key: str,
+                            rows: List[dict]) -> None:
+    """A spin-off's cash in lieu that the election's rows do not sell:
+    the RBC parser's old "NOT booked" warning, now here (the parser
+    leaves the row to this stage). Silent when the brokerage parser
+    books the cash itself (Questrade)."""
+    cash = float(getattr(event, 'cash_in_lieu', 0.0) or 0.0)
+    if (not _spinoff_cil_row(event) or cash < 0.005
+            or getattr(event, 'cil_broker_booked', False)
+            or any(r.get('action') == 'BUYSELL'
+                   and float(r.get('quantity') or 0.0) < 0 for r in rows)):
+        return
+    if election_key == 'rollover_s_86_1':
+        why = ("the export does not state the fraction's size, so its "
+               "cost stays on the whole shares")
+        fix = ("book it in a .tt file dated on or after the spin-off: a "
+               "BUY of the fraction at 0 and its SELL for the cash")
+    else:
+        why = f"the {election_key} election books no sale of it"
+        fix = "add the fractional disposition by hand in a .tt file"
+    emit_line(f"warning: UNBOOKED: spin-off {event.source_symbol}→"
+              f"{event.target_symbol} on {event.date}: {cash:,.2f} "
+              f"{event.cash_in_lieu_currency or ''} cash in lieu of a "
+              f"fractional share is NOT booked ({why}) — {fix}.")
+
+
+# The `type` of an s.86.1 spin-off's fraction sale that replaces the
+# brokerage parser's own pair for that cash in lieu (Questrade's $0 buy
+# and its sale): taxjson-merge2 drops the pair and clears the mark
+# (drop_broker_cil_pairs). Never reaches the engines.
+CIL_TAKEOVER_TYPE = 'cil_takeover'
+
+
+def drop_broker_cil_pairs(txs: List[Any]) -> List[Any]:
+    """Drop the brokerage parser's own booking of a cash in lieu that an
+    s.86.1 spin-off's fraction sale (`type` CIL_TAKEOVER_TYPE) books:
+    Questrade's pair for "CASH IN LIEU OF .5" — the fraction bought at $0
+    and sold for the cash — on the same account and symbol, the nearest
+    pairs (within 50 days) whose fractions and cash add up to the sale's.
+    The sale's mark is cleared. Kept, with a warning, when no such pairs
+    are found. Rows are dicts or TaxTransaction objects (merge2); the
+    rest keep their order."""
+    def g(t, k, d=None):
+        return t.get(k, d) if isinstance(t, dict) else getattr(t, k, d)
+
+    def num(t, k):
+        return float(g(t, k) or 0.0)
+
+    def days(a, b):
+        lag = _rbc_lag(a, b)
+        return abs(lag) if lag is not None else 9999
+
+    from taxjson.lib.brokerages.questrade import _CIL_RE as _QT_CIL_RE
+    marks = [t for t in txs if g(t, 'type') == CIL_TAKEOVER_TYPE]
+    if not marks:
+        return txs
+    dropped: set = set()
+    for m in marks:
+        frac, cash = -num(m, 'quantity'), num(m, 'net_amount')
+        legs: Dict[tuple, List[int]] = {}
+        for i, t in enumerate(txs):
+            if (i in dropped or g(t, 'action') != 'BUYSELL'
+                    or g(t, 'corp_event_id')
+                    or g(t, 'symbol') != g(m, 'symbol')
+                    or (g(t, 'account') or '') != (g(m, 'account') or '')
+                    or not _QT_CIL_RE.search(g(t, 'description') or '')
+                    or days(g(m, 'date'), g(t, 'date')) > 50):
+                continue
+            legs.setdefault((g(t, 'date'), g(t, 'description')),
+                            []).append(i)
+        pairs = []
+        for (day, _d), idx in legs.items():
+            buys = [i for i in idx if num(txs[i], 'quantity') > 0
+                    and abs(num(txs[i], 'net_amount')) < 0.005]
+            for i in idx:
+                q = num(txs[i], 'quantity')
+                if q >= 0:
+                    continue
+                b = next((j for j in buys if abs(num(txs[j], 'quantity')
+                                                  + q) < 1e-9), None)
+                if b is not None:
+                    buys.remove(b)
+                    pairs.append((days(g(m, 'date'), day), b, i, -q,
+                                  num(txs[i], 'net_amount')))
+        took, f, c = [], 0.0, 0.0
+        for _lag, b, i, q, amt in sorted(pairs):
+            if f + q <= frac + 1e-9 and c + amt <= cash + 0.005:
+                took.append((b, i))
+                f, c = f + q, c + amt
+        what = (f"{g(m, 'symbol')}: the s.86.1 spin-off's sale of the "
+                f"{frac:g} fractional share paid {cash:,.2f} "
+                f"{g(m, 'currency') or ''} in cash on {g(m, 'date')}")
+        if took and abs(f - frac) < 1e-6 and abs(c - cash) < 0.01:
+            for b, i in took:
+                dropped.update((b, i))
+            emit_line(f"note: {what} replaces the broker's own booking of "
+                      f"that cash (the fraction bought at $0 and sold), "
+                      f"dropped (CA-CORP-05).")
+        else:
+            emit_line(f"warning: {what}: the broker's own cash-in-lieu rows "
+                      f"for it are not among this account's inputs. If "
+                      f"they are booked under another symbol, the fraction "
+                      f"is sold twice: map the symbols to one with ticker.map.")
+        if isinstance(m, dict):
+            m.pop('type', None)
+        else:
+            m.type = ''
+    return [t for i, t in enumerate(txs) if i not in dropped]
+
+
 def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
                                   *, description_base: str,
                                   allocated_acb: Optional[float] = None,
                                   alloc_cur: Optional[str] = None,
-                                  zero_is_intended: bool = False
+                                  zero_is_intended: bool = False,
+                                  sell_fraction: bool = False
                                   ) -> List[dict]:
     """Country-neutral basis-allocated spinoff: part of the parent's cost
     basis moves to the spun-off position; no current-year tax. Canada
@@ -3863,10 +4218,19 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     Canadian hint, so the US §355 rule cannot book one (partition
     ENGINE-08). `zero_is_intended`: the $0 allocation is the booking
     itself (a sheltered account's default, sheltered_default_rows), not
-    a missing amount — no warning."""
+    a missing amount — no warning.
+
+    `sell_fraction` (the Canada s.86.1 wrapper only, CA-CORP-05): a
+    fraction the broker paid in cash (`fraction_in_lieu`, `cash_in_lieu`)
+    is received with the whole shares — the full quantity takes the full
+    allocated cost and the parent gives up all of it — and then sold for
+    the cash, on its share of that cost."""
     if allocated_acb is None:
         allocated_acb = float((hints or {}).get('allocated_acb') or 0.0)
     alloc_cur = alloc_cur or event.currency
+    frac_cash = float(getattr(event, 'cash_in_lieu', 0.0) or 0.0)
+    frac_paid = float(getattr(event, 'fraction_in_lieu', 0.0) or 0.0)
+    sell = sell_fraction and frac_cash >= 0.005 and frac_paid > 1e-9
     # Snap fractional residue to broker-style cash-in-lieu. Unlike the
     # taxable / deemed-dividend paths — where the target is acquired at
     # FRESH FMV, so the dropped fraction is genuine zero-gain cash — a
@@ -3877,7 +4241,8 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     # position only receives `adjusted_acb` would silently vaporize the
     # fractional basis (frac/qty * allocated_acb). Keeping it in the
     # parent defers it rather than losing it.
-    if (abs(allocated_acb) < 0.005 and event.qty_received > 0
+    if (abs(allocated_acb) < 0.005
+            and (event.qty_received > 0 or sell)
             and not zero_is_intended):
         # A spin-off with value is never allocated $0 (s.86.1(2) /
         # §358(b) apportion by relative FMV): the parent kept its whole
@@ -3893,6 +4258,11 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     whole_qty, adjusted_acb, frac_qty = _snap_received(event,
         event.qty_received, allocated_acb,
     )
+    if sell and frac_qty <= 0:
+        return _allocated_spinoff_selling_fraction(
+            event, description_base=description_base,
+            allocated_acb=allocated_acb, alloc_cur=alloc_cur,
+            whole_qty=whole_qty, frac=frac_paid, cash=frac_cash)
     price = adjusted_acb / whole_qty if whole_qty else 0.0
     description = description_base
     if frac_qty > 0:
@@ -3905,7 +4275,7 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
         _bv, _bcur = spinoff_broker_value(event)
         _ps, _ps_cur = _bv / event.qty_received, _bcur or _ps_cur
     _cash = _corp_cash(_fraction_cash(
-        event, float(getattr(event, 'cash_in_lieu', 0.0) or 0.0),
+        event, _cil_evidence(event),
         event.cash_in_lieu_currency or _ps_cur, frac_qty,
         frac_qty * _ps, _ps_cur))
     rows = []
@@ -3935,6 +4305,64 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
         })
     if _cash and rows:
         rows[0]['corp_cash'] = _cash
+    return rows
+
+
+def _allocated_spinoff_selling_fraction(event: CorporateAction, *,
+                                        description_base: str,
+                                        allocated_acb: float, alloc_cur: str,
+                                        whole_qty: float, frac: float,
+                                        cash: float) -> List[dict]:
+    """The rows of a basis-allocated spin-off whose fraction was paid in
+    cash (`sell_fraction`): the whole shares and the fraction bought at
+    the full allocated cost, the parent's cost reduced by all of it, then
+    the fraction sold for the cash — its gain is the cash less its share
+    of the allocated cost (CA-CORP-05). The sale is dated the day the
+    cash was paid (never before the spin-off). When the brokerage parser
+    books that cash itself (Questrade), the sale is marked to replace its
+    pair (CIL_TAKEOVER_TYPE)."""
+    qty = whole_qty + frac
+    cash_cur = (event.cash_in_lieu_currency or event.target_currency
+                or event.currency)
+    description = (f"{description_base}; {frac:.6g} fractional share(s) "
+                   f"paid in cash, sold below")
+    rows = [{
+        'action': 'BUYSELL',
+        'date': event.date, 'time': event.time, 'date_settle': event.date,
+        'symbol': event.target_symbol,
+        'quantity': qty, 'currency': alloc_cur,
+        'price': allocated_acb / qty, 'net_amount': allocated_acb,
+        'fee': 0.0, 'account': event.account, 'description': description,
+    }]
+    if allocated_acb > 0 and event.source_symbol and event.source_symbol != '(unknown parent)':
+        rows.append({
+            'action': 'ADJUST',
+            'date': event.date, 'time': event.time, 'date_settle': event.date,
+            'symbol': event.source_symbol, 'currency': alloc_cur,
+            'net_amount': -allocated_acb,
+            'account': event.account,
+            'description': description + ' (parent cost reduction)',
+        })
+    paid = max(event.date, getattr(event, 'cash_in_lieu_date', '') or '')
+    sale = {
+        'action': 'BUYSELL',
+        'date': paid,
+        # After the buy when paid the same day.
+        'time': (_bump_time(event.time, 1) if paid == event.date
+                 else event.time),
+        'date_settle': paid,
+        'symbol': event.target_symbol,
+        'quantity': -frac, 'currency': cash_cur,
+        'price': cash / frac, 'net_amount': cash, 'fee': 0.0,
+        'corp_cash': _corp_cash((cash, cash_cur)),
+        'account': event.account,
+        'description': (f"{description_base}: cash in lieu of {frac:.6g} "
+                        f"fractional share(s), sold for the cash on its "
+                        f"share of the allocated cost"),
+    }
+    if getattr(event, 'cil_broker_booked', False):
+        sale['type'] = CIL_TAKEOVER_TYPE
+    rows.append(sale)
     return rows
 
 
@@ -3993,6 +4421,10 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
         allocated_acb=(float(hints.get('allocated_acb_cad') or 0.0)
                        if cad else None),
         alloc_cur='CAD' if cad else None,
+        # A fraction paid in cash is sold at the cash, on its share of
+        # the allocated cost (CA-CORP-05). Canada only: the US §355 path
+        # keeps the fraction's cost in the parent (docs/limits.md).
+        sell_fraction=True,
     )
     if cad:
         rows = _allocation_in_listing_currency(event, hints, rows, 'CAD',
@@ -4020,6 +4452,9 @@ def _allocation_in_listing_currency(event: CorporateAction, hints: dict,
     amount_cur = amount_cur.upper()
     out = []
     for r in rows:
+        if r['action'] == 'BUYSELL' and float(r.get('quantity') or 0) < 0:
+            out.append(r)               # the fraction's sale: its cash
+            continue
         cur = ((event.target_currency or event.currency)
                if r['action'] == 'BUYSELL' else event.currency)
         cur = (cur or amount_cur).upper()
@@ -4424,6 +4859,7 @@ def resolve_event(
     if fx is not None:
         hints[FX_HINT] = fx
     rows = rule.apply(event, election_key, hints)
+    warn_unsold_spinoff_cil(event, election_key, rows)
     # Traceability: every emitted row names the event (and choice) it
     # came from, so reports can join a gains row back to the manifest
     # record instead of grepping prose descriptions.
@@ -4496,6 +4932,45 @@ def _same_quantities(a: CorporateAction, b: CorporateAction) -> bool:
             and abs(a.qty_received - b.qty_received) < 1e-9)
 
 
+def _same_listing(a: CorporateAction, b: CorporateAction) -> bool:
+    """Two copies of one event on the same listings: an overlapping
+    statement can only repeat a holding of the same securities in the
+    same currencies. A CAD and a USD listing of one security held in
+    one broker account are two holdings (they stay separate events,
+    one election), even with equal quantities (2026-10 audit #105)."""
+    return (a.currency == b.currency
+            and a.target_currency == b.target_currency
+            and a.source_symbol == b.source_symbol
+            and a.target_symbol == b.target_symbol)
+
+
+def _value_differences(a: CorporateAction, b: CorporateAction) -> List[str]:
+    """What two copies of one holding disagree on besides quantities:
+    the values the emitted rows are booked at (the disposition's FMV,
+    the target's FMV, the cash in lieu and their currencies). [] when
+    they agree to the cent."""
+    out: List[str] = []
+    for label, x, y in (("FMV", a.fmv, b.fmv),
+                        ("target FMV", a.target_fmv, b.target_fmv),
+                        ("cash in lieu", a.cash_in_lieu, b.cash_in_lieu)):
+        if abs((x or 0.0) - (y or 0.0)) >= 0.005:
+            out.append(f"{label} {x:.2f} vs {y:.2f}")
+    for label, x, y in (("cash-in-lieu currency", a.cash_in_lieu_currency,
+                         b.cash_in_lieu_currency),
+                        ("target FMV currency", a.target_fmv_currency,
+                         b.target_fmv_currency)):
+        if (x or "") != (y or ""):
+            out.append(f"{label} {x or '-'} vs {y or '-'}")
+    return out
+
+
+def _larger_copy(a: CorporateAction, b: CorporateAction) -> CorporateAction:
+    """The copy kept when two statements of one holding disagree:
+    the larger, whatever the input order."""
+    return max((a, b), key=lambda e: (e.qty_disposed, e.qty_received,
+                                      e.fmv, e.target_fmv, e.cash_in_lieu))
+
+
 def combine_broker_copies(events: List[CorporateAction], *,
                           stream=None) -> List[CorporateAction]:
     """One corporate event per event id, covering every broker account.
@@ -4535,16 +5010,14 @@ def combine_broker_copies(events: List[CorporateAction], *,
         for ev in copies:
             if ev.broker_account:
                 dup = next((h for h in holdings
-                            if h.broker_account == ev.broker_account),
-                           None)
+                            if h.broker_account == ev.broker_account
+                            and _same_listing(h, ev)), None)
                 if dup is not None and not _same_quantities(ev, dup):
                     # One broker account's statements disagree on the
                     # event (a correction one of them lacks): keep the
                     # larger copy, whatever the order, and say so.
-                    keep = max((dup, ev), key=lambda e: (
-                        e.qty_disposed, e.qty_received, e.fmv,
-                        e.target_fmv))
-                    emit_line(f"warning: corp-action {eid}: two statements "
+                    keep = _larger_copy(dup, ev)
+                    emit_line(f"warning: ATTENTION: corp-action {eid}: two statements "
                               f"of broker account "
                               f"{_mask_account(ev.broker_account)} disagree "
                               f"on its quantities ({dup.qty_disposed:g}->"
@@ -4555,8 +5028,34 @@ def combine_broker_copies(events: List[CorporateAction], *,
                               file=stream or sys.stderr)
                     holdings[holdings.index(dup)] = keep
             else:
-                dup = next((h for h in seen if _same_quantities(ev, h)),
-                           None)
+                dup = next((h for h in holdings
+                            if _same_quantities(ev, h)
+                            and _same_listing(ev, h)), None) or next(
+                    (h for h in seen if _same_quantities(ev, h)
+                     and _same_listing(ev, h)), None)
+            if (dup is not None and dup in holdings
+                    and _same_quantities(ev, dup)):
+                # Equal quantities but different values: the copies
+                # booked whichever came first, silently (2026-10 audit
+                # #104). Keep the larger, whatever the order, and say
+                # what differs.
+                keep = _larger_copy(dup, ev)
+                other = ev if keep is dup else dup
+                # Said as "the dropped copy vs the kept one", whatever
+                # the input order.
+                diffs = _value_differences(other, keep)
+                if diffs:
+                    who = (f"broker account "
+                           f"{_mask_account(ev.broker_account)}"
+                           if ev.broker_account
+                           else "an unnamed broker account")
+                    emit_line(f"warning: ATTENTION: corp-action {eid}: two statements "
+                              f"of {who} agree on its quantities but "
+                              f"disagree on its values ({'; '.join(diffs)}); "
+                              f"kept the copy with FMV {keep.fmv:.2f}. "
+                              f"Check which statement is current.",
+                              file=stream or sys.stderr)
+                    holdings[holdings.index(dup)] = keep
             seen.append(ev)
             if dup is None:
                 holdings.append(ev)
@@ -4584,6 +5083,19 @@ def combine_broker_copies(events: List[CorporateAction], *,
                 cash_in_lieu=tgt.cash_in_lieu + h.cash_in_lieu,
                 cash_in_lieu_currency=(tgt.cash_in_lieu_currency
                                        or h.cash_in_lieu_currency),
+                fraction_in_lieu=tgt.fraction_in_lieu + h.fraction_in_lieu,
+                cash_in_lieu_date=min(
+                    (d for d in (tgt.cash_in_lieu_date, h.cash_in_lieu_date)
+                     if d), default=''),
+                cil_broker_booked=(tgt.cil_broker_booked
+                                   or h.cil_broker_booked),
+                # A broker that delivers real fractions (IB) makes the
+                # combined quantity exact: inheriting the first copy's
+                # flag snapped 4.5 delivered shares to 4 when a
+                # whole-share broker's copy came first (2026-10 audit
+                # #106; the journal collapse ORs it the same way).
+                fractional_delivery=(tgt.fractional_delivery
+                                     or h.fractional_delivery),
                 raw_descriptions=(list(tgt.raw_descriptions)
                                   + list(h.raw_descriptions)),
                 broker_account='+'.join(

@@ -558,12 +558,13 @@ class TestRedactUsAddress(unittest.TestCase):
         # read the fixture itself as an address.
         text = ("Webull Securities Synthetic\n"
                 "Springfield, IL 62704-1234\n"
-                "Toronto, ON " + "M5V" + " 2T6\n")
+                "Regina, SK " + "S4P" + " 3Y2\n")
         out = redact_text(text)
         out = out[0] if isinstance(out, tuple) else out
         self.assertNotIn("62704", out)
         self.assertNotIn("Springfield", out)
-        self.assertNotIn("M5V", out)
+        self.assertNotIn("S4P", out)
+        self.assertNotIn("Regina", out)
         # A bare 5-digit amount is not a ZIP.
         row = redact_text("2025-01-02,Buy,AAPL,10,15000,USD\n")
         row = row[0] if isinstance(row, tuple) else row

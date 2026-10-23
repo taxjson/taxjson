@@ -387,7 +387,11 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
             # silently (2026-09 audit). Loud, not fatal: partial runs
             # are a legitimate iteration loop.
             newer = stale_wash_inputs(wash)
+            if newer and (wash.name, tuple(newer)) in _STALE_SAID:
+                newer = []          # said once per process (harvest and
+                                    # checklist read the books twice)
             if newer:
+                _STALE_SAID.add((wash.name, tuple(newer)))
                 from taxjson.lib.stage_msg import emit_line
                 emit_line(f"warning: {wash.name} was built before "
                           f"{', '.join(newer)} changed — wash-adjusted "
@@ -415,6 +419,10 @@ def _sha256(p: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+# The stale-wash warnings already given in this process.
+_STALE_SAID: set = set()
 
 
 def _fingerprint(p: Path) -> "Optional[dict]":
@@ -546,7 +554,11 @@ def gains_basis_label(files) -> str:
     """Human label for which basis a report was computed on, from the
     paths resolve_gains_files returned. Printed by the query commands so
     a user comparing two reports can see WHY their totals differ."""
-    paths = files.values() if hasattr(files, "values") else files
+    paths = list(files.values() if hasattr(files, "values") else files)
+    if any(Path(p).name.endswith("_gains_all.json") for p in paths):
+        # The full-history file a windowed view reads for a window
+        # outside the tax year (taxjson_run _gains_all_file).
+        return "pre-wash, full history"
     if any(Path(p).name.endswith("_gains_wash.json") for p in paths):
         return "wash-adjusted"
     return "pre-wash"

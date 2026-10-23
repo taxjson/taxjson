@@ -153,6 +153,74 @@ class TestQuestradeCashEvents(unittest.TestCase):
         self.assertTrue(all(e["account"] for e in evs))
         self.assertNotIn("55500001", json.dumps(evs))     # pii-ok
 
+    # Real order: CAD 200 -> USD 100, then USD 100 -> CAD 150, both on
+    # 02-03, with a same-day USD withdrawal between them; deposits on
+    # the days around anchor the date order.
+    _REAL = (
+        ("2025-02-02", "DEP", "DEPOSIT", 1, "CAD", "Deposits"),
+        ("2025-02-03", "FXT", "CONVERSION - CAD/USD", -200, "CAD",
+         "FX conversion"),
+        ("2025-02-03", "FXT", "CONVERSION - CAD/USD", 100, "USD",
+         "FX conversion"),
+        ("2025-02-03", "WDR", "WITHDRAWAL", -5, "USD", "Withdrawals"),
+        ("2025-02-03", "FXT", "CONVERSION - USD/CAD", -100, "USD",
+         "FX conversion"),
+        ("2025-02-03", "FXT", "CONVERSION - USD/CAD", 150, "CAD",
+         "FX conversion"),
+        ("2025-02-04", "DEP", "DEPOSIT", 1, "CAD", "Deposits"))
+
+    def _events(self, rows):
+        from taxjson.lib.brokerages.questrade import questrade_cash_events
+        text = _QH + "".join(_qrow(d, a, "", desc, 0, 0, n, c, t)
+                             for d, a, desc, n, c, t in rows)
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "q.csv"
+            p.write_text(text)
+            return questrade_cash_events(p)
+
+    @staticmethod
+    def _seq(evs):
+        return [(e["kind"], e["date"], e.get("from_ccy"), e.get("from_amt"),
+                 e.get("to_ccy"), e.get("to_amt"), e.get("amount"))
+                for e in evs]
+
+    def test_newest_first_export_in_real_order(self):
+        # Audit finding 75: Questrade's web export lists rows newest
+        # first. Read in file order, the two same-day conversions were
+        # replayed backward (USD -> CAD before CAD -> USD).
+        want = [
+            ("CASHMOVE", "2025-02-02", None, None, None, None, 1.0),
+            ("FXCONV", "2025-02-03", "CAD", 200.0, "USD", 100.0, None),
+            ("CASHMOVE", "2025-02-03", None, None, None, None, -5.0),
+            ("FXCONV", "2025-02-03", "USD", 100.0, "CAD", 150.0, None),
+            ("CASHMOVE", "2025-02-04", None, None, None, None, 1.0)]
+        self.assertEqual(self._seq(self._events(self._REAL)), want)
+        self.assertEqual(self._seq(self._events(self._REAL[::-1])), want)
+
+    @rule("CA-FX-07")
+    def test_newest_first_export_gain(self):
+        # USD 100 held at CAD 100; buy USD 100 for CAD 200 (pool 200 at
+        # CAD 300), sell USD 100 for CAD 150 (ACB 150): gain 0, USD 100
+        # left at CAD 150. Replayed backward it was gain 50, cost 200.
+        from taxjson.lib import fx_cash_v2 as F
+        evs = [e for e in self._events(self._REAL[::-1])
+               if e["kind"] == "FXCONV"]
+        lines = []
+        for text in ("CASHOPEN 2025-01-01 USD 100 100",
+                     "CASHBAL 2025-12-31 USD 100"):
+            e = CE.parse_line(text)
+            e.update(book="margin/tt", label="margin", where="cash.tt:1")
+            lines.append(e)
+        for e in evs:
+            e.update(book="margin/tt", label="margin")
+        doc = F.build([], {"lines": lines, "events": evs, "problems": []},
+                      "CAD", 2025, lambda c, d: 1.5, country="canada")
+        self.assertEqual(doc["status"], "computed", doc["problems"])
+        self.assertAlmostEqual(doc["net_gain"], 0.0, places=2)
+        self.assertAlmostEqual(
+            doc["close"]["books"]["margin/tt"]["USD"]["cost"], 150.0,
+            places=2)
+
     @rule("CA-FX-07")
     def test_v2_reads_the_conversions(self):
         with tempfile.TemporaryDirectory() as td:

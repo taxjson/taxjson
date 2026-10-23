@@ -152,6 +152,12 @@ refused.
   last row is taken as the end. If an account still holds positions and
   has no row for more than 30 days of the year, the run warns that the
   export may end early.
+- **Row order.** The web export lists rows newest first. Rows of one
+  day carry no time, so taxjson reads a newest-first file bottom-up:
+  same-day rows (a sale and its rebuy, two currency conversions) keep
+  the order they happened in, in the books and in the FX-on-cash
+  ledger v2 alike. A file whose dates are mixed keeps its own order,
+  with a note.
 - **Internal symbol codes** (`X000123`) on some dividend, spin-off and
   journal rows, and currency journals (Norbert's gambit): see
   [troubleshooting.md](troubleshooting.md#questrade-rbc-direct-and-webull).
@@ -197,7 +203,9 @@ account's activity or transaction history page and its export link.
 **Positions report:** the **Holdings Export** (CSV, `Holdings Export
 as of <date>`), with book cost, read as is by `tjs sanity` and
 `tjs opening` (columns matched by label: Symbol, Quantity, Currency,
-book cost or book value).
+book cost or book value as the position's total; a per-share label
+such as Average Cost or Book Cost Per Share is multiplied by the
+quantity; any other cost label is refused, naming it).
 
 Parser: `src/taxjson/lib/brokerages/rbc_direct.py` — `REQUIRED_COLUMNS`, `rbc_coverage_messages`, `DEFAULT_YEAR_END_POSTING`; positions: `src/taxjson/lib/positions_reports.py` — `rbc_holdings`.
 
@@ -276,7 +284,9 @@ take from a few minutes to a week.
   does not book that moves a coin (an airdrop, a conversion, an
   adjustment, margin), are `UNBOOKED` too. `tjs run --strict` stops on
   any `UNBOOKED` line.
-- **Overlapping ledgers are read once**, by their ledger `txid`.
+- **Overlapping ledgers are read once**, by their ledger `txid` (by
+  the books, and by the stablecoin pool `tjs crypto-sends` rebuilds,
+  entry by entry).
 - **A blank `txid`.** Two fills or ledger rows alike in every cell
   are two events when their `txid` is blank, as in any export without
   ids; an overlapping export holding the same rows is still read once.
@@ -322,7 +332,13 @@ dates as CSV.
 - **Row IDs.** A row's ID keeps two fills in the same second apart. A
   row without one (an older layout with no ID column, or a blank cell)
   is told apart from an identical row of the same file by its order, and
-  the same rows in an overlapping export are still read once.
+  the same rows in an overlapping export are still read once (in the
+  stablecoin pool `tjs crypto-sends` rebuilds too).
+- **A blank Total** on a Buy or Sell is derived as Coinbase builds it:
+  Subtotal plus the fee on a buy, minus it on a sale (without a
+  Subtotal, quantity x price stands in). The books, the FX-on-cash
+  ledger v2 and the crypto-sends pool all derive it; a row with neither
+  is refused, naming it: fill in the Total from the Coinbase statement.
 
 **Positions report:** none taxjson knows. Use a `[[holding]]` TOML.
 

@@ -314,8 +314,9 @@ def _cells(name: str, s: Dict[str, Any], cur: str = "") -> List[str]:
     m = metrics(s)
     return [name, cur, str(m["trades"]), _money(m["total"]),
             _money(m["mean"]), _money(m["median"]),
-            f"{m['pct_notional']:.3f}%", f"{m['per_share']:.4f}",
-            f"{m['per_contract']:.4f}"]
+            f"{m['pct_notional']:.3f}%",
+            f"{m['per_share']:.4f}" if s["shares"] else "-",
+            f"{m['per_contract']:.4f}" if s["contracts"] else "-"]
 
 
 # The column legend, one item per column (docs/output-style.md lists).
@@ -389,7 +390,7 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
             split.append([name, _money(m["stock_fee"]),
                           _money(m["option_fee"])])
         doc.line("\n".join(fit_table(["BROKERAGE", "NON-OPTION", "OPTIONS"],
-                                     split, indent="  ", width_=doc.w)))
+                                     split, width_=doc.w)))
         mixed = [(n, b) for n, b in rows
                  if any(c != to_curr for c in b["cur"])]
         if mixed:
@@ -397,7 +398,7 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
             doc.line("\n".join(kv_lines(
                 [(name, ", ".join(f"{_money(c['fee'])} {cur}"
                                   for cur, c in sorted(b["cur"].items())))
-                 for name, b in mixed], indent="  ", width_=doc.w)))
+                 for name, b in mixed], width_=doc.w)))
     else:
         doc.blank()
         doc.message("note", "amounts are in each fee's native currency; "
@@ -409,11 +410,11 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
     doc.blank()
     gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if not brief:
-        doc.para(f"Generated {gen} | files: {info['files_read']} | "
-                 f"fee rows: {info['rows']} | dups collapsed: "
-                 f"{info['dups']}"
-                 + (f" | rows w/o id: {info['no_id']}" if info['no_id']
-                    else ""))
+        doc.kv([("Generated", gen),
+                ("Read", f"{info['files_read']} file(s), {info['rows']} fee "
+                         f"row(s), {info['dups']} duplicate(s) collapsed"
+                         + (f", {info['no_id']} row(s) without an id"
+                            if info['no_id'] else ""))])
     if info["zero_fee"]:
         if info.get("manual_fees"):
             _un = info.get("unnamed") or [MANUAL_TT]
@@ -434,8 +435,8 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
             doc.para(f"Skipped {len(info['skipped'])} non-broker file(s): "
                      f"{', '.join(info['skipped'])}")
         else:
-            doc.para(f"Skipped {len(info['skipped'])} file(s) with no "
-                     f"source_brokerage tag.")
+            doc.para(f"{len(info['skipped'])} file(s) not from a broker "
+                     f"export (no source_brokerage tag) left out.")
     # FX fallback warning, surfaced into the report body.
     import taxjson.bin.taxjson_convert_currency as _cc
     if _cc._DEFAULT_RATE_FALLBACKS:

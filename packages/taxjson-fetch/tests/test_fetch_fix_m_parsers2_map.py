@@ -143,5 +143,29 @@ class TestLiveOptionSuffix(unittest.TestCase):
         self.assertIn('"BMO270116C00090000.TO"', txt)
 
 
+class TestHoldingsCurrency(unittest.TestCase):
+    """2026-10 audit #43: each fetched holding carries its currency, so
+    `taxjson opening` can use its average price."""
+
+    def test_currency_from_the_listing(self):
+        import tempfile
+        from pathlib import Path
+        from taxjson_fetch.api import positions_to_holdings_toml
+        from taxjson.lib.positions_reports import read_positions
+        pos = [{"symbol": "ZZQ.TO", "openQuantity": 10,
+                "averageEntryPrice": 10.0},
+               {"symbol": "ZZR", "openQuantity": 5,
+                "averageEntryPrice": 20.0}]
+        txt = positions_to_holdings_toml(pos, "margin", "9",
+                                         "2026-10-20 00:00:00")
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "margin_live_holdings.toml"
+            f.write_text(txt)
+            rows = {r.symbol: r for r in read_positions(f).rows}
+        self.assertEqual(rows["ZZQ.TO"].currency, "CAD")
+        self.assertEqual(rows["ZZR.US"].currency, "USD")
+        self.assertAlmostEqual(rows["ZZQ.TO"].cost, 100.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -443,12 +443,15 @@ class TestSanity(unittest.TestCase):
             self.assertEqual(doc["accounts"], ["rrsp"])
             self.assertEqual(doc["uncovered_accounts"], ["margin"])
 
-    def test_no_arguments_and_no_config_is_a_usage_error(self):
+    def test_no_arguments_and_no_config_names_the_unchecked(self):
+        # Nothing to compare with is said, not an error (2026-10 audit).
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             r = _run(root, "sanity")
-            self.assertNotEqual(r.returncode, 0)
-            self.assertIn("holdings = [...]", r.stderr)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("UNCHECKED:", r.stdout)
+            self.assertIn("nothing to compare with", r.stdout)
+            self.assertIn("positions .toml in holdings/", r.stdout)
 
     def test_malformed_holdings_files_are_clear_errors(self):
         with tempfile.TemporaryDirectory() as tmp:

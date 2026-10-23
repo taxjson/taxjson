@@ -1010,7 +1010,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
             width_=width_)
     d.blank()
     if not evs and not pending:
-        d.para("No dated rename in the books.")
+        d.para("None in the books.")
     if evs:
         body = []
         for e in evs:

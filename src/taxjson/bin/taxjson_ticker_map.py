@@ -57,10 +57,11 @@ from taxjson.lib.ticker_map import map_ticker
 #                       event (lib/renames) now written in a .tt file as
 #                       `RENAME <date> OLD NEW` (`taxjson format-map
 #                       --write` moves it). Without a date it is GLOBAL.
-# Four more keywords are lookups that change no symbol (lib/ticker_map,
+# Five more keywords are lookups that change no symbol (lib/ticker_map,
 # which parses them): QUOTE (Yahoo quote spelling), CRYPTO (a coin's
-# Yahoo id), EXTRACT (a parser symbol-extraction override) and T1135 (a
-# symbol's T1135 domicile). A
+# Yahoo id), EXTRACT (a parser symbol-extraction override), T1135 (a
+# symbol's T1135 domicile) and SIMILAR (look-alike funds: flagged in a
+# loss window, never pooled). A
 # TRADINGVIEW line (the removed TradingView export) is skipped here;
 # `taxjson run` notes it once (lib/ticker_map.RETIRED_KEYWORDS).
 _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
@@ -512,14 +513,17 @@ def raw_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
 
 def _lookup_named(side) -> frozenset:
     """The symbols the lookup lines of a map name (SideRules): the
-    symbol of a QUOTE, CRYPTO, T1135, STABLE or MULT line and an EXTRACT
-    line's target. A root-wide market line (SPLITSHARE, INDEXOPT,
-    EVENING) and a VENUE code name no symbol."""
+    symbol of a QUOTE, CRYPTO, T1135, STABLE or MULT line, every symbol
+    of a SIMILAR line and an EXTRACT line's target. A root-wide market
+    line (SPLITSHARE, INDEXOPT, EVENING) and a VENUE code name no
+    symbol."""
     out = set()
     for table in (side.quote, side.crypto, side.t1135, side.stable,
                   side.mult):
         out.update(str(k) for k in table)
     out.update(str(sym) for _d, _c, sym in side.extract)
+    for syms, _w, _l in side.similar:
+        out.update(str(s) for s in syms)
     return frozenset(s.upper() for s in out if s)
 
 

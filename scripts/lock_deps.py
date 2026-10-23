@@ -39,7 +39,9 @@ days.
   scripts/lock_deps.py --coverage   network: a wheel exists for every
                                     target platform and Python version
 
-Options: --cooldown-days N (default 7; 0 = up to now), --uv PATH.
+Options: --cooldown-days N (default 7; 0 = up to now), --uv PATH,
+--security-update PKG (repeatable: PKG alone skips the cooldown, for a
+fix to a known vulnerability published within it; named in the header).
 When to run it: docs/releasing.md ("Dependency locks").
 """
 
@@ -207,7 +209,8 @@ def find_uv(given):
     if not uv:
         raise SystemExit("lock_deps: needs uv (https://docs.astral.sh/uv/; "
                          "e.g. `pipx install uv`)")
-    return uv
+    # uv runs from a temporary folder: a relative path would not be found.
+    return os.path.abspath(uv) if os.sep in uv else uv
 
 
 def run(cmd, cwd):
@@ -218,18 +221,23 @@ def run(cmd, cwd):
     return r
 
 
-def compile_locks(uv, cooldown_days):
+def compile_locks(uv, cooldown_days, security_updates=()):
     want = lock_inputs()
     cutoff = None
+    now = _dt.datetime.now(_dt.timezone.utc)
     if cooldown_days > 0:
-        t = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=cooldown_days)
+        t = now - _dt.timedelta(days=cooldown_days)
         cutoff = t.strftime("%Y-%m-%dT00:00:00Z")
+    fresh = sorted({p.strip().lower() for p in security_updates if p.strip()})
     uv_version = run([uv, "--version"], REPO).stdout.split()[1]
     base = [uv, "pip", "compile", "--quiet", "--universal",
             "--python-version", PYTHON_FLOOR, "--no-header",
             "--index-url", "https://pypi.org/simple"]
     if cutoff:
         base += ["--exclude-newer", cutoff]
+        for pkg in fresh:
+            base += ["--exclude-newer-package",
+                     f"{pkg}={now.strftime('%Y-%m-%dT%H:%M:%SZ')}"]
     LOCK_DIR.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -255,6 +263,7 @@ def compile_locks(uv, cooldown_days):
                 f"# body-sha256: {body_digest(body)}",
                 f"# python: >={PYTHON_FLOOR}",
                 f"# exclude-newer: {cutoff or 'none'}",
+                f"# security-updates: {', '.join(fresh) if cutoff and fresh else 'none'}",
                 f"# uv: {uv_version}",
             ]
             (LOCK_DIR / f"{name}.txt").write_text(
@@ -314,6 +323,9 @@ def main(argv=None):
                    help="network: wheels exist for every target")
     ap.add_argument("--cooldown-days", type=int, default=7)
     ap.add_argument("--uv", help="the uv binary (default: uv on PATH)")
+    ap.add_argument("--security-update", action="append", default=[],
+                    metavar="PKG", help="let PKG past the cooldown (a "
+                    "fix to a known vulnerability); repeatable")
     a = ap.parse_args(argv)
     if a.check:
         problems = check()
@@ -325,7 +337,7 @@ def main(argv=None):
     uv = find_uv(a.uv)
     if a.coverage:
         return coverage(uv)
-    compile_locks(uv, a.cooldown_days)
+    compile_locks(uv, a.cooldown_days, a.security_update)
     problems = check()
     for p in problems:
         print(f"lock_deps: {p}", file=sys.stderr)

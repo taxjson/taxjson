@@ -782,7 +782,7 @@ class TestReportLabelsAndTotals(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._views_project(tmp)
             r = _run_cli(root, "divs-sum")
-            self.assertIn("crypto staking rewards", r.stdout)
+            self.assertIn("of which staking rewards", r.stdout)
             j = json.loads(_run_cli(root, "divs-sum", "--json").stdout)
             self.assertEqual(j["crypto_staking"], {"CAD": 7.0})
 
@@ -801,7 +801,7 @@ class TestReportLabelsAndTotals(unittest.TestCase):
             j = json.loads(_run_cli(root, "roc-sum", "--json").stdout)
             self.assertEqual(j["totals_taxable"], {"CAD": 5.0})
             ts = _run_cli(root, "trades-sum")
-            self.assertIn("sold in taxable accounts only: 100.00 CAD",
+            self.assertIn("SOLD IN TAXABLE ACCOUNTS: 100.00 CAD",
                           ts.stdout)
             j = json.loads(_run_cli(root, "trades-sum", "--json").stdout)
             self.assertEqual(j["sold_taxable"], {"CAD": 100.0})
@@ -823,7 +823,7 @@ class TestReportLabelsAndTotals(unittest.TestCase):
                      gross_amount=1.004, net_amount=1.004)
                 for i in range(3)]})
             r = _run_cli(root, "divs-sum")
-            self.assertIn("TOTAL DIVIDEND: 3.00 CAD", r.stdout)
+            self.assertRegex(r.stdout, r"TOTAL DIVIDEND:\s+3\.00 CAD")
 
     def _options_project(self, tmp):
         root = _project(tmp, csv=_QT_HEADER)
@@ -1173,10 +1173,10 @@ class TestDefaultsAndTotalsPinned(unittest.TestCase):
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)
             w = _run_cli(root, "winners").stdout
-            self.assertIn("TOTAL REALIZED GAIN: 600.00 CAD", w)
+            self.assertRegex(w, r"TOTAL REALIZED GAIN:\s+600\.00 CAD")
             ws = _run_cli(root, "wash-sales").stdout
-            self.assertIn("2 superficial loss(es); 350.00 CAD of losses denied",
-                          ws)
+            self.assertRegex(ws, r"DENIED:\s+350\.00 CAD over 2 "
+                                 r"superficial loss\(es\)")
             ts = _run_cli(root, "trades-sum").stdout
             self.assertIn("sold 5,750.00", ts)
             lst = _run_cli(root, "list", "--json")

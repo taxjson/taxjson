@@ -309,6 +309,63 @@ class TestOrderInvariance(unittest.TestCase):
                                  f"{a} vs {b}")
 
 
+def _with_dust(txs, seed):
+    """`txs` plus, in some books, a round trip under the 1e-6 share
+    tolerance that carries real money (2026-10 audit #101: the
+    Canadian engine read it as flat and stranded its cost)."""
+    rng = random.Random(seed + 4242)
+    if rng.random() < 0.5:
+        return list(txs)
+    q = rng.choice([5e-7, 9e-7, 1e-6])
+    acct = txs[0].account if txs else "A0"
+    return list(txs) + [
+        TaxTransaction(action="BUYSELL", date="2025-02-03",
+                       time="10:00:00", symbol="DUST.TO", quantity=q,
+                       currency="CAD", net_amount=round(rng.uniform(1, 90), 2),
+                       account=acct),
+        TaxTransaction(action="BUYSELL", date="2025-03-03",
+                       time="10:00:00", symbol="DUST.TO", quantity=-q,
+                       currency="CAD", net_amount=round(rng.uniform(1, 90), 2),
+                       account=acct)]
+
+
+class TestCashConservation(unittest.TestCase):
+    """I6 CASH CONSERVATION (the 2026-10 critique: money, not only
+    units): on a fully-liquidated taxable book with the loss rule off,
+    the realized gains equal the money the sales and short openings
+    brought in less the money the buys and covers paid — splits,
+    renames and lot matching move cost, never create or lose it; a
+    position under the share tolerance that carries money included."""
+
+    def _check(self, seed, country):
+        txs, _shel = make_book(seed, sheltered_sells=False)
+        txs = _with_dust(txs, seed)
+        kw = {"per_account_basis": True} if country == "usa" else {}
+        res = run_engine(country, txs, [], detect_wash_sales=False, **kw)
+        cash = round(sum((float(t.net_amount) if t.quantity < 0
+                          else -float(t.net_amount))
+                         for t in txs if t.action == "BUYSELL"), 2)
+        gain, _perm = totals(res)
+        self.assertAlmostEqual(
+            gain, cash, places=1,
+            msg=f"CASH not conserved: gains={gain} cash={cash} "
+                f"seed={seed} country={country}\n{book_repr(txs, [])}")
+        self.assertFalse(
+            [r for r in res.get("inventory") or []
+             if abs(float(r.get("qty") or 0)) > 1e-9],
+            f"seed={seed}: a fully-liquidated book holds inventory")
+
+    def test_canada(self):
+        for seed in range(min(N_BOOKS, 100)):
+            with self.subTest(seed=seed):
+                self._check(seed, "canada")
+
+    def test_usa(self):
+        for seed in range(min(N_BOOKS, 100)):
+            with self.subTest(seed=seed):
+                self._check(seed, "usa")
+
+
 class TestCraGoldenExamples(unittest.TestCase):
     """Authoritative hand-computed cases, cited — the oracle side of
     the rigour strategy: not what the engine says, what the LAW says."""

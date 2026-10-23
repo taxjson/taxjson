@@ -150,7 +150,7 @@ class TestSurfacing(unittest.TestCase):
         self.assertRegex(r.stdout,
                          r"XYZ\.TO\s+100\s+2,100\.00\s+21\.00\s+1,000\.00")
         self.assertRegex(r.stdout, r"CLEAN\.TO\s+10\s+500\.00\s+50\.00\s+-")
-        self.assertIn("DEFERRED: 1,000.00 CAD", r.stdout)
+        self.assertIn("DEFERRED in the cost:  1,000.00 CAD", r.stdout)
 
     def test_list_json_carries_deferred(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -165,8 +165,7 @@ class TestSurfacing(unittest.TestCase):
             root = self._project(tmp)
             r = self._run(root, "wash-sales")
             r2 = self._run(root, "wash-sales", "--json")
-        self.assertIn("Currently embedded in OPEN positions: 1,000.00",
-                      r.stdout)
+        self.assertRegex(r.stdout, r"DEFERRED:\s+1,000\.00 CAD in open positions")
         self.assertEqual(json.loads(r2.stdout)["totals"]
                          ["embedded_in_open"], 1000.0)
 

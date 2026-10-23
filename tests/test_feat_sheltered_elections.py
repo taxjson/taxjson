@@ -182,9 +182,10 @@ class _Base:
                 [(x["action"], x["quantity"], x["net_amount"],
                   x["corp_election"]) for x in rows],
                 [("BUYSELL", 25.0, 0.0, "sheltered_default")])
-            # Nothing written to the manifest: an election there wins.
-            man = json.loads((root / "inputs" / self.PLAN / "manifest.json")
-                             .read_text())
+            # Nothing written to the manifest: an election there wins
+            # (no manifest at all until an election is saved).
+            _mp = root / "inputs" / self.PLAN / "manifest.json"
+            man = json.loads(_mp.read_text()) if _mp.exists() else {}
             self.assertEqual(man.get("elections") or {}, {})
             self.assertFalse((root / "work" / "pending_elections.json")
                              .exists())

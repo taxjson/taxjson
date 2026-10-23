@@ -574,8 +574,9 @@ class TestWashSalesStyle(unittest.TestCase):
         self.assertEqual(head.split(), ["ACCOUNT", "DATE", "SYMBOL", "QTY",
                                         "PROCEEDS", "COST", "GAIN",
                                         "DENIED", "ALLOWED"])
-        self.assertIn("1 superficial loss(es); 200.00 CAD of losses denied "
-                      "(60.00 permanently denied).", lines)
+        self.assertTrue(any(ln.startswith("DENIED:") and "200.00 CAD over 1 "
+                            "superficial loss(es) (60.00 permanently denied)"
+                            in ln for ln in lines), lines)
         self.assertIn("WHAT DENIED MEANS", lines)
         # One blank line before each section heading.
         i = lines.index("WHAT DENIED MEANS")

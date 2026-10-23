@@ -185,9 +185,10 @@ class TestCli(unittest.TestCase):
     def test_missing_slip_file(self):
         with tempfile.TemporaryDirectory() as td:
             g = write_gains(td, [sell()])
-            with redirect_stderr(io.StringIO()):
-                rc = main(["/nonexistent.csv", "--gains", str(g), "--country", "canada"])
-            self.assertEqual(rc, 2)
+            with redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit) as cm:
+                main(["/nonexistent.csv", "--gains", str(g), "--country", "canada"])
+            self.assertEqual(cm.exception.code, 2)
 
 
 class TestWrapperExcludesCrypto(unittest.TestCase):

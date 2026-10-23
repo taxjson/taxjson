@@ -4,8 +4,9 @@
 # inputs-sha256: 33f3483de006bdf625138e035b14e4a94dec45f0f1d447b144efd2f229a5ec00
 # body-sha256: d0b9c64b8cc6b1a004ecbaeb70b4d168affbbe79f3ed21a7e057ee546b9cc924
 # python: >=3.9
-# exclude-newer: 2026-10-04T00:00:00Z
-# uv: 0.13.0
+# exclude-newer: 2026-10-15T00:00:00Z
+# security-updates: certifi
+# uv: 0.13.5
 
 pip==26.0.1 ; python_full_version < '3.10' \
     --hash=sha256:bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b \

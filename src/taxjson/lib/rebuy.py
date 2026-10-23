@@ -67,6 +67,9 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
     canon = canon or (lambda s: s)
     underlying = underlying or (lambda s: s)
     members = getattr(canon, "members", {}) or {}
+    # {class root: the class roots ticker.map SIMILAR lines put beside
+    # it} (lib/similar; bin/taxjson_run._wash_class_context).
+    similar = getattr(canon, "similar", {}) or {}
     want_set = set(want) if want is not None else None
     rows: List[Dict[str, Any]] = []
     cleared: Dict[str, Dict[str, Any]] = {}
@@ -85,7 +88,7 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
             if live:
                 open_syms.add(sym)
                 rows.append(_row(sym, live, r, cat, as_of, usa, canon,
-                                 underlying, members))
+                                 underlying, members, similar))
             for l in done:
                 ra = str(l.get("rebuy_at") or "")
                 if not ra or not (0 <= _days(as_of, ra) < cleared_days):
@@ -110,7 +113,8 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
             "rows": rows, "cleared": clr}
 
 
-def _row(sym, live, r, cat, as_of, usa, canon, underlying, members):
+def _row(sym, live, r, cat, as_of, usa, canon, underlying, members,
+         similar=None):
     from taxjson.lib.core import is_option_symbol
     last = max(live, key=lambda l: (l.get("trade_date") or "",
                                     l.get("window_date") or ""))
@@ -138,6 +142,9 @@ def _row(sym, live, r, cat, as_of, usa, canon, underlying, members):
     opt = is_option_symbol(sym.strip().upper())
     others = [] if opt else [m for m in members.get(canon(sym), [])
                              if m != sym]
+    alike = [] if opt else sorted({
+        m for root in (similar or {}).get(canon(sym), [])
+        for m in (members.get(root) or [root])})
     return {
         "ticker": sym,
         "underlying": underlying(sym),
@@ -152,6 +159,9 @@ def _row(sym, live, r, cat, as_of, usa, canon, underlying, members):
         "status": status,
         "rescue_by": rescue_by,
         "also": others,
+        # Look-alike funds (ticker.map SIMILAR): a buy of these is
+        # flagged, not counted (CA-SL-20 / US-WASH-26).
+        "similar": alike,
         "losses": live,
     }
 
@@ -301,29 +311,29 @@ def _details(d, doc: Dict[str, Any], currency: str) -> None:
         d.line("  (none)")
     d.section("HOW THE DATE IS SET")
     if usa:
-        d.para("A loss is a wash sale when the same security is bought "
-               "within 30 days before or after the sale (trade dates, "
-               "§1091) in any of your accounts, IRAs included; there is "
-               "no still-held test. REBUY ON is the 31st day after the "
-               "latest loss sale a buy can still disallow: a loss the "
-               "engine already disallowed in full is not one (buying "
-               "changes nothing for it), and after a loss on covering a "
-               "short only a new short sale replaces it (§1091(e)). A "
-               "long call is a note only (US-PLAN-02). Futures and "
-               "options on them are outside §1091 (US-WASH-18).",
-               indent="  ")
+        d.items([
+            "A loss is a wash sale when the same security is bought "
+            "within 30 days before or after the sale (trade dates, "
+            "§1091) in any account, IRAs included; no still-held test.",
+            "REBUY ON is the 31st day after the latest loss sale a buy "
+            "can still disallow; a loss already disallowed in full is "
+            "not one.",
+            "After a loss on covering a short only a new short sale "
+            "replaces it (§1091(e)); a long call is a note only "
+            "(US-PLAN-02); futures and their options are outside §1091 "
+            "(US-WASH-18)."], "  ")
     else:
-        d.para("A loss is superficial when the same property is "
-               "acquired within 30 days before or after the sale "
-               "(settlement dates, s.54) by you in any account or by an "
-               "affiliated person, and is still held 30 days after it. "
-               "REBUY ON is the day after the latest loss sale's window "
-               "closes, read as a trade date: a buy made that day "
-               "settles after the window. It is the date wash-radar's "
-               "CLEARS and buy-check's safe-from date give. A long call "
-               "on the shares is a replacement too (CA-PLAN-02); an "
-               "option series is replaced only by the same series.",
-               indent="  ")
+        d.items([
+            "A loss is superficial when the same property is acquired "
+            "within 30 days before or after the sale (settlement dates, "
+            "s.54) by you or an affiliated person and still held 30 "
+            "days after it.",
+            "REBUY ON is the day after the latest loss sale's window "
+            "closes, as a trade date: a buy that day settles after the "
+            "window (wash-radar's CLEARS, buy-check's safe-from date).",
+            "A long call on the shares is a replacement too "
+            "(CA-PLAN-02); an option series is replaced only by the "
+            "same series."], "  ")
     d.blank()
     d.line("\n".join(scope_lines(country, d.w)))
 
@@ -353,6 +363,12 @@ def _row_detail(r: Dict[str, Any], usa: bool) -> str:
     if r["also"]:
         text += (" A buy of " + ", ".join(r["also"])
                  + " counts too (the same security).")
+    if r.get("similar"):
+        text += (" A buy of " + ", ".join(r["similar"])
+                 + " is flagged, not counted (ticker.map SIMILAR: two "
+                 "securities unless you treat them as "
+                 + ("substantially identical" if usa
+                    else "identical property") + ").")
     return text
 
 

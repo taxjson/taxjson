@@ -534,6 +534,13 @@ def _trade_net(fname: str, target: str, qty: float, price: float,
     if amount or amount_given:
         if target == "sell" and gross > 0 and fee > gross:
             return -abs(amount)
+        if is_future and price < 0:
+            # A futures price can be negative (WTI, April 2020): the
+            # notional's sign is kept, as the IB parser keeps it — a
+            # buy receives money, a sale pays it (lib/futures._money
+            # books the signed amount). The magnitude flipped the P/L
+            # (KNOWN_ISSUES, fixed 2026-10).
+            return -abs(amount)
         return abs(amount)
     # `fee` is signed: a rebate (negative) lowers a buy's cost and
     # raises a sale's proceeds (A2-0626).
@@ -884,7 +891,10 @@ class GenericBrokerage(BaseBrokerage):
                         where, target, raw_action, qty, price_v, amount_v,
                         abs(fee), mult, is_future)
                     trade_signs.append((where, target, qty))
-                    trade_amounts.append((where, target, amount_v))
+                    if not (is_future and price < 0):
+                        # A negative futures price turns the amount's
+                        # sign: no evidence of the file's cash sign.
+                        trade_amounts.append((where, target, amount_v))
                     fee = _check_trade_row(
                         where, target, qty, price, amount, fee, mult,
                         allow_large_fees, fee_mapped, is_future,
@@ -1139,9 +1149,11 @@ class GenericBrokerage(BaseBrokerage):
                                              - (fee - _gross))
                     <= max(_ABS_TOL, _REL_TOL * (fee - _gross)))
         if (target == "sell" and qty > 0 and (amount_v or 0.0) < 0
-                and not _neg_net):
+                and not _neg_net
+                and not (is_future and (price_v or 0.0) < 0)):
             # (Not a sell whose commission exceeds its gross: that one
-            # really is cash out — S057-02.)
+            # really is cash out — S057-02. Nor a futures sale at a
+            # negative price, which pays cash too — audit #70.)
             raise ValueError(
                 f"generic importer: {where}: {raw_action} is mapped to "
                 f"sell but the quantity is positive and the amount "

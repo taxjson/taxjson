@@ -97,7 +97,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     from taxjson.lib.futures import (has_plain_futures, method_for,
                                      settle_futures_dicts)
     if has_plain_futures(native):
-        native = settle_futures_dicts(list(native), method_for(country))
+        native = settle_futures_dicts(list(native), method_for(country),
+                                      fee_basis=True)
     unattributed: Dict[str, int] = {}
     # A statement's period: a row it carries dated before the period (a
     # correction IB posts with the original date) moved its cash inside
@@ -164,7 +165,11 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                  and m["currency"] == ln["currency"]
                  and abs(m["amount"] - ln["amount"]) <= 0.01
                  and ln["date"] in (m["date"], m["settle"])
-                 and (not ln.get("at") or m.get("book") == ln.get("book"))]
+                 # The line's book, from its at= or its file's CASHBOOK
+                 # line (the folder's only book otherwise): a CASHBOOK-
+                 # scoped declaration matched another book's identical
+                 # move (2026-10 audit #85).
+                 and (not ln.get("book") or m.get("book") == ln.get("book"))]
         if cands:
             m = min(cands, key=lambda e: (e["date"], e.get("line_where", "")))
             m["decl"] = ln["decl"]
@@ -173,9 +178,14 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     for ev in events + [x for x in lines if not x.get("matched")]:
         kind = ev["kind"]
         book = ev.get("book")
-        if kind in ("FXCONV", "CASHMOVE", "CASHBAL", "FLOW") and not book:
+        if kind in ("FXCONV", "CASHMOVE", "CASHBAL", "FLOW",
+                    "CASHOPEN") and not book:
+            # A CASHOPEN of a foreign currency with no book is reported
+            # too, not dropped by the openings below (2026-10 audit #52).
             if ev.get("origin") == "tt" and (
-                    kind == "CASHBAL" or in_year(ev["date"])):
+                    kind == "CASHBAL" or in_year(ev["date"])) and not (
+                    kind == "CASHOPEN"
+                    and str(ev.get("currency", "")).upper() == base):
                 problems.append(_p("book", f"{ev.get('where')}: "
                                    f"{ev.get('book_problem') or 'no book'}",
                                    ev["date"], "", ev.get("currency", "")))
@@ -531,10 +541,17 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 outflow(o, fc, o["from_amt"], None, "spend",
                         proceeds=o["to_amt"])
             else:
-                rf = rate(fc, o["sd"])
-                if rf is None:
-                    continue
-                v = o.get("value") or o["from_amt"] * rf
+                # An explicit value= prices the conversion: a missing
+                # rate is no problem (outflow asks for one only for an
+                # overdrawn part, 2026-10 audit #53).
+                v = o.get("value")
+                if v:
+                    rf = rate_of(fc, o["sd"])   # None is fine here
+                else:
+                    rf = rate(fc, o["sd"])
+                    if rf is None:
+                        continue
+                    v = o["from_amt"] * rf
                 outflow(o, fc, o["from_amt"], rf, "spend", proceeds=v)
                 inflow(o, tc, o["to_amt"], v)
             continue
@@ -694,6 +711,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                            for c, p in sorted(pool.items())
                            if p[0] > 0.005},
         "notes": notes,
+        # lib/cash_events.collect's warnings (one event two files date
+        # differently): said, never a refusal.
+        "warnings": list(cash.get("warnings") or []),
         # Books whose broker's export gives no cash event (READERS):
         # each with whether a CASHBOOK line declared its lines complete.
         "unread_books": unread,
@@ -822,6 +842,9 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
                                           " (no foreign cash moved)"))]
              for u in doc["unread_books"]],
             aligns=["<", "<", "<"], width_=w)
+    for n in doc.get("warnings") or []:
+        lines.append("")
+        lines += out.wrap(out.label("warning", w) + n, w, "", "")
     for n in doc.get("notes") or []:
         lines.append("")
         lines += out.wrap(out.label("note", w) + n, w, "", "")

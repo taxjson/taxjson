@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import copy
 from decimal import Decimal
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from taxjson.lib.core import TaxTransaction, is_option_symbol
 
@@ -152,12 +152,23 @@ def _part(tx: TaxTransaction, qty: Decimal, frac: Decimal, net: Decimal,
     return TaxTransaction(**d)
 
 
-def _settle(transactions: List[TaxTransaction], method: str
+def _own_fee(tx: TaxTransaction) -> Decimal:
+    """A fill's commissions (commission + fee, + charged), inside its
+    net_amount."""
+    return _D(tx.commission) + _D(tx.fee)
+
+
+def _settle(transactions: List[TaxTransaction], method: str,
+            open_fees: Optional[Dict[int, List[Optional[Decimal]]]] = None
             ) -> Tuple[Dict[int, List[TaxTransaction]], Dict[str, int]]:
     """{input index: replacement rows} for the plain-futures fills of
     one book, plus stats. See settle_futures. `method`: "average" keeps
     one pooled lot per contract; "fifo" keeps each opening as its own
-    lot and a close consumes the oldest first."""
+    lot and a close consumes the oldest first. `open_fees`, when given,
+    receives {input index: [per replacement row, the opening fills'
+    commissions inside a close's basis; None for an opening part]} —
+    what the FX cash ledger needs to date each commission on its own
+    fill."""
     if method not in METHODS:
         raise ValueError(f"futures settlement method must be one of "
                          f"{METHODS}, got {method!r}")
@@ -180,11 +191,20 @@ def _settle(transactions: List[TaxTransaction], method: str
             continue
         fut_idx.append(i)
 
-    order = sorted(fut_idx, key=lambda i: (
-        transactions[i].date_settle or transactions[i].date,
-        transactions[i].date, transactions[i].time or "", i))
-    # (sym, cur) -> [signed qty, [[open units, their native money], ...]]
-    # "average" keeps a single pooled lot; "fifo" one lot per opening.
+    if method == "fifo":
+        # The US engine's order (corporate_timeline.event_sort_key,
+        # profile us_main): trade date, then time. Settle-first let a
+        # later trade with an earlier settle date be the "first in"
+        # (2026-10 audit #102). Each row keeps its own date_settle.
+        order = sorted(fut_idx, key=lambda i: (
+            transactions[i].date, transactions[i].time or "", i))
+    else:
+        order = sorted(fut_idx, key=lambda i: (
+            transactions[i].date_settle or transactions[i].date,
+            transactions[i].date, transactions[i].time or "", i))
+    # (sym, cur) -> [signed qty, [[open units, their native money,
+    # their commissions], ...]]: "average" keeps a single pooled lot;
+    # "fifo" one lot per opening.
     pos: Dict[Tuple[str, str], list] = {}
     out_parts: Dict[int, List[TaxTransaction]] = {}
     for i in order:
@@ -193,6 +213,7 @@ def _settle(transactions: List[TaxTransaction], method: str
         if abs(q) <= _EPS:
             out_parts[i] = [_part(tx, q, Decimal(1), Decimal(0), True)]
             continue
+        fee = _own_fee(tx)
         key = (tx.symbol, (tx.currency or "").upper())
         p = pos.setdefault(key, [Decimal(0), []])
         money = _money(tx)
@@ -205,23 +226,29 @@ def _settle(transactions: List[TaxTransaction], method: str
             if method == "average" and p[1]:
                 p[1][0][0] += abs(q)
                 p[1][0][1] += money
+                p[1][0][2] += fee
             else:
-                p[1].append([abs(q), money])
+                p[1].append([abs(q), money, fee])
             out_parts[i] = [_part(tx, q, Decimal(1), Decimal(0), True,
                                   "LO" if q > 0 else "SO", money)]
+            if open_fees is not None:
+                open_fees[i] = [None]
             continue
         closing = min(abs(q), abs(p[0]))
         frac = closing / abs(q)
         # The open money the closed units carry: the pooled average, or
         # the oldest lots first (FIFO).
-        need, basis = closing, Decimal(0)
+        need, basis, basis_fee = closing, Decimal(0), Decimal(0)
         while need > _EPS and p[1]:
             lot = p[1][0]
             take = min(need, lot[0])
             part_money = lot[1] * take / lot[0]
+            part_fee = lot[2] * take / lot[0]
             basis += part_money
+            basis_fee += part_fee
             lot[0] -= take
             lot[1] -= part_money
+            lot[2] -= part_fee
             need -= take
             if lot[0] <= _EPS:
                 p[1].pop(0)
@@ -235,6 +262,7 @@ def _settle(transactions: List[TaxTransaction], method: str
         p[0] += sign * closing
         parts = [_part(tx, sign * closing, frac, pl, True,
                        "SC" if q > 0 else "LC", close_money)]
+        fees: List[Optional[Decimal]] = [basis_fee]
         if abs(p[0]) <= _EPS:
             p[0], p[1] = Decimal(0), []
         left = abs(q) - closing
@@ -243,10 +271,13 @@ def _settle(transactions: List[TaxTransaction], method: str
             stats["split"] += 1
             lfrac = left / abs(q)
             p[0] = sign * left
-            p[1] = [[left, money * lfrac]]
+            p[1] = [[left, money * lfrac, fee * lfrac]]
             parts.append(_part(tx, sign * left, lfrac, Decimal(0), False,
                                "LO" if q > 0 else "SO", money * lfrac))
+            fees.append(None)
         out_parts[i] = parts
+        if open_fees is not None:
+            open_fees[i] = fees
     return out_parts, stats
 
 
@@ -270,11 +301,16 @@ def settle_futures(transactions: List[TaxTransaction], method: str
     return out, stats
 
 
-def settle_futures_dicts(rows: List[dict], method: str) -> List[dict]:
+def settle_futures_dicts(rows: List[dict], method: str, *,
+                         fee_basis: bool = False) -> List[dict]:
     """settle_futures over row DICTS (report tools reading native books),
     one book per `account` value. Non-futures rows pass through as the
     same dict objects; futures rows come back as settlement dicts that
-    keep any extra keys of their source row."""
+    keep any extra keys of their source row. `fee_basis`: each
+    settlement dict also carries `_open_fee`, the opening fills'
+    commissions inside a close's basis (None on an opening part), so
+    the FX cash ledger dates every commission on its own fill
+    (taxjson_fx_cash._cash_legs)."""
     from taxjson.lib.core import coerce_transaction_row
     by_acct: Dict[str, List[int]] = {}
     for i, r in enumerate(rows):
@@ -284,10 +320,13 @@ def settle_futures_dicts(rows: List[dict], method: str) -> List[dict]:
     for acct, idx in by_acct.items():
         objs = [coerce_transaction_row(rows[i], i, f"account {acct}")
                 for i in idx]
-        parts, _ = _settle(objs, method)
+        fees: Dict[int, List[Optional[Decimal]]] = {}
+        parts, _ = _settle(objs, method, fees if fee_basis else None)
         for k, i in enumerate(idx):
             if k in parts:
                 replaced[i] = [{**rows[i], **p.to_dict()} for p in parts[k]]
+                for d, f in zip(replaced[i], fees.get(k, ())):
+                    d["_open_fee"] = None if f is None else float(f)
     out: List[dict] = []
     for i, r in enumerate(rows):
         out.extend(replaced.get(i, [r]))

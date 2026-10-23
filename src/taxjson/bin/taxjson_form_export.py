@@ -1513,6 +1513,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Also write the rows as CSV to this path")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    # The wrapper's run-state problems (taxjson_run._run_state_problems),
+    # carried into --json's readiness record.
+    parser.add_argument("--run-state-problem", action="append",
+                        default=[], help=argparse.SUPPRESS)
     parser.add_argument("--date-basis", choices=("settle", "trade"),
                         default=None,
                         help="Date the gains files were year-scoped on "
@@ -1777,6 +1781,16 @@ def _main(args) -> int:
                                f"{args.csv}: {e}"))
         print(f"wrote {args.csv}", file=sys.stderr)
     if args.json:
+        # Whether these rows are the whole figure (lib/readiness): the
+        # run state, the unknown-cost sales left out, the engine's
+        # conservation warnings (2026-10 critique).
+        from taxjson.lib import readiness as _RD
+        if isinstance(rep, dict):
+            rep["readiness"] = _RD.build(
+                run_state=args.run_state_problem,
+                unknown_cost=max(tainted, len(manual)),
+                conservation=_RD.conservation_lines(
+                    list(args.files) + list(args.crypto)))
         # A NaN figure is refused, never written (issue #8).
         from taxjson.lib.json_input import dump_filing_json
         dump_filing_json(rep, sys.stdout)

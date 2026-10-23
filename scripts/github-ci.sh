@@ -8,7 +8,7 @@
 # The run that counts is the tests.yml run for the PUSH of that commit to
 # main (event push, branch main, head_sha the commit): a pull request's
 # run tested a merge onto whatever its base was then, not the commit main
-# holds. A run still going is waited for (gh run watch). Right after a
+# holds. A run still going is waited for (polled). Right after a
 # push GitHub takes a few seconds to list the run: --appear-wait gives it
 # that long to appear (polling every TAXJSON_CI_POLL_SECS, default 10).
 # <label> names the commit in messages (a tag, or "the version commit").
@@ -16,7 +16,7 @@
 # Exit 0: the run passed ("✓ CI passed on <label>" on stdout). Exit 1: it
 # failed (the run's address is named), there is no such run, GitHub could
 # not be asked, or gh is missing — the reason on stderr, prefixed "✗".
-# Read-only: `gh api` GETs and `gh run watch`.
+# Read-only: `gh api` GETs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 no() { echo "✗ $*" >&2; exit 1; }
@@ -57,9 +57,17 @@ fi
 id="${run%% *}"; st="${run#* }"
 if [ "${st%% *}" != completed ]; then
   echo "CI for $LABEL is still running — waiting for it: https://github.com/$SLUG/actions/runs/$id"
-  gh run watch "$id" --repo "$SLUG" --exit-status >/dev/null 2>&1 \
-    || no "CI failed on $LABEL: https://github.com/$SLUG/actions/runs/$id"
-elif [ "$st" != "completed success" ]; then
+  # Polled through `gh api`, not `gh run watch`: watch reads check-run
+  # annotations, which a fine-grained token may not, and so called every
+  # run still going "failed".
+  while :; do
+    sleep "${TAXJSON_CI_POLL_SECS:-10}"
+    st="$(gh api "repos/$SLUG/actions/runs/$id" --jq '"\(.status) \(.conclusion)"')" \
+      || no "Could not ask GitHub about CI for $LABEL (${SHA:0:9})."
+    [ "${st%% *}" != completed ] || break
+  done
+fi
+if [ "$st" != "completed success" ]; then
   no "CI failed on $LABEL (${st#completed }): https://github.com/$SLUG/actions/runs/$id"
 fi
 echo "✓ CI passed on $LABEL (tests.yml, https://github.com/$SLUG/actions/runs/$id)"

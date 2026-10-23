@@ -71,6 +71,10 @@ def files() -> List[Tuple[str, Path]]:
     return out
 
 
+# The province the demo's estimate taxes at (made-up books, any one).
+PROVINCE = "ON"
+
+
 def settings() -> Dict[str, object]:
     """The demo's [settings] beyond the scaffold's: its zone (it has a
     crypto account) and the first year filed under grant timing (it

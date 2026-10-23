@@ -462,6 +462,52 @@ class TestPartialTradeCancel(unittest.TestCase):
         self.assertEqual(len(unmatched), 1)
         self.assertEqual(len(kept), 3)
 
+    def test_unrefunded_commission_stays_with_the_order(self):
+        """2026-10 audit #29: the kept part is the order less the
+        cancellation's own money; a commission IB did not refund stays
+        whole (pro rata only for a figure the cancellation lacks)."""
+        from taxjson.lib.trade_cancel import (TRADE_CANCEL_TYPE,
+                                              pair_cancellations)
+        base = dict(action='BUYSELL', date='2025-03-03', time='10:00:00',
+                    symbol='QZK.US', currency='USD', price=10.0,
+                    account='m')
+        rows = [dict(base, quantity=20, net_amount=-205.0, commission=-5.0),
+                dict(base, quantity=-10, net_amount=100.0, commission=0.0,
+                     type=TRADE_CANCEL_TYPE)]
+        partials = []
+        kept, _pairs, _un = pair_cancellations(rows, partials=partials)
+        self.assertEqual(len(partials), 1)
+        (k,) = kept
+        self.assertEqual((k['quantity'], k['net_amount'], k['commission']),
+                         (10, -105.0, -5.0))
+        # A cancellation carrying no commission: scaled, as before.
+        rows[1].pop('commission')
+        kept, _p, _u = pair_cancellations(rows)
+        self.assertEqual(kept[0]['commission'], -2.5)
+
+    def test_same_time_order_beats_an_exact_fill_at_another_time(self):
+        """2026-10 audit #62: a Ca at 10:00 names an execution of the
+        100-share order at 10:00, not the 40-share fill at 09:00."""
+        from taxjson.lib.trade_cancel import (TRADE_CANCEL_TYPE,
+                                              pair_cancellations)
+        base = dict(action='BUYSELL', date='2025-03-03', symbol='QZK.US',
+                    currency='USD', price=10.0, account='m')
+        rows = [dict(base, time='09:00:00', quantity=40, net_amount=401.0),
+                dict(base, time='10:00:00', quantity=100, net_amount=1005.0),
+                dict(base, time='10:00:00', quantity=-40, net_amount=402.0,
+                     type=TRADE_CANCEL_TYPE)]
+        kept, pairs, unmatched = pair_cancellations(rows)
+        self.assertEqual(unmatched, [])
+        self.assertEqual(pairs, [])
+        self.assertEqual(sorted((t['time'], t['quantity'], t['net_amount'])
+                                for t in kept),
+                         [('09:00:00', 40, 401.0), ('10:00:00', 60, 603.0)])
+        # With the fill at the cancellation's time, the exact fill wins.
+        rows[0]['time'] = '10:00:00'
+        kept, pairs, _u = pair_cancellations(rows)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual([t['quantity'] for t in kept], [100])
+
 
 if __name__ == '__main__':
     unittest.main()

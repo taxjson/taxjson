@@ -371,9 +371,11 @@ class TestCheckPublicDays(_Sandbox):
 # gh stand-in for land.sh's pull-request path. State in $LAND_STATE (JSON):
 # checks ("pass" | "fail" | "pending" | "none"), rules (required checks on
 # main?), auto_ok (may auto-merge be turned on?), auto, state, branch, runs
-# (this branch's Actions run id), stale (a failed check from another
-# branch's run on the same commit, as after an earlier landing). A
-# merge rebases the branch's commits onto origin's main with GitHub as the
+# (this branch's Actions run id), stale (a failed run of another branch on
+# the same commit, as after an earlier landing: what a runs query that is
+# not limited to this branch would see). The Actions API answers as through
+# land.sh's --jq: runs as "id<TAB>status<TAB>name", jobs as "name<TAB>state".
+# A merge rebases the branch's commits onto origin's main with GitHub as the
 # committer (new ids), as GitHub's rebase merge does.
 _LAND_GH = r"""#!/usr/bin/env python3
 import json, os, subprocess, sys, tempfile
@@ -402,6 +404,22 @@ if args[:1] == ["api"]:
     path = [a for a in args[1:] if not a.startswith("-")][0]
     if path.endswith("/rules/branches/main"):
         print(1 if st.get("rules") else 0); sys.exit(0)
+    if "/actions/runs?" in path:
+        if "branch=%s&" % st["branch"] not in path:
+            if st.get("stale"):
+                print("1\tcompleted\tCI")
+        elif st["checks"] != "none":
+            print("%s\t%s\tCI" % (st.get("runs") or "9",
+                                   "in_progress" if st["checks"] == "pending" else "completed"))
+        sys.exit(0)
+    if "/actions/runs/1/jobs" in path:
+        print("ruff (critical tier)\tfail"); sys.exit(0)
+    if "/jobs" in path:
+        for name in ("ruff (critical tier)", "pii / new commits"):
+            print("%s\t%s" % (name, st["checks"]))
+        sys.exit(0)
+    if path.endswith("/status"):
+        sys.exit(0)
     sys.exit(1)
 if args[:2] == ["pr", "create"]:
     st["branch"] = args[args.index("--head") + 1]; st["state"] = "OPEN"; save()
@@ -420,16 +438,6 @@ if args[:2] == ["pr", "view"]:
     print(st["state"]); sys.exit(0)
 if args[:2] == ["run", "list"]:
     print(st.get("runs", "")); sys.exit(0)
-if args[:2] == ["pr", "checks"]:
-    if st.get("stale"):
-        print("ruff (critical tier)\tfail\t1m\t"
-              "https://github.com/o/r/actions/runs/1/job/5")
-    link = ("https://github.com/o/r/actions/runs/%s/job/9" % st["runs"]
-            if st.get("runs") else "https://x")
-    if st["checks"] != "none":
-        for name in ("ruff (critical tier)", "pii / new commits"):
-            print("%s\t%s\t1m\t%s" % (name, st["checks"], link))
-    sys.exit(0 if st["checks"] == "pass" else 8)
 if args[:2] == ["pr", "close"]:
     st["state"] = "CLOSED"; save(); sys.exit(0)
 sys.exit(0)
@@ -533,10 +541,11 @@ class TestLand(_Sandbox):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.git(self.dev, "rev-parse", "HEAD"),
                          self.origin_main())
-        run_list = self.calls("run", "list")[0]
-        self.assertEqual(run_list[run_list.index("--branch") + 1],
-                         self.calls("pr", "create")[0][
-                             self.calls("pr", "create")[0].index("--head") + 1])
+        create = self.calls("pr", "create")[0]
+        branch = create[create.index("--head") + 1]
+        runs = [c for c in self.calls("api") if "/actions/runs?" in c[1]]
+        self.assertTrue(runs and all(f"branch={branch}&" in c[1] for c in runs), runs)
+        self.assertFalse(self.calls("pr", "checks"))
 
     def test_a_failed_check_closes_the_pull_request(self):
         self.set_state(rules=True, auto_ok=True, checks="fail")

@@ -92,18 +92,41 @@ def _partly_cancels(orig: Any, ca: Any) -> bool:
     return cancels(_probe(orig, -q_c), ca)
 
 
+# A cancelled execution always moved money: a zero in one of these on
+# the cancellation is a missing figure, not a fact.
+_TRADE_MONEY = ('net_amount', 'gross_amount', 'proceeds')
+# A commission or fee of zero on the cancellation is a fact (none was
+# refunded).
+_FEE_MONEY = ('commission', 'fee')
+
+
 def _reduced(orig: Any, ca: Any) -> Any:
-    """`orig` less the cancelled execution: quantity and every money
-    field scaled by the share that stays."""
+    """`orig` less the cancelled execution: the quantity, and each money
+    field less the cancellation's own figure for it (as a magnitude:
+    the readers sign a reversing row's money differently), so a
+    commission IB did not refund stays with the order (2026-10 audit
+    #29). A field the cancellation does not carry is scaled by the
+    share that stays, as is one it carries larger than the order's."""
     q_o = float(_g(orig, 'quantity') or 0.0)
     q_c = float(_g(ca, 'quantity') or 0.0)
     keep = (q_o + q_c) / q_o
     d = dict(orig) if isinstance(orig, dict) else orig.to_dict()
     d['quantity'] = q_o + q_c
-    for f in ('net_amount', 'gross_amount', 'proceeds', 'commission',
-              'fee'):
-        if d.get(f) not in (None, ''):
-            d[f] = round(float(d[f]) * keep, 10)
+    for f in _TRADE_MONEY + _FEE_MONEY:
+        if d.get(f) in (None, ''):
+            continue
+        v = float(d[f])
+        c = _g(ca, f)
+        try:
+            c = abs(float(c)) if c not in (None, '') else None
+        except (TypeError, ValueError):
+            c = None
+        if c is not None and f in _TRADE_MONEY and c < 1e-9:
+            c = None
+        if c is None or c > abs(v) + 1e-9:
+            d[f] = round(v * keep, 10)
+        else:
+            d[f] = round((abs(v) - c) * (1.0 if v >= 0 else -1.0), 10)
     if isinstance(orig, dict):
         if 'id' in d:
             d.pop('id')
@@ -158,12 +181,20 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
         cands = [i for i, t in enumerate(txs)
                  if i not in used and i != ci
                  and cancels(replaced.get(i, t), ca)]
+        ca_time = _g(ca, 'time') or ''
+        part = [i for i, t in enumerate(txs)
+                if i not in used and i != ci and not is_trade_cancel(t)
+                and _partly_cancels(replaced.get(i, t), ca)]
+        same = [i for i in part if (_g(txs[i], 'time') or '') == ca_time]
+        if cands and len(same) == 1 and not any(
+                (_g(txs[i], 'time') or '') == ca_time for i in cands):
+            # An exact-size fill at another time and ONE order at the
+            # cancellation's own time that it cancels part of: the
+            # cancellation names an execution of that order — taking the
+            # other fill moved the commission to the wrong trade (2026-10
+            # audit #62).
+            cands = []
         if not cands:
-            part = [i for i, t in enumerate(txs)
-                    if i not in used and i != ci and not is_trade_cancel(t)
-                    and _partly_cancels(replaced.get(i, t), ca)]
-            same = [i for i in part
-                    if (_g(txs[i], 'time') or '') == (_g(ca, 'time') or '')]
             part = same or part
             if len(part) == 1:
                 oi = part[0]

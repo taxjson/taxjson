@@ -84,7 +84,9 @@ def _held(rows: List[Dict[str, Any]], sym: str, until: str,
     from taxjson.lib.corporate_timeline import split_copies
     # One split reported twice is ONE event per account (CA-CORP-12).
     dup = split_copies(rows, per_account=True)
-    q = 0.0
+    # Every symbol's holding, replayed in date order, so a rename split
+    # (symbol_new) carries the old symbol's shares to the new one.
+    q: Dict[str, float] = {}
     for r in sorted(rows, key=lambda r: (r.get("date") or "",
                                          r.get("time") or "")):
         if id(r) in dup:
@@ -92,12 +94,15 @@ def _held(rows: List[Dict[str, Any]], sym: str, until: str,
         d = r.get("date") or ""
         if d > until or (d == until and not inclusive):
             continue
+        s = r.get("symbol") or ""
         if r.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER",
-                               "OPENING_BALANCE") and r.get("symbol") == sym:
-            q += float(r.get("quantity") or 0.0)
-        elif r.get("action") == "SPLIT" and r.get("symbol") == sym:
-            q *= float(r.get("quantity") or 1.0)
-    return q
+                               "OPENING_BALANCE"):
+            q[s] = q.get(s, 0.0) + float(r.get("quantity") or 0.0)
+        elif r.get("action") == "SPLIT" and s in q:
+            moved = q.pop(s) * float(r.get("quantity") or 1.0)
+            new = (r.get("symbol_new") or "").strip() or s
+            q[new] = q.get(new, 0.0) + moved
+    return q.get(sym, 0.0)
 
 
 _SPIN_BOOKED_RE = re.compile(r"Spinoff\s+(\S+?)\s*\u2192\s*(\S+)")
@@ -461,14 +466,14 @@ def render_spinoffs(doc: Dict[str, Any],
     d = Doc(f"SPIN-OFFS ({len(items)})", width_=width_)
     d.blank()
     if not items:
-        d.para("No spin-offs in the books.")
+        d.para("None in the books.")
     for k, s in enumerate(items):
         if k:
             d.blank()
         tag = f" [{', '.join(s['flags'])}]" if s["flags"] else ""
         _hang(d, f"{s['date']}  {s['account']}  {s['parent']} -> "
                f"{s['child']}  {s['ratio']}{tag}", "", "  ")
-        fmv = (f"{s['fmv_per_share']:g} per share"
+        fmv = (f"{s['fmv_per_share']:,.2f} {s['currency']}/share"
                + (" (the broker's value)" if s.get("value_from_broker")
                   else "")
                if s["fmv_per_share"] else "0")
@@ -506,7 +511,7 @@ def render_splits(items: List[Dict[str, Any]],
     d = Doc(f"SPLITS AND CONSOLIDATIONS ({len(items)})", width_=width_)
     d.blank()
     if not items:
-        d.para("No splits in the books.")
+        d.para("None in the books.")
         return d.lines()
     for s in items:
         tag = f" [{', '.join(s['flags'])}]" if s["flags"] else ""

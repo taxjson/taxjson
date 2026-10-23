@@ -770,7 +770,7 @@ class TestWashSalesCmd(unittest.TestCase):
         self.assertNotIn("AAA.TO", out)               # ordinary gain excluded
         # GAIN -100, DENIED 100, ALLOWED 0
         self.assertRegex(out, r"ZZA\.US\s+100\s+900\.00\s+1,000\.00\s+-100\.00\s+100\.00\s+0\.00")
-        self.assertRegex(out, r"1 superficial loss\(es\); 100\.00 CAD")  # Canada (A2-1249)
+        self.assertRegex(out, r"DENIED:\s+100\.00 CAD over 1 superficial loss\(es\)")  # Canada (A2-1249)
 
     def test_prefers_gains_wash_file(self):
         # When the cross-account wash pass ran, its _gains_wash.json is used.
@@ -962,7 +962,7 @@ class TestPeriodSums(unittest.TestCase):
             r = _runsub(self._project(tmp), "divs-sum")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r"AAA\.TO\s+CAD\s+30\.00")
-        self.assertIn("TOTAL DIVIDEND: 30.00 CAD", r.stdout)
+        self.assertRegex(r.stdout, r"TOTAL DIVIDEND:\s+30\.00 CAD")
 
     def test_dil_view_and_sum(self):
         """`dil` / `dil-sum`: DIVIDEND_IN_LIEU only — plain dividends and
@@ -990,7 +990,7 @@ class TestPeriodSums(unittest.TestCase):
         self.assertNotIn("30.00", summ.stdout)          # dividend excluded
         # divs-sum counts DIVIDEND rows only — the in-lieu payment is
         # dil-sum's (audit R1-272: the two views counted it twice).
-        self.assertIn("TOTAL DIVIDEND: 30.00 CAD", divs.stdout)
+        self.assertRegex(divs.stdout, r"TOTAL DIVIDEND:\s+30\.00 CAD")
 
     def test_dil_sum_empty_message(self):
         with tempfile.TemporaryDirectory() as tmp:

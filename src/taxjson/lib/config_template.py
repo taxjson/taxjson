@@ -545,12 +545,19 @@ def system_timezone() -> Optional[str]:
             cands.append(link.split("zoneinfo/", 1)[1])
     except OSError:
         pass
+    # Servers, containers and WSL run on UTC whatever the user's zone
+    # is: a UTC zone never names where the user lives. TZ, when set, is
+    # the user's word and decides (UTC there: the key stays commented);
+    # among the files, a stale /etc/timezone saying Etc/UTC beside an
+    # /etc/localtime link to America/Toronto (2026-10 workflow audit)
+    # does not hide the link — the first real zone wins, and only UTC
+    # everywhere leaves the key commented.
+    if env:
+        return env if env not in _SERVER_DEFAULT_ZONES \
+            and valid_timezone(env) else None
     for name in cands:
         if name in _SERVER_DEFAULT_ZONES:
-            # Servers, containers and WSL run on UTC whatever the user's
-            # zone is: leave the key commented rather than date crypto
-            # trades in UTC without the user choosing it.
-            return None
+            continue
         if valid_timezone(name):
             return name
     return None

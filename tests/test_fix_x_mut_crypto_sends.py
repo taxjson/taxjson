@@ -546,7 +546,7 @@ class TestCoinbasePoolFlows(_UTC):
                 "USD,3000,300,300,0,Bought 0.1 ETH for 300 USD on ETH-USD "
                 "at 3000 USD/ETH\n"
                 "cd,2025-05-12 12:00:00 UTC,Buy,USDC,4,CAD,1.4,5.6,,0,"
-                "Bought 4 USDC\n"              # no total (m1420)
+                "Bought 4 USDC\n"              # no total: derived (m1420)
                 ",,\n")
         self.assertEqual(self._flows(text), [
             ("05-01 12:00", 20.0, -27.6),     # m1417, m1460, m1461
@@ -557,15 +557,22 @@ class TestCoinbasePoolFlows(_UTC):
             ("05-08 12:00", 99.0, 0.0),
             ("05-09 12:00", -50.25, 0.0),
             ("05-10 12:00", 299.0, 0.0),
-            ("05-12 12:00", 4.0, -0.0)])
+            # A blank Total is Subtotal + fee, as the parser derives
+            # it; read as 0 it was a zero-cost buy (audit finding 74).
+            ("05-12 12:00", 4.0, -5.6)])
 
     def test_column_order_and_missing_columns(self):
         # m1277 (a column at index 0 is read), m1178 (a column the
-        # export lacks reads as empty: no Total column).
+        # export lacks reads as empty: no Total column). A CAD buy with
+        # no Total, Subtotal or price has no cost to derive: refused,
+        # naming the row, never a zero-cost buy (audit finding 74).
         text = ("Timestamp,Transaction Type,Asset,Quantity Transacted,"
                 "Price Currency,Notes\n"
                 "2025-05-01 12:00:00 UTC,Buy,USDC,20,CAD,Bought 20 USDC\n")
-        self.assertEqual(self._flows(text), [("05-01 12:00", 20.0, -0.0)])
+        with self.assertRaisesRegex(ValueError, r"cb\.csv:2: .*blank"):
+            self._flows(text)
+        self.assertEqual(self._flows(text.replace(",CAD,", ",USD,")),
+                         [("05-01 12:00", 20.0, 0.0)])
 
     def test_convert_with_unreadable_notes_is_no_flow(self):
         # m1186: a Convert row whose notes do not parse adds nothing.
