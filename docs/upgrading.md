@@ -59,6 +59,17 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.33.0
+
+- **Python 3.10 or newer is required** (was 3.9). An install on Python
+  3.9 stays on its release; the installer upgrades it once a newer
+  Python (3.13 down to 3.10) is first on `PATH`: macOS `brew install
+  python`, Debian/Ubuntu `sudo apt-get install -y python3 python3-venv`.
+  Why: the fixes to the vulnerabilities reported against the dependency
+  locks (urllib3, requests, cryptography, pip, setuptools, anyio,
+  soupsieve) all dropped Python 3.9, which reached end of life in
+  October 2025.
+
 ### v0.32.0
 
 - **RBC export without a `Symbol Description` column, with a name change

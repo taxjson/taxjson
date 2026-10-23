@@ -195,9 +195,9 @@ installer, which installs the newest release and knows no `--channel`.
 The installer installs dependencies only from `requirements/*.txt`
 (hash-pinned; SECURITY.md, "Release integrity"). `scripts/lock_deps.py`
 writes them with uv (`pipx install uv`): one resolution of every lock,
-universal over platforms and Python 3.9+, nothing published in the last
+universal over platforms and Python 3.10+, nothing published in the last
 7 days (`--cooldown-days`), then a wheel-coverage check for Linux
-x86_64 / aarch64 and macOS arm64 / x86_64 on Python 3.9–3.13 (it fails
+x86_64 / aarch64 and macOS arm64 / x86_64 on Python 3.10–3.13 (it fails
 when `build`, `core` or `fx` lack one; other extras are reported).
 Regenerate and commit them:
 
@@ -298,7 +298,7 @@ message.
 
 **The gate is both:** the full local `scripts/ci.sh` (fuzzers, the private
 lists) before the version commit is made, and GitHub CI (the Python
-3.9–3.13 matrix, the extras, gitleaks, the per-commit PII scan) on the
+3.10–3.13 matrix, the extras, gitleaks, the per-commit PII scan) on the
 version commit before it is tagged, then the publisher's gate twice before
 it is published. A CI failure on the version commit means nothing is
 tagged: re-run a flaky run on GitHub and cut again, or

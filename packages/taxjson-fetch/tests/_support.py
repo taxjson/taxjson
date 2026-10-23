@@ -38,10 +38,7 @@ def _add_path(p: Path, *, env: bool = True) -> None:
 
 def _registered() -> bool:
     from importlib import metadata
-    try:
-        eps = metadata.entry_points(group="taxjson.fetchers")
-    except TypeError:                          # Python 3.9
-        eps = metadata.entry_points().get("taxjson.fetchers", [])
+    eps = metadata.entry_points(group="taxjson.fetchers")
     return any(ep.name == "taxjson-fetch" for ep in eps)
 
 

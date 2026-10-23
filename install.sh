@@ -5,7 +5,7 @@
 #   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --without-fetch
 #   bash -c "$(curl -fsSL https://taxjson.com/install.sh)" _ --channel beta
 #
-# What it does: checks git and Python 3.9+, clones the release on your
+# What it does: checks git and Python 3.10+, clones the release on your
 # CHANNEL into ~/.local/share/taxjson — or moves an existing install to
 # it — builds a private virtualenv there with the [fx] extra (every
 # dependency from the release's hash-pinned lock, requirements/), links
@@ -149,12 +149,12 @@ if ! have git; then
   die "git is required. Debian/Ubuntu: sudo apt-get install -y git"
 fi
 PY=""
-for c in python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
-  if have "$c" && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+for c in python3.13 python3.12 python3.11 python3.10 python3; do
+  if have "$c" && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
     PY="$(command -v "$c")"; break
   fi
 done
-[ -n "$PY" ] || die "Python 3.9 or newer is required (3.11+ recommended). macOS: brew install python; Debian/Ubuntu: sudo apt-get install -y python3 python3-venv"
+[ -n "$PY" ] || die "Python 3.10 or newer is required (3.11+ recommended). macOS: brew install python; Debian/Ubuntu: sudo apt-get install -y python3 python3-venv"
 "$PY" -c 'import venv, ensurepip' 2>/dev/null \
   || die "$PY cannot create virtual environments. Debian/Ubuntu: sudo apt-get install -y python3-venv"
 echo "   git $(git --version | awk '{print $3}')"
@@ -339,7 +339,7 @@ if [ -n "$LOCKS" ]; then
       echo "   WARNING: $("$VPY" --version 2>&1) on $(uname -s) $(uname -m) in taxjson's dependency lock (pip's log: $LOCK_LOG)."
       echo "   WARNING: installing the core package only — its dependencies are pinned too; nothing unpinned is installed."
       echo "   WARNING: without [fx]: no FX rates before 2007-05-01 or for currencies the Bank of Canada does not publish (the Yahoo Finance fallback), and none at all for a non-CAD base."
-      echo "   WARNING: another Python (3.9-3.13) may have the wheels: re-run with it first on PATH."
+      echo "   WARNING: another Python (3.10-3.13) may have the wheels: re-run with it first on PATH."
     fi
   fi
   if [ "$CORE_ONLY" = 1 ]; then

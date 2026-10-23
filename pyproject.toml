@@ -1,10 +1,10 @@
 [project]
 name = "taxjson"
-version = "0.32.0"
+version = "0.33.0"
 description = "Capital gains, dividend income, and wash-sale / superficial-loss computation from brokerage CSVs (Canada + US)"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "cksci", email = "ckscijdtest@gmail.com" },
 ]
@@ -17,7 +17,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -26,7 +25,7 @@ classifiers = [
 ]
 
 # `tomllib` is in the stdlib only from Python 3.11. `taxjson_run.py`
-# falls back to `tomli` on older versions; declare it so 3.9/3.10
+# falls back to `tomli` on older versions; declare it so 3.10
 # users get a working install instead of a "pip install tomli"
 # stderr at first invocation.
 # Windows ships no IANA time-zone database: zoneinfo needs `tzdata` for

@@ -4,7 +4,7 @@ taxjson computes capital gains, adjusted cost base (ACB), income and the
 superficial-loss rule from broker CSV exports (Questrade, RBC Direct,
 Interactive Brokers, Webull, Coinbase, Kraken, or a generic mapping). Canada
 first; the US engine (FIFO basis, wash sales) is experimental. It runs on the
-user's own machine. Python 3.9+, `src/taxjson/`; the CLI is `taxjson` (`tjs`).
+user's own machine. Python 3.10+, `src/taxjson/`; the CLI is `taxjson` (`tjs`).
 
 ## Helping someone use taxjson
 

@@ -203,7 +203,7 @@ class TestNoFetcherCli(unittest.TestCase):
     def _cli(self, root, *args):
         path = [str(SRC)]
         if sys.version_info < (3, 11):
-            # No site-packages, so no `tomli` (the 3.9/3.10 dependency
+            # No site-packages, so no `tomli` (the 3.10 dependency
             # standing in for tomllib): a private copy of it alone.
             path.append(_tomli_alone())
         env = dict(os.environ, PYTHONPATH=os.pathsep.join(path))

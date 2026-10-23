@@ -54,7 +54,7 @@ def _clean_numeric_commas(val):
 def _apply_cells(df, fn):
     """Run `fn` over every cell. `DataFrame.map` is the modern API
     (pandas 2.1+); fall back to the older `applymap` on earlier
-    versions so this tool installs cleanly on Python 3.9/3.10 environs
+    versions so this tool installs cleanly on Python 3.10 environs
     that haven't bumped pandas yet."""
     if hasattr(df, 'map') and callable(getattr(df, 'map')):
         try:

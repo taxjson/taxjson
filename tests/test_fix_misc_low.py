@@ -404,7 +404,7 @@ class TestInstallerTagSelection(unittest.TestCase):
                 self._git(src, "tag", "-a", tag, "-m", tag)
             stub = d / "stub"
             stub.mkdir()
-            for name in ("python3", "python3.9", "python3.10", "python3.11",
+            for name in ("python3", "python3.10", "python3.11",
                          "python3.12", "python3.13"):
                 (stub / name).write_text(_PY_STUB)
                 (stub / name).chmod(0o755)

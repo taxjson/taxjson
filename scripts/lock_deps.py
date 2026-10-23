@@ -22,11 +22,11 @@ The locks (requirements/, one file each):
               locks name has the same version and hashes in both.
 
 Each lock is a universal resolution (`uv pip compile --universal
---generate-hashes`, Python >= 3.9): one file for every platform and
+--generate-hashes`, Python >= 3.10): one file for every platform and
 Python version, with environment markers where versions differ (numpy
-for Python 3.9 is not numpy for 3.13). Its hashes are every file PyPI
+for Python 3.10 is not numpy for 3.13). Its hashes are every file PyPI
 has for each pinned version, so the same lock serves Linux x86_64 and
-aarch64, macOS arm64 and x86_64, and Python 3.9-3.13 (`--coverage`
+aarch64, macOS arm64 and x86_64, and Python 3.10-3.13 (`--coverage`
 checks a wheel exists for each). Nothing newer than the cool-down
 (default 7 days) is locked: a hijacked release is usually yanked within
 days.
@@ -66,7 +66,7 @@ REPO = Path(__file__).resolve().parent.parent
 LOCK_DIR = REPO / "requirements"
 CORE_PYPROJECT = REPO / "pyproject.toml"
 FETCH_PYPROJECT = REPO / "packages" / "taxjson-fetch" / "pyproject.toml"
-PYTHON_FLOOR = "3.9"
+PYTHON_FLOOR = "3.10"
 
 # Where users run the installer (README: Linux and macOS), and the Python
 # versions the package supports. A lock in REQUIRED must have a wheel for
@@ -78,7 +78,7 @@ PLATFORMS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
 )
-PYTHONS = ("3.9", "3.10", "3.11", "3.12", "3.13")
+PYTHONS = ("3.10", "3.11", "3.12", "3.13")
 REQUIRED = ("build", "core", "fx")
 
 HEADER_MARK = "# taxjson dependency lock"

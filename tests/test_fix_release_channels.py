@@ -313,7 +313,7 @@ class TestInstallerChannels(_Repos):
         super().setUp()
         self.stub = self.d / "stub"
         self.stub.mkdir()
-        for name in ("python3", "python3.9", "python3.10", "python3.11",
+        for name in ("python3", "python3.10", "python3.11",
                      "python3.12", "python3.13"):
             (self.stub / name).write_text(_PY_STUB)
             (self.stub / name).chmod(0o755)
@@ -613,7 +613,7 @@ class TestChannelsCommand(_Repos):
     def _deploy_env(self, stub_text):
         stub = self.d / "stub"
         stub.mkdir(exist_ok=True)
-        for name in ("python3", "python3.9", "python3.10", "python3.11",
+        for name in ("python3", "python3.10", "python3.11",
                      "python3.12", "python3.13"):
             (stub / name).write_text(stub_text)
             (stub / name).chmod(0o755)

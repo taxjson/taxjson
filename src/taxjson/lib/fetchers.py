@@ -124,11 +124,7 @@ _CACHE: Optional[Tuple[List[Fetcher], List[str]]] = None
 
 def _entry_points() -> List[Any]:
     from importlib import metadata
-    try:
-        eps = metadata.entry_points(group=ENTRY_POINT_GROUP)
-    except TypeError:                     # Python 3.9: a dict by group
-        eps = metadata.entry_points().get(ENTRY_POINT_GROUP, [])
-    return list(eps)
+    return list(metadata.entry_points(group=ENTRY_POINT_GROUP))
 
 
 def discover(refresh: bool = False) -> Tuple[List[Fetcher], List[str]]:

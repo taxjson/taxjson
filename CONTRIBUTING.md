@@ -198,7 +198,7 @@ Python process uses `taxjson.lib.dispatch.python_module_argv`, never
 
 Run this before every push. It is the full local gate (fuzzers, the
 private lists); the workflow file (`.github/workflows/tests.yml`, Python
-3.9–3.13 on Linux) runs its stages on every pull request and push to
+3.10–3.13 on Linux) runs its stages on every pull request and push to
 `main` — lint, consistency, tax-rules, the PII scan (generic patterns
 only: a hosted runner has no private denylist), gitleaks and the suite —
 and its checks must pass before a change lands and before a release is

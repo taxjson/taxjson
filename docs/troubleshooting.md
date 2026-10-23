@@ -48,9 +48,9 @@ the rest. taxjson computes and shows its work; it gives no tax advice. The rules
 - **Code:** `install.sh` — `pip_locked`, `does not match the sha256`, `--require-hashes`; `scripts/lock_deps.py` — `compile_locks`
 
 ### Installer: "WARNING: extras [fx] NOT installed: no prebuilt wheel of pandas==… for Python 3.14.0 on Linux armv7l in taxjson's dependency lock"
-- **Check:** `tjs --version` works but `~/.local/share/taxjson/venv/bin/python -c 'import yfinance'` fails; the Python and platform in the message are outside what the locks cover (Linux x86_64 and aarch64, macOS arm64 and x86_64, Python 3.9–3.13).
+- **Check:** `tjs --version` works but `~/.local/share/taxjson/venv/bin/python -c 'import yfinance'` fails; the Python and platform in the message are outside what the locks cover (Linux x86_64 and aarch64, macOS arm64 and x86_64, Python 3.10–3.13).
 - **Cause:** the locks pin wheels only (nothing is built from source, which would fetch unpinned build tools), and the pinned version has no wheel for this Python or platform. The installer then installs the core package alone, its dependencies pinned too.
-- **Fix:** run the installer with a supported Python first on `PATH` (e.g. `python3.12`; it takes the newest of 3.13 down to 3.9). Without `[fx]` taxjson still works with the Bank of Canada rates; Yahoo Finance rates (before 2007-05-01, other currencies, a non-CAD base) are missing.
+- **Fix:** run the installer with a supported Python first on `PATH` (e.g. `python3.12`; it takes the newest of 3.13 down to 3.10). Without `[fx]` taxjson still works with the Bank of Canada rates; Yahoo Finance rates (before 2007-05-01, other currencies, a non-CAD base) are missing.
 - **Fixed in:** `v0.28.4`
 - **Code:** `install.sh` — `pip_locked`, `NOT installed: no prebuilt wheel`; `scripts/lock_deps.py` — `coverage`, `PLATFORMS`, `PYTHONS`
 

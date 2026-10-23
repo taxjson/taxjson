@@ -3,6 +3,21 @@
 ## Unreleased
 
 
+## v0.33.0 (2026-10-23)
+
+### Changed
+
+- **Python 3.10 or newer is required** (was 3.9; `requires-python`, the
+  installer, the CI matrix and the docs). Every fix to the open
+  Dependabot alerts on the dependency locks (anyio, cryptography, pip,
+  requests, setuptools, soupsieve, urllib3) is in a release that no
+  longer supports Python 3.9, which reached end of life in October 2025,
+  so the locks' Python 3.9 branches pinned versions that cannot be
+  fixed. The locks are regenerated for Python 3.10+ and the alerts are
+  closed by it. The Python 3.9 entry-point fallback in the fetch plugin
+  discovery is gone.
+
+
 ## v0.32.0 (2026-10-23)
 
 ### Fixed: workflow audit 2026-10-23
