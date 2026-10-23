@@ -982,6 +982,48 @@ def needs_rebuild(out: Path, *inputs: Path) -> bool:
 
 # ---------------------------------------------------------------- config
 
+def _project_above(root: Path, levels: int = 4) -> Optional[Path]:
+    """The project a folder inside one belongs to: the nearest folder
+    above `root` (up to `levels`) holding a taxjson.toml, or the latest
+    year folder of the nearest one holding year folders (in the shared
+    inputs/ of a multi-year project). None when there is none."""
+    try:
+        here = Path(root).resolve()
+    except (OSError, RuntimeError):
+        return None
+    for up in list(here.parents)[:levels]:
+        if _PL.has_config(up):
+            return up
+        years = _PL.year_dirs(up)
+        if years:
+            return years[-1][1]
+    return None
+
+
+def _no_project_message(root: Path, cmd: str = "") -> Tuple[str, str]:
+    """(headline, fix) for a command run where there is no project:
+    the folder has no taxjson.toml. The fix names the project above it
+    when there is one (`cd` there or -C), else how to start one — never
+    "run `taxjson run` first", which fails the same way (workflow audit
+    2026-10-22, item 15)."""
+    import os as _os
+    head = f"no taxjson.toml in {root} — not a taxjson project"
+    above = _project_above(root)
+    if above is not None:
+        try:
+            where = _os.path.relpath(str(above))
+        except ValueError:
+            where = str(above)
+        if len(where) > len(str(above)):
+            where = str(above)
+        run = f"`{_PROG} -C {where} {cmd}`" if cmd else \
+            f"`{_PROG} -C {where} ...`"
+        return head, f"The project is in {where}: `cd {where}`, or {run}."
+    return head, (f"`{_PROG} init --country canada|usa` creates one "
+                  f"(docs/getting-started.md); to use one you have, "
+                  f"`cd` into its folder or name it with -C DIR.")
+
+
 def load_config(root: Path) -> Dict[str, Any]:
     """The project's taxjson.toml, parsed and checked: every command's
     reader. It refuses what no command may run on (a bad account name or
@@ -992,7 +1034,7 @@ def load_config(root: Path) -> Dict[str, Any]:
         _die("TOML support requires Python 3.11+ or `pip install tomli`")
     path = root / "taxjson.toml"
     if not path.exists():
-        _die(f"no taxjson.toml in {root}. Run `taxjson init` first.")
+        _die(*_no_project_message(root, _CURRENT_CMD))
     # First: a project made for a newer taxjson is refused before any
     # other check reads it with this version's rules (lib/requires).
     _refuse_newer_config(path)
@@ -2569,7 +2611,26 @@ def _shared_inputs_note(root: Path, path: Path, prog: str) -> None:
               f"{_PL.shown(path, root)} is in the exports folder every "
               f"year's project shares: it applies to every year",
               "Each year's run reads it; `taxjson run` in another year's "
-              "folder shows what it changes there.", prog=prog)
+              "folder shows what it changes there.",
+              *_frozen_years_apart(root), prog=prog)
+
+
+def _frozen_years_apart(root: Path) -> List[str]:
+    """One line naming the filed years beside `root` that close-year
+    froze (lib/project_layout.frozen_project): they read their own copy
+    of the exports, so a file saved in the shared folder never reaches
+    them (workflow audit 2026-10-22). [] when there is none."""
+    try:
+        yrs = [y for y, d in _PL.year_dirs(root.parent)
+               if _PL.frozen_project(d) and not _PL.shared_inputs(d)]
+    except (OSError, _PL.LayoutError):
+        return []
+    if not yrs:
+        return []
+    return [f"Not {', '.join(map(str, yrs))} (filed, inputs frozen): "
+            f"{'it reads its' if len(yrs) == 1 else 'each reads its'} own "
+            f"copy — to amend a filed year, put the corrected file in "
+            f"its inputs/<account>/ and `taxjson run` there."]
 
 
 # The cross-listing joins this run computed: {work dir: (map path or
@@ -5036,12 +5097,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # (GitHub issue #4).
             _corp_codes = (_codes_state if broker == "questrade"
                            and _codes_state.exists() else None)
+            # The account's .tt files: a spin-off's fraction sold there
+            # by hand books its cash in lieu (no UNBOOKED line; workflow
+            # audit 2026-10-22 #14), so adding or editing one re-runs
+            # this stage.
+            _corp_tts = _account_tt_files(acct_dir, cache, name)
             if force or needs_rebuild(out, *csvs, manifest_path,
                                       src_manifest, rates,
                                       *([ticker_map] if ticker_map
                                         else []),
                                       *([_corp_codes] if _corp_codes
-                                        else [])):
+                                        else []), *_corp_tts):
                 if not _corp_step:
                     _step("Processing corporate actions")
                     _corp_step = True
@@ -5060,7 +5126,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--base-currency", base_currency,
                 ] + (["--ticker-map", str(ticker_map)] if ticker_map
                      else []) + (["--symbol-codes", str(_corp_codes)]
-                                 if _corp_codes else []) + (
+                                 if _corp_codes else []) + [
+                    _a for _t in _corp_tts
+                    for _a in ("--tt", str(_t))] + (
                     # A sheltered account's spin-off / merger is booked
                     # without asking unless [settings]
                     # sheltered_elections = "ask" (CA-CORP-11 /
@@ -7622,21 +7690,25 @@ def stage_cross_reports(all_gains: List[Path],
                     if tb.name.endswith("_base.json") else tb.stem)
             # --json-out: structured sidecar next to the .rpt (harvest
             # --radar reads it and computes countdowns at its own time).
+            # Every taxable book decides the statuses (the engine
+            # pools them); --show keeps the rows to this account's
+            # listings. A sidecar that read its own book alone called a
+            # sibling account's rebuy COOLING / "full exit is fine"
+            # (audit 2026-10-23 #6) — the same view as `wash-radar
+            # <account>`.
             run_to_file(_cmd("taxjson-wash-radar") + [
-                "--taxable", str(tb),
+                "--taxable", *[str(b) for b in taxable_equity_base],
+                "--show", str(tb),
                 "--json-out", str(reports_dir / f"wash_radar_{stem}.json"),
                 "--account", stem,
-            ] + _radar_engine_args([tb], missing_history, country)
+            ] + _radar_engine_args(taxable_equity_base, missing_history,
+                                   country)
                 + sheltered_arg, reports_dir / f"wash_radar_{stem}.rpt",
                 capture_diag=False)
         if len(taxable_equity_base) > 1:
-            # Cross-account radar: a loss sold in one taxable account
-            # with a rebuy in another IS a wash/superficial trigger
-            # (the blended engine disallows it), but each per-account
-            # sidecar sees only its own book. One combined run over
-            # all taxable bases writes the sidecar harvest's ADVISORY
-            # reads — matching what the engine will actually do. The
-            # per-account files stay as the same-account views.
+            # Cross-account radar: one run over all taxable bases, every
+            # row — the sidecar harvest's ADVISORY reads. The
+            # per-account files are its rows for one account.
             run_to_file(_cmd("taxjson-wash-radar") + [
                 "--taxable", *[str(tb) for tb in taxable_equity_base],
                 "--json-out",
@@ -13521,7 +13593,11 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     per ticker, the capital returned (= ACB reduced) with broker-classified
     vs manual row counts, plus per-currency totals. Reads ADJUST rows —
     broker-classified ROC carries type='roc'; manual .tt adjustments (e.g.
-    T3 box 42 entries) count too."""
+    T3 box 42 entries) count too. An ADJUST that is no return of capital
+    (a reinvested distribution, a spin-off's cost allocation:
+    income_dating.is_return_of_capital) is listed apart, outside the
+    totals compared with T3 box 42 (2026-10-23 audit #5, #11)."""
+    from taxjson.lib.income_dating import is_return_of_capital
     # A Canadian trust's ROC counts in the year it became payable (its
     # record date, lib/income_dating — the year of T3 box 42).
     _rules = _view_income_rules(Path(args.dir).resolve())
@@ -13549,8 +13625,20 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     by_group: Dict[str, Dict[str, float]] = {"taxable": {},
                                              "sheltered": {}}
     shel_accts = set()
+    other: List[Dict[str, Any]] = []
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
+        if not is_return_of_capital(tx):
+            _dist = str(tx.get("id") or "").startswith("DIST-")
+            other.append({"account": acct,
+                          "symbol": str(tx.get("symbol") or "?"),
+                          "currency": cur,
+                          "date": str((tx.get("date_settle") if _dist
+                                       else None)
+                                      or tx.get("date") or "")[:10],
+                          "acb_change": float(tx.get("net_amount") or 0.0),
+                          "kind": _adjust_kind(tx)})
+            continue
         _g = groups.get(acct)
         if _g:
             _r = -float(tx.get("net_amount") or 0.0)
@@ -13589,6 +13677,9 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                    "totals_sheltered": {c: round(v, 2) for c, v
                                         in by_group["sheltered"].items()},
                    "sheltered_included": sorted(shel_accts),
+                   "other_adjustments": [
+                       dict(o, acb_change=round(o["acb_change"], 2))
+                       for o in other],
                    "scope": scope})
         return
     # Each country's own slip and cost word (A2-0735): a US fund's
@@ -13596,8 +13687,12 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     _us = _country(_soft_settings(_root)) == "usa"
     _cw = "basis" if _us else "ACB"
     _slip = "1099-DIV box 3" if _us else "T3 box 42"
-    if not agg:
+    if not agg and not other:
         print(f"No {_cw} adjustments in {scope}.")
+        return
+    if not agg:
+        print(f"No return of capital in {scope}.")
+        _roc_sum_other(other, _cw, _slip)
         return
     out_lines = ["SYMBOL CUR CAPITAL_RETURNED ROC_ROWS MANUAL_ROWS "
                  "MAP_ROWS"]
@@ -13623,15 +13718,55 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     else:
         _vprint(f"TOTAL CAPITAL RETURNED ({_cw} reduced): {_tot(totals)}",
                 hang="  ")
+    _roc_sum_other(other, _cw, _slip)
     print()
     for item in (f"Positive = {_cw} reduced (capital returned). Negative "
                  f"rows are reversals or manual {_cw} increases (MAP_ROWS: "
-                 f"[[distributions]] adjustments, a reinvested "
-                 f"distribution shows negative).",
+                 f"[[distributions]] return-of-capital entries).",
                  f"Enter fund ROC from your {_slip} as .tt ADJUST lines OR "
                  f"as [[distributions]] in taxjson.toml, never both — see "
                  f"docs/tax-rules.md, \"Return of capital\"."):
         _vprint(item, indent="- ", hang="  ")
+
+
+def _adjust_kind(tx: Dict[str, Any]) -> str:
+    """What an ADJUST that is no return of capital is, in a few words
+    (roc-sum's OTHER table)."""
+    typ = str(tx.get("type") or "").lower()
+    up = float(tx.get("net_amount") or 0.0) > 0
+    if typ == "dist":
+        if str(tx.get("id") or "").startswith("DIST-"):
+            return ("reinvested distribution ([[distributions]])" if up
+                    else "[[distributions]] entry")
+        return "notional distribution" if up else "distribution"
+    if tx.get("corp_event_id") or typ == "spinoff_355":
+        el = str(tx.get("corp_election") or "")
+        return (f"spin-off cost allocation ({el})" if el
+                else "spin-off cost allocation")
+    if str(tx.get("id") or "").startswith(("WASH_", "HANDOFF_WASH_")):
+        return "deferred loss"
+    return typ or "adjustment"
+
+
+def _roc_sum_other(other: List[Dict[str, Any]], cw: str,
+                   slip: str) -> None:
+    """roc-sum: the ADJUST rows that are no return of capital — a
+    reinvested or notional distribution raises the cost, a spin-off
+    moves part of it to the new shares — each with its kind, outside
+    the totals compared with the slip."""
+    if not other:
+        return
+    from taxjson.lib.out import fit_table
+    print()
+    _vprint(f"OTHER {cw.upper()} ADJUSTMENTS (not a return of capital, not "
+            f"in {slip}; + = {cw} raised)", hang="  ")
+    print()
+    body = [[o["symbol"], o["currency"], o["date"],
+             f"{o['acb_change']:+,.2f}", o["kind"]]
+            for o in sorted(other, key=lambda o: (o["symbol"], o["date"]))]
+    for ln in fit_table(["SYMBOL", "CUR", "DATE", f"{cw.upper()}_CHANGE",
+                         "KIND"], body, drop=(2,)):
+        print(ln)
 
 
 def cmd_trades_sum(args: argparse.Namespace) -> None:
@@ -14771,10 +14906,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             _die(f"no gains for account {args.account!r} in work/",
                  "Run `taxjson run` first, or check the account name.")
         if not _PL.has_config(root):
-            _die(f"no gains files, and no taxjson.toml in {root} — not "
-                 f"a taxjson project",
-                 "`taxjson init` creates one; -C selects another "
-                 "directory.")
+            _die(*_no_project_message(root, _CURRENT_CMD))
         _die("no gains files in work/", "Run `taxjson run` first.")
     basis = gains_basis_label(files)
 
@@ -17961,11 +18093,21 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         except (OSError, ValueError) as e:
             _die("the .tt OPENING cost=unknown lines cannot be read",
                  str(e))
+    # A crypto account writes no options (lib/option_boundary skips it
+    # too), and one the run skipped for an empty inputs/ folder has no
+    # books to make: "run `taxjson run`" about either looped (workflow
+    # audit 2026-10-22, item 12).
+    _no_inputs = _accounts_skipped_for_no_inputs(root)
+    empty = []
     for name, acfg in sorted((cfg.get("accounts") or {}).items()):
-        if not isinstance(acfg, dict) or acfg.get("type", "sheltered") != "taxable":
+        if not isinstance(acfg, dict) or acfg.get("type", "sheltered") != "taxable" \
+                or acfg.get("crypto"):
             continue
         base = cache / f"{name}_base.json"
         if not base.exists():
+            if name in _no_inputs:
+                empty.append(name)
+                continue
             missing.append(name)
             _out.warn(f"no work/{base.name}", prog=_prog,
                       details=["Run `taxjson run` first."])
@@ -18002,6 +18144,14 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     if not books:
         # Nothing was checked: printing the all-clear here let the
         # checklist mark the step done on a project that never ran.
+        if empty and not missing:
+            _f = ", ".join(f"{_PL.shown(_PL.inputs_dir(root), root)}/{n}"
+                           for n in empty)
+            _die(f"NOT CHECKED — {_f} {'is' if len(empty) == 1 else 'are'} "
+                 f"empty, so the run made no books",
+                 "Save the account's exports there, or delete its "
+                 "[accounts.NAME] table from taxjson.toml if you do not "
+                 "have it.")
         _die("NOT CHECKED — no taxable base files in work/",
              "Run `taxjson run` first.")
     amend = [r for r in rows if r["action"].startswith("T1-ADJ")]
@@ -18010,6 +18160,10 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         _json_out({"year": year, "timing": timing, "since": since,
                    "since_explicit": settings.get(
                        "option_grant_timing_since") not in (None, ""),
+                   # The grant-timing warning above was given (the run's
+                   # gate: a written option in the books) — what the
+                   # checklist flags (audit 2026-10-22, item 10).
+                   "since_warning": bool(_w),
                    "filed_years": sorted(filed_years),
                    "partial_locks": {str(k): v for k, v in
                                      sorted(partial_locks.items())},
@@ -18473,7 +18627,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                                           resolve_gains_files)
     from taxjson.lib import positions_check as PC
     from taxjson.lib.brokerages.base import shown_name
-    from taxjson.lib.positions_reports import (PositionsReportError,
+    from taxjson.lib.positions_reports import (PositionsDateError,
+                                               PositionsReportError,
                                                read_positions, toml_as_of)
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -18757,6 +18912,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             # columns (the quantity checks below stay the authority).
             try:
                 reports_of[path] = read_positions(path)
+            except PositionsDateError as e:
+                # An impossible date (an `acquired` of 2024-13-01) is
+                # refused, as `tjs opening` refuses it: never a note.
+                _die_input(str(e))
             except PositionsReportError as e:
                 reports_of[path] = None
                 _unread_cost[path] = str(e)
@@ -18994,6 +19153,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _after = (PC.touched_after(_grows, grp["as_of"])
                   if grp["as_of"] else set())
         _roc = PC.roc_symbols(_grows)
+        _spin = PC.spinoff_symbols(_grows)
         crow_list: List[Dict[str, Any]] = []
         for sym in sorted(ext_cost):
             e = ext_cost[sym]
@@ -19035,7 +19195,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 own=(_own or {}).get("total_cost"),
                 native=_sum(_nat_inv, e["native"]),
                 pooled=_pooled, roc=sym in _roc, tol_abs=cost_tol,
-                tol_rel=0.001, short=e["qty"] < 0)
+                tol_rel=0.001, short=e["qty"] < 0,
+                spinoff=sym in _spin)
             cost_all.append(dict(base_row, **res))
         for a in grp["accounts"]:
             income_all.extend(PC.income_share_mismatches(_rows_of(a), a,
@@ -21240,11 +21401,16 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                                "dispositions filed with another tool) is "
                                "not carried into the new lock."])
             _old_lock = None
+    # A partial lock an earlier release froze: thawed first, so this
+    # close reads the whole year (workflow audit 2026-10-23).
+    _thaw_partial_freeze(root, cfg, int(year), _old_lock,
+                         nothing=_nothing)
     # The lock records a FILED return: a year that has not ended cannot
     # have been filed — the lock then drifted on every later run and
     # the checklist said "Return filed and the year locked" (S045-23).
     from datetime import date as _date_cy
-    if _date_cy.today() <= _date_cy(int(year), 12, 31):
+    _partial_year = _date_cy.today() <= _date_cy(int(year), 12, 31)
+    if _partial_year:
         if not args.force:
             _die(f"tax year {year} has not ended (today is "
                  f"{_date_cy.today().isoformat()})",
@@ -21253,7 +21419,10 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  f"anyway). {_nothing}")
         _out.warn(f"tax year {year} has not ended — locking a partial "
                   f"year (--force)", prog=_prog,
-                  details=[f"Later trades in {year} will show as drift."])
+                  details=[f"The inputs are not frozen: the year keeps "
+                           f"reading its exports, so later trades in "
+                           f"{year} show as drift. Close the year again "
+                           f"after filing."])
     # The checklist's steps before the lock that need attention: listed
     # and confirmed on a terminal; without one, refused unless --yes
     # (new-user walkthrough: a year was locked with them open).
@@ -21300,7 +21469,8 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                if isinstance(_old_lock.get("filed_totals"), dict)
                else "")
             + " — pass --filed-dispositions to replace them."))
-    _cf = _carryforwards_for_lock(root, cfg, _details(args))
+    _cf = _carryforwards_for_lock(root, cfg, _details(args),
+                                  extra.get("filed_totals"))
     if _cf is not None:
         extra["carryforwards"] = _cf
     if _fx_cash_ledger_choice(settings) == "v2":
@@ -21326,9 +21496,14 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     # inputs/ (the lock records their hashes) before the lock is
     # written: the filed year stays reproducible while the shared
     # folder moves on with the next year.
+    # A year that has not ended is hashed, not frozen: it keeps reading
+    # the shared exports, so the rest of the year reaches the books
+    # (and shows as drift against this snapshot) and the close after
+    # filing freezes the whole year (workflow audit 2026-10-23).
     _frozen = _freeze_inputs(root, cfg, settings, int(year),
                              nothing=_nothing,
-                             previous=(_old_lock or {}).get("frozen"))
+                             previous=(_old_lock or {}).get("frozen"),
+                             partial=_partial_year)
     extra["frozen"] = _frozen
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
@@ -21445,7 +21620,9 @@ def _gitignore_hides_filed_reports(root: Path) -> Optional[str]:
 def _frozen_record(root: Path, year) -> Optional[Dict[str, Any]]:
     """The `frozen` record of filed/<year>.json (what close-year froze:
     the shared settings it replaced and the inputs' hashes), or None
-    when the year is not closed or was closed before freezing."""
+    when the year is not closed, was closed before freezing, or was
+    locked before it ended (a `partial` record: hashed only, the year
+    still reads the shared folders)."""
     import json as _json
     p = Path(root) / "filed" / f"{year}.json"
     try:
@@ -21453,13 +21630,14 @@ def _frozen_record(root: Path, year) -> Optional[Dict[str, Any]]:
     except (OSError, ValueError):
         return None
     fz = doc.get("frozen") if isinstance(doc, dict) else None
-    return fz if isinstance(fz, dict) else None
+    return fz if isinstance(fz, dict) and not fz.get("partial") else None
 
 
 def _freeze_inputs(root: Path, cfg: Dict[str, Any],
                    settings: Dict[str, Any], year: int, *,
                    nothing: str,
-                   previous: Optional[Dict[str, Any]] = None
+                   previous: Optional[Dict[str, Any]] = None,
+                   partial: bool = False
                    ) -> Dict[str, Any]:
     """close-year's freeze. With exports shared by every year
     (`inputs_dir`), every file the run read (lib/checklist.input_files)
@@ -21473,8 +21651,17 @@ def _freeze_inputs(root: Path, cfg: Dict[str, Any],
     (lib/checklist.input_fingerprint) the frozen books come from.
     Refuses (nothing written) when inputs/<account>/ already holds
     files this project does not read, or taxjson.toml cannot be
-    edited safely."""
-    from taxjson.lib.checklist import input_files, input_fingerprint
+    edited safely. `partial` (a year that has not ended, locked with
+    --force): nothing is copied and taxjson.toml is left alone — the
+    year goes on reading the shared exports, so its later trades show
+    as drift against the hashes — and the record says `partial`
+    (workflow audit 2026-10-23)."""
+    from taxjson.lib.checklist import (frozen_files, input_files,
+                                       input_fingerprint)
+    if partial:
+        return {"partial": True, "inputs_dir": None, "tobase_map": None,
+                "copied": 0,
+                "inputs": frozen_files(input_fingerprint(root, cfg))}
     shared = _PL.shared_inputs(root)
     shared_tob = _PL.shared_tobase(root)
     # A year frozen before (re-closed with --force) keeps the record
@@ -21565,8 +21752,172 @@ def _freeze_inputs(root: Path, cfg: Dict[str, Any],
             _undo()
             _die(f"cannot rewrite taxjson.toml: {e.strerror or e}",
                  nothing)
-    rec["inputs"] = input_fingerprint(root, cfg)
+    rec["inputs"] = frozen_files(input_fingerprint(root, cfg))
     return rec
+
+
+def _thaw_text(text: str, keys: Sequence[str]) -> str:
+    """taxjson.toml's text with the `keys` (inputs_dir / tobase_map)
+    close-year's freeze commented out under its note set again: the
+    note dropped, the commented line restored as it was."""
+    lines = text.split("\n")
+    out: List[str] = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if ln.strip().startswith(_FROZEN_NOTE_PREFIX):
+            j = i + 1
+            thawed: List[str] = []
+            while j < len(lines):
+                m = re.match(r"#\s*(inputs_dir|tobase_map)(\s*=.*)$",
+                             lines[j].strip())
+                if not m or m.group(1) not in keys:
+                    break
+                thawed.append(m.group(1) + m.group(2))
+                j += 1
+            if thawed:
+                out += thawed
+                i = j
+                continue
+        out.append(ln)
+        i += 1
+    return "\n".join(out)
+
+
+def _thaw_partial_freeze(root: Path, cfg: Dict[str, Any], year: int,
+                         old_lock: Any, *, nothing: str) -> None:
+    """A lock taken before its year ended by a taxjson that froze it
+    anyway (v0.31.0 / v0.31.1): the year reads a copy of the exports as
+    they were then, so the rest of the year never reached its books and
+    re-closing locked the partial figures (workflow audit 2026-10-23,
+    item 7). close-year --force first thaws it — taxjson.toml names the
+    shared folders the lock recorded again, the unchanged copies are
+    removed, the lock's `frozen` record becomes a `partial` one (hashed
+    only) — then stops, so the books are rebuilt from the shared
+    exports before the year is closed. Returns when there is nothing to
+    thaw; refuses, changing nothing, when a copy was edited or added
+    since, or is not in the shared folder."""
+    import json as _json
+    from taxjson.bin import taxjson_filed
+    fz = old_lock.get("frozen") if isinstance(old_lock, dict) else None
+    if (not isinstance(fz, dict) or fz.get("partial")
+            or not taxjson_filed.partial_year_note(old_lock, year)):
+        return
+    want: Dict[str, str] = {}
+    for key, rk, shared in (
+            (_PL.INPUTS_KEY, "inputs_dir", _PL.shared_inputs(root)),
+            (_PL.TOBASE_KEY, "tobase_map", _PL.shared_tobase(root))):
+        v = fz.get(rk)
+        if isinstance(v, str) and v.strip() and not shared:
+            want[key] = v
+    if not want:
+        return
+    hashes = fz.get("inputs") if isinstance(fz.get("inputs"), dict) else {}
+
+    def _shared_path(v: str) -> Path:
+        q = Path(v).expanduser()
+        return q if q.is_absolute() else root / q
+
+    removes: List[Path] = []
+    bad: List[str] = []
+    if _PL.INPUTS_KEY in want:
+        src_dir = _shared_path(want[_PL.INPUTS_KEY])
+        own = root / _PL.INPUTS
+        for a in sorted(cfg.get("accounts") or {}):
+            try:
+                files = sorted(p for p in (own / a).iterdir()
+                               if p.is_file())
+            except OSError:
+                continue
+            for p in files:
+                key = f"{_PL.INPUTS}/{a}/{p.name}"
+                try:
+                    digest = hashlib.sha256(p.read_bytes()).hexdigest()
+                except OSError as e:
+                    bad.append(f"{key}: {e.strerror or e}")
+                    continue
+                if hashes.get(key) != digest:
+                    bad.append(f"{key} ("
+                               + ("changed since the freeze"
+                                  if key in hashes
+                                  else "added after the freeze") + ")")
+                elif not (src_dir / a / p.name).is_file():
+                    bad.append(f"{key} (not in "
+                               f"{want[_PL.INPUTS_KEY]}/{a}/)")
+                else:
+                    removes.append(p)
+    if _PL.TOBASE_KEY in want:
+        own_tob = root / _PL.TOBASE_MAP
+        if own_tob.is_file():
+            try:
+                digest = hashlib.sha256(own_tob.read_bytes()).hexdigest()
+            except OSError as e:
+                digest = ""
+                bad.append(f"{_PL.TOBASE_MAP}: {e.strerror or e}")
+            if digest and digest not in {v for k, v in hashes.items()
+                                         if k.endswith(_PL.TOBASE_MAP)}:
+                bad.append(f"{_PL.TOBASE_MAP} (changed since the freeze)")
+            elif digest and not _shared_path(
+                    want[_PL.TOBASE_KEY]).is_file():
+                bad.append(f"{_PL.TOBASE_MAP} (no "
+                           f"{want[_PL.TOBASE_KEY]})")
+            elif digest:
+                removes.append(own_tob)
+    _at = str(old_lock.get("closed_at") or "")[:10]
+    _what = (f"the {year} lock being replaced was taken on {_at}, before "
+             f"the year ended, and froze a copy of the exports as they "
+             f"were then: the books never got the rest of the year")
+    if bad:
+        _die(_what, *[f"- {b}" for b in bad[:6]],
+             f"Move each into the shared folder (if it belongs to the "
+             f"books) or out of the project; close-year then reads the "
+             f"shared exports again. {nothing}")
+    cfg_path = root / _PL.CONFIG
+    text = _thaw_text(_read_config_text(cfg_path), list(want))
+    try:
+        for key, v in want.items():
+            st = _PL.parse_toml(text).get("settings") or {}
+            if st.get(key) != v:
+                text = _PL.set_key_text(text, ("settings", key), v,
+                                        after=_PL.EXPORTS_KEY)
+        _st = _PL.parse_toml(text).get("settings") or {}
+        # The frozen tobase.map beside the setting goes with the thaw.
+        _both = (_PL.tobase_both_problem(root, _st)
+                 if root / _PL.TOBASE_MAP in removes else None)
+        bad_set = [b for b in _PL.setting_problems(root, _st)
+                   if b != _both]
+    except _PL.LayoutError as e:
+        bad_set = [str(e)]
+    if bad_set:
+        _die(_what, f"taxjson.toml cannot name the shared folders again: "
+             f"{bad_set[0]}", nothing)
+    lock_path = taxjson_filed.snapshot_path(root, year)
+    doc = dict(old_lock)
+    doc["frozen"] = {"partial": True, "inputs_dir": None,
+                     "tobase_map": None, "copied": 0, "inputs": hashes}
+    try:
+        _write_atomic(cfg_path, text)
+        _write_atomic(lock_path, _json.dumps(doc, indent=2, sort_keys=True)
+                      + "\n")
+        for p in removes:
+            p.unlink()
+        for a in sorted(cfg.get("accounts") or {}):
+            with contextlib.suppress(OSError):
+                (root / _PL.INPUTS / a).rmdir()
+        with contextlib.suppress(OSError):
+            (root / _PL.INPUTS).rmdir()
+    except OSError as e:
+        _die(_what, f"the thaw did not finish: {e.strerror or e}",
+             f"Check that taxjson.toml names "
+             f"{' and '.join(want.values())} and remove the copies in "
+             f"{_PL.INPUTS}/ by hand, then `taxjson run` and close.")
+    _die(_what,
+         f"Thawed: taxjson.toml reads {' and '.join(want.values())} "
+         f"again, the {len(removes)} unchanged copied file(s) are "
+         f"removed, and the {year} lock is a partial snapshot (its "
+         f"inputs hashed, not frozen).",
+         f"Run `taxjson run` (later trades in {year} now show as drift), "
+         f"then close the year after filing. Nothing was locked.")
 
 
 def _keep_filed_reports(root: Path, year: int, *, prog: str) -> int:
@@ -21602,6 +21953,17 @@ def _frozen_summary(rec: Dict[str, Any], kept: int, year: int,
                     details: bool) -> str:
     """close-year's `Frozen:` line: what was copied and where the
     reports as filed are; --details adds what reads them."""
+    if rec.get("partial"):
+        what = (f"nothing — {year} has not ended: it keeps reading its "
+                f"exports, so later trades show as drift; the close "
+                f"after filing freezes them")
+        if kept:
+            what += f"; reports so far: filed/{year}/reports/"
+        if details:
+            what += (f"; {len(rec.get('inputs') or {})} input file(s) "
+                     f"hashed in the lock — `taxjson check-filed` names "
+                     f"each one that changes")
+        return what
     if rec.get("copied"):
         what = (f"inputs/ ({rec['copied']} file(s) copied from "
                 f"{rec.get('inputs_dir') or 'the shared folder'}"
@@ -21625,7 +21987,8 @@ def _frozen_summary(rec: Dict[str, Any], kept: int, year: int,
 
 
 def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
-                            details: bool = True
+                            details: bool = True,
+                            filed_totals: Optional[Dict[str, Any]] = None
                             ) -> Optional[Dict[str, Any]]:
     """The `carryforwards` block close-year writes (lib/carryforward):
     the year's net capital loss (Canada) or ST/LT capital loss
@@ -21635,7 +21998,10 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
     with no supported province gets a federal-only estimate (no other
     province's tables stand in; every figure the block carries forward
     is federal), with a note. A failing estimate stops the close (its
-    inputs are wrong), naming the reason."""
+    inputs are wrong), naming the reason. `filed_totals` (Canada; the
+    dispositions filed with another tool, --filed-dispositions): the
+    net capital loss is the filed return's — its gain stands in for
+    the books' dispositions (CA-CARRY-01)."""
     import json as _json
     from taxjson.lib import carryforward as CF
     from taxjson.lib.dispatch import run_cmd as _run
@@ -21667,18 +22033,83 @@ def _carryforwards_for_lock(root: Path, cfg: Dict[str, Any],
         _die("could not compute the carry-forwards the lock records (the "
              "estimate failed)", _child_error(res.stderr),
              "Fix the input, then close. Nothing was written.")
-    r = (_json.loads(res.stdout) or {}).get("estimate") or {}
+    _doc = _json.loads(res.stdout) or {}
+    r = _doc.get("estimate") or {}
     est_cfg = cfg.get("estimate") if isinstance(cfg.get("estimate"),
                                                 dict) else {}
     src = dict(r.get("carry_sources") or {})
     src["other_income_entered"] = "other_income" in (est_cfg or {})
     src["other_income_value"] = (est_cfg or {}).get("other_income") or 0.0
     block = CF.record_block(country, r, src)
+    ncl = block.get("net_capital_loss")
+    if (isinstance(ncl, dict) and isinstance(filed_totals, dict)
+            and filed_totals.get("gain") is not None):
+        _as_filed(ncl, _doc, float(filed_totals["gain"]))
+    if isinstance(ncl, dict):
+        back = _carried_back(root, int(settings.get("year") or 0))
+        if back > 0.005:
+            # A T1A carry-back of this year's loss ([carryover] claimed
+            # under an earlier year) leaves it with the next year: the
+            # estimate never reads it, and the lock carried the whole
+            # loss forward, so it was claimed twice. At most the loss
+            # the lock holds (a filed loss below the books' one): the
+            # rest of the claim stays for a later year's loss.
+            back = min(back, float(ncl["closing"]))
+            ncl["carried_back"] = round(back, 2)
+            ncl["closing"] = round(max(0.0, ncl["closing"] - back), 2)
     mt = block.get("minimum_tax")
     if federal_only and isinstance(mt, dict):
         mt["province"] = None
         mt.pop("recovered_provincial", None)
     return block
+
+
+def _as_filed(ncl: Dict[str, Any], doc: Dict[str, Any],
+              filed_gain: float) -> None:
+    """Make the lock's net capital loss block `ncl` the filed return's:
+    the dispositions filed with another tool (gain `filed_gain`) stand
+    in for the books' (`doc`, the year's `estimate --json`); the T5 box
+    18 capital gains the estimate adds stay. The next year's carryover
+    reads the filed gain from the lock, so the balance the lock carries
+    out comes from it too (workflow audit 2026-10-23 item 4)."""
+    filing = (doc.get("filing") or {}).get("totals") or {}
+    books = filing.get("gain")
+    if books is None:
+        books = (doc.get("totals") or {}).get("realized")
+    if books is None:
+        return
+    books = float(books)
+    if abs(books - filed_gain) <= 0.005:
+        return
+    est = doc.get("estimate") or {}
+    realized = (filed_gain + float(est.get("capital_gains_dividends")
+                                   or 0.0))
+    opening = float(ncl.get("opening") or 0.0)
+    ncl["created"] = round(max(0.0, -realized), 2)
+    ncl["applied"] = round(min(max(0.0, realized), opening), 2)
+    ncl["closing"] = round(max(0.0, opening - realized), 2)
+    ncl["filed_gain"] = round(filed_gain, 2)
+    ncl["books_gain"] = round(books, 2)
+
+
+def _carried_back(root: Path, year: int) -> float:
+    """How much of `year`'s net capital loss `taxjson carryover` finds
+    carried back by [carryover] claimed (lines under earlier years); 0.0
+    when there is none or the ledger cannot be built."""
+    import json as _json
+    from taxjson.lib.dispatch import run_cmd as _run
+    if not year:
+        return 0.0
+    res = _run([sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                str(root), "carryover", "--json"], capture_output=True)
+    if res.returncode != 0:
+        return 0.0
+    try:
+        rows = (_json.loads(res.stdout) or {}).get("rows") or []
+    except ValueError:
+        return 0.0
+    return sum(float(x.get("carried_back") or 0.0) for x in rows
+               if x.get("year") == year)
 
 
 def _carryforwards_summary(cf: Dict[str, Any], year: int,
@@ -21692,7 +22123,13 @@ def _carryforwards_summary(cf: Dict[str, Any], year: int,
     if isinstance(ncl, dict):
         kv.append(("Net capital loss",
                    f"applied {ncl['applied']:,.2f}, created "
-                   f"{ncl['created']:,.2f}, carried into {year + 1}: "
+                   f"{ncl['created']:,.2f}"
+                   + (f" (as filed: gain {ncl['filed_gain']:,.2f}; the "
+                      f"books {ncl['books_gain']:,.2f})"
+                      if ncl.get("filed_gain") is not None else "")
+                   + (f", carried back {ncl['carried_back']:,.2f}"
+                      if ncl.get("carried_back") else "")
+                   + f", carried into {year + 1}: "
                    f"{ncl['closing']:,.2f} (100% amounts)"))
     cl = cf.get("capital_loss")
     if isinstance(cl, dict):
@@ -21904,6 +22341,20 @@ def _frozen_inputs_changed(root: Path, frozen: Dict[str, str]
     return fingerprint_changes(frozen, now)
 
 
+def _frozen_settings_back(root: Path) -> List[str]:
+    """The shared folders a frozen filed year names again in its
+    [settings] (`inputs_dir = "../inputs"`, `tobase_map = ...`): the
+    freeze commented them out, so a live one means the year reads the
+    shared files, not its frozen copy. [] when it names none."""
+    out = []
+    if _PL.shared_inputs(root):
+        out.append(f"{_PL.INPUTS_KEY} ({_PL.shown(_PL.inputs_dir(root), root)})")
+    if _PL.shared_tobase(root):
+        out.append(f"{_PL.TOBASE_KEY} "
+                   f"({_PL.shown(_PL.tobase_map_path(root), root)})")
+    return out
+
+
 def _soft_fingerprint(root: Path) -> Optional[Dict[str, str]]:
     from taxjson.lib.checklist import input_fingerprint
     try:
@@ -22100,18 +22551,43 @@ def _check_filed_years(root: Path, cache: Path,
         # on the basis it was filed on, so OK says nothing about this
         # project's own report for that year (A2-0672).
         _fz = snap.get("frozen")
+        # A lock taken before the year ended (close-year --force): its
+        # inputs were hashed, not frozen — the year reads the shared
+        # exports, so its later trades are expected to move it
+        # (workflow audit 2026-10-23).
+        _partial = taxjson_filed.partial_year_note(snap, year)
         if isinstance(_fz, dict) and isinstance(_fz.get("inputs"), dict):
             # The lock hashed the inputs the filed books came from: one
             # edited or replaced since is named, so a DRIFT (or an OK
             # with other books) is not blamed on the code.
             _moved = _frozen_inputs_changed(root, _fz["inputs"])
-            if _moved:
+            _back = [] if _partial else _frozen_settings_back(root)
+            if _partial and _moved:
+                _line(f"note: filed {year}: {len(_moved)} input(s) "
+                      f"changed since the partial lock was taken: "
+                      f"{', '.join(_moved[:4])}"
+                      + (" ..." if len(_moved) > 4 else "")
+                      + " — not frozen while the year was open: "
+                      "they reach the books")
+            elif _back:
+                # taxjson.toml names the shared folders again (an older
+                # `align`, or by hand): the books read them, not the
+                # frozen copy — restoring files would change nothing
+                # (workflow audit 2026-10-22).
+                _line(f"note: filed {year} was closed with its inputs "
+                      f"frozen, but taxjson.toml names the shared "
+                      f"{' and '.join(_back)} again — the books no "
+                      f"longer read the frozen copy: delete "
+                      f"{'those lines' if len(_back) > 1 else 'that line'}"
+                      f" from [settings], then `taxjson run`")
+            elif _moved:
                 _line(f"note: filed {year}: {len(_moved)} frozen input(s) "
                       f"changed since the year was closed: "
                       f"{', '.join(_moved[:4])}"
                       + (" ..." if len(_moved) > 4 else "")
                       + " — the books no longer come from the exports "
-                      "as filed (restore them from your records)")
+                      "as filed (restore them from your records; for "
+                      "an amendment, re-close once it is filed)")
         _rb = snap.get("date_basis")
         _now_basis = _tax_date(settings)
         if _rb in ("settle", "trade") and _rb != _now_basis:
@@ -22124,14 +22600,18 @@ def _check_filed_years(root: Path, cache: Path,
             drifting += 1
             _out.warn(f"filed {year} DRIFTED vs {path.name}", prog=_prog,
                       details=[f"- {ln}" for ln in lines]
-                      + [f"A code/data change moved an already-filed "
-                         f"year. Review; then either amend the return or "
-                         f"refresh the lock (`taxjson close-year --force` "
-                         f"with [settings].year = {year})."])
+                      + ([f"The lock is a snapshot taken before {year} "
+                          f"ended: trades and corrections since then "
+                          f"move the year. Close it again after filing "
+                          f"(`taxjson close-year --force` with "
+                          f"[settings].year = {year})."] if _partial else
+                         [f"A code/data change moved an already-filed "
+                          f"year. Review; then either amend the return or "
+                          f"refresh the lock (`taxjson close-year --force` "
+                          f"with [settings].year = {year})."]))
         else:
             _line(f"filed {year}: OK (matches {path.name}; "
                   f"{taxjson_filed.NOT_LOCKED})")
-        _partial = taxjson_filed.partial_year_note(snap, year)
         if _partial:
             _line(f"note: filed {year}: {_partial}")
     if counts is not None:
@@ -22864,7 +23344,9 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     go into ONE invocation so the report — and its Definitions legend — prints
     once, in the fixed advisory order. Recomputes cooling-down windows as of now
     (the per-account reports/wash_radar_<account>.rpt are written by `taxjson
-    run`)."""
+    run`). An ACCOUNT scopes the rows shown (--show), never the books
+    read: every taxable account still decides each status, as the
+    engine pools them (audit 2026-10-23 #6)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
 
@@ -22880,11 +23362,22 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
                  "The radar advises on TAXABLE loss sales (sheltered "
                  "books are its context, not its subject).")
         _refuse_us_crypto_account(root, args.account, "taxjson wash-radar")
-        bases = [base]
+        # Every taxable book decides the statuses (the superficial-loss
+        # pool and §1091 look across all your accounts); the account
+        # only scopes the rows shown. It used to read this book alone,
+        # so a sibling account's rebuy or loss was invisible (audit
+        # 2026-10-23 #6).
+        bases = _radar_taxable_bases(root, cache, "taxjson wash-radar",
+                                     empty_ok=True)
+        if base.resolve() not in {b.resolve() for b in bases}:
+            bases.append(base)
+        show = ["--show", str(base), "--account", args.account]
     else:
         bases = _radar_taxable_bases(root, cache, "taxjson wash-radar")
+        show = []
 
     cmd = _cmd("taxjson-wash-radar") + ["--taxable", *[str(b) for b in bases]]
+    cmd += show
     cmd += _radar_engine_args(
         bases, root,
         _country(_radar_config(root, "taxjson wash-radar").get(
@@ -23952,6 +24445,31 @@ def _fold_class_separator(symbol: str) -> str:
     return f"{m.group(1)}.{m.group(2)}{m.group(3)}" if m else s
 
 
+def _bare_listings(radar: Dict[str, Dict[str, Any]], canon,
+                   q: str) -> List[str]:
+    """The listings a BARE ticker (no exchange suffix) names: those in
+    the books that carry it, q.<exchange> joined to the books by a
+    ticker.map rule, and q.<exchange> a ticker.map SIMILAR line names
+    (never held: the look-alike a tax-loss swap is about to buy, whose
+    caveat `buy-check ZZH` dropped while `buy-check ZZH.TO` gave it;
+    workflow audit 2026-10-22 #8). Each listing keeps its own class."""
+    from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
+    q = q.strip().upper()
+    booked = {canon(t) for t in radar}
+    similar = set(getattr(canon, "similar", None) or ())
+    listings = [t for t in radar
+                if t.strip().upper().rpartition(".")[0] == q
+                or t.strip().upper() == q]
+    for sx in sorted(KNOWN_SUFFIXES):
+        t = f"{q}.{sx}"
+        if t in listings:
+            continue
+        c = canon(t)
+        if (c != t and c in booked) or c in similar:
+            listings.append(t)
+    return listings
+
+
 def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
     """(class root, {ticker: row}, note) for one queried symbol.
 
@@ -23988,17 +24506,7 @@ def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
                 f"name." if others else None)
         return wroot, {t: r for t, r in radar.items()
                        if canon(t) == wroot}, note
-    # Bare ticker: the listings that carry it — in the books, or as
-    # q.<exchange> joined to the books by a ticker.map rule — then their
-    # classes. Each listing keeps its own class.
-    booked = {canon(t) for t in radar}
-    listings = [t for t in radar
-                if t.strip().upper().rpartition(".")[0] == q
-                or t.strip().upper() == q]
-    listings += [f"{q}.{sx}" for sx in sorted(KNOWN_SUFFIXES)
-                 if f"{q}.{sx}" not in listings
-                 and canon(f"{q}.{sx}") != f"{q}.{sx}"
-                 and canon(f"{q}.{sx}") in booked]
+    listings = _bare_listings(radar, canon, q)
     classes = sorted({canon(t) for t in listings}) or [canon(q)]
     matches = {t: r for t, r in radar.items() if canon(t) in classes}
     note = None
@@ -24046,9 +24554,21 @@ def _similar_lines(radar: Dict[str, Dict[str, Any]], canon, wroot: str,
     loss inside the window; on a sale, one bought inside it. A caveat
     (SAFE*), never a verdict: the books keep the funds apart."""
     from taxjson.lib import similar as _SIM
+    from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
     from taxjson.lib.core import is_option_symbol
     q = q.strip().upper()
-    sim = set((getattr(canon, "similar", None) or {}).get(wroot) or [])
+    simmap = getattr(canon, "similar", None) or {}
+    roots = {wroot}
+    base, _, ext = q.rpartition(".")
+    if not (base and ext in KNOWN_SUFFIXES) and q not in set(
+            getattr(canon, "bare_listings", None) or ()):
+        # A bare query may name several classes (the worst verdict is
+        # shown): each one's look-alikes are a caveat, none dropped.
+        roots |= {canon(t) for t in _bare_listings(radar, canon, q)}
+    sim = set()
+    for _r in roots:
+        sim.update(simmap.get(_r) or [])
+    sim -= roots
     if not sim or is_option_symbol(q):
         return []
     want = _SIM.LOSS_CATEGORIES if mode == "buy" else _SIM.BUY_CATEGORIES
@@ -24061,6 +24581,14 @@ def _similar_lines(radar: Dict[str, Dict[str, Any]], canon, wroot: str,
         if cat in want:
             out.append(_SIM.caveat(tu, cat, q, mode,
                                    "usa" if usa else "canada"))
+        elif mode == "sell" and isinstance(r.get("sheltered_buy"), dict):
+            # Held only in a registered account / IRA that bought it in
+            # the window: the radar files it CLEAR (nothing taxable to
+            # sell), but the buy is "in any of your accounts" (CA-SL-20
+            # / US-WASH-26; workflow audit 2026-10-22 #13).
+            out.append(_SIM.caveat(tu, cat, q, mode,
+                                   "usa" if usa else "canada",
+                                   sheltered_buy=r["sheltered_buy"]))
     return out
 
 
@@ -26539,17 +27067,19 @@ def cmd_years(args: argparse.Namespace) -> None:
             line += f"; {r['problem']}"
         for _ln in _out.wrap(line, None, "  ", "        "):
             print(_ln)
-    # tobase.map (Canada): one file every year reads, or per-year copies.
-    shared: Dict[str, List[int]] = {}
-    own = [r["year"] for r in rep["years"]
-           if r.get("tobase_map") and not r.get("tobase_shared")]
-    for r in rep["years"]:
-        if r.get("tobase_shared"):
-            shared.setdefault(r["tobase_map"], []).append(r["year"])
+    # tobase.map (Canada): one file every year reads, per-year copies,
+    # or a filed year's frozen copy (said as the default view says it).
+    shared, own, frozen = _years_tobase(rep)
     for p, ys in sorted(shared.items()):
         for _ln in _out.wrap(f"tobase.map: {p}, shared by "
                              f"{', '.join(str(y) for y in ys)} ([settings] "
                              f"{_PL.TOBASE_KEY})", None, "", "  "):
+            print(_ln)
+    if frozen:
+        for _ln in _out.wrap(
+                f"tobase.map: frozen copy of its own in "
+                f"{', '.join(str(y) for y in frozen)} (filed: close-year "
+                f"froze it, the year reads it)", None, "", "  "):
             print(_ln)
     if own:
         for _ln in _out.wrap(
@@ -26558,6 +27088,23 @@ def cmd_years(args: argparse.Namespace) -> None:
                 f"here makes them one file every year reads", None, "",
                 "  "):
             print(_ln)
+
+
+def _years_tobase(rep: Dict[str, Any]
+                  ) -> Tuple[Dict[str, List[int]], List[int], List[int]]:
+    """The years report's tobase.map files: ({shared file: the years
+    naming it}, the years with a copy of their own to merge, the filed
+    years with the copy close-year froze — their own by design, never a
+    copy to merge)."""
+    shared: Dict[str, List[int]] = {}
+    for r in rep["years"]:
+        if r.get("tobase_shared"):
+            shared.setdefault(r["tobase_map"], []).append(r["year"])
+    own = [r["year"] for r in rep["years"]
+           if r.get("tobase_map") and not r.get("tobase_shared")
+           and not r.get("tobase_frozen")]
+    frozen = [r["year"] for r in rep["years"] if r.get("tobase_frozen")]
+    return shared, own, frozen
 
 
 def _years_table(top: Path, rep: Dict[str, Any], root: Path) -> None:
@@ -26629,16 +27176,9 @@ def _years_table(top: Path, rep: Dict[str, Any], root: Path) -> None:
     if differ:
         acts.append(f"What differs: tjs years --diff {differ[0]['year']} "
                     f"{newest}")
-    shared: Dict[str, List[int]] = {}
     # A filed year's frozen copy (close-year) is its own by design:
     # never a copy to merge.
-    own = [r["year"] for r in rep["years"]
-           if r.get("tobase_map") and not r.get("tobase_shared")
-           and not r.get("tobase_frozen")]
-    frozen = [r["year"] for r in rep["years"] if r.get("tobase_frozen")]
-    for r in rep["years"]:
-        if r.get("tobase_shared"):
-            shared.setdefault(r["tobase_map"], []).append(r["year"])
+    shared, own, frozen = _years_tobase(rep)
     for p, ys in sorted(shared.items()):
         acts.append(f"tobase.map: {p}, shared by "
                     f"{', '.join(str(y) for y in ys)}")
@@ -27007,8 +27547,8 @@ def cmd_update_tobase_map(args: argparse.Namespace) -> None:
     elif shared and not args.json:
         for _ln in _out_wrap(
                 f"{_PL.tobase_shown(root)}: read by {_yrs_text} — a "
-                f"change applies to each (a filed year's `taxjson "
-                f"check-filed` shows whether it moved its figures; each "
+                f"change applies to each (a filed year closed with its "
+                f"inputs frozen reads its own copy instead; each "
                 f"year's ticker.map still wins)."):
             print(_ln)
     nsec = len(master.security)
@@ -29536,6 +30076,7 @@ def _main() -> None:
         # A project that needs a newer taxjson: before any other check.
         _refuse_newer_projects(args)
         _refuse_years_root(args)
+        _refuse_no_project(args)
         if args.cmd not in ("init", "help", "migrate", "checklist") \
                 + _RELEASE_CMDS:
             # An old per-purpose file (yf_ticker.map, distributions.map
@@ -29779,7 +30320,31 @@ def _note_shared_decision(args: argparse.Namespace) -> None:
         return
     _say("note", f"saved in {_PL.shown(_PL.inputs_dir(root), root)}/"
          f"<account>/ (manifest.json, sends.json): every year reading "
-         f"these exports applies it on its next run")
+         f"these exports applies it on its next run",
+         *_frozen_years_apart(root))
+
+
+# Commands that run with no project, or say themselves what is missing:
+# the years-root commands, the checklist (every step, outside a
+# project) and format-map (a ticker.map of its own).
+_NO_PROJECT_CMDS = _YEARS_ROOT_CMDS | frozenset({"checklist",
+                                                  "format-map"})
+
+
+def _refuse_no_project(args: argparse.Namespace) -> None:
+    """Stop a project command in a folder that is no project (no
+    taxjson.toml, no year folders): each said "no gains files
+    in work/ — run `taxjson run` first", or blamed a key missing from a
+    taxjson.toml that does not exist (workflow audit 2026-10-22, item
+    15). Every one of them reads the country from taxjson.toml, so a
+    folder with a work/ but no taxjson.toml is no project either."""
+    if args.cmd in _NO_PROJECT_CMDS or not Path(args.dir).is_dir():
+        return
+    root = Path(args.dir)
+    # (a taxjson.toml that is a folder or unreadable: load_config says so)
+    if _os_path_lexists(root / _PL.CONFIG) or _PL.year_dirs(root):
+        return
+    _die(*_no_project_message(root.resolve(), args.cmd))
 
 
 def _refuse_years_root(args: argparse.Namespace) -> None:
@@ -29885,6 +30450,9 @@ def _enforce_command_country(args: argparse.Namespace) -> None:
         if _yrs:
             settings = _soft_settings(_yrs[-1][1])
     if not settings:
+        if not _PL.has_config(Path(args.dir)) \
+                and not _PL.year_dirs(Path(args.dir)):
+            _die(*_no_project_message(Path(args.dir).resolve(), cmd))
         _die("no taxjson.toml here — this command needs a project "
              "(its country decides whether it applies).")
     country = _country(settings)

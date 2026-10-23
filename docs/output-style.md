@@ -392,7 +392,8 @@ bytes alone:
   and indents the rest;
 - the text `taxjson checklist` reads from other commands: `sanity` (lines
   starting `INCOMPLETE` / `UNCHECKED`, the last line), `find-missing-history`
-  (the `AFFECTS` / `REMOVE from ` sections and their row shape),
+  (the `AFFECTS` / `REMOVE from ` / `STALE in ` sections and their row
+  shape),
   `elect --pending` (`No pending elections`, the last line), `audit`
   (`pipeline tie-out N tied, N MISMATCHED, N not found`), `fx-cash` and
   `check-filed` (`DRIFTED`, the last line), and the last stderr line of a

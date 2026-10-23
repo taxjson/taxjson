@@ -58,11 +58,12 @@ class TestDetectors(unittest.TestCase):
             r = cl.d_option_boundary(_ctx(root, {"option-boundary": (0, json.dumps(doc), "")}))
             self.assertEqual(r.status, "attention")
             self.assertIn("1 need attention", r.detail)
-            doc = {"rows": [], "timing": "grant", "since_explicit": False}
+            doc = {"rows": [], "timing": "grant", "since_explicit": False,
+                   "since_warning": True}
             r = cl.d_option_boundary(_ctx(root, {"option-boundary": (0, json.dumps(doc), "")}))
             self.assertEqual(r.status, "attention")
             self.assertIn("option_grant_timing_since", r.detail)
-            doc["since_explicit"] = True
+            doc["since_explicit"], doc["since_warning"] = True, False
             self.assertEqual(cl.d_option_boundary(
                 _ctx(root, {"option-boundary": (0, json.dumps(doc), "")})).status, "done")
 

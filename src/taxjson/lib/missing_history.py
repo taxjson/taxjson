@@ -1282,6 +1282,9 @@ class StaleMissingHistoryEntry:
     reason: str               # 'broker-short' | 'derivative' | 'complete'
     marker: str = ''          # how the broker marks the short
     file_name: str = "missing_history.tt"  # the file that lists it
+    # 'complete' of a .tt OPENING cost=unknown line: the units the run
+    # still opens (a line is applied as written, never sized), else None.
+    opens: Optional[float] = None
 
 
 def stale_missing_history_entries(
@@ -1361,11 +1364,25 @@ def stale_missing_history_entries(
 
 def complete_entry_message(symbol: str, account: str,
                            file_name: str = "missing_history.tt", *,
-                           more: Sequence[Tuple[str, str]] = ()) -> str:
+                           more: Sequence[Tuple[str, str]] = (),
+                           opens: Optional[float] = None) -> str:
     """A missing-history entry whose position never goes short: the
     purchase is in the books now (an older export or a .tt line was
-    added), so the entry does nothing. `more`: further such entries,
-    said in the same line."""
+    added). `opens`: the units a .tt OPENING cost=unknown line still
+    opens — it is applied as written (CA-ACB-11 / US-BASIS-04), so its
+    units are held on top of the purchase and the sales that draw on
+    them stay out of the totals (audit 2026-10-23 #1); without it the
+    entry does nothing. `more`: further such entries, said in the same
+    line."""
+    if opens is not None:
+        return (f"{file_name} lists {symbol} / {account}, but its rows "
+                f"never go short any more — the purchase is in the books "
+                f"now (an older export or a .tt line), yet the line still "
+                f"opens its {opens:g} units at an unknown cost on top of "
+                f"it: the sales that draw on them stay out of the totals "
+                f"and the books hold units the broker may not. Delete the "
+                f"line (keep it only if those units were held besides the "
+                f"purchases in your files).")
     if not more:
         return (f"{file_name} lists {symbol} / {account}, but its rows "
                 f"never go short any more — the purchase is in the books "
@@ -1385,7 +1402,8 @@ def stale_entry_message(e: StaleMissingHistoryEntry) -> str:
     """One ATTENTION line for a stale entry (run, gains and every other
     missing-history applier print it; find-missing-history lists it)."""
     if e.reason == 'complete':
-        return complete_entry_message(e.symbol, e.account, e.file_name)
+        return complete_entry_message(e.symbol, e.account, e.file_name,
+                                      opens=e.opens)
     if e.reason == 'broker-short':
         how = ("codes the sale O (opening)" if e.marker == 'IB code O'
                else f"marks the sales {e.marker}")
@@ -1425,9 +1443,9 @@ class MissingHistoryRow:
     # pair's short moves their gain.
     pooled_with: Tuple[str, ...] = ()
     # The in-year sales that drew on the short: (row id, units sold
-    # beyond the position) — what lib/first_run.engine_booking looks up
-    # in the gains files.
-    in_year_short_sales: Tuple[Tuple[str, float], ...] = ()
+    # beyond the position, units of the whole sale) — what
+    # lib/first_run.engine_booking looks up in the gains files.
+    in_year_short_sales: Tuple[Tuple[Any, ...], ...] = ()
 
     @property
     def year_listed(self) -> bool:
@@ -1564,7 +1582,8 @@ def assess_tax_year_relevance(
                 st['last'] = d
             if tx.quantity < 0 and cur < -1e-9:
                 st['sales'].append((str(tx.id or ''),
-                                    min(-tx.quantity, -cur)))
+                                    min(-tx.quantity, -cur),
+                                    -tx.quantity))
 
     def _carriers(ck: Tuple[str, str]) -> List[Tuple[str, str]]:
         """The pair and every later pair carrying its short."""
@@ -3750,6 +3769,22 @@ def synthesize_openings(
         stale = stale_missing_history_entries(
             [t for t in sorted_txs if (t.symbol, t.account) in _members],
             inserted, file_name=label)
+        # A .tt line whose rows never go short without it: its purchase
+        # is in the books now, yet the line still opens its units (never
+        # sized) — said every run, not only by find-missing-history
+        # (audit 2026-10-23 #1). Over every row, as find-missing-history
+        # decides it: a short on a rename's new symbol counts.
+        _said = {(e.symbol.upper(), e.account) for e in stale}
+        _fixed_in = {p for p in inserted if p in fixed}
+        if _fixed_in:
+            _opens = {(e['symbol'].upper(), e['account']): e['opening_qty']
+                      for e in applied if e.get('inserted')}
+            for e in stale_missing_history_entries(
+                    sorted_txs, _fixed_in, file_name=label, complete=True):
+                pair = (e.symbol.upper(), e.account)
+                if e.reason == 'complete' and pair not in _said:
+                    e.opens = float(_opens.get(pair) or 0.0)
+                    stale.append(e)
         for e in stale:
             _fx = fixed.get((e.symbol.upper(), e.account))
             if _fx is not None:

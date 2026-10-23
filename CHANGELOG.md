@@ -3,6 +3,136 @@
 ## Unreleased
 
 
+## v0.32.0 (2026-10-23)
+
+### Fixed: workflow audit 2026-10-23
+
+- **RBC: a name change under a temporary code is applied in an export
+  without a `Symbol Description` column** (the demo's layout). Every RBC
+  company-name lookup now falls back to the trade's own Description, as
+  the 2026-10-22 spin-off parent fix did: the name change's old ticker, a
+  trade under a temporary code, a ticker change without a reorganization
+  row and a spin-off's cash in lieu. Unfound, the old pool was stranded
+  and the sale under the new ticker was left out of the totals.
+- **Two loss years carried back to the same year: the second one's
+  carry-back is taken out** (`CA-CARRY-04`). The ledger dropped the part
+  of the `[carryover] claimed` total that the first year's lock had not
+  carried back, so the later year's balance, and the lock close-year
+  writes for it, were higher by that part; now lower.
+- **close-year `--filed-dispositions` carries forward the filed net
+  capital loss** (`CA-CARRY-01`, Canada), not the books': the balance
+  follows the filed gain (lower when the filed loss is smaller), and the
+  carry-back is at most the year's loss.
+- **A missing_history.tt line whose purchase is in the books now is said
+  every run** (`CA-ACB-11` / `US-BASIS-04`). The line opens its units as
+  written, so once the purchase was added the sale still drew on
+  unknown-cost units and stayed out of the totals, and the books kept
+  shares the broker no longer holds; only `find-missing-history` listed
+  it, as a line that "does nothing". Now the run warns ("… lists SAMPA.TO
+  / margin, but its rows never go short any more"), `find-missing-history`
+  says the run still applies it, and the checklist's missing-history step
+  needs attention until the line is deleted. A line's short-again or
+  stale warning is no longer said twice by the run.
+- **A year locked before it ended (`close-year --force`) is no longer
+  frozen.** The lock hashes the inputs and copies nothing: the year keeps
+  reading the shared exports, so its later trades show as drift (as the
+  close's warning says) and the close after filing locks the whole year.
+  v0.31.0 and v0.31.1 froze it: the rest of the year never reached the
+  books, every check said OK, and re-closing locked the partial figures.
+  `close-year --force` on such a lock first thaws it (taxjson.toml names
+  the shared folders again, the unchanged copies go, a copy edited since
+  is named and kept), then asks for `taxjson run`.
+- **`tjs wash-radar ACCOUNT` reads every taxable account's books** and
+  only shows that account's listings (`CA-SL-03`, `US-WASH-04`). It read
+  the one account alone, so a rebuy or a loss in another taxable account
+  was invisible: in Canada a full exit read "fine" while the other
+  account's rebuy would deny the loss, and in the US a loss the engine
+  had already washed read COOLING. The run's
+  `reports/wash_radar_<account>.*` are the same view.
+- **slip-audit compares T3 box 42 with the returns of capital only**
+  (`CA-SLIP-01`): a reinvested `[[distributions]]` entry or an RBC
+  notional distribution (an ACB raise) offset the real return of capital,
+  so a correct box 42 showed as "differs" and the suggested
+  `ADJUST ... type=roc` would have cut the ACB by the reinvested amount.
+  `roc-sum` lists such raises, and an s.86.1 spin-off's parent cost
+  reduction, apart under OTHER ACB ADJUSTMENTS, outside its total
+  (`--json`: `other_adjustments`); `sanity` gives a spin-off's cost
+  difference the reason `spin-off`, not `return-of-capital`.
+
+### Fixed: workflow audit 2026-10-22
+
+- **RBC: an s.86.1 spin-off's parent is found in an export without a
+  `Symbol Description` column** (the demo's layout), from the trade's own
+  Description. Unfound, the election's cost split became a gain on the
+  bare SEC# code and the parent kept all its cost.
+- **close-year takes a T1A carry-back out of the loss it carries
+  forward** (`CA-CARRY-01`): a loss `[carryover] claimed` carried back to
+  an earlier year was carried forward whole, and the next year applied it
+  again. The lock records `carried_back`.
+- **Generic CSV: a futures buy at a negative price is booked** (it
+  receives cash: a negative cost). The run refused it with "trade
+  net_amount must be >= 0", and the native view (`tjs gains`, both
+  countries) showed a positive cost for such a buy from any broker.
+- **A sale of more shares than held is NOT in the totals for the units
+  left short.** Bought 40 and sold 50: the engine sells 40 from the
+  purchase and holds 10 short, but the run and `tjs sum` called the sale
+  "in the totals" and readiness complete, while `find-missing-history`
+  said AFFECTS. Now a Warning, and readiness is incomplete.
+- **The checklist flags `option_grant_timing_since` only when the books
+  hold a written option**, as `tjs option-boundary` and the run warn
+  (`option-boundary --json`: `since_warning`).
+- **An empty account left from the scaffold no longer sends you to
+  `taxjson run`**, which skips it: option-boundary leaves out crypto and
+  empty accounts, and the checklist says "inputs/crypto is empty: add
+  exports or delete [accounts.crypto]".
+- **Outside a project every command says so**: "no taxjson.toml in … —
+  not a taxjson project", then how to start one, or the project to `cd`
+  to from inside one. sanity, list, events, fees and others said "run
+  `taxjson run` first" (which fails there), and fx-cash, stats and the
+  income sums blamed a key in a taxjson.toml that does not exist.
+- **A filed year keeps reading its frozen copy of the exports.** `tjs
+  years` counted its commented-out `inputs_dir` and `tobase_map` as
+  settings that differ from the newest year, and `tjs align --from 2025
+  --write` in the filed year wrote them back, so it read the shared
+  exports again; the run's error then sent it to `tjs migrate`, which
+  removed its frozen `tobase.map`. `years`, `years --diff` and `align`
+  now leave both keys out when either year is frozen, `migrate` keeps a
+  filed year's copy, and a filed year that names the shared folders
+  again is told to delete the lines (the run and `check-filed`).
+- **`tjs years --details` calls a filed year's frozen tobase.map its
+  own**, as the default view does, instead of a copy for `tjs migrate`
+  to merge (which then had nothing to do).
+- **US: a closed year no longer reports "frozen input(s) changed:
+  filed/ (locked years)"** on every run, `check-filed` and `compare
+  filed`: the set of locked years is not an input the year was filed
+  from. Locks written before read the same; no re-close needed.
+- **Docs: a filed year reads only its frozen copy.** getting-started
+  ("A filed year and later downloads") and filing.md step 6 said a
+  corrected export or late election in the shared `inputs/` would make
+  the filed year warn `DRIFTED`; the freeze keeps it out. They now say
+  that next year's `tjs handoff` and `tjs option-boundary` show it, and
+  how to amend the filed year. A file saved into the shared folder
+  (`tjs opening`, `tjs elect … --set` …) names the frozen years it does
+  not reach.
+- **`tjs sanity` refuses a holdings TOML whose `acquired` is not a
+  calendar day** (2024-13-01), as it refuses an impossible `as_of`. It
+  compared the quantities, skipped the cost with a note and said OK.
+- **buy-check / sell-check by a bare ticker (`ZZH`) give the SIMILAR
+  caveat of a look-alike never held** (`ZZH.TO` in a ticker.map SIMILAR
+  line), as the query with the suffix does. The bare ticker answered SAFE.
+- **sell-check gives the SIMILAR caveat for a look-alike bought in the
+  past 30 days only in a registered account or IRA** (Canada and the
+  US). The radar files such a holding CLEAR, so sell-check said SAFE
+  while the run warned about the pair; the radar's JSON row now has
+  `sheltered_buy`.
+- **An s.86.1 spin-off's cash in lieu sold by hand in a `.tt` file ends
+  the UNBOOKED warning.** The warning named that fix but never read the
+  `.tt` files, so it printed on every run and `run --strict` stopped on
+  it. It now names the last day such a sale is read.
+- **`scripts/release.sh --prepare` names the upgrade notes**: it renames
+  `docs/upgrading.md`'s `### Unreleased` to the tag, as it does the
+  CHANGELOG's. v0.31.0 shipped its own note under "Unreleased".
+
 ## v0.31.1 (2026-10-22)
 
 ### Changed: tax figures

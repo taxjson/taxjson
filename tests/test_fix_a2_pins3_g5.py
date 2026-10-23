@@ -251,6 +251,14 @@ class TestNoTransferEvidenceGuards(unittest.TestCase):
                          today=date(2026, 9, 1),
                          run_sub=lambda argv, timeout=900: (0, "", ""))
             res = cl.d_crypto_sends(ctx)
+            # An empty inputs/crypto: the run skips it, so the step names
+            # the folder, not the run (audit 2026-10-22, item 12).
+            self.assertEqual(res.status, "blocked", res.detail)
+            self.assertIn("inputs/crypto is empty", res.detail)
+            from test_fix_sends import KR_LEDGER
+            (root / "inputs" / "crypto" / "kr_ledgers.csv").write_text(
+                KR_LEDGER)
+            res = cl.d_crypto_sends(ctx)
         self.assertEqual(res.status, "blocked", res.detail)
         self.assertIn("no crypto transfer evidence", res.detail)
 

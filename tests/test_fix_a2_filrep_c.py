@@ -210,8 +210,13 @@ class TestRocViewDistributions(unittest.TestCase):
                             base={"margin": [dict(notional)]})
             r = _cli(root, "roc-sum", "2025", "--json")
             doc = _json(r)
-            self.assertEqual(doc["totals"], {"CAD": -52.93})
-            self.assertEqual(doc["rows"][0]["dist_rows"], 0)
+            # An ACB raise, not capital returned: listed once, apart
+            # from the T3 box 42 total (2026-10-23 audit #5).
+            self.assertEqual(doc["totals"], {})
+            self.assertEqual(doc["rows"], [])
+            self.assertEqual([(o["acb_change"], o["kind"])
+                              for o in doc["other_adjustments"]],
+                             [(52.93, "notional distribution")])
             self.assertNotIn("reduced twice", r.stderr)
             roc = _json(_cli(root, "roc", "2025", "--json"))
             self.assertEqual(len(roc["rows"]), 1)
@@ -259,7 +264,8 @@ class TestIncomeSumsNeedProject(unittest.TestCase):
             for view in ("divs-sum", "roc-sum", "dil-sum"):
                 r = _cli(root, view)
                 self.assertEqual(r.returncode, 1, view)
-                self.assertIn("country is missing", r.stderr, view)
+                # No taxjson.toml: no project (audit 2026-10-22, item 15).
+                self.assertIn("not a taxjson project", r.stderr, view)
 
 
 _LEAP = "AAQ270618C00045000.TO"

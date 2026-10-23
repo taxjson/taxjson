@@ -701,9 +701,14 @@ class TestViews(unittest.TestCase):
             " 'symbol': 'DLR.U.TO'}]}, {}, 'CAD', 2025, 'canada')\n"
             "sys.argv = ['taxjson', 'fx-cash', '--events']\n"
             "R.main()\n")
-        r = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
-                           capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL)
+        # In a project: outside one every command stops (audit
+        # 2026-10-22, item 15).
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\nyear = 2025\n')
+            r = subprocess.run([sys.executable, "-c", code], cwd=tmp,
+                               capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL)
         # (a table row now: compare its cells)
         self.assertIn("USD 61,234.57 1.3579 +456.70 DLR.U.TO",
                       " ".join(r.stdout.split()), r.stderr)

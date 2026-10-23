@@ -54,6 +54,7 @@ from taxjson.lib.corp_actions import (
     parse_questrade_corporate_actions,
     parse_rbc_corporate_actions,
     rates_converter,
+    read_tt_sales,
     resolve_event,
     SHELTERED_ELECTION_MODES,
     SHELTERED_ELECTIONS_DEFAULT,
@@ -266,7 +267,8 @@ def _load_manifest_or_die(path: Path) -> Manifest:
 
 def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
                    country: str, fx=None,
-                   sheltered_default: frozenset = frozenset()) -> dict:
+                   sheltered_default: frozenset = frozenset(),
+                   tt_sales: Optional[List[dict]] = None) -> dict:
     """Emit taxjson rows for every event. Events whose election is
     `ignore` produce no rows (resolve_event returns an empty list).
     Hints stored on the manifest record (FMV, ACB allocation, etc.)
@@ -296,7 +298,7 @@ def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
         if rec is None:
             raise RuntimeError(f"event {ev.event_id} unresolved at emit time")
         rows = resolve_event(ev, rec.election, country=country,
-                             hints=rec.hints, fx=fx)
+                             hints=rec.hints, fx=fx, tt_sales=tt_sales)
         if rows:
             emitted_event_count += 1
             transactions.extend(rows)
@@ -469,6 +471,12 @@ def main():
              "cost; a merger's new shares taking the old shares' cost; "
              "\"ask\" asks as in a taxable account ([settings] "
              "sheltered_elections).",
+    )
+    parser.add_argument(
+        '--tt', metavar='FILE', action='append', default=[],
+        help="One of the account's .tt files (`taxjson run` passes each): "
+             "a spin-off's fraction sold there by hand is its cash in "
+             "lieu booked, not an UNBOOKED warning.",
     )
     parser.add_argument(
         '--list', dest='list_only', action='store_true',
@@ -658,7 +666,8 @@ def main():
                       f"currency.", file=sys.stderr)
     try:
         out = _emit_resolved(events, manifest, args.country, fx=fx,
-                             sheltered_default=sheltered_default)
+                             sheltered_default=sheltered_default,
+                             tt_sales=read_tt_sales(args.tt or []))
     except (KeyError, ValueError) as e:
         # A saved election the rules cannot apply (an unknown election
         # key, a misspelled or missing hint): refuse by name instead of

@@ -231,8 +231,10 @@ scripts/release.sh v0.17.0             # the cut
 **`--prepare` makes the version commit and lands it, without a tag.** It
 refuses on a dirty tree, off `main`, behind `origin/main`, or when the tag
 exists (here or on origin). It promotes the CHANGELOG's `## Unreleased`
-section to `## v0.17.0 (date)` and each `Fixed in: unreleased` in
-`docs/troubleshooting.md` to the tag, bumps `pyproject.toml` — and, in
+section to `## v0.17.0 (date)`, each `Fixed in: unreleased` in
+`docs/troubleshooting.md` to the tag and `docs/upgrading.md`'s
+`### Unreleased` (when a change asked something of users) to
+`### v0.17.0`, bumps `pyproject.toml` — and, in
 lockstep, `packages/taxjson-fetch/pyproject.toml` (the broker-fetch
 plugin's version and its `taxjson>=` floor) — scans the release notes,
 runs the **full** local gate (or reuses a recorded PASS of the same tree:
@@ -323,11 +325,12 @@ release (`git rev-parse HEAD^{tree}`, before its own edits), made on
 the same Python version (`$PYTHON`, else `venv/bin/python3`), no older
 than `--gate-max-age DAYS` (default 7). The tree it tags is not that
 tree: it has the release's own edits (the CHANGELOG heading, the
-playbook's `Fixed in` tags, both `pyproject.toml` versions and the
-plugin's `taxjson>=` floor). So before reusing the record it proves
-those are the only differences (`release_edits_only`): no file but
-those four is changed or untracked, and each of the four equals the
-gated tree's copy once exactly those lines are masked. Then, instead of
+playbook's `Fixed in` tags, the upgrade notes' heading, both
+`pyproject.toml` versions and the plugin's `taxjson>=` floor). So before
+reusing the record it proves those are the only differences
+(`release_edits_only`): no file but those five is changed or untracked,
+and each of the five equals the gated tree's copy once exactly those
+lines are masked. Then, instead of
 the full gate, it runs `scripts/ci.sh --release-edits` — the
 consistency check and every test module that reads one of those lines
 (a module that names `CHANGELOG`, `troubleshooting.md`, `pyproject`,

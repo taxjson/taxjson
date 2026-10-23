@@ -203,6 +203,19 @@ class TestSanityTomlDate(unittest.TestCase):
         self.assertIn("as_of", r.stderr)
         self.assertIn("2025-03-32", r.stderr)
 
+    def test_impossible_acquired_refused(self):
+        # Workflow audit 2026-10-22 #7: an impossible `acquired` was
+        # only a note ("its cost is not compared") and sanity said OK.
+        f = _toml(self.td / "bad_acquired.toml", [
+            {"symbol": "QQG.TO", "quantity": 10, "currency": "CAD",
+             "total_cost": 100.0, "acquired": "2025-13-01"}],
+            meta={"as_of": "2025-03-15"})
+        r = cli(self.root, "sanity", f"margin={f}", "--json")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("acquired '2025-13-01' is not a calendar date",
+                      r.stderr)
+        self.assertNotIn("cost is not compared", r.stderr)
+
     def test_malformed_cost_keeps_the_date(self):
         f = _toml(self.td / "bad_cost.toml", [
             {"symbol": "QQG.TO", "quantity": 10, "currency": "CAD",

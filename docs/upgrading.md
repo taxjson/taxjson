@@ -59,6 +59,38 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.32.0
+
+- **RBC export without a `Symbol Description` column, with a name change
+  booked under a temporary code: re-run `tjs run`.** The old ticker is
+  now found from the buy's Description, so the rename is booked and the
+  sale under the new ticker is back in the totals. A `GLOBAL <old>.TO
+  <new>.TO` line you added for it can stay.
+- **RBC export without a `Symbol Description` column, with an s.86.1
+  spin-off: set the election again.** The parent is now found from the
+  trade's Description, so the event id names its ticker
+  (`…-zzp-zzs-…` instead of `…-x123456-zzs-…`): `tjs elect --pending`.
+- **A closed year whose loss you carried back (`[carryover] claimed`
+  under an earlier year): `tjs close-year --force` in it.** Its lock
+  carried the whole loss forward; the re-close records the balance after
+  the carry-back, which the next year's estimate reads.
+- **A closed year locked with `--filed-dispositions` whose filed gain
+  differs from the books, or a closed loss year that carried a loss back
+  after an earlier loss year did: `tjs close-year --force` in it.** Its
+  lock carried forward a net capital loss that was too large.
+- **A filed year where you ran `tjs align --from <newer year> --write`:
+  delete the live `inputs_dir` and `tobase_map` lines from its
+  `[settings]`** (the commented ones under `## frozen by` stay), and if
+  `tjs migrate` removed its `tobase.map`, rename `tobase.map.bak` back.
+  An older `align` wrote them, so the year read the shared exports, not
+  its frozen copy; its run now says so.
+- **A year you locked before it ended (`tjs years` marks it `filed*`)
+  with v0.31.0 or v0.31.1: `tjs close-year --force` in it, then `tjs
+  run`.** That close froze a copy of the exports as they were then, so
+  later trades never reached the year. The re-close thaws it (the year
+  reads the shared exports again; a copy you edited is named and kept)
+  and stops; the run then shows the later trades as drift.
+
 ### v0.31.1
 
 - **Re-run `tjs run` for a year with an s.86.1 spin-off paid cash for a

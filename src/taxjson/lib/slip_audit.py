@@ -786,7 +786,8 @@ def load_books(root: Path, cfg: Dict[str, Any], year: int,
     withholding with its payment, ROC by its ACB date, interest when
     paid."""
     from taxjson.lib.cg_dividends import allocate, entries_from_config
-    from taxjson.lib.income_dating import IncomeRules, is_canadian_issuer
+    from taxjson.lib.income_dating import (IncomeRules, is_canadian_issuer,
+                                           is_return_of_capital)
     cache = Path(root) / "work"
     rules = IncomeRules.from_settings(cfg.get("settings") or {})
     problems: List[str] = []
@@ -836,6 +837,12 @@ def load_books(root: Path, cfg: Dict[str, Any], year: int,
                     or float(t.get("gross_amount") or 0.0)
                 cat = "foreign_tax"
             elif act == "ADJUST":
+                # Only a return of capital is T3 box 42: a reinvested
+                # [[distributions]] entry or RBC's notional distribution
+                # raises the ACB, a spin-off's parent cost reduction
+                # moves it (2026-10-23 audit #5, #11).
+                if not is_return_of_capital(t):
+                    continue
                 d = rules.roc_date(t)
                 if str(t.get("id") or "").startswith("DIST-"):
                     d = str(t.get("date_settle") or t.get("date") or "")

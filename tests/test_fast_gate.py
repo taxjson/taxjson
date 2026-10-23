@@ -414,6 +414,20 @@ class TestReleaseReusesAPass(_ReleaseRepo):
             "CHANGELOG.md", "docs/troubleshooting.md",
             "packages/taxjson-fetch/pyproject.toml", "pyproject.toml"])
 
+    def test_the_upgrade_notes_heading_is_a_release_edit(self):
+        (self.dev / "docs" / "upgrading.md").write_text(
+            "### Unreleased\n\n- New note.\n\n### v0.1.0\n\n- Old.\n")
+        self.git(self.dev, "add", "-A")
+        self.git(self.dev, "commit", "-q", "-m", "notes")
+        self.git(self.dev, "push", "-q", "origin", "main")
+        self.tree = self.git(self.dev, "rev-parse", "HEAD^{tree}")
+        self.record()
+        r = self.release("v0.2.0", "--prepare")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.ci_calls(), ["ci --release-edits"])
+        self.assertIn("docs/upgrading.md", self.git(
+            self.dev, "diff", "--name-only", self.tree, "origin/main"))
+
     def test_fresh_gate_and_no_record_run_the_full_gate(self):
         self.record()
         r = self.release("v0.2.0", "--prepare", "--fresh-gate")

@@ -78,7 +78,11 @@ def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                           "losses": list(r.get("losses") or []),
                           "rebuy_at": r.get("rebuy_at"),
                           "deadline_passed": bool(
-                              r.get("deadline_passed"))}
+                              r.get("deadline_passed")),
+                          # CLEAR, held only in registered accounts /
+                          # IRAs bought there in the window: sell-check's
+                          # SIMILAR caveat ({account, date} or None).
+                          "sheltered_buy": r.get("sheltered_buy")}
     return out
 
 

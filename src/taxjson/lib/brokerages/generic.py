@@ -937,7 +937,12 @@ class GenericBrokerage(BaseBrokerage):
                         "quantity": self.signed_quantity(
                             qty, action_is_sell=(target == "sell")),
                         "currency": currency,
-                        "price": abs(price),
+                        # A futures price keeps its sign, as IB's does:
+                        # the schema lets a plain-futures BUY at a
+                        # negative price receive cash only when it sees
+                        # that price (stored unsigned, the run refused
+                        # the row).
+                        "price": price if is_future else abs(price),
                         # Amount column when present (fee-inclusive,
                         # magnitude); else derive from qty*price±fee.
                         "net_amount": _trade_net(

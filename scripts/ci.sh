@@ -99,13 +99,13 @@ SUITE_ENV=(env HOME="$CI_TMP/home" XDG_CACHE_HOME="$CI_TMP/home/.cache"
 # release.sh, reusing a PASS of the tree before its edits: the edits
 # are only version, tag and date lines (release.sh proves it), so what
 # can change is what reads those lines — the consistency check and the
-# tests that read CHANGELOG.md, docs/troubleshooting.md, a pyproject.toml
-# or the installed version. Never a full-gate record.
+# tests that read CHANGELOG.md, docs/troubleshooting.md,
+# docs/upgrading.md, a pyproject.toml or the installed version. Never a full-gate record.
 if [ "$MODE" = release-edits ]; then
   stage consistency bash scripts/check-consistency.sh
   # shellcheck disable=SC2046
   stage release-edit-tests "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
-    $(grep -lE 'CHANGELOG|troubleshooting\.md|pyproject|__version__|--version|importlib\.metadata|_version\(' tests/test_*.py \
+    $(grep -lE 'CHANGELOG|troubleshooting\.md|upgrading\.md|pyproject|__version__|--version|importlib\.metadata|_version\(' tests/test_*.py \
       | sed 's#^tests/##; s#\.py$##')
   finish
 fi

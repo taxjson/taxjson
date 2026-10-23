@@ -427,6 +427,16 @@ def tobase_both_problem(root, settings: Dict[str, Any]) -> Optional[str]:
     if own.exists() and _resolved(own) == shared:
         return None                 # a link to the shared file itself
     v = settings.get(TOBASE_KEY)
+    if frozen_project(root, settings):
+        # A filed year's tobase.map is the copy close-year froze: the
+        # setting is what was written back, never a copy to migrate.
+        return (f"two tobase.map files for this year: [settings] "
+                f"{TOBASE_KEY} = {v!r} names "
+                f"{shown(shared, _resolved(root))} (shared by every year), "
+                f"but this year is filed and its tobase.map is the copy "
+                f"close-year froze — delete {TOBASE_KEY} (and "
+                f"{INPUTS_KEY}, if set) from [settings]: the year then "
+                f"reads its own frozen copy again")
     return (f"two tobase.map files for this year: [settings] {TOBASE_KEY} "
             f"= {v!r} names {shown(shared, _resolved(root))} (shared by "
             f"every year), and this folder holds a tobase.map of its own "
@@ -713,6 +723,11 @@ def key_text(path: Sequence[str]) -> str:
 
 # Keys that differ from year to year by design.
 _PER_YEAR_KEYS = (("settings", "year"), ("settings", "prior_year_record"))
+# The shared folders a filed year stops naming when close-year freezes
+# its inputs (frozen_project): its own, never compared with another
+# year's or brought over (`align` re-pointed a filed year at the shared
+# exports; workflow audit 2026-10-22).
+_FROZEN_KEYS = (("settings", INPUTS_KEY), ("settings", TOBASE_KEY))
 # Account keys never compared or brought over: the year's own positions
 # snapshots (`holdings`), and the broker's account ids and query id
 # (an id is the user's, never shown in a list of differences).
@@ -753,7 +768,8 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     taxjson.toml keys (`taxjson align`, `taxjson years --diff`): rules
     only in one, keys set differently (`year`, prior_year_record, the
     year's own tables and the accounts' holdings and broker ids left
-    out: _compared; arrays of tables compared whole), and the order of
+    out: _compared; a frozen filed year's inputs_dir and tobase_map
+    too: _FROZEN_KEYS; arrays of tables compared whole), and the order of
     the accounts both have when it differs (one more key,
     ACCOUNT_ORDER_KEY, with `"order": true` and the names in each
     order). Each key is given by its path (`path`, a name with a dot
@@ -773,8 +789,15 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
         ta, tb = map_rules(here / TOBASE_MAP), map_rules(other / TOBASE_MAP)
     fa, fb = flat_paths(da), flat_paths(db)
     order = account_order(da, db)
+    # A year closed with its inputs frozen reads its own copy: the
+    # shared folders' settings are left out both ways (align never
+    # re-points a filed year, nor un-points the open one).
+    apart = _FROZEN_KEYS if (frozen_project(here, da.get("settings"))
+                             or frozen_project(other, db.get("settings"))
+                             ) else ()
     keys = sorted((k for k in set(fa) | set(fb)
-                   if _compared(k) and fa.get(k) != fb.get(k)),
+                   if _compared(k) and k not in apart
+                   and fa.get(k) != fb.get(k)),
                   key=lambda p: (key_text(p), p))
     return {
         "map_only_here": [r for r in a if r not in b],
@@ -1226,14 +1249,30 @@ def frozen_year(d, year) -> bool:
     """The year project `d` was closed with its inputs frozen (its
     filed/<year>.json lock carries a `frozen` record: `taxjson
     close-year` copied the shared exports and tobase.map into the
-    year's own folders, which the year reads from then on)."""
+    year's own folders, which the year reads from then on). A lock
+    taken before the year ended (close-year --force) records the
+    inputs' hashes with `partial` set and copies nothing: that year
+    still reads the shared folders, so it is not frozen."""
     import json
     try:
         doc = json.loads((Path(d) / "filed" / f"{year}.json").read_text(
             encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return isinstance(doc, dict) and isinstance(doc.get("frozen"), dict)
+    fz = doc.get("frozen") if isinstance(doc, dict) else None
+    return isinstance(fz, dict) and not fz.get("partial")
+
+
+def frozen_project(d, settings: Optional[Dict[str, Any]] = None) -> bool:
+    """frozen_year for the project `d`, its year read from `settings`
+    (its [settings]; read from its taxjson.toml when not given). False
+    when the year cannot be read."""
+    st = _settings(Path(d)) if settings is None else settings
+    try:
+        year = int((st or {}).get("year"))
+    except (TypeError, ValueError):
+        return False
+    return frozen_year(d, year)
 
 
 def tobase_layout(folder) -> Dict[str, Any]:
@@ -1256,8 +1295,13 @@ def tobase_layout(folder) -> Dict[str, Any]:
             out["shared"].setdefault(p, []).append(y)
         own = d / TOBASE_MAP
         if own.is_file() and not own.is_symlink():
-            if p is None and frozen_year(d, y):
+            if frozen_year(d, y):
+                # The freeze's copy, even beside a setting written back
+                # (an older `align`): never a copy to merge — migrate
+                # would remove the filed year's own file.
                 out["frozen"][y] = own
+                if p is not None and _resolved(own) != p:
+                    out["both"].append(y)
                 continue
             out["own"][y] = own
             if p is not None and _resolved(own) != p:

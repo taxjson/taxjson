@@ -912,7 +912,8 @@ class TestFeesCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             r = _runsub(Path(tmp), "fees-sum")     # no work/ dir
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("run `taxjson run`", r.stderr)
+        # (no taxjson.toml either: no project, audit 2026-10-22 item 15)
+        self.assertIn("not a taxjson project", r.stderr)
 
     def test_period_window_uses_since(self):
         with tempfile.TemporaryDirectory() as tmp:

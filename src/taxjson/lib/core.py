@@ -354,6 +354,19 @@ def is_option_symbol(symbol: str) -> bool:
     return bool(symbol) and bool(_OCC_OPTION_RE.match(symbol))
 
 
+def receives_on_buy(tx) -> bool:
+    """A plain-futures BUY at a negative price: it RECEIVES cash, so
+    its cost is negative (the schema's exemption, audit A2-0302). The
+    engines' abs() of a buy's amount made it a positive cost in the
+    native view, while the settled (base) books were right."""
+    sym = tx.symbol or ''
+    return (float(tx.quantity or 0.0) > 0
+            and float(tx.net_amount or 0.0) < 0
+            and float(tx.price or 0.0) < 0
+            and sym.startswith(('F:', '/', '\\'))
+            and not is_option_symbol(sym))
+
+
 def parse_option_expiry(symbol: str) -> Optional[str]:
     """ISO expiry date ('YYYY-MM-DD') from an OCC option symbol, or None
     when `symbol` isn't one (or carries an impossible date). The OCC
@@ -2820,6 +2833,8 @@ class CanadaTaxRules(TaxRules):
                 # buy (a short's cover) costs its negation, so a short
                 # closed at a profit realizes exactly the P/L.
                 return _n if float(tx.quantity or 0.0) < 0 else -_n
+            if receives_on_buy(tx):
+                return _n
             return _n if float(tx.quantity or 0.0) < 0 else abs(_n)
 
         def _write_year(tx) -> str:
@@ -7020,7 +7035,8 @@ class USATaxRules(TaxRules):
             # commission exceeds the gross (a $0.01 close), which abs()
             # turned into a credit (audit R1-164; mirrors the Canada
             # engine's _trade_money).
-            tx_net = (abs(tx.net_amount) if tx.quantity > 0
+            tx_net = (abs(tx.net_amount)
+                      if tx.quantity > 0 and not receives_on_buy(tx)
                       else float(tx.net_amount))
             if (tx.type or '') == 'futures_settlement':
                 # A futures fill on the settlement basis (lib/futures.py):

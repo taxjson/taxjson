@@ -1993,6 +1993,33 @@ def _rbc_removal_names(leg) -> Tuple[str, str]:
     return old.strip().lstrip('*'), new.lstrip('*')
 
 
+_RBC_TRADE_VERB_RE = re.compile(r'\s*-\s*(?:BUY|SELL)\s*$', re.I)
+_RBC_SPIN_TAIL_RE = re.compile(r'\s+SPIN\s?OFF\s+ON\s', re.I)
+
+
+def rbc_row_company(r) -> str:
+    """The company a share row names: its 'Symbol Description', or with
+    no such column (an optional one: the RBC demo export has none) a
+    trade or transfer's own Description less RBC's ' - Buy' / ' - Sell'
+    tail, or a spin-off row's Description up to 'SPINOFF ON'. Every RBC
+    lookup by company name goes through here. Reading the column alone
+    left an s.86.1 spin-off's parent unfound in the same file (the
+    election's cost split became a phantom gain on the bare SEC# code),
+    and a name change (NAC) whose removal is under a temporary code
+    unresolved (the old pool stranded, the sale under the new ticker
+    left out of the totals)."""
+    if r.symdesc:
+        return r.symdesc
+    cls = getattr(r, 'cls', '')
+    if cls in ('trade', 'transfer'):
+        return _RBC_TRADE_VERB_RE.sub('', r.desc or '').strip()
+    if cls == 'spinoff':
+        body = _rbc_body(r.desc)
+        m = _RBC_SPIN_TAIL_RE.search(body)
+        return body[:m.start()].strip() if m else ''
+    return ''
+
+
 def _rbc_receipt_name(leg) -> str:
     if leg.symdesc:
         return leg.symdesc.lstrip('*')
@@ -2367,7 +2394,7 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
                 s = 2.0
             else:
                 s = rbc_name_similarity(c.symdesc or _rbc_body(c.desc),
-                                        sp.symdesc or '')
+                                        rbc_row_company(sp))
                 if s < 1.0:
                     continue
             key = (s, -abs(lag))
@@ -2495,7 +2522,7 @@ def parse_rbc_corporate_actions(
         cur = (r.currency or '').upper()
         (trade_cur if getattr(r, 'cls', '') in ('trade', 'transfer')
          else other_cur).setdefault(r.symbol, set()).add(cur)
-        name = _rbc_norm_company(r.symdesc)
+        name = _rbc_norm_company(rbc_row_company(r))
         if name:
             name_listings.setdefault(name, {}).setdefault(r.symbol, set())
 
@@ -2719,10 +2746,11 @@ def parse_rbc_corporate_actions(
                            if any(_rbc_tok_eq(x, y) for y in tb)) / len(ta)
             scored = {}
             for x in share_rows:
-                if not x.symdesc or x.symbol == r.symbol:
+                xname = rbc_row_company(x)
+                if not xname or x.symbol == r.symbol:
                     continue
-                sc = min(_cov(parent_name, x.symdesc),
-                         _cov(x.symdesc, parent_name))
+                sc = min(_cov(parent_name, xname),
+                         _cov(xname, parent_name))
                 if sc >= 0.6:
                     scored[x.symbol] = max(sc, scored.get(x.symbol, 0.0))
             if scored:
@@ -4089,26 +4117,106 @@ def _cil_evidence(event: CorporateAction) -> float:
     return float(getattr(event, 'cash_in_lieu', 0.0) or 0.0)
 
 
+def read_tt_sales(paths) -> List[dict]:
+    """The BUYSELL sales (negative quantity) of the account's .tt files
+    ({date, symbol, quantity, source}): what warn_unsold_spinoff_cil
+    looks for a by-hand sale of a spin-off's fraction in. A line this
+    reader cannot read is skipped: the run's .tt conversion stage
+    reports it. `BUYSELL DATE TIME SYMBOL QTY ...`; `#` starts a
+    comment (bin/taxjson_convert_tt)."""
+    out: List[dict] = []
+    for p in paths or ():
+        p = Path(p)
+        try:
+            text = p.read_text(encoding='utf-8-sig')
+        except (OSError, UnicodeDecodeError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            i = line.find('#')
+            parts = (line if i < 0 else line[:i]).split()
+            if len(parts) < 5 or parts[0] != 'BUYSELL':
+                continue
+            try:
+                qty = float(parts[4].replace(',', ''))
+            except ValueError:
+                continue
+            if qty < 0:
+                out.append({'date': parts[1], 'symbol': parts[3].upper(),
+                            'quantity': qty, 'source': f"{p.name}:{n}"})
+    return out
+
+
+# A by-hand sale of a spin-off's fraction is read within this many days
+# after the cash in lieu was paid (drop_broker_cil_pairs' reach).
+_TT_FRACTION_DAYS = 50
+
+
+def _tt_fraction_last_day(event: CorporateAction) -> str:
+    """The last day a .tt sale of the spin-off's fraction is read as its
+    cash in lieu ('' when the event's dates are unreadable)."""
+    from datetime import date, timedelta
+    paid = max(event.date, getattr(event, 'cash_in_lieu_date', '') or '')
+    try:
+        return (date.fromisoformat(paid[:10])
+                + timedelta(days=_TT_FRACTION_DAYS)).isoformat()
+    except ValueError:
+        return ''
+
+
+def _tt_fraction_sale(event: CorporateAction,
+                      tt_sales: List[dict]) -> Optional[dict]:
+    """The account's .tt sale of the spin-off's fraction: the target
+    symbol, less than one share, dated from the spin-off to
+    _TT_FRACTION_DAYS after the cash in lieu was paid (None when the
+    .tt files hold none)."""
+    tgt = str(event.target_symbol or '').upper()
+    last = _tt_fraction_last_day(event)
+    if not last:
+        return None
+    for r in tt_sales or ():
+        if (r.get('symbol') == tgt and 0 < -float(r['quantity']) < 1
+                and event.date <= str(r.get('date') or '') <= last):
+            return r
+    return None
+
+
 def warn_unsold_spinoff_cil(event: CorporateAction, election_key: str,
-                            rows: List[dict]) -> None:
+                            rows: List[dict],
+                            tt_sales: Optional[List[dict]] = None) -> None:
     """A spin-off's cash in lieu that the election's rows do not sell:
     the RBC parser's old "NOT booked" warning, now here (the parser
     leaves the row to this stage). Silent when the brokerage parser
-    books the cash itself (Questrade)."""
+    books the cash itself (Questrade). A sale of the fraction in the
+    account's .tt files (`tt_sales`, read_tt_sales) is the fix the
+    warning names: then a note, never the UNBOOKED line that `run
+    --strict` refuses (workflow audit 2026-10-22 #14)."""
     cash = float(getattr(event, 'cash_in_lieu', 0.0) or 0.0)
     if (not _spinoff_cil_row(event) or cash < 0.005
             or getattr(event, 'cil_broker_booked', False)
             or any(r.get('action') == 'BUYSELL'
                    and float(r.get('quantity') or 0.0) < 0 for r in rows)):
         return
+    sold = _tt_fraction_sale(event, tt_sales or [])
+    if sold is not None:
+        emit_line(f"note: spin-off {event.source_symbol}→"
+                  f"{event.target_symbol} on {event.date}: the "
+                  f"{cash:,.2f} {event.cash_in_lieu_currency or ''} cash "
+                  f"in lieu is booked by hand ({sold['source']}: a sale of "
+                  f"{-float(sold['quantity']):g} {event.target_symbol} on "
+                  f"{sold['date']}).")
+        return
+    last = _tt_fraction_last_day(event)
+    when = (f"dated from the spin-off to {last}" if last
+            else "dated on or after the spin-off")
     if election_key == 'rollover_s_86_1':
         why = ("the export does not state the fraction's size, so its "
                "cost stays on the whole shares")
-        fix = ("book it in a .tt file dated on or after the spin-off: a "
-               "BUY of the fraction at 0 and its SELL for the cash")
+        fix = (f"book it in a .tt file {when}: a BUY of the fraction at "
+               f"0 and its SELL for the cash")
     else:
         why = f"the {election_key} election books no sale of it"
-        fix = "add the fractional disposition by hand in a .tt file"
+        fix = (f"add the fractional disposition by hand in a .tt file "
+               f"({when})")
     emit_line(f"warning: UNBOOKED: spin-off {event.source_symbol}→"
               f"{event.target_symbol} on {event.date}: {cash:,.2f} "
               f"{event.cash_in_lieu_currency or ''} cash in lieu of a "
@@ -4833,8 +4941,12 @@ def resolve_event(
     country: str = 'canada',
     hints: Optional[dict] = None,
     fx: Optional[Callable[[float, str, str, str], Optional[float]]] = None,
+    tt_sales: Optional[List[dict]] = None,
 ) -> List[dict]:
     """Apply a country's rule to a single event with a given election choice.
+
+    `tt_sales`: the account's .tt sales (read_tt_sales), where a
+    spin-off's fraction sold by hand is found (warn_unsold_spinoff_cil).
 
     `fx(amount, from_cur, to_cur, date)` converts between currencies at
     the event date (see `rates_converter`); needed only for exchanges
@@ -4859,7 +4971,7 @@ def resolve_event(
     if fx is not None:
         hints[FX_HINT] = fx
     rows = rule.apply(event, election_key, hints)
-    warn_unsold_spinoff_cil(event, election_key, rows)
+    warn_unsold_spinoff_cil(event, election_key, rows, tt_sales)
     # Traceability: every emitted row names the event (and choice) it
     # came from, so reports can join a gains row back to the manifest
     # record instead of grepping prose descriptions.

@@ -327,7 +327,8 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
     """The comparison document (CompareError when the snapshot is
     missing): what moved per account, which report files differ, which
     inputs changed, and with `details` a unified diff per report."""
-    from taxjson.lib.checklist import fingerprint_delta, input_fingerprint
+    from taxjson.lib.checklist import (fingerprint_delta, frozen_files,
+                                       input_fingerprint)
     root = Path(root)
     doc, rep = load(root, cfg, name)
     before = report_files(rep, f"filed/{doc.get('year')}/reports/"
@@ -346,6 +347,10 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
                "same": len(same)}
     old_fp = doc.get("files") or {}
     new_fp = input_fingerprint(root, cfg)
+    if name == FILED:
+        # The frozen record holds the files only (the year's own lock
+        # is no input it was filed from).
+        old_fp, new_fp = frozen_files(old_fp), frozen_files(new_fp)
     _ch, _ad, _rm = fingerprint_delta(old_fp, new_fp)
     inputs = {"changed": _ch, "added": _ad, "removed": _rm,
               "same": len(old_fp) - len(_ch) - len(_rm)}

@@ -135,7 +135,8 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
     report_model.resolve_gains_files) did with the year's sales the walk
     found short (MissingHistoryRow.in_year_short_sales). A sale's units
     the engine closed against a long position carry the sale's id
-    (matched); units still short are covered by the year's short-close
+    (matched) only as far as the engine closed the whole sale against a
+    long position; units still short are covered by the year's short-close
     records of the symbol (short_cover); what is left the gains files
     lack (open). A row whose account has no readable gains file is
     "open" (the claim the summary always made). `prefer_wash=False`
@@ -184,8 +185,15 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
                 i = str(x.get("id") or "")
                 long_by_id[i] = long_by_id.get(i, 0.0) + q
         matched = rest = 0.0
-        for sid, units in r.in_year_short_sales:
-            m = min(units, long_by_id.get(sid, 0.0))
+        for sale in r.in_year_short_sales:
+            sid, units = sale[0], float(sale[1])
+            # The engine's short units of the sale are the sale less what
+            # it closed against a long position — not the walk's short
+            # units less that (min(10, 40) called a 50-unit sale with 40
+            # long and 10 left open "matched": audit 2026-10-22 item 5).
+            whole = float(sale[2]) if len(sale) > 2 else units
+            m = units - min(units, max(0.0, whole
+                                       - long_by_id.get(sid, 0.0)))
             matched += m
             rest += units - m
         sales = bool(r.in_year_short_sales)

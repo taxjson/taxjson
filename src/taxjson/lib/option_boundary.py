@@ -642,7 +642,11 @@ def project_question_rows(root, cfg: Dict[str, Any],
         if mh_pairs is not None:
             from taxjson.lib.missing_history import synthesize_openings
             try:
-                txs, _log = synthesize_openings(txs, mh_pairs)
+                # Quiet: the run's gains stage already said each line's
+                # ATTENTION (short again, stale); said again here it was
+                # a second copy on the run's console and the checklist's.
+                txs, _log = synthesize_openings(txs, mh_pairs,
+                                                flag_stale=False)
             except Exception:                           # noqa: BLE001
                 pass
         for r in straddling(txs, year, "grant", since, years,

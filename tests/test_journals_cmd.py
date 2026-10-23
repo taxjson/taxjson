@@ -481,7 +481,7 @@ _QT_HINT = ("warning: ATTENTION: margin_2025.csv: Questrade symbol QZOLD.US "
 _RBC_HINT = ("warning: ATTENTION: rbc.csv: RBC symbol QZR (USD) looks "
              "renamed to QZS — if they are one security add to ticker.map:  "
              "GLOBAL QZR.US QZS.US  — QZR stops on 2025-04-01 with 5 "
-             "share(s) still open, and QZS (same Symbol Description 'QZ "
+             "share(s) still open, and QZS (same security name 'QZ "
              "FIRST AGAIN CORP') first appears on 2025-04-15 with a SALE of "
              "5. That is a ticker change RBC booked without a "
              "reorganization row.\n")

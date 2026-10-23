@@ -15,6 +15,9 @@ a failure (sanity's exit code stays the quantity check's):
                       broker shows this account's own cost
     return-of-capital the books lowered the ACB for a return of capital
                       the broker may not have applied (or the reverse)
+    spin-off          a spin-off's election moved part of the parent's
+                      ACB to the new shares (s.86.1); the broker may
+                      split it differently, or not at all
     broker-fx         the broker's book value in Canadian dollars for a
                       foreign listing, converted at its own rates; the
                       books convert each purchase at the Bank of Canada
@@ -28,6 +31,7 @@ a failure (sanity's exit code stays the quantity check's):
     lot-method        the broker may match sales to lots by another
                       method than FIFO (specific identification)
     return-of-capital as above
+    spin-off          as above (§355)
   Both: unexplained — none of those closes the gap: a missing or
   mis-costed purchase, an opening line's cost, or the broker's error.
 
@@ -160,14 +164,31 @@ def touched_after(rows: Iterable[Dict[str, Any]], day: str) -> Set[str]:
 
 
 def roc_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
-    """Symbols the books lowered the cost of (an ADJUST that is a
-    return of capital — negative amount or type roc)."""
+    """Symbols the books lowered the cost of for a return of capital
+    (an ADJUST that is one, income_dating.is_return_of_capital: type
+    roc, or a negative amount). A spin-off's parent cost reduction is
+    not one (spinoff_symbols; 2026-10-23 audit #11)."""
+    from taxjson.lib.income_dating import is_return_of_capital
+    out: Set[str] = set()
+    for r in rows:
+        if not is_return_of_capital(r):
+            continue
+        if (str(r.get("type") or "").lower() == "roc"
+                or float(r.get("net_amount") or 0.0) < 0):
+            out.add(str(r.get("symbol") or ""))
+    return out
+
+
+def spinoff_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
+    """Symbols whose cost a spin-off's election moved to the new shares
+    (the parent's cost-reduction ADJUST a corporate action books: it
+    carries corp_event_id, or the US type spinoff_355)."""
     out: Set[str] = set()
     for r in rows:
         if r.get("action") != "ADJUST":
             continue
-        if (str(r.get("type") or "").lower() == "roc"
-                or float(r.get("net_amount") or 0.0) < 0):
+        if (r.get("corp_event_id")
+                or str(r.get("type") or "").lower() == "spinoff_355"):
             out.add(str(r.get("symbol") or ""))
     return out
 
@@ -383,7 +404,8 @@ def compare_cost(*, symbol: str, broker_cost: float, cost_currency: str,
                  country: str, filing: Optional[Dict[str, Any]],
                  own: Optional[float], native: Optional[Dict[str, Any]],
                  pooled: bool, roc: bool, tol_abs: float,
-                 tol_rel: float, short: bool = False) -> Dict[str, Any]:
+                 tol_rel: float, short: bool = False,
+                 spinoff: bool = False) -> Dict[str, Any]:
     """One symbol's cost row. `filing`: the summed filing-books
     inventory entry (base currency) of the group's accounts; `own`: the
     accounts' own pre-pooling cost (base currency); `native`: the
@@ -442,6 +464,8 @@ def compare_cost(*, symbol: str, broker_cost: float, cost_currency: str,
             explained = True
     if roc:
         reasons.append("return-of-capital")
+    if spinoff:
+        reasons.append("spin-off")
     if (in_filing and not usa and cur == base and pos_cur
             and pos_cur != base):
         reasons.append("broker-fx")
@@ -465,6 +489,9 @@ REASON_TEXT = {
               "cost",
     "return-of-capital": "the books lowered the cost for a return of "
                          "capital the broker may not have applied",
+    "spin-off": "a spin-off's election moved part of the parent's cost "
+                "to the new shares; the broker may split it differently, "
+                "or not at all",
     "broker-fx": "the broker converted a foreign listing's cost at its "
                  "own rates; the books use each purchase day's Bank of "
                  "Canada rate",

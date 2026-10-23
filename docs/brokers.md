@@ -510,7 +510,8 @@ the environment variables: flags show in the process list.
 per project at a time; a second one waits (Ctrl-C stops it).
 
 **Where the files land.** In the shared inputs folder,
-`inputs/<account>/`, so a download applies to every year:
+`inputs/<account>/`, so a download applies to every year that reads
+it (a filed year reads its own frozen copy):
 
 - `questrade_<year>.csv`, named for the project's tax year. Every fetch
   re-covers the whole tax-year window, **December 1 of the year before

@@ -202,11 +202,16 @@ detectors.
       T1-ADJ instructions accurate. It also records the year's
       carry-forwards (net capital loss; minimum tax carryover by year of
       origin), which next year's `estimate`, `carryover` and `amt` read
-      and its `handoff` checks. And it freezes the inputs: the exports
+      and its `handoff` checks. Filed with another tool? Pass the sales
+      it reported with `--filed-dispositions CSV`: the net capital loss
+      carried forward is then the filed one. And it freezes the inputs: the exports
       the filed books were built from are copied into the year's own
       `inputs/`, which the year reads from then on, and `reports/` is
       kept as `filed/<year>/reports/` (`taxjson compare filed` shows
-      whether a later run still reproduces them).
+      whether a later run still reproduces them). A lock taken before
+      the year ended (`--force`) is a snapshot and freezes nothing: the
+      year keeps reading the shared exports, so its later trades show
+      as drift, and the close after filing freezes the whole year.
 - [ ] Commit the `filed/<year>.json` lock, the frozen `inputs/` copy and
       `filed/<year>/reports/`; tag the data repo with the filing date.
       A `.gitignore` written by an earlier `taxjson init` has an
@@ -222,6 +227,14 @@ detectors.
       that differs from the lock, enter the notice's figures in next
       year's `[estimate] amt_carryover` / `[estimate] other_losses` (explicit
       input wins over the lock; `taxjson handoff` names the difference).
-- [ ] `taxjson check-filed` on every later run: an assignment, a late
-      election or a corrected export that changes a filed year is
-      amended, not silently absorbed.
+- [ ] A late correction (a corrected export, a late election, an
+      assignment) saved in the shared `inputs/` does not reach the filed
+      year: it reads its own frozen copy, so its `run` and `check-filed`
+      stay OK. Next year's `taxjson handoff` (positions and cost at
+      Dec 31 against the filed books) and `taxjson option-boundary` are
+      where it shows. To amend, put the corrected file in the filed
+      year's own `inputs/<account>/` (or `taxjson elect` in its folder)
+      and `taxjson run` there: it names the frozen input that changed
+      and warns `DRIFTED` when the filed figures moved. Then file the
+      T1-ADJ and `taxjson close-year --force`. `taxjson check-filed`
+      also catches a taxjson upgrade that moves a filed year.

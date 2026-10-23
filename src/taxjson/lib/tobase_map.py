@@ -328,8 +328,8 @@ def header(master: Master, shared: bool = False) -> List[str]:
     whose = ("every year of this project" if shared else "this project")
     every = [
         "# Shared by every year folder ([settings] tobase_map): a change",
-        "# applies to every year, the filed ones too (each filed year's",
-        "# `taxjson check-filed` shows whether it moved its figures).",
+        "# applies to every year that reads it (a filed year closed with",
+        "# its inputs frozen reads its own copy instead).",
         "# Each year's ticker.map still wins over it.",
     ] if shared else []
     return [f"# tobase.map: the interlisted master's pairs for {whose}"] \

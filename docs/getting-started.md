@@ -717,10 +717,15 @@ SAMPA.TO  2025-03-10     20    795.05  margin
 ```
 
 You still have to report that sale on your return, with the best cost
-you can support. If you later find the purchase and add it, the line
-does nothing any more: the run says `Warning: missing_history.tt lists
-SAMPA.TO / margin, but its rows never go short any more` and
-`find-missing-history` lists it under `STALE`. Delete it.
+you can support. If you later find the purchase and add it, delete the
+line: until you do, it still opens its 20 units at an unknown cost on
+top of the purchase, so the sale stays out of the totals and the books
+hold 20 shares the broker does not. Every run says
+`Warning: inputs/margin/missing_history.tt:8 lists SAMPA.TO / margin,
+but its rows never go short any more`, `find-missing-history` lists it
+under `STALE` and `tjs checklist` puts the missing-history step at
+attention. Once it is deleted, `tjs run` puts the sale in the totals
+with the purchase's cost.
 
 ### 5c. Transfers in
 
@@ -881,7 +886,8 @@ Reasons:
 The broker does not add a denied superficial loss to its book cost; the
 books must. The other reasons `sanity` names: `pooled` (the same stock
 in another of your taxable accounts; your ACB averages them),
-`return-of-capital`, `broker-fx` (the broker converted a US stock's cost
+`return-of-capital`, `spin-off` (your spin-off election moved part of
+the parent's cost to the new shares), `broker-fx` (the broker converted a US stock's cost
 at its own rates), `lot-basis` (IB's cost is per lot; yours is an
 average), and `unexplained` — that one is a missing or mis-costed
 purchase, an opening line's cost, or the broker's own error, and is
@@ -1013,9 +1019,9 @@ and a complete project per tax year beside them.
   `inputs_dir = "../inputs"` in each year's `[settings]`
   ([settings.md](settings.md#folders)) — and in Canada `tobase.map`,
   through `tobase_map = "../tobase.map"`: an update there applies to
-  every year (each year's run, `tjs years` and the checklist name it
-  as changed; a filed year's `tjs check-filed` shows whether it moved
-  the filed figures). Run every command in a year
+  every year that reads it (each year's run, `tjs years` and the
+  checklist name it as changed). A filed year reads the copies
+  close-year froze instead (the first bullet). Run every command in a year
   folder (`cd 2025`, or `tjs -C 2025 run`); in `~/taxes` itself a
   command that needs a year is refused, naming the year folders.
 - **What is shared and what is the year's own.** Shared, in
@@ -1024,14 +1030,17 @@ and a complete project per tax year beside them.
   (your crypto-send decisions). A run never writes there: only a
   decision you make — `tjs elect … --set`, `tjs crypto-sends … --set`,
   or an answer at the run's prompt — is saved there, and it applies to
-  every year — and so do the `OPENING ... cost=unknown` lines of
-  missing history (step 5). The year's own, in its folder: `taxjson.toml`,
+  every year that reads the shared folder — and so do the `OPENING ...
+  cost=unknown` lines of missing history (step 5). A filed year reads
+  its own frozen copy, so none of these reach it (see "A filed year and
+  later downloads"). The year's own, in its folder: `taxjson.toml`,
   `ticker.map`, `inputs/slips/`, `holdings/`,
   `checklist.json`, `work/` (where it generates its `crypto_sends.tt`
   from `sends.json` and its own map), `reports/` and `filed/`.
 - **Downloads go into `inputs/<account>/`**, all years together (file
-  names can carry the period). Each year's books are built from all of
-  them, as a single-folder project's are. A folder of an account a year
+  names can carry the period). Each open year's books are built from
+  all of them, as a single-folder project's are; a filed year's from the
+  copy close-year froze. A folder of an account a year
   does not have (an RRSP split in 2025, seen from 2024) is not read by
   that year, with one `Info:` line.
 - **The year's positions snapshots go in its `holdings/`**: keep one taken
@@ -1056,13 +1065,25 @@ and a complete project per tax year beside them.
   that contradicts this year's is skipped and listed). The accounts'
   `holdings` lists and broker account ids are each year's own: never
   shown as differences or brought over.
-- **A filed year and later downloads.** A new export in `inputs/` can
-  change a filed year's figures (a late correction, a January
-  settlement). That year's `tjs sum` and checklist then say its inputs
-  changed since the last run, and `tjs run` in its folder recomputes it
-  and warns `filed 2024 DRIFTED` against `filed/2024.json` when the
-  filed figures moved; `tjs years` shows which years changed. Amend the
-  return, or keep the books consistent with it.
+- **A filed year and later downloads.** A filed year reads only the
+  copy of the exports close-year froze into its own `inputs/`, so a new
+  or corrected export, a late election or an `OPENING` line saved in the
+  shared `inputs/` never reaches it: its `tjs run`, `tjs sum`,
+  `tjs check-filed` and its row in `tjs years` stay OK. The next year
+  is where it shows: `tjs handoff` there compares the opening positions
+  and cost with the filed year's year-end books, and `tjs option-boundary`
+  the options open across Dec 31. To carry a correction into the filed
+  year, put the corrected file in its `inputs/<account>/` (or run
+  `tjs elect` in its folder); `tjs run` there then names the frozen
+  input that changed and warns `filed 2024 DRIFTED` when the filed
+  figures moved. Amend the return (then `tjs close-year --force`), or
+  keep the books as filed. Leave the year's commented-out `inputs_dir`
+  and `tobase_map` as they are: `tjs align` never brings them over. A
+  year closed by a taxjson older than v0.31.0 has no frozen copy and
+  still reads the shared folder (its `tjs run` warns DRIFTED) until
+  `tjs close-year --force` freezes it; so does a year locked before it
+  ended (`filed*` in `tjs years`): it is frozen by the close after
+  filing.
 - **`exports/`**: the newest year's full run copies its
   `<account>_holdings.toml` and wash radar there, with a `README.txt`
   naming the year, for other tools to read whatever the year

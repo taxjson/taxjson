@@ -119,6 +119,12 @@ class PositionsReportError(ValueError):
     the masked file)."""
 
 
+class PositionsDateError(PositionsReportError):
+    """A holdings TOML date (`[meta] as_of`, `generated_at`, a holding's
+    `acquired`) that is not a calendar day. `tjs sanity` refuses the
+    file for it, where a malformed cost field only skips the cost."""
+
+
 @dataclass
 class PositionRow:
     broker: str
@@ -666,7 +672,7 @@ def toml_as_of(meta: Any, name: str) -> str:
         if v in (None, '') or _iso_day(v):
             continue
         if key == 'as_of' or _ISO_DAY_RE.match(str(v).strip()[:10]):
-            raise PositionsReportError(
+            raise PositionsDateError(
                 f"{name}: [meta] {key} {str(v)!r} is not a calendar "
                 f"date (YYYY-MM-DD)")
     return _iso_day(meta.get('as_of')) or _iso_day(meta.get('generated_at'))
@@ -788,9 +794,9 @@ def _read_toml(path: Path) -> PositionsReport:
         lot = h.get('acquired')
         lot_date = _iso_day(lot) if lot not in (None, '') else ''
         if lot not in (None, '') and not lot_date:
-            raise PositionsReportError(f"{where} ({sym}): acquired "
-                                       f"{lot!r} is not a calendar date "
-                                       f"(YYYY-MM-DD)")
+            raise PositionsDateError(f"{where} ({sym}): acquired "
+                                     f"{lot!r} is not a calendar date "
+                                     f"(YYYY-MM-DD)")
         ck = str(h.get('cost_kind') or '').strip().lower()
         if ck and ck not in ('average', 'lots'):
             raise PositionsReportError(f"{where} ({sym}): cost_kind "

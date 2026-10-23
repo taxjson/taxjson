@@ -344,7 +344,9 @@ the year folders).
 
 The `ticker.map` rules and `taxjson.toml` keys of another year's project
 that differ from this one's (the year's own keys and the accounts' ids
-and `holdings` aside; an array of tables such as `[[distributions]]` is
+and `holdings` aside, and `inputs_dir` / `tobase_map` when either year
+was closed with its inputs frozen: a filed year keeps reading its own
+copy; an array of tables such as `[[distributions]]` is
 one key; `accounts (order)` when the accounts are in another order). A
 file that cannot be read is an error, never "the same". `--write` brings
 the other year's into this project, asked one by one on a terminal
@@ -788,7 +790,10 @@ quantity, never a txid or address; refs are masked (`LG***`). A
 Report positions with a missing cost basis (a truncated buy history, or
 $0-basis corporate-action shares) that distort a year's gain. Pairs the
 accounts' `OPENING ... cost=unknown` lines already cover are listed
-apart (COVERED), not as work to do. `--include-options` checks option
+apart (COVERED), not as work to do. A line whose position never goes
+short without it (its purchase is in the books now) is listed under
+STALE: the run still opens its units at an unknown cost, so delete it
+(the run and `taxjson checklist` say so too). `--include-options` checks option
 positions too; `--year` scopes what counts as relevant (default: the
 config year).
 
@@ -1574,10 +1579,17 @@ wash-sale rule is not in it (the engine-allowed amount is what ranks);
 
 Return-of-capital total per ticker (default: the tax year): the ACB
 (Canada, T3 box 42) or basis (USA, Form 1099-DIV box 3) adjustments,
-split into broker-classified, manual and `[[distributions]]` rows. It
-warns when a symbol has a book ADJUST and a `[[distributions]]` entry on
-the same date (the same ROC entered twice). Use `taxjson roc <period>`
-for every ADJUST row as `.tt` text.
+split into broker-classified, manual and `[[distributions]]` rows. An
+ADJUST that is no return of capital is listed apart under **OTHER ACB
+ADJUSTMENTS**, outside the totals compared with the slip: a reinvested
+`[[distributions]]` entry or an RBC notional distribution (the ACB
+rises), a spin-off's parent cost reduction (its cost moves to the new
+shares); `--json` lists them as `other_adjustments`. A `.tt` ADJUST
+without a type, or with `type=roc`, is a return of capital; `type=dist`
+is a distribution that raises the ACB. It warns when a symbol has a book
+ADJUST and a `[[distributions]]` entry on the same date (the same ROC
+entered twice). Use `taxjson roc <period>` for every ADJUST row as `.tt`
+text.
 
 Most fund and REIT return of capital is in no broker export: enter it
 from the T3 (box 42) as a `.tt` ADJUST line with a negative amount, or as
@@ -1629,8 +1641,12 @@ what you can or cannot sell or buy now; for the wash sales that already
 happened, use [`taxjson wash-sales`](#taxjson-wash-sales). The day each
 loss sale's window closes, ticker by ticker: [`taxjson rebuy`](#taxjson-rebuy). It defaults
 to every taxable account (sheltered accounts are never targets); pass an
-account to scope to one. The combined `sheltered_base.json` is included
-automatically for cross-account detection when present. `--verbose` for
+account to show only its listings (a `ROWS:` line says so). The rows are
+scoped, not the books: every taxable account's buys, holdings and losses
+still decide each status (TAXABLE is all your taxable accounts), as the
+engine pools them, so a rebuy in another account shows. The combined
+`sheltered_base.json` is included automatically for cross-account
+detection when present. `--verbose` for
 more detail. CLEAR (no-risk) positions are in the default view; `--all`
 adds the OTHER rows, listings with no open position and no loss in the
 window (held nowhere, nothing to watch). `--json`
@@ -2365,7 +2381,10 @@ that has a close-year lock (the project's own `filed/<year>.json` or the
 **filed** figure instead (Canada: the total filed with another tool when
 the lock has one, else the Schedule 3 gain lines; US: the Form 8949 Part
 I / Part II gains), and the lock's recorded balance becomes the running
-balance at its year end; a later locked year is compared with its lock,
+balance at its year end. Of the claims under earlier years, a locked
+year takes only the carry-back its lock recorded: the rest of such a
+claim (the total applied on that return) waits for a later year's loss.
+A later locked year is compared with its lock,
 and an unreadable lock is named. Rows after the project year (a few
 January trades in this year's inputs) are partial: they offer no T1A
 carry-back and the carryforward stops at the project year. Every year
@@ -2404,7 +2423,11 @@ settle in January. And it records the year's carry-forwards (the net
 capital loss; US: the short- and long-term capital loss carryover; in
 Canada, the minimum tax carryover by year of origin) from the year's own
 estimate: set `[estimate] other_income` before closing, since the
-minimum tax depends on it. A Canadian project with no supported
+minimum tax depends on it. The part of the net capital loss that
+`[carryover] claimed` carries back to an earlier year (T1A) is taken
+out of what it carries forward; with `--filed-dispositions` (Canada)
+the net capital loss is the filed return's, its gain standing in for
+the books' sales, and the summary shows both. A Canadian project with no supported
 `province` gets a federal-only estimate, said in the output (every
 figure carried forward is federal anyway). See
 [tax-rules.md](tax-rules.md#net-capital-losses-carryforward-and-carry-back).
@@ -2445,7 +2468,14 @@ for `taxjson compare filed`. It refuses, writing nothing, when
 `inputs/<account>/` already holds files this project does not read
 (move them away, or into the shared folder if they belong to the
 books). `taxjson new-year` points the next year at the shared
-folders again.
+folders again. A year that has not ended (`--force`) is not frozen:
+the lock records the hashes only (`frozen.partial`), the year keeps
+reading the shared exports, and a later trade shows as drift until
+the close after filing freezes the whole year. A partial lock that
+an older release froze is thawed by `--force` first (taxjson.toml
+names the shared folders again, the unchanged copies are removed; a
+copy edited since is named and kept), which stops for a `taxjson run`
+before the year is closed.
 
 #### taxjson check-filed
 
@@ -2740,8 +2770,10 @@ the report's (`--cost-tolerance`, default 1.00 or 0.1%, whichever is
 larger): Canada's filing ACB (s.47, pooled, superficial losses added)
 against the broker's book value, or a foreign-currency cost against the
 account's native-currency books. Each difference gets a reason:
-`superficial-loss`, `pooled`, `return-of-capital`, `broker-fx`,
-`lot-basis` (US: `wash-sale`, `lot-method`) or `unexplained`. A dividend
+`superficial-loss`, `pooled`, `return-of-capital`, `spin-off` (a
+spin-off's election moved part of the parent's cost to the new shares),
+`broker-fx`, `lot-basis` (US: `wash-sale`, `lot-method`) or
+`unexplained`. A dividend
 row that states its share count (`ON 500 SHS`) while the books held
 another number on its record date is listed under **INCOME ON SHARES THE
 BOOKS DO NOT HOLD**. Both sections are informational: the exit code

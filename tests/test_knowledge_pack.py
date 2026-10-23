@@ -263,6 +263,22 @@ class TestTroubleshooting(unittest.TestCase):
         self.assertEqual(dup, [])
 
 
+class TestUpgrading(unittest.TestCase):
+    def test_note_headings_are_releases(self):
+        # scripts/release.sh --prepare renames "### Unreleased" to the tag
+        # (audit 2026-10-22 #9): any other heading is a CHANGELOG release.
+        doc = _read("docs/upgrading.md")
+        part = doc.split("## Changes that ask something of you", 1)[1]
+        part = re.split(r"^## ", part, flags=re.M)[0]
+        heads = re.findall(r"^### (.*)$", part, re.M)
+        released = _released()
+        bad = [h for i, h in enumerate(heads)
+               if not (h == "Unreleased" and i == 0)
+               and not (re.fullmatch(r"v(\d+\.\d+\.\d+)", h)
+                        and h[1:] in released)]
+        self.assertEqual(bad, [], "a heading is Unreleased (first) or a CHANGELOG release")
+
+
 class TestArchitectureMap(unittest.TestCase):
     def test_sections_and_bullets(self):
         doc = _read("docs/architecture-map.md")

@@ -41,7 +41,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          shown_name)
 from taxjson.lib.corp_actions import (
     RBC_REORG_CODES, RbcReorgPairing, pair_rbc_reorganizations,
-    rbc_norm_company,
+    rbc_norm_company, rbc_row_company,
     rbc_is_temp_symbol, rbc_is_option_code, rbc_rights_key,
     rbc_name_similarity, _rbc_removal_names, _rbc_receipt_name,
 )
@@ -1277,11 +1277,15 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
             ctx.occ_by_code[rc.symbol] = old
 
     # Security name → ticker, with dates (temporary-code resolution).
+    # The name is `rbc_row_company`'s: with no Symbol Description column
+    # (the demo layout) a trade's own Description, else a name change
+    # under a temporary code found no ticker and stranded the old pool.
     for fi, r in chrono:
         if not r.symbol or rbc_is_temp_symbol(r.symbol) \
                 or rbc_is_option_code(r.symbol):
             continue
-        for key in (rbc_norm_company(r.symdesc), rbc_rights_key(r.desc),
+        for key in (rbc_norm_company(rbc_row_company(r)),
+                    rbc_rights_key(r.desc),
                     rbc_rights_key(r.symdesc)):
             if key:
                 ent = ctx.names.setdefault(key, [])
@@ -1299,9 +1303,10 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
             continue
         li = ctx.listings.setdefault(r.symbol, {}).setdefault(
             r.currency, _Listing(r.symbol, r.currency))
-        nm = rbc_norm_company(r.symdesc)
+        company = rbc_row_company(r)
+        nm = rbc_norm_company(company)
         if nm:
-            li.names.setdefault(nm, ' '.join(r.symdesc.split()))
+            li.names.setdefault(nm, ' '.join(company.split()))
         li.events.append((r.date, r.k, fi, _signed_qty(r)))
     for per in ctx.listings.values():
         for li in per.values():
@@ -1430,7 +1435,8 @@ def _short_reach(events) -> Tuple[float, str, float]:
 def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
     """A ticker change RBC applied WITHOUT a reorganization row
     (e.g. ABC → ABD): the old symbol stops with shares still open
-    and a new symbol with the same Symbol Description and currency goes
+    and a new symbol with the same security name (`rbc_row_company`)
+    and currency goes
     SHORT by no more than those shares (its first row a sale, or a buy
     followed by a larger sale). The export carries no CUSIP, so this is
     not certain enough to merge silently: an ATTENTION line (on the run
@@ -1477,8 +1483,8 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                     f"one security, add to a .tt file of this account:  "
                     f"RENAME {b.first} {sa} {sb}  "
                     f"— {a.symbol} stops on {a.last} with {open_a:g} "
-                    f"share(s) still open, and {b.symbol} (same Symbol "
-                    f"Description {a.names[nm]!r}) {how}. That is a "
+                    f"share(s) still open, and {b.symbol} (same security "
+                    f"name {a.names[nm]!r}) {how}. That is a "
                     f"ticker change RBC booked without a reorganization "
                     f"row: as exported it is a stranded long {sa} and a "
                     f"short {sb}.")
@@ -1770,8 +1776,8 @@ class RbcBrokerage(BaseBrokerage):
     def _resolve_temp(self, r) -> str:
         if not rbc_is_temp_symbol(r.symbol):
             return r.symbol
-        for key in (rbc_norm_company(r.symdesc), rbc_rights_key(r.desc),
-                    rbc_rights_key(r.symdesc)):
+        for key in (rbc_norm_company(rbc_row_company(r)),
+                    rbc_rights_key(r.desc), rbc_rights_key(r.symdesc)):
             hit = self._ctx.ticker_for_name(key, r.date) if key else None
             if hit:
                 self._note(f"line {r.line}: RBC temporary code {r.symbol} "
@@ -1810,8 +1816,9 @@ class RbcBrokerage(BaseBrokerage):
                 return out      # ticker.map already folds them (A2-1056)
             if self._extract_covers(r.desc, currency):
                 return out      # an EXTRACT line rewrites the row
-            _words = _extract_words(r.symdesc, r.desc)
-            self._warn(f"{symbol} ({' '.join(r.symdesc.split())!r}) reads "
+            _company = rbc_row_company(r)
+            _words = _extract_words(_company, r.desc)
+            self._warn(f"{symbol} ({' '.join(_company.split())!r}) reads "
                        f"as the US-dollar class of a TSX-listed fund but is "
                        f"booked as {out}, a US listing (off the T1135, one "
                        f"pool with IB/Questrade's .U.TO only with a map "
@@ -1836,7 +1843,7 @@ class RbcBrokerage(BaseBrokerage):
             self._untraded_income.setdefault(r.symbol, set()).add(
                 (r.currency, r.cls))
             return r.currency
-        name = rbc_norm_company(r.symdesc)
+        name = rbc_norm_company(rbc_row_company(r))
         if len(per) == 1:
             (cur, li), = per.items()
             if (cur != r.currency and name and li.names
@@ -2751,7 +2758,7 @@ class RbcBrokerage(BaseBrokerage):
             # earlier year's export).
             old_name, _new_name = _rbc_removal_names(rem)
             hit = None
-            for nm in (rem.symdesc, old_name):
+            for nm in (rbc_row_company(rem), old_name):
                 key = rbc_norm_company(nm) if nm else ''
                 hit = self._ctx.ticker_for_name(key, rem.date,
                                                 before_only=True)

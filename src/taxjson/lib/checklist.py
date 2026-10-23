@@ -324,7 +324,8 @@ class Result:
     question: bool = False
     # The command the summary's `! ` line names for this result, when
     # the item's first command is not the one for the problem (the
-    # configure step: edit taxjson.toml, not `tjs migrate`).
+    # configure step: edit taxjson.toml, not `tjs migrate`); "-" names
+    # none (the detail is the whole fix: an empty inputs folder).
     cmd: str = ""
     # The questions asked, one key each (export-coverage: account|broker|
     # end; option-boundary: account|contract|write date): a DONE mark
@@ -1321,13 +1322,23 @@ def input_files(root: Path, cfg: Dict[str, Any]) -> List[Path]:
     return _input_paths(root, cfg)
 
 
+def frozen_files(fp: Dict[str, str]) -> Dict[str, str]:
+    """A fingerprint as a lock's frozen record compares it: the files
+    only. The set of locked years (LOCKED_YEARS_KEY, a US project's) is
+    not an input the year was filed from: closing the year adds its own
+    lock to it, so the frozen record (taken before the lock exists)
+    never had it (workflow audit 2026-10-22)."""
+    return {k: v for k, v in fp.items() if k != LOCKED_YEARS_KEY}
+
+
 def fingerprint_changes(before: Dict[str, str], now: Dict[str, str]
                         ) -> List[str]:
     """The keys whose content differs between two fingerprints, with
     the added and the missing ones (a lock's frozen inputs against
-    the project now), sorted; the shared / own tobase.map treated as
-    _fingerprint_diff does."""
-    changed, added, removed = fingerprint_delta(before, now)
+    the project now: frozen_files of each), sorted; the shared / own
+    tobase.map treated as _fingerprint_diff does."""
+    changed, added, removed = fingerprint_delta(frozen_files(before),
+                                                frozen_files(now))
     return sorted(changed + added + removed)
 
 
@@ -1433,8 +1444,10 @@ def d_missing_history(ctx: Ctx) -> Result:
         return Result("missing-history", "blocked", _last_line(err) or _last_line(out) or f"exit {code}")
     syms: List[str] = []
     remove: List[str] = []
+    stale: List[str] = []
     in_affects = False
     in_remove = False
+    in_stale = False
     # Every table row printed under an AFFECTS heading counts — a strict
     # symbol/currency pattern dropped 'SAMPLC/B', a '?' currency, 'USDT'
     # and lower-case coins, and the step said "nothing affects the
@@ -1450,6 +1463,11 @@ def d_missing_history(ctx: Ctx) -> Result:
         if ln.startswith("REMOVE from "):
             in_remove = True
             continue
+        # Lines whose purchase is in the books now: the run still opens
+        # their units at an unknown cost (audit 2026-10-23 #1).
+        if ln.startswith("STALE in "):
+            in_stale = True
+            continue
         if (not ln.strip() or ln.startswith(("##", "NOT relevant",
                                               "To fix", "SHELTERED",
                                               "COVERED"))):
@@ -1457,28 +1475,37 @@ def d_missing_history(ctx: Ctx) -> Result:
             # no reportable gain: never counted as affecting the year
             # (audit S035-08); pairs the missing-history file covers are not work
             # to do (R1-339).
-            in_affects = in_remove = False
+            in_affects = in_remove = in_stale = False
             continue
-        if (not (in_affects or in_remove) or ln[:1].isspace()
+        if (not (in_affects or in_remove or in_stale) or ln[:1].isspace()
                 or ln.startswith("-") or ln.startswith("Symbol ")):
             continue
         parts = ln.split()
         if len(parts) >= 2:
-            (remove if in_remove else syms).append(
+            (remove if in_remove else stale if in_stale else syms).append(
                 f"{parts[0]} ({parts[1]})")
+
+    def _shown(items: List[str]) -> str:
+        return ", ".join(items[:4]) + (" ..." if len(items) > 4 else "")
+    said: List[str] = []
     if remove:
-        shown = ", ".join(remove[:4]) + (" ..." if len(remove) > 4 else "")
+        said.append(f"{len(remove)} {_mh_name(ctx)} entr"
+                    f"{'y is' if len(remove) == 1 else 'ies are'} a real "
+                    f"short or a written option — remove: {_shown(remove)}")
+    if stale:
+        said.append(f"{len(stale)} {_mh_name(ctx)} entr"
+                    f"{'y still opens its' if len(stale) == 1 else 'ies still open their'}"
+                    f" units though the purchase is in the books now — "
+                    f"delete: {_shown(stale)}")
+    if said:
         return Result("missing-history", "attention",
-                      f"{len(remove)} {_mh_name(ctx)} entr"
-                      f"{'y is' if len(remove) == 1 else 'ies are'} a real "
-                      f"short or a written option — remove: {shown}"
+                      "; ".join(said)
                       + (f"; {len(syms)} position(s) with missing basis "
                          f"affect {ctx.year}" if syms else ""))
     if syms:
-        shown = ", ".join(syms[:4]) + (" ..." if len(syms) > 4 else "")
         return Result("missing-history", "attention",
                       f"{len(syms)} position(s) with missing basis affect "
-                      f"{ctx.year}: {shown}")
+                      f"{ctx.year}: {_shown(syms)}")
     return Result("missing-history", "done", "nothing affects the year")
 
 
@@ -1527,6 +1554,18 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         return Result("crypto-sends", "n/a", "no crypto account configured")
     if not any((ctx.cache / f"{n}_{b}_transfers.json").is_file()
                for n in names for b in ("kraken", "coinbase")):
+        # Every crypto folder empty: the run skips the account, so
+        # "run `taxjson run`" looped (audit 2026-10-22, item 12).
+        empty = [n for n in names
+                 if not _data_files(_PL.inputs_dir(ctx.root) / n)]
+        if empty and len(empty) == len(names):
+            where = _inputs_label(ctx.root)
+            return Result("crypto-sends", "blocked",
+                          f"{', '.join(f'{where}/{n}' for n in empty)} "
+                          f"{'is' if len(empty) == 1 else 'are'} empty: "
+                          f"add exports or delete "
+                          + ", ".join(f"[accounts.{n}]" for n in empty),
+                          cmd="-")
         return Result("crypto-sends", "blocked",
                       "no crypto transfer evidence in work/ — run `taxjson run`")
     # A crypto account not parsed yet: a send to it reads as unmatched
@@ -1960,7 +1999,10 @@ def d_option_boundary(ctx: Ctx) -> Result:
     if doc.get("missing_books"):
         return Result("option-boundary", "blocked",
                       f"no books for {', '.join(doc['missing_books'])} — run `taxjson run`")
-    if not doc.get("since_explicit", True) and str(doc.get("timing")) == "grant":
+    # Flagged only where option-boundary (and the run) warned — the
+    # books hold a written option: a project that writes none has no
+    # premium for the default to move (audit 2026-10-22, item 10).
+    if doc.get("since_warning"):
         return Result("option-boundary", "attention",
                       "option_grant_timing_since is not set in [settings] — the default "
                       "follows `year`; set it once and keep it")
@@ -3726,7 +3768,7 @@ def _do(it: Item, r: Optional[Result] = None,
         inputs_label: str = "inputs") -> str:
     """What the closing line tells the user to do for item `it`. A
     blocked result whose detail names the command that unblocks it
-    (`run \`taxjson run\``) says that, not the item's standing advice
+    ("run `taxjson run`") says that, not the item's standing advice
     (2026-10 workflow audit: the first checklist said "download the
     exports" while its own detector asked for a run). `inputs_label`:
     the exports folder as the project sees it (`../inputs` when every
@@ -3734,7 +3776,7 @@ def _do(it: Item, r: Optional[Result] = None,
     if r is not None and r.effective == "manual":
         return f"confirm it, then `tjs checklist --done {it.id}`"
     if r is not None and r.effective == "blocked" and r.detail \
-            and _detail_cmd(r.detail):
+            and (_detail_cmd(r.detail) or r.cmd == "-"):
         return " ".join(str(r.detail).split())
     if it.do:
         return it.do.replace("inputs/<account>/",
@@ -3983,6 +4025,7 @@ def render_summary(results: List[Result], year: int, country: str,
         # missing local_timezone said "— tjs migrate").
         cmd = (r.cmd or _detail_cmd(r.detail)
                or (it.cmds[0].command if it.cmds else ""))
+        cmd = "" if cmd == "-" else cmd
         group = blocked.get(" ".join((r.detail or "").split()), [])
         if eff == "blocked" and len(group) > 1:
             if group[0] is not r:

@@ -320,14 +320,27 @@ def checklist_note(findings: List[Dict[str, Any]]) -> str:
             f"(`taxjson run --details` lists them)")
 
 
-def caveat(t: str, cat: str, q: str, mode: str, country: str) -> str:
+def caveat(t: str, cat: str, q: str, mode: str, country: str,
+           sheltered_buy: Optional[Dict[str, Any]] = None) -> str:
     """buy-check's / sell-check's caveat line for a radar row `t` (a
-    member similar to the queried `q`) in category `cat`."""
+    member similar to the queried `q`) in category `cat`.
+    `sheltered_buy` ({account, date}, sell only): `t` is held only in a
+    registered account / IRA that bought it inside the window."""
     if mode == "buy":
         return (f"{t}: {cat} — a loss sold within the past 30 days; "
                 f"ticker.map calls it similar to {q} (SIMILAR). The books "
                 f"keep them two securities, so buying {q} denies nothing; "
                 f"it would if you treat them as {_test(country)}.")
+    if sheltered_buy:
+        from taxjson.lib.country import is_usa
+        kind = "an IRA" if is_usa(country) else "a registered account"
+        return (f"{t}: bought within the past 30 days in "
+                f"{kind} ('{sheltered_buy.get('account') or 'unknown'}', "
+                f"{sheltered_buy.get('date') or '?'}); ticker.map calls it "
+                f"similar to {q} (SIMILAR). The books keep them two "
+                f"securities, so a loss on {q} stays allowed; treated as "
+                f"{_test(country)}, it would be denied for good (bought in "
+                f"{kind}).")
     return (f"{t}: {cat} — bought within the past 30 days; ticker.map "
             f"calls it similar to {q} (SIMILAR). The books keep them two "
             f"securities, so a loss on {q} stays allowed; it would not if "

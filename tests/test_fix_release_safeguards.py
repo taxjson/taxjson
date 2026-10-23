@@ -351,6 +351,35 @@ class TestReleaseNotes(_ReleaseRepo):
         self.assertIn("release notes are empty", r.stdout)
         self.assertNotIn("0.2.0", self.origin_version())
 
+    def test_prepare_names_the_upgrade_notes(self):
+        # Audit 2026-10-22 #9: the notes written since the last release
+        # went out under "### Unreleased". With no such heading the file
+        # is left as it is.
+        up = self.dev / "docs" / "upgrading.md"
+        old = "## Changes\n\n### v0.1.0\n\n- Old note.\n"
+        up.write_text(old)
+        self.git(self.dev, "add", "-A")
+        self.git(self.dev, "commit", "-q", "-m", "notes")
+        self.git(self.dev, "push", "-q", "origin", "main")
+        self.prepared()
+        self.assertEqual(self.git(self.dev, "show", "origin/main:docs/upgrading.md"),
+                         old.rstrip("\n"))
+        self.assertEqual(self.git(self.dev, "status", "--porcelain"), "")
+
+    def test_prepare_promotes_the_unreleased_upgrade_notes(self):
+        up = self.dev / "docs" / "upgrading.md"
+        up.write_text("## Changes\n\n### Unreleased\n\n- New note.\n\n"
+                      "### v0.1.0\n\n- Old note.\n")
+        self.git(self.dev, "add", "-A")
+        self.git(self.dev, "commit", "-q", "-m", "notes")
+        self.git(self.dev, "push", "-q", "origin", "main")
+        self.prepared()
+        doc = self.git(self.dev, "show", "origin/main:docs/upgrading.md")
+        self.assertIn("### v0.2.0\n\n- New note.\n\n### v0.1.0", doc)
+        self.assertNotIn("Unreleased", doc)
+        self.assertEqual(self.git(self.dev, "log", "-1", "--format=%s"),
+                         "release v0.2.0")
+
     def test_the_cut_needs_gh_before_it_tags(self):
         # Preparing needs no gh (the test origin takes direct pushes).
         r = self.prepare(path=self.path_without_gh())

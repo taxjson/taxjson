@@ -336,6 +336,14 @@ def main():
                              "own time from the absolute clears_at dates)")
     parser.add_argument("--account", default="",
                         help="Account label stamped into --json-out")
+    parser.add_argument("--show", nargs='+', action='extend', default=[],
+                        metavar="FILE",
+                        help="Show only the rows of these taxable books "
+                             "(each one also passed in --taxable): the "
+                             "listings they traded or hold. Every book "
+                             "still decides each status, as the engine "
+                             "pools them (`taxjson wash-radar ACCOUNT`; "
+                             "default: every row)")
     parser.add_argument("--json", action="store_true",
                         help="Print the structured radar document (the "
                              "--json-out payload) to stdout instead of "
@@ -525,6 +533,30 @@ def main():
 
     load_files(args.taxable, 'TAXABLE')
     load_files(args.sheltered, 'SHELTERED')
+    # --show: the listings of the scoped books (`wash-radar ACCOUNT`).
+    # Only the rows shown are scoped; every book above still decides
+    # each status, as the engine pools the taxable accounts and checks
+    # every registered one (audit 2026-10-23 #6: a scoped radar read
+    # only its own book and called a full exit safe while a sibling
+    # taxable account still held the rebuy).
+    _show_paths = {str(Path(f).resolve()) for f in args.show}
+    _taxable_paths = {str(Path(f).resolve()) for f in args.taxable}
+    if _show_paths - _taxable_paths:
+        _out.fail("--show names a book that is not a --taxable file: "
+                  + ", ".join(sorted(_show_paths - _taxable_paths)),
+                  prog=_PROG)
+    _show_symbols = None
+    if _show_paths:
+        _show_symbols = set()
+        for _t in transactions:
+            if (_t._group == 'TAXABLE'
+                    and str(Path(_t._file).resolve()) in _show_paths
+                    and _t.action not in ('DIVIDEND', 'DIVIDEND_IN_LIEU',
+                                          'TAX', 'INTEREST', 'FEE',
+                                          'DISALLOW')):
+                for _sym in (_t.symbol, getattr(_t, 'symbol_new', None)):
+                    if _sym:
+                        _show_symbols.add(str(_sym))
     # The engine's input order (core._by_account_name): taxable rows,
     # then sheltered, each in account-name order, so a tie at one moment
     # is broken as the engine breaks it — never by the order the books
@@ -1354,6 +1386,16 @@ def main():
     all_tickers = set(t for t, g, a in account_pool_qty.keys())
     all_tickers.update(recent_losses.keys())
 
+    # --show: the scoped books' listings, by rename class (a listing
+    # renamed since is shown under its name today). Every row is still
+    # computed; only the ones shown are filtered.
+    _show_cls = (None if _show_symbols is None
+                 else {alias_of(s_) for s_ in _show_symbols})
+
+    def _shown(t):
+        return (_show_cls is None or t in _show_symbols
+                or alias_of(t) in _show_cls)
+
     sorted_tickers = sorted(all_tickers, key=lambda t: (is_option_ticker(t), t))
 
     for ticker in sorted_tickers:
@@ -1486,6 +1528,10 @@ def main():
         # forward view, or as COOLING when nothing is held.
         short_cover_j = None
         _short_cover_note = None
+        # Held only in registered accounts / IRAs, bought there in the
+        # past 30 days: {account, date} of the latest such buy (the
+        # category stays CLEAR; sell-check's SIMILAR caveat reads it).
+        sheltered_buy_j = None
 
         if _us_exempt:
             if in_window_losses or abs(tax_q) > _eps or abs(shl_q) > _eps:
@@ -2084,6 +2130,10 @@ def main():
                         _e = max(_recent, key=lambda e: e['epoch'])
                         _bought = (f" ('{_e['account'] or _e['holder'][1] or 'unknown'}'"
                                    f" bought it {epoch_to_date(_e['epoch'])})")
+                        sheltered_buy_j = {
+                            "account": (_e['account'] or _e['holder'][1]
+                                        or 'unknown'),
+                            "date": epoch_to_date(_e['epoch'])}
                     adv = (f"CLEAR: Held only in {_reg}{_bought} — "
                            f"selling it there has no tax effect"
                            + ("; while it is held, that purchase can "
@@ -2206,7 +2256,7 @@ def main():
                                if us_mode else None),
             })
 
-        if args.all or is_relevant:
+        if (args.all or is_relevant) and _shown(ticker):
             table_data.append([ticker, _qfmt(tax_q), _qfmt(shl_q), clear_in, adv])
             row_records.append({
                 "ticker": ticker,
@@ -2246,6 +2296,12 @@ def main():
                 # only a new SHORT sale replaces (§1091(e)) — a buy is
                 # not a replacement ({loss, date, reshort_ok_from}).
                 "short_cover_loss": short_cover_j,
+                # CLEAR, held only in registered accounts / IRAs: the
+                # latest buy there in the past 30 days ({account, date};
+                # None otherwise) — a look-alike's in-window purchase
+                # in any account (sell-check's SIMILAR caveat, CA-SL-20
+                # / US-WASH-26).
+                "sheltered_buy": sheltered_buy_j,
                 # The class's recent losses and the first day a buy no
                 # longer replaces any of them (`taxjson rebuy`; None
                 # when no in-window loss is one a buy can deny).
@@ -2272,11 +2328,19 @@ def main():
     _status = {str(r[0]).strip().upper(): cat for cat, rows_ in by_cat.items()
                for r in rows_ if cat}
     similar_lines = radar_lines(_groups, _status)
+    _shown_for = ""
+    if _show_paths:
+        _shown_for = args.account or ", ".join(sorted(
+            Path(f).name[:-len("_base.json")]
+            if Path(f).name.endswith("_base.json") else Path(f).stem
+            for f in args.show))
     report = (_render_brief(_order + extras, by_cat, args.country,
-                            _today_iso, bool(args.all), similar_lines)
+                            _today_iso, bool(args.all), similar_lines,
+                            _shown_for)
               if args.brief else
               _render_text(_order + extras, by_cat, args.country,
-                           _today_iso, bool(args.all), similar_lines))
+                           _today_iso, bool(args.all), similar_lines,
+                           _shown_for))
 
     if args.json_out or args.json:
         # Structured sidecar: same rows/grouping as the printed .rpt, plus
@@ -2301,6 +2365,9 @@ def main():
             "as_of_date": today_dt.strftime("%Y-%m-%d"),
             "account": args.account,
             "include_all": bool(args.all),
+            # True when the rows are one account's listings (--show);
+            # the statuses still pool every book.
+            "rows_scoped": bool(_show_paths),
             "scope_note": scope_note(args.country),
             "sections": sections_j,
             # The SIMILAR groups with a member's status (lib/similar).
@@ -2429,8 +2496,15 @@ def _similar_block(doc: "_out.Doc", similar_lines) -> None:
     doc.para(_SIMILAR_NOTE)
 
 
+def _shown_for_line(shown_for: str) -> str:
+    """The scoped view's legend line (`wash-radar ACCOUNT`)."""
+    return (f"ROWS: the listings of {shown_for}; every account's books "
+            f"decide each status (TAXABLE: all your taxable accounts).")
+
+
 def _render_brief(sections, by_cat, country: str, as_of: str,
-                  include_all: bool, similar_lines=()) -> "_out.Doc":
+                  include_all: bool, similar_lines=(),
+                  shown_for: str = "") -> "_out.Doc":
     """The radar's essentials (docs/output-style.md, Essentials first):
     a legend, ONE table of the positions with an advisory (its STATUS
     first, in the fixed order), then one `! ` line per status that asks
@@ -2447,10 +2521,13 @@ def _render_brief(sections, by_cat, country: str, as_of: str,
     if body:
         doc.para("STATUS: what a loss sale or a buy does today; CLEARS: "
                  "the day its window closes.")
+        if shown_for:
+            doc.para(_shown_for_line(shown_for))
         doc.table(["STATUS", "TICKER", "TAXABLE", "SHELTERED", "CLEARS"],
                   body, aligns=["<", "<", ">", ">", "<"], per_record=False)
     else:
-        doc.para("No position with an advisory.")
+        doc.para("No position with an advisory"
+                 + (f" in {shown_for}." if shown_for else "."))
     acts = []
     n_notes = 0
     for cat in sections:
@@ -2487,7 +2564,8 @@ def _render_brief(sections, by_cat, country: str, as_of: str,
 
 
 def _render_text(sections, by_cat, country: str, as_of: str,
-                 include_all: bool, similar_lines=()) -> "_out.Doc":
+                 include_all: bool, similar_lines=(),
+                 shown_for: str = "") -> "_out.Doc":
     """The radar report in the house layout (docs/output-style.md): a
     title, one section per advisory category (heading with its count;
     `(none)` when empty) holding a TICKER / TAXABLE / SHELTERED / CLEARS
@@ -2501,6 +2579,8 @@ def _render_text(sections, by_cat, country: str, as_of: str,
            else "superficial losses (s.54, settlement dates)")
         + f", as of {as_of}"
         + ("" if include_all else ", positions with an advisory"))
+    if shown_for:
+        doc.para(_shown_for_line(shown_for))
     headers = ["TICKER", "TAXABLE", "SHELTERED", "CLEARS"]
     for cat in sections:
         rows_c = by_cat.get(cat, [])

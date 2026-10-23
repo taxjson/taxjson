@@ -265,12 +265,14 @@ class TestFastMapDeletionInvalidates(unittest.TestCase):
 
 class TestCombinedRadarSidecar(unittest.TestCase):
     """A loss sold in one taxable account with a rebuy in another IS a
-    superficial-loss trigger (the blended engine disallows it), but
-    each per-account sidecar sees only its own book. The pipeline now
-    also writes wash_radar_COMBINED.{rpt,json} from one all-taxable
-    run — the sidecar harvest's ADVISORY prefers."""
+    superficial-loss trigger (the blended engine disallows it). The
+    pipeline also writes wash_radar_COMBINED.{rpt,json} from one
+    all-taxable run — the sidecar harvest's ADVISORY prefers. The
+    per-account sidecar used to see only its own book (merely COOLING);
+    it now reads every taxable book and shows the account's rows
+    (workflow audit 2026-10-23 #6)."""
 
-    def test_cross_account_trigger_visible_only_in_combined(self):
+    def test_cross_account_trigger_visible_in_combined_and_per_account(self):
         from datetime import date, timedelta
         d = lambda n: (date.today() - timedelta(days=n)).isoformat()  # noqa: E731
         with tempfile.TemporaryDirectory() as tmp:
@@ -306,11 +308,10 @@ class TestCombinedRadarSidecar(unittest.TestCase):
                         for sec in doc.get("sections") or []
                         for r2 in sec.get("rows") or []}
             comb, marg = cats(combined), cats(per_acct)
-        # Combined book: loss sold AND still held (via cash) →
-        # VIOLATION. Margin alone: sold out, no rebuy visible →
-        # merely COOLING.
+        # Loss sold in margin AND still held (via cash) → VIOLATION in
+        # both views: margin's rows, every taxable book's verdict.
         self.assertEqual(comb.get("XEI.TO"), "VIOLATION", comb)
-        self.assertNotEqual(marg.get("XEI.TO"), "VIOLATION", marg)
+        self.assertEqual(marg.get("XEI.TO"), "VIOLATION", marg)
 
 
 class TestFeeRebateNetting(unittest.TestCase):

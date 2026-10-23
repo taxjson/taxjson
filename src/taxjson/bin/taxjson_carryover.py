@@ -52,7 +52,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
@@ -175,15 +175,20 @@ def yearly_nets(results: dict, tax_date: str) -> Dict[int, Dict[str, float]]:
 
 def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                         claimed: Dict[int, float],
-                        carried: Optional[Dict[int, float]] = None
+                        carried: Optional[Dict[int, float]] = None,
+                        locked_back: Optional[Dict[int, float]] = None
                         ) -> Dict[str, Any]:
     """`carried`: {year: balance a close-year lock recorded as carried
     out of that year} — at the end of that year the running balance
     becomes the recorded one (the lock is the record; the books of a
     later project rebuild earlier years only partly). Claims still
     pending stay pending (a T1A carry-back recorded under its target
-    year)."""
+    year). `locked_back`: {year: the carry-back that lock recorded
+    (carried_back; 0 when it records none)} — a locked year meets
+    claims under earlier years only up to it, and the rest of those
+    claims stays pending for a later year's loss (CA-CARRY-04)."""
     carried = carried or {}
+    locked_back = locked_back or {}
     # Union of book years and CLAIM years: a claim is applied on the
     # year of the RETURN it appears on, which may have no dispositions
     # in the broker book at all (T3 distributions, a no-trade year).
@@ -236,6 +241,12 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
         # shelters the gains of ITS recorded year, whose carryback
         # capacity it therefore consumes.
         applied = 0.0
+        # The part met from claims recorded against EARLIER years: a
+        # T1A carry-back of this year's loss (a claim pending from year
+        # C found no balance until now). close-year takes it out of the
+        # balance its lock carries forward.
+        carried_back = 0.0
+        backs: List[Tuple[int, float]] = []
         for _cy in sorted(pending_by_year):
             if balance <= 0.005:
                 break
@@ -244,6 +255,9 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                 continue
             balance -= take
             applied += take
+            if _cy < y:
+                carried_back += take
+                backs.append((_cy, take))
             pending_by_year[_cy] -= take
             if _cy in cb_capacity:
                 cb_capacity[_cy] = max(0.0, cb_capacity[_cy] - take)
@@ -256,6 +270,27 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             balance = 0.0
         if balance <= 0.005:
             slack = 0.0
+        if y in carried:
+            # The lock is the record of this year's return: of the
+            # claims under earlier years, it took only the carry-back it
+            # recorded. The rest of a claim (the total applied on that
+            # earlier return, `claimed` is one amount per year) is met
+            # by a later year's loss — resetting the balance to the
+            # lock's dropped it, and the later lock carried it forward
+            # (workflow audit 2026-10-23 item 2). The latest claims
+            # taken give back first: the fold took the oldest first.
+            # The target year's carry-back capacity stays used: the
+            # claim is still on its return.
+            excess = carried_back - max(0.0, float(locked_back.get(y)
+                                                   or 0.0))
+            for _cy, take in reversed(backs):
+                if excess <= 0.005:
+                    break
+                give = min(take, excess)
+                pending_by_year[_cy] = pending_by_year.get(_cy, 0.0) + give
+                applied -= give
+                carried_back -= give
+                excess -= give
         pending_by_year = {k: v for k, v in pending_by_year.items()
                            if v > 0.005}
         rebuilt_balance = None
@@ -284,6 +319,7 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             'net_gain': round(net, 2),
             'dispositions': nets.get(y, _ZERO)['dispositions'],
             'claimed_applied': round(applied, 2),
+            'carried_back': round(carried_back, 2),
             'carryforward_balance': round(balance, 2),
             'available_to_apply': round(min(balance, max(0.0, net)), 2)
                                   if net > 0 else 0.0,
@@ -500,6 +536,11 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
                     cf.get('net_capital_loss'), dict):
                 out['carried'] = _finite(cf['net_capital_loss']['closing'],
                                          'net_capital_loss.closing')
+                # The T1A carry-back close-year took out of it (0 when
+                # it records none: build_canada_ledger's locked_back).
+                out['carried_back'] = _finite(
+                    cf['net_capital_loss'].get('carried_back') or 0.0,
+                    'net_capital_loss.carried_back')
     except (KeyError, TypeError, ValueError) as e:
         raise LockUnreadable(f"{type(e).__name__}: {e}") from None
     return out
@@ -1141,6 +1182,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     seeded: Dict[int, Dict[str, Any]] = {}
     lock_info: Dict[int, Dict[str, Any]] = {}
     carried: Dict[int, Any] = {}
+    locked_back: Dict[int, float] = {}
     for item in args.filed_lock:
         try:
             y_s, lp = item.split("=", 1)
@@ -1163,6 +1205,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if (args.project_year is not None and y < args.project_year
                 and info.get('carried') is not None):
             carried[y] = info['carried']
+            locked_back[y] = float(info.get('carried_back') or 0.0)
         if args.project_year is not None and y < args.project_year:
             rebuilt = dict(nets.get(y, _zero))
             nets[y] = {'net': info['figure'], 'st': info['st'],
@@ -1178,7 +1221,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rec['net'] = rec.get('net', 0.0) + v
 
     if country == 'canada':
-        ledger = build_canada_ledger(nets, claimed, carried)
+        ledger = build_canada_ledger(nets, claimed, carried, locked_back)
     else:
         ledger = build_usa_ledger(nets, claimed, carried)
 

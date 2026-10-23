@@ -791,9 +791,12 @@ def main(argv=None):
             _fx = _fixed.get((e.symbol.upper(), e.account))
             if _fx is not None:
                 e.file_name = _fx.where
-    # Entries whose purchase is in the books now: harmless (the run
-    # applies nothing for them), listed apart from the REMOVE ones the
-    # checklist counts.
+                if e.reason == 'complete':
+                    e.opens = float(_fx.quantity)
+    # Entries whose purchase is in the books now: the run still opens a
+    # .tt line's units (never sized, CA-ACB-11), so they are work to do
+    # too — listed apart from the REMOVE ones; the checklist counts both
+    # (audit 2026-10-23 #1).
     complete = [e for e in stale if e.reason == 'complete']
     stale = [e for e in stale if e.reason != 'complete']
     stale_pairs = {(e.symbol.upper(), e.account) for e in stale}
@@ -863,12 +866,17 @@ def main(argv=None):
                 _P.para(stale_entry_message(e), "    ", "    ")
 
     if complete:
-        _P.heading(f"PURCHASE NOW IN THE BOOKS — {mh_name} entries that do "
-                   f"nothing: {len(complete)}")
-        _P.line(f"STALE in {mh_name} - the position never goes short any "
-                f"more, so the entry does nothing; delete it:")
+        # The STALE line heads the rows the checklist counts.
+        _P.heading(f"PURCHASE NOW IN THE BOOKS — {mh_name} entries the run "
+                   f"still applies: {len(complete)}")
+        _P.line(f"STALE in {mh_name} - the position never goes short "
+                f"without it, yet the run still opens its units at an "
+                f"unknown cost (their sales stay out of the totals); "
+                f"delete it:")
         for e in complete:
             _P.line(f"{e.symbol} {e.account}")
+            if DETAILS:
+                _P.para(stale_entry_message(e), "    ", "    ")
 
     if covers:
         _P.heading(f"COVERS OF A SHORT OPENED BEFORE THE DATA — missing "

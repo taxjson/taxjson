@@ -1368,7 +1368,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "it with its TOBASE target, the native-currency views "
                  "keep the listing they trade. A position that goes short "
                  "again once the opening is used up, or before the line's "
-                 "date, is flagged.", cont=True),
+                 "date, is flagged, and so is a line whose rows never go "
+                 "short without it (its purchase is in the books now: "
+                 "it still opens its units until it is deleted).",
+                 cont=True),
             Rule("CA-ACB-12",
                  "A loss within 30 days (settle dates) of such a sale, or "
                  "such a sale at a loss with a purchase in that window, is "
@@ -1876,8 +1879,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(CA-INC-06), T5 15 and T3 24/25 with a foreign issuer's "
                  "(a depositary receipt's — a CDR — included), "
                  "T5 16 and T3 33/34 with the tax withheld, T3 42 with the "
-                 "return of capital (roc-sum), T5 13 with the interest "
-                 "received. A T3's split of a trust's distribution (boxes "
+                 "return of capital (roc-sum: a broker's ROC row, a .tt "
+                 "ADJUST with no type or type=roc, a negative "
+                 "[[distributions]] factor — never an ACB raise, a "
+                 "reinvested [[distributions]] entry or an RBC notional "
+                 "distribution (CA-DIST-01, CA-DIST-02), nor a spin-off's "
+                 "parent cost reduction (CA-CORP-05)), T5 13 with the "
+                 "interest received. A T3's split of a trust's distribution (boxes "
                  "21, 25, 26, 49) is applied to the one dividend the books "
                  "carry for it, grossed up by the foreign tax the trust "
                  "withheld (box 34) and without a return of capital it "
@@ -2304,8 +2312,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson close-year` records in filed/<year>.json the "
                  "year's carry-forwards, from the same estimate: the net "
                  "capital loss carried in, created (the year's net loss), "
-                 "applied (up to the year's gains) and carried out (100% "
-                 "amounts); and the minimum tax carryover by year of "
+                 "applied (up to the year's gains), carried back (the "
+                 "part [carryover] claimed under the 3 earlier years "
+                 "takes from this year's loss, a T1A carry-back, as "
+                 "`taxjson carryover` folds it, at most the year's "
+                 "loss) and carried out (100% amounts); with "
+                 "--filed-dispositions (Canada) the net capital loss is "
+                 "the filed return's: the filed gain stands in for the "
+                 "books' dispositions. And the minimum tax carryover by "
+                 "year of "
                  "origin — opening, expired, recovered, created, carried "
                  "out. With no supported [settings] province it uses a "
                  "federal-only estimate (no provincial tax, credit or "
@@ -2326,7 +2341,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CARRY-04",
                  "`taxjson carryover` takes the balance a close-year lock "
                  "recorded as carried out of its year as the running "
-                 "balance at that year end (the lock is the record).",
+                 "balance at that year end (the lock is the record). Of "
+                 "the claims under earlier years, that year takes only "
+                 "the carry-back its lock recorded (none when it records "
+                 "none); the rest of such a claim waits for a later "
+                 "year's loss.",
                  cont=True),
             Rule("CA-CARRY-05",
                  "`taxjson handoff` flags a next-year input that differs "
@@ -3255,7 +3274,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "pool it with its TOBASE target, the native-currency "
                  "views keep the listing they trade. A position that goes "
                  "short again once the opening is used up, or before the "
-                 "line's date, is flagged. A loss within 30 days "
+                 "line's date, is flagged, and so is a line whose rows "
+                 "never go short without it (its purchase is in the books "
+                 "now: it still opens its units until it is deleted). A "
+                 "loss within 30 days "
                  "(trade dates) of such a sale, or such a sale at a loss "
                  "with a purchase in that window, is flagged for a manual "
                  "wash-sale check (not for crypto accounts)."),

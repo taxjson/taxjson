@@ -248,6 +248,8 @@ class TestCloseYearNeedsNoStandInProvince(unittest.TestCase):
         r = estimate_canada(province=prov, **self._EST)
 
         def fake(argv, capture_output=False, **_k):
+            if "estimate" not in argv:      # close-year's carryover ledger
+                return subprocess.CompletedProcess(argv, 1, "", "")
             seen["argv"] = list(argv)
             return subprocess.CompletedProcess(
                 argv, 0, json.dumps({"estimate": r}), "")

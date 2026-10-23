@@ -126,6 +126,32 @@ def is_canadian_issuer(row: Any) -> bool:
     return is_canadian_listing(_get(row, "symbol"))
 
 
+def is_return_of_capital(row: Any) -> bool:
+    """An ADJUST row that is a return of capital (T3 box 42, 1099-DIV
+    box 3), by its kind, not its sign: a broker's ROC (type `roc`, a
+    reversal included), a `[[distributions]]` entry with a negative
+    factor (a `DIST-` row of type `dist` below zero), or a hand-entered
+    ADJUST with no type (a `.tt` line: either sign, so the pair that
+    moves a January ROC to Dec 31 nets). Never one: a cost RAISE booked
+    as a distribution (a reinvested `[[distributions]]` entry, RBC's
+    notional distribution, a `.tt` `type=dist`, CA-DIST-01/02), a
+    corporate action's cost move (a spin-off's parent cost reduction,
+    s.86.1 / section 355: it carries `corp_event_id`), any other typed
+    row, or a superficial-loss / wash-sale deferral."""
+    if str(_get(row, "action")).upper() != "ADJUST":
+        return False
+    typ = str(_get(row, "type")).lower()
+    rid = str(_get(row, "id"))
+    if typ == "roc":
+        return True
+    if typ == "dist":
+        return (rid.startswith("DIST-")
+                and float(_get(row, "net_amount", 0.0) or 0.0) < 0)
+    if typ or str(_get(row, "corp_event_id")):
+        return False
+    return not rid.startswith(("WASH_", "HANDOFF_WASH_"))
+
+
 def _iso(v: Any) -> str:
     s = str(v or "")[:10]
     return s if _ISO.match(s) else ""

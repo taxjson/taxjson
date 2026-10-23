@@ -14,8 +14,10 @@
 #   1. refuses on a dirty tree, off main, behind origin/main, or when the
 #      tag exists;
 #   2. turns the CHANGELOG's "## Unreleased" into "## vX.Y.Z (date)" (or
-#      requires that heading to exist already), and each "Fixed in:
-#      unreleased" in docs/troubleshooting.md into the tag;
+#      requires that heading to exist already), each "Fixed in:
+#      unreleased" in docs/troubleshooting.md into the tag, and
+#      docs/upgrading.md's "### Unreleased" (when there is one) into
+#      "### vX.Y.Z";
 #   3. bumps pyproject.toml and, in lockstep, the taxjson-fetch plugin's
 #      packages/taxjson-fetch/pyproject.toml (its version and its
 #      `taxjson>=` floor), reinstalls so `taxjson --version` agrees;
@@ -166,16 +168,17 @@ if [ -n "$PREPARE" ]; then
     REUSE="$(bash scripts/gate-record.sh find "$PRE_TREE" "$PYVER" "$GATE_MAX_AGE" 2>/dev/null || true)"
   fi
   # The release's own edits (below) and nothing else: every file but the
-  # four it edits as HEAD has it, nothing untracked, and each of the four
+  # five it edits as HEAD has it, nothing untracked, and each of the five
   # equal to HEAD's once the lines it rewrites are masked — the version
   # lines, the plugin's `taxjson>=` floor, the CHANGELOG heading (and the
-  # fresh Unreleased heading above it), the playbook's Fixed-in tag.
+  # fresh Unreleased heading above it), the playbook's Fixed-in tag, the
+  # upgrade notes' heading.
   release_edits_only() {
     local line f st tagre
     tagre="v$VRE"
     while IFS= read -r line; do
       st="${line:0:2}"; f="${line:3}"
-      case "$f" in CHANGELOG.md|docs/troubleshooting.md|pyproject.toml|"$FETCH_TOML") ;;
+      case "$f" in CHANGELOG.md|docs/troubleshooting.md|docs/upgrading.md|pyproject.toml|"$FETCH_TOML") ;;
         *) echo "   $f is changed besides the release edits"; return 1 ;; esac
       [ "$st" = " M" ] || { echo "   $f: status '$st'"; return 1; }
     done < <(git status --porcelain --untracked-files=all)
@@ -189,6 +192,8 @@ if [ -n "$PREPARE" ]; then
          "s/^version = \"$VRE\"/version = @V@/; s/\"taxjson>=$VRE\"/\"taxjson>=@V@\"/" || return 1
     same docs/troubleshooting.md 's/^- \*\*Fixed in:\*\* unreleased$/@FIXED@/' \
          "s/^- \\*\\*Fixed in:\\*\\* \`$tagre\`\$/@FIXED@/" || return 1
+    [ ! -f docs/upgrading.md ] \
+      || same docs/upgrading.md 's/^### Unreleased$/@HEAD@/' "s/^### $tagre\$/@HEAD@/" || return 1
     # The new file is line 1, a blank, "## Unreleased", a blank, then the
     # old file from its line 2 with "## Unreleased…" renamed to the tag.
     same CHANGELOG.md 's/^## Unreleased.*/@HEAD@/' \
@@ -215,6 +220,9 @@ if [ -n "$PREPARE" ]; then
   rm -f "$NOTES"
   # The playbook's entries fixed since the last release name this one.
   sed -i "s/^- \*\*Fixed in:\*\* unreleased\$/- **Fixed in:** \`$TAG\`/" docs/troubleshooting.md
+  # The upgrade notes written since the last release are this one's. No
+  # fresh Unreleased heading: a release that asks nothing is not listed.
+  [ ! -f docs/upgrading.md ] || sed -i "s/^### Unreleased\$/### $TAG/" docs/upgrading.md
   sed -i "s/^version = \"[^\"]*\"/version = \"$V\"/" pyproject.toml
   grep -q "^version = \"$V\"" pyproject.toml || { echo "pyproject version bump failed"; exit 1; }
   # The broker-fetch plugin ships from the same tag, version for version,
@@ -240,6 +248,7 @@ if [ -n "$PREPARE" ]; then
   fi
 
   git add CHANGELOG.md pyproject.toml "$FETCH_TOML" docs/troubleshooting.md
+  [ ! -f docs/upgrading.md ] || git add docs/upgrading.md
   # An earlier run may already have committed the bump: publish it then.
   git diff --cached --quiet || git commit -q -m "release $TAG"
   if ! publish_main; then
