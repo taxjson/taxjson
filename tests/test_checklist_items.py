@@ -174,7 +174,7 @@ class TestCoverage(unittest.TestCase):
 class TestOutsideAProject(unittest.TestCase):
     def test_every_step_numbered_with_its_commands(self):
         with tempfile.TemporaryDirectory() as d:
-            r = _cli("checklist", cwd=d)
+            r = _cli("checklist", "--run", cwd=d)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stderr, "")
         out = r.stdout
@@ -199,7 +199,7 @@ class TestOutsideAProject(unittest.TestCase):
 
     def test_json_outside(self):
         with tempfile.TemporaryDirectory() as d:
-            r = _cli("-C", d, "checklist", "--json")
+            r = _cli("-C", d, "checklist", "--run", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads(r.stdout)
         self.assertEqual(doc["schema_version"], 2)
@@ -220,7 +220,7 @@ class TestOutsideAProject(unittest.TestCase):
 
     def test_missing_dir_is_an_error(self):
         with tempfile.TemporaryDirectory() as d:
-            r = _cli("-C", str(Path(d) / "nope"), "checklist")
+            r = _cli("-C", str(Path(d) / "nope"), "checklist", "--run")
         self.assertEqual(r.returncode, 2)
         self.assertIn("no such directory", r.stderr)
 
@@ -236,7 +236,7 @@ class TestFreshProject(unittest.TestCase):
     def test_next_is_the_broker_files(self):
         with tempfile.TemporaryDirectory() as d:
             root = self._init(d, "America/Toronto")
-            r = _cli("-C", str(root), "checklist", "--json")
+            r = _cli("-C", str(root), "checklist", "--run", "--json")
             self.assertEqual(r.returncode, 1, r.stderr)     # not ready
             doc = json.loads(r.stdout)
             st = {s["id"]: s for s in doc["steps"]}
@@ -249,8 +249,8 @@ class TestFreshProject(unittest.TestCase):
                           st["inputs-frozen"]["detail"])
             self.assertEqual(st["run-clean"]["effective"], "todo")
             self.assertEqual(st["run-clean"]["detail"], "no reports/ yet")
-            r = _cli("-C", str(root), "checklist")
-            full = _cli("-C", str(root), "checklist", "--all")
+            r = _cli("-C", str(root), "checklist", "--run")
+            full = _cli("-C", str(root), "checklist", "--run", "--all")
         self.assertEqual(r.returncode, 1, r.stderr)
         assert_styled(self, r.stdout, PIPE_WIDTH)
         # The marked list is --all (the default view is the counts).
@@ -268,9 +268,9 @@ class TestFreshProject(unittest.TestCase):
         error instead of the list. Exit 1: not ready."""
         with tempfile.TemporaryDirectory() as d:
             root = self._init(d, "UTC")
-            r = _cli("-C", str(root), "checklist", "--json")
-            t = _cli("-C", str(root), "checklist")
-            tall = _cli("-C", str(root), "checklist", "--all")
+            r = _cli("-C", str(root), "checklist", "--run", "--json")
+            t = _cli("-C", str(root), "checklist", "--run")
+            tall = _cli("-C", str(root), "checklist", "--run", "--all")
         self.assertEqual(r.returncode, 1, r.stderr)
         doc = json.loads(r.stdout)
         st = {s["id"]: s for s in doc["steps"]}
@@ -295,7 +295,7 @@ class TestFreshProject(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = self._init(d, "America/Toronto")
             (root / "yf_ticker.map").write_text("ABC ABC.TO\n")
-            r = _cli("-C", str(root), "checklist", "--json", "--quick")
+            r = _cli("-C", str(root), "checklist", "--run", "--json", "--quick")
         self.assertEqual(r.returncode, 1, r.stderr)
         doc = json.loads(r.stdout)
         st = {s["id"]: s for s in doc["steps"]}
@@ -311,7 +311,7 @@ class TestFreshProject(unittest.TestCase):
             root = Path(d)
             (root / "taxjson.toml").write_text(
                 '[settings]\ncountry = "canada"\n')
-            r = _cli("-C", str(root), "checklist", "--json", "--quick")
+            r = _cli("-C", str(root), "checklist", "--run", "--json", "--quick")
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertEqual(r.stdout, "")
         self.assertIn("year", r.stderr)
@@ -322,7 +322,7 @@ class TestFreshProject(unittest.TestCase):
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n')
-            r = _cli("-C", str(root), "checklist", "--json", "--quick")
+            r = _cli("-C", str(root), "checklist", "--run", "--json", "--quick")
         self.assertEqual(r.returncode, 1, r.stderr)
         doc = json.loads(r.stdout)
         st = {s["id"]: s for s in doc["steps"]}
@@ -347,7 +347,7 @@ class TestAfterARun(unittest.TestCase):
     def out(cls, country, *args):
         key = (country,) + args
         if key not in cls._cache:
-            cls._cache[key] = project(country).run("checklist", *args)
+            cls._cache[key] = project(country).run("checklist", "--run", *args)
         return cls._cache[key]
 
     def test_missing_history_needs_attention(self):
@@ -419,6 +419,7 @@ class TestAfterARun(unittest.TestCase):
     def test_json_schema(self):
         doc = json.loads(self.out("canada", "--json").stdout)
         self.assertEqual(set(doc), {"schema_version", "in_project", "year",
+                                    "checked", "checked_oldest", "stale",
                                     "country", "all_passed", "counts",
                                     "next", "steps"})
         self.assertEqual(doc["schema_version"], cl.SCHEMA_VERSION)
@@ -468,7 +469,7 @@ class TestFormerIds(unittest.TestCase):
             st = cl.load_state(root)
             self.assertEqual(st["overrides"]["tips"]["status"], "skipped")
             self.assertNotIn("scan", st["overrides"])
-            r = _cli("-C", str(root), "checklist", "--only", "tips",
+            r = _cli("-C", str(root), "checklist", "--run", "--only", "tips",
                      "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(list(doc), ["tips"])
@@ -530,7 +531,7 @@ class TestMarks(unittest.TestCase):
             self.assertEqual(st["overrides"]["tips"]["status"], "done")
             self.assertEqual(st["overrides"]["transfers"]["status"],
                              "skipped")
-            r = _cli("-C", str(root), "checklist", "--quick", "--json")
+            r = _cli("-C", str(root), "checklist", "--run", "--quick", "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(doc["tips"]["effective"], "done")
             # A skip accepts the finding; it stays beside the mark.
@@ -540,7 +541,7 @@ class TestMarks(unittest.TestCase):
             self.assertEqual(doc["fees"]["note"], "read it")
             # A DONE mark never hides a finding.
             r = _cli("-C", str(root), "checklist", "--done", "transfers")
-            r = _cli("-C", str(root), "checklist", "--quick", "--json")
+            r = _cli("-C", str(root), "checklist", "--run", "--quick", "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(doc["transfers"]["effective"], "attention")
 
@@ -573,10 +574,10 @@ class TestCleanProject(unittest.TestCase):
             for a in (["init", "-q"], ["add", "-A"],
                       ["commit", "-qm", "inputs"]):
                 subprocess.run(git + a, check=True, capture_output=True)
-            r = _cli("-C", str(root), "checklist", "--json")
+            r = _cli("-C", str(root), "checklist", "--run", "--json")
             self.assertEqual(r.returncode, 1, r.stderr)
             doc = json.loads(r.stdout)
-            text = _cli("-C", str(root), "checklist").stdout
+            text = _cli("-C", str(root), "checklist", "--run").stdout
         st = {s["id"]: s["effective"] for s in doc["steps"]}
         for sid in ("install", "init", "configure", "inputs-frozen",
                     "export-coverage", "run-clean", "elections",

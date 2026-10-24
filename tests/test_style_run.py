@@ -176,7 +176,7 @@ class TestBookStateWarnings(_Width):
             text = self._err(lambda: R._warn_run_state(Path("."), {}))
         self.assertEqual(text.strip().splitlines(), [
             "Warning: these books are not the clean result of the "
-            "current inputs (2 problems): `taxjson checklist`"])
+            "current inputs (2 problems): `taxjson checklist --run`"])
 
     @mock.patch("taxjson.bin.taxjson_run._CURRENT_DETAILS", True)
     def test_artifact_year_and_run_state(self):

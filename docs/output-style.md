@@ -51,7 +51,7 @@ command, the docs). Every command follows these rules.
    | command | budget |
    | --- | --- |
    | `run` | each message one line (its headline; the detail with `--details` and in work/*.diag); the closing block under `==> Before you trust these numbers` at most 6 lines; `==> ` steps are not counted |
-   | `checklist` | the next step, one `! ` line per item needing attention, one line per section with its counts (a table); at most 6 other lines. `--all` is the full list |
+   | `checklist` | the list (each step one line with its mark, number, id and title, its finding under it; an open step's commands; how and why only for the next step and those needing attention), then the summary: one line per section with its counts (a table), one `! ` line per item needing attention, the legend, the next step last. `--all` adds every step's how, commands and why; `--section N` one section |
    | `format`, `format-map` | the diff is the data; the note after it one line |
    | `init --force` over another project | 8: the backup it kept and the leftover folders are never left out |
    | `tax-logic`, `help`, `-h` | exempt: they are the reference text |

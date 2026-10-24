@@ -377,7 +377,7 @@ class TestRun(unittest.TestCase):
             self.assertIn("No superficial losses", ws.stdout)
             wj = json.loads(cli(root, "wash-sales", "--json").stdout)
             self.assertEqual(len(wj["filing_positions"]), 1)
-            ck = json.loads(cli(root, "checklist", "--json",
+            ck = json.loads(cli(root, "checklist", "--run", "--json",
                                 "--quick").stdout)
             st, = [s for s in ck["steps"] if s["id"] == "filing-positions"]
             self.assertEqual(st["status"], "manual")
@@ -421,7 +421,7 @@ class TestRun(unittest.TestCase):
             self.assertFalse((root / "work" / LO.STATE).exists())
             doc = json.loads(cli(root, "sum", "--json").stdout)
             self.assertNotIn("filing_positions", doc)
-            ck = json.loads(cli(root, "checklist", "--json",
+            ck = json.loads(cli(root, "checklist", "--run", "--json",
                                 "--quick").stdout)
             st, = [s for s in ck["steps"] if s["id"] == "filing-positions"]
             self.assertEqual(st["status"], "n/a")

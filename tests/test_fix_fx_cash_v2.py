@@ -831,14 +831,14 @@ class TestCli(unittest.TestCase):
                          ("v2", "computed", 300.0))
 
     def test_checklist_step(self):
-        r = _cli(self.root, "checklist", "--json")
+        r = _cli(self.root, "checklist", "--run", "--json")
         doc = json.loads(r.stdout)
         step = [s for s in doc["steps"] if s["id"] == "fx-cash"][0]
         self.assertEqual(step["status"], "attention")
         self.assertIn("NOT RELIABLE", step["detail"])
         # v2 computed: attention until THAT figure is marked reviewed.
         self._setting('fx_cash_ledger = "v2"')
-        doc = json.loads(_cli(self.root, "checklist", "--json").stdout)
+        doc = json.loads(_cli(self.root, "checklist", "--run", "--json").stdout)
         step = [s for s in doc["steps"] if s["id"] == "fx-cash"][0]
         self.assertEqual(step["status"], "attention")
         self.assertIn("mark it reviewed", step["detail"])
@@ -846,7 +846,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.addCleanup(lambda: (self.root / "checklist.json").unlink()
                         if (self.root / "checklist.json").exists() else 0)
-        doc = json.loads(_cli(self.root, "checklist", "--json").stdout)
+        doc = json.loads(_cli(self.root, "checklist", "--run", "--json").stdout)
         step = [s for s in doc["steps"] if s["id"] == "fx-cash"][0]
         self.assertEqual(step.get("effective", step["status"]), "done",
                          step)

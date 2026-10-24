@@ -218,6 +218,45 @@ Regenerate and commit them:
 
 Review the diff (new packages especially) before committing.
 
+## Dependency and code checks (the publish kit's)
+
+Every pull request of the dev repo also runs the publish kit's checks
+(`kit-checks` job, `.github/workflows/kit-checks.yml`; publish-kit SPEC.md
+section 14), and `kit preflight` runs them again on what a tag carries:
+
+- **known-vulnerable pins**: `osv-scanner` asks OSV.dev about every pinned
+  version in the lock files `kit-checks.toml` lists (every
+  `requirements/*.txt`; a new lock goes into that list too);
+- **unsafe code patterns**: `opengrep` with the kit's selection of the
+  opengrep-rules security rules over the tree.
+
+Every hit blocks, whatever its severity, unless `kit-checks.toml` excepts
+it: one advisory id in one lock file, or one rule id in one path, each with
+a reason and an expiry date (an expired exception fails like a hit; `kit
+doctor` lists those expiring within 14 days). The file is published, so
+the reason holds no private values. Today's exceptions are two SHA-1
+fingerprints that are stored and compared, not security uses: the row stems
+that number parsed rows and the hash a ticker.map marker carries of its
+line (`tests/test_kit_checks.py` keeps them the only SHA-1 uses in `src/`).
+Inline `nosemgrep` comments and `.semgrepignore` files are not honoured.
+
+`scripts/kit_checks.py` is an unchanged copy of the kit's
+`checks/kit_checks.py` (`kit doctor` compares the two; a kit release with a
+new tool version or rules commit means copying it again). Run it locally
+on a clean checkout, not the working tree: the tools scan every file
+there, `venv/` and stray worktrees included:
+
+```bash
+python3 -I scripts/kit_checks.py              # 3.11+; fetches the pinned tools into ~/.cache/publish-kit/checks once
+python3 -I scripts/kit_checks.py --only deps  # or --only code
+```
+
+A dependency hit is fixed by regenerating the locks with the fixed version
+let past the cooldown (`scripts/lock_deps.py --security-update PKG`,
+above). `scripts/land.sh` waits for the job like every other pull-request
+check, and counts a workflow every pull request triggers (no `paths`
+filter) whose run GitHub has not created yet as pending.
+
 ## Cutting a release
 
 Two steps, so the commit that is tagged is one GitHub CI has passed:
@@ -505,7 +544,8 @@ from GitHub does not un-publish it (clones, forks, caches); rotation does.
 Every `uses:` in `.github/workflows/` names a full commit SHA with its
 release beside it (`actions/checkout@<sha>  # v7.0.1`), and every job runs
 on an explicit runner image (`runs-on: ubuntu-24.04`, never
-`ubuntu-latest`): a moved tag or label cannot change what runs, and the
+`ubuntu-latest`) or, for a job of the dev repo only, its self-hosted
+runner's label (`taxjson-dev`): a moved tag or label cannot change what runs, and the
 runner image changes only when we choose (GitHub moves `ubuntu-latest` to
 Ubuntu 26 from 2026-10-19). The jobs have read-only tokens, a timeout, and
 checkouts that keep no credentials. `tests/test_fix_release_hardening.py`
@@ -538,6 +578,8 @@ which renames the matrix checks: update the ruleset's required checks
   the pull request proposes), so a pull request can neither widen the
   allowlist it is judged by nor weaken the test its new config must pass;
   a new exception lands on `main` before the fixture that needs it.
+- **Kit checks** (`kit-checks`, the dev repo only): known-vulnerable pins
+  and unsafe code patterns, above.
 - **Per-commit PII scan** (`pii / new commits`): every commit a pull
   request adds — and, on a push to `main`, every commit from `before` to
   the new head — its patch, message and identities, with the base's

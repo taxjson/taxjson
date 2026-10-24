@@ -1393,8 +1393,8 @@ _COMMAND_GROUPS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
                    "instalments", "option-yield", "plot-tax", "stats",
                    "sum", "win-rates")),
     ("Positions", ("list", "shares")),
-    ("Row listings", ("dil", "divs", "events", "fees", "gains", "leaps",
-                      "roc", "trades", "transfers")),
+    ("Row listings", ("cash", "dil", "divs", "events", "fees", "gains",
+                      "leaps", "roc", "trades", "transfers")),
     ("Totals by type", ("ccd-sum", "dil-sum", "divs-sum", "fees-sum",
                         "leaps-sum", "losers", "roc-sum", "trades-sum",
                         "winners")),
@@ -6929,7 +6929,7 @@ def _say_option_transition(root: Path, cfg: Dict[str, Any]) -> None:
                   indent="  ", file=sys.stdout,
                   short=f"{len(asked)} option contract(s) written in "
                         f"{_wys}: is {_tot:,.2f} of premium taxed in "
-                        f"{year} right? — `taxjson checklist`")
+                        f"{year} right? — `taxjson checklist --run`")
 
 
 def _say_export_coverage(root: Path, cfg: Dict[str, Any]) -> None:
@@ -18250,20 +18250,36 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
 
 def cmd_checklist(args: argparse.Namespace) -> None:
     """`taxjson checklist`: every step from install to filing, in order
-    (lib/checklist.items), each checked for you — a check runs the
-    command that proves it (or reads the project's files) and shows its
-    verdict — plus manual marks for the items no command can prove
-    (`--done ID`, `--skip ID`, `--undo ID`; stored in checklist.json at the
-    project root, which you should commit). The last line names the next
-    item and its command. `--walk` steps through the open items one at a
-    time. Exit 1 while anything is open. Outside a project (no
-    taxjson.toml) it prints the same list as a step-by-step guide, exit
-    0."""
+    (lib/checklist.items). `--run` checks each — a check runs the
+    command that proves it (or reads the project's files) — and stores
+    the verdicts in work/checklist_results.json (`-j N`: N slow checks
+    at a time); without `--run` the stored verdicts are shown as they
+    are, with a line saying when they were made and what changed since
+    (nothing stored: the steps, unchecked). The view is the list, then
+    the summary (the counts per section, one `!` line per step needing
+    attention); `--section N` one section of it. Manual marks for the
+    items no command can prove (`--done ID`, `--skip ID`, `--undo ID`,
+    ID the step's id or its number; stored in checklist.json at the
+    project root, which you should commit) are applied as they are now.
+    The last line names the next item and its command. `--walk` steps
+    through the open items one at a time, checking each. Exit 1 while
+    anything is open. Outside a project (no taxjson.toml) it prints the
+    same list as a step-by-step guide, exit 0."""
     import json as _json
     from datetime import date as _date
     from taxjson.lib import checklist as cl
 
     root = Path(args.dir).resolve()
+    section = None
+    if args.section:
+        try:
+            section = cl.resolve_section(args.section)
+        except KeyError:
+            _die(f"unknown section {args.section!r}",
+                 "Sections: " + "; ".join(cl.section_label(sec)
+                                          for sec in cl.SECTIONS) + ".")
+        if args.only:
+            _die("--section and --only: one or the other")
     if not _PL.has_config(root):
         used = [f for f, v in (("--done", args.done), ("--skip", args.skip),
                                ("--undo", args.undo), ("--reset", args.reset),
@@ -18277,9 +18293,9 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                        "`taxjson -C DIR checklist`); here it prints the "
                        "steps.")
         if args.json:
-            _json_out(cl.guide_json())
+            _json_out(cl.guide_json(section=section))
             return
-        print(cl.render_guide())
+        print(cl.render_guide(section=section))
         return
     cfg, cfg_error = _checklist_config(root)
     settings = cfg.get("settings") or {}
@@ -18292,14 +18308,20 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     if args.note and not (args.done or args.skip):
         _die("--note goes with --done or --skip (it is stored with "
              "the mark)")
+
+    def step_id(token: str) -> str:
+        # A step by its id or its number in the list (`--done 18`).
+        try:
+            return cl.resolve_id(token)
+        except KeyError:
+            _die(f"unknown step {token!r}",
+                 f"Step ids: {', '.join(ids)}; or the step's number, "
+                 f"1-{len(ids)}.")
     # Every repeated --done/--skip/--undo is recorded (only the last one
     # was, silently — A2-1159); an unknown id stops before any is written.
-    marks = ([(st, "done") for st in (args.done or [])]
-             + [(st, "skipped") for st in (args.skip or [])]
-             + [(st, None) for st in (args.undo or [])])
-    for step, _m in marks:
-        if step not in ids:
-            _die(f"unknown step {step!r}", f"Step ids: {', '.join(ids)}.")
+    marks = ([(step_id(st), "done") for st in (args.done or [])]
+             + [(step_id(st), "skipped") for st in (args.skip or [])]
+             + [(step_id(st), None) for st in (args.undo or [])])
     recorded: List[Dict[str, Any]] = []
     for step, mark in marks:
         if step:
@@ -18350,7 +18372,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                   else f"taxjson checklist: no {cl.STATE_FILE} — nothing to "
                        f"reset.")
     if (args.done or args.skip or args.undo or args.reset) and not args.walk \
-            and not args.show:
+            and not args.show and not args.run:
         if args.json:
             print(_json.dumps({"year": year, "state_file": cl.STATE_FILE,
                                "recorded": recorded}, indent=2))
@@ -18358,46 +18380,71 @@ def cmd_checklist(args: argparse.Namespace) -> None:
 
     ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=_date.today(),
                  run_sub=cl.default_run_sub(root), config_error=cfg_error)
-    only = [args.only] if args.only else None
-    if only and args.only not in ids:
-        _die(f"unknown step {args.only!r}", f"Step ids: {', '.join(ids)}.")
-    if only and args.quick:
-        from taxjson.lib.out import note as _note
+    only = [step_id(args.only)] if args.only else None
+    scope = ""
+    if section:
+        only = cl.section_ids(section)
+        scope = cl.section_label(section)
+    elif only:
+        scope = only[0]
+    from taxjson.lib.out import note as _note, warn as _warn
+    if args.only and args.quick and args.run:
         _note("--only names one step; ignoring --quick.",
               prog="taxjson checklist")
         args.quick = False
+    jobs = args.jobs if args.jobs is not None else cl.default_jobs()
+    if jobs < 1:
+        _die("-j takes a number of 1 or more (slow checks at a time)")
 
     if args.walk:
         if not sys.stdin.isatty():
             _die("--walk needs a terminal",
-                 "Use `taxjson checklist` for the report, --done/--skip to "
-                 "record steps.")
+                 "Use `taxjson checklist --run` for the report, "
+                 "--done/--skip to record steps.")
         try:
-            _checklist_walk(ctx, cl, only, quick=args.quick)
+            _checklist_walk(ctx, cl, only, quick=args.quick, scope=scope)
         except cl.StateFileError as e:
             _die(str(e))
         return
 
-    # The default view is the essentials (docs/output-style.md):
-    # --all (or --details) is the full list, every item's commands and
-    # why; --only ID shows that item in full.
-    full = bool(args.all or _details(args) or only)
+    # The default view is the list (an open step's commands, the next
+    # step's how and why) and then the summary; --all (or --details)
+    # adds every item's how, commands and why; --only ID shows that item
+    # in full; --section N one section.
+    show_all = bool(args.all or _details(args) or args.only)
+    quick = bool(args.quick and args.run)
     try:
-        results = cl.evaluate(ctx, only=only, quick=args.quick,
-                              progress=(cl.stderr_progress
-                                        if full or args.json
-                                        else cl.once_progress()))
+        if args.run:
+            results = cl.evaluate(ctx, only=only, quick=args.quick,
+                                  progress=(cl.stderr_progress
+                                            if show_all or args.json
+                                            else cl.once_progress()),
+                                  jobs=jobs)
+            try:
+                doc = cl.save_results(ctx, results)
+            except OSError as e:
+                # A read-only project, a full disk: the verdicts are
+                # shown this once and not kept.
+                _warn(f"the verdicts could not be stored in "
+                      f"work/{cl.RESULTS_FILE} ({e.strerror or e}): "
+                      f"shown now, not kept", prog="taxjson checklist")
+                info = cl.fresh_info()
+            else:
+                results, info = cl.load_results(ctx, only=only, doc=doc)
+        else:
+            if args.quick or args.jobs is not None:
+                _note("--quick and -j go with --run; showing the stored "
+                      "verdicts.", prog="taxjson checklist")
+            results, info = cl.load_results(ctx, only=only)
     except cl.StateFileError as e:
         _die(str(e))
     if args.json:
-        print(_json.dumps(cl.to_json(results, year, country), indent=2))
-    elif full:
-        print(cl.render(results, year, country, quick=args.quick,
-                        show_all=bool(args.all or _details(args)),
-                        root=root))
+        print(_json.dumps(cl.to_json(results, year, country, info),
+                          indent=2))
     else:
-        print(cl.render_summary(results, year, country,
-                                quick=args.quick, root=root))
+        print(cl.render(results, year, country, quick=quick,
+                        show_all=show_all, root=root, info=info,
+                        scope=scope))
     if not all(r.passed for r in results):
         sys.exit(1)
 
@@ -18459,7 +18506,8 @@ def _walk_interrupted(sid: str, ctx) -> None:
     sys.exit(1)
 
 
-def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
+def _checklist_walk(ctx, cl, only, quick: bool = False,
+                    scope: str = "") -> None:
     """Interactive pass over the open steps, one detector at a time: each
     step is shown as soon as its own check finishes (the whole list can
     take a minute on a big book), with why it matters and what was found,
@@ -18477,6 +18525,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     for sid in ids:
         r = cl.evaluate(ctx, only=[sid], quick=quick,
                         progress=cl.stderr_progress)[0]
+        _walk_store(ctx, cl, r)
         if r.passed:
             for ln in wrap(f"{cl.SYMBOL[r.effective]} {sid}"
                            + (f": {r.detail}" if r.detail else "")
@@ -18534,6 +18583,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                 break
             if ans in ("r", "recheck", "re-check"):
                 r = cl.evaluate(ctx, only=[sid], progress=cl.stderr_progress)[0]
+                _walk_store(ctx, cl, r)
                 if r.passed:
                     for ln in wrap(f"now: {cl.SYMBOL[r.effective]} "
                                    f"{r.detail}", None, "  ", "    "):
@@ -18548,13 +18598,22 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
         if quit_early:
             break
     print(f"\n{seen} open step(s) visited. Summary "
-          f"(`taxjson checklist` re-checks everything):\n")
-    results = cl.evaluate(ctx, only=only, quick=True)
-    print(cl.render_summary(results, ctx.year, country, quick=True,
-                            root=ctx.root))
+          f"(`taxjson checklist --run` re-checks everything):\n")
+    results, info = cl.load_results(ctx, only=only)
+    print(cl.render_summary(results, ctx.year, country, root=ctx.root,
+                            info=info, scope=scope))
     if quit_early or left_open:
         # Open steps remain (the one quit on, the ones passed over).
         sys.exit(1)
+
+
+def _walk_store(ctx, cl, r) -> None:
+    """A walked step's verdict goes to the store like a --run's; a store
+    that cannot be written never stops the walk."""
+    try:
+        cl.save_results(ctx, [r])
+    except OSError:
+        pass
 
 
 def _mask_ids_in_path(path: str) -> str:
@@ -21160,7 +21219,7 @@ def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
                   if _filed_year_stale_hint(root, cfg, probs) else "")
         _say("warning", f"these books are not the clean result of the "
              f"current inputs ({_count_noun(len(probs), 'problem')}"
-             f"{_filed}): `taxjson checklist`", prog=_cmd_prog())
+             f"{_filed}): `taxjson checklist --run`", prog=_cmd_prog())
     elif probs:
         _say("warning", "these books are not the clean result of the "
              "current inputs",
@@ -23850,18 +23909,19 @@ def _fx_sum_item(st: Dict[str, Any], money) -> str:
             "cash events).")
 
 
-def _fx_cash_native(root: Path, cache: Path):
+def _fx_cash_native(root: Path, cache: Path, prog: str = "taxjson fx-cash"):
     """(rows, base, year, country, fx history) for the FX-on-cash
-    ledgers: every TAXABLE account's native rows (each with `account`)
-    — s.39(1.1) / §988 reach the person's taxable holdings; registered
-    accounts are exempt."""
+    ledgers (and `taxjson cash`, `prog` naming it in the errors): every
+    TAXABLE account's native rows (each with `account`) — s.39(1.1) /
+    §988 reach the person's taxable holdings; registered accounts are
+    exempt."""
     from taxjson.lib.price_chain import load_fx_history
     cfg = _soft_config(root)
     settings = cfg.get("settings", {}) or {}
     base = str(_base(settings)).upper()
     year = settings.get("year")
     if not year:
-        sys.exit(exit_text("taxjson fx-cash: needs [settings] year in "
+        sys.exit(exit_text(f"{prog}: needs [settings] year in "
                            "taxjson.toml."))
     country = _country(settings)
     txs: List[Dict[str, Any]] = []
@@ -23874,7 +23934,7 @@ def _fx_cash_native(root: Path, cache: Path):
             if _has_inputs(root, name):
                 # A partial ledger flipped the line-15300 figure's sign
                 # with rc 0 (S005-04, S046-19).
-                sys.exit(exit_text(f"taxjson fx-cash: no native transaction file "
+                sys.exit(exit_text(f"{prog}: no native transaction file "
                                    f"for taxable account {name!r} — run `taxjson "
                                    f"run` first; a ledger without it would be "
                                    f"partial."))
@@ -23883,7 +23943,7 @@ def _fx_cash_native(root: Path, cache: Path):
             doc = _read_work_doc(f)
         except (OSError, ValueError) as e:
             _m = str(e)                 # (named once: A2-1413)
-            sys.exit(exit_text(f"taxjson fx-cash: "
+            sys.exit(exit_text(f"{prog}: "
                                f"{_m if str(f) in _m else f'could not read {f}: {_m}'}"
                                + ("" if "taxjson run" in _m else
                         " — re-run `taxjson run` to rebuild it")
@@ -23894,13 +23954,124 @@ def _fx_cash_native(root: Path, cache: Path):
             t.setdefault("account", name)
             txs.append(t)
     if not found:
-        sys.exit(exit_text(f"taxjson fx-cash: no native transaction files in "
+        sys.exit(exit_text(f"{prog}: no native transaction files in "
                            f"{cache} (run `taxjson run` first)."))
     try:
         fx = load_fx_history(cache / "to_base.csv", base)
     except (OSError, ValueError) as e:
-        sys.exit(exit_text(f"taxjson fx-cash: error: {e}"))
+        sys.exit(exit_text(f"{prog}: error: {e}"))
     return txs, base, int(year), country, fx
+
+
+def cmd_cash(args: argparse.Namespace) -> None:
+    """`taxjson cash`: the cash events of the taxable accounts over a
+    window — the conversions, deposits and withdrawals the exports carry
+    and the project's .tt cash lines, the rows the FX-on-cash ledger v2
+    reads — each as the .tt line that declares it (lib/cash_events
+    tt_line: FXCONV, CASHMOVE, CASHOPEN; a fee as a `#FEE` comment
+    line), oldest to latest, with per-currency totals. A broker's move
+    that no .tt line declares shows `?` where its own / kept / spot /
+    cost= / proceeds= goes. Statement balances are not listed (`taxjson
+    fx-cash --ledger v2` reconciles them). `[PERIOD] [ACCOUNT]` as
+    `taxjson events`."""
+    from taxjson.lib import cash_events as CE
+    root = Path(args.dir).resolve()
+    cache = root / "work"
+    keep, scope, account = _view_window(args, root)
+    cfg = _soft_config(root)
+    accounts = cfg.get("accounts") or {}
+    taxable = sorted(n for n, c in accounts.items()
+                     if isinstance(c, dict) and c.get("type") == "taxable")
+    if account:
+        if account not in accounts:
+            _die(f"no account {account!r} in taxjson.toml",
+                 f"Accounts: {', '.join(sorted(accounts)) or 'none'}.")
+        if account not in taxable:
+            _die(f"account {account!r} is not a taxable account",
+                 "Cash events are read for the taxable accounts "
+                 "(s.39(1.1) / §988 reach those alone): "
+                 f"{', '.join(taxable) or 'none'}.")
+    txs, _base, _year, country, _fx = _fx_cash_native(root, cache,
+                                                       prog="taxjson cash")
+    by_label: Dict[str, List[Dict[str, Any]]] = {}
+    for t in txs:
+        by_label.setdefault(str(t.get("account")), []).append(t)
+    try:
+        cash = CE.collect(root, cfg, country, by_label)
+    except (OSError, ValueError) as e:
+        _die(str(e))
+    CE.apply_declarations(cash["events"], cash["lines"])
+    for p in list(cash["problems"]) + list(cash.get("warnings") or []):
+        _view_msg("warning", p)
+    evs = [e for e in list(cash["events"])
+           + [x for x in cash["lines"] if not x.get("matched")]
+           if e.get("date") and keep(e["date"])
+           and (not account or e.get("label") == account)]
+    evs.sort(key=lambda e: (e["date"], e.get("label") or "", e["kind"]))
+    rows = [(e, ln) for e, ln in ((e, CE.tt_line(e)) for e in evs) if ln]
+
+    # Per-currency totals: deposits (+) and withdrawals (-), the
+    # conversions per currency pair, the fees.
+    dep: Dict[str, float] = {}
+    wd: Dict[str, float] = {}
+    conv: Dict[str, float] = {}
+    fees: Dict[str, float] = {}
+    for e, _ln in rows:
+        k = e["kind"]
+        if k == "CASHMOVE":
+            d = dep if e["amount"] > 0 else wd
+            d[e["currency"]] = d.get(e["currency"], 0.0) + abs(e["amount"])
+        elif k == "FXCONV":
+            pair = f"{e['from_ccy']}->{e['to_ccy']}"
+            conv[pair] = conv.get(pair, 0.0) + float(e["from_amt"])
+        elif k == "FLOW":
+            fees[e["currency"]] = fees.get(e["currency"], 0.0) + abs(e["amount"])
+    if getattr(args, "json", False):
+        _json_out({"scope": scope, "account": account,
+                   "rows": [dict({k: v for k, v in e.items()
+                                  if not k.startswith("_")}, tt=ln)
+                            for e, ln in rows],
+                   "totals": {"deposits": dep, "withdrawals": wd,
+                              "converted": conv, "fees": fees},
+                   "problems": list(cash["problems"])})
+        return
+    if not rows:
+        print("(no cash events in this window)")
+        return
+    # One account prints the lines as they are; the merged view prefixes
+    # each with its account, as `taxjson events` does. The keyword, date,
+    # currency and amount line up in columns (the amounts on their
+    # decimal points); what follows (a conversion's other side, a move's
+    # declaration) is as written, and the comments line up after the
+    # longest line.
+    prefix = not account and len(taxable) != 1
+    head_n = 5 if prefix else 4
+    heads, tails = [], []
+    for e, ln in rows:
+        parts = (f"{e['label']} {ln}" if prefix else ln).split()
+        heads.append(" ".join(parts[:head_n]))
+        tails.append(" ".join(parts[head_n:]))
+    bodies = [f"{h} {t}" if t else h for h, t in
+              zip(_align_columns(heads, numeric_right=True, header=False),
+                  tails)]
+    comments = [CE.tt_comment(e) for e, _ln in rows]
+    width = max(len(b) for b in bodies)
+    for body, c in zip(bodies, comments):
+        print(f"{body:<{width}}  # {c}" if c else body)
+
+    def _fmt(d: Dict[str, float]) -> str:
+        return ", ".join(f"{v:,.2f} {c}" for c, v in sorted(d.items()))
+    footer = [(lbl, d) for lbl, d in
+              (("TOTAL DEPOSITS:", dep), ("TOTAL WITHDRAWALS:", wd),
+               ("TOTAL CONVERTED:", conv), ("TOTAL FEES:", fees)) if d]
+    if footer:
+        print()
+        _w = max(len(lbl) for lbl, _d in footer)
+        for lbl, d in footer:
+            if prefix:
+                _vprint(f"{lbl:<{_w}} {_fmt(d)}", hang=" " * (_w + 1))
+            else:
+                print(f"{lbl:<{_w}} {_fmt(d)}")
 
 
 def _fx_cash_doc(root: Path, cache: Path):
@@ -28399,6 +28570,28 @@ def _build_parser(prog: str = "taxjson"
     p_al.add_argument("--json", action="store_true", help="Emit JSON")
     p_al.set_defaults(func=cmd_align)
 
+    p_cash = sub.add_parser(
+        "cash",
+        help="Cash deposits, withdrawals and conversions",
+        description="The cash events of the taxable accounts over a "
+                    "look-back window (default: the tax year): the "
+                    "conversions, deposits and withdrawals the exports "
+                    "carry and the project's .tt cash lines — what "
+                    "`taxjson fx-cash --ledger v2` reads — each as the "
+                    ".tt line that declares it (FXCONV, CASHMOVE, "
+                    "CASHOPEN; a fee as a #FEE comment line), oldest to "
+                    "latest, with per-currency totals. A broker's move no "
+                    ".tt line declares shows `?` where own / kept / spot / "
+                    "cost= / proceeds= goes. Statement balances are not "
+                    "listed.")
+    p_cash.add_argument("period", nargs="?", help=_PERIOD_HELP)
+    p_cash.add_argument("account", nargs="?",
+                        help="A taxable account (default: all, merged, "
+                             "each line prefixed with its account)")
+    p_cash.add_argument("--json", action="store_true",
+                        help="Emit JSON instead of text")
+    p_cash.set_defaults(func=cmd_cash)
+
     p_tx = sub.add_parser(
         "events",
         help="Every transaction over a window, oldest first",
@@ -29267,20 +29460,41 @@ def _build_parser(prog: str = "taxjson"
         help="Every step from install to filing, checked",
         description="Every step from install to filing, in order, each "
              "with its command(s) and why. Inside a project (a "
-             "taxjson.toml here, or -C DIR) each step is checked — by "
+             "taxjson.toml here, or -C DIR) --run checks each step — by "
              "running the command that proves it, or from the project's "
-             "files — and marked done, needs attention, to do, blocked, "
-             "to confirm, yours to run and read or n/a. The default "
-             "view is the counts per section, one `!` line per step "
-             "needing attention and, last, the next step and its "
-             "command; --all lists every step. --done/--skip/--undo "
-             "record the steps no command can prove; --walk steps "
-             "through the open ones. Exit 1 while anything is open. "
-             "Outside a project it prints the steps as a guide (exit 0).")
+             "files — and marks it done, needs attention, to do, "
+             "blocked, to confirm, yours to run and read or n/a; the "
+             "verdicts are kept in work/checklist_results.json. Without "
+             "--run the kept verdicts are shown as they are, with when "
+             "they were made and what changed since (none kept: the "
+             "steps, unchecked). The view is every step with its state "
+             "(an open step with its commands), then the summary: the "
+             "counts per section, one `!` line per step needing "
+             "attention and, last, the next step and its command; "
+             "--all adds each step's how and why; --section N shows "
+             "(or with --run checks) one section. --done/--skip/--undo "
+             "record the steps no command can prove (ID: the step's id "
+             "or its number); --walk steps through the open ones, "
+             "checking each. Exit 1 while anything is open. Outside a "
+             "project it prints the steps as a guide (exit 0).")
+    p_ck.add_argument("--run", action="store_true",
+                      help="Run the checks (else the last run's verdicts "
+                           "are shown)")
+    p_ck.add_argument("-j", "--jobs", "--j", metavar="N", type=int,
+                      dest="jobs",
+                      help="With --run: how many slow checks (sanity, "
+                           "audit, ...) run at a time (default: the CPUs, "
+                           "at most 4; 1 = one after another)")
     p_ck.add_argument("--walk", action="store_true",
-                      help="Interactive: visit each open step in turn")
+                      help="Interactive: visit each open step in turn, "
+                           "checking it")
+    p_ck.add_argument("--section", metavar="N",
+                      help="One section (its number, 1-10, or its name): "
+                           "its steps shown, or with --run checked; "
+                           "--walk walks it")
     p_ck.add_argument("--done", metavar="ID", action="append",
-                      help="Mark a step done (repeatable)")
+                      help="Mark a step done (its id, or its number in "
+                           "the list; repeatable)")
     p_ck.add_argument("--skip", metavar="ID", action="append",
                       help="Mark a step skipped (n/a for you; repeatable)")
     p_ck.add_argument("--undo", metavar="ID", action="append",
@@ -29288,16 +29502,17 @@ def _build_parser(prog: str = "taxjson"
     p_ck.add_argument("--note", metavar="TEXT", help="Note to store with --done/--skip")
     p_ck.add_argument("--reset", action="store_true",
                       help="Remove every manual mark (deletes checklist.json)")
-    p_ck.add_argument("--only", metavar="ID", help="Check one step")
+    p_ck.add_argument("--only", metavar="ID",
+                      help="One step (its id or number): its kept verdict, "
+                           "or with --run its check alone")
     p_ck.add_argument("--quick", action="store_true",
-                      help="Skip the detectors that run slow sub-commands "
-                           "(audit, sanity, ...)")
+                      help="With --run: skip the slow checks (audit, "
+                           "sanity, ...), keeping their last verdicts")
     p_ck.add_argument("--show", action="store_true",
                       help="With --done/--skip/--undo: also print the checklist")
     p_ck.add_argument("--all", action="store_true",
-                      help="The full list: every step with its state, "
-                           "commands and why, also the done ones (the same "
-                           "as --details)")
+                      help="Every step's how, commands and why, the done "
+                           "ones too (the same as --details)")
     p_ck.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text (a stable schema, "
                            "schema_version 2: docs/settings.md)")

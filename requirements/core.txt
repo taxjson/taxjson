@@ -4,8 +4,8 @@
 # inputs-sha256: 93b6815decfe4259595e29cfae34068be3998fdd25fcc595fefd5b1e96a8885f
 # body-sha256: 229f45713503d3500c8582d66afca0cae80498c7bdc9629435dffeb75344841c
 # python: >=3.10
-# exclude-newer: 2026-10-16T00:00:00Z
-# security-updates: certifi
+# exclude-newer: 2026-10-17T00:00:00Z
+# security-updates: certifi, setuptools
 # uv: 0.13.5
 
 tomli==2.5.0 ; python_full_version < '3.11' \

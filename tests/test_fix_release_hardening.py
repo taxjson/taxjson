@@ -69,7 +69,7 @@ class TestWorkflowPins(unittest.TestCase):
                 for lab in labels:
                     lab = lab.strip().strip('"\'')
                     self.assertNotRegex(lab, r"-latest$", lab)
-                    if not lab.startswith("${{"):
+                    if not lab.startswith("${{") and lab != "taxjson-dev":
                         self.assertRegex(lab, r"^ubuntu-\d\d\.\d\d$", lab)
                 self.assertRegex(text, r"\npermissions:\n  contents: read\n")
                 if wf.name == "release.yml":
@@ -572,6 +572,41 @@ class TestLand(_Sandbox):
         self.assertIn("merge it (gh pr merge https://github.com/taxjson/"
                       "taxjson/pull/7 --rebase --delete-branch)", r.stderr)
         self.assertFalse(self.calls("pr", "close"))
+
+    def workflow(self, name, pull_request=True, paths=False):
+        wf = self.dev / ".github" / "workflows"
+        wf.mkdir(parents=True, exist_ok=True)
+        on = "  pull_request:\n" if pull_request else "  push:\n"
+        if paths:
+            on += "    paths:\n      - scripts/x.sh\n"
+        (wf / f"{name.lower()}.yml").write_text(
+            f"name: {name}\non:\n{on}permissions:\n  contents: read\n")
+
+    def test_a_pull_request_workflow_with_no_run_yet_is_pending(self):
+        # kit-checks.yml beside tests.yml: a poll that sees only the runs
+        # GitHub has created so far (the stub answers with the CI run
+        # alone) must not call the other workflow passed and merge.
+        self.workflow("CI")
+        self.workflow("kit-checks")
+        self.workflow("nightly", pull_request=False)   # not a check of a pull request
+        self.workflow("watch", paths=True)             # of a few pull requests only
+        self.git(self.dev, "add", "-A")
+        self.set_state()
+        self.commit("with workflows")
+        start = self.origin_main()
+        r = self.land("--timeout", "0")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertEqual(self.origin_main(), start)
+        self.assertFalse(self.calls("pr", "close"))
+        # Every pull-request workflow has its run: it merges.
+        (self.dev / ".github" / "workflows" / "kit-checks.yml").unlink()
+        self.git(self.dev, "add", "-A")
+        self.set_state()
+        self.commit("one workflow")
+        r = self.land("--timeout", "0")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.git(self.dev, "rev-parse", "HEAD"),
+                         self.origin_main())
 
     def test_refusals_push_nothing(self):
         self.set_state()

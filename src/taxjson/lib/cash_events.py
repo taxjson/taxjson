@@ -372,6 +372,81 @@ def flow(date: str, ccy: str, amount: float, *,
             "account": account, "desc": desc, "origin": "broker"}
 
 
+def apply_declarations(events: List[Dict[str, Any]],
+                       lines: List[Dict[str, Any]]) -> None:
+    """A .tt CASHMOVE line that matches a broker's move (the account,
+    the currency, the amount within a cent, its date the move's trade
+    or settlement date, and its book when it names one) declares it:
+    the move takes the line's `decl` (and `decl_where`), the line is
+    marked `matched`. A line matching none is a move of its own. In
+    place; the ledger (lib/fx_cash_v2.build) and `taxjson cash` read
+    the same declarations."""
+    moves = [e for e in events if e["kind"] == "CASHMOVE"]
+    for ln in [x for x in lines if x["kind"] == "CASHMOVE"]:
+        cands = [m for m in moves
+                 if m.get("label") == ln.get("label")
+                 and m.get("decl") is None
+                 and m["currency"] == ln["currency"]
+                 and abs(m["amount"] - ln["amount"]) <= 0.01
+                 and ln["date"] in (m["date"], m["settle"])
+                 # The line's book, from its at= or its file's CASHBOOK
+                 # line (the folder's only book otherwise): a CASHBOOK-
+                 # scoped declaration matched another book's identical
+                 # move (2026-10 audit #85).
+                 and (not ln.get("book") or m.get("book") == ln.get("book"))]
+        if cands:
+            m = min(cands, key=lambda e: (e["date"], e.get("line_where", "")))
+            m["decl"] = ln["decl"]
+            m["decl_where"] = ln.get("where")
+            ln["matched"] = True
+
+
+UNDECLARED = "?"        # a CASHMOVE line's how, when nothing declared it
+
+
+def tt_line(e: Dict[str, Any]) -> Optional[str]:
+    """A cash event as the .tt line that declares it (FORMS, without
+    `at=`; `taxjson cash` lists them): an FXCONV, a CASHMOVE (a broker's
+    move nothing declared shows UNDECLARED where own / kept / spot /
+    cost= / proceeds= goes, so the line is not copied as it is), a
+    CASHOPEN; a FLOW (the fee a cash event charged) as a `#FEE` comment
+    line, which a .tt file ignores. None for a CASHBAL (a statement
+    fact, never written by hand), a PERIOD, a NOTE, a CASHBOOK."""
+    k = e["kind"]
+    if k == "FXCONV":
+        s = (f"FXCONV {e['date']} {e['from_ccy']} {e['from_amt']:,.2f} "
+             f"{e['to_ccy']} {e['to_amt']:,.2f}")
+        if e.get("value") is not None:
+            s += f" value={e['value']:,.2f}"
+        return s
+    if k == "CASHMOVE":
+        d = e.get("decl")
+        if not d:
+            how = UNDECLARED
+        elif d.get("value") is not None:
+            how = f"{d['how']}={d['value']:,.2f}"
+        else:
+            how = str(d["how"])
+        return f"CASHMOVE {e['date']} {e['currency']} {e['amount']:+,.2f} {how}"
+    if k == "CASHOPEN":
+        return (f"CASHOPEN {e['date']} {e['currency']} {e['units']:,.2f} "
+                f"{e['cost']:,.2f}")
+    if k == "FLOW":
+        return f"#FEE {e['date']} {e['currency']} {e['amount']:+,.2f}"
+    return None
+
+
+def tt_comment(e: Dict[str, Any]) -> str:
+    """What follows `# ` after a tt_line: a .tt line's file and line, a
+    broker event's description (and where a .tt line declared it)."""
+    if e.get("origin") == "tt":
+        return str(e.get("where") or "")
+    desc = " ".join(str(e.get("desc") or "").split())
+    if e.get("decl_where"):
+        desc = (desc + "; " if desc else "") + f"declared in {e['decl_where']}"
+    return desc
+
+
 def pair_internal(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Drop the moves of one statement that cancel inside it: an IB
     internal transfer between two accounts of a combined statement (the

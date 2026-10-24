@@ -4,8 +4,8 @@
 # inputs-sha256: 40ceb338e73faaa9a8ffc3cc02e9e6407c63ce07d1cafd9a50aafe81f71621df
 # body-sha256: 9e2c65c9fc27de1401f0af173284446361876d74b2cf1159a5bc5bc1365f75bb
 # python: >=3.10
-# exclude-newer: 2026-10-16T00:00:00Z
-# security-updates: certifi
+# exclude-newer: 2026-10-17T00:00:00Z
+# security-updates: certifi, setuptools
 # uv: 0.13.5
 
 ruff==0.17.1 \

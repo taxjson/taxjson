@@ -1,0 +1,23 @@
+# The publish kit's dependency and code checks (publish-kit SPEC.md section 14): osv-scanner
+# over the lock files kit-checks.toml lists, opengrep with the kit's rules over the code; every
+# hit fails the job unless kit-checks.toml excepts it. scripts/kit_checks.py is an unchanged copy
+# of the kit's checks/kit_checks.py (kit doctor compares the two). Run it locally with
+# `python3 -I scripts/kit_checks.py` (docs/releasing.md, "Dependency and code checks").
+# scripts/land.sh waits for this job as for every pull-request check.
+name: kit-checks
+on:
+  pull_request:                  # dev CI runs on PRs (SPEC.md S5); kit preflight covers the tag
+permissions:
+  contents: read
+jobs:
+  kit-checks:
+    # Dev repo only: the published copy of this file never runs, so the job
+    # names the dev repo's self-hosted runner (tests.yml) outright.
+    if: github.event.repository.private
+    runs-on: taxjson-dev
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -I scripts/kit_checks.py

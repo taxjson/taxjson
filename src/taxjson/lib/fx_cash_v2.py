@@ -156,25 +156,10 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 != base:
             notes.append(ev["text"])
     # .tt CASHMOVE lines: a declaration of a broker's move when one
-    # matches, else a move of their own.
-    moves = [e for e in events if e["kind"] == "CASHMOVE"]
-    for ln in [x for x in lines if x["kind"] == "CASHMOVE"]:
-        cands = [m for m in moves
-                 if m.get("label") == ln.get("label")
-                 and m.get("decl") is None
-                 and m["currency"] == ln["currency"]
-                 and abs(m["amount"] - ln["amount"]) <= 0.01
-                 and ln["date"] in (m["date"], m["settle"])
-                 # The line's book, from its at= or its file's CASHBOOK
-                 # line (the folder's only book otherwise): a CASHBOOK-
-                 # scoped declaration matched another book's identical
-                 # move (2026-10 audit #85).
-                 and (not ln.get("book") or m.get("book") == ln.get("book"))]
-        if cands:
-            m = min(cands, key=lambda e: (e["date"], e.get("line_where", "")))
-            m["decl"] = ln["decl"]
-            m["decl_where"] = ln.get("where")
-            ln["matched"] = True
+    # matches, else a move of their own (lib/cash_events; `taxjson
+    # cash` lists the same).
+    from taxjson.lib.cash_events import apply_declarations
+    apply_declarations(events, lines)
     for ev in events + [x for x in lines if not x.get("matched")]:
         kind = ev["kind"]
         book = ev.get("book")

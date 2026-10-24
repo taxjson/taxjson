@@ -226,7 +226,7 @@ class TestDemo(unittest.TestCase):
         tj(self.root, "new-year", "2025")
         text = (self.top / "2025" / "taxjson.toml").read_text()
         self.assertFalse(format_config(text).changed)
-        r = tj(self.top / "2025", "checklist", "--only", "format")
+        r = tj(self.top / "2025", "checklist", "--run", "--only", "format")
         self.assertNotIn("not in the template layout", r.stdout)
 
     def test_option_yield_has_no_blank_stderr_line(self):

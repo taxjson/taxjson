@@ -182,7 +182,7 @@ class TestTransitionQuestionProject(unittest.TestCase):
         r = tj(d, "run", "--no-input")
         self.assertIn("Warning: 1 option contract(s) written in 2025: is "
                       "400.00 of premium taxed in 2026 right? — "
-                      "`taxjson checklist`\n", r.stdout)
+                      "`taxjson checklist --run`\n", r.stdout)
         self.assertNotIn("Did your 2025 return", r.stdout)
 
     @rule("CA-OPT-11")

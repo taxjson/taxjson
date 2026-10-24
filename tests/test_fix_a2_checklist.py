@@ -461,7 +461,7 @@ class TestLocks(unittest.TestCase):
                 "option_grant_timing_since = 2025\n",
                 'option_grant_timing_since = 2025\n'
                 'prior_year_record = ["../2023/filed/2023.json"]\n'))
-            for cmd in (("handoff",), ("checklist", "--quick"), ("run", "--no-input")):
+            for cmd in (("handoff",), ("checklist", "--run", "--quick"), ("run", "--no-input")):
                 r = tj(p, *cmd, check=False)
                 self.assertNotEqual(r.returncode, 0, cmd)
                 # The checklist shows it as its configure item (exit 1,

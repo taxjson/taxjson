@@ -609,12 +609,12 @@ def render_blocks(doc: Dict[str, Any], *,
             rest = infos[keep:]
             if rest:
                 items.append(("Info", f"{len(rest)} more check(s) not yet "
-                              f"made — `taxjson checklist`"))
-        closing = ("Info: Then run `taxjson checklist` (the next step); "
+                              f"made — `taxjson checklist --run`"))
+        closing = ("Info: Then `taxjson checklist --run` (the next step); "
                    "each message's detail: `taxjson run --details`"
                    if details_hint else
-                   "Info: Then run `taxjson checklist`: it checks every "
-                   "step and names the next one.")
+                   "Info: Then run `taxjson checklist --run`: it checks "
+                   "every step and names the next one.")
 
         def _one(text: str) -> List[str]:
             if 0 < w < len(text):
@@ -700,7 +700,7 @@ def render_blocks(doc: Dict[str, Any], *,
                "(docs/getting-started.md, step 5)"]]
     for kind, it in items:
         blocks.append(out.wrap(f"{kind}: {it}", w, "", hang))
-    blocks.append(out.wrap("Info: Then run `taxjson checklist`: it checks "
-                           "every step and names the next one.", w, "",
-                           hang))
+    blocks.append(out.wrap("Info: Then run `taxjson checklist --run`: it "
+                           "checks every step and names the next one.", w,
+                           "", hang))
     return blocks

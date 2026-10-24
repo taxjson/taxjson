@@ -122,7 +122,8 @@ ACCOUNT  DATE        SYMBOL   QTY  PROCEEDS      COST     GAIN  DENIED  ALLOWED
 margin   2024-08-05  INTC.US   20    564.17    966.96  -402.78  <span class="w">402.78</span>     0.00
 ib       2024-11-20  NVDA.US   10  1,953.00  2,017.71   -64.71   <span class="w">64.71</span>     0.00<!-- pii-ok: the synthetic demo -->
 
-2 superficial loss(es); 467.50 CAD of losses denied (402.78 permanently denied).</pre>
+DENIED:    467.50 CAD over 2 superficial loss(es) (402.78 permanently denied)
+DEFERRED:  64.71 CAD in open positions' cost — tjs list</pre>
   <div class="takeaway">Only a tool that sees every account at once can get this right. That is the whole design.</div>
   <div class="foot"><span>taxjson.com</span><span>5</span></div>
 </section>
@@ -151,7 +152,7 @@ ib       2024-11-20  NVDA.US   10  1,953.00  2,017.71   -64.71   <span class="w"
     <div class="card"><h3>Build the books</h3><p><code>run</code> <code>compare</code> <code>crypto-sends</code> <code>find-missing-history</code> <code>opening</code></p></div>
     <div class="card"><h3>Summaries</h3><p><code>amt</code> <code>div-estimate</code> <code>estimate</code> <code>fx-cash</code> <code>instalments</code> <code>option-yield</code> <code>plot-tax</code> <code>stats</code> <code>sum</code> <code>win-rates</code></p></div>
     <div class="card"><h3>Positions</h3><p><code>list</code> <code>shares</code></p></div>
-    <div class="card"><h3>Row listings</h3><p><code>dil</code> <code>divs</code> <code>events</code> <code>fees</code> <code>gains</code> <code>leaps</code> <code>roc</code> <code>trades</code> <code>transfers</code></p></div>
+    <div class="card"><h3>Row listings</h3><p><code>cash</code> <code>dil</code> <code>divs</code> <code>events</code> <code>fees</code> <code>gains</code> <code>leaps</code> <code>roc</code> <code>trades</code> <code>transfers</code></p></div>
   </div>
   <div class="row cmds">
     <div class="card"><h3>Totals by type</h3><p><code>ccd-sum</code> <code>dil-sum</code> <code>divs-sum</code> <code>fees-sum</code> <code>leaps-sum</code> <code>losers</code> <code>roc-sum</code> <code>trades-sum</code> <code>winners</code></p></div>
@@ -217,18 +218,18 @@ ib       2024-11-20  NVDA.US   10  1,953.00  2,017.71   -64.71   <span class="w"
   <p class="small" style="margin:8pt 0 14pt">Installs the stable release into its own Python environment and links <code>taxjson</code> and its short name <code>tjs</code> onto your PATH. Needs git and Python 3.10+, nothing else. Re-run to upgrade. The Questrade / IBKR auto-fetch plugin comes with it (add <code>_ --without-fetch</code> to leave it out).</p>
   <pre class="term"><span class="d"># try it first on made-up exports (Canada, 2024)</span>
 tjs init --demo ~/taxjson-demo &amp;&amp; cd ~/taxjson-demo/2024
-tjs run &amp;&amp; tjs sum &amp;&amp; tjs checklist
+tjs run &amp;&amp; tjs sum &amp;&amp; tjs checklist --run
 
 <span class="d"># your own books</span>
 mkdir -p ~/taxes &amp;&amp; cd ~/taxes
 tjs init --country canada   <span class="d"># or usa; inputs/ for every year, 2026/ for this one</span>
 cd 2026                     <span class="d"># each year's folder: its taxjson.toml, ticker.map, results</span>
-tjs checklist               <span class="d"># every step: what is done, what is next</span>
+tjs checklist --run         <span class="d"># every step: what is done, what is next</span>
 <span class="d"># drop broker CSVs, all years together, into ../inputs/margin/, ../inputs/rrsp/, …</span>
 tjs run                     <span class="d"># books, reports, wash pass, broker check</span>
 tjs sum                     <span class="d"># the year, by Schedule 3 line</span>
 tjs wash-radar              <span class="d"># "can I sell this at a loss today?"</span>
-tjs checklist               <span class="d"># again at year end: ready to file?</span></pre>
+tjs checklist --run         <span class="d"># again at year end: ready to file?</span></pre>
   <div class="foot"><span>taxjson.com</span><span>11</span></div>
 </section>
 

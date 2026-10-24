@@ -74,7 +74,7 @@ class TestStyledNonZeroExits(unittest.TestCase):
     def test_checklist(self):
         # The full list (--all; the default view is the counts per
         # section, docs/output-style.md Essentials first).
-        r = project("canada").run("checklist", "--all")
+        r = project("canada").run("checklist", "--run", "--all")
         self.assertEqual(r.returncode, 1, r.stderr)
         assert_styled(self, r.stdout)
         lines = r.stdout.splitlines()
@@ -114,14 +114,14 @@ class TestChecklistReadsTheNewLayout(unittest.TestCase):
     restyled reports to the same verdicts."""
 
     def test_missing_history_and_audit_steps(self):
-        r = project("canada").run("checklist", "--only", "missing-history",
+        r = project("canada").run("checklist", "--run", "--only", "missing-history",
                                   "--json")
         step = json.loads(r.stdout)["steps"][0]
         self.assertEqual(step["status"], "attention")
         self.assertEqual(step["detail"],
                          "2 position(s) with missing basis affect 2024: "
                          "GHOSTQ.TO (margin), OLDCO.US (margin)")
-        r = project("canada").run("checklist", "--only", "audit", "--json")
+        r = project("canada").run("checklist", "--run", "--only", "audit", "--json")
         step = json.loads(r.stdout)["steps"][0]
         self.assertEqual((step["status"], step["detail"]),
                          ("done", "14 disposition(s) tied"))

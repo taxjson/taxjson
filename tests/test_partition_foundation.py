@@ -149,7 +149,7 @@ class TestOneCountryResolver(unittest.TestCase):
             for cmd in (["run", "--no-input"], ["sum"], ["form-export"],
                         ["t1135"], ["fx-cash"], ["tax-logic"],
                         ["estimate", "--other-income", "0"],
-                        ["checklist", "--quick"], ["carryover"],
+                        ["checklist", "--run", "--quick"], ["carryover"],
                         ["wash-radar"], ["instalments"],
                         ["option-boundary"], ["close-year", "--yes"]):
                 with self.subTest(cmd=cmd[0]):

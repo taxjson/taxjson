@@ -394,7 +394,7 @@ class TestChecklistSlipStep(unittest.TestCase):
                     tempfile.TemporaryDirectory() as td:
                 from tax_rules.dual import cli, projects_both
                 root = projects_both(td)[c]
-                out = cli(root, "checklist", "--quick", "--all").stdout
+                out = cli(root, "checklist", "--run", "--quick", "--all").stdout
                 self.assertEqual("T5 / T3" in out, c == "canada", out)
 
 

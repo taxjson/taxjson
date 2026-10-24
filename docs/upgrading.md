@@ -59,6 +59,21 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.34.0
+
+- **`tjs checklist` no longer runs the checks: `tjs checklist --run`
+  does.** A plain `tjs checklist` shows the verdicts of the last `--run`
+  (kept in `work/checklist_results.json`) with when they were made and
+  what changed since; until the first `--run` it lists the steps
+  unchecked. A script that read `tjs checklist` or `tjs checklist
+  --json` for fresh verdicts adds `--run`. `-j N` runs N slow checks at
+  a time (default: the CPUs, at most 4).
+- **`tjs checklist` prints the whole list before the summary.** The
+  default view was the summary alone; the summary (the counts table,
+  the `! ` lines, the `Next` line last) is unchanged but now follows
+  the list. A script that read the default text and expected the table
+  first reads it after the list; `--json` is unchanged.
+
 ### v0.33.0
 
 - **Python 3.10 or newer is required** (was 3.9). An install on Python

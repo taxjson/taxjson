@@ -118,7 +118,7 @@ class TestFirstRunSummary(unittest.TestCase):
             self.assertIn("paid income in 2025 that the books do not "
                           "hold", tail)
             self.assertIn("DIV.TO (margin)", tail)
-            self.assertIn("`taxjson checklist`", tail)
+            self.assertIn("`taxjson checklist --run`", tail)
             self.assertIn("docs/getting-started.md", tail)
             # Short: a heading, one line per finding, one closing line.
             block = tail[tail.index("==> Before"):].strip().splitlines()

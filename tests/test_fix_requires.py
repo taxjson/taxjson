@@ -135,7 +135,7 @@ class TestRefused(unittest.TestCase):
         # Checked before anything else: an old missing_history.json
         # (refused by every command, naming migrate) is not reached.
         (root / "missing_history.json").write_text("{}")
-        for cmd in (("sum",), ("checklist",), ("format", "--check"),
+        for cmd in (("sum",), ("checklist", "--run",), ("format", "--check"),
                     ("migrate",), ("run", "--no-input")):
             r = cli(root, *cmd)
             self.assertEqual(r.returncode, 2, (cmd, r.stdout, r.stderr))

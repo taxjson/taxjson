@@ -278,7 +278,7 @@ class TestTheJsonIsRefused(unittest.TestCase):
                     self.assertIn(f"{name} is no longer read", flat)
                     self.assertIn("run `taxjson migrate` to convert it",
                                   flat)
-                r = tjs("-C", str(d), "checklist", "--json")
+                r = tjs("-C", str(d), "checklist", "--run", "--json")
                 self.assertIn(f"{name} is no longer read", r.stdout)
 
     def test_a_stage_refuses_the_file(self):

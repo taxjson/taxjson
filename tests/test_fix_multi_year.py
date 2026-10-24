@@ -289,7 +289,7 @@ class TestFiledYearAndSharedInputs(unittest.TestCase):
         r = tjs("-C", str(y24), "sum")
         self.assertIn("added: inputs/margin/late.tt", r.stderr)
         self.assertIn("2024 is filed", r.stderr)
-        r = tjs("-C", str(y24), "checklist", "--only", "filed-lock",
+        r = tjs("-C", str(y24), "checklist", "--run", "--only", "filed-lock",
                 "--json")
         st = json.loads(r.stdout)["steps"][0]
         self.assertEqual(st["status"], "attention", st)

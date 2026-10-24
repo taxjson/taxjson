@@ -172,7 +172,7 @@ Warning: NOT in the totals: 1 sale with no purchase (SAMPA.TO) — `taxjson find
 Warning: 1 position at a $0 cost (SAMPQ.TO) — `taxjson find-missing-history`
 Warning: 1 transfer-in kept out with no cost (SAMPK.TO) — `taxjson transfers`
 Info: 1 account with positions not checked against the broker's holdings — `taxjson sanity`
-Info: Then run `taxjson checklist` (the next step); each message's detail: `taxjson run --details`
+Info: Then `taxjson checklist --run` (the next step); each message's detail: `taxjson run --details`
 ```
 
 One line per finding (at most six under the heading), each naming the
@@ -193,10 +193,13 @@ runs it, from set-up to year end.
 
 `tjs checklist` is the map of the whole job: run it whenever you are not
 sure what comes next. Outside a project it prints every step; inside one
-it checks each, marks it from what the checks and the project's files
-say, and ends with the next step's command. It writes nothing to the
-project but your own marks (`checklist.json`). The flags are under
-[`taxjson checklist`](#taxjson-checklist) below.
+`tjs checklist --run` checks each, marks it from what the checks and the
+project's files say, and ends with the next step's command. The verdicts
+are kept in `work/checklist_results.json`: `tjs checklist` alone shows
+them as they are, in a second, with when they were made and what changed
+since. Besides that file in `work/` (the run's cache) it writes nothing
+to the project but your own marks (`checklist.json`). The flags are
+under [`taxjson checklist`](#taxjson-checklist) below.
 
 `--json` prints the same list as one document, a stable schema
 (`schema_version` 2) described in
@@ -219,7 +222,7 @@ dropped. `--json` is the same either way.
 
 #### taxjson checklist
 
-`taxjson checklist [--all] [--walk] [--done ID] [--skip ID] [--undo ID] [--note TEXT] [--reset] [--only ID] [--quick] [--show] [--json] [--details]`
+`taxjson checklist [--run [-j N] [--quick]] [--section N] [--all] [--walk] [--done ID] [--skip ID] [--undo ID] [--note TEXT] [--reset] [--only ID] [--show] [--json] [--details]`
 
 Every step from install to filing, in order, each with the exact
 command(s) and a one-line why, in ten sections: Set up (install or
@@ -235,33 +238,52 @@ carryover, FX on cash, carrying charges, estimate, AMT), Through the
 year, Share safely (a redacted sample) and Year end (`close-year`, the
 lock committed, next year's project, the notice of assessment).
 
-Inside a project (a `taxjson.toml` here, or `-C DIR`) each step is
-checked: a check runs the command that proves it (sanity,
+Inside a project (a `taxjson.toml` here, or `-C DIR`) `--run` checks
+each step: a check runs the command that proves it (sanity,
 find-missing-history, elect, audit, option-boundary, handoff,
 reconcile-slips, form-export, t1135, carryover, fx-cash, amt,
-check-filed, git status) or reads the project's files. The default view
-is the essentials: the done count, one row per section with its counts
-(done, attention, blocked, to do, to confirm, to read), one `! ` line per
-step needing attention or blocked (`! 10 missing-history: … — tjs
-find-missing-history`; steps blocked for one reason share a line), and
-the next step last. `--all` (or `--details`) is the full list: each step
-shows done `[x]`, needs attention `[!]`, to do `[ ]`, blocked `[b]`
-(usually: run `taxjson run` first), to confirm `[m]`, yours to run and
-read `[?]`, n/a `[-]` or skipped `[~]`, with its commands and why; the
-first step to do or needing attention is marked `[>]`, and the last line
-names it with its command.
+check-filed, git status) or reads the project's files. The slow checks
+(each a sub-command reading the books) run `-j N` at a time (default:
+the CPUs, at most 4; `-j 1` one after another), and every verdict is
+kept in `work/checklist_results.json`. Without `--run` the kept verdicts
+are shown as they are, in a second: a line says when they were made and
+what moved since (the inputs, a `taxjson run`, an upgrade), and the
+steps never checked say so; with nothing kept yet (no `--run`, or a
+`work/` the run cleared) the steps are listed unchecked. Your marks are
+applied as they are now either way. The view is the list, then the
+summary. The list: every step, in its section, as done `[x]`, needs
+attention `[!]`, to do `[ ]`, blocked `[b]` (usually: run `taxjson run`
+first), to confirm `[m]`, yours to run and read `[?]`, n/a `[-]` or
+skipped `[~]`, with its number, its id and what the check found; an
+open step shows its commands, and the first step to do or needing
+attention is marked `[>]` and shows how and why (`--all`, or
+`--details`: every step's how, commands and why, the done ones too).
+The summary: one row per section with its counts (done, attention,
+blocked, to do, to confirm, to read), one `! ` line per step needing
+attention or blocked (`! 10 missing-history: … — tjs
+find-missing-history`; steps blocked for one reason share a line), the
+legend, and the next step last with its command. `--section N` is one
+section of it (its number, 1-10, or its name: `--section 4`, `--section
+"fill the gaps"`, `--section fill`): shown alone, checked alone with
+`--run` (the other sections' verdicts kept), walked alone with
+`--walk`.
 
 Nothing in the project is written but `checklist.json` (the marks;
-commit it). The steps no command can prove are confirmed with `--done
-ID` (`--note TEXT` stores a note with the mark). A mark never hides a
+commit it) and the kept verdicts in `work/` (the run's cache, never
+committed). The steps no command can prove are confirmed with `--done
+ID`, ID the step's id or its number in the list (`--done roc-entered`
+and `--done 18` are the same mark; `--note TEXT` stores a note with
+it). A mark never hides a
 later finding: a step marked done whose detector finds a problem shows
 `[!]` (or `[b]` when the detector could not check) with the mark beside
 it and keeps the list open. `--skip ID` is the explicit "reviewed,
 accepted"; a `[?]` step can be ticked off the same way. `--undo ID`
 removes one mark, `--reset` removes them all (deletes `checklist.json`),
 and `--show` prints the list after a `--done` / `--skip` / `--undo`.
-`--only ID` checks one step, `--walk` visits the open steps one at a
-time, and `--quick` skips the slow checks (audit, sanity, ...).
+`--only ID` shows one step (its id or number; with `--run`: checks that
+one alone and keeps its verdict), `--walk` visits the open steps one at
+a time, checking each, and `--run --quick` skips the slow checks
+(audit, sanity, ...), keeping their last verdicts.
 
 form-export is checked against `sum`'s FOR THE RETURN totals and the
 taxable realized gain. US projects get the US names (1099-B, Form 8949 /
@@ -1354,6 +1376,43 @@ the config tax year. Every view takes `--json`.
 Money is shown to 2 decimals; quantities and per-share prices keep full
 precision. Rows with a missing or unparseable date are excluded with a
 warning.
+
+#### taxjson cash
+
+`taxjson cash [PERIOD] [ACCOUNT] [--json]`
+
+The cash events of the taxable accounts over the window: the
+conversions, deposits and withdrawals the exports carry (Interactive
+Brokers, RBC Direct, Questrade, Kraken, Coinbase) and the project's
+`.tt` cash lines — the rows `taxjson fx-cash --ledger v2` reads. Each is
+printed as the `.tt` line that declares it, in the forms of
+[settings.md](settings.md#tt-files) (`FXCONV`, `CASHMOVE`, `CASHOPEN`;
+a fee a cash event charged as a `#FEE` comment line), oldest to latest,
+the columns lined up, the broker's description (or the `.tt` file and
+line) after `#`:
+
+```
+CASHOPEN 2025-01-01 USD    0.00 0.00
+CASHMOVE 2025-01-15 USD +500.00 ?             # Wire in
+FXCONV   2025-03-05 USD  400.00 CAD 542.00    # Forex USD.CAD
+CASHMOVE 2025-09-30 USD -250.00 kept          # Withdrawal; declared in inputs/margin/cash.tt:3
+
+TOTAL DEPOSITS:    500.00 USD
+TOTAL WITHDRAWALS: 250.00 USD
+TOTAL CONVERTED:   400.00 USD->CAD
+```
+
+A broker's move that no `.tt` line declares shows `?` where its `own`
+/ `kept` / `spot` / `cost=` / `proceeds=` goes: copy the line into a
+`.tt` file of the account and put the declaration there (the ledger then
+reads the move as declared). A `.tt` line that matches a broker's move
+is shown once, as that move with its declaration; one that matches none
+is a move of its own. Statement balances (`CASHBAL`) are not listed: the
+ledger reconciles them. The totals are per currency (deposits,
+withdrawals, fees) and per currency pair (converted). It needs a run
+(the account books name each file's broker account) and reads nothing
+for a sheltered account. `--json`: `rows` (each event with its `tt`
+line), `totals`, `problems`.
 
 #### taxjson dil
 

@@ -25,10 +25,14 @@ else is reference: [commands.md](commands.md) (every command),
 taxjson does not do), [troubleshooting.md](troubleshooting.md) (a message
 you don't understand).
 
-**Not sure what comes next?** Run `tjs checklist`. It lists every
+**Not sure what comes next?** Run `tjs checklist --run`. It lists every
 step of this guide with the command for it; in a project folder it
-checks each step, marks which are done and names the next one. It
-writes nothing but your own marks, so run it as often as you like.
+checks each step, marks which are done and names the next one. The
+checks take a minute or two on a big book (`-j 4`: four at a time);
+`tjs checklist` alone shows the last run's verdicts in a second, with
+when they were made and what changed since. It writes its verdicts to
+`work/` and nothing else but your own marks, so run it as often as you
+like.
 
 ## 1. Install
 
@@ -55,7 +59,7 @@ nothing to answer). Then:
 cd ~/taxjson-demo/2024
 tjs run          # the first run downloads 2024's exchange rates
 tjs sum          # the year's gains, as on the return
-tjs checklist    # every step to filing, checked
+tjs checklist --run    # every step to filing, checked
 ```
 
 That is what a finished run looks like, before you download anything of
@@ -211,7 +215,7 @@ Info: 2 position(s) go short in margin's data (SAMPA.TO, SAMPK.TO) — `taxjson 
 Warning: NOT in the totals: 2 sales with no purchase (SAMPA.TO, SAMPK.TO) — `taxjson find-missing-history`
 Warning: 1 transfer-in kept out with no cost (SAMPK.TO) — `taxjson transfers`
 Info: 1 account with positions not checked against the broker's holdings — `taxjson sanity`
-Info: Then run `taxjson checklist` (the next step); each message's detail: `taxjson run --details`
+Info: Then `taxjson checklist --run` (the next step); each message's detail: `taxjson run --details`
 ```
 
 Every line starts with `==> ` (a step the run is doing), `Info:`,
@@ -224,7 +228,7 @@ with its explanation, and which broker each file was read as
 The list can also name positions at a $0 cost (sold this year or still
 held) and stocks that paid you income the books do not hold. A run with
 nothing to report has no list after `Done.` (at most the line naming
-`tjs checklist`); the same counts are always written to
+`tjs checklist --run`); the same counts are always written to
 `reports/run_summary.json`.
 
 Read every line that starts with `Warning:` and every `Info:` line. A warning that an account folder is
@@ -969,9 +973,10 @@ purchase that affects the year shows as:
 ! 10 missing-history: 1 position(s) with missing basis affect 2025... — tjs find-missing-history
 ```
 
-`tjs checklist --all` lists every step, each marked `[x]` done, `[!]`
-needs attention, `[ ]` to do or `[m]` for you to confirm, with its whole
-finding:
+Above the summary, the list has every step, each marked `[x]` done,
+`[!]` needs attention, `[ ]` to do or `[m]` for you to confirm, with its
+whole finding (`tjs checklist --section 4`: one section of it; `--all`:
+every step's commands and why):
 
 ```
   [!] 10. missing-history   No position with missing cost basis affects the year
@@ -983,7 +988,8 @@ Work through it until every step is done or marked. Each step is
 explained in [filing.md](filing.md). `tjs checklist --walk` goes through
 the open ones one at a time; it needs a terminal (piped or scripted it
 stops with `Error: --walk needs a terminal`), so a script marks steps
-with `tjs checklist --done ID` or `--skip ID` instead.
+with `tjs checklist --done ID` or `--skip ID` instead (ID: the step's id
+or its number, `--done roc-entered` or `--done 18`).
 
 ## One folder of exports for every year
 

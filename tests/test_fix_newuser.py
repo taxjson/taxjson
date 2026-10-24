@@ -379,7 +379,7 @@ class TestInitDemo(unittest.TestCase):
         s = _cli("sum", cwd=self.year, env=env)
         self.assertEqual(s.returncode, 0, s.stderr)
         self.assertIn("FOR THE RETURN", s.stdout)
-        c = _cli("checklist", cwd=self.year, env=env)
+        c = _cli("checklist", "--run", cwd=self.year, env=env)
         self.assertIn("CHECKLIST — tax year 2024 (canada)", c.stdout)
         self.assertIn("missing-history", c.stdout)
         self.assertIn("SAMPG.US", _cli("find-missing-history", cwd=self.year,

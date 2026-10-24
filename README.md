@@ -56,12 +56,12 @@ pinned by hash in the release (`requirements/`; SECURITY.md).
 mkdir -p ~/taxes && cd ~/taxes
 tjs init --country canada   # or usa; inputs/ for every year, 2026/ for this one
 cd 2026                     # each year's folder: its taxjson.toml, ticker.map, results
-tjs checklist               # every step: what is done, what is next
+tjs checklist --run         # every step: what is done, what is next
 # drop broker CSVs, all years together, into ../inputs/margin/, ../inputs/rrsp/, …
 tjs run                     # books, reports, wash pass, broker check
 tjs sum                     # the year, by Schedule 3 line
 tjs wash-radar              # "can I sell this at a loss today?"
-tjs checklist               # again at year end: ready to file?
+tjs checklist --run         # again at year end: ready to file?
 ```
 
 For last year's return, `tjs init --country canada --year 2025` and
@@ -73,7 +73,7 @@ year's exchange rates):
 
 ```bash
 tjs init --demo ~/taxjson-demo && cd ~/taxjson-demo/2024
-tjs run && tjs sum && tjs checklist
+tjs run && tjs sum && tjs checklist --run
 ```
 
 Then read **[docs/getting-started.md](docs/getting-started.md)**: a
@@ -146,7 +146,8 @@ what it sends: [SECURITY.md](SECURITY.md#network-access-and-data-egress).
 
 ## Getting help
 
-1. **`tjs checklist`** in your project: the next step and its command.
+1. **`tjs checklist --run`** in your project: the next step and its
+   command (`tjs checklist` alone: the last run's verdicts, in a second).
 2. **A message you don't understand:** search
    [docs/troubleshooting.md](docs/troubleshooting.md) for its text; on an
    older release, also [docs/upgrading.md](docs/upgrading.md#problems-an-upgrade-fixes).
@@ -242,6 +243,7 @@ country's commands (`taxjson help --all` lists them). Every command takes
 
 | Command | Purpose |
 | --- | --- |
+| [`taxjson cash`](docs/commands.md#taxjson-cash) | Cash deposits, withdrawals and conversions over a window, as `.tt` lines |
 | [`taxjson dil`](docs/commands.md#taxjson-dil) | Payments in lieu of dividends over a window |
 | [`taxjson divs`](docs/commands.md#taxjson-divs) | Dividends over a window |
 | [`taxjson events`](docs/commands.md#taxjson-events) | Every transaction over a window |

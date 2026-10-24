@@ -49,7 +49,7 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
     issues: List[Dict[str, Any]] = []
     for t in run_state:
         issues.append({"kind": "run-state", "detail": str(t),
-                       "fix": "taxjson run, then taxjson checklist"})
+                       "fix": "taxjson run, then taxjson checklist --run"})
     if unknown_cost:
         issues.append({
             "kind": "unknown-cost", "count": int(unknown_cost),

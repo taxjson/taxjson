@@ -332,7 +332,7 @@ class TestIBEndToEnd(unittest.TestCase):
                 "ADJUST 2025-09-30 09:30:00 ZZT.TO CAD -3.45 type=roc",
                 "DIVIDEND 2025-09-30 09:30:00 ZZT.TO 0 CAD 0 -3.45"])
             # The checklist asks, per account.
-            r = tj(root, home, "checklist", "--json")
+            r = tj(root, home, "checklist", "--run", "--json")
             st = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(st["t5-t3"]["status"], "attention")
             self.assertIn("margin: ", st["t5-t3"]["detail"])
@@ -358,7 +358,7 @@ class TestIBEndToEnd(unittest.TestCase):
             from _style import assert_styled
             assert_styled(self, tj(root, home, "slip-audit",
                                    width=120).stdout)
-            r = tj(root, home, "checklist", "--json")
+            r = tj(root, home, "checklist", "--run", "--json")
             st = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(st["t5-t3"]["status"], "done")
 
@@ -395,14 +395,14 @@ class TestIBEndToEnd(unittest.TestCase):
             r = tj(root, home, "checklist", "--done", "t5-t3")
             self.assertEqual(r.returncode, 0, r.stderr)
             st = {s["id"]: s for s in json.loads(
-                tj(root, home, "checklist", "--json").stdout)["steps"]}
+                tj(root, home, "checklist", "--run", "--json").stdout)["steps"]}
             self.assertEqual(st["t5-t3"]["effective"], "done")
             (root / "inputs" / "margin" / "more.tt").write_text(
                 "DIVIDEND 2025-11-14 09:30:00 ZZQ.TO 0 CAD 0 7.00\n")
             self.assertEqual(tj(root, home, "run", "--no-input").returncode,
                              0)
             st = {s["id"]: s for s in json.loads(
-                tj(root, home, "checklist", "--json").stdout)["steps"]}
+                tj(root, home, "checklist", "--run", "--json").stdout)["steps"]}
             self.assertEqual(st["t5-t3"]["effective"], "attention")
 
     def test_reconcile_slips_and_checklist_skip_the_report(self):
@@ -618,7 +618,7 @@ class TestTypedSlips(unittest.TestCase):
             rep = json.loads(tj(root, home, "slip-audit", "--json").stdout)
             self.assertEqual({i["kind"] for i in rep["issues"]},
                              {"empty-slip", "no-slip"})
-            r = tj(root, home, "checklist", "--json")
+            r = tj(root, home, "checklist", "--run", "--json")
             st = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(st["t5-t3"]["status"], "attention")
 

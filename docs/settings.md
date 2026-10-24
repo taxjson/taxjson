@@ -981,10 +981,12 @@ Each suggestion: `line`, `reason`, `source`, `kind`, `certainty`, and when they 
 
 The checklist as one document: a stable schema for programs (new keys,
 statuses and items may be added; none is renamed or removed while
-`schema_version` is 2). Inside a project the checks run the commands
-that prove them; outside one nothing is evaluated.
+`schema_version` is 2). Inside a project `--run` runs the commands that
+prove the checks and keeps the verdicts; without `--run` the kept
+verdicts are reported (`checked`, `stale`); outside a project nothing
+is evaluated.
 Code: `src/taxjson/lib/checklist.py` — `to_json`, `guide_json`,
-`SCHEMA_VERSION`, `STATUSES`.
+`SCHEMA_VERSION`, `STATUSES`, `RunInfo`.
 
 | Key | Meaning |
 | --- | --- |
@@ -993,14 +995,16 @@ Code: `src/taxjson/lib/checklist.py` — `to_json`, `guide_json`,
 | `year`, `country` | the project's `[settings]`; `null` outside a project |
 | `all_passed` | `true` when no step is open (the exit is then 0); `null` outside a project |
 | `counts` | `{"done", "skipped", "attention", "todo", "blocked", "manual", "review", "n/a"}`: how many steps have each effective status; `null` outside a project |
+| `checked`, `checked_oldest` | when the newest and the oldest verdict shown were made (ISO, local time; they differ after a `--run --quick` or `--run --only ID` kept older verdicts); `null` when no step was checked yet, and outside a project |
+| `stale` | what moved since the verdicts were made, one sentence each (the inputs changed, the books were rebuilt by `taxjson run`, taxjson was upgraded); `[]` right after a `--run` |
 | `next` | `{"step", "id", "title", "do"}` of the next step: the first one to do, needing attention or blocked that can be acted on now, else the first one to confirm (`do`: what to do, usually its first command); `null` when none, and outside a project |
-| `steps` | one object per step, in order (below); with `--only ID`, that step only |
+| `steps` | one object per step, in order (below); with `--only ID` that step only, with `--section N` that section's steps only |
 
 Each step:
 
 | Key | Meaning |
 | --- | --- |
-| `step`, `id` | its number (1, 2 ...) and a stable id — the id `--done` / `--skip` / `--undo` take and `checklist.json` records (`install`, `inputs-frozen`, `run-clean`, `missing-history`, `t5008`, `filed-lock` ...) |
+| `step`, `id` | its number (1, 2 ...) and a stable id (`install`, `inputs-frozen`, `run-clean`, `missing-history`, `t5008`, `filed-lock` ...); `--done` / `--skip` / `--undo` / `--only` take either, `checklist.json` records the id |
 | `section`, `title` | the section it belongs to (`Set up`, `Get your files`, `Build the books`, `Fill the gaps`, `Tidy the config`, `Check`, `Results`, `Through the year`, `Share safely`, `Year end`) and what it is (a check's title in the project's country's words) |
 | `check` | `true` for a check (a detector proves it), `false` for a step marked from the project's files |
 | `command` | a check's proving command as one line (e.g. `taxjson find-missing-history`); a step's first command |

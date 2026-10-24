@@ -1,0 +1,44 @@
+# The kit checks (publish-kit SPEC.md section 14). Every hit blocks the dev repo's CI and
+# kit preflight unless an exception here names it exactly, with a reason and an expiry date
+# (an expired exception fails like a hit; kit doctor lists those expiring within 14 days).
+
+# The lock files osv-scanner reads: package-lock.json, poetry.lock, uv.lock, Cargo.lock, go.mod...
+# A *.txt is read as a pip requirements file; "parser:path" names osv-scanner's parser (e.g.
+# "requirements.txt:requirements/build.txt"). lock_files = [] when there are none.
+# taxjson's locks are requirements/*.txt (scripts/lock_deps.py); a new lock file goes here too.
+lock_files = [
+  "requirements/all.txt",
+  "requirements/build.txt",
+  "requirements/core.txt",
+  "requirements/dev.txt",
+  "requirements/fx.txt",
+  "requirements/generate-parser.txt",
+  "requirements/ibkr.txt",
+  "requirements/xlsx.txt",
+]
+
+# [[vuln_exceptions]]
+# id = "GHSA-xxxx-xxxx-xxxx"            # the advisory id (or one of its aliases)
+# lock_file = "package-lock.json"       # one of lock_files
+# reason = "why it does not apply, or what waits for a fix"
+# expires = 2026-12-31                  # a date, no quotes
+
+# [[code_exceptions]]
+# rule = "python.lang.security.insecure-hash-algorithm-sha1"   # the rule id the check prints
+# path = "src/example.py"                                      # one file, no globs
+# reason = "a checksum, not a security use"
+# expires = 2026-12-31
+
+# Short fingerprints of text, stored in outputs and compared: not a security use. A different
+# hash would change every stem and marker already written.
+[[code_exceptions]]
+rule = "python.lang.security.insecure-hash-algorithm-sha1"
+path = "src/taxjson/lib/brokerages/base.py"
+reason = "non-security fingerprint: the 16-hex row stem that numbers a parsed row (stem_id); kept in the books, so changing the hash changes every id"
+expires = 2027-10-24
+
+[[code_exceptions]]
+rule = "python.lang.security.insecure-hash-algorithm-sha1"
+path = "src/taxjson/lib/tobase_map.py"
+reason = "non-security fingerprint: the 6-hex hash a ticker.map marker carries of its line (line_hash); compared against markers already written"
+expires = 2027-10-24

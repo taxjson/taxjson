@@ -182,13 +182,13 @@ class TestChecklistHints(unittest.TestCase):
 
     def test_next_follows_the_blocked_step_then_names_the_shared_folder(self):
         year = self.top / "2024"
-        r = tj(year, "checklist", "--only", "inputs-frozen", check=False)
+        r = tj(year, "checklist", "--run", "--only", "inputs-frozen", check=False)
         text = " ".join(r.stdout.split())
         self.assertIn("Next (step 4, inputs-frozen): no work/*_base.json — "
                       "run `taxjson run`", text)
         self.assertNotIn("download the exports", text)
         tj(year, "run", "--no-input")
-        r = tj(year, "checklist", "--only", "inputs-frozen", check=False)
+        r = tj(year, "checklist", "--run", "--only", "inputs-frozen", check=False)
         text = " ".join(r.stdout.split())
         self.assertIn("download the exports into ../inputs/<account>/", text)
 
@@ -201,7 +201,7 @@ class TestChecklistHints(unittest.TestCase):
         (root / "taxjson.toml").write_text(
             "\n".join(ln for ln in toml.splitlines()
                       if not ln.startswith("local_timezone")) + "\n")
-        r = tj(root, "checklist", check=False)
+        r = tj(root, "checklist", "--run", check=False)
         line, = [ln for ln in r.stdout.splitlines()
                  if ln.startswith("! 3 configure:")]
         self.assertTrue(line.endswith("— edit taxjson.toml"), line)

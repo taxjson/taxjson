@@ -33,6 +33,14 @@ line.
 
 Outside a project (no taxjson.toml) the same items are printed as a
 step-by-step guide, without marks (render_guide).
+The checks run only with `taxjson checklist --run` (`-j N`: N slow checks
+at a time, each a sub-command reading the books). Their verdicts are
+stored in work/checklist_results.json (RESULTS_FILE; save_results,
+load_results): a plain `taxjson checklist` shows the stored verdicts,
+with the marks of checklist.json applied as they are now and a line
+saying when they were made and what changed since (RunInfo); with
+nothing stored it lists the steps unchecked. A `--run --quick` refreshes
+the fast checks and keeps the stored verdicts of the slow ones.
 
 Every user-facing `taxjson` command is named by some item or listed in
 EXCLUDED with its reason; tests/test_checklist_items.py fails when a new
@@ -63,6 +71,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from taxjson.lib import project_layout as _PL
 
 STATE_FILE = "checklist.json"
+# The last run's verdicts (save_results / load_results), in work/: the
+# run's cache, never committed. Marks are not stored here (checklist.json
+# is theirs); n/a is decided afresh from taxjson.toml.
+RESULTS_FILE = "checklist_results.json"
+RESULTS_FORMAT = "taxjson-checklist-results/1"
+NOT_CHECKED = "not checked yet: `tjs checklist --run`"
 # taxjson_run.UNBOOKED_PREFIX: a parser row that is a tax event the
 # run could not book.
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
@@ -357,6 +371,20 @@ class Result:
 
 
 @dataclass
+class RunInfo:
+    """When the verdicts shown were made, and whether the project moved
+    since (load_results). `checked` None: nothing was checked yet."""
+    checked: Optional[str] = None       # ISO, the newest verdict
+    oldest: Optional[str] = None        # ISO, the oldest one shown
+    stale: List[str] = field(default_factory=list)   # what changed since
+    version: Optional[str] = None       # the taxjson that made them
+
+    @property
+    def never(self) -> bool:
+        return self.checked is None
+
+
+@dataclass
 class Ctx:
     root: Path
     cfg: Dict[str, Any]
@@ -387,6 +415,14 @@ class Ctx:
 
 
 # ------------------------------------------------------------------ helpers
+def has_books(ctx: Ctx) -> bool:
+    """work/ holds a run's files. A work/ holding only the checklist's
+    own results file (RESULTS_FILE, written by `--run` before any
+    `taxjson run`) is no work/ for the detectors that ask."""
+    return ctx.cache.is_dir() and any(f.name != RESULTS_FILE
+                                      for f in ctx.cache.iterdir())
+
+
 def default_run_sub(root: Path) -> Callable[..., Tuple[int, str, str]]:
     """Run `taxjson <argv>` on this project as a subprocess (the sub-
     commands sys.exit and print; a subprocess keeps that contained)."""
@@ -1342,6 +1378,11 @@ def fingerprint_changes(before: Dict[str, str], now: Dict[str, str]
     return sorted(changed + added + removed)
 
 
+def _fingerprint_name(key: str) -> str:
+    """A fingerprint key as the user knows the file (its name)."""
+    return str(key).rsplit("/", 1)[-1] or str(key)
+
+
 def fingerprint_delta(before: Dict[str, str], now: Dict[str, str]
                       ) -> Tuple[List[str], List[str], List[str]]:
     """(changed, added, removed) keys between two fingerprints, each
@@ -2044,7 +2085,7 @@ def d_check_dates(ctx: Ctx) -> Result:
 
 def d_renames(ctx: Ctx) -> Result:
     from taxjson.lib.renames import report
-    if not ctx.cache.is_dir():
+    if not has_books(ctx):
         return Result("renames", "blocked", "no work/ — run `taxjson run`")
     try:
         doc = report(ctx.root, ctx.cfg)
@@ -2069,7 +2110,7 @@ def d_renames(ctx: Ctx) -> Result:
 
 def d_journals(ctx: Ctx) -> Result:
     from taxjson.lib.journals import JournalsError, report
-    if not ctx.cache.is_dir():
+    if not has_books(ctx):
         return Result("journals", "blocked", "no work/ — run `taxjson run`")
     try:
         doc = report(ctx.root, ctx.cfg)
@@ -2239,7 +2280,7 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
                           ctx.settings.get("country")) else
                          "; NR4 slips by hand"))
     from taxjson.lib import slip_audit as SA
-    if not ctx.cache.is_dir():
+    if not has_books(ctx):
         return Result("t5-t3", "blocked", "no work/ — run `taxjson run`")
     import contextlib
     import io
@@ -3271,7 +3312,9 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                          "across years"),)),
         _check("fx-cash",
                cmds=(Cmd("tjs fx-cash", "currency gains on foreign "
-                         "cash"),)),
+                         "cash"),
+                     Cmd("tjs cash", "the deposits, withdrawals and "
+                         "conversions it reads, as .tt lines"))),
         _check("fees",
                cmds=(Cmd("tjs events", "lists the INTEREST rows"),),
                do="take the interest paid from the statements, then `tjs "
@@ -3391,6 +3434,46 @@ def item_ids() -> List[str]:
 # item's id (a data migration of saved marks only: the command line takes
 # the current ids alone).
 _SAVED_ID_MIGRATION: Dict[str, str] = {"scan": "tips"}
+
+
+def resolve_id(token: str) -> str:
+    """A step as the command line names it — its id (`--done
+    roc-entered`) or its number in the list (`--done 18`) — as its id.
+    KeyError for neither."""
+    ids = item_ids()
+    t = str(token).strip()
+    if t in ids:
+        return t
+    if t.isdigit() and 1 <= int(t) <= len(ids):
+        return ids[int(t) - 1]
+    raise KeyError(token)
+
+
+def resolve_section(token: str) -> str:
+    """A section as the command line names it (`--section 4`, `--section
+    "fill the gaps"`, `--section fill`: its number, its name, or a start
+    of the name that fits one section, case aside) as its SECTIONS
+    entry. KeyError for none, or a start that fits two."""
+    t = " ".join(str(token).split()).lower()
+    if t.isdigit() and 1 <= int(t) <= len(SECTIONS):
+        return SECTIONS[int(t) - 1]
+    exact = [sec for sec in SECTIONS if sec.lower() == t]
+    if exact:
+        return exact[0]
+    starts = [sec for sec in SECTIONS if t and sec.lower().startswith(t)]
+    if len(starts) == 1:
+        return starts[0]
+    raise KeyError(token)
+
+
+def section_ids(section: str) -> List[str]:
+    """The ids of the steps of `section` (a SECTIONS entry), in order."""
+    return [it.id for it in _spec(2025, None) if it.section == section]
+
+
+def section_label(section: str) -> str:
+    """`4. Fill the gaps`: a section with its number."""
+    return f"{SECTIONS.index(section) + 1}. {section}"
 
 
 def item_meta(sid: str, country: Optional[str]) -> Tuple[str, str, str,
@@ -3682,62 +3765,321 @@ def _before_run(sid: str, ctx: Ctx, f: _Facts) -> Optional[Result]:
 
 
 # ----------------------------------------------------------------- evaluate
-def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
-             quick: bool = False,
-             progress: Optional[Callable[[str, str], None]] = None) -> List[Result]:
-    """Every item's result, in the list's order (all, or `only` these
-    ids): a check's detector, a step's rule, each with its checklist.json
-    mark applied. `progress(id, command)` is called before each slow
-    detector so a caller can say what it is waiting on — the audit alone
-    can take a minute on a big book."""
+QUICK_SKIPPED = "skipped by --quick (`tjs checklist --run` checks it)"
+
+
+def _overrides(ctx: Ctx) -> Dict[str, Any]:
+    """This year's marks from checklist.json (another year's, copied
+    along with the project, are not this year's)."""
     state = load_state(ctx.root)
     overrides = state.get("overrides") or {}
     if state.get("year") not in (None, ctx.year) and overrides:
-        # Marks from another year's project copied along — not this year's.
-        overrides = {}
+        return {}
+    return overrides
+
+
+def _not_applicable(sid: str, us: bool, has_taxable: bool
+                    ) -> Optional[Result]:
+    """The n/a result of a check this project has no use for (the other
+    country's step, a taxable-only step with no taxable account); None
+    when the check applies. Decided from taxjson.toml alone, so the
+    stored verdicts never carry it."""
+    if us and isinstance(US_STEPS.get(sid), str):
+        return Result(sid, "n/a", US_STEPS[sid])
+    if not has_taxable and sid in TAXABLE_ONLY:
+        return Result(sid, "n/a", "no taxable account — nothing to report")
+    return None
+
+
+def _project_shape(ctx: Ctx) -> Tuple[Optional[str], bool, bool]:
     country = ctx.settings.get("country")
-    us = is_us(country)
-    has_taxable = any(a.get("type") == "taxable" for a in ctx.accounts.values())
+    has_taxable = any(a.get("type") == "taxable"
+                      for a in ctx.accounts.values())
+    return country, is_us(country), has_taxable
+
+
+def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
+             quick: bool = False,
+             progress: Optional[Callable[[str, str], None]] = None,
+             jobs: int = 1) -> List[Result]:
+    """Every item's result, in the list's order (all, or `only` these
+    ids): a check's detector, a step's rule, each with its checklist.json
+    mark applied. The step rules and the fast checks run first, in
+    order; then the slow checks (SLOW: each a sub-command reading the
+    books), `jobs` at a time. `progress(id, command)` is called as each
+    slow detector starts so a caller can say what it is waiting on — the
+    audit alone can take a minute on a big book."""
+    overrides = _overrides(ctx)
+    country, us, has_taxable = _project_shape(ctx)
     facts = _Facts(ctx)
-    results: List[Result] = []
+    slots: List[Tuple[str, Optional[Result], bool]] = []   # id, result, marked
+    pending: List[str] = []
     for sid in item_ids():
         if only and sid not in only:
             continue
-        ov = overrides.get(sid) or {}
         if sid in STEP_RULES:
             try:
                 r = STEP_RULES[sid](ctx, facts)
             except Exception as e:      # an item must never take the list down
                 r = Result(sid, "blocked", f"could not check: {e}")
-            apply_override(r, ov)
-            results.append(r)
+            slots.append((sid, r, True))
             continue
-        if us and isinstance(US_STEPS.get(sid), str):
-            results.append(Result(sid, "n/a", US_STEPS[sid]))
-            continue
-        if not has_taxable and sid in TAXABLE_ONLY:
-            results.append(Result(sid, "n/a", "no taxable account — nothing to report"))
+        r = _not_applicable(sid, us, has_taxable)
+        if r is not None:
+            slots.append((sid, r, False))
             continue
         if ctx.config_error:
             # Every check reads the books through the config every
             # command refuses: none can run until configure is fixed.
-            results.append(apply_override(
-                Result(sid, "blocked", CONFIG_FIRST), ov))
+            slots.append((sid, Result(sid, "blocked", CONFIG_FIRST), True))
             continue
         r = _before_run(sid, ctx, facts)
         if r is None and quick and sid in SLOW:
-            r = Result(sid, "todo", "skipped by --quick (run without it to check)",
-                       actionable=False)
+            r = Result(sid, "todo", QUICK_SKIPPED, actionable=False)
         if r is None:
-            if progress and sid in SLOW:
-                progress(sid, step_meta(sid, country)[3])
-            try:
-                r = DETECTORS[sid](ctx)
-            except Exception as e:      # a detector must never take the list down
-                r = Result(sid, "blocked", f"detector failed: {e}")
-        apply_override(r, ov)
+            pending.append(sid)
+        slots.append((sid, r, True))
+    found = _run_detectors(ctx, pending, country, progress, jobs)
+    results: List[Result] = []
+    for sid, r, marked in slots:
+        if r is None:
+            r = found[sid]
+        if marked:
+            apply_override(r, overrides.get(sid) or {})
         results.append(r)
     return results
+
+
+def _run_detectors(ctx: Ctx, sids: List[str], country: Optional[str],
+                   progress: Optional[Callable[[str, str], None]],
+                   jobs: int) -> Dict[str, Result]:
+    """The detectors of `sids`: the fast ones in order, then the slow
+    ones `jobs` at a time (threads: each spends its time in a
+    sub-command reading the books, so they overlap). A detector that
+    raises is a blocked result, never the end of the list."""
+    def one(sid: str) -> Result:
+        try:
+            return DETECTORS[sid](ctx)
+        except Exception as e:      # a detector must never take the list down
+            return Result(sid, "blocked", f"detector failed: {e}")
+
+    out: Dict[str, Result] = {}
+    slow = []
+    for sid in sids:
+        if sid in SLOW:
+            slow.append(sid)
+        else:
+            out[sid] = one(sid)
+    if jobs <= 1 or len(slow) <= 1:
+        for sid in slow:
+            if progress:
+                progress(sid, step_meta(sid, country)[3])
+            out[sid] = one(sid)
+        return out
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    say = threading.Lock()
+
+    def started(sid: str) -> Result:
+        if progress:
+            with say:
+                progress(sid, step_meta(sid, country)[3])
+        return one(sid)
+    with ThreadPoolExecutor(max_workers=min(jobs, len(slow))) as pool:
+        futures = [(sid, pool.submit(started, sid)) for sid in slow]
+        for sid, f in futures:
+            out[sid] = f.result()
+    return out
+
+
+def default_jobs() -> int:
+    """How many slow checks `--run` makes at a time without -j: the
+    CPUs, at most 4 (each check is a Python process reading the books)."""
+    return max(1, min(4, os.cpu_count() or 1))
+
+
+# ------------------------------------------------------- stored verdicts
+def _results_path(ctx: Ctx) -> Path:
+    return ctx.cache / RESULTS_FILE
+
+
+def _taxjson_version() -> Optional[str]:
+    try:
+        from importlib.metadata import version
+        return version("taxjson")
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _books_stamp(ctx: Ctx) -> Optional[str]:
+    """When the books in work/ were last built (the run's fingerprint
+    record), None when there is none: a verdict made before a run is
+    stale after it."""
+    rec = recorded_fingerprint(ctx.root)
+    if not rec or rec[1] is None:
+        return None
+    when = rec[1]
+    return (when.isoformat(timespec="seconds") if isinstance(when, datetime)
+            else str(when))
+
+
+def _stamp(when: Optional[datetime] = None) -> str:
+    return (when or datetime.now()).isoformat(timespec="seconds")
+
+
+def _load_results_doc(ctx: Ctx) -> Optional[Dict[str, Any]]:
+    p = _results_path(ctx)
+    if not p.is_file():
+        return None
+    doc = _load_json(p)
+    if not doc or doc.get("format") != RESULTS_FORMAT \
+            or not isinstance(doc.get("steps"), dict):
+        return None
+    return doc
+
+
+def save_results(ctx: Ctx, results: List[Result],
+                 now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Store the verdicts of `results` in work/checklist_results.json,
+    merged over the stored ones (a `--run --only ID` or `--run --quick`
+    refreshes some steps and keeps the rest); marks are not stored, and
+    a step the project's shape makes n/a is decided afresh on load. A
+    step skipped by --quick keeps its stored verdict. Records
+    what the verdicts were made from (the inputs fingerprint, the books'
+    build time, the taxjson version) for load_results's stale line.
+    Returns the document written."""
+    doc = _load_results_doc(ctx) or {"format": RESULTS_FORMAT, "steps": {}}
+    when = _stamp(now)
+    for r in results:
+        if r.status == "todo" and r.detail == QUICK_SKIPPED:
+            continue
+        doc["steps"][r.id] = {
+            "status": r.status, "detail": r.detail,
+            "question": bool(r.question), "cmd": r.cmd,
+            "answers": list(r.answers), "actionable": bool(r.actionable),
+            "checked": when,
+        }
+    try:
+        fingerprint = input_fingerprint(ctx.root, ctx.cfg)
+    except Exception:                                   # noqa: BLE001
+        fingerprint = {}
+    doc.update({"format": RESULTS_FORMAT, "year": ctx.year,
+                "checked": when, "fingerprint": fingerprint,
+                "books": _books_stamp(ctx), "version": _taxjson_version()})
+    ctx.cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from taxjson.lib.safe_write import write_atomic
+    write_atomic(_results_path(ctx),
+                 json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                 suffix=f".{os.getpid()}.part")
+    return doc
+
+
+def _stale_reasons(ctx: Ctx, doc: Dict[str, Any]) -> List[str]:
+    """What moved since the stored verdicts were made: the inputs or the
+    config (the fingerprint), the books (a `taxjson run`), taxjson
+    itself. Marks are applied live, so a new mark is never staleness."""
+    out: List[str] = []
+    try:
+        now = input_fingerprint(ctx.root, ctx.cfg)
+    except Exception:                                   # noqa: BLE001
+        now = None
+    before = doc.get("fingerprint")
+    if now is not None and isinstance(before, dict):
+        changed, added, removed = fingerprint_delta(before, now)
+        moved = changed + added + removed
+        if moved:
+            shown = ", ".join(_fingerprint_name(k) for k in moved[:3])
+            if len(moved) > 3:
+                shown += f" +{len(moved) - 3} more"
+            out.append(f"the inputs changed ({shown})")
+    if (doc.get("books") or None) != _books_stamp(ctx):
+        out.append("the books were rebuilt (`taxjson run`)")
+    v = _taxjson_version()
+    if v and doc.get("version") and doc.get("version") != v:
+        out.append(f"taxjson was upgraded ({doc.get('version')} to {v})")
+    return out
+
+
+def load_results(ctx: Ctx, only: Optional[List[str]] = None,
+                 doc: Optional[Dict[str, Any]] = None
+                 ) -> Tuple[List[Result], RunInfo]:
+    """The stored verdicts as the list (all items, or `only` these ids):
+    each stored step as it was found, the marks of checklist.json
+    applied as they are now, n/a decided from today's taxjson.toml, and
+    a step with no stored verdict `todo` NOT_CHECKED (never the NEXT
+    one). With nothing stored (no `--run` yet, or a work/ the run
+    cleared) every check is NOT_CHECKED and the RunInfo says so."""
+    if doc is None:
+        doc = _load_results_doc(ctx)
+    overrides = _overrides(ctx)
+    _country, us, has_taxable = _project_shape(ctx)
+    steps = (doc or {}).get("steps") or {}
+    if doc is not None and doc.get("year") not in (None, ctx.year):
+        steps = {}                      # another year's verdicts
+    results: List[Result] = []
+    times: List[str] = []
+    for sid in item_ids():
+        if only and sid not in only:
+            continue
+        if sid not in STEP_RULES:
+            r = _not_applicable(sid, us, has_taxable)
+            if r is not None:
+                results.append(r)
+                continue
+        e = steps.get(sid)
+        if isinstance(e, dict) and isinstance(e.get("status"), str) \
+                and e["status"] in STATUSES:
+            r = Result(sid, e["status"], str(e.get("detail") or ""),
+                       question=bool(e.get("question")),
+                       cmd=str(e.get("cmd") or ""),
+                       answers=[str(a) for a in (e.get("answers") or [])],
+                       actionable=bool(e.get("actionable", True)))
+            if isinstance(e.get("checked"), str):
+                times.append(e["checked"])
+        else:
+            r = Result(sid, "todo", NOT_CHECKED, actionable=False)
+        apply_override(r, overrides.get(sid) or {})
+        results.append(r)
+    info = RunInfo()
+    if times:
+        info.checked = max(times)
+        info.oldest = min(times)
+        info.version = (doc or {}).get("version")
+        info.stale = _stale_reasons(ctx, doc or {})
+    return results, info
+
+
+def fresh_info() -> RunInfo:
+    """The RunInfo of verdicts made just now and not stored."""
+    now = _stamp()
+    return RunInfo(checked=now, oldest=now, version=_taxjson_version())
+
+
+def _shown_time(iso: Optional[str]) -> str:
+    """`2026-10-23T14:02:11` as `2026-10-23 14:02`."""
+    if not iso:
+        return "?"
+    return iso[:16].replace("T", " ")
+
+
+def run_info_lines(info: Optional[RunInfo], quick: bool = False) -> List[str]:
+    """What the list shows about its verdicts, as paragraphs: nothing
+    checked yet; or when they were made, the slow ones' older time when
+    a `--run --quick` kept them, and what moved since (stale)."""
+    if info is None:
+        return []
+    if info.never:
+        return [f"Nothing checked yet: `tjs checklist --run` runs every "
+                f"check (`-j N`: N slow checks at a time)."]
+    line = f"Checked {_shown_time(info.checked)}"
+    if info.oldest and info.oldest[:16] != (info.checked or "")[:16]:
+        line += f" (the oldest verdict {_shown_time(info.oldest)})"
+    if info.stale:
+        line += (". Since then " + "; ".join(info.stale)
+                 + ": `tjs checklist --run` re-checks.")
+    else:
+        line += "; `tjs checklist --run` re-checks."
+    return [line]
 
 
 def next_result(results: List[Result]) -> Optional[Result]:
@@ -3866,27 +4208,43 @@ def _inputs_label(root: Optional[Path]) -> str:
         return "inputs"
 
 
+def _title(year: int, country: str, quick: bool, scope: str,
+           results: List[Result]) -> str:
+    """`CHECKLIST — tax year 2025 (canada) — 4. Fill the gaps: 5/9
+    done`: the heading of every view (`scope`: the section shown, or
+    the one step, when not the whole list)."""
+    c = counts(results)
+    total = len(results) - c["n/a"]
+    done = c["done"] + c["skipped"]
+    return (f"CHECKLIST — tax year {year} ({country})"
+            f"{' — quick' if quick else ''}"
+            f"{' — ' + scope if scope else ''}: {done}/{total} done")
+
+
 def render(results: List[Result], year: int, country: str,
            quick: bool = False, width_: Optional[int] = None,
-           show_all: bool = False, root: Optional[Path] = None) -> str:
-    """The list in the house layout (docs/output-style.md): a title and
-    the counts, then one section per SECTIONS entry; each item is its
-    mark, number, id and title on one line, its state wrapped under the
-    title, then — while it is open — its commands; the NEXT item and one
-    needing attention also say how and why (`show_all`: every item). The
-    legend, then the last line: the next item and what to do."""
+           show_all: bool = False, root: Optional[Path] = None,
+           info: Optional[RunInfo] = None, scope: str = "") -> str:
+    """The default view, in the house layout (docs/output-style.md): a
+    title and the counts, then the list, one section per SECTIONS entry
+    (`scope`: the one section or step shown, named in the title); each
+    item is its mark, number, id and title on one line, its state
+    wrapped under the title, then — while it is open — its commands; the
+    NEXT item and one needing attention also say how and why
+    (`show_all`, --all: every item). Then the summary: the counts per
+    section as a table and one `! ` line per item needing attention or
+    blocked (_summary_block), the legend, and the last line: the next
+    item and what to do."""
     from taxjson.lib.out import Doc, wrap
     its = {it.id: it for it in items(year, country)}
     num = {sid: i + 1 for i, sid in enumerate(its)}
     c = counts(results)
-    total = len(results) - c["n/a"]
-    done = c["done"] + c["skipped"]
-    d = Doc(f"CHECKLIST — tax year {year} ({country})"
-            f"{' — quick' if quick else ''}: {done}/{total} done",
-            width_=width_)
+    d = Doc(_title(year, country, quick, scope, results), width_=width_)
     d.para(f"{c['attention']} need attention, {c['todo']} to do, "
            f"{c['blocked']} blocked, {c['manual']} to confirm, "
            f"{c['review']} to run and read yourself, {c['n/a']} n/a")
+    for ln in run_info_lines(info, quick):
+        d.para(ln)
     nxt = next_result(results)
     idw = max((len(r.id) for r in results), default=0)
     by_sec: Dict[str, List[Result]] = {}
@@ -3913,7 +4271,8 @@ def render(results: List[Result], year: int, country: str,
                        + (f": {r.note}" if r.note else ""), lead)
                 if r.finding:
                     d.para(f"the detector still says: {r.finding}", lead)
-            elif r.detail:
+            elif r.detail and r.detail != NOT_CHECKED:
+                # (an unchecked step: the list's own line says so once)
                 d.para(r.detail, lead)
             # A done, skipped or n/a item is its state line; an open one
             # adds its commands; the next one and one that needs
@@ -3927,24 +4286,40 @@ def render(results: List[Result], year: int, country: str,
                     d.line(ln)
             if full and it.why:
                 d.para(f"Why: {it.why}", lead)
+    _summary_block(d, results, its, num)
     d.blank()
     d.line("[x] done  [!] needs attention  [ ] to do  [b] blocked  "
            "[-] n/a  [~] skipped  [>] next")
-    d.para("[m] confirm it, then `tjs checklist --done ID`; [?] yours to "
-           "run and read (`--done ID` ticks it off)")
-    d.para("One at a time: `tjs checklist --walk`; every item's commands "
-           "and why: `tjs checklist --all`")
-    if nxt is not None:
-        d.para(f"Next (step {num[nxt.id]}, {nxt.id}): "
-               f"{_do(its[nxt.id], nxt, _inputs_label(root))}")
-    elif all(r.passed for r in results):
-        d.para("Nothing left to do now: the [?] items are yours to run "
-               "and read.")
-    elif quick:
-        d.para("Nothing to do now: run without --quick to check the rest.")
-    else:
-        d.para("Nothing to do until the year ends: re-check then.")
+    d.para("[m] confirm it, then `tjs checklist --done ID` (the step's id "
+           "or number); [?] yours to run and read (`--done ID` ticks it "
+           "off)")
+    d.para("One at a time: `tjs checklist --walk`; one section: "
+           "`--section N`; every item's commands and why: `tjs checklist "
+           "--all`")
+    d.para(_closing(results, nxt, its, num, root, quick, info))
     return d.text()
+
+
+def _closing(results: List[Result], nxt: Optional[Result],
+             its: Dict[str, Item], num: Dict[str, int],
+             root: Optional[Path], quick: bool,
+             info: Optional[RunInfo]) -> str:
+    """The last line: the next item and what to do; else why nothing is
+    next (nothing checked yet, all passed, slow checks skipped, the year
+    still open)."""
+    if nxt is not None:
+        return (f"Next (step {num[nxt.id]}, {nxt.id}): "
+                f"{_do(its[nxt.id], nxt, _inputs_label(root))}")
+    if info is not None and info.never:
+        return "Next: `tjs checklist --run` — the checks have not run yet."
+    if all(r.passed for r in results):
+        return ("Nothing left to do now: the [?] items are yours to run "
+                "and read.")
+    if quick or any(r.detail in (QUICK_SKIPPED, NOT_CHECKED)
+                    for r in results):
+        return ("Nothing to do now: `tjs checklist --run` (without "
+                "--quick) checks the rest.")
+    return "Nothing to do until the year ends: re-check then."
 
 
 ACT_WIDTH = 100     # an `! ` line is never wrapped (docs/output-style.md)
@@ -3971,21 +4346,37 @@ def _act_line(head: str, detail: str, cmd: str,
 def render_summary(results: List[Result], year: int, country: str,
                    quick: bool = False,
                    width_: Optional[int] = None,
-                   root: Optional[Path] = None) -> str:
-    """The default view (docs/output-style.md, Essentials first): the
-    title with the done count, one table row per section with its
-    counts, one `! ` line per item needing attention or blocked (id,
-    what, the command), the pointer to the full list, and the last line:
-    the next item and what to do (as render())."""
+                   root: Optional[Path] = None,
+                   info: Optional[RunInfo] = None, scope: str = "") -> str:
+    """The summary alone (after a `--walk`): the title with the done
+    count, the counts table and the `! ` lines (_summary_block), the
+    pointer to the list, and the last line: the next item and what to
+    do (as render())."""
     from taxjson.lib.out import Doc
     its = {it.id: it for it in items(year, country)}
     num = {sid: i + 1 for i, sid in enumerate(its)}
-    c = counts(results)
-    total = len(results) - c["n/a"]
-    done = c["done"] + c["skipped"]
-    d = Doc(f"CHECKLIST — tax year {year} ({country})"
-            f"{' — quick' if quick else ''}: {done}/{total} done",
-            width_=width_)
+    d = Doc(_title(year, country, quick, scope, results), width_=width_)
+    _summary_block(d, results, its, num)
+    d.blank()
+    for ln in run_info_lines(info, quick):
+        d.para(ln)
+    d.line("More: tjs checklist (every step, then this summary); "
+           "tjs checklist --all (each step's commands and why); "
+           "tjs checklist --walk (one at a time)")
+    nxt = next_result(results)
+    d.para(_closing(results, nxt, its, num, root, quick, info)
+           .replace("the [?] items", "the READ items"))
+    return d.text()
+
+
+def _summary_block(d: Any, results: List[Result], its: Dict[str, Item],
+                   num: Dict[str, int]) -> None:
+    """The summary, appended to `d` (the default view's second half,
+    the whole of render_summary): a blank line, one table row per
+    section shown with its counts (done, attention, blocked, to do, to
+    confirm, to read), then one `! ` line per item needing attention or
+    blocked (id, what, the command), items blocked for one reason
+    sharing a line."""
     by_sec: Dict[str, List[Result]] = {}
     for r in results:
         by_sec.setdefault(its[r.id].section, []).append(r)
@@ -4043,35 +4434,25 @@ def render_summary(results: List[Result], year: int, country: str,
         d.blank()
         for ln in acts:
             d.line(ln)
-    d.blank()
-    d.line("More: tjs checklist --all (every item, its commands and why); "
-           "tjs checklist --walk (one at a time)")
-    nxt = next_result(results)
-    if nxt is not None:
-        d.para(f"Next (step {num[nxt.id]}, {nxt.id}): "
-               f"{_do(its[nxt.id], nxt, _inputs_label(root))}")
-    elif all(r.passed for r in results):
-        d.para("Nothing left to do now: the READ items are yours to run "
-               "and read.")
-    elif quick:
-        d.para("Nothing to do now: run without --quick to check the rest.")
-    else:
-        d.para("Nothing to do until the year ends: re-check then.")
-    return d.text()
 
 
 def render_guide(year: Optional[int] = None,
-                 width_: Optional[int] = None) -> str:
+                 width_: Optional[int] = None,
+                 section: Optional[str] = None) -> str:
     """Outside a project: every item as a numbered step with its
-    commands, how and why — no marks."""
+    commands, how and why — no marks (`section`: that section's steps
+    alone)."""
     from taxjson.lib.out import Doc, wrap
     year = year or date.today().year - 1
     its = items(year, None)
-    d = Doc("CHECKLIST — from install to filing, step by step",
+    d = Doc("CHECKLIST — from install to filing, step by step"
+            + (f" — {section_label(section)}" if section else ""),
             width_=width_)
     d.para("Each step: the command(s) to type and why. `tjs` is the "
            f"short name of `taxjson`. Worked examples: {GUIDE}.")
     for k, sec in enumerate(SECTIONS, 1):
+        if section and sec != section:
+            continue
         d.section(f"{k}. {sec.upper()}")
         first = True
         for n, it in enumerate(its, 1):
@@ -4116,7 +4497,8 @@ def _item_json(n: int, it: Item, r: Optional[Result], is_next: bool,
     }
 
 
-def to_json(results: List[Result], year: int, country: str) -> Dict[str, Any]:
+def to_json(results: List[Result], year: int, country: str,
+            info: Optional[RunInfo] = None) -> Dict[str, Any]:
     """The list as one document (schema_version 2, docs/settings.md)."""
     its = {it.id: it for it in items(year, country)}
     num = {sid: i + 1 for i, sid in enumerate(its)}
@@ -4128,6 +4510,9 @@ def to_json(results: List[Result], year: int, country: str) -> Dict[str, Any]:
         "year": year, "country": country,
         "all_passed": all(r.passed for r in results),
         "counts": counts(results),
+        "checked": info.checked if info is not None else None,
+        "checked_oldest": info.oldest if info is not None else None,
+        "stale": list(info.stale) if info is not None else [],
         "next": ({"step": num[nit.id], "id": nit.id, "title": nit.title,
                   "do": _do(nit, nxt)} if nit is not None else None),
         "steps": [_item_json(num[r.id], its[r.id], r,
@@ -4136,13 +4521,17 @@ def to_json(results: List[Result], year: int, country: str) -> Dict[str, Any]:
     }
 
 
-def guide_json(year: Optional[int] = None) -> Dict[str, Any]:
-    """Outside a project: the same schema, nothing evaluated."""
+def guide_json(year: Optional[int] = None,
+               section: Optional[str] = None) -> Dict[str, Any]:
+    """Outside a project: the same schema, nothing evaluated
+    (`section`: that section's steps alone)."""
     year = year or date.today().year - 1
     return {
         "schema_version": SCHEMA_VERSION, "in_project": False,
         "year": None, "country": None, "all_passed": None,
-        "counts": None, "next": None,
+        "counts": None, "checked": None, "checked_oldest": None,
+        "stale": [], "next": None,
         "steps": [_item_json(n, it, None, False, None)
-                  for n, it in enumerate(items(year, None), 1)],
+                  for n, it in enumerate(items(year, None), 1)
+                  if not section or it.section == section],
     }

@@ -105,7 +105,7 @@ class TestOneLineMessages(_Runs):
                 self.assertIn("not checked against the broker's holdings "
                               "— `taxjson sanity`", flat)
                 self.assertTrue(lines[-1].startswith(
-                    "Info: Then run `taxjson checklist`"), tail)
+                    "Info: Then `taxjson checklist --run`"), tail)
                 self.assertIn("`taxjson run --details`", lines[-1])
 
 
@@ -123,7 +123,7 @@ class TestDetails(_Runs):
                 "2 positions sold in 2024 with no purchase in your files, "
                 "not in missing_history.tt",
                 "Tighten it once: chmod -R go-rwx",
-                "Info: Then run `taxjson checklist`: it checks every step "
+                "Info: Then run `taxjson checklist --run`: it checks every step "
                 "and names the next one."):
             self.assertIn(phrase, text)
         assert_console(self, r.stdout, width=CONCISE_WIDTH)
@@ -186,7 +186,7 @@ class TestConciseItems(unittest.TestCase):
         self.assertLessEqual(len(body), FR.CONCISE_BUDGET, body)
         self.assertTrue(any("$0 cost you declared" in ln for ln in body)
                         or any("more check(s)" in ln for ln in body), body)
-        self.assertEqual(body[-1], "Info: Then run `taxjson checklist`: "
+        self.assertEqual(body[-1], "Info: Then run `taxjson checklist --run`: "
                                    "it checks every step and names the "
                                    "next one.")
 

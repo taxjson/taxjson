@@ -3,6 +3,68 @@
 ## Unreleased
 
 
+## v0.34.0 (2026-10-24)
+
+### Changed
+
+- **`taxjson checklist` shows the last run's verdicts; `--run` checks.**
+  The checks (fourteen sub-commands reading the books, minutes on a big
+  book) now run only with `--run`, `-j N` of the slow ones at a time
+  (default: the CPUs, at most 4), and their verdicts are kept in
+  `work/checklist_results.json`. A plain `taxjson checklist` shows them
+  in a second, with when they were made and what moved since (the
+  inputs, a `taxjson run`, an upgrade), your marks applied as they are
+  now; with nothing kept it lists the steps unchecked and names
+  `--run`. `--run --quick` refreshes the fast checks and keeps the slow
+  ones' last verdicts; `--run --only ID` re-checks one step. `--walk`
+  checks as it goes. `--json` adds `checked`, `checked_oldest` and
+  `stale`. The run's closing line and the guides say `taxjson checklist
+  --run`.
+- **`taxjson checklist` shows the whole list, then the summary.** The
+  default view was the summary alone (the counts per section, the `!`
+  lines, the next step); now every step comes first, in its section,
+  with its mark, number, id and finding, an open step with its
+  commands, the next step with how and why, and the summary follows.
+  `--all` (or `--details`) still adds every step's how, commands and
+  why.
+
+- **Dependency locks regenerated** (the 7-day cooldown, to 2026-10-17),
+  with `setuptools` 84.2.1 let past it for GHSA-xmj3-9gf7-h52w (`certifi`
+  stays past it, as before).
+- **The publish kit's dependency and code checks run on every pull
+  request** (for maintainers): the `kit-checks` job runs
+  `scripts/kit_checks.py`, an unchanged copy of the kit's, which asks
+  OSV about every pin in `requirements/*.txt` and runs opengrep's
+  security rules over the code; every hit blocks unless `kit-checks.toml`
+  excepts it (one advisory in one lock file, or one rule in one path,
+  with a reason and an expiry date). Two SHA-1 fingerprints are excepted
+  as non-security uses: the row stems that number parsed rows and the
+  short hash a ticker.map marker carries of its line. `scripts/land.sh`
+  counts a workflow every pull request triggers whose run GitHub has not
+  created yet as pending, so a merge cannot slip in before it starts.
+
+### Added
+
+- **`taxjson cash`: the cash events as `.tt` lines.** The conversions,
+  deposits and withdrawals the exports carry and the project's `.tt`
+  cash lines — what `taxjson fx-cash --ledger v2` reads — over a window
+  (`[PERIOD] [ACCOUNT]` as `taxjson events`), each as the `.tt` line
+  that declares it (`FXCONV`, `CASHMOVE`, `CASHOPEN`; a fee as a `#FEE`
+  comment), oldest first, the columns lined up, the broker's description
+  after `#`, and per-currency totals (deposits, withdrawals, converted,
+  fees). A broker's move no `.tt` line declares shows `?` where `own` /
+  `kept` / `spot` / `cost=` / `proceeds=` goes, ready to copy and fill
+  in. Statement balances are not listed. `--json` for programs.
+- **`taxjson checklist --section N`**: one section (its number, 1-10,
+  or its name — `--section 4`, `--section "fill the gaps"`, `--section
+  fill`) shown alone; with `--run` checked alone, the other sections'
+  verdicts kept; with `--walk` walked alone. Outside a project, that
+  section of the guide.
+- **A step by its number:** `--done`, `--skip`, `--undo` and `--only`
+  take the step's number in the list as well as its id (`--done 18` is
+  `--done roc-entered`). An unknown step's message says both.
+
+
 ## v0.33.0 (2026-10-23)
 
 ### Changed

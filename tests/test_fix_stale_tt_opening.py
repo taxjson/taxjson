@@ -93,7 +93,7 @@ class TestStaleTtOpening(unittest.TestCase):
             self.assertIn("STALE in missing_history.tt", f.stdout)
             self.assertIn("SAMPQ.TO margin", f.stdout)
             self.assertNotIn("does nothing", f.stdout)
-            c = cli(root, "checklist", "--only", "missing-history")
+            c = cli(root, "checklist", "--run", "--only", "missing-history")
             self.assertIn("[!]", c.stdout.replace("[>]", "[!]"))
             self.assertIn("entry still opens its units", c.stdout)
             self.assertNotIn("[x] 10. missing-history", c.stdout)
@@ -107,7 +107,7 @@ class TestStaleTtOpening(unittest.TestCase):
             s = cli(root, "sum")
             self.assertNotIn("unknown cost", s.stdout + s.stderr)
             self.assertIn("200.00", s.stdout)
-            c = cli(root, "checklist", "--only", "missing-history")
+            c = cli(root, "checklist", "--run", "--only", "missing-history")
             self.assertIn("[x] 10. missing-history", c.stdout)
 
 

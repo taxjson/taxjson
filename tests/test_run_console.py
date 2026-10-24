@@ -194,7 +194,7 @@ class TestSteps(_Runs):
         lines = tail.splitlines()
         self.assertTrue(lines[1].startswith(
             "Warning: NOT in the totals: 2 sales with no purchase"), tail)
-        self.assertEqual(lines[-1], "Info: Then run `taxjson checklist` "
+        self.assertEqual(lines[-1], "Info: Then `taxjson checklist --run` "
                                     "(the next step); each message's "
                                     "detail: `taxjson run --details`")
         # --details: the long form.
@@ -203,7 +203,7 @@ class TestSteps(_Runs):
         lines = tail.splitlines()
         self.assertTrue(lines[1].startswith(
             "Warning: 2 positions sold in 2024 with no purchase"), tail)
-        self.assertEqual(lines[-1], "Info: Then run `taxjson checklist`: "
+        self.assertEqual(lines[-1], "Info: Then run `taxjson checklist --run`: "
                                     "it checks every step and names the "
                                     "next one.")
 

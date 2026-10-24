@@ -221,7 +221,7 @@ class TestCommand(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("fees marked done", r.stdout)
             self.assertEqual(json.loads((root / "checklist.json").read_text())["overrides"]["fees"]["note"], "12,303.57 interest")
-            r = cli("--quick", "--json")
+            r = cli("--run", "--quick", "--json")
             self.assertEqual(r.returncode, 1, r.stderr)            # open steps remain
             doc = json.loads(r.stdout)
             self.assertEqual({s["id"]: s for s in doc["steps"]}["fees"]["override"], "done")

@@ -1,12 +1,15 @@
-"""`taxjson checklist`'s default view (docs/output-style.md, Essentials
-first): the counts per section as a table, one `! ` line per item
-needing attention or blocked, the pointer to the full list and, last,
-the next step; `--all` / `--details` the full list. On the synthetic
-style projects at TAXJSON_WIDTH=100."""
+"""`taxjson checklist`'s default view (docs/output-style.md): the list
+(every step with its state; an open step's commands; how and why for
+the next step and those needing attention), then the summary: the
+counts per section as a table, one `! ` line per item needing attention
+or blocked, and, last, the next step; `--all` / `--details` adds every
+step's how, commands and why. On the synthetic style projects at
+TAXJSON_WIDTH=100."""
 import json
+import re
 import unittest
 
-from _style import CapturedWidth, assert_concise, assert_styled, project
+from _style import CapturedWidth, assert_styled, project
 
 from taxjson.lib import checklist as cl
 from taxjson.lib import out
@@ -27,39 +30,56 @@ class TestChecklistDefault(unittest.TestCase):
 
     def _check(self, country):
         p = project(country)
-        r = p.run("checklist", TAXJSON_WIDTH=100)
+        r = p.run("checklist", "--run", TAXJSON_WIDTH=100)
         self.assertEqual(r.returncode, 1, r.stderr)
-        doc = json.loads(p.run("checklist", "--json").stdout)
+        doc = json.loads(p.run("checklist", "--run", "--json").stdout)
         open_ = [s for s in doc["steps"]
                  if s["effective"] in ("attention", "blocked")]
         self.assertTrue(open_)
-        # The budget: one `! ` line per open item, at most 6 others.
-        assert_concise(self, r.stdout, r.stderr, budget=6 + len(open_))
         assert_styled(self, r.stdout, 100)
-        acts = out.act_lines(r.stdout)
-        # Items blocked for one reason share a line; each other item
-        # needing attention or blocked has its own.
-        self.assertLessEqual(len(acts), len(open_), r.stdout)
-        flat = " ".join(acts)
-        for s in open_:
-            self.assertIn(f"{s['step']} {s['id']}", flat, r.stdout)
-            if s["effective"] == "attention":
-                self.assertTrue(any(a.startswith(f"! {s['step']} {s['id']}")
-                                    for a in acts), (s["id"], r.stdout))
-        # Every section a row of the counts table.
+        lines = r.stdout.splitlines()
+        # The list first: every section's heading, every step on a line
+        # of its own with its mark and number.
+        for k, sec in enumerate(cl.SECTIONS, 1):
+            self.assertIn(f"{k}. {sec.upper()}", lines, sec)
+        for s in doc["steps"]:
+            self.assertRegex(r.stdout, rf"(?m)^  \[.\] {s['step']:>2}\. "
+                                       rf"{s['id']} ")
+        # How and why for the next step and those needing attention
+        # only (--all: every step).
+        attention = sum(1 for s in doc["steps"]
+                        if s["effective"] == "attention")
+        self.assertLessEqual(r.stdout.count("Why: "), attention + 1)
+        self.assertLess(r.stdout.count("Why: "),
+                        sum(1 for s in doc["steps"] if s["why"]))
+        # Then the summary: the counts table, a row per section, after
+        # the last step ...
+        last_step = max(i for i, ln in enumerate(lines)
+                        if re.match(r"^  \[.\] +\d+\. ", ln))
         kinds = dict((ln, k) for k, ln in out.classify(r.stdout))
         for k, sec in enumerate(cl.SECTIONS, 1):
             row = next((ln for ln in kinds if ln.startswith(f"{k}. {sec} ")),
                        None)
             self.assertIsNotNone(row, (sec, r.stdout))
             self.assertEqual(kinds[row], "table", row)
-        lines = r.stdout.splitlines()
+            self.assertGreater(lines.index(row), last_step, row)
+        # ... one `! ` line per item needing attention or blocked (items
+        # blocked for one reason share a line), each within the width ...
+        acts = out.act_lines(r.stdout)
+        self.assertLessEqual(len(acts), len(open_), r.stdout)
+        for ln in acts:
+            self.assertLessEqual(len(ln), 100, ln)
+        flat = " ".join(acts)
+        for s in open_:
+            self.assertIn(f"{s['step']} {s['id']}", flat, r.stdout)
+            if s["effective"] == "attention":
+                self.assertTrue(any(a.startswith(f"! {s['step']} {s['id']}")
+                                    for a in acts), (s["id"], r.stdout))
+        # ... and the next step last.
         nxt = doc["next"]
         self.assertEqual(lines[-1], f"Next (step {nxt['step']}, "
                                     f"{nxt['id']}): {nxt['do']}")
         self.assertIn("tjs checklist --all", r.stdout)
-        # The per-item commands and reasons are not in the default view.
-        self.assertNotIn("Why: ", r.stdout)
         # One progress step, not one per check.
         self.assertEqual(r.stderr.count("==> "), 1, r.stderr)
         return r
@@ -72,8 +92,8 @@ class TestChecklistDefault(unittest.TestCase):
 
     def test_all_and_details_are_the_full_list(self):
         p = project("canada")
-        full = p.run("checklist", "--all", TAXJSON_WIDTH=100)
-        det = p.run("checklist", "--details", TAXJSON_WIDTH=100)
+        full = p.run("checklist", "--run", "--all", TAXJSON_WIDTH=100)
+        det = p.run("checklist", "--run", "--details", TAXJSON_WIDTH=100)
         self.assertEqual(full.stdout, det.stdout)
         flat = " ".join(full.stdout.split())
         for phrase in ("1. SET UP", "[!] 10. missing-history",

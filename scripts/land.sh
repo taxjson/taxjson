@@ -121,10 +121,33 @@ fail() {   # fail MESSAGE — nothing may merge later behind the caller's back
 # check-runs API it reads needs a permission fine-grained personal tokens cannot have, and the
 # everyday token is one (publish kit D8, 2026-10-17). A run not finished yet, or one whose jobs
 # cannot be read, counts as pending; one that ended with no job is a failure (a broken workflow).
+# A workflow every pull request triggers (a .github/workflows/*.yml with a pull_request trigger
+# and no paths filter: kit-checks.yml, tests.yml; privacy-watch.yml runs on a few paths only)
+# whose run GitHub has not created yet counts as pending too: an early poll must not see only
+# the runs that exist and call the rest passed.
+expected() {
+  local f
+  for f in .github/workflows/*.yml; do
+    [ -f "$f" ] || continue
+    awk '/^on:/ { on = 1; if ($0 ~ /pull_request/) seen = 1; next }
+         on && /^[^ #]/ { on = 0 }
+         on && /^  pull_request:/ { pr = 1; seen = 1; next }
+         on && pr && /^  [^ ]/ { pr = 0 }
+         on && pr && /^    paths(-ignore)?:/ { filtered = 1 }
+         END { exit !(seen && !filtered) }' "$f" || continue
+    sed -nE 's/^name:[[:space:]]*"?([^"]*[^" ])"?[[:space:]]*$/\1/p' "$f" | sed -n 1p
+  done
+}
 checks() {
-  local id status name jobs
-  gh api "repos/$SLUG/actions/runs?branch=$BRANCH&head_sha=$HEAD_SHA&per_page=100" \
-      --jq '.workflow_runs[] | [(.id | tostring), .status, .name] | @tsv' 2>/dev/null |
+  local id status name jobs runs
+  runs="$(gh api "repos/$SLUG/actions/runs?branch=$BRANCH&head_sha=$HEAD_SHA&per_page=100" \
+      --jq '.workflow_runs[] | [(.id | tostring), .status, .name] | @tsv' 2>/dev/null || true)"
+  expected | while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    printf '%s\n' "$runs" | awk -F'\t' -v n="$name" '$3 == n { found = 1 } END { exit !found }' \
+      || printf '%s\tpending\n' "$name"
+  done
+  printf '%s\n' "$runs" |
   while IFS="$(printf '\t')" read -r id status name; do
     [ -n "$id" ] || continue
     [ "$status" = completed ] || { printf '%s\tpending\n' "$name"; continue; }
@@ -153,6 +176,7 @@ while :; do
   if [ "$AUTO" = 0 ] && [ -n "$CHECKS" ] && [ "$NOTPASS" -eq 0 ]; then
     gh pr merge "$URL" --repo "$SLUG" --rebase --delete-branch >/dev/null \
       || die "Every check passed but the merge failed: $URL (merge it on GitHub, then git pull --rebase)." 1
+    break        # merged: not "still waiting" when the timeout falls in the same round
   fi
   if [ "$(date +%s)" -ge "$END" ]; then
     if [ "$AUTO" = 1 ]; then

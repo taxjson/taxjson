@@ -241,7 +241,7 @@ class TestOutsideAProject(unittest.TestCase):
 
     def test_the_checklist_still_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r = _tjs(tmp, "checklist")
+            r = _tjs(tmp, "checklist", "--run")
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
