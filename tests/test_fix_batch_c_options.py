@@ -45,20 +45,24 @@ class LongSplitTest(unittest.TestCase):
 
 class CreditSplitRenameTest(unittest.TestCase):
     """#32 / #33: a put's assignment credit follows the underlying's
-    split and rename."""
+    split and rename. The put's delivery leg is in the book: a credit
+    whose leg the engine never paired stays with the option (2026-10-24
+    audit A44, A49)."""
 
     CR = [dict(account="margin", underlying="AAA.TO", right="P",
                shares=10, amount=100, date="2025-01-02")]
+    LEG = row("ASSIGN", "2025-01-02", "AAA.TO", 10, 500, id="delivery")
 
     def test_split_scales_the_credit(self):
-        rows = [row("SPLIT", "2025-02-03", "AAA.TO", 2),
+        rows = [dict(self.LEG), row("SPLIT", "2025-02-03", "AAA.TO", 2),
                 row("BUYSELL", "2025-03-03", "AAA.TO", -10, 300, id="sale")]
         got = TS.credits_by_sale(rows, [dict(c) for c in self.CR])
         self.assertEqual(set(got), {"sale"})
         self.assertAlmostEqual(got["sale"], 50.0)
 
     def test_rename_moves_the_credit(self):
-        rows = [row("SPLIT", "2025-02-03", "AAA.TO", 1, symbol_new="BBB.TO"),
+        rows = [dict(self.LEG),
+                row("SPLIT", "2025-02-03", "AAA.TO", 1, symbol_new="BBB.TO"),
                 row("BUYSELL", "2025-03-03", "BBB.TO", -10, 300, id="sale")]
         got = TS.credits_by_sale(rows, [dict(c) for c in self.CR])
         self.assertEqual(set(got), {"sale"})
@@ -67,6 +71,7 @@ class CreditSplitRenameTest(unittest.TestCase):
     def test_split_before_assignment_does_not_scale(self):
         cr = [dict(self.CR[0], date="2025-03-01")]
         rows = [row("SPLIT", "2025-02-03", "AAA.TO", 2),
+                dict(self.LEG, date="2025-03-01", date_settle="2025-03-01"),
                 row("BUYSELL", "2025-03-03", "AAA.TO", -10, 300, id="sale")]
         got = TS.credits_by_sale(rows, cr)
         self.assertAlmostEqual(got["sale"], 100.0)
@@ -125,18 +130,40 @@ class CallCreditLegTest(unittest.TestCase):
                          {"leg": 100.0})
 
     def test_no_identified_leg_keeps_the_window(self):
+        # An unmarked sale of another size and price two days BEFORE
+        # the option row is no leg: the engine's ledger drains an
+        # unpaired premium only into a sale from the option row on,
+        # within 7 days, else leaves it with the option (2026-10-24
+        # audit A44).
         rows = [row("BUYSELL", "2025-02-01", "AAA.TO", -40, 200,
                     price=5, id="near")]
+        self.assertEqual(TS.credits_by_sale(rows, self.credit()), {})
+        # The same sale on the option's day is the nearest trade in the
+        # window and, as the last leg coming, takes the whole premium,
+        # as the engine folds it.
+        rows = [row("BUYSELL", "2025-02-03", "AAA.TO", -40, 200,
+                    price=5, id="near")]
         self.assertEqual(TS.credits_by_sale(rows, self.credit()),
-                         {"near": 40.0})
+                         {"near": 100.0})
+        # Beyond the window: the premium stays with the option.
+        rows = [row("BUYSELL", "2025-02-11", "AAA.TO", -100, 5000,
+                    price=50, id="late")]
+        self.assertEqual(TS.credits_by_sale(rows, self.credit()), {})
 
     def test_credits_carry_strike_and_delivered(self):
         sym = "AAA250321C00050000.TO"
         rows = [row("BUYSELL", "2025-01-02", sym, -2, 300),
-                row("ASSIGN", "2025-02-03", sym, 2, 0)]
+                row("ASSIGN", "2025-02-03", sym, 2, 0),
+                # The share leg: without a stock line of AAA.TO in the
+                # account the engine's resolver reads the assignment as
+                # cash-settled, and there is no credit (audit A44).
+                row("ASSIGN", "2025-02-03", "AAA.TO", -200, 10000,
+                    price=50, id="leg")]
         cr = written(rows)["credits"]
         self.assertEqual([(c["strike"], c["delivered"]) for c in cr],
                          [(50.0, 200.0)])
+        self.assertEqual(written(rows[:2])["credits"], [])
+        self.assertTrue(written(rows[:2])["trades"][0]["cash_settled"])
 
 
 class RenameIntoOpenSeriesTest(unittest.TestCase):

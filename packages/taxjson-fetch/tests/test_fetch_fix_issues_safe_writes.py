@@ -226,7 +226,9 @@ class TestProjectFetchLock(unittest.TestCase):
                 entered.set()
                 return {}
 
-            with mock.patch.object(C, "_run", fake_run):
+            # The lock is _run's own (audit 2026-10-24 B27): the step
+            # it guards is _run_locked.
+            with mock.patch.object(C, "_run_locked", fake_run):
                 with file_lock(work / ".fetch.lock"):
                     t = threading.Thread(target=C.run, args=(req,))
                     t.start()
@@ -237,8 +239,8 @@ class TestProjectFetchLock(unittest.TestCase):
             self.assertEqual(_mode(work / ".fetch.lock"), 0o600)
 
 
-_QT_ROWS = ("Transaction Date,Symbol,Quantity\n"
-            "2025-01-02,ZZSYN,1\n2025-02-02,ZZSYN,2\n")
+_QT_ROWS = ("Transaction Date,Symbol,Quantity,Account #\n"
+            "2025-01-02,ZZSYN,1,99900001\n2025-02-02,ZZSYN,2,99900001\n")
 
 
 class TestTrimBackupLinks(unittest.TestCase):
@@ -260,7 +262,7 @@ class TestTrimBackupLinks(unittest.TestCase):
             link.symlink_to(outside)
             backups = []
             self.assertEqual(C._qt_trim_file(source, "2025-01-01",
-                                             "2025-01-31",
+                                             "2025-01-31", "99900001",
                                              backups=backups), 1)
             self.assertFalse(os.path.lexists(str(outside)))
             self.assertTrue(link.is_symlink())          # left alone
@@ -271,8 +273,8 @@ class TestTrimBackupLinks(unittest.TestCase):
             self.assertEqual(bak.read_text(), _QT_ROWS)
             self.assertEqual(_mode(bak), 0o600)
             self.assertEqual(source.read_text(),
-                             "Transaction Date,Symbol,Quantity\n"
-                             "2025-02-02,ZZSYN,2\n")
+                             "Transaction Date,Symbol,Quantity,Account #\n"
+                             "2025-02-02,ZZSYN,2,99900001\n")
 
     def test_backup_link_to_an_existing_file_is_never_written(self):
         with tempfile.TemporaryDirectory() as td:
@@ -281,7 +283,7 @@ class TestTrimBackupLinks(unittest.TestCase):
             outside.write_text("keep")
             source.with_name(source.name + ".bak").symlink_to(outside)
             backups = []
-            C._qt_trim_file(source, "2025-01-01", "2025-01-31",
+            C._qt_trim_file(source, "2025-01-01", "2025-01-31", "99900001",
                             backups=backups)
             self.assertEqual(outside.read_text(), "keep")
             self.assertEqual(backups[0].read_text(), _QT_ROWS)

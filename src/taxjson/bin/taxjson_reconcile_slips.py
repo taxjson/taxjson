@@ -413,9 +413,14 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
             root, sfx = split_listing(sym)
             rec = out.setdefault(root, {"qty": 0.0, "proceeds": 0.0,
                                         "cost": None, "rows": 0,
-                                        "listings": {}})
+                                        "qty_rows": 0, "listings": {}})
+            # `qty_rows`: the rows that state a quantity. A blank one
+            # adds nothing to `qty`, so with fewer than `rows` the
+            # quantity is a partial sum, never a total to compare
+            # (_compare; audit 2026-10-24 B47).
             _bump(rec, sfx, rows=1, proceeds=proceeds,
-                  qty=abs(q) if q is not None else 0.0, cost=c)
+                  qty=abs(q) if q is not None else 0.0,
+                  qty_rows=1 if q is not None else 0, cost=c)
         if foreign:
             got = ", ".join(f"{n} row(s) in {c}"
                             for c, n in sorted(foreign.items()))
@@ -623,7 +628,26 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
         if _timed:
             problems.extend(grant_note)
     _oq = float(c.get("open_grant_qty") or 0.0)
-    if s["qty"] > 0 and abs(s["qty"] - c["qty"]) > 1e-4 \
+    _known = s.get("qty_rows")
+    _blank = (int(s.get("rows") or 0) - int(_known)
+              if _known is not None else 0)
+    if s["qty"] > 0 and _blank > 0:
+        # Some of the slip's rows state no quantity: its share count is
+        # a partial sum, not a total — a "quantity off by" line claimed
+        # a discrepancy of exactly the blank rows' shares (audit
+        # 2026-10-24 B47). The known part alone above the computed
+        # count is a real one.
+        _where = (f"{_blank} of {int(s['rows'])} slip row(s) state no "
+                  f"quantity")
+        if s["qty"] > c["qty"] + 1e-4:
+            problems.append(f"quantity: the {s['qty']:,.4f} the slip "
+                            f"rows with a quantity state exceed the "
+                            f"computed {c['qty']:,.4f} ({_where})")
+        else:
+            notes.append(f"quantity not compared: {_where} (the others "
+                         f"state {s['qty']:,.4f}; computed "
+                         f"{c['qty']:,.4f})")
+    elif s["qty"] > 0 and abs(s["qty"] - c["qty"]) > 1e-4 \
             and not (_oq > 1e-9 and abs(s["qty"] - (c["qty"] - _oq)) <= 1e-4):
         problems.append(f"quantity off by {s['qty'] - c['qty']:+,.4f} "
                         f"(slip {s['qty']:,.4f} vs computed "
@@ -966,8 +990,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                           f"reconcile yet", prog="taxjson reconcile-slips",
                           details=["Save the broker's T5008 / 1099-B slip "
                                    "CSV there (docs/filing.md), or skip "
-                                   "the step: `taxjson checklist --skip "
-                                   "t5008`."], code=2)
+                                   "the step: `taxjson checklist --done "
+                                   "t5008 --force`."], code=2)
             _out.fail(f"no such file: {sp}", prog="taxjson reconcile-slips",
                       code=2)
         if not sp.is_file():
@@ -1003,10 +1027,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             for root, rec in one.items():
                 acc = slip.setdefault(root, {"qty": 0.0, "proceeds": 0.0,
                                              "cost": None, "rows": 0,
-                                             "listings": {}})
+                                             "qty_rows": 0, "listings": {}})
                 for sfx, sub in rec["listings"].items():
                     _bump(acc, sfx, qty=sub["qty"],
                           proceeds=sub["proceeds"], rows=sub["rows"],
+                          qty_rows=sub.get("qty_rows", sub["rows"]),
                           cost=sub["cost"])
     except SlipRefused as e:
         print(e.code, file=sys.stderr)

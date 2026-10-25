@@ -266,28 +266,77 @@ def resolve_live_symbol(transactions: List[dict], symbol: str,
     return cur
 
 
+def _symbol_trades(txs: List[dict], symbol: str, account: str
+                   ) -> List[dict]:
+    """The position-moving rows of `symbol` in `account` ('' = any)."""
+    return [t for t in txs
+            if t.get("symbol") == symbol
+            and t.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER")
+            and (not account or not t.get("account")
+                 or str(t.get("account")) == str(account))]
+
+
+def _straddles(t: dict, record_date: str) -> bool:
+    """A trade executed on or before the record date that settles after
+    it: not the holder of record's."""
+    return (str(t.get("date") or "") <= record_date
+            < str(t.get("date_settle") or ""))
+
+
 def _stamp_date(txs: List[dict], symbol: str, record_date: str,
                 account: str) -> str:
     """The trade date to stamp a map ADJUST with. Sized on the settled
     position (the holder of record), it must also reach exactly those
-    lots in a trade-date-ordered engine (the US, or tax_date = trade):
-    a trade executed on or before the record date that settles AFTER it
-    is not the record holder's, so the ADJUST goes at the end of the day
-    BEFORE the earliest such trade (audit A2-0071: a sale traded on the
-    record date dropped the ADJUST as 'no open lots'; A2-0988: a buy
-    traded on the record date shared it). The settle date stays the
-    record date, so settle-ordered books are unchanged."""
-    straddle = [str(t.get("date") or "") for t in txs
-                if t.get("symbol") == symbol
-                and t.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER")
-                and (not account or not t.get("account")
-                     or str(t.get("account")) == str(account))
-                and str(t.get("date") or "") <= record_date
-                < str(t.get("date_settle") or "")]
+    lots in a trade-date-ordered engine (the US, or tax_date = trade).
+    A SALE executed on or before the record date that settles AFTER it
+    is not the record holder's: its shares are still the holder's, but
+    a trade-date walk has already closed their lot by the record date,
+    so the ADJUST goes at the end of the day BEFORE the earliest such
+    sale (audit A2-0071: a sale traded on the record date dropped the
+    ADJUST as 'no open lots'). A straddling PURCHASE needs no
+    backdating: the row carries the record date (`record_date`), and
+    the US engine spreads it over the open lots settled by then only
+    (core.py, the 'dist' ADJUST branch; A2-0988: a buy traded on the
+    record date shared it). Backdating for a purchase put the whole
+    amount on the lots open BEFORE it — a later lot settled by the
+    record date got nothing (audit 2026-10-24 B14). The settle date
+    stays the record date, so settle-ordered books are unchanged."""
+    straddle = [str(t.get("date") or "")
+                for t in _symbol_trades(txs, symbol, account)
+                if _straddles(t, record_date)
+                and float(t.get("quantity") or 0.0) < 0]
     if not straddle:
         return record_date
     first = _dt.date.fromisoformat(min(straddle))
     return (first - _dt.timedelta(days=1)).isoformat()
+
+
+def _stamp_problem(txs: List[dict], symbol: str, record_date: str,
+                   account: str, stamp: str) -> Optional[str]:
+    """Why a backdated stamp (`_stamp_date`) cannot reach exactly the
+    holder of record's lots in a per-lot, trade-date-ordered engine, or
+    None: a trade of the symbol between the stamp and the record date
+    that is NOT a straddling sale — a purchase settled by the record
+    date (open only after the stamp: it gets no share) or a sale settled
+    by it (its lot is open at the stamp: it gets one). Said, never
+    silently misplaced (audit 2026-10-24 B14)."""
+    if stamp >= record_date:
+        return None
+    between = sorted(
+        (str(t.get("date") or ""), float(t.get("quantity") or 0.0))
+        for t in _symbol_trades(txs, symbol, account)
+        if stamp < str(t.get("date") or "") <= record_date
+        and not (_straddles(t, record_date)
+                 and float(t.get("quantity") or 0.0) < 0))
+    if not between:
+        return None
+    rows = ", ".join(f"{'bought' if q > 0 else 'sold'} {abs(q):g} on {d}"
+                     for d, q in between)
+    return (f"dated {stamp} so that it reaches the shares of the sale "
+            f"settling after the record date, it misses the lots of "
+            f"the trade(s) in between ({rows}): a per-lot engine puts it "
+            f"on the lots open on {stamp} — check those lots' basis, or "
+            f"enter per-lot ADJUST rows by hand")
 
 
 def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
@@ -498,11 +547,21 @@ def apply_distributions(doc: dict, map_rows, account: str,
             "currency": doc.get("metadata", {}).get("target_currency", ""),
             "net_amount": amount, "gross_amount": 0.0,
             "type": "dist",
+            # The record date: the US engine spreads the row over the
+            # open lots settled by it only (B14; the Canada pool needs
+            # no lot).
+            "record_date": date,
             "account": account,
             "id": rid,
             "description": f"{kind}: {bal:g} sh x {per_share:g}/sh "
                            f"per [[distributions]]",
         })
+        from taxjson.lib.country import is_usa
+        trouble = _stamp_problem(txs, sym, date, account, adj_date)
+        if trouble and is_usa(country):
+            emit_line(f"warning: ATTENTION: [[distributions]] {key}{via} "
+                      f"{date}: the basis adjustment is {trouble}.",
+                      file=sys.stderr)
         # A reinvested distribution is income of the record year (T3
         # box 21/26/49, or a T5 stock dividend): the ACB rises only
         # because that amount is taxed. This tool books the ACB side

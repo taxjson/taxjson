@@ -166,7 +166,7 @@ class TestCommandEdges(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); _project(root)
             r = _cli(root, "--note", "x")
-            self.assertNotEqual(r.returncode, 0); self.assertIn("--note goes with --done or --skip", r.stderr)
+            self.assertNotEqual(r.returncode, 0); self.assertIn("--note goes with --done", r.stderr)
             r = _cli(root, "--undo", "fees")
             self.assertEqual(r.returncode, 0); self.assertIn("had no mark", r.stdout)
             r = _cli(root, "--reset")
@@ -197,7 +197,7 @@ class TestCommandEdges(unittest.TestCase):
                     _checklist_walk(ctx, cl, ["fees"])
             self.assertEqual(cm.exception.code, 1)
             text = out.getvalue()
-            self.assertIn("unknown key 'x' — [d]one  [s]kip", text)
+            self.assertIn("unknown key 'x' — [d]one  [f]orce done", text)
             self.assertIn("CHECKLIST — tax year 2025", text)
             # [d]one closes the only open step: exit normally.
             answers = iter(["d", ""])

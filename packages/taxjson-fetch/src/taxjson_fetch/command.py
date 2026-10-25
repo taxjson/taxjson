@@ -362,12 +362,15 @@ def _qt_restatement_suspects(existing_csv: str,
 
 
 def _qt_window_overlap(acct_dir: Path, out: Path,
-                       start_iso: str,
-                       end_iso: str) -> List[Tuple[Path, int]]:
-    """Sibling Questrade CSVs with rows dated inside the fetched
-    window. The two sources round price/gross differently, so their
-    copies of the same trade hash to DIFFERENT ids and never dedup —
-    coexisting coverage double-counts the books."""
+                       start_iso: str, end_iso: str,
+                       number: str) -> List[Tuple[Path, int]]:
+    """Sibling Questrade CSVs with rows of the fetched account `number`
+    dated inside the fetched window. The two sources round price/gross
+    differently, so their copies of the same trade hash to DIFFERENT
+    ids and never dedup — coexisting coverage double-counts the books.
+    Another Questrade account's rows in the folder (its manual export)
+    are not this fetch's: counted by date alone, --trim-overlap deleted
+    them from the active books (audit 2026-10-24 B28)."""
     hits: List[Tuple[Path, int]] = []
     import csv as _csv
     import io as _io
@@ -395,8 +398,11 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
         except Exception:
             continue
         col = _qt_date_col(rows[0] if rows else [])
-        n = sum(1 for r in rows[1:] if len(r) > col and _row_date_in_window(
-            r[col], start_iso, end_iso))
+        acol = _qt_account_col(rows[0] if rows else [])
+        n = sum(1 for r in rows[1:]
+                if len(r) > col
+                and _row_date_in_window(r[col], start_iso, end_iso)
+                and _row_of_account(r, acol, number))
         if n:
             hits.append((sib, n))
     return hits
@@ -421,6 +427,31 @@ def _qt_date_col(header: List[str]) -> int:
     return 0
 
 
+def _qt_account_col(header: List[str]) -> Optional[int]:
+    """Index of Questrade's "Account #" column, by header name; None
+    when the header has none (not a Questrade export, then)."""
+    for i, h in enumerate(header):
+        if h.strip().lstrip("\ufeff").lower() == "account #":
+            return i
+    return None
+
+
+def _row_of_account(row: List[str], acol: Optional[int],
+                    number: str) -> bool:
+    """Whether a Questrade row is the fetched account's: its Account #
+    cell holds the same digits. A BLANK cell counts as the account's
+    (the parser books the folder's unattributed rows to it, so they
+    would double-count against the fetched file and the warning must
+    still name them); a cell naming ANOTHER account does not (audit
+    2026-10-24 B28). With no Account # column (acol None) every row
+    counts: the warning errs towards saying so, and _qt_trim_file
+    refuses to trim such a file rather than guess."""
+    if acol is None or len(row) <= acol:
+        return True
+    cell = re.sub(r"\D", "", row[acol])
+    return not cell or cell == re.sub(r"\D", "", str(number))
+
+
 def _row_date_in_window(first_field: str, start_iso: str,
                         end_iso: str) -> bool:
     """True only for rows whose first field carries a REAL date INSIDE
@@ -436,11 +467,15 @@ def _row_date_in_window(first_field: str, start_iso: str,
     return start_iso <= first_field[:10] <= end_iso
 
 
-def _qt_trim_file(path: Path, start_iso: str, end_iso: str, *,
+def _qt_trim_file(path: Path, start_iso: str, end_iso: str, number: str, *,
                   backups: Optional[List[Path]] = None) -> int:
     """Rewrite a Questrade CSV keeping only rows dated OUTSIDE the
     fetch window (the fetched file owns the window — and nothing
-    else). The original is kept as <name>.bak (or the next free
+    else) or belonging to ANOTHER Questrade account than `number`
+    (_row_of_account; a second account's export in the folder lost its
+    rows inside the window, audit 2026-10-24 B28). A file with no
+    Account # column is refused (ValueError) rather than trimmed by
+    date alone. The original is kept as <name>.bak (or the next free
     <name>.bakN; its path is appended to `backups`). Returns the number
     of rows removed; unparseable rows are kept (safe side)."""
     import csv as _csv
@@ -459,9 +494,18 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str, *,
                              f"lines (an unbalanced quote?) — not "
                              f"trimmed; fix the file by hand")
     col = _qt_date_col(rows[0] if rows else [])
+    acol = _qt_account_col(rows[0] if rows else [])
+    if acol is None:
+        raise ValueError(
+            f"{path.name}: no 'Account #' column — cannot tell which "
+            f"rows are account #{F.mask_account_number(number)}'s; not "
+            f"trimmed. Remove its rows dated {start_iso}..{end_iso} by "
+            f"hand (the fetched file holds them)")
     keep = [rows[0]] + [r for r in rows[1:]
-                        if not (len(r) > col and _row_date_in_window(
-                            r[col], start_iso, end_iso))]
+                        if not (len(r) > col
+                                and _row_date_in_window(r[col], start_iso,
+                                                        end_iso)
+                                and _row_of_account(r, acol, number))]
     removed = len(rows) - len(keep)
     if removed:
         # Never clobber an existing backup: a second --trim-overlap
@@ -578,11 +622,22 @@ def _flex_lost_dates(existing: str, new: str, year: Any,
 
 
 def run(request) -> Dict[str, Any]:
-    """`taxjson fetch`, one per project at a time: the whole command
+    """`taxjson fetch` (plugin.BrokerFetcher.fetch): _run, which takes
+    the project's fetch lock itself."""
+    return _run(request)
+
+
+def _run(request) -> Dict[str, Any]:
+    """One `taxjson fetch` per project at a time: the whole command
     (each account's read of its existing CSV, the merge and the write
     back, the backups, --trim-overlap) runs under work/.fetch.lock, so
     a second fetch in the same project waits instead of merging into a
-    file the first is rewriting (a lost update; GitHub issue #13)."""
+    file the first is rewriting (a lost update; GitHub issue #13). The
+    lock is taken HERE, around the read-merge-publish step itself
+    (_run_locked), not in a wrapper a caller can skip: entered
+    directly, two concurrent fetches each read the old CSV, merged
+    their own download into it and both published, and one download
+    was lost (audit 2026-10-24 B27)."""
     from taxjson.lib.safe_write import file_lock
     work = Path(request.work)
     work.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -591,7 +646,7 @@ def run(request) -> Dict[str, Any]:
             "finish ...")):
         if not getattr(request, "shared_inputs", False) \
                 or getattr(request, "dry_run", False):
-            return _run(request)
+            return _run_locked(request)
         # Exports shared by every year's project: a fetch in another
         # year folder writes the same files.
         shared = Path(request.inputs)
@@ -599,10 +654,10 @@ def run(request) -> Dict[str, Any]:
         with file_lock(shared / ".fetch.lock", on_wait=lambda: request.say(
                 "waiting for another `taxjson fetch` writing the shared "
                 "inputs folder to finish ...")):
-            return _run(request)
+            return _run_locked(request)
 
 
-def _run(request) -> Dict[str, Any]:
+def _run_locked(request) -> Dict[str, Any]:
     """Download every account in request.accounts (each declares
     `brokerage = "questrade"` or `"ibkr_flex"`) into inputs/<account>/:
     questrade_<year>.csv through the Questrade REST API, ib_flex.csv
@@ -739,7 +794,7 @@ def _run(request) -> Dict[str, Any]:
                          f"{out.name} aside and re-fetch.")
             overlap_now = _qt_window_overlap(acct_dir, out,
                                              start.isoformat(),
-                                             end.isoformat())
+                                             end.isoformat(), number)
             results[a] = {
                 "source": "questrade", "file": out.name,
                 "window": [start.isoformat(), end.isoformat()],
@@ -770,14 +825,14 @@ def _run(request) -> Dict[str, Any]:
                     f"restatements)")
             overlap = _qt_window_overlap(acct_dir, out,
                                          start.isoformat(),
-                                         end.isoformat())
+                                         end.isoformat(), number)
             if overlap and getattr(args, "trim_overlap", False):
                 results[a]["trimmed"] = []
                 for sib, n in overlap:
                     _baks: List[Path] = []
                     try:
                         cut = _qt_trim_file(sib, start.isoformat(),
-                                            end.isoformat(),
+                                            end.isoformat(), number,
                                             backups=_baks)
                     except ValueError as e:
                         print(f"taxjson fetch: WARNING: {a}/{e}",

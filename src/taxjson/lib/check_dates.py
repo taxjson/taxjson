@@ -375,10 +375,16 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                     from taxjson.lib.core import parse_option_expiry
                     _exp = _d(parse_option_expiry(sym))
                     if (_exp and sd > _exp and td <= _exp
-                            and abs(float(r.get("price") or 0)) < 1e-9):
+                            and abs(float(r.get("price") or 0)) < 1e-9
+                            and action != "ASSIGN"):
                         # An expiry/zero-price close settling after the
                         # contract expired: on a settle basis its gain or
-                        # loss moves to the settle year (A2-0386).
+                        # loss moves to the settle year (A2-0386). An
+                        # assignment's option leg is not one: it settles
+                        # with its stock leg, one cycle after the exercise
+                        # day (CA-DATE-08's "takes its stock leg's date";
+                        # a Friday expiry settles the Monday), so the
+                        # parsers keep its T+1 and so does this check.
                         add("WARN", "settle-after-expiry",
                             "an option expiry (price 0) settles after the "
                             "contract's expiry date", acct, label, r,

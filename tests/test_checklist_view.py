@@ -67,7 +67,7 @@ class TestView(unittest.TestCase):
                            for k, s in enumerate(cl.SECTIONS, 1))]
             self.assertEqual(len(rows), len(cl.SECTIONS))
             self.assertIn("one section: `--section N`", text)
-            self.assertIn("(the step's id or number)", text)
+            self.assertIn("(the step's id or number; several: `--done ID,ID`)", text)
             # The summary alone (after a --walk) is the same block.
             summary = cl.render_summary(results, 2025, "canada", width_=100)
             self.assertIn(lines[table], summary)
@@ -106,12 +106,12 @@ class TestCommand(unittest.TestCase):
             self.assertIn("roc-entered mark removed", r.stdout)
             self.assertNotIn("roc-entered",
                              cl.load_state(root)["overrides"])
-            r = _cli(root, "--skip", "tt-lines", "--done",
+            r = _cli(root, "--done", "tt-lines", "--done",
                      str(ids.index("noa") + 1), "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual([(m["step"], m["mark"]) for m in
                               json.loads(r.stdout)["recorded"]],
-                             [("noa", "done"), ("tt-lines", "skipped")])
+                             [("tt-lines", "done"), ("noa", "done")])
             # A number out of range, like an unknown id, writes nothing.
             r = _cli(root, "--done", str(len(ids) + 1), "--done", "install")
             self.assertNotEqual(r.returncode, 0)
@@ -122,6 +122,33 @@ class TestCommand(unittest.TestCase):
             # --only by number: that step alone.
             doc = json.loads(_cli(root, "--only", "2", "--json").stdout)
             self.assertEqual([s["id"] for s in doc["steps"]], [ids[1]])
+
+    def test_several_steps_at_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); _project(root)
+            ids = cl.item_ids()
+            r = _cli(root, "--done", "export-coverage,inputs-frozen")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("export-coverage marked done", r.stdout)
+            self.assertIn("inputs-frozen marked done", r.stdout)
+            marks = cl.load_state(root)["overrides"]
+            self.assertEqual({k: v["status"] for k, v in marks.items()},
+                             {"export-coverage": "done", "inputs-frozen": "done"})
+            # Numbers mix with ids; a space after the comma is fine.
+            r = _cli(root, "--undo", f"export-coverage, {ids.index('inputs-frozen') + 1}")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(cl.load_state(root)["overrides"], {})
+            # One unknown name in the list writes nothing.
+            r = _cli(root, "--done", "export-coverage,bogus")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("unknown step 'bogus'", r.stderr)
+            self.assertEqual(cl.load_state(root)["overrides"], {})
+            r = _cli(root, "--done", ",")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("--done names no step", r.stderr)
+            # --only takes a list too.
+            doc = json.loads(_cli(root, "--only", "2,3", "--json").stdout)
+            self.assertEqual([s["id"] for s in doc["steps"]], ids[1:3])
 
     def test_section_shows_checks_and_refuses(self):
         with tempfile.TemporaryDirectory() as td:
@@ -155,6 +182,29 @@ class TestCommand(unittest.TestCase):
             self.assertIn(cl.NOT_CHECKED,
                           {s["detail"] for s in whole["steps"]
                            if s["section"] == "Check"})
+            # Several sections: comma-separated or repeated, in the
+            # list's order, each once.
+            want = cl.section_ids("Check") + cl.section_ids("Results")
+            for argv in (("--section", "6,7"), ("--section", "7,6"),
+                         ("--section", "results", "--section", "6"),
+                         ("--section", "6,check,7")):
+                doc = json.loads(_cli(root, *argv, "--json").stdout)
+                self.assertEqual([s["id"] for s in doc["steps"]], want,
+                                 argv)
+            r = _cli(root, "--section", "6,7")
+            self.assertIn("— 6. Check, 7. Results: ",
+                          r.stdout.splitlines()[0])
+            self.assertIn("6. CHECK", r.stdout)
+            self.assertIn("7. RESULTS", r.stdout)
+            self.assertNotIn("8. THROUGH THE YEAR", r.stdout)
+            self.assertEqual(cl.resolve_sections(["6,7", "fill"]),
+                             ["Fill the gaps", "Check", "Results"])
+            r = _cli(root, "--section", "6,bogus")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("unknown section 'bogus'", r.stderr)
+            r = _cli(root, "--section", ",")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("names no section", r.stderr)
             r = _cli(root, "--section", "bogus")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("unknown section 'bogus'", r.stderr)
@@ -174,6 +224,13 @@ class TestCommand(unittest.TestCase):
                                   "--json").stdout)
             self.assertEqual({s["section"] for s in doc["steps"]},
                              {"Year end"})
+            doc = json.loads(_cli(Path(td), "--section", "2,10",
+                                  "--json").stdout)
+            self.assertEqual({s["section"] for s in doc["steps"]},
+                             {"Get your files", "Year end"})
+            r = _cli(Path(td), "--section", "2,10")
+            self.assertIn("— 2. Get your files, 10. Year end",
+                          r.stdout.splitlines()[0])
             self.assertFalse(doc["in_project"])
             self.assertEqual(list(Path(td).iterdir()), [])
 

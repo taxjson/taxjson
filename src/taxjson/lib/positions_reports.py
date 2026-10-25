@@ -125,6 +125,16 @@ class PositionsDateError(PositionsReportError):
     file for it, where a malformed cost field only skips the cost."""
 
 
+class PositionsSnapshotError(PositionsReportError):
+    """A holdings TOML that is not a whole, readable snapshot: its
+    `[meta] holdings_count` is not its number of `[[holding]]` tables
+    (cut short or edited), or a holding's contract size is not a
+    positive number (or contradicts `contract_multiplier_unknown`).
+    `tjs sanity` refuses the file for it, as for a date that is no day:
+    its quantities are never compared as if complete (audit 2026-10-25
+    brokers-inputs#1)."""
+
+
 @dataclass
 class PositionRow:
     broker: str
@@ -698,6 +708,19 @@ def _read_toml(path: Path) -> PositionsReport:
             f"{name} has no [[holding]] array (a holdings file has "
             f"[[holding]] tables)")
     meta = doc.get('meta') if isinstance(doc.get('meta'), dict) else {}
+    count = meta.get('holdings_count')
+    if count is not None and (isinstance(count, bool)
+                              or not isinstance(count, int)
+                              or count != len(holdings)):
+        # The writer's own row count (taxjson-fetch, taxjson-export): a
+        # file with fewer [[holding]] tables than it declares is cut
+        # short (a copy that stopped part-way, a hand edit) — refused,
+        # not compared as if complete (audit 2026-10-24 B37).
+        raise PositionsSnapshotError(
+            f"{name}: [meta] holdings_count = {count!r} but the file has "
+            f"{len(holdings)} [[holding]] table(s) — the snapshot is "
+            f"incomplete or edited; download it again (an unreadable "
+            f"file is never compared as if complete)")
     as_of = toml_as_of(meta, name)
     meta_acct = mask_account(meta.get('broker_account')
                              or meta.get('account'))
@@ -706,13 +729,14 @@ def _read_toml(path: Path) -> PositionsReport:
     rep = PositionsReport(path=path, broker='toml',
                           kind=kind_label('holdings_toml'), as_of=as_of)
     accts = set([meta_acct] if meta_acct else [])
-    for n, h in enumerate(holdings, 1):
+
+    def _row(n: int, h: Any) -> None:
         where = f"{name}: [[holding]] #{n}"
         if not isinstance(h, dict):
             raise PositionsReportError(f"{where} is not a table")
         atype_raw = str(h.get('asset_type') or '').strip().lower()
         if atype_raw == 'cash':
-            continue
+            return
         sym = str(h.get('symbol') or '').strip()
         qraw = h.get('quantity')
         if qraw is None or (isinstance(qraw, str) and not qraw.strip()):
@@ -737,9 +761,9 @@ def _read_toml(path: Path) -> PositionsReport:
                 raise PositionsReportError(
                     f"{where}: quantity {qty:g} but no symbol — it cannot "
                     f"be compared; fix the file")
-            continue
+            return
         if abs(qty) <= 1e-12:
-            continue
+            return
         _safe_cell(sym, field='symbol', where=where)
         for key in ('currency', 'cost_currency'):
             if isinstance(h.get(key), str):
@@ -768,7 +792,40 @@ def _read_toml(path: Path) -> PositionsReport:
             return f
         atype = ('crypto' if atype_raw == 'crypto'
                  else _asset_type_of(sym))
-        mult = _money('multiplier') or _money('contract_multiplier') or 0.0
+        mult = 0.0
+        for key in ('multiplier', 'contract_multiplier'):
+            try:
+                m = _money(key)
+            except PositionsReportError as e:
+                # A contract size that is no number: the file is
+                # refused, as for a size of 0 (audit 2026-10-25).
+                raise PositionsSnapshotError(str(e)) from None
+            if m is None:
+                continue
+            if m <= 0:
+                # A contract size is a positive count of units; a
+                # negative one turned a long option's cost negative
+                # (audit 2026-10-24 B36). Refused, like taxjson-export's
+                # own read-back.
+                raise PositionsSnapshotError(
+                    f"{where} ({sym}): {key} {m:g} is not a positive "
+                    f"number — fix the file (an unreadable row is never "
+                    f"skipped)")
+            mult = m
+            break
+        # taxjson-export writes `contract_multiplier_unknown = true` when
+        # its inputs disagree on an option's contract size (audit
+        # 2026-10-24 B21): the size is unknown, never the equity 100.
+        unknown = h.get('contract_multiplier_unknown')
+        if unknown is not None and not isinstance(unknown, bool):
+            raise PositionsSnapshotError(
+                f"{where} ({sym}): contract_multiplier_unknown "
+                f"{unknown!r} is not true or false")
+        if unknown and mult:
+            raise PositionsSnapshotError(
+                f"{where} ({sym}): contract_multiplier_unknown = true "
+                f"beside a contract size of {mult:g} — the file "
+                f"contradicts itself; keep one of the two")
         cost = None
         for key in ('total_cost', 'book_cost', 'cost_basis'):
             cost = _money(key)
@@ -782,8 +839,14 @@ def _read_toml(path: Path) -> PositionsReport:
                 # contract is `multiplier` shares, else the equity
                 # option's 100 (as the RBC reader and sanity's per-share
                 # view take it; 2026-10 audit #28).
-                cost = aep * abs(qty) * (
-                    mult if mult else 100.0 if atype == 'option' else 1.0)
+                if unknown and atype == 'option':
+                    # A per-share price times an unknown contract size
+                    # is no cost: left unknown rather than invented.
+                    cost = None
+                else:
+                    cost = aep * abs(qty) * (
+                        mult if mult else 100.0 if atype == 'option'
+                        else 1.0)
             else:
                 # taxjson-export's own cost_per_share is per HOLDING
                 # UNIT (per contract for an option: its file header
@@ -819,6 +882,23 @@ def _read_toml(path: Path) -> PositionsReport:
             cost_kind=kind, market_value=_money('market_value'),
             as_of=as_of, asset_type=atype, lot_date=lot_date,
             multiplier=float(mult), source=name))
+
+    # Every row is read before a refusal of one of its fields is
+    # raised: a malformed cost on row 1 hid a contract size of -50 or
+    # an impossible `acquired` on row 3, and `tjs sanity`, which skips
+    # only the cost for the first kind, compared the file (audit
+    # 2026-10-25 brokers-inputs#1). A refusal of the whole file wins.
+    first: Optional[PositionsReportError] = None
+    for n, h in enumerate(holdings, 1):
+        try:
+            _row(n, h)
+        except (PositionsDateError, PositionsSnapshotError):
+            raise
+        except PositionsReportError as e:
+            if first is None:
+                first = e
+    if first is not None:
+        raise first
     rep.accounts = sorted(accts)
     return rep
 

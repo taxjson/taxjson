@@ -421,8 +421,21 @@ In a taxable account the transfer rows themselves stay out of the books
 (`sidecar`): a transfer is not a purchase. Most are your own moves (a
 broker's internal account shuffle, a move between two of your accounts,
 a journal between a stock's US- and Canadian-dollar lines): their out
-and in rows cancel, and `IN_BOOKS` says `own_move`. What is left came
-from **outside your books**, and `IN_BOOKS` says what the books did:
+and in rows cancel, and `IN_BOOKS` says `own_move`. The two rows of a
+move between two of your accounts cancel within 10 days of each other.
+A slower one (an ATON move often takes a few weeks) cancels when the in
+row is up to 45 days after the out row, the same stock and quantity,
+and no other transfer could pair with either; the run says so:
+
+```
+Info: Own-account move: SAMPM.TO 50 cash -> margin (out 2024-05-20, in 2024-06-03: 14 days apart, nothing else pairs)
+```
+
+What is left came from **outside your books**, and `IN_BOOKS` says
+what the books did (when a transfer-out of yours that nothing paired
+comes before it, the run's warning adds `maybe a move of your own` and
+`--details` names it: if they are the same shares, do not add a
+purchase for them, docs/troubleshooting.md):
 
 - `book_value`: the broker printed a book value on the row (Questrade's
   `TRANSFER BOOK VALUE`, RBC's `BOOK VALUE`). The shares are booked at
@@ -449,6 +462,17 @@ from **outside your books**, and `IN_BOOKS` says what the books did:
   purchase (5c below).
 - `.tt_covers`: your `.tt` purchase covers the row (5c). Nothing more is
   said.
+- `PARTLY_covered`: your `.tt` purchases account for some of the units
+  only. Nothing is booked (booking the whole row would hold the covered
+  units twice), the run prints `Warning: Transfer-in: margin: 1 only
+  PARTLY covered by .tt purchases, NOT booked (SAMPK.TO)`, and its closing
+  list counts the row with the no-cost ones. Add the other units'
+  purchase (5c), or the whole quantity's if those `.tt` purchases are
+  another holding of the stock in this account.
+- `NO_COST_(0_stated)`: the row states a book value of 0 (Questrade
+  `TRANSFER BOOK VALUE 0.00`), usually the broker's placeholder for a cost
+  it was not given. Never booked as a $0 lot: as `NO_COST`, add the
+  purchase (at a cost of 0 if your cost really is nil).
 - `missing_history`: an `OPENING ... cost=unknown` line opens the stock
   in that account (5b, step 4): its cost stays unknown and its sales are
   reported by hand, as you declared; the book value is not used.
@@ -633,8 +657,8 @@ confirmation:
 BUYSELL  2019-06-03  09:30:00  SAMPA.TO  20  CAD  30.00  604.95  4.95
 ```
 
-`total` for a buy is quantity × price + commission. Check a file before
-running with `taxjson-convert-tt --account margin inputs/margin/margin_start.tt`.
+`total` for a buy is quantity × price + commission. Check the file before
+running with `tjs check-tt` (every malformed line, with its file and line).
 The full line format (sales, return of capital, options) is in
 [settings.md, ".tt files"](settings.md#tt-files).
 
@@ -748,9 +772,23 @@ BUYSELL  2021-03-15  09:30:00  SAMPK.TO  40  CAD  15.00  600.00  0
 - Once the account's `.tt` purchases of the stock, dated on or before
   the transfer, cover the transferred quantity, the transfer's
   `Warning: Transfer-in:` line stops and `tjs transfers` shows `.tt_covers`.
+  A `.tt` `SPLIT` line dated before the transfer is applied (bought 10,
+  2-for-1, 20 arrived: add `SPLIT 2023-05-01 09:30:00 SAMPK.TO SAMPK.TO
+  2` beside the purchase), and a `.tt` sale dated before the transfer
+  (an earlier day, or earlier on the day by its time) uses up units.
+  Purchases for part of the quantity cover nothing: the run says `only
+  PARTLY covered … NOT booked` until you add the rest.
 - The same line overrides a broker's book value (`book_value`): the
   book value is then no longer used. Add it when the broker's figure is
   not your cost; otherwise the book value is a reasonable start.
+- A move between two of your taxable accounts in the project needs no
+  line: its rows cancel (`own_move`; legs up to 45 days apart when
+  nothing else pairs, said as an `Own-account move` Info line). When
+  the transfer-in's warning says `maybe a move of your own` (its
+  detail, `--details`: "It may be the other end of a transfer-out of
+  yours …"), check it first: if they are the same shares, the sending
+  account's books still hold them, and a purchase line would hold them
+  twice (docs/troubleshooting.md).
 - Do not write a `TRANSFER` or `ACQUIRED` line for a taxable account:
   the run stops with `TRANSFER is not allowed in taxable accounts`.
 - Do not use IB's transfer `VALUE`: it is the market value, not your
@@ -916,7 +954,10 @@ quantities are.
 Before you file, save the broker's **year-end** positions in the year's
 `holdings/` folder (a `[[holding]]` TOML per broker account, as a
 download tool writes it; `tjs sanity` finds each file's account by its
-`[meta] account` or its name, `margin_holdings.toml`), or update the
+`[meta] account` or its name, `margin_holdings.toml`; to keep a second
+date of one broker account, give each of its files `[meta]
+broker_account`, the broker's account number, or sanity refuses the
+pair rather than add them up), or update the
 positions file from step 5 (or give `sanity` the year-end IB statement or
 RBC Holdings Export itself), and run `tjs sanity` again. A report dated
 before the books' last row is compared with the books' positions on its
@@ -975,7 +1016,8 @@ purchase that affects the year shows as:
 
 Above the summary, the list has every step, each marked `[x]` done,
 `[!]` needs attention, `[ ]` to do or `[m]` for you to confirm, with its
-whole finding (`tjs checklist --section 4`: one section of it; `--all`:
+whole finding (`tjs checklist --section 4`: one section of it,
+`--section 6,7` several; `--all`:
 every step's commands and why):
 
 ```
@@ -988,8 +1030,9 @@ Work through it until every step is done or marked. Each step is
 explained in [filing.md](filing.md). `tjs checklist --walk` goes through
 the open ones one at a time; it needs a terminal (piped or scripted it
 stops with `Error: --walk needs a terminal`), so a script marks steps
-with `tjs checklist --done ID` or `--skip ID` instead (ID: the step's id
-or its number, `--done roc-entered` or `--done 18`).
+with `tjs checklist --done ID` instead (ID: the step's id or its
+number, `--done roc-entered` or `--done 18`; `--force` marks a step
+done over a finding the check still flags).
 
 ## One folder of exports for every year
 

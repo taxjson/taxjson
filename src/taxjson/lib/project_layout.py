@@ -1322,7 +1322,6 @@ def set_key_after(text: str, dotted: str, value: Any,
 def years_report(folder: Path) -> Dict[str, Any]:
     """`taxjson years --json`: each year project of the multi-year folder
     with its state (docs/settings.md, `taxjson years --json`)."""
-    import json
     from taxjson.lib import checklist as CL
     yrs = year_dirs(folder)
     newest = yrs[-1][1] if yrs else None
@@ -1336,18 +1335,23 @@ def years_report(folder: Path) -> Dict[str, Any]:
                                "differs_from_newest": None,
                                "tobase_map": None, "tobase_shared": False,
                                "tobase_frozen": False,
-                               "marks": {"done": 0, "skipped": 0}}
+                               "marks": {"done": 0, "forced": 0}}
         lock = d / "filed" / f"{y}.json"
         if lock.is_file():
             rec["filed"] = True
             try:
-                doc = json.loads(lock.read_text(encoding="utf-8"))
-                from taxjson.bin.taxjson_filed import lock_shape_problem
-                bad = lock_shape_problem(doc, y)
+                from taxjson.bin.taxjson_filed import (lock_damage,
+                                                       load_lock_json)
+                doc = load_lock_json(lock)
+                # The one damage check every reader of a lock applies
+                # (its carryforwards block too: a lock the next year's
+                # estimate refuses was shown as a clean filed year,
+                # 2026-10-25 audit year-end#6).
+                bad = lock_damage(doc, y, f"filed/{y}.json")
                 if bad:
                     # A damaged lock is named, never shown as a
                     # clean filed year (issue #49).
-                    rec["problem"] = f"filed/{y}.json {bad}"
+                    rec["problem"] = bad
                 elif isinstance(doc, dict):
                     rec["closed_at"] = str(doc.get("closed_at") or "") or None
                     t = doc.get("totals")
@@ -1400,8 +1404,8 @@ def years_report(folder: Path) -> Dict[str, Any]:
         try:
             st = CL.load_state(d)
             for ov in (st.get("overrides") or {}).values():
-                s = ov.get("status") if isinstance(ov, dict) else None
-                if s in ("done", "skipped"):
+                s = CL.mark_kind(ov)
+                if s:
                     rec["marks"][s] += 1
         except Exception:                               # noqa: BLE001
             rec["problem"] = rec["problem"] or "checklist.json cannot be read"

@@ -170,7 +170,9 @@ refuses, before writing anything, when either is a symlink to a file
 outside the project; a link inside the project is kept and its target
 updated. The same goes for the folders taxjson writes into: every
 command stops when `work/`, `reports/`, `filed/`, `export/`, `inputs/`
-or an `inputs/<account>/` folder is a symlink leaving the project.
+or an `inputs/<account>/` folder is a symlink leaving the project,
+before it reads or writes anything (`taxjson redact`, which writes
+only its own `inputs_redact/`, aside).
 
 Ids in audit output: `taxjson audit` and the gains traces (`explain`,
 `--trace`) print each row's own id unmasked, on purpose — it is the

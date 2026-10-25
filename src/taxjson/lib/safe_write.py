@@ -181,23 +181,57 @@ def backup_copy(path: Union[str, Path]) -> Path:
     replaced, and return the backup's path: `<name>.bak`, or the next
     free `<name>.bakN` — an earlier backup is never overwritten (a second
     --force used to replace the only copy of the first version), and an
-    identical regular backup is reused. An entry at a .bak name that is
-    not a regular file (a symlink, dangling or not) is taken, never
-    written through; the copy is written fresh, owner-only, via
-    write_atomic (pre-release security review M1)."""
+    identical regular backup is reused. Each name is taken with an
+    exclusive create (O_CREAT | O_EXCL | O_NOFOLLOW, owner-only), so
+    choosing the name and reserving it are one step: two overlapping
+    callers both found `<name>.bak` free and one version was lost
+    (audit 2026-10-24 D06). An entry at a .bak name that is not a
+    regular file (a symlink, dangling or not) makes that create fail
+    and is never written through (pre-release security review M1). The
+    copy is complete and fsync'd when this returns; one a crash left
+    short is never reused (its contents differ) and never overwritten."""
     path = Path(path)
     data = path.read_bytes()
     base = path.name + ".bak"
-    bak = path.with_name(base)
-    n = 1
-    while os.path.lexists(str(bak)) and not (
-            bak.is_file() and not bak.is_symlink()
-            and bak.read_bytes() == data):
-        bak = path.with_name(f"{base}{n}")
+    n = 0
+    while True:
+        bak = path.with_name(base if n == 0 else f"{base}{n}")
         n += 1
-    if not os.path.lexists(str(bak)):
-        write_atomic(bak, data, keep_mode=False)
-    return bak
+        try:
+            fd = os.open(str(bak), _FLAGS, 0o600)
+        except FileExistsError:
+            if _same_regular_file(bak, data):
+                return bak
+            continue
+        try:
+            _fill(fd, data)
+        except BaseException:
+            discard(bak)
+            raise
+        return bak
+
+
+def _same_regular_file(path: Path, data: bytes) -> bool:
+    """True when `path` is a regular file (not a link) holding `data`."""
+    try:
+        if not stat.S_ISREG(os.lstat(str(path)).st_mode):
+            return False
+        return path.read_bytes() == data
+    except OSError:
+        return False
+
+
+def _fill(fd: int, data: bytes) -> None:
+    """Write `data` to the just-created `fd`, fsync it and close it."""
+    try:
+        f = os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 class LockLinkError(OSError):

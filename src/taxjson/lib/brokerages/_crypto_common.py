@@ -256,6 +256,47 @@ def same_coin_hint(a: str, b: str, qty_a: float, qty_b: float,
         f"ticker.map and re-run."))
 
 
+class RowIds:
+    """The broker's own row ids of one export (a Coinbase ID, a Kraken
+    trades txid), which the parsers keep as the transaction id. The
+    de-duplication (taxjson-sort --dedup, bin/taxjson_sort.plan_dedup)
+    reads two rows of one file with one id as the file repeating itself
+    and books one: right for an identical row (two downloads pasted
+    together), but a second row with DIFFERENT content was a trade
+    dropped from the books with no message (2026-10-25 audit
+    robustness#4). `check` lets an identical repeat through and refuses
+    a different one, naming the file, both lines and the id (masked: its
+    first 2 characters, the privacy rule for ids)."""
+
+    def __init__(self, label: str, id_name: str):
+        # label: "Coinbase CSV cb.csv"; id_name: the column, "ID".
+        self.label, self.id_name = label, id_name
+        self._seen: dict = {}
+
+    def check(self, row_id: str, line: int, content: tuple,
+              brief: str) -> None:
+        row_id = (row_id or '').strip()
+        if not row_id:
+            return
+        prev = self._seen.get(row_id)
+        if prev is None:
+            self._seen[row_id] = (line, content, brief)
+            return
+        p_line, p_content, p_brief = prev
+        if p_content == content:
+            return
+        raise ValueError(
+            f"{self.label} lines {p_line} and {line}: {self.id_name} "
+            f"{row_id[:2]}*** is on two rows with DIFFERENT content "
+            f"(line {p_line}: {p_brief}; line {line}: {brief}). One id "
+            f"names one transaction, and the books keep one row per id, "
+            f"so the other trade would be dropped. Fix the file: delete "
+            f"the row that is a stray or edited copy, or download the "
+            f"export again; if the broker's own export holds both rows, "
+            f"give one a distinct {self.id_name} (append -2 to it) so "
+            f"both are booked.")
+
+
 # A USD stablecoin traded this far from 1.00 USD is said: the parsers
 # book stablecoins as US-dollar cash (an approximation), so a de-peg
 # gain or loss never reaches the books (partition INPUTS-12; tax-logic

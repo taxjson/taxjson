@@ -134,8 +134,146 @@ def _is_dust(qty: float, total_cost: float, threshold: float) -> bool:
 _DUST_COST = 1.0
 
 
+def _evidence_rows(evidence_paths) -> list:
+    """The TRANSFER rows of the transfer sidecars named: each file read
+    once, and identical rows of two files kept the way one broker's
+    overlapping exports are (taxjson_brokerage._dedup_evidence: per
+    content id, the largest count any single file has). The same
+    sidecar named twice (`--transfer-evidence` repeated, or two
+    spellings of one path) used to double every move it evidences
+    (audit 2026-10-24 B11)."""
+    from taxjson.bin.taxjson_brokerage import _dedup_evidence
+    seen: set = set()
+    per_file: list = []
+    for p in evidence_paths:
+        try:
+            key = str(Path(p).resolve())
+        except OSError:
+            key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        # An unreadable sidecar used to be skipped with a warning: the
+        # evidenced flip was silently not applied and the snapshot split
+        # one position across two listings at exit 0 (audit S030-19).
+        doc = _read_json(p)
+        if (doc.get("metadata") or {}).get("kind") != "transfer_sidecar":
+            continue
+        per_file.append([t for t in doc.get("transactions") or []
+                         if isinstance(t, dict)
+                         and t.get("action") == "TRANSFER"
+                         and t.get("symbol")])
+    return _dedup_evidence(per_file)
+
+
+def _evidenced_journals(rows, same_class) -> list:
+    """The journals the sidecar rows evidence, as (date, out_symbol,
+    in_symbol, quantity): an out-leg and an in-leg of two listings of
+    one identity class (`same_class(a, b)`), netted per listing and
+    day first (a flip flipped back the same day moves nothing), dated
+    within PAIR_DAYS business days of each other (lib/cross_listings:
+    the window one journal's legs post in), the closest pair first and
+    an exact quantity before a part of one. A leg with no partner in
+    that window is a custody move (a broker switch, ATON in or out) or
+    a journal whose other leg the data lacks, and evidences nothing: a
+    2020 departure and a 2026 arrival used to pair as one journal and
+    move today's shares to the other listing (audit 2026-10-24 B12).
+    Legs that would pair but for the window are said (a `note:` line
+    naming them), so a journal the broker posted in two far-apart rows
+    can be declared with a .tt JOURNAL line."""
+    from datetime import date as _date
+    from taxjson.lib.cross_listings import PAIR_DAYS, business_days
+
+    def day(s):
+        try:
+            return _date.fromisoformat(str(s or "")[:10])
+        except ValueError:
+            return None
+
+    net: Dict[tuple, float] = {}
+    for t in rows:
+        try:
+            q = float(t.get("quantity") or 0)
+        except (TypeError, ValueError):
+            continue
+        k = (str(t.get("date") or ""), t["symbol"])
+        net[k] = net.get(k, 0.0) + q
+    legs = [[d, s, q] for (d, s), q in sorted(net.items())
+            if abs(q) > 1e-9]
+    outs = [x for x in legs if x[2] < 0]
+    ins = [x for x in legs if x[2] > 0]
+    cands = []
+    far = []
+    for n, o in enumerate(outs):
+        for m, i in enumerate(ins):
+            if o[1] == i[1] or not same_class(o[1], i[1]):
+                continue
+            do, di = day(o[0]), day(i[0])
+            if do is None or di is None:
+                continue
+            gap = business_days(do, di)
+            if gap > PAIR_DAYS:
+                far.append((o, i))
+                continue
+            exact = 0 if abs(-o[2] - i[2]) <= 1e-9 else 1
+            cands.append((exact, gap, o[0], i[0], o[1], i[1], n, m))
+    journals = []
+    for _exact, _gap, _do, _di, _so, _si, n, m in sorted(cands):
+        o, i = outs[n], ins[m]
+        move = min(-o[2], i[2])
+        if move <= 1e-9:
+            continue
+        journals.append((min(o[0], i[0]), o[1], i[1], move))
+        o[2] += move
+        i[2] -= move
+    for o, i in far:
+        if -o[2] <= 1e-9 or i[2] <= 1e-9:
+            continue
+        emit_line(f"note: transfer evidence: {o[1]} {o[2]:g} on {o[0]} and "
+                  f"{i[1]} +{i[2]:g} on {i[0]} are more than {PAIR_DAYS} "
+                  f"business days apart: not read as one journal between "
+                  f"the listings (a .tt JOURNAL line declares one).",
+                  file=sys.stderr)
+    return journals
+
+
+def _move_units(agg: Dict[str, Dict[str, Any]], frm: str, to: str,
+                units: float) -> None:
+    """Move `units` of the position under `frm` to `to`, with the
+    proportional cost: `units` carries the sign of the position (a
+    long's units are positive, a short's negative) and is at most what
+    `frm` holds. An emptied bucket is pruned."""
+    b = agg[frm]
+    frac = units / b["qty"]
+    d = agg.setdefault(to, {
+        "qty": 0.0, "total_cost": 0.0, "currency": "",
+        "position_start_date": None})
+    d["qty"] += units
+    d["total_cost"] += b["total_cost"] * frac
+    d.setdefault("cost_by_currency", {})
+    for cur, amt in (b.get("cost_by_currency") or {}).items():
+        d["cost_by_currency"][cur] = (
+            d["cost_by_currency"].get(cur, 0.0) + amt * frac)
+    if (b.get("currency") and d.get("currency")
+            and b["currency"] != d["currency"]):
+        d["mixed_currency"] = True
+    elif b.get("currency") and not d.get("currency"):
+        d["currency"] = b["currency"]
+    psd = b.get("position_start_date")
+    if psd and (d.get("position_start_date") is None
+                or psd < d["position_start_date"]):
+        d["position_start_date"] = psd
+    b["total_cost"] -= b["total_cost"] * frac
+    for cur in list((b.get("cost_by_currency") or {})):
+        b["cost_by_currency"][cur] *= (1 - frac)
+    b["qty"] -= units
+    if abs(b.get("qty", 0.0)) <= 1e-9 \
+            and abs(b.get("total_cost", 0.0)) <= 0.005:
+        agg.pop(frm, None)
+
+
 def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
-                             evidence_paths, tmap) -> None:
+                             evidence_paths, tmap) -> list:
     """Evidence-driven depot flips: re-symbol holdings quantities that
     the TRANSFER sidecar PROVES were journaled between listings of the
     same security — and only those quantities.
@@ -144,45 +282,28 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     broker's InterDepot rows (or a .tt JOURNAL line's legs, lib/
     dated_events), not a timeless property of the symbol pair (2026-09
     design review) — a legacy ticker.map JOURNAL line is a TOBASE line
-    and no longer re-symbols the holdings on its own. So: net the sidecar's
-    TRANSFER quantities per symbol, and within each map-declared
-    identity class (GLOBAL/TOBASE/JOURNAL union) move matched
-    negative→positive residuals between buckets, capped at what the
-    source bucket actually holds. Shares are never created or
-    destroyed: unpaired residuals (broker migrations in/out — ATON)
-    are ignored, and a flip that was flipped back nets to zero and
+    and no longer re-symbols the holdings on its own. So: read the
+    sidecars once each (_evidence_rows), pair their legs into journals
+    within each map-declared identity class (GLOBAL/TOBASE/JOURNAL
+    union) by date (_evidenced_journals), net the journals per symbol,
+    and move matched negative→positive residuals between buckets,
+    capped at what the bucket actually holds. Shares are never created
+    or destroyed: a leg with no partner (broker migrations in/out —
+    ATON) is ignored, and a flip that was flipped back nets to zero and
     moves nothing.
 
-    Caveats (round-five audit): residual matching is quantity-based
-    with no temporal pairing — an out-leg and in-leg YEARS apart in
-    one sidecar still match if nothing else nets them (rare: sidecars
-    are per-broker and custody churn clusters tightly). Passing the
-    same sidecar twice on a direct CLI invocation doubles the move up
-    to the held-quantity cap — the orchestrator's per-broker glob
-    cannot duplicate."""
-    import json as _json
+    A long's units leave the bucket of the listing they left. A SHORT
+    position journaled shows as the opposite legs (+10 on the listing
+    it left, -10 on the one it reached): when the listing the units
+    "left" holds no long and the one they "reached" holds a short, the
+    short moves (audit 2026-10-24 B13). Returns the moves applied as
+    (from_symbol, to_symbol, units), the units signed like the
+    position (negative: a short), for _replay_moves_on_base."""
     applied: list = []
     if not evidence_paths or tmap is None:
         return applied
-    # No fold: the buckets are per listing (a legacy JOURNAL line no
-    # longer folds them — its pair is a TOBASE class, moved by evidence
-    # like any other).
-    _fold: Dict[str, str] = {}
-    net: Dict[str, float] = {}
-    for p in evidence_paths:
-        # An unreadable sidecar used to be skipped with a warning: the
-        # evidenced flip was silently not applied and the snapshot split
-        # one position across two listings at exit 0 (audit S030-19).
-        doc = _read_json(p)
-        if (doc.get("metadata") or {}).get("kind") != "transfer_sidecar":
-            continue
-        for t in doc.get("transactions") or []:
-            if t.get("action") != "TRANSFER":
-                continue
-            s = _fold.get(t.get("symbol") or "", t.get("symbol") or "")
-            if s:
-                net[s] = net.get(s, 0.0) + float(t.get("quantity") or 0)
-    if not net:
+    rows = _evidence_rows(evidence_paths)
+    if not rows:
         return applied
     # Identity classes: union-find over every map pair.
     parent: Dict[str, str] = {}
@@ -197,57 +318,55 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     for d in (tmap.glob, tmap.tobase, tmap.journal):
         for a, b in d.items():
             parent[find(a)] = find(b)
+    journals = _evidenced_journals(
+        rows, lambda a, b: find(a) == find(b))
+    net: Dict[str, float] = {}
+    for _day, out_sym, in_sym, q in journals:
+        net[out_sym] = net.get(out_sym, 0.0) - q
+        net[in_sym] = net.get(in_sym, 0.0) + q
     by_class: Dict[str, list] = {}
     for s, q in net.items():
         if abs(q) > 1e-9:
             by_class.setdefault(find(s), []).append((s, q))
     for members in by_class.values():
-        srcs = [[s, -q] for s, q in members if q < 0]
-        dsts = [[s, q] for s, q in members if q > 0]
+        srcs = [[s, -q] for s, q in members if q < 0]   # units left
+        dsts = [[s, q] for s, q in members if q > 0]    # units reached
         if not srcs or not dsts:
-            continue                      # migration in/out — not a flip
+            continue
         for src in srcs:
-            b = agg.get(src[0])
             for dst in dsts:
                 if src[1] <= 1e-9:
                     break
-                if dst[1] <= 1e-9 or b is None:
+                if dst[1] <= 1e-9:
                     continue
-                move = min(src[1], dst[1], max(0.0, b.get("qty", 0.0)))
-                if move <= 1e-9:
+                # A long: capped at what the listing it left holds.
+                b = agg.get(src[0])
+                held = max(0.0, b.get("qty", 0.0)) if b else 0.0
+                move = min(src[1], dst[1], held)
+                if move > 1e-9:
+                    _move_units(agg, src[0], dst[0], move)
+                    src[1] -= move
+                    dst[1] -= move
+                    applied.append((src[0], dst[0], move))
+                    emit_line(f"note: applied evidenced depot flip: "
+                              f"{move:g} {src[0]} -> {dst[0]} (transfer "
+                              f"sidecar).", file=sys.stderr)
+                if src[1] <= 1e-9 or dst[1] <= 1e-9:
                     continue
-                frac = move / b["qty"]
-                d = agg.setdefault(dst[0], {
-                    "qty": 0.0, "total_cost": 0.0, "currency": "",
-                    "position_start_date": None})
-                d["qty"] += move
-                d["total_cost"] += b["total_cost"] * frac
-                d.setdefault("cost_by_currency", {})
-                for cur, amt in (b.get("cost_by_currency") or {}).items():
-                    d["cost_by_currency"][cur] = (
-                        d["cost_by_currency"].get(cur, 0.0) + amt * frac)
-                if (b.get("currency") and d.get("currency")
-                        and b["currency"] != d["currency"]):
-                    d["mixed_currency"] = True
-                elif b.get("currency") and not d.get("currency"):
-                    d["currency"] = b["currency"]
-                psd = b.get("position_start_date")
-                if psd and (d.get("position_start_date") is None
-                            or psd < d["position_start_date"]):
-                    d["position_start_date"] = psd
-                b["total_cost"] -= b["total_cost"] * frac
-                for cur in list((b.get("cost_by_currency") or {})):
-                    b["cost_by_currency"][cur] *= (1 - frac)
-                b["qty"] -= move
-                src[1] -= move
-                dst[1] -= move
-                applied.append((src[0], dst[0], move))
-                emit_line(f"note: applied evidenced depot flip: {move:g} "
-                          f"{src[0]} -> {dst[0]} (transfer sidecar).",
-                          file=sys.stderr)
-            if b is not None and abs(b.get("qty", 0.0)) <= 1e-9 \
-                    and abs(b.get("total_cost", 0.0)) <= 0.005:
-                agg.pop(src[0], None)
+                # A short journaled: held under the listing the legs
+                # say the units reached; it moves to the other one.
+                b = agg.get(dst[0])
+                held = max(0.0, -b.get("qty", 0.0)) if b else 0.0
+                move = min(src[1], dst[1], held)
+                if move > 1e-9:
+                    _move_units(agg, dst[0], src[0], -move)
+                    src[1] -= move
+                    dst[1] -= move
+                    applied.append((dst[0], src[0], -move))
+                    emit_line(f"note: applied evidenced depot flip: "
+                              f"{-move:g} {dst[0]} -> {src[0]} (a short "
+                              f"position; transfer sidecar).",
+                              file=sys.stderr)
     return applied
 
 
@@ -259,7 +378,8 @@ def _replay_moves_on_base(base_agg: Dict[str, Dict[str, Any]],
     line folds nothing any more) — so every move REPLAYS, moving the
     base cost with the shares. Deriving moves independently, or folding
     through the to-base renames, both diverge (round-five finding 5 /
-    round-six finding 1)."""
+    round-six finding 1). A move's units are signed like the position
+    (negative: a short moved — audit 2026-10-24 B13)."""
     if not moves or tmap is None:
         return
     # The base inventory comes from the RAW-base pipeline, which applies
@@ -268,34 +388,22 @@ def _replay_moves_on_base(base_agg: Dict[str, Dict[str, Any]],
     # here made every TOBASE-pair move a "same key" no-op and the
     # flipped shares' base cost silently vanished (round-six adversarial
     # audit, finding 1 — a HIGH regression over the round-five fix).
-    ren: Dict[str, str] = {}
-    for src, dst, qty in moves:
-        bs = ren.get(src, src)
-        bd = ren.get(dst, dst)
-        if bs == bd:
+    for src, dst, units in moves:
+        if src == dst:
             continue
-        b = base_agg.get(bs)
-        if not b or b.get("qty", 0.0) <= 1e-9:
+        b = base_agg.get(src)
+        if not b:
             continue
-        move = min(qty, b["qty"])
-        frac = move / b["qty"]
-        d = base_agg.setdefault(bd, {
-            "qty": 0.0, "total_cost": 0.0,
-            "currency": b.get("currency", ""),
-            "position_start_date": None})
-        d["qty"] += move
-        d["total_cost"] += b["total_cost"] * frac
-        d.setdefault("cost_by_currency", {})
-        for cur, amt in (b.get("cost_by_currency") or {}).items():
-            d["cost_by_currency"][cur] = (
-                d["cost_by_currency"].get(cur, 0.0) + amt * frac)
-        b["total_cost"] -= b["total_cost"] * frac
-        for cur in list((b.get("cost_by_currency") or {})):
-            b["cost_by_currency"][cur] *= (1 - frac)
-        b["qty"] -= move
-        if abs(b.get("qty", 0.0)) <= 1e-9 \
-                and abs(b.get("total_cost", 0.0)) <= 0.005:
-            base_agg.pop(bs, None)
+        held = b.get("qty", 0.0)
+        if units > 0:
+            if held <= 1e-9:
+                continue
+            move = min(units, held)
+        else:
+            if held >= -1e-9:
+                continue
+            move = max(units, held)
+        _move_units(base_agg, src, dst, move)
 
 
 def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
@@ -330,12 +438,27 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
         bucket['total_cost'] += float(item.get('total_cost', 0))
         # The contract size the parser declared (a futures option's CL
         # 1000 — audit S026-22); two inputs that disagree leave it
-        # unknown.
+        # unknown (said once, the sizes kept for the snapshot's note:
+        # audit 2026-10-24 B21), as does a snapshot read back that says
+        # so (`contract_multiplier_unknown`).
         _m = item.get('multiplier')
         if _m:
-            if bucket.get('multiplier') not in (None, float(_m)):
+            _mf = float(_m)
+            _sizes = bucket.setdefault('multipliers_seen', [])
+            if _mf not in _sizes:
+                _sizes.append(_mf)
+            if bucket.get('multiplier') not in (None, _mf):
+                if not bucket.get('multiplier_conflict'):
+                    emit_line(
+                        f"warning: {sym}: its inputs declare different "
+                        f"contract sizes ({', '.join(f'{x:g}' for x in sorted(_sizes))}): "
+                        f"contract_multiplier is left unknown, and its "
+                        f"cost figures stay per contract (not per share)",
+                        file=sys.stderr)
                 bucket['multiplier_conflict'] = True
-            bucket['multiplier'] = float(_m)
+            bucket['multiplier'] = _mf
+        if item.get('multiplier_conflict'):
+            bucket['multiplier_conflict'] = True
         # Per-currency sub-buckets: JOURNAL folds (SAMPLF.US -> SAMPLF.TO)
         # deliberately merge cross-currency listings, and summing their
         # NATIVE costs into one number made total_cost currency salad.
@@ -373,9 +496,13 @@ def contract_multiplier_of(sym: str, bucket: Dict[str, Any]):
     """The contract size of a held line: the size its rows declared
     (`multiplier` on the inventory — a futures option's CL 1000), else
     100 for an equity option; None for a futures option whose size was
-    not declared (never the equity 100 — audit S026-22, S030-09) and
+    not declared (never the equity 100 — audit S026-22, S030-09), for
+    a line whose inputs declare different sizes (`multiplier_conflict`:
+    unknown, never the equity 100 either — audit 2026-10-24 B21) and
     for anything else."""
-    if bucket.get('multiplier') and not bucket.get('multiplier_conflict'):
+    if bucket.get('multiplier_conflict'):
+        return None
+    if bucket.get('multiplier'):
         return float(bucket['multiplier'])
     if is_option_ticker(sym) and not is_future_ticker(sym):
         return float(_OPTION_CONTRACT_MULTIPLIER)
@@ -552,8 +679,13 @@ def _load_trade_events(paths, mapping=None, drops=None,
     time the running balance returned to zero. A ticker bought, fully sold,
     then re-bought reports only the latest round — the events that actually
     contribute to the live cost basis. This boundary equals the gains engine's
-    `position_start_date`. Ordering uses settlement date (matching the engine)
-    but each event keeps its trade `date` for charting."""
+    `position_start_date`: the last time the balance left zero or changed
+    sign. A trade that crosses zero (10 held, 20 sold) opens the new
+    position with its leftover, and is kept as that part alone (a SELL of
+    10 at its price); the old position's events go (audit 2026-10-24 B22).
+    Ordering uses settlement date (matching the engine) but each event
+    keeps its trade `date` for charting; a rename merges the two symbols'
+    events in that order (audit 2026-10-24 B44)."""
     mapping = mapping or {}
     drops = drops or set()
     from taxjson.lib.corporate_timeline import (normalize_symbol_new,
@@ -583,10 +715,13 @@ def _load_trade_events(paths, mapping=None, drops=None,
     # replay them (CA-DATE-14 / US-DATE-13; audit S030-05).
     rows.sort(key=lambda r: (r[0], r[1]))
 
-    events: Dict[str, List[Dict[str, Any]]] = {}
+    # Per symbol, (replay order, event): the order merges a renamed
+    # symbol's events into the new symbol's in sequence (B44).
+    events: Dict[str, List[Any]] = {}
     balance: Dict[str, float] = {}
     seen: set = set()
     for _key, _i, tx in rows:
+        order = (_key, _i)
         sym = mapping.get(tx["symbol"], tx["symbol"])
         if tx.get("action") == "SPLIT":
             # SPLIT rows scale the running balance and follow renames:
@@ -611,7 +746,11 @@ def _load_trade_events(paths, mapping=None, drops=None,
                 if sym in balance:
                     balance[new] = balance.get(new, 0.0) + balance.pop(sym)
                 if sym in events:
-                    events.setdefault(new, []).extend(events.pop(sym))
+                    # In replay order, not the old symbol's events
+                    # behind the new one's (B44).
+                    merged = events.get(new, []) + events.pop(sym)
+                    merged.sort(key=lambda e: e[0])
+                    events[new] = merged
             continue
         try:
             qty = float(tx.get("quantity") or 0)
@@ -619,24 +758,36 @@ def _load_trade_events(paths, mapping=None, drops=None,
             continue
         if qty == 0 or sym in drops:
             continue
+        before = balance.get(sym, 0.0)
+        after = before + qty
+        balance[sym] = after
+        flat = abs(after) < 1e-6
+        # Long to short (or back) in one row: a new position (B22).
+        crossed = (not flat and abs(before) >= 1e-6
+                   and (before > 0) != (after > 0))
         if tx.get("action") in ("TRANSFER", "OPENING_BALANCE"):
             # Units moved in or out (no trade to chart): the running
             # balance only.
-            balance[sym] = balance.get(sym, 0.0) + qty
-            if current_position_only and abs(balance[sym]) < 1e-6:
+            if current_position_only and (flat or crossed):
                 events[sym] = []
             continue
-        events.setdefault(sym, []).append({
+        ev = {
             "date": tx.get("date"),
             "action": "BUY" if qty > 0 else "SELL",
             "qty": abs(qty),
             "price": float(tx.get("price") or 0.0),
-        })
-        balance[sym] = balance.get(sym, 0.0) + qty
-        if current_position_only and abs(balance[sym]) < 1e-6:
+        }
+        if current_position_only and flat:
             # position flat -> the current round starts after this row
             events[sym] = []
-    by_symbol = {s: evs for s, evs in events.items() if evs}
+        elif current_position_only and crossed:
+            # The part of this row that opens the new position.
+            ev["qty"] = abs(after)
+            events[sym] = [(order, ev)]
+        else:
+            events.setdefault(sym, []).append((order, ev))
+    by_symbol = {s: [e for _o, e in evs] for s, evs in events.items()
+                 if evs}
     return by_symbol
 
 
@@ -744,6 +895,17 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                              "trades[].price is per "
                              + ("unit of the underlying" if is_fut
                                 else "share"))
+            elif b.get('multiplier_conflict'):
+                # The inputs disagree on the size: unknown, said in a
+                # key a reader keeps (this tool reads it back), never
+                # the equity 100 (audit 2026-10-24 B21).
+                _sizes = ", ".join(f"{x:g}" for x in
+                                   sorted(b.get('multipliers_seen') or []))
+                lines.append("contract_multiplier_unknown = true")
+                lines.append("# contract_multiplier unknown: the inputs "
+                             "declare different contract sizes"
+                             + (f" ({_sizes})" if _sizes else "")
+                             + "; cost_per_share below is per CONTRACT")
             else:
                 # A futures option's multiplier is the future's (CL
                 # 1000, micro contracts 0.1 ...), not the equity 100:
@@ -769,9 +931,25 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
             lines.append(f"cost_per_share = {round(cps, 6)!r}")
         base = base_agg.get(sym)
         expected_base = getattr(args, 'base_currency', None)
+        # A base bucket whose figures are in more than one currency has
+        # no single base-currency total: its flat figure called a CAD +
+        # USD sum entirely CAD (audit 2026-10-24 B23); omitted and said.
+        base_mixed = base is not None and bool(base.get('mixed_currency'))
         base_ok = (base is not None and base.get('currency')
+                   and not base_mixed
                    and (expected_base is None
                         or base['currency'].upper() == expected_base.upper()))
+        if base_mixed:
+            _curs = ", ".join(sorted(base.get('cost_by_currency') or [])) \
+                or "more than one currency"
+            lines.append(f"# base_total_cost omitted: this holding's "
+                         f"base-currency figures are in {_curs}, so no "
+                         f"one base-currency total exists (a cost was "
+                         f"not converted)")
+            emit_line(f"warning: {sym}: its base-currency figures are in "
+                      f"{_curs}: base_total_cost is omitted for it (a "
+                      f"cost was not converted to the base currency)",
+                      file=sys.stderr)
         if base_ok:
             base_total = base['total_cost']
             # Prefer the base bucket's own quantity for the per-share figure;
@@ -855,6 +1033,15 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
                 or not math.isfinite(mult) or mult <= 0):
             _die(f"{path}: [[holding]] {i} ({sym}): contract_multiplier "
                  f"is {mult!r}, not a positive number")
+        # The unknown state this tool wrote (its inputs disagreed on the
+        # size): read back, or the re-read invented the equity 100
+        # (audit 2026-10-24 B21).
+        _unknown = h.get("contract_multiplier_unknown")
+        if _unknown is not None and not isinstance(_unknown, bool):
+            _die(f"{path}: [[holding]] {i} ({sym}): "
+                 f"contract_multiplier_unknown is {_unknown!r}, not "
+                 f"true or false")
+        _flags = {"multiplier_conflict": True} if _unknown else {}
         if h.get("mixed_currency"):
             # A JOURNAL-folded cross-currency bucket this tool wrote: no
             # flat total_cost, one total_cost_<cur> per currency. Read
@@ -884,6 +1071,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
                     "currency": cur,
                     "position_start_date": psd,
                     "multiplier": mult,
+                    **_flags,
                 })
             continue
         inventory.append({
@@ -893,6 +1081,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
             "currency": h.get("currency", ""),
             "position_start_date": psd,
             "multiplier": mult,
+            **_flags,
         })
     return {"inventory": inventory}
 

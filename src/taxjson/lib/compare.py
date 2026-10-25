@@ -28,6 +28,7 @@ import errno
 import json
 import re
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -111,9 +112,15 @@ def report_files(reports: Path, label: str = "reports/"
     return out
 
 
-def normalized(data: bytes) -> str:
-    """A report's text without the lines that only date it."""
-    text = data.decode("utf-8", errors="replace")
+def normalized(data: bytes, *, display: bool = False) -> str:
+    """A report's text without the lines that only date it. A byte that
+    is not UTF-8 stays a character of its own (surrogateescape), so two
+    damaged or binary reports that differ only there never compare as
+    the same — `errors="replace"` made every such byte one U+FFFD (audit
+    2026-10-24 A34). `display`: the same text with those bytes as `\\xff`
+    escapes, for a diff that can be printed."""
+    text = data.decode("utf-8", errors="backslashreplace" if display
+                       else "surrogateescape")
     return "".join(ln for ln in text.splitlines(keepends=True)
                    if not _STAMP_RE.match(ln))
 
@@ -174,18 +181,69 @@ def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str
            "accounts": aggregates(root, cfg),
            "reports": sorted(files)}
     from taxjson.lib.safe_write import write_atomic
-    tmp = dest.with_name(dest.name + ".part")
-    if tmp.exists():
-        shutil.rmtree(tmp)
-    (tmp / "reports").mkdir(parents=True)
-    for name, data in files.items():
-        write_atomic(tmp / "reports" / name, data)
-    write_atomic(tmp / SNAPSHOT_FILE,
-                 json.dumps(doc, indent=1, sort_keys=True) + "\n")
-    if dest.exists():
-        shutil.rmtree(dest)
-    tmp.rename(dest)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Staged in a folder of this call's own, named outside the snapshot
+    # namespace (a leading dot is no snapshot name, NAME_RE): the fixed
+    # `<name>.part` was the user's own snapshot of that name and was
+    # removed to make room (audit 2026-10-24 A08).
+    stage = Path(tempfile.mkdtemp(prefix=_HIDDEN + dest.name + ".",
+                                  suffix=".part", dir=str(dest.parent)))
+    try:
+        (stage / "reports").mkdir()
+        for name, data in files.items():
+            write_atomic(stage / "reports" / name, data)
+        write_atomic(stage / SNAPSHOT_FILE,
+                     json.dumps(doc, indent=1, sort_keys=True) + "\n")
+        _publish(stage, dest)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
     return doc
+
+
+_HIDDEN = "."       # a staging or holding folder's name starts with it
+
+
+def _publish(stage: Path, dest: Path) -> None:
+    """Rename the finished `stage` to `dest`. A snapshot already at
+    `dest` is moved aside first, into a holding folder of its own
+    beside it, and removed once the new one is in place; when the
+    rename fails it is moved back, so the name never goes missing — it
+    used to be deleted before the rename (audit 2026-10-24 A41).
+    CompareError, naming where the earlier snapshot is, when the
+    rename fails."""
+    where = f"work/{SNAP_ROOT}/{dest.name}/"
+    aside = None
+    if dest.exists() or dest.is_symlink():
+        hold = Path(tempfile.mkdtemp(prefix=_HIDDEN + dest.name + ".",
+                                     suffix=".old", dir=str(dest.parent)))
+        aside = hold / dest.name
+        try:
+            dest.rename(aside)
+        except OSError as e:
+            shutil.rmtree(hold, ignore_errors=True)
+            raise CompareError(f"{where} cannot be replaced ({_why(e)}); "
+                               f"the earlier snapshot is kept") from None
+    try:
+        stage.rename(dest)
+    except OSError as e:
+        if aside is None:
+            raise CompareError(f"{where} cannot be written: "
+                               f"{_why(e)}") from None
+        try:
+            aside.rename(dest)
+        except OSError as e2:
+            raise CompareError(
+                f"{where} cannot be replaced ({_why(e)}), and the earlier "
+                f"snapshot could not be moved back ({_why(e2)}): it is at "
+                f"work/{SNAP_ROOT}/{aside.parent.name}/{aside.name}/ — move "
+                f"it to {where}") from None
+        shutil.rmtree(aside.parent, ignore_errors=True)
+        raise CompareError(f"{where} cannot be replaced ({_why(e)}); "
+                           f"the earlier snapshot is kept") from None
+    if aside is not None:
+        shutil.rmtree(aside.parent, ignore_errors=True)
 
 
 def rotate_previous(root: Path, cfg: Dict[str, Any]) -> bool:
@@ -226,8 +284,11 @@ def list_snapshots(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     d = snapshots_dir(root)
     names: List[str] = []
     if d.is_dir():
+        # Only snapshot names: a staging or holding folder `take` is
+        # using (or a crash left) starts with a dot.
         names = sorted(p.name for p in d.iterdir()
-                       if p.is_dir() and (p / SNAPSHOT_FILE).is_file())
+                       if NAME_RE.match(p.name) and p.is_dir()
+                       and (p / SNAPSHOT_FILE).is_file())
     names.sort(key=lambda n: (n != PREV, n))
     for n in names:
         try:
@@ -300,10 +361,48 @@ def load(root: Path, cfg: Dict[str, Any], name: str
     except (OSError, ValueError) as e:
         raise CompareError(f"work/compare/{name}/{SNAPSHOT_FILE} cannot be "
                            f"read: {e}")
-    if not isinstance(doc, dict) or not isinstance(doc.get("files"), dict):
-        raise CompareError(f"work/compare/{name}/{SNAPSHOT_FILE} is not a "
-                           f"snapshot")
+    _check_snapshot(doc, name)
     return doc, d / "reports"
+
+
+def _what(v: Any) -> str:
+    return ("a table" if isinstance(v, dict) else
+            "a list" if isinstance(v, list) else
+            "text" if isinstance(v, str) else
+            "null" if v is None else
+            "a boolean" if isinstance(v, bool) else
+            "a number" if isinstance(v, (int, float)) else
+            type(v).__name__)
+
+
+def _check_snapshot(doc: Any, name: str) -> None:
+    """CompareError naming the field when `doc` is not the shape
+    `compare` and `list_snapshots` read: `files` a table, `accounts`
+    (when present) a table of tables, `reports` a list, `kind` and
+    `taken` text. A snapshot whose `accounts` was a list passed and
+    the comparison died on it (audit 2026-10-24 A48)."""
+    def bad(field: str, found: Any, want: str) -> CompareError:
+        return CompareError(
+            f"work/compare/{name}/{SNAPSHOT_FILE} is not a snapshot "
+            f"({field} is {_what(found)}, not {want}) — `taxjson compare "
+            f"--delete {name}` removes it")
+    if not isinstance(doc, dict):
+        raise bad("the document", doc, "a table")
+    if not isinstance(doc.get("files"), dict):
+        raise bad("files", doc.get("files"), "a table of inputs")
+    acc = doc.get("accounts")
+    if acc is not None:
+        if not isinstance(acc, dict):
+            raise bad("accounts", acc, "a table of accounts")
+        for a, v in acc.items():
+            if not isinstance(v, dict):
+                raise bad(f"accounts.{a}", v, "a table of figures")
+    rep = doc.get("reports")
+    if rep is not None and not isinstance(rep, list):
+        raise bad("reports", rep, "a list of file names")
+    for k in ("kind", "taken"):
+        if doc.get(k) is not None and not isinstance(doc.get(k), str):
+            raise bad(k, doc.get(k), "text")
 
 
 # ------------------------------------------------------------ comparison
@@ -390,8 +489,8 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
         diffs = {}
         for n in changed:
             diffs[n] = "".join(difflib.unified_diff(
-                normalized(before[n]).splitlines(keepends=True),
-                normalized(after[n]).splitlines(keepends=True),
+                normalized(before[n], display=True).splitlines(keepends=True),
+                normalized(after[n], display=True).splitlines(keepends=True),
                 fromfile=f"{name}/{n}", tofile=f"reports/{n}", n=1))
         out["diffs"] = diffs
     return out

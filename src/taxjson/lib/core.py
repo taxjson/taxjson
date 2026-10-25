@@ -17,6 +17,9 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, account_tie,
 from decimal import Decimal
 
 from taxjson.lib.numeric import D
+# A sale's trace shares its pool's running trace (audit 2026-10-25
+# robustness#5: a copy per sale grew with the square of the rows).
+from taxjson.lib.trace_format import SharedTrace
 
 class SplitStraddlesSettlementError(ValueError):
     """A RENAME-split dated strictly between a trade's execution and
@@ -2971,7 +2974,7 @@ class CanadaTaxRules(TaxRules):
                     symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                 symbol_acb_traces[symbol].append(
                     f"# {tx.date} WRITE {units:10.4f} @ {tx.price:7.4f} | premium {_g:10.4f} recognised now (ITA s.49(1))")
-                _gt = list(symbol_acb_traces[symbol])
+                _gt = SharedTrace(symbol_acb_traces[symbol])
             rec_d = {
                 'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
                 'date_settle': tx.date_settle or tx.date,
@@ -3749,7 +3752,8 @@ class CanadaTaxRules(TaxRules):
                                     if symbol not in symbol_acb_traces:
                                         symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                                     fee_amt = _effective_fee_for_trace(tx)
-                                    rg_trace = list(symbol_acb_traces[symbol])
+                                    # (shared, not copied: SharedTrace)
+                                    rg_trace = SharedTrace(symbol_acb_traces[symbol])
                                     # The BOOKED figures (audit S069-10):
                                     # grant-timed units already recognised
                                     # their premium at the write, so the
@@ -3789,6 +3793,20 @@ class CanadaTaxRules(TaxRules):
                                     if (_ik == IN_KIND_CONTRIBUTION_TYPE
                                         and _rec_gain < -0.001
                                         and not is_tainted) else 0.0)
+                                # The earlier superficial losses this
+                                # disposition's ACB carries (the s.53(1)(f)
+                                # additions the pool's deferred_wash
+                                # tallies; a short's: taken off its
+                                # proceeds), released in the same share
+                                # as the drain below releases them. The
+                                # views that count economic P/L before
+                                # any denial take it back out (CA-RPT-16;
+                                # audit 2026-10-25 planning-us#1).
+                                _dw_abs = abs(pool['qty'])
+                                _dw_out = (
+                                    pool.get('deferred_wash', 0.0)
+                                    * min(1.0, closing_qty / _dw_abs)
+                                    if _dw_abs > _qeps else 0.0)
                                 iteration_realized_gains.append({
                                     'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
                                     'date_settle': tx.date_settle or tx.date,
@@ -3818,6 +3836,8 @@ class CanadaTaxRules(TaxRules):
                                     'direction': 'LONG' if pool['qty'] > 0 else 'SHORT',
                                     'tainted': is_tainted,
                                     'trace': rg_trace,
+                                    **({'deferred_loss_recovered': _dw_out}
+                                       if _dw_out > 1e-9 else {}),
                                     # {} when the close consumed only
                                     # close-timing lots; absent when the
                                     # pool kept no lots (a long close).
@@ -5095,6 +5115,13 @@ class CanadaTaxRules(TaxRules):
                 gain_entry['in_kind'] = g['in_kind']
                 gain_entry['denied_contribution'] = round(
                     float(g.get('denied_contribution') or 0.0), 6)
+            if g.get('deferred_loss_recovered'):
+                # The earlier superficial losses (s.53(1)(f) additions)
+                # in this disposition's cost — a short's: off its
+                # proceeds — so `raw_gain` + this is its P/L before any
+                # denial (CA-RPT-16).
+                gain_entry['deferred_loss_recovered'] = round(
+                    float(g['deferred_loss_recovered']), 6)
             if g.get('grant_closed') is not None:
                 # A buy-back of grant-timed lots: {write year: {units,
                 # premium}} of the lots it closed (see _short_lot_close).
@@ -6024,7 +6051,9 @@ class USATaxRules(TaxRules):
             frac = q / entry['qty']
             head = dict(entry)
             for k in ('qty', 'cost', 'proceeds', 'gain', 'raw_gain',
-                      'commission', 'fee'):
+                      'commission', 'fee', 'deferred_loss_recovered'):
+                if k not in entry:
+                    continue
                 head[k] = entry[k] * frac
                 entry[k] = entry[k] - head[k]
             entry['trace'] = []
@@ -6612,6 +6641,29 @@ class USATaxRules(TaxRules):
                 continue            # booked with its spin-off (US-CORP-07)
             if tx.action == 'ADJUST':
                 lots = inventory_long.get(ikey, [])
+                if tx.type == 'dist' and tx.record_date and lots:
+                    # A distribution to the holders of record (the
+                    # [[distributions]] row, tax-logic US-DIST-01): the
+                    # lots settled by the record date only — a purchase
+                    # that straddles it is not the holder's. One stamp
+                    # could not pick them (audit 2026-10-24 B14: backdated
+                    # before a straddling buy, the whole amount landed on
+                    # the lots open before it).
+                    _rd = tx.record_date[:10]
+                    _settled = [l for l in lots
+                                if str(l.get('date_settle')
+                                       or l['date'])[:10] <= _rd]
+                    if not _settled:
+                        _note(tx.date,
+                              f"warning: ATTENTION: unapplied basis "
+                              f"adjustment: {symbol} ADJUST of "
+                              f"{float(tx.net_amount):+.2f} on {tx.date} "
+                              f"(record date {_rd}) found no open long lot "
+                              f"settled by the record date ({len(lots)} "
+                              f"open, all settling after it) — the row was "
+                              f"NOT applied; check the record date.")
+                        continue
+                    lots = _settled
                 open_qty = sum(l['qty'] for l in lots)
                 if open_qty <= epsilon:
                     # Not applied (tax-logic US-ROC-03 / US-ROC-04): a
@@ -7057,7 +7109,7 @@ class USATaxRules(TaxRules):
             def make_gain_entry(*, chunk_qty, chunk_cost, chunk_proceeds, raw_gain, allowed_gain,
                                 disallowed_amt, permanently_disallowed_amt, replacement_ids, wash_reps,
                                 acq_for_holding, days_held, is_long_term, direction, rg_trace,
-                                tainted=False, raw_acq_date=''):
+                                tainted=False, raw_acq_date='', deferred=Decimal(0)):
                 fee_share = chunk_qty / tx_qty_abs if tx_qty_abs > 0 else 1.0
                 total_disallowed = disallowed_amt + permanently_disallowed_amt
                 entry = {
@@ -7102,6 +7154,13 @@ class USATaxRules(TaxRules):
                     # — same end-state as Canada's tainted-pool model.
                     'tainted': bool(tainted),
                 }
+                if deferred and float(deferred) > 1e-9:
+                    # The earlier wash-sale losses (§1091(d) basis adds)
+                    # in this chunk's basis — a short's: off its opening
+                    # proceeds — the lot's wash_deferred, so `raw_gain`
+                    # + this is its P/L before any denial (US-RPT-12;
+                    # audit 2026-10-25 planning-us#1).
+                    entry['deferred_loss_recovered'] = float(deferred)
                 return entry
 
             # Option-leg ASSIGN: the premium rolls into the underlying's
@@ -7171,6 +7230,8 @@ class USATaxRules(TaxRules):
                                 (symbol, short_lot['qty'] - qty_remaining))
                         chunk_qty = short_lot['qty']
                         chunk_open_proceeds_d = short_lot['proceeds']
+                        chunk_wd_d = short_lot.get('wash_deferred',
+                                                   Decimal(0))
                         inventory_short[ikey].pop(0)
                         # A short_replacement record that pointed at this
                         # lot is consumed: no lot reference (a later match
@@ -7195,10 +7256,11 @@ class USATaxRules(TaxRules):
                         # partial cover (mirrors the long side's
                         # wash_deferred proration).
                         _swd = short_lot.get('wash_deferred', Decimal(0))
+                        chunk_wd_d = ((D(chunk_qty)
+                                       / D(short_lot['qty'] + chunk_qty))
+                                      * _swd if _swd else Decimal(0))
                         if _swd:
-                            short_lot['wash_deferred'] = _swd - (
-                                D(chunk_qty)
-                                / D(short_lot['qty'] + chunk_qty)) * _swd
+                            short_lot['wash_deferred'] = _swd - chunk_wd_d
                         for r in short_replacements.get(_rep_key(symbol, tx.date), []):
                             if r.get('short_lot_ref') is short_lot:
                                 # remaining_qty is denominated in the
@@ -7423,6 +7485,7 @@ class USATaxRules(TaxRules):
                         rg_trace=rg_trace,
                         tainted=short_lot.get('tainted', False),
                         raw_acq_date=short_lot['date'],
+                        deferred=chunk_wd_d,
                     )
                     realized_gains.append(entry)
 
@@ -7530,6 +7593,9 @@ class USATaxRules(TaxRules):
                             'cost_basis': _c + _pb,
                             'wash_deferred': _pb,
                             'date': tx.date,
+                            # When the lot is the holder of record's
+                            # (a 'dist' ADJUST, US-DIST-01).
+                            'date_settle': tx.date_settle or tx.date,
                             'effective_acq_date': _pe,
                             'id': tx.id,
                         })
@@ -7539,6 +7605,7 @@ class USATaxRules(TaxRules):
                             'cost_basis': base_cost_d - _alloc,
                             'wash_deferred': Decimal(0),
                             'date': tx.date,
+                            'date_settle': tx.date_settle or tx.date,
                             'effective_acq_date': tx.date,
                             'id': tx.id,
                         })
@@ -7586,6 +7653,7 @@ class USATaxRules(TaxRules):
                             (symbol, lot['qty'] - qty_remaining))
                     chunk_qty = lot['qty']
                     chunk_cost_d = lot['cost_basis']
+                    chunk_wd_d = lot.get('wash_deferred', Decimal(0))
                     inventory_long[ikey].pop(0)
                     # As on the short side: a long_replacement rep that
                     # pointed at this sold lot loses its lot reference and
@@ -7605,9 +7673,10 @@ class USATaxRules(TaxRules):
                     chunk_qty = qty_remaining
                     chunk_cost_d = (D(chunk_qty) / D(lot['qty'])) * lot['cost_basis']
                     _wd = lot.get('wash_deferred', Decimal(0))
+                    chunk_wd_d = ((D(chunk_qty) / D(lot['qty'])) * _wd
+                                  if _wd else Decimal(0))
                     if _wd:
-                        lot['wash_deferred'] = _wd - (
-                            D(chunk_qty) / D(lot['qty'])) * _wd
+                        lot['wash_deferred'] = _wd - chunk_wd_d
                     lot['qty'] -= chunk_qty
                     lot['cost_basis'] -= chunk_cost_d
                     for r in long_replacements.get(_rep_key(symbol, tx.date), []):
@@ -7891,6 +7960,7 @@ class USATaxRules(TaxRules):
                     rg_trace=rg_trace,
                     raw_acq_date=lot['date'],
                     tainted=lot.get('tainted', False),
+                    deferred=chunk_wd_d,
                 )
                 realized_gains.append(entry)
                 _record_sold_replacement(lot, entry, chunk_qty, tx)

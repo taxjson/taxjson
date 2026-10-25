@@ -418,6 +418,13 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # released too much cost (2026-10 filing audit F4).
     transactions = _fold_merger_ratios(transactions, tax_date)
     pools: Dict[str, _Pool] = {}
+    # An assignment's premium staged for its stock leg while the shares
+    # are held short, per underlying: [(the option row's date, amount)],
+    # consumed by the next buy of the shares (the option leg sorts
+    # before its stock leg) and apportioned as the engine apportions it
+    # (CA-RPT-12; 2026-10-24 audit D02).
+    pending_fold: Dict[str, List[Tuple[str, Decimal]]] = {}
+    from taxjson.lib.core import _MARKED_LEG_MAX_LAG_DAYS, _day_gap
     max_total = 0.0
     max_total_date = ""
     baseline_taken = False
@@ -584,6 +591,22 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                     per = pool.cost / Decimal(str(abs(pool.qty)))
                     amt = per * Decimal(str(closing_units))
                     fold = (und, amt if pool.qty > 0 else -amt)
+            # The premium an assignment staged for THIS stock leg (a
+            # buy of the shares within the engine's leg window): the
+            # engine apportions it by quantity share between what the
+            # buy closes (a short's gain) and what it opens (the cost
+            # of the shares kept). Folded into the pool up front, as
+            # it was, a buy that covered a short and went long lost the
+            # kept shares' share of it when the cover drained the pool
+            # (audit D02). An entry no buy claims in the window is
+            # dropped, as the engine leaves it undrained.
+            adj = Decimal(0)
+            if qty > 0 and not is_option_symbol(symbol) \
+                    and symbol in pending_fold:
+                for _fd, _amt in pending_fold.pop(symbol):
+                    _gap = _day_gap(_fd, date)
+                    if _gap is None or _gap <= _MARKED_LEG_MAX_LAG_DAYS:
+                        adj += _amt
             # The engine's tolerance (core.pool_qty_eps): a coin's
             # sub-micro sale is a closing, not another opening.
             _peps = pool.eps(qty)
@@ -591,7 +614,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                          (pool.qty < -_peps and qty < 0) or \
                          (abs(pool.qty) <= _peps)
             if is_opening:
-                pool.cost += Decimal(str(abs(net)))
+                pool.cost += Decimal(str(abs(net))) + adj
                 pool.qty += qty
             else:
                 closing = min(abs(qty), abs(pool.qty))
@@ -616,15 +639,30 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                 remainder = abs(qty) - closing
                 if remainder > _peps:
                     # Crossed zero: the excess opens a position in the
-                    # opposite direction at proportional cost.
+                    # opposite direction at proportional cost — and
+                    # its share of the staged premium (the closing
+                    # share went to the cover's gain, never a cost).
                     frac = remainder / abs(qty)
-                    pool.cost += Decimal(str(abs(net) * frac))
+                    pool.cost += Decimal(str(abs(net) * frac)) \
+                        + adj * Decimal(str(frac))
                     pool.qty += remainder * (1 if qty > 0 else -1)
             if fold is not None:
                 # R1-202 / R1-276: the premium follows the shares (the
                 # option leg sorts before its stock leg, so this lands
-                # before the stock purchase's own cost).
-                pools.setdefault(fold[0], _Pool(fold[0])).cost += fold[1]
+                # before the stock purchase's own cost; a leg dated
+                # before the option row has had its cost already).
+                # Shares held SHORT: staged for the next buy instead
+                # (`pending_fold`, above), which covers the short and
+                # may go long — the engine apportions the premium
+                # between the cover's gain and the kept shares' cost;
+                # folded here, the cover drained it with the pool
+                # (audit D02).
+                und = pools.setdefault(fold[0], _Pool(fold[0]))
+                if und.qty < -und.eps():
+                    pending_fold.setdefault(fold[0], []).append(
+                        (date, fold[1]))
+                else:
+                    und.cost += fold[1]
 
         if date >= year_start:
             snapshot(date)

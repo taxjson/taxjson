@@ -11,18 +11,29 @@ Per payer (a listing, across the accounts that hold it):
   single payment: irregular (its estimate is pro rata from the
   trailing-12-month amount per share);
 - its latest per-share amount (gross, in the payment's currency) and
-  its trailing-12-month amount per share.
+  its trailing-12-month amount per share. A payment before a stock
+  split is read in today's share denomination (the split's ratio
+  scales its share count), so the forecast is not multiplied by the
+  split (every split in the books, whatever the as-of date: the shares
+  are the books' current holdings); a payment in lieu on lent shares
+  beside the dividend on the rest is one payment on all of them; a
+  dividend charged on a short position (a negative row while the books
+  put the account short the symbol, splits and renames counted) is an
+  expense, not a correction of earlier income.
 
 Per position (account, listing) held now: the shares, the next pay
 dates on the payer's schedule and their amounts (latest per-share x
 shares held), converted to the base currency at the books' latest rate
-(work/to_base.csv; never a network call). Each projected payment is
-dated for the tax year by the same rule as divs-sum
-(lib/income_dating.IncomeRules.income_date on a copy of the payer's
-latest row moved to the projected date: a Canadian trust's
-distribution by its record date, a listed US RIC's January dividend in
-the year before). Withholding uses the rate the latest payment in that
-account shows (its TAX rows), where it has one.
+(work/to_base.csv; never a network call). The history used is in one
+currency, the one that account's latest payment was paid in (payments
+in another currency, another broker's conversion, are flagged and left
+out). Each projected payment is dated for the tax year by the same
+rule as divs-sum (lib/income_dating.IncomeRules.income_date on a copy
+of the payer's latest row moved to the projected date: a Canadian
+trust's distribution by its record date, a listed US RIC's January
+dividend in the year before). Withholding uses the rate the latest
+payment in that account shows (its TAX rows over its gross, every
+broker account of a combined account together), where it has one.
 
 This module is pure: the command (taxjson_run.cmd_div_estimate) reads
 the books and hands the rows in.
@@ -57,6 +68,9 @@ LOOKBACK = 12
 # weekends and the broker's posting; a quarterly one's a few weeks).
 GAP_TOL = 0.25
 _INCOME = ("DIVIDEND", "DIVIDEND_IN_LIEU")
+# The rows that move an account's share balance (the sign of the
+# balance tells a short position's dividend expense from a reversal).
+_TRADES = ("BUYSELL", "ASSIGN", "OPENING_BALANCE", "TRANSFER")
 
 
 @dataclass
@@ -96,12 +110,95 @@ def parse_window(token: str) -> Optional[int]:
     return max(1, int(round(months)))
 
 
+def horizon_problem(as_of: str, months: int,
+                    tax_year: int) -> Optional[str]:
+    """Why an estimate as of `as_of` over `months` months for `tax_year`
+    cannot be computed: the window, or the January after the tax year,
+    reaches past 9999-12-31, or the 12-month look-back reaches before
+    0001-01-01 (`--date 9999-09-01 --months 120` raised "year 10009 is
+    out of range" from inside the arithmetic: 2026-10 audit A30). None
+    when it can."""
+    try:
+        d = date.fromisoformat(str(as_of))
+    except ValueError:
+        return f"--date {as_of!r} is not a YYYY-MM-DD date"
+    try:
+        d - timedelta(days=365)
+    except OverflowError:
+        return (f"--date {as_of}: the 12-month look-back reaches before "
+                f"0001-01-01")
+    try:
+        add_months(as_of, int(months))
+    except (ValueError, OverflowError):
+        return (f"--date {as_of} with a {months}-month window reaches "
+                f"past 9999-12-31")
+    try:
+        add_months(f"{int(tax_year):04d}-12-31", 1)
+    except (ValueError, OverflowError):
+        return (f"tax year {tax_year}: the projection runs to January "
+                f"{int(tax_year) + 1}, past 9999-12-31")
+    return None
+
+
 class Payments(dict):
     """{symbol: [Payment]} that remembers the rows it was read from, so
     `estimate` can read them again as of its own date (a reversal or a
     share count dated after the as-of date must not change what the
-    books said on it: 2026-10 audit R09)."""
+    books said on it: 2026-10 audit R09; a later split still sets the
+    denomination, the current holdings'). `notes`: {(account, symbol):
+    [what the reading had to decide without the books' say-so]}, shown
+    as the position's flags."""
     rows: List[Tuple[str, Dict[str, Any]]] = []
+    notes: Dict[Tuple[str, str], List[str]] = {}
+
+
+def _money(v: float) -> str:
+    return f"{v:,.2f}"
+
+
+def _held(rows: List[Tuple[str, Dict[str, Any]]],
+          ok: Callable[[Dict[str, Any]], Optional[Tuple[str, str, str]]],
+          splits: List[Tuple[str, str, str, float]]
+          ) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
+    """{(account, symbol): [(date, signed share balance after it)]} by
+    trade date: each account's trade rows (_TRADES; `ok` reads a row's
+    (action, symbol, date), or None to leave it out), scaled by every
+    split of `splits` (date, symbol, new symbol, ratio) and moved to the
+    new symbol by a rename. On one date an opening balance comes first,
+    then the split (effective at the open), then the day's trades. The
+    raw quantities alone read 100 shares, a 2-for-1 split and a sale of
+    150 as short 50, and a reversal of the long payment as a short's
+    expense (2026-10-25 audit planning-us#3)."""
+    walk: Dict[str, List[tuple]] = {}
+    for acct, t in rows:
+        key = ok(t)
+        if key is None or key[0] not in _TRADES:
+            continue
+        try:
+            q = float(t.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        walk.setdefault(acct, []).append(
+            (key[2], 0 if key[0] == "OPENING_BALANCE" else 2,
+             str(t.get("time") or ""), key[1], q, ""))
+    out: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
+    for acct, ts in walk.items():
+        bal: Dict[str, float] = {}
+        evs = [(d, 1, "", sym, ratio, new) for d, sym, new, ratio in splits]
+        for d, rank, _tm, sym, q, new in sorted(ts + evs,
+                                                key=lambda x: x[:3]):
+            if rank != 1:
+                bal[sym] = bal.get(sym, 0.0) + q
+                touched: Tuple[str, ...] = (sym,)
+            elif sym in bal:
+                moved = bal.pop(sym) * q
+                bal[new] = bal.get(new, 0.0) + moved
+                touched = (sym, new)
+            else:
+                continue
+            for s in touched:
+                out.setdefault((acct, s), []).append((d, bal.get(s, 0.0)))
+    return out
 
 
 def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
@@ -112,30 +209,98 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
     shares were lent) rows netted per account, broker account (the
     rows' source_account: two broker accounts in one taxjson account
     are two holdings, not one payment of both amounts on the larger
-    share count), symbol and pay date (a reversal and its re-posting
-    are one payment), their withholding from the TAX rows of that
-    account, broker account, symbol and date. A reversal posted on a
-    later date nets against the latest earlier posting of that account,
-    broker account and symbol (the original it cancels), so a
-    correction counts once. A corporate action's deemed dividend (a spin-off
-    election) is not part of a payer's schedule; a row with no share
-    count (the broker's description names none) takes the count of the
-    account's nearest dated payment of that symbol that has one, or is
-    left out when none has."""
-    rows = list(rows)
-    inc: Dict[tuple, Dict[str, Any]] = {}
-    tax: Dict[tuple, float] = {}
-    for acct, t in rows:
-        if not isinstance(t, dict):
-            continue
+    share count), symbol, pay date and currency (a reversal and its
+    re-posting are one payment; a CAD and a USD posting of one date are
+    two, never one sum: 2026-10 audit A10), their withholding from the
+    TAX rows of that account, broker account, symbol and date. The
+    share count of a date is the largest count its DIVIDEND rows name
+    (a special beside the regular dividend is on the same shares) plus
+    the largest its DIVIDEND_IN_LIEU rows name (the lent shares are
+    the others: a dividend on 5 and a payment in lieu on 5 is one
+    payment on 10, audit B15). A SPLIT row dated after a payment
+    scales its share count by the ratio, so every per-share amount is
+    in today's denomination (a 2-for-1 split doubled the forecast,
+    audit A09); every SPLIT in the books, `as_of` or not: the shares
+    the estimate multiplies by are the books' current holdings (a
+    --date before the split doubled it again, 2026-10-25 audit
+    planning-us#2). A reversal posted on a later date nets against the
+    latest earlier positive posting of that account, broker account,
+    symbol and currency (the original it cancels), so a correction
+    counts once. A negative row is a dividend charged on a short
+    position when the books put the account short the symbol on the
+    row's record (or pay) date (its trade rows, scaled by the splits
+    and carried through a rename: `_held`; 2026-10-25 audit
+    planning-us#3): an expense, neither a payment nor a correction
+    (audit A50), whatever the row's own share count (Questrade's
+    charge names "ON 100 SHS": planning-us#4); long by the books, it
+    is a reversal (IB back-computes a negative count from the signed
+    amount); with no trade row of the symbol in that account, a
+    negative count decides (a short's expense) and `notes` says so,
+    a positive one is a reversal. A corporate action's deemed dividend
+    (a spin-off election) is not part of a payer's schedule; a row
+    with no share count (the broker's description names none) takes
+    the count of the account's nearest dated payment of that symbol
+    that has one, or is left out when none has."""
+    rows = [(a, t) for a, t in rows if isinstance(t, dict)]
+
+    def _ok(t: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
         act = str(t.get("action") or "").upper()
         sym = str(t.get("symbol") or "").strip()
         d = str(t.get("date") or "")[:10]
         if not sym or len(d) != 10:
-            continue
+            return None
         if as_of is not None and d > as_of:
+            return None
+        return act, sym, d
+    # The splits: one corporate event per security, whichever account's
+    # book posted it (split_copies, the one dedup rule: CA-CORP-12; two
+    # books' copies a few days apart are one). Every split in the books
+    # scales the payments before it, whatever `as_of`: the shares
+    # `estimate` multiplies by are the books' current holdings, so the
+    # history is read in the denomination after the last split (a
+    # --date before a 2-for-1 split doubled the forecast: 2026-10-25
+    # audit planning-us#2).
+    from taxjson.lib.corporate_timeline import split_copies
+    dup = split_copies([t for _a, t in rows])
+    splits: List[Tuple[str, str, str, float]] = []    # date, sym, new, ratio
+    for _a, t in rows:
+        if str(t.get("action") or "").upper() != "SPLIT" or id(t) in dup:
             continue
-        k = (acct, str(t.get("source_account") or ""), sym, d)
+        sym = str(t.get("symbol") or "").strip()
+        d = str(t.get("date") or "")[:10]
+        try:
+            ratio = float(t.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            ratio = 0.0
+        if sym and len(d) == 10 and ratio > 0:
+            splits.append((d, sym, str(t.get("symbol_new") or "").strip()
+                           or sym, ratio))
+    held = _held(rows, _ok, [e for e in splits
+                             if as_of is None or e[0] <= as_of])
+
+    def _short_on(acct: str, sym: str, when: str) -> Optional[bool]:
+        """Whether `acct` was short `sym` at the end of `when` by the
+        books (its trade rows, the splits, a rename carrying its shares
+        in); None when no row of the books moves the symbol in it."""
+        hs = held.get((acct, sym))
+        if not hs:
+            return None
+        bal = 0.0
+        for d, b in hs:
+            if d > when:
+                break
+            bal = b
+        return bal < -1e-9
+    inc: Dict[tuple, Dict[str, Any]] = {}
+    tax: Dict[tuple, float] = {}
+    notes: Dict[Tuple[str, str], List[str]] = {}
+    for acct, t in rows:
+        key = _ok(t)
+        if key is None:
+            continue
+        act, sym, d = key
+        cur = str(t.get("currency") or "").upper()
+        k = (acct, str(t.get("source_account") or ""), sym, d, cur)
         if act == "TAX" or str(t.get("type") or "").lower() == "tax":
             tax[k] = tax.get(k, 0.0) + float(t.get("net_amount") or 0.0)
             continue
@@ -145,29 +310,60 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
             continue
         amt = (float(t.get("gross_amount") or 0.0)
                or float(t.get("net_amount") or 0.0))
-        e = inc.setdefault(k, {"gross": 0.0, "qty": 0.0, "row": t,
-                               "currency": str(t.get("currency") or "")})
+        qraw = float(t.get("quantity") or 0.0)
+        if amt < -0.005:
+            # Short or long on the record (or pay) date by the books,
+            # whatever the row's own count says: Questrade's charge
+            # names "ON 100 SHS", a positive count (2026-10-25 audit
+            # planning-us#4).
+            when = d
+            for f in ("record_date", "ex_date"):
+                rd = str(t.get(f) or "")[:10]
+                if len(rd) == 10 and rd <= d:
+                    when = min(when, rd)
+            short = _short_on(acct, sym, when)
+            if short is None and qraw < 0:
+                notes.setdefault((acct, sym), []).append(
+                    f"the {d} row of {_money(amt)} {cur} on {qraw:g} "
+                    f"shares was read as a short position's dividend "
+                    f"expense, not a correction of an earlier payment: "
+                    f"{acct} has no trade of {sym} in the books to say")
+                continue
+            if short:
+                continue
+        e = inc.setdefault(k, {"gross": 0.0, "qty": 0.0, "qty_by": {},
+                               "row": t, "row_qty": -1.0, "currency": cur})
         e["gross"] += amt
-        q = abs(float(t.get("quantity") or 0.0))
-        if q > e["qty"]:
-            e["qty"], e["row"] = q, t
-    # A TAX row naming no broker account (or another one) on a date
-    # with no income of its own broker account: the withholding of that
-    # date's largest holding in the account.
-    for (acct, src, sym, d) in list(tax):
-        if (acct, src, sym, d) in inc:
+        q = abs(qraw)
+        if q > e["qty_by"].get(act, 0.0):
+            e["qty_by"][act] = q
+        e["qty"] = sum(e["qty_by"].values())
+        if q > e["row_qty"]:
+            e["row_qty"], e["row"] = q, t
+    # A payment before a split: its share count in today's denomination.
+    for (acct, src, sym, d, cur), e in inc.items():
+        for sd, ssym, _new, ratio in splits:
+            if ssym == sym and d < sd:
+                e["qty"] *= ratio
+    # A TAX row naming no broker account (or another one, or another
+    # currency) on a date with no income of its own: the withholding of
+    # that date's matching, else largest, holding in the account.
+    for k in list(tax):
+        if k in inc:
             continue
-        same = [k for k in inc if k[0] == acct and k[2:] == (sym, d)]
+        acct, src, sym, d, cur = k
+        same = [j for j in inc if j[0] == acct and j[2:4] == (sym, d)]
         if same:
-            k = max(same, key=lambda k: inc[k]["qty"])
-            tax[k] = tax.get(k, 0.0) + tax.pop((acct, src, sym, d))
-    # Per account and symbol, in date order: a net-negative date (a
-    # reversal) cancels the latest earlier positive posting(s) of its
-    # broker account (any, when one of the two names none); a date
-    # with no share count borrows the nearest dated one.
+            j = max(same, key=lambda j: (j[1] == src, j[4] == cur,
+                                         inc[j]["qty"]))
+            tax[j] = tax.get(j, 0.0) + tax.pop(k)
+    # Per account, symbol and currency, in date order: a net-negative
+    # date (a reversal) cancels the latest earlier positive posting(s)
+    # of its broker account (any, when one of the two names none); a
+    # date with no share count borrows the nearest dated one.
     by_pair: Dict[tuple, List[tuple]] = {}
-    for (acct, src, sym, d), e in inc.items():
-        by_pair.setdefault((acct, sym), []).append((d, src, e))
+    for (acct, src, sym, d, cur), e in inc.items():
+        by_pair.setdefault((acct, sym, cur), []).append((d, src, e))
 
     def _same_src(a: str, b: str) -> bool:
         return not a or not b or a == b
@@ -198,14 +394,15 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
                 e["qty"] = min(near)[1]
     out = Payments()
     out.rows = rows
-    for (acct, src, sym, d), e in inc.items():
+    out.notes = notes
+    for (acct, src, sym, d, cur), e in inc.items():
         if e["gross"] <= 0.005 or e["qty"] <= 1e-9:
             continue
         out.setdefault(sym, []).append(Payment(
             pay_date=d, per_share=e["gross"] / e["qty"], gross=e["gross"],
-            qty=e["qty"], currency=e["currency"].upper(), account=acct,
-            tax=max(0.0, tax.get((acct, src, sym, d), 0.0)), row=e["row"],
-            source=src))
+            qty=e["qty"], currency=cur, account=acct,
+            tax=max(0.0, tax.get((acct, src, sym, d, cur), 0.0)),
+            row=e["row"], source=src))
     for ps in out.values():
         ps.sort(key=lambda p: (p.pay_date, -p.qty))
     return out
@@ -224,10 +421,12 @@ def schedule(pays: List[Payment]) -> List[Payment]:
     CLUSTER_DAYS of each other are one payment, its per-share amount
     the largest holding's (an account's two rows of it, a special and a
     regular dividend, added; each broker account of a combined taxjson
-    account a holding of its own). A posting more than CLUSTER_DAYS
-    after an earlier one of its own holding in the cluster starts the
-    next payment: a weekly payer posted a few days apart by two brokers
-    is not one chain of every week's postings."""
+    account a holding of its own, and a holding's postings in another
+    currency another holding: amounts in unlike currencies are never
+    added). A posting more than CLUSTER_DAYS after an earlier one of its
+    own holding in the cluster starts the next payment: a weekly payer
+    posted a few days apart by two brokers is not one chain of every
+    week's postings."""
     out: List[Payment] = []
     group: List[Payment] = []
 
@@ -236,9 +435,9 @@ def schedule(pays: List[Payment]) -> List[Payment]:
             return
         by: Dict[tuple, List[Payment]] = {}
         for p in group:
-            by.setdefault((p.account, p.source), []).append(p)
+            by.setdefault((p.account, p.source, p.currency), []).append(p)
         best = None
-        for (acct, src), ps in by.items():
+        for (acct, src, _cur), ps in by.items():
             qty = max(p.qty for p in ps)
             per = sum(p.gross for p in ps) / qty if qty else 0.0
             last = max(ps, key=lambda p: (p.pay_date, p.qty))
@@ -362,11 +561,17 @@ def estimate(positions: Iterable[Dict[str, Any]],
              income_date: Optional[Callable] = None) -> Dict[str, Any]:
     """The estimate document. `positions`: {account, group ("taxable" |
     "sheltered"), symbol, qty} held now (long shares only); `fx(cur)`:
-    the base-currency rate of `cur` (None: no rate in the books)."""
+    the base-currency rate of `cur` (None: no rate in the books).
+    ValueError (`horizon_problem`) when the window or the tax year
+    leaves the calendar."""
+    bad = horizon_problem(as_of, months, tax_year)
+    if bad:
+        raise ValueError(bad)
     horizon = add_months(as_of, months)
     ystart, yend = f"{tax_year}-01-01", f"{tax_year}-12-31"
     if isinstance(pays, Payments) and pays.rows:
         pays = payments(pays.rows, as_of=as_of)
+    notes = getattr(pays, "notes", None) or {}
     # The projection runs to the later of the window and the tax year
     # (plus the month a December-record distribution is paid in): the
     # rest-of-year total is the year's, whatever window was asked for
@@ -379,24 +584,44 @@ def estimate(positions: Iterable[Dict[str, Any]],
         sym, acct = pos["symbol"], pos["account"]
         # The history as of the date (a later payment in the books is
         # not known yet on it).
-        hist = [p for p in (pays.get(sym) or []) if p.pay_date <= as_of]
-        if not hist:
+        every = [p for p in (pays.get(sym) or []) if p.pay_date <= as_of]
+        if not every:
             omitted.append({"account": acct, "symbol": sym,
                             "shares": pos["qty"]})
             continue
+        flags: List[str] = list(notes.get((acct, sym), []))
+        # One currency: the one this account's latest payment (else the
+        # payer's) was paid in. Another broker's postings in another
+        # currency are another holding's, flagged and left out (audit
+        # A10: a USD and a CAD posting of one date were summed).
+        own = [p for p in every if p.account == acct] or every
+        cur = max(own, key=lambda p: (p.pay_date, p.qty)).currency
+        hist = [p for p in every if p.currency == cur]
+        others = sorted({p.currency for p in every if p.currency != cur})
+        if others:
+            flags.append(f"payments in {', '.join(others)} too: estimated "
+                         f"from the {cur} ones")
         sched = schedule(hist)
         latest = sched[-1]
         name, step, gap = detect_frequency([p.pay_date for p in sched])
         ttm = ttm_per_share(sched, as_of)
-        cur = latest.currency
         rate = 1.0 if cur == base.upper() else fx(cur)
+        # The withholding rate: this account's latest payment, every
+        # broker account's posting of it together (its TAX over its
+        # gross; the smallest holding's rate alone put a 20% rate on
+        # the whole position: audit A29).
         mine = [p for p in hist if p.account == acct]
         wrate = None
-        if mine and mine[-1].tax > 0.005 and mine[-1].gross > 0:
-            wrate = mine[-1].tax / mine[-1].gross
+        if mine:
+            last_d = date.fromisoformat(mine[-1].pay_date)
+            grp = [p for p in mine
+                   if (last_d - date.fromisoformat(p.pay_date)).days
+                   <= CLUSTER_DAYS]
+            g, w = sum(p.gross for p in grp), sum(p.tax for p in grp)
+            if w > 0.005 and g > 0:
+                wrate = w / g
         shares = float(pos["qty"])
         per_pay = latest.per_share * shares
-        flags: List[str] = []
         projected: List[Dict[str, Any]] = []
         missed = 0
         status = "ok"
@@ -405,9 +630,12 @@ def estimate(positions: Iterable[Dict[str, Any]],
             grace = GRACE_DAYS[name]
             k = 1
             while True:
-                d = (add_months(latest.pay_date, step * k) if step
-                     else _iso(date.fromisoformat(latest.pay_date)
-                               + timedelta(days=7 * k)))
+                try:
+                    d = (add_months(latest.pay_date, step * k) if step
+                         else _iso(date.fromisoformat(latest.pay_date)
+                                   + timedelta(days=7 * k)))
+                except (ValueError, OverflowError):
+                    break               # past 9999-12-31: nothing to come
                 if d > reach:
                     break
                 k += 1
@@ -563,7 +791,10 @@ def render(doc: Dict[str, Any], details: bool = False,
             kv.append((f"Withholding, {n} months",
                        _pair(t["withholding_window"])))
         d.kv(kv)
-    check = [r for r in rows if r["status"] != "ok"]
+    # Every status but ok carries a flag; a flag on an ok row (a
+    # currency left out, a row read without the books' say-so) is a
+    # payer to check too.
+    check = [r for r in rows if r["status"] != "ok" or r["flags"]]
     acts = []
     if check:
         syms = list(dict.fromkeys(r["symbol"] for r in check))

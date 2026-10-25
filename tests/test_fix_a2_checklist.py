@@ -702,7 +702,7 @@ class TestChecklistMarks(unittest.TestCase):
             p = Path(td)
             (p / "taxjson.toml").write_text(TOML)
             r = tj(p, "checklist", "--done", "roc-entered", "--done", "t5-t3",
-                   "--skip", "fees", "--json")
+                   "--done", "fees", "--json")
             doc = json.loads(r.stdout)
             self.assertEqual([x["step"] for x in doc["recorded"]],
                              ["roc-entered", "t5-t3", "fees"])

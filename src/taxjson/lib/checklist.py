@@ -22,14 +22,16 @@ one-line why (items()). An item is either
   open.
 
 Overrides live in `checklist.json` at the project root (commit it): an
-item the user marks done or skipped keeps that mark until `--undo` or
-`--reset`. A mark never hides a detector's finding: a step marked DONE
-whose detector later says `attention` counts as attention (shown `[!]`
-with the mark and its note beside the finding), so a stale mark cannot
-turn the list green. `--skip` is the deliberate "reviewed, accepted"
-mark — the finding stays visible beside it. The first item to do (or
-needing attention) is the NEXT one, named with its command on the last
-line.
+item the user marks done keeps that mark until `--undo` or `--reset`. A
+mark never hides a detector's finding: a step marked DONE whose detector
+later says `attention` counts as attention (shown `[!]` with the mark
+and its note beside the finding), so a stale mark cannot turn the list
+green. `--done ID` is refused while the step's kept verdict is a
+finding (attention or blocked); `--done ID --force` is the deliberate
+"reviewed, accepted" mark (stored `"forced": true`, shown `[f]`) — the
+finding stays visible beside it. The `skipped` mark of earlier releases
+reads as a forced done. The first item to do (or needing attention) is
+the NEXT one, named with its command on the last line.
 
 Outside a project (no taxjson.toml) the same items are printed as a
 step-by-step guide, without marks (render_guide).
@@ -313,14 +315,40 @@ def step_meta(sid: str, country: str) -> Tuple[str, str, str, str, str]:
 
 
 SYMBOL = {"done": "[x]", "attention": "[!]", "todo": "[ ]", "manual": "[m]",
-          "blocked": "[b]", "n/a": "[-]", "skipped": "[~]", "review": "[?]"}
+          "blocked": "[b]", "n/a": "[-]", "forced": "[f]", "review": "[?]"}
 NEXT_MARK = "[>]"
-# Every effective status, in the order the counts are shown.
-STATUSES = ("done", "skipped", "attention", "todo", "blocked", "manual",
+# Every effective status, in the order the counts are shown. `forced`:
+# a `--done --force` mark over a finding (the finding stays beside it).
+STATUSES = ("done", "forced", "attention", "todo", "blocked", "manual",
             "review", "n/a")
 # Statuses that leave nothing to do: the exit is 0 when every item has
 # one. `review` (yours to run and read) never keeps the list open.
-PASSED = ("done", "n/a", "skipped", "review")
+PASSED = ("done", "n/a", "forced", "review")
+# The kept verdicts a plain `--done` is refused over (`--force` marks).
+FINDING_STATUSES = ("attention", "blocked")
+# The marks, as checklist.json stores them: {"status": "done"} and
+# {"status": "done", "forced": true}; "skipped" (before v0.35) is read
+# as forced.
+MARK_DONE = "done"
+MARK_FORCED = "forced"
+
+
+def mark_kind(ov: Any) -> Optional[str]:
+    """MARK_DONE, MARK_FORCED or None for a checklist.json override
+    entry (a legacy "skipped" mark is MARK_FORCED)."""
+    if not isinstance(ov, dict):
+        return None
+    status = ov.get("status")
+    if status == "skipped":
+        return MARK_FORCED
+    if status == "done":
+        return MARK_FORCED if ov.get("forced") else MARK_DONE
+    return None
+
+
+def mark_text(kind: Optional[str]) -> str:
+    """A mark as a person reads it: `done`, `done (forced)`."""
+    return "done (forced)" if kind == MARK_FORCED else str(kind or "")
 
 
 @dataclass
@@ -328,7 +356,7 @@ class Result:
     id: str
     status: str
     detail: str = ""
-    override: Optional[str] = None      # "done" | "skipped"
+    override: Optional[str] = None      # MARK_DONE | MARK_FORCED
     note: str = ""
     finding: str = ""                   # detector status when an override hides it
     # The attention is a QUESTION only the user can answer (the files
@@ -349,12 +377,21 @@ class Result:
     # False for a `todo` nothing can be done about yet (the year is still
     # open, a check --quick skipped): never the NEXT item, still open.
     actionable: bool = True
+    # The detector's own detail and question flag, kept when a mark's
+    # text is put on them (apply_override: a question the DONE mark did
+    # not answer). save_results stores these, never the marked view: a
+    # stored view with the question turned off could not be answered by
+    # a later mark (audit 2026-10-24 A03).
+    own_detail: Optional[str] = None
+    own_question: Optional[bool] = None
 
     @property
     def effective(self) -> str:
         # A DONE mark never outranks a detector finding (README: "a mark
-        # never hides a later finding"); --skip is the explicit accept.
-        # A question's DONE mark is its answer.
+        # never hides a later finding"); `--done --force` is the explicit
+        # accept. A question's DONE mark is its answer.
+        if self.override == MARK_FORCED:
+            return "forced"
         if self.override == "done" and self.status == "attention" \
                 and not self.question:
             return "attention"
@@ -378,6 +415,11 @@ class RunInfo:
     oldest: Optional[str] = None        # ISO, the oldest one shown
     stale: List[str] = field(default_factory=list)   # what changed since
     version: Optional[str] = None       # the taxjson that made them
+    # The kept verdicts shown that were made before a change in `stale`
+    # (each verdict is judged by its own basis: a `--run --only ID`
+    # refreshes one step's), and how many kept verdicts are shown.
+    stale_steps: List[str] = field(default_factory=list)
+    stored: int = 0
 
     @property
     def never(self) -> bool:
@@ -408,7 +450,11 @@ class Ctx:
 
     @property
     def accounts(self) -> Dict[str, Dict[str, Any]]:
-        return self.cfg.get("accounts") or {}
+        # The tables only: a leniently read taxjson.toml (config_error)
+        # can hold `margin = 42`, which every `a.get(...)` died on
+        # (audit 2026-10-24 A16).
+        return {n: a for n, a in (self.cfg.get("accounts") or {}).items()
+                if isinstance(a, dict)}
 
     def sub(self, *argv: str, timeout: int = 900) -> Tuple[int, str, str]:
         return self.run_sub(list(argv), timeout=timeout)
@@ -2467,7 +2513,7 @@ def d_carryover(ctx: Ctx) -> Result:
 def d_fx_cash(ctx: Ctx) -> Result:
     """`taxjson fx-cash --json` (tax-logic CA-FX-07 / US-FX-03). The
     default ledger (v1) is NOT RELIABLE: attention whenever it saw
-    foreign cash move (a `--skip` mark is the deliberate accept). The
+    foreign cash move (a `--done --force` mark is the deliberate accept). The
     opt-in v2: attention with its problems when it refused; when it
     computed, attention until the user marks THAT figure reviewed (a
     DONE mark answers the year and reportable amount it saw — a changed
@@ -2726,6 +2772,10 @@ def load_state(root: Path) -> Dict[str, Any]:
                 f"{STATE_FILE}: overrides entry {sid!r} is {ov!r}, not a "
                 f"{{\"status\": ..., \"note\": ...}} table — fix it, or "
                 f"`taxjson checklist --undo {sid}` / `--reset`.")
+        if ov.get("status") == "skipped":
+            # The `--skip` mark of releases before v0.35: a forced done.
+            ov["status"] = "done"
+            ov["forced"] = True
     return doc
 
 
@@ -2768,11 +2818,13 @@ def reset_state(root: Path) -> bool:
 
 
 class _StateLock:
-    """An exclusive lock around a read-modify-write of checklist.json:
-    two `checklist --done` at once lost a mark or left the file
-    unparseable (A2-1160). A POSIX flock on the project directory itself
-    (no lock file to commit or ignore); no lock where fcntl or a
-    directory descriptor is unavailable."""
+    """An exclusive lock around a read-modify-write of checklist.json
+    (two `checklist --done` at once lost a mark or left the file
+    unparseable, A2-1160) and of work/checklist_results.json (two
+    `--run --only` at once each kept the other's verdict out, audit
+    2026-10-24 A19). A POSIX flock on the project directory itself (no
+    lock file to commit or ignore); no lock where fcntl or a directory
+    descriptor is unavailable. Not re-entrant: never nest it."""
 
     def __init__(self, root: Path):
         self.root = root
@@ -2865,8 +2917,8 @@ def option_keys(rows: List[Dict[str, Any]]) -> List[str]:
 def unanswered(r: Result, ov: Dict[str, Any]) -> List[str]:
     """The question keys of `r` its DONE mark `ov` did not record (a
     mark with none recorded answers none)."""
-    if not r.question or ov.get("status") != "done":
-        return []
+    if not r.question or mark_kind(ov) != MARK_DONE:
+        return []        # (a forced mark accepts every question)
     done = {str(k) for k in (ov.get("answers") or [])
             if isinstance(k, str)}
     return [k for k in r.answers if k not in done]
@@ -2890,12 +2942,17 @@ def apply_override(r: Result, ov: Dict[str, Any]) -> Result:
     """Put a manual mark on a detector result: a DONE mark answers the
     question keys it recorded only — a key it did not record leaves the
     step needing attention, named in the detail."""
-    if ov.get("status") not in ("done", "skipped"):
+    kind = mark_kind(ov)
+    if kind is None:
         return r
-    r.override = ov["status"]
+    r.override = kind
     r.note = ov.get("note") or ""
     new = unanswered(r, ov)
     if new:
+        if r.own_detail is None:
+            # (what the detector said, for the store: a later mark
+            # answering these keys must still find the question)
+            r.own_detail, r.own_question = r.detail, r.question
         r.question = False      # the mark does not answer these
         shown = ", ".join(key_text(r.id, k) for k in new[:3]) + (
             f" +{len(new) - 3} more" if len(new) > 3 else "")
@@ -2916,14 +2973,18 @@ def _set_override_locked(root: Path, year: int, step: str,
         # evaluate() already ignores them, so a new mark must not
         # re-stamp them as this year's (R1-254).
         state = {"overrides": {}}
+    if mark == "skipped":
+        mark = MARK_FORCED       # the mark's name before v0.35
     if mark is None:
         if step not in state["overrides"]:
             return False
         state["overrides"].pop(step, None)
     else:
-        state["overrides"][step] = {"status": mark,
+        state["overrides"][step] = {"status": "done",
                                     "date": (today or date.today()).isoformat(),
                                     "note": note}
+        if mark == MARK_FORCED:
+            state["overrides"][step]["forced"] = True
         if mark == "done" and answers is not None:
             state["overrides"][step]["answers"] = sorted(set(answers))
     save_state(root, state, year)
@@ -3153,8 +3214,10 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
              "The run reads a .tt file like a broker file; `tjs run "
              "--strict` refuses a line whose total is not quantity x "
              "price +/- fee.",
-             (Cmd("tjs events", "the books' rows in the same .tt format, "
-                  "to copy from"),),
+             (Cmd("tjs check-tt", "every .tt line read as the run reads "
+                  "it, each problem named with its file and line"),
+              Cmd("tjs events", "the books' rows in the same .tt format, "
+                  "to copy from")),
              how="A purchase from before your downloads, a dividend from "
                  "a slip (Webull), a return of capital (ADJUST): a line "
                  "in a .tt file in inputs/<account>/ "
@@ -3476,6 +3539,32 @@ def section_label(section: str) -> str:
     return f"{SECTIONS.index(section) + 1}. {section}"
 
 
+def resolve_sections(tokens: Any) -> List[str]:
+    """The sections `--section 6,7` / `--section 6 --section check`
+    name (each token as resolve_section reads it; comma-separated and
+    repeated alike), in the list's order, each once. KeyError (the
+    token) for one that is no section."""
+    out: List[str] = []
+    for tok in (tokens if isinstance(tokens, (list, tuple)) else [tokens]):
+        for t in str(tok).split(","):
+            if t.strip():
+                sec = resolve_section(t.strip())
+                if sec not in out:
+                    out.append(sec)
+    return sorted(out, key=SECTIONS.index)
+
+
+def sections_label(sections: List[str]) -> str:
+    """`6. Check, 7. Results`: the sections shown, each with its number."""
+    return ", ".join(section_label(sec) for sec in sections)
+
+
+def sections_ids(sections: List[str]) -> List[str]:
+    """The ids of the steps of these sections, in the list's order."""
+    return [sid for sec in sorted(sections, key=SECTIONS.index)
+            for sid in section_ids(sec)]
+
+
 def item_meta(sid: str, country: Optional[str]) -> Tuple[str, str, str,
                                                          str, str]:
     """(id, section, title, command, why) of any item: a check's
@@ -3793,9 +3882,16 @@ def _not_applicable(sid: str, us: bool, has_taxable: bool
 
 def _project_shape(ctx: Ctx) -> Tuple[Optional[str], bool, bool]:
     country = ctx.settings.get("country")
-    has_taxable = any(a.get("type") == "taxable"
+    has_taxable = any(isinstance(a, dict) and a.get("type") == "taxable"
                       for a in ctx.accounts.values())
     return country, is_us(country), has_taxable
+
+
+# The details of the n/a a project's shape decides (_not_applicable), to
+# read a store an older release wrote: such an entry is no verdict.
+_SHAPE_NA_DETAILS = frozenset(
+    ["no taxable account — nothing to report"]
+    + [v for v in US_STEPS.values() if isinstance(v, str)])
 
 
 def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
@@ -3927,6 +4023,137 @@ def _stamp(when: Optional[datetime] = None) -> str:
     return (when or datetime.now()).isoformat(timespec="seconds")
 
 
+def _check_only_files(ctx: Ctx) -> List[Path]:
+    """The files only the checks read (`taxjson run` reads none of
+    them, so input_fingerprint leaves them out): the positions
+    snapshots sanity compares against (holdings/ and each account's
+    `holdings = [...]`), the slips (inputs/slips/) and the filed-year
+    locks (filed/)."""
+    from taxjson.lib.holdings_dir import listed_files, snapshot_files
+    out = set(snapshot_files(_PL.holdings_folder(ctx.root)))
+    out |= {p for p in listed_files(ctx.root, ctx.accounts) if p.is_file()}
+    for folder in (_PL.slips_dir(ctx.root), ctx.root / "filed"):
+        if folder.is_dir():
+            out |= {p for p in folder.iterdir()
+                    if p.is_file() and not _skipped_input_name(p.name)}
+    return sorted(out)
+
+
+def _check_key(root: Path, p: Path) -> str:
+    """A check-only file's fingerprint key: its path from the project
+    (a `holdings = [...]` entry is read resolved), else its path."""
+    for base in (root, Path(root).resolve()):
+        try:
+            return p.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    return p.as_posix()
+
+
+def checklist_fingerprint(ctx: Ctx) -> Dict[str, str]:
+    """What the kept verdicts were made from, {key: sha256}: every run
+    input (input_fingerprint) and the files only the checks read
+    (_check_only_files) — a changed holdings snapshot made no verdict
+    stale before (audit 2026-10-24 A14)."""
+    import hashlib
+    out = input_fingerprint(ctx.root, ctx.cfg)
+    for p in _check_only_files(ctx):
+        try:
+            out.setdefault(_check_key(ctx.root, p),
+                           hashlib.sha256(p.read_bytes()).hexdigest())
+        except OSError:
+            continue
+    return out
+
+
+# The provenance of a kept verdict (its basis: the inputs fingerprint,
+# the books' build time, the taxjson version). Each step entry names
+# its basis (`basis`, an id into the document's `bases`), so a `--run
+# --only ID` that refreshes one step leaves the other verdicts'
+# provenance as it was: the document's single fingerprint used to be
+# re-stamped on every kept verdict, and a stale one read as fresh
+# (audit 2026-10-24 A01).
+def _basis_now(ctx: Ctx) -> Dict[str, Any]:
+    try:
+        fingerprint = checklist_fingerprint(ctx)
+    except Exception:                                   # noqa: BLE001
+        fingerprint = {}
+    return {"fingerprint": fingerprint, "books": _books_stamp(ctx),
+            "version": _taxjson_version()}
+
+
+def _basis_id(basis: Dict[str, Any]) -> str:
+    import hashlib
+    blob = json.dumps(basis, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def _bases(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """{basis id: provenance} of a results document, every step entry
+    given its `basis` (an entry without one — a store an older release
+    wrote — is the document's own fingerprint, books and version)."""
+    raw = doc.get("bases")
+    bases: Dict[str, Dict[str, Any]] = {
+        k: v for k, v in (raw.items() if isinstance(raw, dict) else ())
+        if isinstance(k, str) and isinstance(v, dict)}
+    legacy: Optional[str] = None
+    for e in (doc.get("steps") or {}).values():
+        if not isinstance(e, dict):
+            continue
+        if isinstance(e.get("basis"), str) and e["basis"] in bases:
+            continue
+        if legacy is None:
+            fp = doc.get("fingerprint")
+            b = {"fingerprint": fp if isinstance(fp, dict) else {},
+                 "books": doc.get("books"), "version": doc.get("version")}
+            legacy = _basis_id(b)
+            bases.setdefault(legacy, b)
+        e["basis"] = legacy
+    return bases
+
+
+def kept_verdict(ctx: Ctx, step: str) -> Optional[Result]:
+    """The step's verdict as the last `--run` kept it for this tax year
+    in work/checklist_results.json, no mark applied (None: none kept).
+    Another year's kept verdicts are none, as load_results shows them
+    (unchecked): a `--done` was refused over a verdict the list itself
+    ignored (audit 2026-10-25 diff-tooling#2)."""
+    doc = _load_results_doc(ctx)
+    if doc is None or doc.get("year") not in (None, ctx.year):
+        return None
+    e = (doc.get("steps") or {}).get(step)
+    if not isinstance(e, dict) or e.get("status") not in STATUSES:
+        return None
+    return Result(step, e["status"], str(e.get("detail") or ""),
+                  question=bool(e.get("question")),
+                  answers=[str(a) for a in (e.get("answers") or [])])
+
+
+def stored_status(ctx: Ctx, step: str) -> Optional[str]:
+    """The status of kept_verdict (None: none kept for this year)."""
+    r = kept_verdict(ctx, step)
+    return r.status if r is not None else None
+
+
+def finding_over_done(r: Optional[Result]) -> Optional[str]:
+    """The finding a plain DONE mark would not show over on the
+    detector's verdict `r` (Result.effective): "attention" or
+    "blocked", where a `--done` is refused and `--done --force` records
+    the forced mark; None where a DONE mark shows (no verdict, a
+    passing one, or a question awaiting its answer: the mark answers
+    it). Decided by the verdict's own question flag, never by the step:
+    a question step's attention that asks nothing (fx-cash's NOT
+    RELIABLE default ledger, option-boundary's amendment) or its
+    blocked verdict is a finding like any other's (audit 2026-10-25
+    first-project#1)."""
+    if r is None or r.status not in FINDING_STATUSES:
+        return None
+    asked = r.question if r.own_question is None else r.own_question
+    eff = Result(r.id, r.status, question=asked,
+                 override=MARK_DONE).effective
+    return eff if eff in FINDING_STATUSES else None
+
+
 def _load_results_doc(ctx: Ctx) -> Optional[Dict[str, Any]]:
     p = _results_path(ctx)
     if not p.is_file():
@@ -3941,32 +4168,63 @@ def _load_results_doc(ctx: Ctx) -> Optional[Dict[str, Any]]:
 def save_results(ctx: Ctx, results: List[Result],
                  now: Optional[datetime] = None) -> Dict[str, Any]:
     """Store the verdicts of `results` in work/checklist_results.json,
-    merged over the stored ones (a `--run --only ID` or `--run --quick`
-    refreshes some steps and keeps the rest); marks are not stored, and
-    a step the project's shape makes n/a is decided afresh on load. A
-    step skipped by --quick keeps its stored verdict. Records
-    what the verdicts were made from (the inputs fingerprint, the books'
-    build time, the taxjson version) for load_results's stale line.
-    Returns the document written."""
-    doc = _load_results_doc(ctx) or {"format": RESULTS_FORMAT, "steps": {}}
+    merged over the kept ones of the same year (a `--run --only ID` or
+    `--run --quick` refreshes some steps and keeps the rest; another
+    year's kept verdicts are dropped — a `year` bumped in place carried
+    last year's done audit along, audit 2026-10-24 A02). Marks are not
+    stored; a step the project's shape makes n/a is decided afresh on
+    load and never stored (a kept n/a outlived the taxable account
+    added later, A04); a step skipped by --quick keeps its stored
+    verdict. Each verdict records what it was made from (its basis:
+    the inputs fingerprint, the books' build time, the taxjson version
+    — `bases`, _basis_now) for load_results's stale line, the kept ones
+    keeping theirs (A01). The read, merge and write hold the project
+    lock (_StateLock): two `--run --only` at once each kept the other's
+    verdict out (A19). Returns the document written. A work/ that is a
+    link leaving the project is an OSError: nothing is written through
+    it (A17)."""
+    from taxjson.lib.safe_write import link_outside
+    target = link_outside(ctx.cache, ctx.root)
+    if target is not None:
+        raise OSError(f"work/ is a symlink to {target}, outside the "
+                      f"project — nothing was written through it")
+    ctx.cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with _StateLock(ctx.root):
+        return _save_results_locked(ctx, results, now)
+
+
+def _save_results_locked(ctx: Ctx, results: List[Result],
+                         now: Optional[datetime]) -> Dict[str, Any]:
+    old = _load_results_doc(ctx)
+    if old is None or old.get("year") not in (None, ctx.year):
+        old = {"format": RESULTS_FORMAT, "steps": {}}
+    bases = _bases(old)
+    steps: Dict[str, Any] = {k: v for k, v in (old.get("steps") or {}).items()
+                             if isinstance(v, dict)}
     when = _stamp(now)
+    basis = _basis_now(ctx)
+    bid = _basis_id(basis)
+    _c, us, has_taxable = _project_shape(ctx)
     for r in results:
         if r.status == "todo" and r.detail == QUICK_SKIPPED:
             continue
-        doc["steps"][r.id] = {
-            "status": r.status, "detail": r.detail,
-            "question": bool(r.question), "cmd": r.cmd,
+        if r.status == "n/a" and _not_applicable(r.id, us, has_taxable):
+            continue            # decided from taxjson.toml on every load
+        steps[r.id] = {
+            "status": r.status,
+            "detail": r.detail if r.own_detail is None else r.own_detail,
+            "question": bool(r.question if r.own_question is None
+                             else r.own_question),
+            "cmd": r.cmd,
             "answers": list(r.answers), "actionable": bool(r.actionable),
-            "checked": when,
+            "checked": when, "basis": bid,
         }
-    try:
-        fingerprint = input_fingerprint(ctx.root, ctx.cfg)
-    except Exception:                                   # noqa: BLE001
-        fingerprint = {}
-    doc.update({"format": RESULTS_FORMAT, "year": ctx.year,
-                "checked": when, "fingerprint": fingerprint,
-                "books": _books_stamp(ctx), "version": _taxjson_version()})
-    ctx.cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    bases[bid] = basis
+    used = {e.get("basis") for e in steps.values()}
+    doc = {"format": RESULTS_FORMAT, "year": ctx.year, "steps": steps,
+           "bases": {k: v for k, v in bases.items() if k in used},
+           "checked": when, "fingerprint": basis["fingerprint"],
+           "books": basis["books"], "version": basis["version"]}
     from taxjson.lib.safe_write import write_atomic
     write_atomic(_results_path(ctx),
                  json.dumps(doc, indent=2, sort_keys=True) + "\n",
@@ -3974,30 +4232,61 @@ def save_results(ctx: Ctx, results: List[Result],
     return doc
 
 
-def _stale_reasons(ctx: Ctx, doc: Dict[str, Any]) -> List[str]:
-    """What moved since the stored verdicts were made: the inputs or the
-    config (the fingerprint), the books (a `taxjson run`), taxjson
-    itself. Marks are applied live, so a new mark is never staleness."""
+def _basis_stale(basis: Dict[str, Any], now_fp: Optional[Dict[str, str]],
+                 now_books: Optional[str], now_version: Optional[str]
+                 ) -> List[str]:
+    """What moved since a verdict with this basis was made."""
     out: List[str] = []
-    try:
-        now = input_fingerprint(ctx.root, ctx.cfg)
-    except Exception:                                   # noqa: BLE001
-        now = None
-    before = doc.get("fingerprint")
-    if now is not None and isinstance(before, dict):
-        changed, added, removed = fingerprint_delta(before, now)
+    before = basis.get("fingerprint")
+    if now_fp is not None and isinstance(before, dict):
+        changed, added, removed = fingerprint_delta(before, now_fp)
         moved = changed + added + removed
         if moved:
             shown = ", ".join(_fingerprint_name(k) for k in moved[:3])
             if len(moved) > 3:
                 shown += f" +{len(moved) - 3} more"
             out.append(f"the inputs changed ({shown})")
-    if (doc.get("books") or None) != _books_stamp(ctx):
+    if (basis.get("books") or None) != now_books:
         out.append("the books were rebuilt (`taxjson run`)")
-    v = _taxjson_version()
-    if v and doc.get("version") and doc.get("version") != v:
-        out.append(f"taxjson was upgraded ({doc.get('version')} to {v})")
+    v = basis.get("version")
+    if now_version and v and v != now_version:
+        out.append(f"taxjson was upgraded ({v} to {now_version})")
     return out
+
+
+def _stale_reasons(ctx: Ctx, doc: Dict[str, Any], sids: List[str]
+                   ) -> Tuple[List[str], List[str]]:
+    """(what moved since the kept verdicts of `sids` were made, the ids
+    of those made before a change): the inputs or the config (the
+    fingerprint), the books (a `taxjson run`), taxjson itself — each
+    verdict judged by its own basis (_bases). Marks are applied live,
+    so a new mark is never staleness."""
+    try:
+        now_fp: Optional[Dict[str, str]] = checklist_fingerprint(ctx)
+    except Exception:                                   # noqa: BLE001
+        now_fp = None
+    now_books, now_version = _books_stamp(ctx), _taxjson_version()
+    bases = _bases(doc)
+    steps = doc.get("steps") or {}
+    reasons: List[str] = []
+    stale_ids: List[str] = []
+    seen: Dict[str, List[str]] = {}
+    for sid in sids:
+        e = steps.get(sid)
+        bid = e.get("basis") if isinstance(e, dict) else None
+        if not isinstance(bid, str) or bid not in bases:
+            continue
+        if bid not in seen:
+            seen[bid] = _basis_stale(bases[bid], now_fp, now_books,
+                                     now_version)
+        if seen[bid]:
+            stale_ids.append(sid)
+            reasons += [s for s in seen[bid] if s not in reasons]
+    # (the inputs, then the books, then the version, whatever the order
+    # of the verdicts)
+    reasons.sort(key=lambda s: (0 if s.startswith("the inputs") else
+                                1 if s.startswith("the books") else 2))
+    return reasons, stale_ids
 
 
 def load_results(ctx: Ctx, only: Optional[List[str]] = None,
@@ -4018,6 +4307,7 @@ def load_results(ctx: Ctx, only: Optional[List[str]] = None,
         steps = {}                      # another year's verdicts
     results: List[Result] = []
     times: List[str] = []
+    stored: List[str] = []
     for sid in item_ids():
         if only and sid not in only:
             continue
@@ -4028,12 +4318,17 @@ def load_results(ctx: Ctx, only: Optional[List[str]] = None,
                 continue
         e = steps.get(sid)
         if isinstance(e, dict) and isinstance(e.get("status"), str) \
-                and e["status"] in STATUSES:
+                and e["status"] in STATUSES and not (
+                    # A shape n/a an older release stored is no verdict
+                    # of a step that applies now (audit A04).
+                    e["status"] == "n/a"
+                    and str(e.get("detail") or "") in _SHAPE_NA_DETAILS):
             r = Result(sid, e["status"], str(e.get("detail") or ""),
                        question=bool(e.get("question")),
                        cmd=str(e.get("cmd") or ""),
                        answers=[str(a) for a in (e.get("answers") or [])],
                        actionable=bool(e.get("actionable", True)))
+            stored.append(sid)
             if isinstance(e.get("checked"), str):
                 times.append(e["checked"])
         else:
@@ -4045,7 +4340,8 @@ def load_results(ctx: Ctx, only: Optional[List[str]] = None,
         info.checked = max(times)
         info.oldest = min(times)
         info.version = (doc or {}).get("version")
-        info.stale = _stale_reasons(ctx, doc or {})
+        info.stale, info.stale_steps = _stale_reasons(ctx, doc or {}, stored)
+        info.stored = len(stored)
     return results, info
 
 
@@ -4075,7 +4371,12 @@ def run_info_lines(info: Optional[RunInfo], quick: bool = False) -> List[str]:
     if info.oldest and info.oldest[:16] != (info.checked or "")[:16]:
         line += f" (the oldest verdict {_shown_time(info.oldest)})"
     if info.stale:
-        line += (". Since then " + "; ".join(info.stale)
+        part = ""
+        if info.stale_steps and 0 < len(info.stale_steps) < info.stored:
+            # (a `--run --only ID` refreshed some: the rest predate it)
+            part = (f" ({len(info.stale_steps)} of the {info.stored} "
+                    f"verdicts shown are from before)")
+        line += (". Since then " + "; ".join(info.stale) + part
                  + ": `tjs checklist --run` re-checks.")
     else:
         line += "; `tjs checklist --run` re-checks."
@@ -4215,7 +4516,7 @@ def _title(year: int, country: str, quick: bool, scope: str,
     the one step, when not the whole list)."""
     c = counts(results)
     total = len(results) - c["n/a"]
-    done = c["done"] + c["skipped"]
+    done = c["done"] + c["forced"]
     return (f"CHECKLIST — tax year {year} ({country})"
             f"{' — quick' if quick else ''}"
             f"{' — ' + scope if scope else ''}: {done}/{total} done")
@@ -4267,14 +4568,14 @@ def render(results: List[Result], year: int, country: str,
             for ln in wrap(it.title, d.w, head, lead):
                 d.line(ln)
             if r.override:
-                d.para(f"marked {r.override}"
+                d.para(f"marked {mark_text(r.override)}"
                        + (f": {r.note}" if r.note else ""), lead)
                 if r.finding:
                     d.para(f"the detector still says: {r.finding}", lead)
             elif r.detail and r.detail != NOT_CHECKED:
                 # (an unchecked step: the list's own line says so once)
                 d.para(r.detail, lead)
-            # A done, skipped or n/a item is its state line; an open one
+            # A done, forced or n/a item is its state line; an open one
             # adds its commands; the next one and one that needs
             # attention also say how and why (--all: every item).
             full = (show_all or (nxt is not None and r.id == nxt.id)
@@ -4289,10 +4590,10 @@ def render(results: List[Result], year: int, country: str,
     _summary_block(d, results, its, num)
     d.blank()
     d.line("[x] done  [!] needs attention  [ ] to do  [b] blocked  "
-           "[-] n/a  [~] skipped  [>] next")
+           "[-] n/a  [f] done over a finding (--force)  [>] next")
     d.para("[m] confirm it, then `tjs checklist --done ID` (the step's id "
-           "or number); [?] yours to run and read (`--done ID` ticks it "
-           "off)")
+           "or number; several: `--done ID,ID`); [?] yours to run and read "
+           "(`--done ID` ticks it off)")
     d.para("One at a time: `tjs checklist --walk`; one section: "
            "`--section N`; every item's commands and why: `tjs checklist "
            "--all`")
@@ -4391,7 +4692,7 @@ def _summary_block(d: Any, results: List[Result], its: Dict[str, Item],
             v = sum(sc[s] for s in sts)
             return str(v) if v else "-"
         body.append([f"{k}. {sec}",
-                     f"{sc['done'] + sc['skipped']}/{len(rows) - sc['n/a']}",
+                     f"{sc['done'] + sc['forced']}/{len(rows) - sc['n/a']}",
                      n("attention"), n("blocked"), n("todo"), n("manual"),
                      n("review")])
     d.blank()
@@ -4438,20 +4739,21 @@ def _summary_block(d: Any, results: List[Result], its: Dict[str, Item],
 
 def render_guide(year: Optional[int] = None,
                  width_: Optional[int] = None,
-                 section: Optional[str] = None) -> str:
+                 section: Any = None) -> str:
     """Outside a project: every item as a numbered step with its
-    commands, how and why — no marks (`section`: that section's steps
-    alone)."""
+    commands, how and why — no marks (`section`: that section's, or
+    those sections', steps alone)."""
     from taxjson.lib.out import Doc, wrap
     year = year or date.today().year - 1
     its = items(year, None)
+    secs = _sections_arg(section)
     d = Doc("CHECKLIST — from install to filing, step by step"
-            + (f" — {section_label(section)}" if section else ""),
+            + (f" — {sections_label(secs)}" if secs else ""),
             width_=width_)
     d.para("Each step: the command(s) to type and why. `tjs` is the "
            f"short name of `taxjson`. Worked examples: {GUIDE}.")
     for k, sec in enumerate(SECTIONS, 1):
-        if section and sec != section:
+        if secs and sec not in secs:
             continue
         d.section(f"{k}. {sec.upper()}")
         first = True
@@ -4521,11 +4823,21 @@ def to_json(results: List[Result], year: int, country: str,
     }
 
 
+def _sections_arg(section: Any) -> List[str]:
+    """A `section` argument: one SECTIONS entry, a list of them, or
+    None, as the list of sections (empty: every section)."""
+    if not section:
+        return []
+    return list(section) if isinstance(section, (list, tuple)) \
+        else [section]
+
+
 def guide_json(year: Optional[int] = None,
-               section: Optional[str] = None) -> Dict[str, Any]:
+               section: Any = None) -> Dict[str, Any]:
     """Outside a project: the same schema, nothing evaluated
-    (`section`: that section's steps alone)."""
+    (`section`: that section's, or those sections', steps alone)."""
     year = year or date.today().year - 1
+    secs = _sections_arg(section)
     return {
         "schema_version": SCHEMA_VERSION, "in_project": False,
         "year": None, "country": None, "all_passed": None,
@@ -4533,5 +4845,5 @@ def guide_json(year: Optional[int] = None,
         "stale": [], "next": None,
         "steps": [_item_json(n, it, None, False, None)
                   for n, it in enumerate(items(year, None), 1)
-                  if not section or it.section == section],
+                  if not secs or it.section in secs],
     }

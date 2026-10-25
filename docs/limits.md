@@ -174,11 +174,24 @@ broker states on the row (Questrade "TRANSFER BOOK VALUE", RBC "BOOK VALUE"), wi
 run; without a stated value (IB's transfer value is a market value) they stay out with no cost, said as
 ATTENTION. That book value is the sending broker's record and may not be your ACB or basis. A US lot
 booked this way starts its holding period on the arrival date, and the arrival is never treated as a
-purchase for the superficial-loss / wash-sale window. An unrelated transfer out and transfer in of the
-same security cancel each other.
+purchase for the superficial-loss / wash-sale window. A transfer out and a transfer in of the same
+security and quantity within 10 days of each other cancel as one move of your own, whatever their accounts
+(so an unrelated departure and arrival in that window cancel too). A slower move of your own cancels too
+when the transfer in posts 11 to 45 days after a transfer out of the same security and quantity in another
+of your taxable accounts and neither has another candidate: said as Info with both dates (an unrelated
+pair like that cancels as well). Legs that could pair otherwise, legs in one account, a departure partly
+paired or of another quantity, a leg of an in-kind move, legs more than 45 days apart and a departure
+after the arrival are an arrival and a departure of their own: the arrival is said as ATTENTION, naming a
+departure nothing paired up to 45 days before it, while the sending account's books keep the departed
+shares (a transfer out never leaves the books), so a move of your own among them is held twice
+(`taxjson sanity` shows it against each broker's holdings). A listing journal with no pair id and no
+ticker.map rule cancels only two listings of one root (`QZQ.TO` / `QZQ.US`); two tickers that differ need
+a `TOBASE` line. A stated book value of 0 is read as no cost, never a $0 lot. `.tt` purchases for part of
+an arrival's units cover nothing: the arrival is said as ATTENTION and not booked until the rest is
+declared.
 **Instead:** a `.tt` purchase dated on or before the arrival, or an `OPENING … cost=unknown` line,
 replaces the stated value (tax-logic CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
-**Code:** `src/taxjson/lib/transfer_in.py` — `arrivals`, `attention_lines`
+**Code:** `src/taxjson/lib/transfer_in.py` — `arrivals`, `attention_lines`, `OWN_MOVE_DAYS`, `SLOW_MOVE_DAYS`, `slow_pairs`
 
 #### Positions reports: what is read
 
@@ -616,7 +629,7 @@ The figures go on real returns, so correctness is checked in layers, not by test
   ACB or FIFO and the superficial-loss / wash-sale decision, and ties each figure to the pipeline's
   saved gains; any disagreement exits 1. The other filing commands (`sum`, `carryover`, `form-export`,
   `t1135`) are checked against it.
-- **8,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
+- **9,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
   failed before it. This figure is the one the deck and the website quote (`tests/test_deck.py`).
 - **Property fuzzers.** Seeded generators build thousands of random books per run and check
   conservation, determinism and ordering laws (the engine, custody transfers, settlement-lag and split

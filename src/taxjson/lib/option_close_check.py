@@ -45,6 +45,13 @@ def _same_company(a: str, b: str) -> bool:
     return a != b and (_root_matches_stock(a, b) or _root_matches_stock(b, a))
 
 
+def _clocked(t: Any) -> bool:
+    """The row carries a clock time, so its place in the day is known
+    (RBC prints none; Questrade stamps every row midnight)."""
+    tm = str(getattr(t, 'time', '') or '')
+    return bool(tm) and tm != '00:00:00'
+
+
 def unbacked_option_closes(transactions: Iterable[Any]) -> List[Dict[str, Any]]:
     """Every option row coded CLOSING (open_close 'C') whose position
     the books cannot back — a sale with no long to close, a purchase
@@ -84,8 +91,14 @@ def unbacked_option_closes(transactions: Iterable[Any]) -> List[Dict[str, Any]]:
         day = later_open.get((acct, t.symbol, t.date), [])
         if t in day:
             day.remove(t)
+        # ...only while the day's order is unknown: an opening stamped
+        # later than a clocked close is later (a 15:00 opening excused
+        # a 09:00 close with nothing to close, 2026-10-24 audit B45);
+        # rows without a clock, or at one stamp, can go either way.
         pending = sum(float(o.quantity or 0.0) for o in day
-                      if (float(o.quantity or 0.0) > 0) != (q > 0))
+                      if (float(o.quantity or 0.0) > 0) != (q > 0)
+                      and not (_clocked(t) and _clocked(o)
+                               and str(o.time) > str(t.time)))
         if 'C' in open_close_codes(t) and unbacked_close(t, prev, order_prev) \
                 and unbacked_close(t, prev + pending, order_prev + pending):
             root, block, sfx = _contract(t.symbol)

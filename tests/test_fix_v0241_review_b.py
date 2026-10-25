@@ -359,8 +359,12 @@ class TestExportCoverageMarkPerGap(unittest.TestCase):
         self.assertEqual(r.effective, "attention")
         r = cl.Result("export-coverage", "attention", "x", question=True,
                       answers=["a|b|2026-01-01"])
-        cl.apply_override(r, {"status": "skipped"})
-        self.assertEqual(r.effective, "skipped")
+        cl.apply_override(r, {"status": "skipped"})     # before v0.35
+        self.assertEqual(r.effective, "forced")
+        r = cl.Result("export-coverage", "attention", "x", question=True,
+                      answers=["a|b|2026-01-01"])
+        cl.apply_override(r, {"status": "done", "forced": True})
+        self.assertEqual(r.effective, "forced")
         r = cl.Result("export-coverage", "attention", "x", question=True,
                       answers=["a|b|2026-01-01"])
         cl.apply_override(r, {"status": "done",

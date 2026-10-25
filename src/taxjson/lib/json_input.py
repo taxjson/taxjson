@@ -106,9 +106,12 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
 # once, here, where every reader loads the file. None is allowed (an
 # absent value); bool is not a number.
 _STR_FIELDS = ("date", "date_settle")
+# `dividend` and `pil`: the income rows a gains file carries beside its
+# dispositions — a dividend of 1e400 (valid JSON, inf as a float) summed
+# to "TOTAL DIVIDENDS / STAKING: inf" at exit 0 (audit 2026-10-24 D03).
 _NUM_FIELDS = ("qty", "quantity", "proceeds", "cost", "gain", "net_amount",
                "price", "commission", "fee", "total_cost",
-               "disallowed_amount")
+               "disallowed_amount", "dividend", "pil")
 
 
 def check_row_types(rows, path, key: str = "transactions") -> None:

@@ -255,12 +255,22 @@ def read_report(path: Path) -> Report:
         if sec not in ("DividendDetail", "PILDetail"):
             continue
         disc = (d.get("DataDiscriminator") or "").strip()
+        if disc not in ("Summary", "RevenueComponent"):
+            continue
         cur = (d.get("Currency") or "").strip().upper()
         sym = (d.get("Symbol") or "").strip().upper()
         if not sym:
             continue
-        key = (sec, cur, sym, (d.get("Conid") or "").strip(),
-               _iso(d.get("ReportDate", ""), where),
+        pay = _iso(d.get("ReportDate", ""), where)
+        if not pay:
+            # Read with no pay date, the payment was in no year's slip
+            # (Report.years left it out) while its amounts counted
+            # (audit 2026-10-24 B26).
+            raise IBReportError(
+                f"{where}: {sym}: a blank ReportDate — the payment's pay "
+                f"date is missing, so it cannot be placed in a tax year; "
+                f"download the report again")
+        key = (sec, cur, sym, (d.get("Conid") or "").strip(), pay,
                _iso(d.get("ExDate", ""), where))
         if key not in groups:
             groups[key] = Payment(
@@ -271,10 +281,8 @@ def read_report(path: Path) -> Report:
         if disc == "Summary":
             shares[key] = _num(d.get("Shares", ""), "Shares", where)
             label = ""
-        elif disc == "RevenueComponent":
-            label = (d.get("RevenueComponent") or "").strip()
         else:
-            continue
+            label = (d.get("RevenueComponent") or "").strip()
         slip, cat = component_category(label, groups[key].country)
         if (not (d.get("GrossInBase") or "").strip()
                 and _num(d.get("Gross", ""), "Gross", where)):
@@ -284,6 +292,15 @@ def read_report(path: Path) -> Report:
                 f"{where}: Gross {(d.get('Gross') or '').strip()!r} with "
                 f"a blank GrossInBase — the amount in the account's base "
                 f"currency is missing; download the report again")
+        if (not (d.get("WithholdInBase") or "").strip()
+                and _num(d.get("Withhold", ""), "Withhold", where)):
+            # The same for the tax withheld: read as 0, the foreign tax
+            # paid would drop out of T5 box 16 (audit 2026-10-24 B25).
+            raise IBReportError(
+                f"{where}: Withhold {(d.get('Withhold') or '').strip()!r} "
+                f"with a blank WithholdInBase — the tax withheld in the "
+                f"account's base currency is missing; download the "
+                f"report again")
         comp = Component(
             slip=slip, category=cat, label=label,
             gross=_num(d.get("Gross", ""), "Gross", where),
@@ -300,9 +317,18 @@ def read_report(path: Path) -> Report:
     if not acct:
         raise IBReportError(f"{name}: no Account section with an "
                             f"AccountNumber — not an IB dividends report?")
+    if not base:
+        # GrossInBase / WithholdInBase are amounts in the account's base
+        # currency: with none stated they were labelled CAD (audit
+        # 2026-10-24 B24) — a USD-base account's would have gone on a
+        # Canadian slip unconverted.
+        raise IBReportError(
+            f"{name}: the Account section has no BaseCurrency — the "
+            f"currency of GrossInBase and WithholdInBase is unknown; "
+            f"download the report again (the Account section with its "
+            f"Base Currency column)")
     rep = Report(path=Path(path), account_hash=hash_broker_account(acct),
-                 account_masked=mask_account(acct), base_currency=base
-                 or "CAD")
+                 account_masked=mask_account(acct), base_currency=base)
     for k in order:
         p = groups[k]
         p.shares = shares.get(k, 0.0)

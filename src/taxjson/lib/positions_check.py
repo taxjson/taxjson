@@ -58,28 +58,57 @@ _COST_ACTIONS = _QTY_ACTIONS + ('SPLIT', 'ADJUST', 'DISALLOW')
 from taxjson.lib.brokerages.base import _DIV_QTY_ON_SHS_RE  # noqa: E402
 
 
-def load_base_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
+class BaseBookError(ValueError):
+    """An account's merged books (work/<acct>_base.json) exist but
+    cannot be read: the message names the file and why."""
+
+
+def load_base_rows(cache: Path, account: str, *,
+                   strict: bool = False) -> List[Dict[str, Any]]:
     """The account's merged books (work/<acct>_base.json) rows, [] when
-    missing or unreadable."""
+    missing or unreadable. `strict`: a file that is there but cannot be
+    read (not JSON, not a books document) raises BaseBookError instead
+    — read as an empty history, it made `sanity` compare a dated
+    snapshot with the latest books and certify it (audit 2026-10-24
+    B18); a missing file is still no history."""
     p = Path(cache) / f"{account}_base.json"
     try:
-        doc = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        if strict:
+            raise BaseBookError(f"work/{p.name}: cannot be read "
+                                f"({e.strerror or e})") from None
+        return []
+    try:
+        doc = json.loads(text)
+    except ValueError as e:
+        if strict:
+            raise BaseBookError(f"work/{p.name}: not JSON ({e})") from None
         return []
     rows = doc.get("transactions") if isinstance(doc, dict) else doc
-    return [r for r in (rows or []) if isinstance(r, dict)]
+    if rows is None:
+        rows = []
+    if not isinstance(rows, list):
+        if strict:
+            raise BaseBookError(f"work/{p.name}: not a books document "
+                                f"(no transactions list)")
+        return []
+    return [r for r in rows if isinstance(r, dict)]
 
 
-def book_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
+def book_rows(cache: Path, account: str, *,
+              strict: bool = False) -> List[Dict[str, Any]]:
     """The rows the account's books hold positions from: its merged rows
-    (load_base_rows) plus the missing-history openings its gains run
-    booked (the .tt OPENING cost=unknown
+    (load_base_rows; `strict` as there) plus the missing-history
+    openings its gains run booked (the .tt OPENING cost=unknown
     lines: units bought before the data, which no row of the merged
     books carries — lib/missing_history.openings_from_log). Every view
     of the books' positions on a date reads these, so it holds the
     same units the books do."""
     from taxjson.lib.missing_history import openings_from_log
-    rows = load_base_rows(cache, account)
+    rows = load_base_rows(cache, account, strict=strict)
     for name in (f"{account}_gains.json", f"{account}_gains_wash.json"):
         p = Path(cache) / name
         try:

@@ -552,9 +552,10 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
             for line in summary_lines:
                 f.write(line + "\n")
 
+        shown: dict = {}
         for g in gains:
             f.write("\n")
-            f.write("\n".join(render_gain_block(g)))
+            f.write("\n".join(render_gain_block(_since_shown(g, shown))))
             f.write("\n")
 
         # Unknown-cost dispositions (--incomplete-history): not in the
@@ -570,8 +571,32 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
             for g in sorted(manual, key=lambda g: (g.get('date', ''),
                                                    g.get('symbol', ''))):
                 f.write("\n")
-                f.write("\n".join(render_gain_block(g, manual=True)))
+                f.write("\n".join(render_gain_block(_since_shown(g, shown),
+                                                    manual=True)))
                 f.write("\n")
+
+
+def _since_shown(g, shown):
+    """`g` with its trace cut to the pool lines since the block above
+    that showed the same pool's history (lib/trace_format.SharedTrace),
+    headed by where the earlier lines are; `g` itself when no block
+    above did. `shown` maps each running trace to the last block of it
+    written. Each block repeated the whole pool history before, so the
+    file grew with the square of a symbol's sales (audit 2026-10-25
+    robustness#5); `taxjson audit` and taxjson-explain still show a
+    sale's whole history."""
+    from taxjson.lib.trace_format import SharedTrace, continued_header
+    t = g.get('trace')
+    if not isinstance(t, SharedTrace):
+        return g
+    prev = shown.get(id(t.base))
+    shown[id(t.base)] = (t, g)
+    lines = t.since(prev[0]) if prev else None
+    if lines is None or not t.n:
+        return g
+    head = continued_header(t.base[0], str(prev[1].get('date', '?')),
+                            (prev[1].get('id') or '')[:16])
+    return {**g, 'trace': [head] + lines}
 
 
 if __name__ == "__main__":

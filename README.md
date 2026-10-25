@@ -303,6 +303,7 @@ country's commands (`taxjson help --all` lists them). Every command takes
 | [`taxjson tax-logic`](docs/commands.md#taxjson-tax-logic) | Every tax rule applied, one line each (`--ids`) |
 | [`taxjson edge-cases`](docs/commands.md#taxjson-edge-cases) | Trades on a year-end or 30-day-window edge |
 | [`taxjson check-dates`](docs/commands.md#taxjson-check-dates) | Trade and settlement dates checked against each market |
+| [`taxjson check-tt`](docs/commands.md#taxjson-check-tt) | Every `.tt` line read as the run reads it, each problem named with its file and line |
 | [`taxjson sanity`](docs/commands.md#taxjson-sanity) | Compare positions (and costs) with the broker's holdings |
 | [`taxjson journals`](docs/commands.md#taxjson-journals) | Broker journals between two listings of one security |
 | [`taxjson renames`](docs/commands.md#taxjson-renames) | Ticker changes as dated events |

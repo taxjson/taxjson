@@ -164,10 +164,10 @@ class TestOverlapReadsUtf16(unittest.TestCase):
             sib.write_bytes(raw)
             out = d / "questrade_2025.csv"
             out.write_text(_QT_HEADER)
-            hits = _qt_window_overlap(d, out, "2025-06-01", "2025-12-31")
+            hits = _qt_window_overlap(d, out, "2025-06-01", "2025-12-31", "55500001")
             self.assertEqual([(p.name, n) for p, n in hits],
                              [("manual.csv", 2)])
-            self.assertEqual(_qt_trim_file(sib, "2025-06-01", "2025-12-31"),
+            self.assertEqual(_qt_trim_file(sib, "2025-06-01", "2025-12-31", "55500001"),
                              2)
             # The trimmed file is readable text the parser accepts, and
             # the untouched original bytes are kept as the backup.

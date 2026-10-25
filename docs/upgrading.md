@@ -59,6 +59,126 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.35.0
+
+- **`tjs checklist --skip` is gone: `tjs checklist --done ID --force`.**
+  A script or a habit that marked a step `--skip ID` now writes `--done
+  ID --force`; a plain `--done ID` is refused while the last check flags
+  the step. The `skipped` marks already in a project's `checklist.json`
+  need nothing: they read as forced done marks (`[f]`, `--json`
+  `effective: "forced"`); a script that read `skipped` from `--json`
+  reads `forced`.
+- **`tjs fetch` (IBKR Flex) works again.** Every release since the
+  multi-account guard was added refused a normal single-account Flex
+  download as "contains 3 account statements" (it counted the
+  statement's metadata rows). After upgrading, run the fetch again;
+  nothing in a project needs changing.
+- **A Coinbase or Kraken trades export with one ID on two different rows
+  is refused.** The second trade used to be dropped from the books with
+  no message; now `tjs run` stops on the file and names both lines (an
+  identical repeat is still read once). Delete the row that is a stray
+  copy, or give one of two real trades a distinct ID, and re-run: a
+  trade that was missing is booked, and the coin's units, cost and gains
+  change.
+- **`tjs fx-cash --ledger v2` refuses a prior-year close that carries a
+  cost below zero, or a cost on no units** (2026-10-25 audit,
+  year-end#2): figures a `CASHOPEN` line is refused for and `close-year`
+  never writes. A year that computed on such a record (a damaged or
+  hand-edited `filed/<year-1>.json`) is now NOT COMPUTED with a `carry`
+  problem naming the book: restore the record from git, or re-close that
+  year with `fx_cash_ledger = "v2"`.
+- **A damaged prior-year lock, or one closed under the other country's
+  law, now stops `tjs carryover`, `tjs estimate` and `tjs amt`**
+  (2026-10-25 audit year-end#1, robustness#1, year-end#3, year-end#6).
+  Before, the carryover ledger dropped a damaged lock with a warning
+  and printed the carryforward without that year (0.00 when the books
+  do not rebuild it), took the other country's lock as the filed figure
+  0.00, and counted a loss twice when a lock's `year` named another
+  year; the estimate and `amt` read the other country's lock as
+  carrying nothing, and a minimum-tax year written twice in a lock kept
+  its second amount. If one of these now stops naming a lock: restore
+  it from git, re-close that year in its project, or point
+  `[settings] prior_year_record` at this country's lock; then re-run
+  and compare the carryforward and the estimate with the last run's.
+  `tjs check-filed` and `tjs years` in the closed year now name the
+  same lock damaged.
+- **Transfer-ins into a taxable account are reconciled more strictly**
+  (2026-10-24 audit, B03 / B04 / B40 / B41 / B42 / B50): a transfer-out
+  cancels a transfer-in of the same security within 10 days (a slower
+  move of your own: the next item; a departure years after an arrival
+  never), a listing journal with no pair id and no ticker.map rule only
+  between two listings of one root, `.tt` purchases for part of an
+  arrival's units book nothing (`PARTLY_covered`, said every run) and a
+  stated book value of 0 is no cost. After the upgrade, `tjs run` and
+  compare `tjs transfers` with the last run's: an arrival now booked
+  that was `own_move` before came from outside your books (or needs a
+  `TOBASE` line joining two tickers), unless its line names a
+  transfer-out of yours that could be its other end (the next item); a
+  `PARTLY_covered` row needs the other units' purchase as a `.tt` line;
+  a pre-split `.tt` purchase now covers the post-split units that
+  arrived once its `SPLIT` line is in the `.tt` file.
+- **A move of your own between two taxable accounts whose legs post 11
+  to 45 days apart is one move** (2026-10-25 audit diff-engine#4): a
+  transfer-in of the same stock and quantity as a transfer-out of
+  another of your taxable accounts 11 to 45 days before it, neither with
+  another candidate, books nothing (the shares keep their cost; a US
+  project carries the sending account's lots), said as an `Own-account
+  move` Info line with both dates. A build with the 10-day window alone
+  booked such an arrival at the broker's book value, blending the pooled
+  cost, and kept the shares in the sending account: `tjs run` again, and
+  the cost and gain of their sale are the purchase's. Legs that are
+  ambiguous, partly paired, in one account or further apart stay an
+  arrival and a departure: the arrival's ATTENTION line names a
+  departure nothing paired up to 45 days before it, and `tjs sanity`
+  shows the shares held twice if they are one move.
+- **US project: a `[[distributions]]` basis adjustment reaches every lot
+  settled by the record date.** The row carries the record date and the
+  US engine spreads it over the open lots settled by that date only; it
+  is dated before a straddling SALE only, no longer before a straddling
+  buy, which had put the whole amount on the lots bought before that buy.
+  Re-run `tjs run`: a lot bought after a purchase that straddled a
+  record date, and sold since, changes its basis and gain. Canada's pool
+  is unchanged. When a trade between a straddling sale and the record
+  date keeps the row from reaching exactly the record date's lots, the
+  run says so (`warning: ATTENTION: [[distributions]] … misses the lots
+  of the trade(s) in between`): check those lots, or enter per-lot
+  `.tt` ADJUST rows.
+- **An in-kind move of an option is valued and priced at the contract
+  size its transfer row declares** (`multiplier`: an adjusted series'
+  50, a mini's 10; else a ticker.map `MULT` line, else 100). A move of
+  such an option valued from a Yahoo close was worth 100 units per
+  contract: re-run `tjs run` and compare `tjs transfers` (the move's
+  value and the booked row's price change; a value from an `INKIND` line
+  or the broker's market value is unchanged).
+- **`tjs stats` / `tjs win-rates` count a denied superficial loss (US: a
+  disallowed wash-sale loss) once.** The replacement's sale counted it
+  again through the amount the rule added to its cost (s.53(1)(f) /
+  §1091(d)); it now counts without it, so after a denied loss whose
+  replacement was sold the views show more wins and a higher NET_P/L.
+  Re-run `tjs run`: the gains files then carry each sale's
+  `deferred_loss_recovered`, which the views read (a gains file written
+  before the upgrade has none and keeps the old figure). No filing figure
+  changes.
+- **A declared in-kind move delivered in parts is booked with the plan's
+  legs only when that set is the only one** among every candidate leg
+  within the window — not the eight nearest. A move booked before by
+  such a match may now be listed as "possibly in-kind in parts — NOT
+  booked" with the legs: it is the `INKIND` line's value that books the
+  taxable side; name the plan's legs with a line per part if the plan
+  received them that way.
+- **`tjs sanity` refuses a holdings TOML whose `[meta] holdings_count`
+  is not its number of `[[holding]]` tables, or whose holding declares a
+  `contract_multiplier` (or `multiplier`) that is 0 or negative.**
+  It stops with an Error naming the file (exit 2) and compares nothing;
+  `tjs run` ends with "holdings check could not run". Download the
+  snapshot again, or fix the hand-made file.
+- **`tjs sanity` refuses files of one account at different dates that
+  do not each name their broker account** (two `holdings/` snapshots
+  named only `margin_…` or `[meta] account = "margin"`): they were
+  summed. Add `broker_account = "…"` to each file's `[meta]` (one broker
+  account's snapshots are then compared one date at a time), or keep one
+  snapshot per broker account.
+
 ### v0.34.0
 
 - **`tjs checklist` no longer runs the checks: `tjs checklist --run`

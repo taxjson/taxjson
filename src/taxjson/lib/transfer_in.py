@@ -15,23 +15,47 @@ This module finds them and decides what the run does with each:
 * the transfer rows of all your taxable (non-crypto, `transfers =
   false`) accounts are pooled per security (after ticker.map's undated
   renames); every out leg cancels in legs of the same security — the
-  same quantity and the closest date first — and what is left of an in
-  leg arrived from outside. A journal inside one account (a broker's
+  same quantity and the closest date first, within OWN_MOVE_DAYS days
+  (the two legs of one move; a departure years after an arrival is not
+  its source: audit 2026-10-24 B50); then a slower move of your own
+  (slow_pairs): an out leg and an in leg of the same security and
+  quantity in two of your accounts, the in leg more than OWN_MOVE_DAYS
+  and at most SLOW_MOVE_DAYS days after, when neither leg has another
+  candidate (an ATON move often takes one to three weeks: such legs were
+  booked as an outside purchase while the sending account kept the
+  shares, audit 2026-10-25 diff-engine#4; the run says each as Info) —
+  and what is left of an in leg arrived from outside (an earlier
+  transfer-out nothing paired is named on its ATTENTION line,
+  Arrival.departures). A journal inside one account (a broker's
   journal pair, a .tt JOURNAL line) cancels within its own pair first
-  and never against another account's leg (own_journal_legs);
+  and never against another account's leg (own_journal_legs); a
+  listing journal with no pair id and no ticker.map rule cancels only
+  two listings of one root (ZZQ.TO / ZZQ.US; cross_listings.
+  listing_root), never two securities that happen to share a quantity
+  and a day (B03);
 * such an arrival is COVERED when the receiving account's .tt files
   already hold purchases of that security, dated on or before the
-  arrival, for its quantity (the documented fix: the original purchase
-  as a .tt line), or when a .tt OPENING cost=unknown line opens the security for
-  that account (you declared its cost unknown, to be reported by hand)
-  — nothing more is said or booked;
+  arrival, for its whole quantity (the documented fix: the original
+  purchase as a .tt line; the .tt SPLIT lines before the arrival are
+  replayed, a .tt sale before it — an earlier day, or earlier on the
+  day by its time — consumes; B04, B42), or when a .tt OPENING
+  cost=unknown line opens the security for that account (you declared
+  its cost unknown, to be reported by hand) — nothing more is said or
+  booked. Purchases for PART of the quantity cover nothing: the
+  arrival is said as ATTENTION and NOT booked (`partly_covered`) until
+  the rest is declared — booking it whole would hold the covered units
+  twice, booking a pro-rata rest would guess which units are which
+  (B41);
 * otherwise, when the broker STATES the book value on the row
   (Questrade "TRANSFER BOOK VALUE", RBC "BOOK VALUE"), it becomes the
   cost of the incoming shares: one acquisition on the arrival date at
   that value (TRANSFER_BOOK_VALUE_TYPE), said as ATTENTION;
 * otherwise (no stated book value — IB's VALUE is the market value on
   the transfer day, never a cost) the arrival has no cost: said as
-  ATTENTION, and counted by the run's closing summary.
+  ATTENTION, and counted by the run's closing summary. A stated book
+  value of 0 is read as no cost too, and said as such (a broker's 0 is
+  usually its placeholder for a cost it was not given; a real nil cost
+  is declared as a .tt purchase at 0): never booked as a $0 lot (B40).
 
 Pure functions over plain dicts: the run feeds the sidecar rows and the
 converted .tt rows.
@@ -39,6 +63,7 @@ converted .tt rows.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import date as _date
 from pathlib import Path
@@ -49,8 +74,27 @@ from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
 # book value. The engines do not treat it as a purchase in a loss window
 # (its date is the arrival, not the acquisition) — core.py.
 from taxjson.lib.core import TRANSFER_BOOK_VALUE_TYPE  # noqa: E402
+# The most days between the two legs of one move of your own: the window
+# the in-kind pairing allows a transfer between two brokers
+# (lib/in_kind.PAIR_DAYS; the US custody pairing's _OWN_MOVE_DAYS in
+# bin/taxjson_run is the same 10). An out leg further from an in leg
+# than this is a departure (or an arrival) of its own, never the other's
+# source (audit 2026-10-24 B50: a 2026 departure cancelled a 2020
+# arrival).
+from taxjson.lib.in_kind import PAIR_DAYS as OWN_MOVE_DAYS  # noqa: E402
+# The most days a move of your own between two of your taxable accounts
+# may take when nothing else could be either leg's partner (slow_pairs):
+# an ATON / ACATS move between two brokers often posts its in leg one to
+# three weeks after the out leg, and a delayed one later still. Legs
+# further apart, or an in leg before its out leg, are an arrival and a
+# departure of their own (audit 2026-10-25 diff-engine#4; B50).
+SLOW_MOVE_DAYS = 45
 
 _EPS = 1e-6
+# A listing journal with no pair id and no ticker.map rule: its two legs
+# are in one account, the same quantity, two listings of one root, this
+# many days apart at most.
+LISTING_JOURNAL_DAYS = 3
 
 
 @dataclass
@@ -64,21 +108,80 @@ class Arrival:
     quantity: float             # arrived from outside (<= the row's qty)
     currency: str
     book_value: Optional[float]  # the broker's stated book value for
-    #                              `quantity` (pro rata); None: not stated
+    #                              `quantity` (pro rata); None: not stated;
+    #                              0.0: the row states 0 (zero_book_value)
     broker: str
     source: str                 # the input file the row came from
     description: str
     covered: bool = False       # the account's .tt lines cover it, or
     #                             a .tt OPENING cost=unknown line opens the pair
     covered_by: str = ""        # "tt" | "missing_history"
+    covered_units: float = 0.0  # when not covered: the units the .tt
+    #                             lines do account for (0 < u < quantity)
+    # The transfer-outs of the security nothing paired, from any of the
+    # accounts, dated on or before the arrival and at most
+    # SLOW_MOVE_DAYS earlier: (account, date, units left). One of them
+    # may be this arrival's source (its legs are ambiguous, or its
+    # quantity differs), so attention_lines names them: the sending
+    # account's books still hold those shares (audit 2026-10-25
+    # diff-engine#4).
+    departures: List[Tuple[str, str, float]] = field(default_factory=list)
     row: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
+    def zero_book_value(self) -> bool:
+        """The row states a book value of 0: read as no cost (never a $0
+        lot), said apart from a row that states none."""
+        return self.book_value is not None and abs(self.book_value) <= _EPS
+
+    @property
     def status(self) -> str:
+        """covered | missing_history | partly_covered | book_value |
+        no_cost: what the books do with the arrival (booked_rows books
+        `book_value` only)."""
         if self.covered:
             return ("missing_history" if self.covered_by == "missing_history"
                     else "covered")
+        if self.covered_units > _EPS:
+            return "partly_covered"
         return "book_value" if self.book_value else "no_cost"
+
+
+@dataclass
+class SlowMove:
+    """A move of your own whose two legs post more than OWN_MOVE_DAYS
+    and at most SLOW_MOVE_DAYS days apart, paired because neither leg
+    has another candidate (slow_pairs): nothing is booked for its in
+    leg, and the run says it as Info (audit 2026-10-25
+    diff-engine#4)."""
+    key: str                    # the security after ticker.map renames
+    symbol: str                 # the in row's own symbol
+    quantity: float
+    out_account: str
+    out_date: str
+    in_account: str
+    in_date: str
+
+    @property
+    def days(self) -> int:
+        do, di = _d(self.out_date), _d(self.in_date)
+        return (di - do).days if do and di else 0
+
+    def text(self) -> str:
+        """`ZZQ.TO 100 a -> b (out 2024-03-01, in 2024-03-16: 15 days
+        apart, nothing else pairs)`, as the run's own-account move line
+        says a move."""
+        when = slow_dates(self.out_date, self.in_date, self.days)
+        return (f"{self.symbol} {self.quantity:g} {self.out_account} -> "
+                f"{self.in_account} ({when})")
+
+
+def slow_dates(out_date: str, in_date: str, days: int) -> str:
+    """How a move slower than the window names its legs:
+    `out 2024-03-01, in 2024-03-16: 15 days apart, nothing else
+    pairs`."""
+    return (f"out {str(out_date)[:10]}, in {str(in_date)[:10]}: {days} "
+            f"days apart, nothing else pairs")
 
 
 def _d(s: Any) -> Optional[_date]:
@@ -88,15 +191,72 @@ def _d(s: Any) -> Optional[_date]:
         return None
 
 
+def slow_pairs(outs: Sequence[Tuple[str, str, Any, float, bool]],
+               ins: Sequence[Tuple[str, str, Any, float, bool]]
+               ) -> List[Tuple[int, int]]:
+    """(index in `outs`, index in `ins`): the two legs of a move of your
+    own between two of your accounts that post more than OWN_MOVE_DAYS
+    and at most SLOW_MOVE_DAYS days apart (audit 2026-10-25
+    diff-engine#4). `outs` and `ins` are (account, security, date,
+    units, whole) of the legs the window pairing left, units positive;
+    `whole` False marks a leg that may not pair here (partly paired
+    already, a journal leg, one that looks like a move whose quantities
+    do not pair) but still counts as a candidate.
+
+    A candidate is an out leg and an in leg of the same security and
+    the same units, the in leg OWN_MOVE_DAYS + 1 to SLOW_MOVE_DAYS days
+    AFTER the out leg (an arrival never comes from a later departure:
+    audit 2026-10-24 B50), in any accounts. A candidate pairs only when
+    both legs are whole, in two accounts, and neither has another
+    candidate (an in leg back in the out leg's own account counts as
+    one): two departures that could be one arrival's source, or two
+    arrivals one departure's, pair nothing — never a guess. The window
+    pairing (OWN_MOVE_DAYS, either order) is the caller's, first."""
+    def _q(x: float) -> float:
+        return abs(float(x or 0.0))
+
+    def _cand(o, g) -> bool:
+        if o[1] != g[1]:
+            return False
+        qo, qi = _q(o[3]), _q(g[3])
+        if abs(qo - qi) > max(_EPS, 1e-6 * max(qo, qi)):
+            return False
+        do, di = _d(o[2]), _d(g[2])
+        if do is None or di is None:
+            return False
+        return OWN_MOVE_DAYS < (di - do).days <= SLOW_MOVE_DAYS
+    by_out: Dict[int, List[int]] = {}
+    by_in: Dict[int, List[int]] = {}
+    for j, o in enumerate(outs):
+        if _q(o[3]) <= _EPS:
+            continue
+        for i, g in enumerate(ins):
+            if _q(g[3]) > _EPS and _cand(o, g):
+                by_out.setdefault(j, []).append(i)
+                by_in.setdefault(i, []).append(j)
+    return [(j, c[0]) for j, c in sorted(by_out.items())
+            if len(c) == 1 and len(by_in.get(c[0], ())) == 1
+            and outs[j][4] and ins[c[0]][4]
+            and outs[j][0] != ins[c[0]][0]]
+
+
 def stated_book_value(row: Dict[str, Any]) -> Optional[float]:
     """The book value the broker states on a transfer row (the parser's
     `book_value` evidence), else None. A VALUE / net_amount that is a
-    market value (IB) is never one."""
+    market value (IB) is never one. A stated 0 is 0.0 — known to be
+    stated, so the arrival can say so — and never a cost (Arrival.status
+    reads it as no_cost; audit 2026-10-24 B40). A negative or non-finite
+    figure is no evidence (None)."""
+    raw = row.get("book_value")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
     try:
-        bv = float(row.get("book_value") or 0.0)
+        bv = float(raw)
     except (TypeError, ValueError):
         return None
-    return bv if bv > 0 else None
+    if not math.isfinite(bv) or bv < 0:
+        return None
+    return bv
 
 
 def sidecar_rows(cache: Path, accounts: Sequence[str], *,
@@ -227,16 +387,29 @@ def movable_rows(rows: Sequence[Tuple[str, str, Dict[str, Any]]]
 
 
 def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
-             key: Optional[Callable[[str], str]] = None) -> List[Arrival]:
+             key: Optional[Callable[[str], str]] = None,
+             slow: Optional[List[SlowMove]] = None,
+             no_slow: Optional[Callable[[Tuple[str, str, Dict[str, Any]]],
+                                        bool]] = None) -> List[Arrival]:
     """The transfer-in quantities that came from outside the books.
 
     Per security (`key`: the symbol after ticker.map renames; default
     the upper-cased symbol), every out leg cancels in legs — same
-    quantity first, then the closest date — across ALL the given
-    accounts (a move between two of your accounts is not an arrival) —
-    except the legs of a journal inside one account (own_journal_legs),
-    which cancel within their own pair. What is left of each in leg is
-    an Arrival."""
+    quantity first, then the closest date, within OWN_MOVE_DAYS days —
+    across ALL the given accounts (a move between two of your accounts
+    is not an arrival) — except the legs of a journal inside one
+    account (own_journal_legs), which cancel within their own pair.
+    Then, inside one account, an out leg of another listing of the same
+    root (cross_listings.listing_root), the same quantity, within
+    LISTING_JOURNAL_DAYS days: a listing journal with no pair id and no
+    ticker.map rule. Then a slower move of your own between two
+    accounts (slow_pairs: the same security and quantity, the in leg up
+    to SLOW_MOVE_DAYS days after the out leg, neither with another
+    candidate), each appended to `slow` when given; a row `no_slow`
+    marks (the taxable leg of an in-kind move, booked or not) never
+    pairs so, though it counts as a candidate. What is left of each in
+    leg is an Arrival, carrying the earlier transfer-outs of its
+    security nothing paired (Arrival.departures)."""
     keyf = key or (lambda s: str(s or "").upper())
     rows = list(rows)
     # A journal inside one account (its legs' pair id, a .tt JOURNAL
@@ -266,22 +439,84 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     def _gap(a, b):
         da, db = _d(a[2].get("date")), _d(b[2].get("date"))
         return abs((da - db).days) if da and db else 10 ** 6
-    # 1. The same security: same quantity first, then the closest date.
+    # 1. The same security: same quantity first, then the closest date
+    #    — within OWN_MOVE_DAYS days, the two legs of one move. Further
+    #    apart they are a departure and an arrival of their own (audit
+    #    2026-10-24 B50: a 2026 departure cancelled a 2020 arrival whose
+    #    booking the years between needed).
     _cancel([(abs(inn[4] - o[4]) > _EPS, _gap(inn, o),
               str(inn[2].get("date")), i, j)
              for i, inn in enumerate(ins) for j, o in enumerate(outs)
              if inn[3] == o[3]
-             and (inn[0] == o[0] or not (inn[5] or o[5]))])
+             and (inn[0] == o[0] or not (inn[5] or o[5]))
+             and _gap(inn, o) <= OWN_MOVE_DAYS])
     # 2. A listing journal (the same units moved between two listings of
     #    one security, e.g. a US-dollar and a Canadian-dollar line, with
-    #    no ticker.map rule joining them): an out leg of another symbol
-    #    in the same account, the same quantity, within 3 days.
+    #    no ticker.map rule joining them): an out leg of another listing
+    #    of the SAME ROOT (ZZQ.TO / ZZQ.US; a class or warrant suffix is
+    #    the root's own) in the same account, the same quantity, within
+    #    LISTING_JOURNAL_DAYS days. Two securities that share a quantity
+    #    and a day are no journal (audit 2026-10-24 B03): the in leg
+    #    stays an arrival, said as ATTENTION; a journal between two
+    #    roots is declared by the ticker.map TOBASE line joining them.
+    from taxjson.lib.cross_listings import listing_root
     _cancel([(_gap(inn, o), str(inn[2].get("date")), i, j)
              for i, inn in enumerate(ins) for j, o in enumerate(outs)
              if inn[3] != o[3] and inn[0] == o[0]
-             and abs(inn[4] - o[4]) <= _EPS and _gap(inn, o) <= 3])
+             and abs(inn[4] - o[4]) <= _EPS
+             and _gap(inn, o) <= LISTING_JOURNAL_DAYS
+             and listing_root(str(inn[2].get("symbol") or ""))
+             == listing_root(str(o[2].get("symbol") or ""))])
+
+    # 3. A move of your own slower than the window (audit 2026-10-25
+    #    diff-engine#4): the in leg 11 to SLOW_MOVE_DAYS days after an
+    #    out leg of the same security and quantity in another of your
+    #    accounts, neither leg with another candidate. A taxable
+    #    departure never leaves the books, so booking the arrival too
+    #    (at the stated book value) held the shares twice and blended
+    #    the pool's cost; an ATON move often takes one to three weeks.
+    #    Ambiguous or partly paired legs stay an arrival and a departure
+    #    of their own (the arrival's line names the departure).
+    def _whole(g) -> bool:
+        return (not g[5] and abs(g[4] - abs(float(g[2].get("quantity")
+                                                  or 0.0))) <= _EPS
+                and not (no_slow and no_slow((g[0], g[1], g[2]))))
+    lo = [j for j, o in enumerate(outs) if o[4] > _EPS]
+    li = [i for i, g in enumerate(ins) if g[4] > _EPS]
+    for pj, pi in slow_pairs(
+            [(outs[j][0], outs[j][3], outs[j][2].get("date"), outs[j][4],
+              _whole(outs[j])) for j in lo],
+            [(ins[i][0], ins[i][3], ins[i][2].get("date"), ins[i][4],
+              _whole(ins[i])) for i in li]):
+        o, g = outs[lo[pj]], ins[li[pi]]
+        if slow is not None:
+            slow.append(SlowMove(
+                key=g[3], symbol=str(g[2].get("symbol") or ""),
+                quantity=round(g[4], 8), out_account=o[0],
+                out_date=str(o[2].get("date") or "")[:10],
+                in_account=g[0], in_date=str(g[2].get("date") or "")[:10]))
+        o[4] = g[4] = 0.0
+
+    def _departures(g) -> List[Tuple[str, str, float]]:
+        # The out legs of the security nothing paired, in any of the
+        # accounts (the arrival's own: shares that went out and came
+        # back), up to SLOW_MOVE_DAYS before the arrival (a journal leg
+        # is a move inside its account, a `no_slow` leg an in-kind
+        # move's: never one).
+        dg = _d(g[2].get("date"))
+        found = []
+        for o in outs:
+            do = _d(o[2].get("date"))
+            if (o[4] > _EPS and not o[5] and o[3] == g[3]
+                    and not (no_slow and no_slow((o[0], o[1], o[2])))
+                    and dg is not None and do is not None
+                    and 0 <= (dg - do).days <= SLOW_MOVE_DAYS):
+                found.append((o[0], str(o[2].get("date") or "")[:10],
+                              round(o[4], 8)))
+        return sorted(found, key=lambda x: (x[1], x[0]))
     out: List[Arrival] = []
-    for a, b, t, k, left, _j in ins:
+    for g in ins:
+        a, b, t, k, left, _j = g
         if left <= _EPS:
             continue
         q = float(t.get("quantity") or 0.0)
@@ -292,11 +527,108 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
             time=str(t.get("time") or "09:30:00"),
             quantity=round(left, 8),
             currency=str(t.get("currency") or ""),
-            book_value=(round(bv * left / q, 2) if bv and q else None),
+            book_value=(round(bv * left / q, 2) if bv is not None and q
+                        else None),
             broker=b, source=str(t.get("source") or ""),
-            description=str(t.get("description") or ""), row=t))
+            description=str(t.get("description") or ""),
+            departures=_departures(g), row=t))
     out.sort(key=lambda a: (a.account, a.key, a.date))
     return out
+
+
+def _tt_events(rows: Iterable[Dict[str, Any]], keyf: Callable[[str], str]
+               ) -> List[Tuple[str, str, int, str, str, float, str]]:
+    """The position events of an account's converted .tt rows, in (date,
+    time, file order): (date, time, n, kind, key, value, new_key) — a
+    `trade` moves `value` units of `key` (a BUYSELL, an ASSIGN, any row
+    with a quantity); a `split` scales the units of `key` by `value` and
+    moves them to `new_key` when the SPLIT line renames (the engine's
+    arithmetic: core._verify_share_conservation). Opening balances are
+    not events (mark_covered reads them as snapshots); income and
+    adjustments move no units."""
+    from taxjson.lib.core import is_opening_row
+    out: List[Tuple[str, str, int, str, str, float, str]] = []
+    for n, t in enumerate(rows):
+        if not isinstance(t, dict) or is_opening_row(t):
+            continue
+        act = t.get("action")
+        if act in ("DIVIDEND", "DIVIDEND_IN_LIEU", "ADJUST", "INTEREST",
+                   "FEE"):
+            continue
+        try:
+            v = float(t.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(v):
+            continue
+        k = keyf(str(t.get("symbol") or ""))
+        d, tm = str(t.get("date") or "")[:10], str(t.get("time") or "")
+        if act == "SPLIT":
+            if v <= 0:
+                continue        # the converter refuses these (core.py)
+            out.append((d, tm, n, "split", k, v,
+                        keyf(str(t.get("symbol_new") or t.get("symbol")
+                                 or ""))))
+        elif abs(v) > _EPS:
+            out.append((d, tm, n, "trade", k, v, k))
+    out.sort(key=lambda e: (e[0], e[1], e[2]))
+    return out
+
+
+def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
+                                        str]],
+                 consumed: Sequence[Tuple[str, str, str, float]],
+                 a: Arrival) -> float:
+    """The units of `a.key` the account's .tt rows hold when `a`
+    arrives, replayed: every .tt acquisition dated on or before the
+    arrival day (the documented fix is a purchase "dated on or before
+    the transfer", whatever its time); a .tt sale or SPLIT only when it
+    is BEFORE the arrival — an earlier day, or the same day earlier by
+    its time when the arrival's row carries one (a sale later on the
+    arrival day sells the arrived shares and consumes nothing: audit
+    2026-10-24 B42; a SPLIT before the arrival scales the earlier
+    purchase into the units that arrived: B04); the units earlier
+    arrivals of this account took (`consumed`: (date, time, key,
+    units)), at their own place in the replay, so a split between two
+    arrivals scales them too."""
+    arrival_time = str(a.row.get("time") or "") if a.row else ""
+
+    def before(d: str, tm: str) -> bool:
+        return d < a.date or (d == a.date and bool(tm) and bool(arrival_time)
+                              and tm < arrival_time)
+
+    merged = list(events) + [(d, tm, 10 ** 9 + n, "consume", k, -u, k)
+                             for n, (d, tm, k, u) in enumerate(consumed)]
+    merged.sort(key=lambda e: (e[0], e[1], e[2]))
+    held: Dict[str, float] = {}
+    redirect: Dict[str, str] = {}
+
+    def rk(k: str) -> str:
+        while k in redirect:
+            k = redirect[k]
+        return k
+
+    for d, tm, _n, kind, k, v, nk in merged:
+        if d > a.date:
+            break
+        k2 = rk(k)
+        if kind == "trade":
+            if v < 0 and not before(d, tm):
+                continue
+            held[k2] = held.get(k2, 0.0) + v
+        elif kind == "consume":
+            if not (d < a.date or (d == a.date and tm <= a.time)):
+                continue
+            held[k2] = held.get(k2, 0.0) + v
+        elif kind == "split":
+            if not before(d, tm):
+                continue
+            held[k2] = held.get(k2, 0.0) * v
+            tk = rk(nk)
+            if tk != k2:
+                held[tk] = held.get(tk, 0.0) + held.pop(k2, 0.0)
+                redirect[k2] = tk
+    return max(0.0, held.get(rk(a.key), 0.0))
 
 
 def mark_covered(found: List[Arrival],
@@ -304,18 +636,24 @@ def mark_covered(found: List[Arrival],
                  key: Optional[Callable[[str], str]] = None) -> None:
     """Set `covered` on each arrival the receiving account's .tt rows
     already account for: the .tt acquisitions of the security dated on
-    or before the arrival, less .tt sales before it, cover the
+    or before the arrival, its .tt SPLIT lines before the arrival
+    replayed, less the .tt sales before it (_tt_units_at), cover the
     arrivals in date order (`tt_rows`: account -> the converted .tt
-    rows)."""
+    rows). Rows that account for PART of an arrival's units set
+    `covered_units` instead (status `partly_covered`): the arrival is
+    not covered and booked_rows books nothing for it — booking it
+    whole would hold the covered units twice (audit 2026-10-24 B41),
+    booking a pro-rata rest would guess which units the .tt lines
+    are."""
     from taxjson.lib.core import is_opening_row
     keyf = key or (lambda s: str(s or "").upper())
     for acct in sorted({a.account for a in found}):
-        held: Dict[str, List[Tuple[str, float]]] = {}
+        rows = [t for t in tt_rows.get(acct) or [] if isinstance(t, dict)]
         # An opening balance (CA-OPEN-03) dated on or after an arrival
         # already holds those shares: the snapshot replaces the history
         # before it, the arrival included.
         snap: Dict[str, str] = {}
-        for t in tt_rows.get(acct) or []:
+        for t in rows:
             if is_opening_row(t):
                 k = keyf(str(t.get("symbol") or ""))
                 snap[k] = max(snap.get(k, ""), str(t.get("date") or "")[:10])
@@ -323,27 +661,19 @@ def mark_covered(found: List[Arrival],
             if (a.account == acct and not a.covered
                     and a.date <= snap.get(a.key, "")):
                 a.covered, a.covered_by = True, "tt"
-        for t in tt_rows.get(acct) or []:
-            if t.get("action") in ("SPLIT", "DIVIDEND", "DIVIDEND_IN_LIEU",
-                                   "ADJUST", "INTEREST", "FEE"):
-                continue
-            if is_opening_row(t):
-                continue        # the snapshot's own shares (above)
-            try:
-                q = float(t.get("quantity") or 0.0)
-            except (TypeError, ValueError):
-                continue
-            if abs(q) > _EPS:
-                held.setdefault(keyf(str(t.get("symbol") or "")), []).append(
-                    (str(t.get("date") or "")[:10], q))
-        used: Dict[str, float] = {}
+        events = _tt_events(rows, keyf)
+        consumed: List[Tuple[str, str, str, float]] = []
         for a in sorted((x for x in found if x.account == acct
                          and not x.covered),
                         key=lambda x: (x.date, x.time)):
-            avail = sum(q for d, q in held.get(a.key, []) if d <= a.date)
-            if avail - used.get(a.key, 0.0) >= a.quantity - _EPS:
+            a.covered_units = 0.0
+            avail = _tt_units_at(events, consumed, a)
+            if avail >= a.quantity - _EPS:
                 a.covered, a.covered_by = True, "tt"
-                used[a.key] = used.get(a.key, 0.0) + a.quantity
+                consumed.append((a.date, a.time, a.key, a.quantity))
+            elif avail > _EPS:
+                a.covered_units = round(avail, 8)
+                consumed.append((a.date, a.time, a.key, avail))
 
 
 def mark_missing_history(found: List[Arrival],
@@ -363,11 +693,14 @@ def mark_missing_history(found: List[Arrival],
 
 def booked_rows(found: Iterable[Arrival]) -> List[Dict[str, Any]]:
     """The acquisitions the books take for uncovered arrivals with a
-    stated book value: one BUYSELL each, on the arrival date, at the
-    book value (TRANSFER_BOOK_VALUE_TYPE)."""
+    stated book value (status `book_value`): one BUYSELL each, on the
+    arrival date, at the book value (TRANSFER_BOOK_VALUE_TYPE). Nothing
+    for a partly covered arrival (its .tt purchases account for some of
+    its units: said as ATTENTION until the rest is declared) or a stated
+    book value of 0 (no cost, never a $0 lot)."""
     out = []
     for a in found:
-        if a.covered or not a.book_value:
+        if a.status != "book_value":
             continue
         t = a.row
         row = {
@@ -400,7 +733,12 @@ def booked_rows(found: Iterable[Arrival]) -> List[Dict[str, Any]]:
 
 def attention_lines(found: Iterable[Arrival], country: str) -> List[str]:
     """One ATTENTION line per account and kind: the arrivals booked at
-    the broker's book value, and those with no cost."""
+    the broker's book value, those only partly covered by the account's
+    .tt purchases (not booked), and those with no cost (a row stating
+    no book value, and a row stating 0, each said as what it is). An
+    arrival booked or kept out that follows a transfer-out of yours
+    nothing paired (Arrival.departures) names it: the sending account
+    still holds those shares."""
     from taxjson.lib.country import COST_TERM, is_canada
     cost = COST_TERM.get(country, "cost")
     lines: List[str] = []
@@ -413,11 +751,62 @@ def attention_lines(found: Iterable[Arrival], country: str) -> List[str]:
         shown = "; ".join(f"{x.quantity:g} {x.symbol} ({x.date})"
                           for x in xs[:6])
         return shown + ("; ..." if len(xs) > 6 else "")
+
+    def _list_parts(xs):
+        shown = "; ".join(f"{x.quantity:g} {x.symbol} ({x.date}, "
+                          f"{x.covered_units:g} of {x.quantity:g} covered)"
+                          for x in xs[:6])
+        return shown + ("; ..." if len(xs) > 6 else "")
     override = ("To use your own figure instead, add the original "
                 "purchase as a .tt BUYSELL line dated on or before the "
                 "transfer: the book value is then no longer used and this "
                 "line stops.")
+
+    def _departed(xs, booked: bool) -> str:
+        # Audit 2026-10-25 diff-engine#4: an earlier transfer-out of the
+        # security nothing paired (ambiguous, another quantity) may be
+        # the arrival's source. A taxable departure never leaves the
+        # books, so the line names it and what follows.
+        ds = [x for x in xs if x.departures]
+        if not ds:
+            return ""
+        named = "; ".join(
+            f"{x.quantity:g} {x.symbol} ({x.date}) after "
+            + ", ".join(f"{u:g} out of {acct} ({d})"
+                        for acct, d, u in x.departures[:3])
+            + (", ..." if len(x.departures) > 3 else "")
+            for x in ds[:3]) + ("; ..." if len(ds) > 3 else "")
+        who = ("It may be" if len(xs) == 1
+               else f"{len(ds)} of them may be")
+        then = ("they are then held twice: `taxjson sanity` compares each "
+                "account with the broker's holdings" if booked else
+                "a purchase added for them would then hold them twice")
+        return (f" {who} the other end of a transfer-out of yours that "
+                f"nothing paired ({named}; more than one could pair, or "
+                f"the quantities differ): a transfer-out never leaves "
+                f"the books, so if they are one move of your own the "
+                f"sending account still holds those shares, and {then} "
+                f"(docs/troubleshooting.md).")
     for (acct, status), xs in sorted(by.items()):
+        if status == "partly_covered":
+            # Audit 2026-10-24 B41: the .tt purchases account for some
+            # of the units. Booking the arrival whole would hold those
+            # units twice; booking the rest pro rata would guess which
+            # units the .tt lines are. Nothing is booked, and the line
+            # names both answers.
+            lines.append(
+                f"transfer-in: {acct}: {len(xs)} transfer-in(s) from "
+                f"outside your books only PARTLY covered by your .tt "
+                f"purchases ({_list_parts(xs)}): NOT booked. The units "
+                f"your .tt lines do not account for have no {cost} in "
+                f"the books, so a later sale reads as a short; a book "
+                f"value the broker states on the row is not used for a "
+                f"part. Add the purchase of those units as a .tt BUYSELL "
+                f"line dated on or before the transfer (date and {cost} "
+                f"from the sending broker) — or of all the transferred "
+                f"units, when the .tt purchases are another holding of "
+                f"the stock in this account; this line then stops.")
+            continue
         if status == "book_value":
             from taxjson.lib.brokerages.detect import DISPLAY_NAMES
             srcs = sorted({DISPLAY_NAMES.get(x.broker, x.broker)
@@ -432,16 +821,39 @@ def attention_lines(found: Iterable[Arrival], country: str) -> List[str]:
                 f"outside your books booked at the {cost} the broker "
                 f"states on the row ({', '.join(srcs)}: {_list(xs)}). "
                 f"A broker's book value is its own record, not always "
-                f"your {cost}: check it.{hp} {override}")
+                f"your {cost}: check it.{hp} {override}"
+                + _departed(xs, True))
         else:
-            lines.append(
-                f"transfer-in: {acct}: {len(xs)} transfer-in(s) from "
-                f"outside your books have NO cost in the books "
-                f"({_list(xs)}): the row states no book value (a VALUE "
-                f"column is the market value, never your {cost}), so the "
-                f"shares are kept out and a later sale reads as a short. "
-                f"Add the original purchase as a .tt BUYSELL line (date "
-                f"and {cost} from the sending broker) dated on or before "
-                f"the transfer; this line then stops "
-                f"(docs/getting-started.md, step 5c).")
+            plain = [x for x in xs if not x.zero_book_value]
+            zero = [x for x in xs if x.zero_book_value]
+            if plain:
+                lines.append(
+                    f"transfer-in: {acct}: {len(plain)} transfer-in(s) "
+                    f"from outside your books have NO cost in the books "
+                    f"({_list(plain)}): the row states no book value (a "
+                    f"VALUE column is the market value, never your "
+                    f"{cost}), so the shares are kept out and a later "
+                    f"sale reads as a short. Add the original purchase "
+                    f"as a .tt BUYSELL line (date and {cost} from the "
+                    f"sending broker) dated on or before the transfer; "
+                    f"this line then stops (docs/getting-started.md, "
+                    f"step 5c)." + _departed(plain, False))
+            if zero:
+                # Audit 2026-10-24 B40: a stated 0 is not "no book value"
+                # — it is said as what it is, and not booked as a $0 lot
+                # (a broker's 0 is usually its placeholder for a cost it
+                # was not given; a real nil cost is a .tt purchase at 0).
+                lines.append(
+                    f"transfer-in: {acct}: {len(zero)} transfer-in(s) "
+                    f"from outside your books have NO cost in the books "
+                    f"({_list(zero)}): the row states a book value of 0, "
+                    f"usually the broker's placeholder for the {cost} it "
+                    f"was not given, never booked as a $0 lot, so the "
+                    f"shares are kept out and a later sale reads as a "
+                    f"short. Add the original purchase as a .tt BUYSELL "
+                    f"line (date and {cost} from the sending broker; at "
+                    f"0 if your {cost} really is nil) dated on or before "
+                    f"the transfer; this line then stops "
+                    f"(docs/getting-started.md, step 5c)."
+                    + _departed(zero, False))
     return lines

@@ -134,7 +134,7 @@ DEFERRED:  64.71 CAD in open positions' cost — tjs list</pre>
   <h2>Checked against the one thing that cannot lie</h2>
   <p class="lead">Internal reports can all agree and still be wrong. <code>taxjson sanity</code> compares the positions the books say you hold with the positions your broker's own export says you hold, account by account — every run ends with it once the snapshots are in <code>holdings/</code>, matched to their accounts without a setting. Any difference is a trade that has not reached the CSV yet, or a booking problem — there is no third kind.</p>
   <div class="row">
-    <div class="card"><h3>8,500+ tests</h3><p>Every fix lands with a regression test that failed before it, tagged with the tax-logic rule it pins; the gate fails on a rule with no test.</p></div>
+    <div class="card"><h3>9,500+ tests</h3><p>Every fix lands with a regression test that failed before it, tagged with the tax-logic rule it pins; the gate fails on a rule with no test.</p></div>
     <div class="card"><h3>Fuzzers and mutants</h3><p>Three property fuzzers run thousands of random ledgers per run; mutation testing of both engines finds the boundaries no test pins.</p></div>
     <div class="card"><h3>Two full audits</h3><p>Eight review rounds, a security review and two full-coverage audits of the whole codebase. Every confirmed finding reproduced, fixed, pinned.</p></div>
     <div class="card"><h3>Published limits</h3><p>docs/limits.md lists what is out of scope and what to do by hand, with the citation.</p></div>
@@ -158,7 +158,7 @@ DEFERRED:  64.71 CAD in open positions' cost — tjs list</pre>
     <div class="card"><h3>Totals by type</h3><p><code>ccd-sum</code> <code>dil-sum</code> <code>divs-sum</code> <code>fees-sum</code> <code>leaps-sum</code> <code>losers</code> <code>roc-sum</code> <code>trades-sum</code> <code>winners</code></p></div>
     <div class="card"><h3>Before you trade</h3><p><code>wash-radar</code> <code>buy-check</code> <code>sell-check</code> <code>rebuy</code> <code>harvest</code> <code>tips</code> <code>watch</code></p></div>
     <div class="card"><h3>Before you file</h3><p><code>form-export</code> <code>t1135</code> <code>reconcile-slips</code> <code>slip-audit</code> <code>carryover</code> <code>option-boundary</code> <code>close-year</code> <code>check-filed</code> <code>handoff</code></p></div>
-    <div class="card"><h3>Explain and check</h3><p><code>audit</code> <code>wash-sales</code> <code>tax-logic</code> <code>edge-cases</code> <code>check-dates</code> <code>sanity</code> <code>journals</code> <code>renames</code> <code>spinoffs</code> <code>splits</code></p></div>
+    <div class="card"><h3>Explain and check</h3><p><code>audit</code> <code>wash-sales</code> <code>tax-logic</code> <code>edge-cases</code> <code>check-dates</code> <code>check-tt</code> <code>sanity</code> <code>journals</code> <code>renames</code> <code>spinoffs</code> <code>splits</code></p></div>
     <div class="card"><h3>Tools</h3><p><code>redact</code> <code>help</code></p></div>
   </div>
   <!-- commands:end -->

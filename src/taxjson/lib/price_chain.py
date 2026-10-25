@@ -667,14 +667,31 @@ def _cached_price(rec) -> Optional[float]:
     return p if math.isfinite(p) and p > 0 else None
 
 
-def _save_cache(path: Path, cache: Dict[str, dict]) -> None:
-    # allow_nan=False: a NaN/Inf that slipped past a tier guard must
-    # fail the cache write loudly, not fossilize forever. A unique temp
-    # file under a lock (re-audit A2-0233); not merged — a stale entry
-    # this run replaced must not come back.
+def _iso_day_in(day: str, start: str, end: str) -> bool:
+    """`day` is a calendar date (YYYY-MM-DD) with start <= day <= end."""
+    try:
+        d = date.fromisoformat(day)
+    except (TypeError, ValueError):
+        return False
+    return date.fromisoformat(start) <= d <= date.fromisoformat(end)
+
+
+def _save_cache(path: Path, fresh: Dict[str, dict]) -> None:
+    """Write this run's FRESH entries into the cache file: under the
+    cache's lock (safe_write.file_lock, via json_cache), the entries on
+    disk are read, `fresh` is merged over them and the result renamed
+    into place. Only the fresh entries are passed, never the dict the
+    run loaded earlier: two runs that each loaded the cache, fetched a
+    symbol of their own and wrote their whole dict back each replaced
+    the other's new price with the stale copy they had loaded (audit
+    2026-10-24 A33). A fresh entry still wins over the one on disk (the
+    stale entry it replaces does not come back). allow_nan=False: a
+    NaN/Inf that slipped past a tier guard must fail the cache write
+    loudly, not fossilize forever. A unique temp file (re-audit
+    A2-0233)."""
     from taxjson.lib.json_cache import save_json_cache
-    save_json_cache(path, cache, label="price cache ", indent=1,
-                    sort_keys=True, allow_nan=False)
+    save_json_cache(path, fresh, merge=True, label="price cache ",
+                    indent=1, sort_keys=True, allow_nan=False)
 
 
 def fetch_prices(pairs: Dict[str, str], *,
@@ -755,8 +772,16 @@ def fetch_prices(pairs: Dict[str, str], *,
             price, cur, problem = clean_quote_currency(
                 price, hit[2] if len(hit) > 2 else None)
             if problem:
+                # The source named a unit taxjson cannot read: the price
+                # may be in cents, or not a money amount at all. The hit
+                # is refused like a non-finite price — the next tier is
+                # asked, nothing is cached. It used to be taken with no
+                # currency, and the listing's currency was then inferred
+                # for it (audit 2026-10-24 A40).
                 emit_line(f"warning: price-chain: {source} quote for {sym}: "
-                          f"{problem} — ignored", file=sys.stderr)
+                          f"{problem} — not used; the next source is asked",
+                          file=sys.stderr)
+                continue
             if cur is None and minor_unit_listing(pairs.get(sym) or sym):
                 # Pence or pounds? A unit-less quote for an LSE line is
                 # left for the next tier (Yahoo names the unit) and
@@ -802,8 +827,19 @@ def fetch_prices(pairs: Dict[str, str], *,
             price, cur, problem = clean_quote_currency(
                 price, rec.get("currency"))
             if problem:
+                # A hand-edited or damaged entry: a miss, as a live hit
+                # with such a unit is (A40).
                 emit_line(f"warning: price cache entry for {sym}: {problem} "
-                          f"— its currency is ignored", file=sys.stderr)
+                          f"— not used", file=sys.stderr)
+                continue
+            if cur is None and minor_unit_listing(remaining[sym]):
+                # Pence or pounds? An entry with no provider-named unit
+                # for an LSE/JSE/TASE line is as ambiguous as the live
+                # quote the tiers refuse above (and close_on's cache
+                # rule): a miss, said below (audit 2026-10-24 A31).
+                if sym not in unit_less:
+                    unit_less.append(sym)
+                continue
             quotes[sym] = PriceQuote(price=price,
                                      source=f"cache:{age}d", asof=asof,
                                      currency=cur)
@@ -827,18 +863,18 @@ def fetch_prices(pairs: Dict[str, str], *,
                       f"as pounds, so it was not used (a source that names "
                       f"the unit, e.g. Yahoo, prices it).", file=sys.stderr)
 
-    # Write back every fresh (non-cache) quote.
-    dirty = False
+    # Write back every fresh (non-cache) quote: the fresh entries alone,
+    # merged into the file under its lock (_save_cache).
+    fresh: Dict[str, dict] = {}
     for sym, q in quotes.items():
         if q.source.startswith("cache"):
             continue
-        cache[sym] = {"price": q.price, "asof": q.asof, "source": q.source,
+        fresh[sym] = {"price": q.price, "asof": q.asof, "source": q.source,
                       "quote_symbol": spelled.get(sym, pairs[sym])}
         if q.currency:
-            cache[sym]["currency"] = q.currency
-        dirty = True
-    if dirty:
-        _save_cache(cache_path, cache)
+            fresh[sym]["currency"] = q.currency
+    if fresh:
+        _save_cache(cache_path, fresh)
 
     if remaining and offline:
         from taxjson.lib import out
@@ -906,9 +942,14 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
     from taxjson.lib.offline import offline_enabled
     key = f"{symbol}|{quote_symbol}@{day}"
     minor = minor_unit_listing(quote_symbol)
+    try:
+        start = (_date.fromisoformat(day)
+                 - _td(days=CLOSE_LOOKBACK_DAYS)).isoformat()
+    except ValueError:
+        start = None
     cache = _load_cache(cache_path)
     rec = cache.get(key)
-    if isinstance(rec, dict):
+    if isinstance(rec, dict) and start is not None:
         price = _cached_price(rec)
         # A market that quotes in pence/cents: only an entry whose unit
         # the provider named is trusted — an older entry's currency was
@@ -916,23 +957,31 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
         # (issue #75); it is a miss and is fetched again.
         if minor and rec.get("unit") != "provider":
             price = None
+        # The day the entry says its close is from must be one the live
+        # tier could have returned for this key: on or before the asked
+        # day, within the lookback. A hand-edited or damaged entry that
+        # names a later day (a December close under a January key) is a
+        # miss, never a value from the future (audit 2026-10-24 A32).
+        rec_day = str(rec.get("day") or day)[:10]
+        if price is not None and not _iso_day_in(rec_day, start, day):
+            emit_line(f"warning: price-chain: the close cache entry for "
+                      f"{symbol} ({quote_symbol}) on {day} is dated "
+                      f"{rec_day!s}, outside {start}..{day} — not used",
+                      file=sys.stderr)
+            price = None
         if price is not None:
             price, cur, _p = clean_quote_currency(price, rec.get("currency"))
             cur = cur or (None if minor else quote_currency(quote_symbol))
             if cur is not None:
                 return DayClose(price=price, currency=cur,
-                                day=str(rec.get("day") or day),
-                                source="cache")
+                                day=rec_day, source="cache")
     if offline is None:
         offline = offline_enabled() and fetchers is None
     if offline:
         raise OfflineCloseMissing(
             f"TAXJSON_OFFLINE is set and the close of {symbol} on {day} "
             f"is not in {cache_path.name}")
-    try:
-        start = (_date.fromisoformat(day)
-                 - _td(days=CLOSE_LOOKBACK_DAYS)).isoformat()
-    except ValueError:
+    if start is None:
         return None
     if fetchers is None:
         fetchers = [lambda pairs, s, e: _yf_history_fetcher(
@@ -977,12 +1026,12 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
                       f"pounds, so it was not used", file=sys.stderr)
             continue
         cur = cur or quote_currency(quote_symbol)
-        cache[key] = {"price": price, "day": str(used)[:10],
-                      "asof": _date.today().isoformat(),
-                      "source": "yfinance", "unit": unit}
+        entry = {"price": price, "day": str(used)[:10],
+                 "asof": _date.today().isoformat(),
+                 "source": "yfinance", "unit": unit}
         if cur:
-            cache[key]["currency"] = cur
-        _save_cache(cache_path, cache)
+            entry["currency"] = cur
+        _save_cache(cache_path, {key: entry})
         return DayClose(price=price, currency=cur, day=str(used)[:10],
                         source="yfinance")
     return None

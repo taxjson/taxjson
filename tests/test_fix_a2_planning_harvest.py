@@ -260,12 +260,23 @@ class TestMinorUnitQuotes(unittest.TestCase):
             _write(root / ".price_cache.json", {"VOD.L": {
                 "price": 70.0, "asof": TODAY.isoformat(),
                 "source": "yfinance", "quote_symbol": "VOD.L"}})
+            # Audit 2026-10-24 A31: the entry is a cache MISS (pence or
+            # pounds is unknown), so offline the run stops naming the
+            # symbol, as for any symbol the cache lacks; online the
+            # next tier prices it (below).
+            with self.assertRaises(SystemExit) as cm:
+                _run([str(g), "--no-ibkr", "--country", "canada",
+                      "--json"], env={"TAXJSON_OFFLINE": "1"})
+            self.assertIn("no current price in the cache: VOD.L",
+                          str(cm.exception))
             rc, out, err = _run(
                 [str(g), "--no-ibkr", "--country", "canada", "--json"],
-                env={"TAXJSON_OFFLINE": "1"})
+                fetchers=[lambda rem: {s: (0.70, "yfinance", "GBP")
+                                       for s in rem}])
         self.assertEqual(rc, 0, err)
-        self.assertEqual(_json_rows(out)["rows"], [])
-        self.assertIn("VOD.L", err)
+        row = _json_rows(out)["rows"][0]
+        self.assertEqual(row["price_source"], "yfinance")
+        self.assertAlmostEqual(row["value"], 1295.0)
 
     def test_cache_entry_with_currency_is_used(self):
         with tempfile.TemporaryDirectory() as td:
@@ -285,10 +296,12 @@ class TestMinorUnitQuotes(unittest.TestCase):
 
 class TestCachedCurrencyValidated(unittest.TestCase):
     """A2-1170: a cached quote's currency is checked like its price:
-    stripped and upper-cased; a non-string is ignored with a warning
-    (the symbol's own spelling then decides)."""
+    stripped and upper-cased; a non-string never crashes the run. Since
+    audit 2026-10-24 A40 such an entry is a cache MISS (said), not a
+    quote with its currency dropped: offline the run stops naming the
+    symbol, online the next tier prices it again."""
 
-    def _go(self, cur):
+    def _go(self, cur, fetchers=None):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "to_base.csv").write_text(
@@ -301,7 +314,8 @@ class TestCachedCurrencyValidated(unittest.TestCase):
                 "source": "yfinance", "currency": cur,
                 "quote_symbol": "AAPL"}})
             return _run([str(g), "--no-ibkr", "--country", "canada",
-                         "--json"], env={"TAXJSON_OFFLINE": "1"})
+                         "--json"], fetchers=fetchers,
+                        env={} if fetchers else {"TAXJSON_OFFLINE": "1"})
 
     def test_lower_case_currency_is_normalised(self):
         rc, out, err = self._go(" usd ")
@@ -312,12 +326,19 @@ class TestCachedCurrencyValidated(unittest.TestCase):
 
     def test_non_string_currency_does_not_crash(self):
         for bad in (["x"], {"a": 1}, 5):
-            rc, out, err = self._go(bad)
+            with self.assertRaises(SystemExit) as cm:
+                self._go(bad)
+            self.assertNotIn("Traceback", str(cm.exception))
+            self.assertIn("no current price in the cache: AAPL.US",
+                          str(cm.exception))
+            rc, out, err = self._go(
+                bad, fetchers=[lambda rem: {s: (210.0, "yfinance", "USD")
+                                            for s in rem}])
             self.assertEqual(rc, 0, err)
             self.assertNotIn("Traceback", err)
-            self.assertIn("currency", err)
             row = _json_rows(out)["rows"][0]
-            self.assertEqual(row["price_currency"], "USD")
+            self.assertEqual((row["price_currency"], row["price_source"]),
+                             ("USD", "yfinance"))
 
 
 class TestBaseCurrencyFlagTrimmed(unittest.TestCase):

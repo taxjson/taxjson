@@ -59,8 +59,12 @@ def cached_price(cache, key):
 
 
 def _damaged_entry(cache, key) -> bool:
-    """`key` is in the cache but its value is not a number at all."""
-    return key in cache and _cache_number(cache[key]) is None
+    """`key` is in the cache but its value is not a usable price: not a
+    number at all, or a number that is no price (0, a negative, inf).
+    A cached 0 used to keep its key, so the row was never looked up
+    again and stayed unpriced run after run until the cache was edited
+    by hand (audit 2026-10-24 B30)."""
+    return key in cache and cached_price(cache, key) is None
 
 def save_cache(cache_data):
     # A unique temp file renamed into place under a lock, merged with
@@ -211,14 +215,18 @@ def _swap_pairs(loaded):
     `<refid>-sell`/`-buy` and `<txid>-base`/`-quote`, Coinbase Convert
     `<id>-sell`/`-buy` and an Advanced Trade's `<id>` + `<id>-quote`.
     A pair is exactly two unpriced BUYSELL rows under one stem with
-    opposite-sign quantities and different symbols."""
+    opposite-sign quantities and different symbols. A stablecoin leg
+    pairs like any coin's (its par value is then the exchange's one
+    value, _value_swaps_once): left out, the coin leg was priced from
+    its own Yahoo close while the stablecoin leg was priced at par, so
+    one exchange had two values (audit 2026-10-24 B32). A fiat symbol
+    (USD, CAD) is cash, never a leg."""
     groups = {}
     for tx in loaded:
         if (tx.action != 'BUYSELL' or not getattr(tx, 'id', None)
                 or abs(tx.price) >= 1e-8 or abs(tx.net_amount) >= 1e-8
                 or abs(tx.quantity) <= 1e-12
-                or tx.symbol in ('USD', 'CAD')
-                or tx.symbol in _STABLE_ONE_TO_ONE):
+                or tx.symbol in ('USD', 'CAD')):
             continue
         m = _SWAP_LEG_RE.match(str(tx.id))
         groups.setdefault(m.group(1) if m else str(tx.id), []).append(tx)
@@ -237,18 +245,26 @@ def _value_swaps_once(pairs, unpriced):
     """One exchange, one value (audit S013-08): each leg priced from its
     own coin's daily close gave the spent coin's proceeds and the
     received coin's cost two different values — a phantom gain or loss
-    that stayed in the lifetime total. Both legs take the RECEIVED
-    coin's fair value (what the spent coin was exchanged for), else the
-    spent coin's when the received coin has no price. Returns the
-    number of swaps valued."""
+    that stayed in the lifetime total. Both legs take a stablecoin
+    leg's par value when one side is a USD stablecoin (exact by
+    definition, tax-logic US-CRYPTO-02: 1 coin for 10 USDC is 10 USD
+    of consideration, whatever Yahoo's close of the coin; B32), else
+    the RECEIVED coin's fair value (what the spent coin was exchanged
+    for), else the spent coin's when the received coin has no price.
+    Returns the number of swaps valued."""
     n = 0
 
     def _unpriced(leg):
         return any(u is leg for u in unpriced)
 
+    def _value(leg):
+        return abs(leg.net_amount) if not _unpriced(leg) else 0.0
+
     for recv, spent in pairs:
-        value = (abs(recv.net_amount) if not _unpriced(recv) else 0.0) \
-            or (abs(spent.net_amount) if not _unpriced(spent) else 0.0)
+        stable = [leg for leg in (recv, spent)
+                  if leg.symbol in _STABLE_ONE_TO_ONE]
+        value = (_value(stable[0]) if stable else 0.0) \
+            or _value(recv) or _value(spent)
         if not value > 0:
             continue
         for leg in (recv, spent):
@@ -461,11 +477,11 @@ def _fill(args):
                 looked_up.add(tx.symbol)
                 cache_key = f"{y_symbol}-{tx.date}"
                 if _damaged_entry(cache, cache_key):
-                    # null / "abc" / true / Infinity: a miss, looked up
-                    # again (re-audit A2-0772 / A2-1403).
+                    # null / "abc" / true / Infinity / 0: a miss, looked
+                    # up again (re-audit A2-0772 / A2-1403; B30).
                     cli_diag.warn(
                         PROG,
-                        f"{CACHE_FILE}: entry {cache_key} is "
+                        f"{_shown_cache_path()}: entry {cache_key} is "
                         f"{cache[cache_key]!r}, not a price — ignored "
                         f"and looked up again.")
                     del cache[cache_key]
@@ -525,8 +541,9 @@ def _fill(args):
         cli_diag.note(
             PROG,
             f"{n_swaps} crypto-to-crypto swap(s) valued ONCE: both legs "
-            f"carry the received coin's fair value (the spent coin's "
-            f"proceeds = the received coin's cost).")
+            f"carry one value — a stablecoin leg's par value, else the "
+            f"received coin's fair value (the spent coin's proceeds = "
+            f"the received coin's cost).")
     if unpriced:
         # Never silently 0 (R1-105): these rows still carry price 0 —
         # $0 income, $0 cost basis, or $0 proceeds. The crypto path's

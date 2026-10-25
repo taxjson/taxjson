@@ -290,6 +290,10 @@ take from a few minutes to a week.
 - **A blank `txid`.** Two fills or ledger rows alike in every cell
   are two events when their `txid` is blank, as in any export without
   ids; an overlapping export holding the same rows is still read once.
+- **One `txid` on two rows of a file.** Two identical rows (downloads
+  pasted together) are read once; two rows that differ are refused,
+  naming both lines: the books keep one row per id, so one trade would
+  be dropped.
 - **Required columns:** trades `txid`, `pair`, `time`, `type`, `price`,
   `cost`, `fee`, `vol`; ledgers `txid`, `refid`, `time`, `type`,
   `asset`, `amount`, `fee`.
@@ -333,7 +337,9 @@ dates as CSV.
   row without one (an older layout with no ID column, or a blank cell)
   is told apart from an identical row of the same file by its order, and
   the same rows in an overlapping export are still read once (in the
-  stablecoin pool `tjs crypto-sends` rebuilds too).
+  stablecoin pool `tjs crypto-sends` rebuilds too). One ID on two rows
+  of a file: identical rows are read once, and two rows that differ
+  are refused, naming both lines.
 - **A blank Total** on a Buy or Sell is derived as Coinbase builds it:
   Subtotal plus the fee on a buy, minus it on a sale (without a
   Subtotal, quantity x price stands in). The books, the FX-on-cash
@@ -532,7 +538,9 @@ Manual exports keep working beside these files, with one catch: a
 **manual Questrade export with rows inside the fetched window** is
 flagged, because the API and the export round prices differently, so
 the same trade would be counted twice. `--trim-overlap` removes those
-rows from the manual file (the original is kept as a `.bak`).
+rows from the manual file (the original is kept as a `.bak`): only the
+fetched account's rows dated inside the window; a row whose `Account #`
+is another Questrade account's is left alone.
 
 `--dry-run` shows what would be written; `--json` gives a machine
 summary. Each fetch prints a count per activity type ("Trades 14,

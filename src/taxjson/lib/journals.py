@@ -72,7 +72,8 @@ _EPS = 1e-6
 
 
 class JournalsError(ValueError):
-    """The project has no completed run to read."""
+    """The project has no completed run to read, or the run's record
+    of the journals (work/cross_listings.state) cannot be read."""
 
 
 # ------------------------------------------------------------ the map
@@ -392,6 +393,12 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
         raise JournalsError("no work/ folder")
     if not state_path.is_file():
         raise JournalsError(f"no work/{XL.STATE}")
+    # read_state answers a damaged file with empty lists; taken as "no
+    # journals", that read as nothing pending and a done checklist step
+    # (2026-10-24 audit D05). Named instead, until a run rewrites it.
+    why = XL.state_problem(state_path)
+    if why:
+        raise JournalsError(f"work/{XL.STATE} {why}")
     st = XL.read_state(state_path)
     accts = [n for n, c in ((cfg.get("accounts") or {}).items())
              if not (c or {}).get("crypto")]

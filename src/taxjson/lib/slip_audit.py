@@ -319,29 +319,54 @@ def _shown(path: Path) -> str:
 
 
 # ------------------------------------------------------------ broker_key
-def key_salt(root: Path, create: bool = False) -> Optional[str]:
-    """The project's broker_key salt (work/.slip_key_salt, 32 hex);
-    `create` makes one when there is none. None: no salt."""
-    p = Path(root) / "work" / KEY_SALT_FILE
+def _salt_in(p: Path) -> str:
+    """The salt the file `p` holds; "" when there is none (or what it
+    holds is not one)."""
     try:
         v = p.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
-        v = ""
-    if re.fullmatch(r"[0-9a-f]{32}", v):
+        return ""
+    return v if re.fullmatch(r"[0-9a-f]{32}", v) else ""
+
+
+def key_salt(root: Path, create: bool = False) -> Optional[str]:
+    """The project's broker_key salt (work/.slip_key_salt, 32 hex);
+    `create` makes one when there is none. None: no salt.
+
+    The salt is made under the lock work/.slip_key_salt.lock
+    (lib/safe_write.file_lock) and the file read again inside it: two
+    first imports at once (`slip-audit --import-cra` in two shells)
+    each made a salt of its own and returned it, the last write won,
+    and the keys written with the other salt could never be resolved
+    (audit 2026-10-24 A43). Both now return the one salt the file
+    holds."""
+    p = Path(root) / "work" / KEY_SALT_FILE
+    v = _salt_in(p)
+    if v:
         return v
     if not create:
         return None
+    import contextlib
     import os
     import secrets
-    from taxjson.lib.safe_write import write_atomic
-    v = secrets.token_hex(16)
+    from taxjson.lib.safe_write import LockLinkError, file_lock, write_atomic
     p.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(p, v + "\n")
-    try:
-        os.chmod(p, 0o600)
-    except OSError:
-        pass
-    return v
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(
+                file_lock(p.with_name(KEY_SALT_FILE + ".lock")))
+        except LockLinkError as e:
+            raise SlipsError(f"work/{KEY_SALT_FILE}.lock: {e}") from None
+        v = _salt_in(p)             # another import wrote one meanwhile
+        if v:
+            return v
+        v = secrets.token_hex(16)
+        write_atomic(p, v + "\n")
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+        return v
 
 
 def broker_key(salt: str, book_hash: str) -> str:
@@ -637,6 +662,13 @@ def ib_slips(rep: Any, account: str, year: Optional[int],
             cat = _IB_CAT.get(c.category or "")
             if cat is None:
                 continue
+            if year is not None and slip_year(p, c) != str(year):
+                # A payment of another year in the report (a download
+                # spanning two years, last year's report in this year's
+                # inputs/slips/): not on this year's slip. It stays in
+                # the T5's payments for the per-payment match, which
+                # names it (audit 2026-10-24 B31).
+                continue
             if c.slip == "T3":
                 tgt = t3s.setdefault(p.symbol, Slip(
                     where=where, type="T3", issuer="IB", account=account,
@@ -651,6 +683,17 @@ def ib_slips(rep: Any, account: str, year: Optional[int],
                 tgt.amounts["foreign_tax"] = (
                     tgt.amounts.get("foreign_tax", 0.0) + w)
     return [t5] + [t3s[k] for k in sorted(t3s)]
+
+
+def slip_year(payment: Any, component: Any) -> str:
+    """The tax year a report component is income of (the slip it is
+    on): a T3 component — a trust's distribution — by the year of its
+    ex-date, the record date's (CA-INC-DATE-TRUST: IB's report for a
+    year lists a December distribution paid in January); every other
+    by its pay date. "" when the report gives no date."""
+    if component.slip == "T3" and payment.ex_date:
+        return str(payment.ex_date)[:4]
+    return str(payment.pay_date or "")[:4]
 
 
 def _report_to_cad(rep: Any, where: str, fx_cache: Optional[dict]):
@@ -1224,6 +1267,8 @@ def _usd_base_note(rep: Any, acct: str, year: int, fx_cache, slips
         for c in p.components:
             if _IB_CAT.get(c.category or "") not in INCOME_CATS:
                 continue
+            if slip_year(p, c) != str(year):
+                continue            # not this year's slip (ib_slips)
             if p.currency == "CAD":
                 alt_cad += c.gross
             elif p.currency == rep.base_currency and avg:

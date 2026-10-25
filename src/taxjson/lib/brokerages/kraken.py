@@ -12,7 +12,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          shown_name)
 from taxjson.lib.brokerages.schema import QTY_ZERO
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
-                                                   USD_STABLECOINS,
+                                                   USD_STABLECOINS, RowIds,
                                                    same_coin_hint,
                                                    strict_money, utc_to_local,
                                                    usd_value as _usd_value,
@@ -717,10 +717,20 @@ class KrakenBrokerage(BaseBrokerage):
         self._stems = {}
         coin_fee_fills = 0
         margin_fills = 0
+        # One txid on two different fills: refused, never one dropped by
+        # the dedup (2026-10-25 audit robustness#4; the ledger's twin is
+        # S013-09).
+        ids = RowIds(f"Kraken trades CSV {shown_name(path)}", "txid")
         with io.StringIO(read_broker_text(path)) as f:
             for raw, line in _dict_rows(f, path, 'trades',
                                         _TRADES_REQUIRED):
                 row = _lower_row(raw)
+                ids.check(
+                    row.get('txid') or '', line,
+                    tuple(sorted((str(k), str(v or '').strip())
+                                 for k, v in row.items() if k)),
+                    " ".join(str(row.get(k) or '').strip() for k in
+                             ('time', 'type', 'vol', 'pair')))
                 type_ = (row.get('type') or '').strip().lower()
                 if type_ not in ('buy', 'sell'):
                     ignored_types[type_ or '?'] = (
@@ -2139,11 +2149,14 @@ def kraken_cash_events(path, stable_cash: bool = True
     ledger v2 (lib/cash_events, tax-logic CA-FX-07): a CASHMOVE per fiat
     (or, in a cash-mode book, stablecoin) deposit/withdrawal/transfer
     with its fee a FLOW, an FXCONV per trade whose legs are all currency
-    (USD for CAD, USDC for EUR — a stablecoin folded into USD against
-    USD is no conversion), and a CASHBAL per currency at the end of
-    every year the export spans (from its `balance` column, summed over
-    the assets that fold into one currency). A trades export: none (its
-    fills are in the position book).
+    (USD for CAD, USDC for EUR; the legs of one refid added up per
+    currency — a stablecoin folded into USD against USD is no
+    conversion, and its spread off par is a FLOW of US dollars; a
+    refid trading three currencies is refused naming it), and a CASHBAL
+    per currency at the end of every year the export spans (from its
+    `balance` column, summed over the assets that fold into one
+    currency). A trades export: none (its fills are in the position
+    book).
 
     Rows are read as the parser reads them (`_dict_rows`, any header
     case; a missing ledger column refused naming the file). A fee is in
@@ -2234,20 +2247,60 @@ def kraken_cash_events(path, stable_cash: bool = True
     for ref, legs in groups.items():
         if any(a not in cashlike for a in all_assets_by_ref.get(ref, ())):
             continue        # a coin leg: the position book's fill
-        neg = [lg for lg in legs if lg[2] < 0]
-        pos = [lg for lg in legs if lg[2] > 0]
         for lg in legs:
             if abs(lg[3]) > 1e-9 and lg[6]:
                 out.append(CE.flow(lg[0], lg[6], -lg[3], where=lg[4],
                                    desc="Kraken conversion fee"))
+        # The legs added up per (folded) currency: Kraken can write one
+        # side of a trade as several ledger rows under one refid (two
+        # receipt legs), which `one debit, one credit` used to skip
+        # without a word (2026-10-24 audit C08).
+        sides: Dict[str, Dict[str, Any]] = {}
+        for day, cur, amt, _fee, where, bare, _fc in legs:
+            s = sides.setdefault(cur, {"amt": 0.0, "day": day,
+                                       "where": where, "bare": []})
+            s["amt"] += amt
+            s["day"] = max(s["day"], day)
+            if bare not in s["bare"]:
+                s["bare"].append(bare)
+        sides = {c: s for c, s in sides.items() if abs(s["amt"]) > 1e-9}
+        if not sides:
+            continue
+        if len(sides) == 1:
+            # USDC <-> USD (or USDC <-> USDT) in a cash-mode book: the
+            # same currency, so no conversion — but a trade off par
+            # moves the folded pool by its spread: 200 USDC sold for
+            # 197 USD leaves 3 US dollars fewer (the ledger's own
+            # balances say so). The net movement is a FLOW of the
+            # currency, as a Coinbase spread is; dropped, it was a
+            # reconcile gap the ledger could not explain (2026-10-24
+            # audit C06). The de-peg itself is not a gain or loss of
+            # the coin (tax-logic CA-CRYPTO-02).
+            (cur, s), = sides.items()
+            out.append(CE.flow(s["day"], cur, s["amt"], where=s["where"],
+                               desc=f"Kraken {'/'.join(s['bare'])} spread"))
+            continue
+        neg = [(c, s) for c, s in sides.items() if s["amt"] < 0]
+        pos = [(c, s) for c, s in sides.items() if s["amt"] > 0]
         if len(neg) != 1 or len(pos) != 1:
-            continue
-        a, b = neg[0], pos[0]
-        if a[1] == b[1]:
-            # USDC <-> USD in a cash-mode book: the same currency.
-            continue
-        out.append(CE.conv(b[0], a[1], -a[2], b[1], b[2], where=a[4],
-                           desc=f"Kraken {a[5]}->{b[5]}"))
+            # Three or more currencies under one refid: not one
+            # currency for another. Refused naming the entry, never
+            # left out of the ledger in silence (2026-10-24 audit C08).
+            days = sorted(lg[0] for lg in legs)
+            amounts = ', '.join(f"{s['amt']:+,.2f} {c}"
+                                for c, s in sorted(sides.items()))
+            raise ValueError(
+                f"Kraken ledger {name}: refid {_mask(ref)} ({days[0]}) "
+                f"trades {len(sides)} currencies at once ({amounts}) — "
+                f"the FX-on-cash ledger books one currency for another. "
+                f"Enter it as FXCONV .tt lines and remove its rows from "
+                f"the export.")
+        (fc, a), = neg
+        (tc, b), = pos
+        out.append(CE.conv(b["day"], fc, -a["amt"], tc, b["amt"],
+                           where=a["where"],
+                           desc=f"Kraken {'/'.join(a['bare'])}->"
+                                f"{'/'.join(b['bare'])}"))
     # Balances: per folded currency, at the end of each year spanned and
     # before the first row (the opening of the first year).
     if bal_rows:

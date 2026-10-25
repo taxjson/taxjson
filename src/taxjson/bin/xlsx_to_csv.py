@@ -97,7 +97,14 @@ def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None
     df = _apply_cells(df, _clean_numeric_commas)
 
     if output_file:
-        df.to_csv(output_file, index=False, encoding='utf-8')
+        # A generated file: staged beside `-o` and renamed over it, so a
+        # symlink planted at the output name is replaced by the CSV and
+        # its target is never opened (lib/safe_write; audit 2026-10-24
+        # B06 — pandas' own writer followed the link and overwrote what
+        # it pointed at). newline="": the text keeps the line endings
+        # pandas wrote, as its path writer does.
+        from taxjson.lib.safe_write import write_atomic
+        write_atomic(output_file, df.to_csv(index=False), newline="")
         print(f"Successfully converted to {output_file!r}.", file=sys.stderr)
     else:
         df.to_csv(sys.stdout, index=False, encoding='utf-8')

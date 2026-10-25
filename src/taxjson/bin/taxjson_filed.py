@@ -29,6 +29,7 @@ foreign cash (line 15300 / §988) — check-filed says so with every OK.
 
 from taxjson.lib.pipeline import income_dating_flags, option_timing_flags
 import json
+import math
 import sys
 import tempfile
 from datetime import datetime
@@ -39,6 +40,21 @@ from taxjson.lib import cli_diag
 
 PROG = "taxjson-filed"
 _TOL = 0.01
+# The per-account and total figures a lock records as numbers.
+_NUMERIC_KEYS = ("realized", "disallowed", "income", "dividend", "pil",
+                 "proceeds", "st_gain", "lt_gain", "dispositions",
+                 "tainted")
+
+
+def _finite_num(v: Any) -> bool:
+    """A locked figure: a number (not a bool) that is finite. json.loads
+    reads `NaN` and `Infinity` into floats, and every comparison with a
+    NaN is False, so a locked NaN total passed the shape check and
+    matched any recomputed figure in the drift check (2026-10 audit
+    B38). close-year writes plain finite numbers; anything else is a
+    damaged or hand-edited lock."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(float(v)))
 
 
 # What every OK line says the lock does not cover (S032-11).
@@ -267,7 +283,8 @@ def write_snapshot(root: Path, year, country: str, basis: str,
 
 
 def lock_country_problem(lock: Dict[str, Any], settings: Dict[str, Any],
-                         label: str) -> Optional[str]:
+                         label: str, *, prior: bool = False
+                         ) -> Optional[str]:
     """A refusal message when a filed-year lock (or a prior-year
     record) was closed under the OTHER country than this project's, else
     None. Every lock close-year writes records its country; recomputing
@@ -275,7 +292,11 @@ def lock_country_problem(lock: Dict[str, Any], settings: Dict[str, Any],
     difference between the two laws as drift and advised amending or
     refreshing the lock — which would overwrite the filed record with
     the other country's numbers (partition COMMANDS-08). A lock without
-    a country (hand-written, pre-country) is not judged."""
+    a country (hand-written, pre-country) is not judged. `prior`: the
+    lock is read as the previous year's record (the next year's
+    carryover, estimate, amt, handoff), so the advice is to point
+    [settings] prior_year_record at this country's lock (2026-10-25
+    audit year-end#1)."""
     from taxjson.lib.country import (CountryError, canonical_country,
                                      display_name, settings_country)
     rc = lock.get("country") if isinstance(lock, dict) else None
@@ -288,6 +309,16 @@ def lock_country_problem(lock: Dict[str, Any], settings: Dict[str, Any],
         return f"{e} — the lock cannot be checked against this project"
     if rcc == here:
         return None
+    if prior:
+        return (f"{label} was closed under country = \"{rcc}\" "
+                f"({display_name(rcc)} law) but this project is country = "
+                f"\"{here}\" ({display_name(here)}): the other country's "
+                f"carry-forwards, positions and cost cannot open a "
+                f"{display_name(here)} year, so the lock is not read. Point "
+                f"[settings] prior_year_record at the previous year's lock "
+                f"of this project's {display_name(here)} books (or, if this "
+                f"project's country is wrong, set [settings] country = "
+                f"\"{rcc}\").")
     return (f"{label} was closed under country = \"{rcc}\" "
             f"({display_name(rcc)} law) but this project is country = "
             f"\"{here}\" ({display_name(here)}): a return filed under one "
@@ -316,6 +347,24 @@ def lock_shape_problem(lock: Any, year) -> Optional[str]:
         return "is not a close-year lock (no per-account table)"
     if "totals" in lock and not isinstance(lock.get("totals"), dict):
         return "is not a close-year lock (totals is not a table)"
+    # A figure that is not a finite number (NaN, Infinity, null, a quoted
+    # number) is a damaged lock, never a match (_finite_num).
+    for acct, tbl in accts.items():
+        for k in _NUMERIC_KEYS:
+            if k in tbl and not _finite_num(tbl[k]):
+                return (f"records accounts.{acct}.{k} as {tbl[k]!r}, not a "
+                        f"finite number — the lock is damaged")
+        fl = tbl.get("form_lines")
+        if isinstance(fl, dict):
+            for code, v in fl.items():
+                if not _finite_num(v):
+                    return (f"records accounts.{acct}.form_lines.{code} as "
+                            f"{v!r}, not a finite number — the lock is "
+                            f"damaged")
+    for k, v in (lock.get("totals") or {}).items():
+        if k in _NUMERIC_KEYS and not _finite_num(v):
+            return (f"records totals.{k} as {v!r}, not a finite number — "
+                    f"the lock is damaged")
     y = lock.get("year")
     if y is not None:
         try:
@@ -325,6 +374,113 @@ def lock_shape_problem(lock: Any, year) -> Optional[str]:
         if not ok:
             return f"says year {y!r}, not {year}"
     return None
+
+
+# ------------------------------------------- the one check of a lock
+#
+# Every reader of a close-year lock — check-filed and the run's filed-
+# year check, `taxjson years`, the next year's carryover, estimate, amt,
+# close-year and handoff — applies the same check (read_lock), so a
+# lock one of them refuses is never taken as sound by another: the
+# carryover ledger dropped a lock the estimate refused and printed a
+# 0.00 carryforward, and took a lock closed under the other country's
+# law as the filed figure 0.00 (2026-10-25 audit robustness#1,
+# year-end#1, year-end#6).
+
+class LockProblem(ValueError):
+    """A close-year lock no reader may use: unreadable, damaged, or
+    closed under the other country's law. The message names the file
+    and the fix."""
+
+
+LOCK_FIX = ("restore the lock from git or re-close that year (`taxjson "
+            "close-year --force` in its project)")
+
+
+def _unique_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """json.loads object_pairs_hook: a key written twice in one object
+    is refused — json.loads keeps the second in silence (a balance
+    written twice, 2026-10-25 audit year-end#3)."""
+    out: Dict[str, Any] = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError(f"the key {k!r} is written twice in one "
+                             f"object")
+        out[k] = v
+    return out
+
+
+def load_lock_json(path: Path) -> Any:
+    """The JSON document of a lock file (UTF-8, a BOM tolerated). A key
+    written twice in one object raises ValueError, as do bad JSON and
+    text that is not UTF-8 (UnicodeDecodeError); OSError propagates."""
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"),
+                      object_pairs_hook=_unique_keys)
+
+
+def file_year(path: Path) -> Optional[int]:
+    """The year a lock's file name gives (filed/<year>.json), else
+    None (a prior_year_record may be named anything)."""
+    try:
+        return int(Path(path).stem)
+    except ValueError:
+        return None
+
+
+def lock_damage(lock: Any, year: Any, label: str) -> Optional[str]:
+    """Why a lock document is damaged, as a sentence naming it
+    (`label`), else None: its shape (lock_shape_problem — an object, a
+    per-account table, finite figures, a `year` field that is `year`,
+    the file's) and its `carryforwards` block
+    (carryforward.block_problem — each present section with its closing
+    balance, numbers, one entry per year, no negative balance). `year`
+    None: the year field is not judged."""
+    if year is None and isinstance(lock, dict):
+        year = lock.get("year")
+    prob = lock_shape_problem(lock, year)
+    if prob:
+        return f"{label} {prob}"
+    if isinstance(lock, dict) and lock.get("carryforwards") is not None:
+        from taxjson.lib.carryforward import block_problem
+        prob = block_problem(lock["carryforwards"])
+        if prob:
+            return f"{label}: {prob}"
+    return None
+
+
+def read_lock(path: Path, settings: Optional[Dict[str, Any]] = None, *,
+              label: Optional[str] = None,
+              prior: bool = False) -> Dict[str, Any]:
+    """Read a close-year lock and apply the one check every reader of a
+    lock uses: readable JSON with no key written twice, lock_damage (the
+    year field against the file's name), and — `settings` given — the
+    country it was closed under (lock_country_problem). Returns the
+    document; raises LockProblem naming the file (`label`, default the
+    path) and the fix. `prior`: the lock is read as the previous year's
+    record (estimate, amt, carryover), so a country mismatch is advised
+    as a prior_year_record naming the wrong project's lock
+    (lock_country_problem)."""
+    p = Path(path)
+    label = label or str(p)
+    try:
+        doc = load_lock_json(p)
+    except OSError as e:
+        raise LockProblem(f"cannot read the close-year lock {label} "
+                          f"({e.strerror or e})") from None
+    except UnicodeDecodeError as e:
+        raise LockProblem(f"{label}: not UTF-8 text ({e.reason} at byte "
+                          f"{e.start}) — {LOCK_FIX}") from None
+    except ValueError as e:
+        raise LockProblem(f"{label}: not valid JSON ({e}) — "
+                          f"{LOCK_FIX}") from None
+    damage = lock_damage(doc, file_year(p), label)
+    if damage:
+        raise LockProblem(f"{damage} — {LOCK_FIX}")
+    if settings is not None:
+        cp = lock_country_problem(doc, settings, label, prior=prior)
+        if cp:
+            raise LockProblem(cp)
+    return doc
 
 
 def partial_year_note(lock: Dict[str, Any], year) -> Optional[str]:
@@ -652,6 +808,12 @@ def diff_snapshot(snapshot: Dict[str, Any],
                     "pil", "proceeds", "st_gain", "lt_gain"):
             if key not in filed or key not in cur:
                 continue        # pre-upgrade lock: field not recorded
+            if not _finite_num(filed[key]):
+                # A NaN compares equal to nothing and drifts from
+                # nothing: said OK over any figure (2026-10 audit B38).
+                raise ValueError(
+                    f"accounts.{acct}.{key} is {filed[key]!r}, not a "
+                    f"finite number — the lock is damaged")
             if abs(float(filed[key]) - float(cur[key])) > _TOL:
                 lines.append(
                     f"{acct}: {key} filed {filed[key]:,.2f} -> now "
@@ -677,6 +839,11 @@ def diff_snapshot(snapshot: Dict[str, Any],
                 fl_cur = {k: v for k, v in fl_cur.items()
                           if "_da_" not in k}
             for code in sorted(set(fl_filed) | set(fl_cur)):
+                if code in fl_filed and not _finite_num(fl_filed[code]):
+                    raise ValueError(
+                        f"accounts.{acct}.form_lines.{code} is "
+                        f"{fl_filed[code]!r}, not a finite number — the "
+                        f"lock is damaged")
                 a = float(fl_filed.get(code) or 0.0)
                 b = float(fl_cur.get(code) or 0.0)
                 if abs(a - b) > _TOL:
@@ -689,6 +856,10 @@ def diff_snapshot(snapshot: Dict[str, Any],
                 continue        # pre-fix lock: its count missed them
             if key not in filed:
                 continue        # not recorded (hand-written lock)
+            if not _finite_num(filed[key]):
+                raise ValueError(
+                    f"accounts.{acct}.{key} is {filed[key]!r}, not a "
+                    f"finite number — the lock is damaged")
             if int(filed[key]) != int(cur.get(key) or 0):
                 lines.append(f"{acct}: {key} filed {filed[key]} -> now "
                              f"{cur[key]}")

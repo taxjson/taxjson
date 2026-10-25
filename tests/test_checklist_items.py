@@ -467,13 +467,15 @@ class TestFormerIds(unittest.TestCase):
                                        "date": "2026-01-02"}},
                 **({"year": year} if year else {})}))
             st = cl.load_state(root)
-            self.assertEqual(st["overrides"]["tips"]["status"], "skipped")
+            # (a `skipped` mark of an older release reads as forced done)
+            self.assertEqual(st["overrides"]["tips"]["status"], "done")
+            self.assertTrue(st["overrides"]["tips"]["forced"])
             self.assertNotIn("scan", st["overrides"])
             r = _cli("-C", str(root), "checklist", "--run", "--only", "tips",
                      "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(list(doc), ["tips"])
-            self.assertEqual(doc["tips"]["effective"], "skipped")
+            self.assertEqual(doc["tips"]["effective"], "forced")
             r = _cli("-C", str(root), "checklist", "--undo", "tips")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("tips", json.loads(
@@ -489,7 +491,7 @@ class TestFormerIds(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "p"
             shutil.copytree(project("canada").root, root)
-            flags = ("--done", "--skip", "--undo", "--only")
+            flags = ("--done", "--undo", "--only", "--done")
             cases = [(old, flags[i % 4]) for i, old in enumerate(former)]
             cases += [("scan", f) for f in flags[1:]]
             for old, flag in cases:
@@ -517,11 +519,22 @@ class TestMarks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "p"
             shutil.copytree(project("canada").root, root)
+            # transfers' kept verdict is a finding: a plain --done is
+            # refused, naming --force; --force records the forced mark.
+            r = _cli("-C", str(root), "checklist", "--run", "--only",
+                     "transfers")
             before = _snapshot(root)
+            r = _cli("-C", str(root), "checklist", "--done", "transfers")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("--done transfers --force", r.stderr)
+            self.assertEqual(_snapshot(root), before)
             r = _cli("-C", str(root), "checklist", "--done", "tips",
-                     "--skip", "transfers", "--done", "fees",
-                     "--note", "read it")
+                     "--done", "transfers", "--done", "fees",
+                     "--note", "read it", "--force")
             self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("transfers marked done (forced)", r.stdout)
+            self.assertIn("tips marked done", r.stdout)
+            self.assertIn("nothing to force", r.stdout)
             after = _snapshot(root)
             self.assertEqual(sorted(set(after) - set(before)),
                              [cl.STATE_FILE])
@@ -529,18 +542,22 @@ class TestMarks(unittest.TestCase):
                               if k != cl.STATE_FILE}, before)
             st = json.loads((root / cl.STATE_FILE).read_text())
             self.assertEqual(st["overrides"]["tips"]["status"], "done")
-            self.assertEqual(st["overrides"]["transfers"]["status"],
-                             "skipped")
+            self.assertNotIn("forced", st["overrides"]["tips"])
+            self.assertEqual(st["overrides"]["transfers"]["status"], "done")
+            self.assertTrue(st["overrides"]["transfers"]["forced"])
             r = _cli("-C", str(root), "checklist", "--run", "--quick", "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(doc["tips"]["effective"], "done")
-            # A skip accepts the finding; it stays beside the mark.
-            self.assertEqual(doc["transfers"]["effective"], "skipped")
+            # A forced mark accepts the finding; it stays beside the mark.
+            self.assertEqual(doc["transfers"]["effective"], "forced")
+            self.assertEqual(doc["transfers"]["override"], "forced")
             self.assertIn("transfer-in", doc["transfers"]["finding"])
             self.assertEqual(doc["fees"]["effective"], "done")
             self.assertEqual(doc["fees"]["note"], "read it")
-            # A DONE mark never hides a finding.
-            r = _cli("-C", str(root), "checklist", "--done", "transfers")
+            # A DONE mark never hides a finding (one recorded before the
+            # check ran, as set_override writes it).
+            cl.set_override(root, cl.load_state(root)["year"], "transfers",
+                            "done")
             r = _cli("-C", str(root), "checklist", "--run", "--quick", "--json")
             doc = {s["id"]: s for s in json.loads(r.stdout)["steps"]}
             self.assertEqual(doc["transfers"]["effective"], "attention")

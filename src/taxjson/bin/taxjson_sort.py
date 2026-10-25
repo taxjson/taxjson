@@ -81,8 +81,10 @@ def sort_transactions(transactions: List[TaxTransaction]) -> List[TaxTransaction
 # Rows carry their input file in `source` (taxjson-brokerage, convert-
 # tt). Two rows with one content id are:
 #   * from ONE file: collapsed (a parser marks a genuine repeated fill
-#     "[fill #N]", which changes the id, so a same-id pair inside one
-#     file is the file repeating itself);
+#     "[fill #N]", which changes the id, and a parser that keeps the
+#     broker's own id refuses one id on two DIFFERENT rows —
+#     brokerages/_crypto_common.RowIds, audit 2026-10-25 robustness#4 —
+#     so a same-id pair inside one file is the file repeating itself);
 #   * from statements of DIFFERENT broker accounts (the parse records
 #     each file's account set, hashed, in metadata.source_accounts):
 #     separate trades, both booked;
@@ -263,6 +265,11 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
     # (a, b, verdict) -> example rows
     events: Dict[Tuple[str, str, str], List[int]] = {}
     keep_set: Set[int] = set()
+    # Every id in the book, plus each replacement as it is given: a
+    # replacement `<id>~2` that another row already carried (a row
+    # relabelled by an earlier pass and written out) made two records
+    # one id again (audit 2026-10-24 B29).
+    taken: Set[Any] = {u for u in uids if u is not None}
     for uid, idx in groups.items():
         # One canonical order, so the kept set never depends on the
         # order the files were listed in (audit A2-0105, A2-0624):
@@ -275,7 +282,11 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
         def keep(i: int, against: Optional[int], v: str) -> None:
             n = len(kept) + len(tt_kept)
             if n:
-                plan.relabel[i] = f"{uid}~{n + 1}"
+                k = n + 1
+                while f"{uid}~{k}" in taken:
+                    k += 1
+                plan.relabel[i] = f"{uid}~{k}"
+                taken.add(plan.relabel[i])
             if against is not None and srcs[against] != srcs[i]:
                 events.setdefault((srcs[against], srcs[i], v), []).append(i)
 

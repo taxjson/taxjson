@@ -465,6 +465,18 @@ def _read_wash_inputs(cache: Path) -> dict:
     return w if isinstance(w, dict) else {}
 
 
+def _book_accounts(cache: Path) -> "list[str]":
+    """The accounts with a plain gains book in `cache`, as
+    resolve_gains_files discovers them: `<acct>_gains.json`, never a
+    dot-prefixed intermediate or a raw derivative."""
+    return sorted(
+        f.name[: -len("_gains.json")]
+        for f in Path(cache).glob("*_gains.json")
+        if not f.name.startswith(".")
+        and not f.name.endswith(("_raw_gains.json",
+                                 "_raw_base_gains.json")))
+
+
 def record_wash_inputs(cache: Path, washes: Iterable[Path],
                        inputs: Iterable[Path], *, blend: str) -> None:
     """After a wash pass wrote `washes` from `inputs` (every member's
@@ -472,16 +484,21 @@ def record_wash_inputs(cache: Path, washes: Iterable[Path],
     a missing one recorded as absent), remember what each was built
     from, for stale_wash_inputs: a blended result depends on EVERY
     account in the blend, and `run --account B` rebuilds B without the
-    blended pass (GitHub issue #15). Written by the run (under its run
-    lock), owner-only, never through a link (safe_write)."""
+    blended pass (GitHub issue #15). `books` is the roster of accounts
+    whose books were there when the pass ran (members and not): one
+    that appears later (a new account built by `run --account <new>`)
+    was not in the blend and makes it stale (2026-10-24 audit D01).
+    Written by the run (under its run lock), owner-only, never through
+    a link (safe_write)."""
     from taxjson.lib.safe_write import write_atomic
     cache = Path(cache)
     fps = {Path(p).name: _fingerprint(Path(p)) for p in inputs}
+    books = _book_accounts(cache)
     entries = _read_wash_inputs(cache)
     for w in washes:
         w = Path(w)
         entries[w.name] = {"blend": blend, "wash": _fingerprint(w),
-                           "inputs": fps}
+                           "inputs": fps, "books": books}
     write_atomic(cache / WASH_INPUTS_FILE,
                  json.dumps({"schema_version": 1, "wash": entries},
                             indent=2, sort_keys=True) + "\n")
@@ -497,7 +514,15 @@ def stale_wash_inputs(wash: Path) -> "list[str]":
     (another taxable account's books after `run --account <other>`:
     GitHub issue #15), from the record the wash pass kept
     (WASH_INPUTS_FILE) — by that record's fingerprints, the account's
-    own inputs included, so a rebuild with the same bytes is current. A
+    own inputs included, so a rebuild with the same bytes is current.
+    A blended result should have had EVERY account in it: an account
+    whose books were not there when the pass ran (not in the record's
+    `books` roster — a new account, built by `run --account <new>`)
+    makes it stale when its base or plain gains are newer (2026-10-24
+    audit D01; the roster tells it from a sheltered account rebuilt
+    unchanged, which a record without a roster — an older release's —
+    reports too, until the next full run). A single-account pass
+    (`blend` is the account's own name) depends on no other account. A
     wash file with no record (an older taxjson wrote it) counts its own
     inputs and any other account's base or plain gains newer than
     it (accounts as resolve_gains_files finds them). Empty when the wash file is current. One second of slack
@@ -532,13 +557,29 @@ def stale_wash_inputs(wash: Path) -> "list[str]":
         for inp, fp in sorted(recorded.items()):
             if inp not in out and not _matches(fp, wash.with_name(inp)):
                 out.append(inp)
+        if rec.get("blend") != name:
+            # A blended pass: an account the roster lacks is new to the
+            # project since the pass, and its books newer than the wash
+            # file never went through it (audit D01).
+            roster = rec.get("books")
+            if isinstance(roster, list) and roster:
+                known = {str(b) for b in roster}
+            else:
+                known = {inp[: -len(suf)] for inp in recorded
+                         for suf in ("_gains.json", "_base.json")
+                         if inp.endswith(suf)}
+            for other in _book_accounts(wash.parent):
+                if other == name or other in known:
+                    continue
+                for p in (wash.with_name(f"{other}_base.json"),
+                          wash.with_name(f"{other}_gains.json")):
+                    try:
+                        if p.name not in out and p.stat().st_mtime > w + 1.0:
+                            out.append(p.name)
+                    except OSError:
+                        continue
         return sorted(out)
-    others = sorted(
-        {f.name[: -len("_gains.json")]
-         for f in wash.parent.glob("*_gains.json")
-         if not f.name.startswith(".")
-         and not f.name.endswith(("_raw_gains.json",
-                                  "_raw_base_gains.json"))} - {name})
+    others = sorted(set(_book_accounts(wash.parent)) - {name})
     for other in others:
         for p in (wash.with_name(f"{other}_base.json"),
                   wash.with_name(f"{other}_gains.json")):

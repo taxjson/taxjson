@@ -688,23 +688,29 @@ def validate_record(record: Any, path: Any = "the prior-year record"
     ot = record.get("option_timing")
     if ot is not None and not isinstance(ot, dict):
         raise bad("option_timing", "an object")
-    if record.get("carryforwards") is not None:
-        from taxjson.lib.carryforward import block_problem
-        prob = block_problem(record["carryforwards"])
-        if prob:
-            raise RecordError(f"{path}: {prob} — fix the lock or restore "
-                              f"it from git (or re-close that year with "
-                              f"`taxjson close-year --force` in its "
-                              f"project)")
+    # The one damage check every reader of a lock applies
+    # (taxjson_filed.lock_damage): the carryforwards block, the locked
+    # figures, and a year field naming another year than the file's —
+    # the hand-off checked "2023 into 2024" from 2024.json and said
+    # everything carried forward (2026-10-25 audit year-end#6).
+    from taxjson.bin.taxjson_filed import file_year, lock_damage
+    prob = lock_damage(record, file_year(Path(str(path))), str(path))
+    if prob:
+        raise RecordError(f"{prob} — fix the lock or restore it from git "
+                          f"(or re-close that year with `taxjson "
+                          f"close-year --force` in its project)")
     return record
 
 
 def load_record(path: Any) -> Dict[str, Any]:
     """Read and validate a prior-year lock (utf-8, a BOM tolerated:
-    A2-0776). Any problem is a RecordError naming the file."""
+    A2-0776; a key written twice in one object refused, as every lock
+    reader does: taxjson_filed.load_lock_json). Any problem is a
+    RecordError naming the file."""
+    from taxjson.bin.taxjson_filed import load_lock_json
     p = Path(path)
     try:
-        doc = json.loads(p.read_text(encoding="utf-8-sig"))
+        doc = load_lock_json(p)
     except OSError as e:
         raise RecordError(f"{p}: cannot read ({e.strerror or e})") \
             from None
@@ -844,7 +850,10 @@ def _timing_issues(cache: Path, cfg: Dict[str, Any],
                 txs += load_transactions(p)
         for lot in write_lots(txs, tax_date=_basis(settings)):
             wy = lot.write_year
-            if lot.broker_closing or wy > ry:
+            # (a write that is not in the books — a short opening
+            # balance, a transfer in — has no known write year or
+            # premium to place: option-boundary says so)
+            if lot.broker_closing or lot.unknown_premium or wy > ry:
                 continue
             carried = (lot.open_units > 1e-9
                        or any(int(c.date[:4]) > ry for c in lot.closes))

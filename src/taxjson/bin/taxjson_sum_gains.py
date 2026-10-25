@@ -44,15 +44,22 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         t.get('symbol') for t in list(transactions)
         + list(data.get('inventory') or []) if isinstance(t, dict))
     # Grant-timing writes not yet paired with a buy-back:
-    # (symbol, currency) -> [[bucket, dollars index, open units,
-    # tick_stats, hold_days index], ...] (A2-1114).
+    # (account, symbol, currency) -> [[bucket, dollars index, open
+    # units, tick_stats, hold_days index], ...] (A2-1114). Per account:
+    # a buy-back closes its own account's write, never another's
+    # (2026-10-24 audit B35).
     open_writes: Dict[Any, list] = {}
+    from taxjson.lib.futures import is_plain_future
 
     for tx in transactions:
         symbol = tx.get('symbol')
         if not symbol: continue
-        
+
         is_opt = is_option_ticker(symbol)
+        # One classifier for the returns and the fees: a futures row's
+        # gain and fee land in the same Futures block (audit B34).
+        asset_type = ('Options' if is_opt else
+                      'Futures' if is_plain_future(symbol) else 'Stocks')
         base_ticker = get_base_ticker(symbol) if is_opt else symbol
         if base_ticker is None: base_ticker = symbol
         if is_opt:
@@ -101,7 +108,6 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
                 tick_stats['cap'] += gain
 
             # Aggregate for statistics
-            asset_type = 'Options' if is_opt else 'Stocks'
             if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
             if currency not in returns_by_asset[asset_type]:
                 returns_by_asset[asset_type][currency] = {'dollars': [], 'days': [], 'fees': [], 'fee_shares': []}
@@ -125,7 +131,8 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
                 # the per-asset block — an expired write vanished and a
                 # bought-back one showed only its loss (A2-1114).
                 _bi, _hi = _trade(gain, 0)
-                open_writes.setdefault((symbol, currency), []).append(
+                open_writes.setdefault(
+                    (tx.get('account') or '', symbol, currency), []).append(
                     [bucket, _bi, qty, tick_stats, _hi])
             else:
                 # Units of this close that buy back a grant write of the
@@ -143,7 +150,8 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
                     else:
                         fold = qty
                 folded = 0.0
-                for w in open_writes.get((symbol, currency), []):
+                for w in open_writes.get(
+                        (tx.get('account') or '', symbol, currency), []):
                     if fold - folded <= 1e-9:
                         break
                     take = min(w[2], fold - folded)
@@ -170,11 +178,6 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         # must net out of TOTAL TRADING FEES.
         if fee != 0:
             total_fees[currency] = total_fees.get(currency, 0.0) + fee
-            is_opt = is_option_ticker(symbol)
-            from taxjson.lib.futures import is_plain_future
-            asset_type = ('Options' if is_opt else
-                          'Futures' if is_plain_future(symbol) else 'Stocks')
-            
             if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
             if currency not in returns_by_asset[asset_type]: 
                 returns_by_asset[asset_type][currency] = {'dollars': [], 'days': [], 'fees': [], 'fee_shares': []}
@@ -387,7 +390,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         )
         
         # Add Statistical sections
-        for asset_type in ['Stocks', 'Options']:
+        for asset_type in ['Stocks', 'Options', 'Futures']:
             if asset_type in data['returns_by_asset'] and currency in data['returns_by_asset'][asset_type]:
                 lines.append(output_statistics(currency, asset_type, data['returns_by_asset'][asset_type][currency], total_year, use_color=use_color))
 
@@ -493,6 +496,11 @@ def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], yea
         avg_fee_per_share = total_fees / total_fee_shares if total_fee_shares > 0 else 0
         lines.append(f"Avg Fee Per Trade:       {avg_fee_per_trade:17,.2f} {currency}")
         lines.append(f"Avg Fee Per Share:       {avg_fee_per_share:17,.4f} {currency}")
+    elif asset_type == 'Futures':
+        # `fee_shares` for futures is the contract count.
+        avg_fee_per_contract = total_fees / total_fee_shares if total_fee_shares > 0 else 0
+        lines.append(f"Avg Fee Per Trade:       {avg_fee_per_trade:17,.2f} {currency}")
+        lines.append(f"Avg Fee Per Contract:    {avg_fee_per_contract:17,.4f} {currency}")
     else:
         # `fee_shares` for options is contract count, not underlying shares.
         # One contract already represents 100 underlying shares, so
@@ -569,6 +577,11 @@ def main():
         # to converge, the merged report must warn.
         wash_converged = True
         wash_iters = None
+        # The year each file says it is (summary.year): a summary is one
+        # year's figures, so files of different years are refused — the
+        # loop took the LAST file's year and labelled the sum of every
+        # file's gains as that year's (audit 2026-10-24 D04).
+        years: Dict[str, Any] = {}
         for fp in file_paths:
             data = load_json_doc_or_exit(PROG, fp)
             _require_gains(data, fp)
@@ -580,6 +593,15 @@ def main():
             summary = data.get('summary') or {}
             if summary.get('year'):
                 total_year = summary['year']
+                years[str(fp)] = summary['year']
+                if len({str(y) for y in years.values()}) > 1:
+                    cli_diag.error(
+                        PROG,
+                        "the gains files are of different tax years: "
+                        + ", ".join(f"{f} ({y})" for f, y in years.items())
+                        + " — a summary is one year's figures: run it on "
+                        "each year's files on their own")
+                    sys.exit(2)
             wash_converged = wash_converged and summary.get('wash_solver_converged', True)
             # Carried like stdin carries it (the file path dropped it,
             # audit S051-02): the most iterations any input needed.

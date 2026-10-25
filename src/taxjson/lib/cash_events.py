@@ -257,12 +257,9 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
         cur = _check_cur(rest[0], where, shown, kw)
         units = _num(rest[1], "units", where, shown, kw)
         cost = _num(rest[2], "cost", where, shown, kw)
-        if cost < 0:
-            raise _bad("the cost is a positive base-currency amount (for "
-                       "a debt, what the borrowed units were worth when "
-                       "borrowed)")
-        if abs(units) < 1e-9 and abs(cost) > 0.005:
-            raise _bad("0 units cannot have a cost")
+        why = opening_problem(units, cost)
+        if why:
+            raise _bad(why)
         ev.update(currency=cur, units=units, cost=cost)
         return ev
     # CASHBAL
@@ -274,6 +271,21 @@ def parse_line(line: str, source: str = "") -> Optional[Dict[str, Any]]:
               balance=_num(rest[1], "balance", where, shown, kw),
               statement="tt")
     return ev
+
+
+def opening_problem(units: float, cost: float) -> Optional[str]:
+    """Why an opening balance of `units` (signed: negative is a debt)
+    at a base-currency `cost` cannot open a year, or None. One rule for
+    a CASHOPEN line (parse_line) and for a book carried from the prior
+    year's close (lib/fx_cash_v2._carry_openings), which a damaged or
+    hand-edited record could otherwise open with a cost CASHOPEN
+    refuses (2026-10-25 audit year-end#2)."""
+    if cost < 0:
+        return ("the cost is a positive base-currency amount (for a "
+                "debt, what the borrowed units were worth when borrowed)")
+    if abs(units) < 1e-9 and abs(cost) > 0.005:
+        return "0 units cannot have a cost"
+    return None
 
 
 def read_project_lines(root: Path, accounts: Dict[str, Any]

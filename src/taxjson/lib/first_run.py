@@ -437,7 +437,11 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                  and r.still_held_qty > 0]
     income = income_without_position(txs, year, skip_accounts=crypto,
                                      date_basis=basis, declared=covered)
-    no_cost = [a for a in arrivals if getattr(a, "status", "") == "no_cost"]
+    # A partly covered arrival (its .tt purchases account for some of
+    # its units; nothing booked — lib/transfer_in, audit 2026-10-24
+    # B41) is kept out with no cost too.
+    no_cost = [a for a in arrivals
+               if getattr(a, "status", "") in ("no_cost", "partly_covered")]
     book_value = [a for a in arrivals
                   if getattr(a, "status", "") == "book_value"]
 

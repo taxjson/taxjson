@@ -494,17 +494,17 @@ class TestOverlapTrim(unittest.TestCase):
             out = d / "questrade_2026.csv"
             out.write_text(self._HDR)
             hits = _qt_window_overlap(d, out, "2025-12-15",
-                                      "2026-08-31")
+                                      "2026-08-31", "1")
             self.assertEqual(hits, [(manual, 1)])
             self.assertEqual(_qt_window_overlap(d, out, "2026-03-01",
-                                                "2026-08-31"),
+                                                "2026-08-31", "1"),
                              [])
             # Rows dated AFTER the window's end are NOT overlap — the
             # fetched file does not own them, and --trim-overlap
             # deleting them silently removed real trades from the
             # active books (2026-09 audit).
             self.assertEqual(_qt_window_overlap(d, out, "2025-12-15",
-                                                "2026-01-15"),
+                                                "2026-01-15", "1"),
                              [])
 
     def test_trim_keeps_history_and_backs_up(self):
@@ -512,7 +512,7 @@ class TestOverlapTrim(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
             manual = self._manual(d)
-            cut = _qt_trim_file(manual, "2025-12-15", "2026-08-31")
+            cut = _qt_trim_file(manual, "2025-12-15", "2026-08-31", "1")
             self.assertEqual(cut, 1)
             text = manual.read_text()
             self.assertIn("2025-06-03", text)      # history kept
@@ -528,7 +528,7 @@ class TestOverlapTrim(unittest.TestCase):
             manual = self._manual(d)
             # Window ends before the 2026-02-01 row: nothing to trim.
             self.assertEqual(
-                _qt_trim_file(manual, "2025-12-15", "2026-01-15"), 0)
+                _qt_trim_file(manual, "2025-12-15", "2026-01-15", "1"), 0)
             self.assertIn("2026-02-01", manual.read_text())
 
     def test_trim_noop_leaves_no_backup(self):
@@ -537,7 +537,7 @@ class TestOverlapTrim(unittest.TestCase):
             d = Path(td)
             manual = self._manual(d)
             self.assertEqual(
-                _qt_trim_file(manual, "2027-01-01", "2027-12-31"), 0)
+                _qt_trim_file(manual, "2027-01-01", "2027-12-31", "1"), 0)
             self.assertFalse((d / "lira.csv.bak").exists())
 
 

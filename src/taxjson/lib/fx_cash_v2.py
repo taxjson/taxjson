@@ -42,6 +42,7 @@ CASHOPEN is the SETTLED balance at the start of Jan 1.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 LABEL = "v2 (opt-in, under audit)"
@@ -63,6 +64,191 @@ def _p(kind: str, text: str, date: str = "", book: str = "",
             "text": text}
 
 
+def _finite(v: Any) -> bool:
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(float(v)))
+
+
+def _book_parts(book: str) -> Tuple[str, str, str, str]:
+    """(label, broker, short, prefix) of a book name `label/short[:prefix]`
+    (lib/cash_events.book_name); the broker's long name is "" for a book
+    kept by hand."""
+    from taxjson.lib.cash_events import BROKER_SHORT
+    label, _, rest = book.partition("/")
+    short, _, pre = rest.partition(":")
+    long_ = {v: k for k, v in BROKER_SHORT.items()}.get(short, "")
+    return label, long_, short, pre
+
+
+def _book_account(books: Any, book: str) -> Optional[str]:
+    """The hashed broker account of `book` when the books tell it (one
+    account of that broker in the folder, or the one the name's prefix
+    picks), else None."""
+    if books is None or not hasattr(books, "seen"):
+        return None
+    label, broker, _short, pre = _book_parts(book)
+    accts = sorted(a for a in books.seen.get(label, {}).get(broker, set())
+                   if a) if broker else []
+    if pre:
+        hit = [a for a in accts if a.startswith(pre)]
+        return hit[0] if len(hit) == 1 else None
+    return accts[0] if len(accts) == 1 else None
+
+
+def _carried_book(book: str, books: Any, acct: Optional[str]
+                  ) -> Tuple[Optional[str], str]:
+    """This year's name of a book carried from the prior year's close,
+    and why it differs ("" when it does not); (None, why) when it
+    cannot be told. lib/cash_events.Books names a broker's book by its
+    account only while the account folder holds several accounts of
+    that broker, so a book is renamed when a second account appears or
+    one goes: the carried `margin/questrade` matched none of this year's
+    `margin/questrade:3f2a` / `:9c41`, and a CASHOPEN for the right one
+    was added to the carried balance instead of replacing it (2026-10
+    audit C05). The account the close recorded (`accounts`, written
+    since then) names the book for certain; else the prefix in the
+    carried name; a bare name among several accounts is ambiguous."""
+    if books is None or not hasattr(books, "seen"):
+        return book, ""
+    label, broker, short, pre = _book_parts(book)
+    accts = sorted(a for a in books.seen.get(label, {}).get(broker, set())
+                   if a) if broker else []
+    if not broker or not accts:
+        return book, ""         # kept by hand, or no file of the broker
+    names = sorted(books.name(label, broker, a) for a in accts)
+    if acct:
+        if acct in accts:
+            name = books.name(label, broker, acct)
+            return name, ("" if name == book else
+                          f"{label} holds {len(accts)} {short} accounts "
+                          f"now ({', '.join(names)})" if len(accts) > 1
+                          else f"the only {short} account of {label} now")
+        # Its account has no file this year while another of the broker
+        # has: kept apart under its own name, never mixed into theirs.
+        return f"{label}/{short}:{acct[:4]}", (
+            f"its account has no file in {label} this year; "
+            f"{', '.join(names)} is another {short} account")
+    if book in names:
+        return book, ""
+    if pre:
+        hit = [a for a in accts if a.startswith(pre)]
+        if len(hit) == 1:
+            return books.name(label, broker, hit[0]), (
+                f"the only {short} account of {label} now"
+                if len(accts) == 1 else
+                f"{label} holds {len(accts)} {short} accounts now")
+        return None, (f"{label} holds {len(accts)} {short} account(s) "
+                      f"({', '.join(names)}), none or several starting "
+                      f"with {pre}")
+    return None, (f"{label} now holds {len(accts)} {short} accounts "
+                  f"({', '.join(names)}) where it had one")
+
+
+def _carry_openings(carry: Dict[str, Any],
+                    opening: Dict[Tuple[str, str], Dict[str, Any]],
+                    books: Any, base: str, year: int,
+                    problems: List[Dict[str, Any]]) -> Tuple[int, List[str]]:
+    """The prior year's close into `opening` (a CASHOPEN for the same
+    book and currency replaces its entry). Returns (books carried,
+    notes). Refused, never guessed (2026-10 audit C02-C05): a record
+    that could not be read (`carry["problem"]`, from
+    bin/taxjson_run._fx_cash_carry), costs in another base currency, a
+    units or cost value that is not a finite number, or one a CASHOPEN
+    line could not give (lib/cash_events.opening_problem: a cost below
+    zero, a cost on no units), and a carried book this year's books
+    cannot place (_carried_book) unless a CASHOPEN for one of the
+    broker's books takes its place."""
+    from taxjson.lib.cash_events import opening_problem
+    notes: List[str] = []
+    y0 = f"{year}-01-01"
+    cy = carry.get("year")
+    src = f"close of {cy}"
+    repair = (f"the prior-year record is damaged: restore filed/{cy}.json "
+              f"from git or re-close {cy} with this ledger")
+    if carry.get("problem"):
+        problems.append(_p("carry", str(carry["problem"])))
+    ccur = str(carry.get("currency") or "").upper()
+    if ccur and ccur != base:
+        problems.append(_p(
+            "carry", f"{src}: its costs are in {ccur}, and this project's "
+            f"base currency is {base} — a pool carried from a project of "
+            f"another base currency cannot open this year; if {base} is "
+            f"wrong set [settings] base_currency, else open the year with "
+            f"CASHOPEN lines (docs/settings.md)", y0, "", ccur))
+        return 0, notes
+    accounts = carry.get("accounts")
+    if not isinstance(accounts, dict):
+        accounts = {}
+    cbooks = carry.get("books")
+    if not isinstance(cbooks, dict):
+        problems.append(_p("carry", f"{src}: its books are not a table — "
+                           f"{repair}", y0))
+        return 0, notes
+    carried = 0
+    for book, curs in cbooks.items():
+        book = str(book)
+        if not isinstance(curs, dict):
+            problems.append(_p("carry", f"{src}: {book} is not a table of "
+                               f"currencies — {repair}", y0, book))
+            continue
+        target, why = _carried_book(book, books, accounts.get(book))
+        if target is not None and target != book:
+            notes.append(f"{src}: {book} is {target} this year ({why}) — "
+                         f"carried under that name")
+        for cur, v in curs.items():
+            cur = str(cur).upper()
+            if not isinstance(v, dict) or not _finite(v.get("units")) \
+                    or not _finite(v.get("cost")):
+                shown = ({k: v.get(k) for k in ("units", "cost")}
+                         if isinstance(v, dict) else v)
+                problems.append(_p(
+                    "carry", f"{src}: {book} {cur} carries {shown!r} — "
+                    f"units and cost must be finite numbers; {repair}",
+                    y0, book, cur))
+                continue
+            units, cost = float(v["units"]), float(v["cost"])
+            # The rule a CASHOPEN line is held to (a cost below zero, a
+            # cost on no units): a close never writes either, so the
+            # record was damaged or edited (2026-10-25 audit year-end#2).
+            unsound = opening_problem(units, cost)
+            if unsound:
+                problems.append(_p(
+                    "carry", f"{src}: {book} {cur} carries {units:,.2f} "
+                    f"{cur} at a cost of {cost:,.2f} {base} — as on a "
+                    f"CASHOPEN line, {unsound}; {repair}",
+                    y0, book, cur, units))
+                continue
+            if target is None:
+                mine = sorted(k for k in opening
+                              if k[1] == cur and k[0].startswith(f"{book}:"))
+                if mine:
+                    notes.append(
+                        f"{', '.join(opening[k]['source'] for k in mine)}: "
+                        f"CASHOPEN for {', '.join(k[0] for k in mine)} "
+                        f"{cur} replaces the prior year's carried balance "
+                        f"of {book} ({why})")
+                    continue
+                label = book.split("/", 1)[0]
+                problems.append(_p(
+                    "carry", f"{src} carries {units:,.2f} {cur} (cost "
+                    f"{cost:,.2f} {base}) for {book}, and {why} — which "
+                    f"of them held it the record does not say: add "
+                    f"`CASHOPEN {y0} {cur} {units:.2f} {cost:.2f} "
+                    f"at={book.split('/', 1)[1]}:<the first letters of its "
+                    f"book>` to a .tt of {label} (it replaces the carried "
+                    f"balance)", y0, book, cur, units))
+                continue
+            k = (target, cur)
+            if k in opening:
+                notes.append(f"{opening[k]['source']}: CASHOPEN for "
+                             f"{target} {cur} replaces the prior year's "
+                             f"carried balance")
+                continue
+            opening[k] = {"units": units, "cost": cost, "source": src}
+            carried += 1
+    return carried, notes
+
+
 def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
           year: int, rate_of: RateOf, *, country: str,
           carry: Optional[Dict[str, Any]] = None,
@@ -70,8 +256,11 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     """The v2 ledger of `year`. `native`: the taxable accounts' native
     rows, each with `_book` (lib/cash_events.Books.for_file; None when
     no book can be told). `cash`: lib/cash_events.collect's result.
-    `carry`: the prior year's close ({"year", "books": {book: {cur:
-    {"units", "cost"}}}}). `inflow_spot`: [settings] fx_cash_inflow_cost
+    `carry`: the prior year's close ({"year", "currency", "books": {book:
+    {cur: {"units", "cost"}}}, "accounts": {book: hashed account}}; a
+    "problem" text when the record exists but could not be read:
+    bin/taxjson_run._fx_cash_carry) — checked, never trusted
+    (_carry_openings). `inflow_spot`: [settings] fx_cash_inflow_cost
     = "spot" (an undeclared inflow costs the day's rate)."""
     from taxjson.bin.taxjson_fx_cash import _cash_legs
     base = base.upper()
@@ -224,18 +413,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                       "source": ln.get("where") or "CASHOPEN"}
     carried = 0
     if carry:
-        for book, curs in (carry.get("books") or {}).items():
-            for cur, v in (curs or {}).items():
-                k = (book, cur.upper())
-                if k in opening:
-                    notes.append(f"{opening[k]['source']}: CASHOPEN for "
-                                 f"{book} {cur} replaces the prior "
-                                 f"year's carried balance")
-                    continue
-                opening[k] = {"units": float(v.get("units") or 0.0),
-                              "cost": float(v.get("cost") or 0.0),
-                              "source": f"close of {carry.get('year')}"}
-                carried += 1
+        carried, _cn = _carry_openings(carry, opening, cash.get("books"),
+                                       base, year, problems)
+        notes.extend(_cn)
 
     # Trade-date vs settle-date: what a statement shows at the end of D
     # beyond the settled ledger.
@@ -477,15 +657,73 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             walk.append({"kind": "check", "sd": c["date"], "td": "~",
                          "time": "~", "seq": 0, "book": c["book"],
                          "check": c})
-    # Same settle day: an own transfer out before one in; checks last.
-    rank = {"check": 9}
-    walk.sort(key=lambda o: (o["sd"], o["td"], o.get("time") or "",
-                             rank.get(o["kind"], 1 if
-                                      (o.get("decl") or {}).get("how")
-                                      == "own" and o["amount"] > 0
-                                      else 0),
-                             o["seq"]))
-    for o in walk:
+    def _own(o: Dict[str, Any]) -> bool:
+        return o["kind"] == "move" and (o.get("decl") or {}).get(
+            "how") == "own"
+
+    # One settle day: by trade date and time, an own arrival after the
+    # other events of its moment; checks last.
+    def _order(o: Dict[str, Any]) -> Tuple:
+        return (o["sd"], 9 if o["kind"] == "check" else 0, o["td"],
+                o.get("time") or "",
+                1 if _own(o) and o["amount"] > 0 else 0, o["seq"])
+    walk.sort(key=_order)
+
+    def _waits(i: int) -> bool:
+        """walk[i] an own arrival that the units in transit do not cover
+        while a departure of its currency comes later on its settlement
+        day: the two brokers book their own trade dates (the receiving
+        one the request day, the sending one the day it moved), and
+        walked by trade date the arrival was refused as "only 0.00 had
+        left", the departure as "never arrived" (2026-10 audit A20). The
+        departure comes up to the earliest point from which its account
+        holds the units until the departure's own place (no earlier than
+        the arrival: the same units leave sooner, so no figure moves),
+        and the arrival is walked right after it; the other events keep
+        their order, so a conversion that funds the departure that day
+        still comes first. Moving every own departure to the start of
+        its day instead overdrew the account a same-day conversion
+        funds: a debt at the day's rate, a gain on repaying it and the
+        pool at spot, not at the amount paid (2026-10-25 audit
+        diff-engine#2). True when walk changed."""
+        o = walk[i]
+        if not (_own(o) and o["amount"] > 0):
+            return False
+        cur, sd = o["currency"], o["sd"]
+        if transit.get(cur, 0.0) + TOL >= o["amount"]:
+            return False
+        for j in range(i + 1, len(walk)):
+            d = walk[j]
+            if d["sd"] != sd:
+                break
+            if not (_own(d) and d["amount"] < 0 and d["currency"] == cur):
+                continue
+            # Its account's balance before each event from the arrival
+            # to the departure's own place; the earliest point from
+            # which it stays at or above the units that leave.
+            bal_at = [held.get((d["book"], cur), 0.0)]
+            for x in walk[i:j]:
+                bal_at.append(bal_at[-1] + (
+                    sum(a for c, a in _legs(x) if c == cur)
+                    if x["kind"] != "check" and x["book"] == d["book"]
+                    else 0.0))
+            need, at = -d["amount"] - _EPS, j - i
+            if bal_at[at] >= need:      # else it overdraws in place
+                while at > 0 and bal_at[at - 1] >= need:
+                    at -= 1
+            dep, arr = walk.pop(j), walk.pop(i)
+            pos = i + max(at - 1, 0)
+            walk.insert(pos, dep)
+            walk.insert(pos + 1, arr)
+            return True
+        return False
+
+    i = 0
+    while i < len(walk):
+        if _waits(i):
+            continue
+        o = walk[i]
+        i += 1
         if o["kind"] == "check":
             c = o["check"]
             book, cur = c["book"], c["currency"]
@@ -672,6 +910,14 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if d[0] > _EPS:
             close_books.setdefault(book, {})[cur] = {
                 "units": round(-d[0], 6), "cost": round(d[1], 6)}
+    # The close names its base currency and each book's broker account
+    # (hashed, as the books do): next year checks the first and places
+    # each book by the second (_carry_openings).
+    close_accounts: Dict[str, str] = {}
+    for book in sorted(close_books):
+        a = _book_account(cash.get("books"), book)
+        if a:
+            close_accounts[book] = a
     net = sum(s["gain"] + s["debt_gain"] for s in per.values())
     status = "not_computed" if problems else "computed"
     return {
@@ -690,7 +936,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                                  "source": o["source"]}
                     for (b, c), o in sorted(opening.items())},
         "carried_in": carried,
-        "close": {"year": year, "books": close_books},
+        "close": {"year": year, "currency": base, "books": close_books,
+                  "accounts": close_accounts},
         "pools_year_end": {c: {"units": round(p[0], 2),
                                "acb": round(p[1], 2)}
                            for c, p in sorted(pool.items())

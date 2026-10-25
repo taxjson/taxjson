@@ -1602,6 +1602,28 @@ def read_state(path: Path) -> Dict[str, List[Dict[str, Any]]]:
             for k in STATE_KEYS}
 
 
+def state_problem(path: Path) -> Optional[str]:
+    """Why read_state gives empty lists for an EXISTING state file:
+    "cannot be read: …", "is not JSON (…)", or not a FORMAT record
+    (damaged, hand-edited, or another taxjson version wrote it). None
+    when it reads. A reader that takes "no records" as a verdict (the
+    journals: nothing pending, the checklist step done) asks this first
+    instead of trusting the tolerant fallback (2026-10-24 audit D05)."""
+    path = Path(path)
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as e:
+        return f"cannot be read: {e.strerror or e}"
+    except (ValueError, RecursionError) as e:
+        return f"is not JSON ({e})"
+    if not isinstance(doc, dict):
+        return "is not a JSON object"
+    if doc.get("format") != FORMAT:
+        return (f"has format {doc.get('format')!r}, not {FORMAT!r} "
+                f"(another taxjson version wrote it, or it is damaged)")
+    return None
+
+
 def effective_map_text(ticker_map: Optional[Path],
                        joined: Iterable[Pair],
                        renames: Iterable[str] = ()) -> Optional[str]:

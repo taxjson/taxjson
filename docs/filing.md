@@ -16,10 +16,10 @@ that runs the command named beside it and reports done, attention, to
 do, blocked, or — for the steps no command can prove — manual, which
 you confirm with `taxjson checklist --done ID` (the step's id or its
 number; marks are kept in `checklist.json`; commit it). `taxjson
-checklist --section N` shows one section. `taxjson checklist --walk` visits the open
+checklist --section N` shows one section (`--section 6,7` several). `taxjson checklist --walk` visits the open
 steps one at a time; it needs a terminal (piped or scripted it stops with
-`Error: --walk needs a terminal`; `taxjson checklist --done ID` and
-`--skip ID` are the non-interactive way). `--quick` skips the slow
+`Error: --walk needs a terminal`; `taxjson checklist --done ID`, with
+`--force` over a finding, is the non-interactive way). `--quick` skips the slow
 detectors.
 
 ## 1. Freeze the inputs

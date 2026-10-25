@@ -348,6 +348,17 @@ def _names_of(listing: str, n: int = 2) -> str:
                                   if len(syms) > n else "")
 
 
+# A transfer-in line that names a transfer-out of yours nothing paired
+# (lib/transfer_in.attention_lines; audit 2026-10-25 diff-engine#4): its
+# one-line form says so.
+_DEPARTED = "the other end of a transfer-out of yours that nothing paired"
+
+
+def _maybe_own(m: "re.Match", then: str = "") -> str:
+    """`: maybe a move of your own` for such a line, else `then`."""
+    return ": maybe a move of your own" if _DEPARTED in m.string else then
+
+
 # Set by `taxjson run` for itself and its stages when its console shows
 # each message as one line (no --details): a stage's own message shown
 # to a person is then its one-line form too.
@@ -393,15 +404,24 @@ _CONCISE = [
                 r"your books have NO cost in the books \((?P<l>.*?)\): "
                 r"the row states.*"),
      lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} with NO cost, "
-               f"kept out of the books ({_names_of(m['l'])}) — "
-               f"`taxjson transfers`"),
+               f"kept out of the books ({_names_of(m['l'])})"
+               f"{_maybe_own(m)} — `taxjson transfers`"),
     (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: transfer-in: "
                 r"(?P<a>[^:]+): (?P<n>\d+) transfer-in\(s\) from outside "
                 r"your books booked at the \w+ the broker states on the "
                 r"row \([^:]*: (?P<l>.*?)\)\. .*"),
      lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} booked at the "
-               f"broker's stated cost ({_names_of(m['l'])}): check it — "
-               f"`taxjson transfers`"),
+               f"broker's stated cost ({_names_of(m['l'])})"
+               f"{_maybe_own(m, ': check it')} — `taxjson transfers`"),
+    # .tt purchases for some of the units only: nothing booked (audit
+    # 2026-10-24 B41).
+    (re.compile(r"(?:[\w./-]+: )?warning: ATTENTION: transfer-in: "
+                r"(?P<a>[^:]+): (?P<n>\d+) transfer-in\(s\) from outside "
+                r"your books only PARTLY covered by your \.tt purchases "
+                r"\((?P<l>.*?)\): NOT booked\..*"),
+     lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} only PARTLY "
+               f"covered by .tt purchases, NOT booked "
+               f"({_names_of(m['l'])}) — `taxjson transfers`"),
 ]
 
 

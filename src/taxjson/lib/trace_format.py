@@ -5,8 +5,75 @@ Both tools take the per-gain `trace` list produced by core.compute_gains
 rule. Keeping the rendering here means the two tools never drift apart.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
+from itertools import islice
 from typing import Any, Dict, List, Optional
+
+
+class SharedTrace(Sequence):
+    """One disposition's trace: the first `n` lines of its pool's
+    running trace, shared and never copied, then the sale's own lines
+    (`tail`). It reads as the list of lines it stands for (`list(t)`
+    makes that list). The engine copied the whole pool history into
+    every sale, so a symbol's traces grew with the square of its rows
+    (8,000 rows of one ticker: two 3.5 GB trace files; audit 2026-10-25
+    robustness#5). The running list is only ever appended to (a reset
+    starts a new list), so the prefix a sale saw never changes."""
+
+    __slots__ = ("base", "n", "tail")
+
+    def __init__(self, base: List[str], tail: Optional[List[str]] = None):
+        self.base = base
+        self.n = len(base)
+        self.tail = list(tail or [])
+
+    def __len__(self) -> int:
+        return self.n + len(self.tail)
+
+    def __iter__(self):
+        yield from islice(self.base, self.n)
+        yield from self.tail
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return list(self)[i]
+        k = i + len(self) if i < 0 else i
+        if not 0 <= k < len(self):
+            raise IndexError("trace index out of range")
+        return self.base[k] if k < self.n else self.tail[k - self.n]
+
+    def append(self, line: str) -> None:
+        self.tail.append(line)
+
+    def __eq__(self, other):
+        if isinstance(other, (list, tuple, SharedTrace)):
+            return list(self) == list(other)
+        return NotImplemented
+
+    __hash__ = None
+
+    def __repr__(self) -> str:
+        return f"SharedTrace({list(self)!r})"
+
+    def since(self, earlier: "SharedTrace") -> Optional[List[str]]:
+        """This trace's lines after `earlier`'s share of the same running
+        trace (the pool lines from the earlier sale on, then this
+        sale's own); None when `earlier` reads another running trace or
+        a longer stretch of it."""
+        if earlier.base is not self.base or earlier.n > self.n:
+            return None
+        return self.base[earlier.n:self.n] + self.tail
+
+
+def continued_header(first_line: str, date: str, gid: str) -> str:
+    """The first line of a block that shows only the pool lines since
+    the sale of `date` (id `gid`): its pool's trace heading, saying where
+    the lines before are (write_traces_file)."""
+    note = f"(continued from the sale of {date} above, id={gid})"
+    if first_line.endswith(" ---"):
+        return f"{first_line[:-4]} {note} ---"
+    return f"# --- {note} ---"
 
 
 def _denoise(amount) -> float:

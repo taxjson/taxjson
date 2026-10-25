@@ -173,12 +173,37 @@ def _settle(transactions: List[TaxTransaction], method: str,
         raise ValueError(f"futures settlement method must be one of "
                          f"{METHODS}, got {method!r}")
     stats = {"rows": 0, "closes": 0, "split": 0}
+    # A book is settled once, as a whole. One already rewritten comes
+    # back as is (idempotent); one that MIXES settled rows with raw
+    # fills is refused — the shortcut used to return the whole input on
+    # the first settled row it met, so a raw fill beside it kept its
+    # notional as its money (audit 2026-10-24 B09).
+    settled = [i for i, tx in enumerate(transactions)
+               if is_plain_future(tx.symbol)
+               and (tx.type or "") == FUTURES_SETTLEMENT]
+    if settled:
+        raw = [i for i, tx in enumerate(transactions)
+               if is_plain_future(tx.symbol)
+               and (tx.type or "") != FUTURES_SETTLEMENT
+               and tx.action == "BUYSELL"
+               and abs(float(tx.quantity or 0.0)) > 0]
+        if raw:
+            def _name(i):
+                tx = transactions[i]
+                return f"{tx.symbol} {tx.date} (id={tx.id})"
+            raise ValueError(
+                f"futures book mixes {len(settled)} row(s) already on the "
+                f"settlement basis (e.g. {_name(settled[0])}) with "
+                f"{len(raw)} unsettled fill(s) (e.g. {_name(raw[0])}): a "
+                f"book is settled once, as a whole, so the unsettled "
+                f"fill's notional would stay its money. Keep the raw "
+                f"fills in a book of their own, or rebuild the book from "
+                f"the exports (`taxjson run`).")
+        return {}, stats                           # already settled
     fut_idx = []
     for i, tx in enumerate(transactions):
         if not is_plain_future(tx.symbol):
             continue
-        if (tx.type or "") == FUTURES_SETTLEMENT:
-            return {}, stats                       # already settled
         if tx.action != "BUYSELL":
             if abs(float(tx.quantity or 0.0)) > 0 and tx.action not in (
                     "DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST",

@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 from taxjson.lib.brokerages.base import (BaseBrokerage, read_broker_text,
                                          shown_name)
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
-                                                   USD_STABLECOINS,
+                                                   USD_STABLECOINS, RowIds,
                                                    same_coin_hint,
                                                    strict_money, utc_to_local,
                                                    warn_depeg)
@@ -205,6 +205,9 @@ class CoinbaseBrokerage(BaseBrokerage):
         unbooked: List[tuple] = []
         self.lint_findings: List[str] = []
         self._stems: Dict[str, int] = {}
+        # One ID on two different rows: refused, never one dropped by
+        # the dedup (2026-10-25 audit robustness#4).
+        ids = RowIds(f"Coinbase CSV {shown_name(path)}", "ID")
         # utf-8-sig swallows a BOM if present, plain utf-8 reads it as a
         # data byte and silently breaks the first column match.
         with io.StringIO(read_broker_text(path)) as f:
@@ -274,6 +277,12 @@ class CoinbaseBrokerage(BaseBrokerage):
                         f"the row has {len(row)} cells but the header has "
                         f"{len(header)} — misaligned columns (an unquoted "
                         f"comma?); refusing to read it.")
+                ids.check(
+                    self._col(row, header_map, 'id'), row_start,
+                    tuple(c.strip() for c in row[:len(header)]),
+                    " ".join(self._col(row, header_map, k).strip() for k in
+                             ('timestamp', 'transaction type',
+                              'quantity transacted', 'asset')))
 
                 type_raw = self._col(row, header_map, 'transaction type')
                 is_buy = bool(_BUY_RE.search(type_raw))
@@ -1111,7 +1120,8 @@ def coinbase_cash_events(path, stable_cash: bool = True
             continue
         if not any((c or '').strip() for c in row):
             continue
-        typ = cb._col(row, header_map, 'transaction type').strip().lower()
+        type_raw = cb._col(row, header_map, 'transaction type').strip()
+        typ = type_raw.lower()
         asset = cb._col(row, header_map, 'asset').strip().upper()
         if not typ or not asset:
             continue
@@ -1119,6 +1129,13 @@ def coinbase_cash_events(path, stable_cash: bool = True
         is_cash_coin = asset in cash_coins
         if not (is_fiat or is_cash_coin):
             continue
+        # The row's kind as the position parser reads it (_BUY_RE /
+        # _SELL_RE / _STAKING_RE): "Advanced Trade Buy" is a buy. The
+        # exact labels 'buy' / 'sell' alone left an Advanced Trade of
+        # USDC for CAD out of the cash ledger (2026-10-24 audit C09).
+        is_buy = bool(_BUY_RE.search(type_raw))
+        is_sell = bool(_SELL_RE.search(type_raw))
+        is_staking = bool(_STAKING_RE.search(type_raw))
         cur = 'USD' if is_cash_coin else asset
         where = f"{name}:{i}"
         qty = abs(cb._num(row, header_map, 'quantity transacted'))
@@ -1131,29 +1148,34 @@ def coinbase_cash_events(path, stable_cash: bool = True
                          desc=f"Coinbase {typ} {asset}")
             ev['line_where'] = where
             out.append(ev)
-        elif is_cash_coin and typ in ('buy', 'sell'):
+        elif is_cash_coin and (is_buy or is_sell) and not is_staking:
+            sell = is_sell and not is_buy
+            verb = 'sell' if sell else 'buy'
             pc = (cb._col(row, header_map, 'price currency') or 'USD'
                   ).strip().upper() or 'USD'
             pc = 'USD' if pc in cash_coins else pc
-            total = coinbase_row_total(
-                cb, row, header_map,
-                cb._col(row, header_map, 'transaction type'),
-                typ == 'sell', where)
+            total = coinbase_row_total(cb, row, header_map, type_raw,
+                                       sell, where)
             if pc == cur:
                 # USDC for USD: the same currency, no conversion — but
                 # the fee or spread is US dollars spent (CA-FX-07): it
                 # was dropped with the row, leaving the pool that many
-                # units too large (2026-10 audit #73).
-                spent = (total - qty) if typ == 'buy' else (qty - total)
-                if spent > 0.005:
+                # units too large (2026-10 audit #73). The other way
+                # too: 200 USDC bought for 197 USD is 3 US dollars MORE
+                # in the folded pool, a FLOW in (at the day's rate; the
+                # de-peg is not the coin's gain, CA-CRYPTO-02); only a
+                # spread paid was booked (2026-10-24 audit C07).
+                spent = (total - qty) if not sell else (qty - total)
+                if abs(spent) > 0.005:
                     ev = CE.flow(day, cur, -spent, where=where,
-                                 desc=f"Coinbase {typ} {asset} fee")
+                                 desc=f"Coinbase {verb} {asset} "
+                                      f"{'fee' if spent > 0 else 'spread'}")
                     out.append(ev)
                 continue
-            if typ == 'buy':
+            if not sell:
                 out.append(CE.conv(day, pc, total, cur, qty, where=where,
-                                   desc=f"Coinbase buy {asset}"))
+                                   desc=f"Coinbase {verb} {asset}"))
             else:
                 out.append(CE.conv(day, cur, qty, pc, total, where=where,
-                                   desc=f"Coinbase sell {asset}"))
+                                   desc=f"Coinbase {verb} {asset}"))
     return out

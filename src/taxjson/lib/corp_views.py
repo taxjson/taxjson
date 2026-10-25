@@ -81,28 +81,21 @@ def _manifest(root: Path, acct: str) -> Dict[str, Any]:
 
 def _held(rows: List[Dict[str, Any]], sym: str, until: str,
           inclusive: bool) -> float:
-    from taxjson.lib.corporate_timeline import split_copies
-    # One split reported twice is ONE event per account (CA-CORP-12).
-    dup = split_copies(rows, per_account=True)
-    # Every symbol's holding, replayed in date order, so a rename split
-    # (symbol_new) carries the old symbol's shares to the new one.
-    q: Dict[str, float] = {}
-    for r in sorted(rows, key=lambda r: (r.get("date") or "",
-                                         r.get("time") or "")):
-        if id(r) in dup:
-            continue
-        d = r.get("date") or ""
-        if d > until or (d == until and not inclusive):
-            continue
-        s = r.get("symbol") or ""
-        if r.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER",
-                               "OPENING_BALANCE"):
-            q[s] = q.get(s, 0.0) + float(r.get("quantity") or 0.0)
-        elif r.get("action") == "SPLIT" and s in q:
-            moved = q.pop(s) * float(r.get("quantity") or 1.0)
-            new = (r.get("symbol_new") or "").strip() or s
-            q[new] = q.get(new, 0.0) + moved
-    return q.get(sym, 0.0)
+    """Shares of `sym` held at the end of trade date `until` (or just
+    before it, `inclusive=False`), replayed by THE balance walk the
+    [[distributions]] stage uses (bin/taxjson_apply_distributions
+    .balance_on, trade-date basis): at one date an opening balance
+    first, then a split — effective at the open, whatever clock time
+    its row carries — then the day's trades; a rename split carries the
+    old symbol's shares to the new one; one split reported twice is ONE
+    event per account (CA-CORP-12). The view used to replay by clock
+    time, so a noon-stamped split doubled the morning's purchase (audit
+    2026-10-24 B05)."""
+    from taxjson.bin.taxjson_apply_distributions import balance_on
+    if not inclusive:
+        rows = [r for r in rows if (r.get("date") or "") < until]
+        until = "9999-12-31"
+    return balance_on(rows, sym, until, "trade")
 
 
 _SPIN_BOOKED_RE = re.compile(r"Spinoff\s+(\S+?)\s*\u2192\s*(\S+)")
@@ -277,7 +270,22 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                            f"<{'|'.join(spin_options)}>`.")
             elif election in _FMV_ELECTIONS:
                 why.append(_FMV_ELECTIONS[election])
-                if not fmv_ps and declares_zero_value(election, hints):
+                if from_broker and declares_zero_value(election, hints):
+                    # A saved 0 is "no value given" while the broker
+                    # reports one: the broker's value is booked
+                    # (corp_actions._emit_distribution). A 0 is what a
+                    # user enters when they do not know the value, so
+                    # this is the intended booking, not a flag; the
+                    # line says why the 0 is not the value used (audit
+                    # 2026-10-24 B16). `elect --set` takes no
+                    # fmv_per_share for such an event, so no command is
+                    # offered.
+                    why.append("the saved fmv_per_share=0 is not used: "
+                               "a 0 means no value was given, and the "
+                               f"broker reported {broker_fmv:,.2f} "
+                               f"{broker_cur} for the new shares, which "
+                               "is the value booked")
+                elif not fmv_ps and declares_zero_value(election, hints):
                     # The user's own $0 (a warrant distributed at no
                     # value): answered, not a flag.
                     why.append("booked at the $0 value you declared "

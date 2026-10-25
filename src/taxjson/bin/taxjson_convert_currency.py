@@ -11,6 +11,7 @@ Usage:
 from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -177,7 +178,12 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
                 if len(malformed_samples) < 3:
                     malformed_samples.append(f"line {lineno}: {stripped!r}")
                 continue
-            if not rate.is_finite() or rate <= 0:
+            # `1e400` is a finite Decimal that reads as inf once the
+            # amounts are multiplied (float), `1e-400` as 0: both the
+            # Decimal and its float must be positive and finite (audit
+            # 2026-10-24 B33 — a row converted to net_amount=inf).
+            if not rate.is_finite() or rate <= 0 \
+                    or not math.isfinite(float(rate)) or float(rate) <= 0:
                 raise ValueError(
                     f"rates file {rates_file}, line {lineno}: rate "
                     f"{parts[4]!r} for {from_curr}->{to_curr} on "
@@ -372,6 +378,18 @@ def convert_transaction(
                     file=sys.stderr,
                 )
 
+        # A result that is not a finite number (an amount times a huge
+        # rate overflowed to inf) is never booked: the row would be
+        # relabelled in the target currency with inf as its money (audit
+        # 2026-10-24 B33). A hard stop, like a non-finite rate.
+        bad = sorted(f for f, v in staged.items() if not math.isfinite(v))
+        if bad:
+            raise InputContentError(
+                f"{tx.action} {tx.symbol} {tx_date} (id={tx.id}): "
+                f"{bad[0]}={getattr(tx, bad[0])!r} x rate {rate} "
+                f"({src_curr}->{target_curr}) is not a finite number — "
+                f"refusing to convert money with that rate. Fix the "
+                f"rates file (or --default-rate).")
         if not any_failure:
             for field, converted_value in staged.items():
                 setattr(converted, field, converted_value)

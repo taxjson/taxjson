@@ -188,7 +188,8 @@ class TestOverridesAndRender(unittest.TestCase):
             self.assertRegex(text, r"\[>\] +\d+\. sanity ")
             flat = " ".join(text.split())
             self.assertIn("marked done: trades after the export the detector still says: 7 discrepancy(ies).", flat)
-            self.assertRegex(text, r"\[~\] +\d+\. fees ")
+            self.assertRegex(text, r"\[f\] +\d+\. fees ")
+            self.assertIn("marked done (forced)", flat)
             cl.set_override(root, 2025, "sanity", None)
             self.assertIsNone(cl.evaluate(ctx, only=["sanity"])[0].override)
             # Marks recorded for another year are ignored, not applied.

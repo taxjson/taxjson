@@ -155,14 +155,40 @@ class TestSingleProject(unittest.TestCase):
         self.assertEqual(r.returncode, 2, console(r))
         self.assertIn("Error:", r.stderr)
         self.assertIn("no slip CSV matches inputs/slips/*.csv", r.stderr)
-        self.assertIn("--skip t5008", r.stderr)
+        self.assertIn("--done t5008 --force", r.stderr)
 
-    def test_done_mark_says_a_finding_outranks_it(self):
+    def test_done_over_a_finding_is_refused_unless_forced(self):
+        # No kept verdict: a plain done, no sermon.
         r = tj(self.root, "checklist", "--done", "inputs-frozen")
-        self.assertIn("A DONE mark never hides a finding", r.stdout)
-        self.assertIn("`--skip inputs-frozen`", r.stdout)
-        r = tj(self.root, "checklist", "--undo", "inputs-frozen")
+        self.assertIn("inputs-frozen marked done", r.stdout)
         self.assertNotIn("never hides", r.stdout)
+        self.assertNotIn("force", r.stdout)
+        tj(self.root, "checklist", "--undo", "inputs-frozen")
+        # inputs-committed in a folder that is no git repository: the
+        # kept verdict is attention, so --done is refused naming --force.
+        tj(self.root, "checklist", "--run", "--only", "inputs-committed",
+           check=False)
+        r = tj(self.root, "checklist", "--done", "inputs-committed",
+               check=False)
+        self.assertEqual(r.returncode, 1, console(r))
+        self.assertIn("is marked attention by the last check", r.stderr)
+        self.assertIn("--done inputs-committed --force", r.stderr)
+        from taxjson.lib import checklist as _cl
+        self.assertNotIn("inputs-committed",
+                         _cl.load_state(self.root)["overrides"])
+        r = tj(self.root, "checklist", "--done", "inputs-committed",
+               "--force", "--note", "not under git yet")
+        self.assertIn("inputs-committed marked done (forced)", r.stdout)
+        self.assertIn("[f]", r.stdout)
+        r = tj(self.root, "checklist", "--only", "inputs-committed")
+        self.assertRegex(r.stdout, r"\[f\] +\d+\. inputs-committed")
+        self.assertIn("marked done (forced): not under git yet", r.stdout)
+        self.assertIn("the detector still says: not a git repository",
+                      r.stdout)
+        r = tj(self.root, "checklist", "--force", check=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--force goes with --done", r.stderr)
+        tj(self.root, "checklist", "--undo", "inputs-committed")
 
     def test_migrate_note_in_the_house_style(self):
         r = tj(self.root, "migrate", "--dry-run", check=False)

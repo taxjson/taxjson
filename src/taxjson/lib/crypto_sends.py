@@ -272,13 +272,28 @@ def _fits(o: Dict[str, Any], r: Dict[str, Any], q_in: float
     return abs(delta.total_seconds())
 
 
-def _assign(costs: List[List[float]]) -> List[int]:
+def _assign(costs: List[List[Optional[Tuple[float, ...]]]]) -> List[int]:
     """Minimum-cost assignment of every row to a distinct column
-    (rows <= columns; Kuhn-Munkres, O(n^2 m)). Returns the column of
-    each row."""
+    (rows <= columns; Kuhn-Munkres, O(n^2 m)). A cost is a tuple, added
+    component by component and compared lexicographically: the first
+    component decides, the next breaks its ties, and so on — so a later
+    component can never outweigh an earlier one, whatever its size (a
+    weighted sum let the time term outweigh a small loss, audit
+    2026-10-24 A46). `None` is an impossible pairing. Every row needs
+    one possible column. Returns the column of each row."""
     n, m = len(costs), len(costs[0]) if costs else 0
-    INF = float("inf")
-    u, v = [0.0] * (n + 1), [0.0] * (m + 1)
+    k = next((len(c) for row in costs for c in row if c is not None), 1)
+    INF = (float("inf"),) * k
+    ZERO = (0.0,) * k
+    cost = [[INF if c is None else tuple(c) for c in row] for row in costs]
+
+    def sub(a, b):
+        return tuple(x - y for x, y in zip(a, b))
+
+    def add(a, b):
+        return tuple(x + y for x, y in zip(a, b))
+
+    u, v = [ZERO] * (n + 1), [ZERO] * (m + 1)
     p, way = [0] * (m + 1), [0] * (m + 1)
     for i in range(1, n + 1):
         p[0] = i
@@ -290,17 +305,17 @@ def _assign(costs: List[List[float]]) -> List[int]:
             i0, delta, j1 = p[j0], INF, 0
             for j in range(1, m + 1):
                 if not used[j]:
-                    cur = costs[i0 - 1][j - 1] - u[i0] - v[j]
+                    cur = sub(sub(cost[i0 - 1][j - 1], u[i0]), v[j])
                     if cur < minv[j]:
                         minv[j], way[j] = cur, j0
                     if minv[j] < delta:
                         delta, j1 = minv[j], j
             for j in range(m + 1):
                 if used[j]:
-                    u[p[j]] += delta
-                    v[j] -= delta
+                    u[p[j]] = add(u[p[j]], delta)
+                    v[j] = sub(v[j], delta)
                 else:
-                    minv[j] -= delta
+                    minv[j] = sub(minv[j], delta)
             j0 = j1
             if p[j0] == 0:
                 break
@@ -381,18 +396,21 @@ def match_transfers(rows: List[Dict[str, Any]],
         si = [r for r in ins if r["symbol"] == sym]
         if not si:
             continue
-        top = max(-o["quantity"] for o in so) or 1.0
-        span = MATCH_AFTER.total_seconds() + MATCH_BEFORE.total_seconds()
-        BIG = 1e6                  # one more pair always beats any loss
+        # A cost is (sends left unpaired, coins lost, seconds apart),
+        # compared in that order (_assign): one more pair beats any
+        # loss, and the smallest loss beats any closeness in time. A
+        # weighted sum (loss x 1000 / largest send + time / window) let
+        # 99.99 received at once beat an exact 100 received the next day
+        # (audit 2026-10-24 A46). The extra column k is send k staying
+        # unpaired.
         costs = []
         for k, o in enumerate(so):
             row = []
             for r in si:
                 secs = _fits(o, r, r["quantity"])
-                row.append(float("inf") if secs is None else
-                           1000.0 * (-o["quantity"] - r["quantity"]) / top
-                           + secs / span)
-            row += [BIG if j == k else float("inf")
+                row.append(None if secs is None else
+                           (0.0, -o["quantity"] - r["quantity"], secs))
+            row += [(1.0, 0.0, 0.0) if j == k else None
                     for j in range(len(so))]
             costs.append(row)
         for k, j in enumerate(_assign(costs)):
@@ -560,6 +578,37 @@ def save_decisions(path: Path, doc: Dict[str, Any]) -> None:
             from None
 
 
+def manifest_lock_path(path: Path) -> Path:
+    """The lock file a change to the manifest `path` holds: a hidden
+    file beside it (`.sends.json.lock`), so no inputs scan reads or
+    counts it (lib/checklist `_skipped_input_name`, `run`'s dot-file
+    rule)."""
+    path = Path(path)
+    return path.with_name(f".{path.name}.lock")
+
+
+def _manifest_lock(path: Path, create: bool = False):
+    """`with _manifest_lock(path):` — the manifest's read-modify-write
+    (load, change one send, save) as one step. Two `--set`s at once (two
+    terminals, a run's prompt beside a --set) each loaded the file,
+    changed their own send and saved: the later save silently dropped
+    the other's decision, although both reported "saved" (audit
+    2026-10-24 A35). lib/safe_write.file_lock: an advisory flock, held
+    across the whole step; the second holder waits. `create`: make the
+    folder first so the lock can live there (a first decision of a new
+    account; save_decisions makes it too and says so when it cannot).
+    Without it, a missing folder means nothing to lock: the block runs
+    unlocked, and finds no decisions."""
+    from taxjson.lib.safe_write import file_lock
+    path = Path(path)
+    if create:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    return file_lock(manifest_lock_path(path))
+
+
 def record_decision(path: Path, sid: str, decision: str,
                     note: Optional[str] = None,
                     price: Optional[float] = None,
@@ -568,7 +617,9 @@ def record_decision(path: Path, sid: str, decision: str,
     """Save one decision. A hand price belongs to the decision it was
     given with: re-deciding a send to ANOTHER decision without --price
     drops it, so a typo is never stuck (re-audit A2-0572). `unpair`
-    True keeps the send out of the automatic pairing (A2-0004)."""
+    True keeps the send out of the automatic pairing (A2-0004). The
+    load, the change and the save are one locked step: a concurrent
+    decision is never lost (_manifest_lock, audit 2026-10-24 A35)."""
     ok = (DECISIONS + (FEE_DECISION,) if sid.endswith("-fee")
           else DECISIONS)
     if decision not in ok:
@@ -578,37 +629,40 @@ def record_decision(path: Path, sid: str, decision: str,
         why = price_problem(price)
         if why:
             raise ValueError(f"--price {why}.")
-    doc = load_decisions(path)
-    rec = dict(doc["sends"].get(sid) or {})
-    if price is None and rec.get("decision") != decision:
-        rec.pop("price", None)
-    rec["decision"] = decision
-    if summary:
-        rec["summary"] = summary
-    if note is not None:
-        if note:
-            rec["note"] = note
-        else:
-            rec.pop("note", None)
-    if price is not None:
-        rec["price"] = float(price)
-    if unpair is not None:
-        if unpair:
-            rec["unpair"] = True
-        else:
-            rec.pop("unpair", None)
-    doc["sends"][sid] = rec
-    save_decisions(path, doc)
+    with _manifest_lock(path, create=True):
+        doc = load_decisions(path)
+        rec = dict(doc["sends"].get(sid) or {})
+        if price is None and rec.get("decision") != decision:
+            rec.pop("price", None)
+        rec["decision"] = decision
+        if summary:
+            rec["summary"] = summary
+        if note is not None:
+            if note:
+                rec["note"] = note
+            else:
+                rec.pop("note", None)
+        if price is not None:
+            rec["price"] = float(price)
+        if unpair is not None:
+            if unpair:
+                rec["unpair"] = True
+            else:
+                rec.pop("unpair", None)
+        doc["sends"][sid] = rec
+        save_decisions(path, doc)
 
 
 def clear_decision(path: Path, sid: str) -> bool:
     """Remove a saved decision (the send is undecided again: `run`
-    asks, the checklist lists it). False when none was saved."""
-    doc = load_decisions(path)
-    if sid not in doc["sends"]:
-        return False
-    doc["sends"].pop(sid)
-    save_decisions(path, doc)
+    asks, the checklist lists it). False when none was saved. Locked
+    like record_decision (audit 2026-10-24 A35)."""
+    with _manifest_lock(path):
+        doc = load_decisions(path)
+        if sid not in doc["sends"]:
+            return False
+        doc["sends"].pop(sid)
+        save_decisions(path, doc)
     return True
 
 
@@ -1101,6 +1155,28 @@ def merge_pool_flows(per_file: List[List[Dict[str, Any]]]
     return out
 
 
+def account_pool_flows(broker_files: Dict[str, List[Tuple[str, Path]]],
+                       accts: Iterable[str]) -> List[Dict[str, Any]]:
+    """The pool flows of every crypto account in `accts`: each account's
+    exports merged by themselves (`merge_pool_flows`: ITS overlapping
+    exports are read once), then the accounts added up. A row's identity
+    is only its cells in a Coinbase export with no ID column, so merging
+    every account's exports together collapsed identical purchases made
+    in two independent accounts into one acquisition (audit 2026-10-24
+    A36). Two accounts are two owners' books: the same entry in both is
+    two events, never a copy."""
+    out: List[Dict[str, Any]] = []
+    for acct in accts:
+        per_file: List[List[Dict[str, Any]]] = []
+        for broker, p in broker_files.get(acct, []):
+            if broker == "kraken":
+                per_file.append(kraken_pool_flows(p))
+            elif broker == "coinbase":
+                per_file.append(coinbase_pool_flows(p))
+        out += merge_pool_flows(per_file)
+    return out
+
+
 def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
              pairs, unmatched_ids: Dict[int, str], rates: Rates
              ) -> Dict[str, Any]:
@@ -1169,7 +1245,18 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
             n = e["units"] if kind == "flow" else e["quantity"]
             if n > 0:
                 if kind == "flow" and e.get("cad", 0.0) < 0:
-                    c = -e["cad"]
+                    # The CAD leg is the exact cost — in Canadian
+                    # dollars, so it is the pool's cost through the
+                    # day's CAD rate to the base (1.0 when the base is
+                    # CAD); taken as the base amount itself, a CAD leg
+                    # priced a pool kept in another currency wrong
+                    # (audit 2026-10-24 A45). No rate: unrated, like
+                    # any other unpriced acquisition.
+                    rc = rates.get("CAD", day)
+                    if rc is None:
+                        unrated += 1
+                        continue
+                    c = -e["cad"] * rc[0]
                 else:
                     r = rate(day)
                     if r is None:
@@ -1279,14 +1366,8 @@ def build_report(root: Path, cfg: Dict[str, Any],
     if with_pool and broker_files is not None and base != "USD" and any(
             is_cash_stablecoin(s["symbol"], s["exchange"])
             for s in unmatched):
-        per_file: List[List[Dict[str, Any]]] = []
-        for acct in accts:
-            for broker, p in broker_files.get(acct, []):
-                if broker == "kraken":
-                    per_file.append(kraken_pool_flows(p))
-                elif broker == "coinbase":
-                    per_file.append(coinbase_pool_flows(p))
-        pool = usd_pool(merge_pool_flows(per_file), rows, pairs, ids, rates)
+        pool = usd_pool(account_pool_flows(broker_files, accts), rows,
+                        pairs, ids, rates)
     out: Dict[str, Any] = {"base_currency": base, "country": country,
                            "accounts": {}}
     for acct in accts:

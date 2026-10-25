@@ -2563,7 +2563,9 @@ def questrade_cash_events(path) -> List[Dict[str, Any]]:
     conversion leg that day when that one moved the other way in
     another currency. Read in file order, a newest-first export replayed
     two same-day conversions backward and paired a leg with the wrong
-    conversion (audit finding 75)."""
+    conversion (audit finding 75). A cash row whose Quantity or Net
+    Amount cannot be read raises BrokerageParseError naming the line
+    (lib/cash_events.collect lists it; the ledger computes nothing)."""
     from taxjson.bin.taxjson_brokerage import hash_broker_account
     from taxjson.lib import cash_events as CE
     name = shown_name(path)
@@ -2620,7 +2622,24 @@ def questrade_cash_events(path) -> List[Dict[str, Any]]:
                                       field='Net Amount',
                                       where=f"{name} line {lineno}",
                                       allow_blank=True, blank=0.0)
-        except (ValueError, BrokerageParseError):
+        except (ValueError, BrokerageParseError) as e:
+            # A cash row whose amount cannot be read is refused BY NAME:
+            # the position parser counts a deposit, withdrawal,
+            # conversion or cash-only journal as a non-event without
+            # reading its Net Amount, so nothing else named it, and the
+            # row vanished from a ledger that then computed (2026-10
+            # audit C01). A row of any other kind is the position
+            # parser's to refuse.
+            if (action == 'FXT' or atype == 'FX conversion'
+                    or action in _QT_CASH_MOVE_CODES
+                    or atype in _QT_CASH_MOVE_TYPES
+                    or action in ('TF6', 'LFJ') or atype == 'Transfers'):
+                msg = str(e)
+                if not msg.startswith(name):
+                    msg = f"{name} line {lineno}: {msg}"
+                raise BrokerageParseError(
+                    f"{msg} — a {action or atype} cash row the FX-on-cash "
+                    f"ledger reads; fix the cell in the export") from None
             continue            # the position parser names the row
         cur = (row.get('Currency') or '').strip().upper()
         if not cur or abs(net) < 0.005:

@@ -929,8 +929,12 @@ class TestCloseYearCarry(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             rec = json.loads((root / "filed" / "2025.json").read_text())
             # US$10,000 held at Dec 31, bought back at 1.40: cost 14,000.
+            # The close names its base currency and each broker book's
+            # account (none for a folder of .tt files): next year checks
+            # the currency and places each book by its account.
             self.assertEqual(rec["fx_cash_v2"], {
-                "year": 2025, "books": {"margin/tt": {
+                "year": 2025, "currency": "CAD", "accounts": {},
+                "books": {"margin/tt": {
                     "USD": {"units": 10000.0, "cost": 14000.0}}}})
             nxt = Path(tmp) / "next"
             shutil.copytree(root / "inputs", nxt / "inputs")

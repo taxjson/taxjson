@@ -111,12 +111,16 @@ class RenamedStrikeTest(unittest.TestCase):
         o, = doc["open"]
         self.assertEqual(o["symbol"], Q40)
         self.assertAlmostEqual(o["strike"], 40.0)
-        # Naked: the yield is over the strike notional, at 40 not 50
-        # (open 2025-01-02 to the window's end: 364 of 365 days).
+        # Naked: the yield is over the strike notional — at 50 for the
+        # 60 days before the adjustment (2025-01-02 to 2025-03-03), at
+        # 40 for the 304 days after it to the window's end (the whole
+        # stretch at 40 revalued the earlier exposure: 2026-10-24 audit
+        # A05).
         r, = doc["rows"]
         self.assertEqual(r["yield_basis"], "notional")
         self.assertAlmostEqual(r["avg_notional"],
-                               round(40 * 100 * 364 / 365, 2))
+                               round((50 * 100 * 60 + 40 * 100 * 304) / 365,
+                                     2))
 
 
 class CryptoSendFullPrecisionTest(unittest.TestCase):

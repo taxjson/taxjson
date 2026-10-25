@@ -35,7 +35,7 @@ class TestFetchAndWatch(unittest.TestCase):
                       'Individual\n')
             f.write_text(body)
             with self.assertRaises(ValueError):
-                _qt_trim_file(f, "2025-06-01", "2025-06-30")
+                _qt_trim_file(f, "2025-06-01", "2025-06-30", "55500001")
             self.assertEqual(f.read_text(), body)
             self.assertFalse((Path(tmp) / "qt_manual.csv.bak").exists())
 

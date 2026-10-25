@@ -1360,13 +1360,22 @@ def plan_shared(folder) -> SharedPlan:
     win = cands[-1]
     plan.source, plan.text = win[1], win[2]
     plan.identical = all(c[2] == win[2] for c in cands)
+    # The file every year would read must be text: an unreadable
+    # winner was proposed as it was (compared as an empty map, and
+    # identical copies compared not at all) and written for every year
+    # (2026-10-24 audit A42). A problem: nothing is written.
+    try:
+        win_text = win[2].decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        plan.problems.append(
+            f"{win[1]} is not UTF-8 text (byte 0x{e.object[e.start]:02x} "
+            f"at offset {e.start}) — save it as UTF-8 in your editor "
+            f"first")
+        return plan
     if plan.identical:
         return plan
     master = load_master()
-    try:
-        won = parse_tobase(win[2].decode("utf-8-sig"))
-    except UnicodeDecodeError:
-        won = parse_tobase("")
+    won = parse_tobase(win_text)
     have = {ln.rule for ln in won.lines}
     for _y, label, data in cands[:-1]:
         if data == win[2]:

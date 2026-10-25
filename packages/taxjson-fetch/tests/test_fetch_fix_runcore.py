@@ -51,9 +51,9 @@ class TestFetchOverlapByHeader(unittest.TestCase):
             out = d / "questrade_2026.csv"
             out.write_text(_QT_HEADER)
             self.assertEqual(_qt_window_overlap(d, out, "2025-12-15",
-                                                "2026-08-31"), [])
+                                                "2026-08-31", "55500001"), [])
             self.assertEqual(_qt_trim_file(manual, "2025-12-15",
-                                           "2026-08-31"), 0)
+                                           "2026-08-31", "55500001"), 0)
             self.assertIn("XYZ.TO", manual.read_text())
 
     def test_trimmed_file_is_private(self):
@@ -64,7 +64,7 @@ class TestFetchOverlapByHeader(unittest.TestCase):
             manual.write_text(_MARGIN_CSV)
             os.chmod(manual, 0o664)
             self.assertEqual(_qt_trim_file(manual, "2025-06-01",
-                                           "2025-12-31"), 1)
+                                           "2025-12-31", "55500001"), 1)
             self.assertEqual(manual.stat().st_mode & 0o777, 0o600)
             self.assertTrue((d / "manual.csv.bak").exists())
 
@@ -76,7 +76,7 @@ class TestFetchOverlapByHeader(unittest.TestCase):
             sib.write_text(_MARGIN_CSV)
             out = d / "questrade_2025.csv"
             out.write_text(_QT_HEADER)
-            hits = _qt_window_overlap(d, out, "2025-06-01", "2025-12-31")
+            hits = _qt_window_overlap(d, out, "2025-06-01", "2025-12-31", "55500001")
         self.assertEqual([(p.name, n) for p, n in hits],
                          [("QT_MANUAL.CSV", 1)])
 

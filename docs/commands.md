@@ -160,7 +160,12 @@ What a run writes:
   the `trades` show. A futures option carries the future's
   `contract_multiplier` that its broker rows declared (IB's instrument
   list: CL 1000, ES 50) and none when no row declared it, never the
-  equity 100; a plain future is `asset_type = "future"`.
+  equity 100; a plain future is `asset_type = "future"`. When the
+  inputs disagree on an option's contract size, `contract_multiplier`
+  is omitted and `contract_multiplier_unknown = true` says so (the
+  sizes seen are in a comment). A base-currency figure (`base_total_cost`)
+  is omitted, with a comment, when the holding's base-currency costs
+  are in more than one currency.
 
 **What to check next.** A full run ends (after `Done.` and the holdings
 check) with a short summary of what the books themselves show is still
@@ -222,7 +227,7 @@ dropped. `--json` is the same either way.
 
 #### taxjson checklist
 
-`taxjson checklist [--run [-j N] [--quick]] [--section N] [--all] [--walk] [--done ID] [--skip ID] [--undo ID] [--note TEXT] [--reset] [--only ID] [--show] [--json] [--details]`
+`taxjson checklist [--run [-j N] [--quick]] [--section N[,N]] [--all] [--walk] [--done ID[,ID] [--force]] [--undo ID[,ID]] [--note TEXT] [--reset] [--only ID[,ID]] [--show] [--json] [--details]`
 
 Every step from install to filing, in order, each with the exact
 command(s) and a one-line why, in ten sections: Set up (install or
@@ -254,7 +259,8 @@ applied as they are now either way. The view is the list, then the
 summary. The list: every step, in its section, as done `[x]`, needs
 attention `[!]`, to do `[ ]`, blocked `[b]` (usually: run `taxjson run`
 first), to confirm `[m]`, yours to run and read `[?]`, n/a `[-]` or
-skipped `[~]`, with its number, its id and what the check found; an
+done over a finding you accepted `[f]`, with its number, its id and
+what the check found; an
 open step shows its commands, and the first step to do or needing
 attention is marked `[>]` and shows how and why (`--all`, or
 `--details`: every step's how, commands and why, the done ones too).
@@ -264,22 +270,35 @@ attention or blocked (`! 10 missing-history: … — tjs
 find-missing-history`; steps blocked for one reason share a line), the
 legend, and the next step last with its command. `--section N` is one
 section of it (its number, 1-10, or its name: `--section 4`, `--section
-"fill the gaps"`, `--section fill`): shown alone, checked alone with
-`--run` (the other sections' verdicts kept), walked alone with
+"fill the gaps"`, `--section fill`), `--section 6,7` (or `--section 6
+--section 7`) several, in the list's order: shown alone, checked alone
+with `--run` (the other sections' verdicts kept), walked alone with
 `--walk`.
 
 Nothing in the project is written but `checklist.json` (the marks;
 commit it) and the kept verdicts in `work/` (the run's cache, never
 committed). The steps no command can prove are confirmed with `--done
-ID`, ID the step's id or its number in the list (`--done roc-entered`
-and `--done 18` are the same mark; `--note TEXT` stores a note with
+ID`, ID the step's id or its number in the list, several at once with
+commas (`--done roc-entered` and `--done 18` are the same mark;
+`--done export-coverage,inputs-frozen` marks both; `--note TEXT` stores a note with
 it). A mark never hides a
 later finding: a step marked done whose detector finds a problem shows
 `[!]` (or `[b]` when the detector could not check) with the mark beside
-it and keeps the list open. `--skip ID` is the explicit "reviewed,
-accepted"; a `[?]` step can be ticked off the same way. `--undo ID`
-removes one mark, `--reset` removes them all (deletes `checklist.json`),
-and `--show` prints the list after a `--done` / `--skip` / `--undo`.
+it and keeps the list open, and a `--done ID` is refused while the
+step's kept verdict for this tax year is attention or blocked (fix it
+and `--run --only ID`, or `--done ID --force`). A question the files
+cannot answer (export-coverage's gap, option-boundary's transition
+contract, a t5-t3 slip, fx-cash's v2 figure to review) is answered by a
+plain `--done`, for the questions asked then; the same steps' other
+findings (fx-cash's NOT RELIABLE default ledger, a contract that needs
+a T1-ADJ, a blocked check) take `--force` like any other. `--done ID
+--force` is the explicit "reviewed, accepted": shown `[f]` with the
+finding beside it, counted as done, stored in `checklist.json` as
+`"forced": true` (the `--skip` of releases before v0.35 and its
+`skipped` marks read as this); a `[?]` step is ticked off with a plain
+`--done`. `--undo ID` removes one mark,
+`--reset` removes them all (deletes `checklist.json`), and `--show`
+prints the list after a `--done` / `--undo`.
 `--only ID` shows one step (its id or number; with `--run`: checks that
 one alone and keeps its verdict), `--walk` visits the open steps one at
 a time, checking each, and `--run --quick` skips the slow checks
@@ -904,15 +923,26 @@ last payments fall on; a special beside a regular payment or a stretch
 the position was not held does not break it; no grid, or a single
 payment, is flagged and estimated pro rata from its 12-month amount per
 share; a reversal posted later nets against the payment it cancels, and
-a row with no share count takes the account's nearest one), its latest
+a row with no share count takes the account's nearest one; a payment
+before a stock split is read in today's shares, whatever `--date`; a
+dividend on part of the shares beside a payment in lieu on the lent
+rest is one payment on all of them; a dividend charged on a short
+position — the account short the symbol in the books on its record
+date, splits, renames and `OPENING … cost=unknown` lines counted,
+whatever share count the row prints — is an expense, not a correction
+of earlier income), its latest
 and trailing-12-month amount per share, and per position the shares held now (the last `taxjson run`'s
 native holdings, one row per listing and account); the next pay date and
 amount follow the payer's own schedule (latest per-share amount x
-shares held). The totals are the rest of the tax year and the next N
+shares held), in the currency that account's latest payment was paid in
+(payments in another currency, another broker's conversion, are flagged
+and left out). The totals are the rest of the tax year and the next N
 months (default 12; `--months N`, or a forward `PERIOD` such as `6m` or
 `1y`), split taxable / sheltered, in the base currency at the latest
 rate the books have (`work/to_base.csv`; no network), with withholding
-where the latest payment in that account shows a rate (its TAX rows).
+where the latest payment in that account shows a rate (its TAX rows
+over its gross, every broker account of a combined account together).
+A `--date` and window that reach past 9999-12-31 are refused.
 Each projected payment counts in its tax year by the same rule as
 `divs-sum`: its pay date, or a Canadian trust's record date (a
 December-record distribution paid in January is the December year's);
@@ -940,9 +970,11 @@ investment income is bracketed on top of what you already earn. Taxable
 accounts only. With no flags it uses the `[estimate]` block of
 `taxjson.toml`, which `taxjson instalments` reads too; without it, other
 income is 0 (pure investment-income bracketing) and the loss carryover
-is the latest close-year lock's carry-forward, else 0. `taxjson sum
---other-income ...` shows the same estimate after the FOR THE RETURN
-block.
+is the latest close-year lock's carry-forward, else 0. A lock that is
+damaged or closed under the other country's law is refused by name (the
+check every lock reader applies), never read as carrying nothing.
+`taxjson sum --other-income ...` shows the same estimate after the FOR
+THE RETURN block.
 Canada projects also get an **AMT check** (post-2024 rules: gains at
 100%, no DTC, 20.5% over the exemption plus the provincial piggyback),
 shown binding or not, with the top-up and the 7-year carryforward when
@@ -1097,7 +1129,8 @@ are underlyings (`QQQ` matches QQQ on any market, `QQQ.US` that
 listing), a window (`30d`, `6m`, `1y`, `mtd`, `ytd`, `all`, a tax year;
 default: the tax year) and an account (default: all), in any order.
 Three sections: the contracts closed in the window, each with how it
-closed (expired, bought back, assigned, sold, exercised), its days
+closed (expired, bought back, assigned, sold, exercised; transferred
+out: no money and no P/L here), its days
 open, premium, the money of the close and its P/L; the contracts open
 at the window's end (one past its expiry with no expiry or assignment
 row in the books is marked); then the summary per underlying — the
@@ -1120,6 +1153,11 @@ average strike notional open in the window (strike x contract size x
 contracts, each weighted by its days open inside the window) and is
 marked `*`. A contract opened before the data (a missing-history
 opening) has no premium: its money is unknown and the row is flagged.
+A `TRANSFER` row moves contracts out of the account (the oldest open
+contracts of the series, "transferred") or in (a contract whose
+premium is in the books it came from: unknown here, and said so); a
+move out and back within days that nets to zero is a no-op, as the
+gains run reads it.
 The tax treatment of each premium (ITA s.49 timing, §1234) is in the
 gains, not here; `taxjson option-boundary` is the year-end check of
 written options.
@@ -1157,8 +1195,11 @@ shares and ETFs, short shares, long options, written options, futures,
 crypto) plus a total: trades, wins, losses, win rate, net P/L, average
 and largest win and loss, profit factor (gross wins / gross losses).
 Economic P/L in the base currency **before** any superficial-loss /
-wash-sale denial (the denied total is its own line); taxable accounts
-unless a sheltered one is named. `YEAR` defaults to the project's year
+wash-sale denial (the denied total is its own line): a denied loss
+counts once, in the loss sale's P/L, and the replacement's sale counts
+without the denied loss the rule added to its cost (`raw_gain` plus the
+row's `deferred_loss_recovered`); taxable accounts unless a sheltered one
+is named. `YEAR` defaults to the project's year
 and takes any window token too (`30d`, `ytd`, `all` ...);
 `--all-history` covers every closed trade the books hold. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
 One trade per
@@ -1530,7 +1571,15 @@ only a payment is a sale). These are the TRANSFER rows the books
 deliberately exclude (cost comes from the buy and sell history). It
 reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`)
 plus the in-book TRANSFERs of `transfers = true` accounts, with the
-broker's transfer type (InterDepot / Internal / ATON). A SYMBOL CODES
+broker's transfer type (InterDepot / Internal / ATON). IN_BOOKS says
+what the books did with a taxable account's transfer-in (`--details`
+explains each value): `own_move` when a transfer-out of yours cancels
+it — within 10 days, or a transfer-out of the same stock and quantity
+in another of your taxable accounts 11 to 45 days before it when no
+other transfer could pair with either (said by `taxjson run` as an
+`Own-account move` Info line with both dates) — else `book_value`,
+`NO_COST`, `.tt_covers`, `PARTLY_covered`, `missing_history` or an
+in-kind move (docs/getting-started.md, step 5a). A SYMBOL CODES
 section lists the Questrade internal codes the run booked under an
 inferred ticker, with the evidence, and those it could not identify.
 `--json` for machines (`symbol_codes`).
@@ -2296,7 +2345,7 @@ proceeds, and (when the slip carries cost) basis. Several slip files
 (one per broker) are reconciled together. With no slip saved yet, the
 documented `inputs/slips/*.csv` is refused with "no slip CSV matches
 ... nothing to reconcile yet" (exit 2): save the slip there, or
-`taxjson checklist --skip t5008`. CRA and the IRS machine-match
+`taxjson checklist --done t5008 --force`. CRA and the IRS machine-match
 returns against these slips: run this before filing and decide, for
 every flagged row, whether it is a tool-side problem (dropped rows,
 missing statement months) or a legitimate, documentable difference
@@ -2443,8 +2492,11 @@ I / Part II gains), and the lock's recorded balance becomes the running
 balance at its year end. Of the claims under earlier years, a locked
 year takes only the carry-back its lock recorded: the rest of such a
 claim (the total applied on that return) waits for a later year's loss.
-A later locked year is compared with its lock,
-and an unreadable lock is named. Rows after the project year (a few
+Such a lock that cannot be used (unreadable, damaged — its carry-forward
+block included — or closed under the other country's law: the check
+every lock reader applies) stops the ledger, naming the lock and the
+fix, as the estimate does. A later locked year is compared with its
+lock, and an unreadable lock is named. Rows after the project year (a few
 January trades in this year's inputs) are partial: they offer no T1A
 carry-back and the carryforward stops at the project year. Every year
 uses the project's settings, its income dating
@@ -2562,7 +2614,11 @@ the date basis it recorded, and a note says when this project's
 `tax_date` or `option_buyback_loss_superficial` now differs from the
 lock's (its own reports for that year then differ from the filed
 return). A lock account entry that records none of the locked totals, or
-whose `form_lines` is not a table, is damaged, never OK. A bad
+whose `form_lines` is not a table, is damaged, never OK; so is a lock
+the next year's estimate, `carryover` or `handoff` would refuse (a
+carry-forward block without its closing balance, with a figure that is
+not a number, a year of origin twice or a negative amount; a `year`
+other than its file's). A bad
 `[settings]` value is refused as a settings error before any lock is
 checked; when the recompute itself fails on an input, the child's own
 error is shown and the exit code is 2 (1 is drift or a damaged lock).
@@ -2780,6 +2836,31 @@ dates (exit 1), WARN for exchange holidays, NOTE for unusual but
 explainable dates. It lists the first 10 rows per kind (`--all`: every
 row). A `checklist` step.
 
+#### taxjson check-tt
+
+`taxjson check-tt [ACCOUNT | FILE.tt ...] [--account NAME] [--crypto | --equity] [--json]`
+
+Reads every line of the `.tt` files with the parsers `taxjson run` uses
+and names each problem with its file and line. The run (and
+`taxjson-convert-tt`) stop at the first malformed line; this goes on,
+so one pass shows them all. An ERROR is a line the run would refuse: a
+mistyped action (with the nearest valid one), a bad date, time or
+number (a decimal comma), a stray column, an `OPENING` or `JOURNAL`
+line in a crypto account, a symbol opened twice at an unknown cost, two
+`RENAME` declarations that disagree, a file name the run refuses. A
+WARNING is what the run would say and book anyway: a bare symbol in a
+share account, a suffix that is no market, a total off its quantity x
+price +/- fee, a last line with no line end. With no item it checks
+every account's `inputs/<account>/*.tt` (the shared folder with
+`inputs_dir`); an account name, that account's files; a path ending in
+`.tt`, that file, read as the account its folder names (`--account
+NAME` to say which; outside a project `--crypto` or `--equity` says the
+account's kind, else the bare-symbol warning is off). Every file
+checked is listed with its account, its line, row and event counts and
+its status: `ok`, or its errors and warnings; the problems follow, one
+line each. Nothing is written; exit 1 on an error, 2 on a missing file
+or account. A `checklist` step names it (".tt lines").
+
 #### taxjson sanity
 
 `taxjson sanity [ACCOUNT | FILE.toml | ACCOUNT[+ACCOUNT]=FILE[+FILE] ...] [--tolerance N] [--cost-tolerance N] [--json] [--details]`
@@ -2808,7 +2889,14 @@ could not check.
   account its name starts with, compared at its `as_of` (else
   `generated_at`) date; a snapshot newer than the books is compared with
   the latest books, with a note; one with only its `[meta]` (no
-  `[[holding]]`) is an account that holds nothing. An
+  `[[holding]]`) is an account that holds nothing. Several snapshots of
+  the same broker account at different dates are compared one date at
+  a time, each against the books on its own day (never summed); files
+  of one account at different dates that do not each name their broker
+  account (`[meta] broker_account`) are refused, since one broker
+  account at two dates cannot then be told from two broker accounts
+  (add `broker_account` to each, or keep one snapshot per broker
+  account). Files of one date are summed. An
   account with open positions and no holdings at all is listed as
   `UNCHECKED` (the checklist's sanity step is then attention, not done).
 - A relative FILE is looked for from the shell's folder, then from the
@@ -2816,8 +2904,13 @@ could not check.
   finds the project's copy).
 
 A holdings row with a quantity but no symbol, or a symbol with no
-quantity, is refused, not skipped. Option rows whose root the file
-spells differently (`RCI…` vs taxjson's `RCI.B…`) are matched through
+quantity, is refused, not skipped. So is a holdings TOML that is not a
+whole snapshot (a `[meta] holdings_count` that is not its number of
+`[[holding]]` tables, a contract size that is not a positive number) or
+that has a date that is no calendar day: sanity stops with an Error
+naming the file (exit 2) and compares nothing. A cost field it cannot
+read only leaves that file's cost out (a note says so). Option rows
+whose root the file spells differently (`RCI…` vs taxjson's `RCI.B…`) are matched through
 the row's `underlying` field. A FILE may also be the broker's own
 positions report (an IB Activity Statement with Open Positions, an RBC
 Holdings Export: the same readers as `taxjson opening`); one dated

@@ -4344,6 +4344,20 @@ def _draft_transfers(rows: List[Dict[str, Any]],
         k: s.get('tt_qty', 0.0) for k, s in state.items()}
     bv_left: Dict[Tuple[str, str], float] = {
         k: s.get('booked_bv', 0.0) for k, s in state.items()}
+    # The moves of your own slower than the window that the run's
+    # arrivals pair (lib/transfer_in.slow_pairs: the in leg up to
+    # SLOW_MOVE_DAYS days after an out leg of the same security and
+    # quantity, neither with another candidate): not booked, so not
+    # drafted either (audit 2026-10-25 diff-engine#4).
+    from taxjson.lib import transfer_in as TI
+    slow: List[Any] = []
+    TI.arrivals([(str(r.get('account') or ''), '', r) for r in rows
+                 if r.get('action', 'TRANSFER') == 'TRANSFER'
+                 and not is_registered_account(str(r.get('account') or ''),
+                                               registered_accounts, country)],
+                key=lambda s: str(key(s) or '').upper(), slow=slow)
+    slow_in = {(m.in_account, m.symbol, m.in_date, round(m.quantity, 8)): m
+               for m in slow}
     for r in sorted(rows, key=lambda r: (str(r.get('date') or ''),
                                          str(r.get('symbol') or ''))):
         q = float(r.get('quantity') or 0)
@@ -4382,6 +4396,13 @@ def _draft_transfers(rows: List[Dict[str, Any]],
             bv_left[book_key] -= q
             gap.reason = ("the run already books it at the stated book "
                           "value")
+            gaps.append(gap)
+            continue
+        sm = slow_in.get((account, symbol, d, round(q, 8)))
+        if sm is not None:
+            gap.reason = (f"a move from your account {sm.out_account} "
+                          f"({sm.out_date}, {sm.days} days before) — its "
+                          f"cost carries over, it is not a purchase")
             gaps.append(gap)
             continue
         st = state.get(book_key) or {}

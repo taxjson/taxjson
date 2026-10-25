@@ -60,23 +60,74 @@ def load_income_data(file_path: Path = None) -> List[Dict[str, Any]]:
     # an impossible date, a NaN / inf amount or a text amount was summed
     # at rc 0 (or a float() traceback) here while gains refused it in
     # one line (A2-1448).
+    from dataclasses import asdict
     from taxjson.lib.core import coerce_transaction_row
     where = str(file_path) if file_path is not None else "<stdin>"
     if not isinstance(rows, list):
         raise InputFileError(f'{where}: "transactions" must be a list')
+    out: List[Dict[str, Any]] = []
     for i, t in enumerate(rows):
+        probe = t
         if isinstance(t, dict):
             # An absent (null) amount has its own refusal below
             # ('no amount', S051-14); the funnel checks the rest.
-            t = {k: v for k, v in t.items()
-                 if not (k in _AMOUNT_KEYS and v is None)}
+            probe = {k: v for k, v in t.items()
+                     if not (k in _AMOUNT_KEYS and v is None)}
         try:
-            coerce_transaction_row(t, i, where)
+            obj = coerce_transaction_row(probe, i, where)
+            amount = _checked_amount(t, i, where)
         except (TypeError, ValueError) as e:
             msg = str(e)
             raise InputFileError(msg if where in msg
                                  else f"{where}: {msg}") from None
-    return rows
+        if not isinstance(t, dict):
+            out.append(t)
+            continue
+        # The row the summary reads is the funnel's NORMALIZED one for
+        # every field it checked: a null `type` becomes the default
+        # (summarize_income called .lower() on None — audit 2026-10-24
+        # B46), a numeric string its number, a date its YYYY-MM-DD. A
+        # key the funnel does not know (`amount`, the alias) keeps the
+        # row's own value, and so does a null amount: the probe left it
+        # out, so the funnel's value is TaxTransaction's 0.0 default,
+        # and copying it booked the row as $0 past the 'no amount'
+        # refusal (2026-10-25 audit diff-tooling#3).
+        norm = asdict(obj)
+        row = dict(t)
+        for k in t:
+            if k in norm and not (k in _AMOUNT_KEYS and t[k] is None):
+                row[k] = norm[k]
+        if amount is not None:
+            row["amount"] = amount
+        out.append(row)
+    return out
+
+
+def _checked_amount(t, i: int, where: str):
+    """The row's `amount` (the alias summarize_income reads beside
+    gross_amount / net_amount) as a finite float, or None when absent
+    or null. It is not a TaxTransaction field, so the shared funnel
+    never saw it: an amount of "NaN" reached the totals as nan (audit
+    2026-10-24 B49). The funnel's own refusals, word for word."""
+    import math
+    if not isinstance(t, dict) or t.get("amount") is None:
+        return None
+    v = t["amount"]
+    ctx = (f"{where}: transaction at index {i} (id={t.get('id', '?')!r}, "
+           f"symbol={t.get('symbol', '?')!r})")
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        raise ValueError(f"{ctx}: amount={v!r} is not a number (got "
+                         f"{type(v).__name__}) — fix the input data.")
+    if isinstance(v, str):
+        try:
+            v = float(v)
+        except ValueError:
+            raise ValueError(f"{ctx}: non-numeric amount={t['amount']!r} "
+                             f"— fix the input data.") from None
+    if not math.isfinite(v):
+        raise ValueError(f"{ctx}: non-finite amount={v!r} — fix the "
+                         f"input data.")
+    return float(v)
 
 
 def get_base_ticker(symbol: str) -> str:

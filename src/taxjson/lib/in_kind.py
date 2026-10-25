@@ -62,8 +62,9 @@ CONTRIBUTION = "contribution"
 WITHDRAWAL = "withdrawal"
 # `INKIND ... plan=own`: the transfer row is a move of your own.
 OWN = "own"
-# The most legs a delivery in parts is looked for among.
-_PARTS_MAX = 8
+# The most search steps a delivery in parts is looked for in (`_parts`):
+# past them nothing is proven unique, and nothing is booked.
+_PARTS_STEPS = 1 << 16
 
 # Canada: the plans s.40(2)(g)(iv) names — a loss on a disposition to a
 # trust governed by an RRSP (a LIRA is one), RRIF (a LIF / LRIF is one),
@@ -406,25 +407,50 @@ def _parts(d: Leg, cands: Sequence[Tuple[int, Leg]], days: int
            ) -> List[int]:
     """The indexes of the plan's legs (one plan) that add up to the
     declared leg `d`'s quantity — opposite direction, each smaller,
-    within `days` — when exactly one set does; else []."""
-    from itertools import combinations
+    within `days` — when exactly one set does; else [].
+
+    EVERY candidate leg counts towards uniqueness: the search used to
+    look at the eight nearest legs only, so a ninth leg that made a
+    second set was never seen and the first set was booked as the only
+    one (audit 2026-10-24 B43). The search is bounded by `_PARTS_STEPS`
+    steps instead; when they run out before a second set is ruled out,
+    nothing is proven unique and [] is returned (the line then books
+    the taxable side alone and the plan's legs stay listed)."""
     want = abs(d.qty)
     pool = sorted(((j, g) for j, g in cands
                    if g.key == d.key and (g.qty > 0) != (d.qty > 0)
                    and abs(g.qty) < want - _EPS
                    and _gap(g.date, d.date) <= days),
                   key=lambda e: (_gap(e[1].date, d.date), e[1].date))
-    pool = pool[:_PARTS_MAX]
     found: List[List[int]] = []
-    for r in range(2, len(pool) + 1):
-        for combo in combinations(pool, r):
-            if len({g.plan for _j, g in combo}) != 1:
+    steps = _PARTS_STEPS
+    for plan in sorted({g.plan for _j, g in pool}):
+        # Largest legs first: a sum that overshoots is pruned sooner.
+        legs_ = sorted(((j, g) for j, g in pool if g.plan == plan),
+                       key=lambda e: -abs(e[1].qty))
+        qs = [abs(g.qty) for _j, g in legs_]
+        rest = [0.0] * (len(qs) + 1)        # what the legs from i on add
+        for i in range(len(qs) - 1, -1, -1):
+            rest[i] = rest[i + 1] + qs[i]
+        # Depth-first over "take leg i / skip leg i", iteratively.
+        stack: List[Tuple[int, float, Tuple[int, ...]]] = [(0, 0.0, ())]
+        while stack and len(found) < 2:
+            if steps <= 0:
+                return []           # unproven: the budget ran out
+            steps -= 1
+            i, total, chosen = stack.pop()
+            if abs(total - want) <= _EPS:
+                if len(chosen) >= 2:
+                    found.append(sorted(legs_[k][0] for k in chosen))
                 continue
-            if abs(sum(abs(g.qty) for _j, g in combo) - want) <= _EPS:
-                found.append([j for j, _g in combo])
-                if len(found) > 1:
-                    return []
-    return found[0] if found else []
+            if (i >= len(qs) or total > want + _EPS
+                    or total + rest[i] < want - _EPS):
+                continue
+            stack.append((i + 1, total, chosen))
+            stack.append((i + 1, total + qs[i], chosen + (i,)))
+        if len(found) > 1:
+            break
+    return found[0] if len(found) == 1 else []
 
 
 def pair(all_legs: Sequence[Leg], days: int = PAIR_DAYS, *,
@@ -544,6 +570,38 @@ def apply_lines(moves: List[Move],
     return problems
 
 
+def contract_size(leg: Leg, *others: Optional[Leg]) -> float:
+    """Units one contract of the leg's option covers — what a quoted
+    price is multiplied by to value a contract, and what its booked
+    price is per: the size a transfer row declares (`multiplier`: an
+    adjusted series' 50, a mini's 10; IB states it — `leg`'s row, else
+    an `others`' row, the move's other leg), else lib/core's rule for
+    the symbol (a ticker.map `MULT` line, else the standard 100,
+    assumed and said once per root); 1 for a share. Every option used
+    to be valued and priced at 100 (audit 2026-10-24 B20)."""
+    from types import SimpleNamespace
+
+    from taxjson.lib.core import is_option_symbol, option_contract_size
+    sym = leg.symbol
+    if not is_option_symbol(sym):
+        return 1.0
+    m, basis = 0.0, ""
+    for g in (leg,) + others:
+        if g is None:
+            continue
+        try:
+            gm = float(g.row.get("multiplier") or 0.0)
+        except (TypeError, ValueError):
+            gm = 0.0
+        gb = str(g.row.get("contract_size_basis") or "")
+        if gm > 0 and gb != "assumed":
+            return gm
+        if gm > 0 and not m:
+            m, basis = gm, gb
+    return float(option_contract_size(SimpleNamespace(
+        symbol=sym, multiplier=m, contract_size_basis=basis)) or 1.0)
+
+
 def _market_value(leg: Optional[Leg], qty: float) -> Optional[float]:
     if leg is None:
         return None
@@ -605,8 +663,8 @@ def value(moves: Iterable[Move],
         if c is None or not getattr(c, "currency", None):
             m.problem = "no_value"
             continue
-        from taxjson.lib.core import is_option_symbol
-        size = 100.0 if is_option_symbol(m.key) else 1.0
+        # The rows' own contract size (B20), not 100 for every option.
+        size = contract_size(m.taxable, m.registered)
         m.fmv = round(float(c.price) * m.quantity * size, 2)
         m.currency = str(c.currency).upper()
         m.source, m.estimated = "yahoo", True
@@ -638,8 +696,10 @@ def booked_rows(moves: Iterable[Move], country: str
             continue
         t = m.taxable.row
         q = -m.quantity if m.kind == CONTRIBUTION else m.quantity
-        from taxjson.lib.core import is_option_symbol
-        size = 100.0 if is_option_symbol(m.symbol) else 1.0
+        # The price is per unit of the rows' own contract size (B20);
+        # the row below carries that `multiplier`, so the engines'
+        # qty x price x multiplier comes back to `net_amount`.
+        size = contract_size(m.taxable, m.registered)
         what = ("IN-KIND CONTRIBUTION TO" if m.kind == CONTRIBUTION
                 else "IN-KIND WITHDRAWAL FROM")
         row = {
@@ -668,6 +728,14 @@ def booked_rows(moves: Iterable[Move], country: str
         for k in ("multiplier", "contract_size_basis", "source_account"):
             if t.get(k):
                 row[k] = t[k]
+        if size != 1.0 and size != (float(row.get("multiplier") or 0.0)
+                                    or 100.0):
+            # The size the price is per, when the engines would read
+            # another one off the row (the plan's leg's or a MULT line's
+            # size, the taxable row declaring none or an assumed one —
+            # whose basis then no longer describes the size).
+            row.pop("contract_size_basis", None)
+            row["multiplier"] = size
         out.setdefault(m.taxable.account, []).append(row)
     return out
 

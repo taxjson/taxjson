@@ -1,8 +1,8 @@
 """Written options that straddle a tax-year boundary — the data behind
 `taxjson option-boundary`.
 
-Walks the taxable books' option rows FIFO per symbol (the same order the
-engine's grant-timing pre-scan uses) and returns one row per WRITE lot
+Walks the taxable books' option rows FIFO per account and symbol (the
+same order the engine's grant-timing pre-scan uses) and returns one row per WRITE lot
 whose close (buy-back, expiry or assignment) falls in a later year than
 the write, or that is still open at the end of the project year. Each
 row says where the premium and any later amount land under the timing
@@ -24,13 +24,18 @@ Two findings are ATTENTION rather than information (`attention: True`):
     the export is missing the expiry/assignment row;
   * a lot this project puts on grant timing although the write year's
     lock records CLOSE timing — that return never reported the premium
-    and this project does not report it either.
+    and this project does not report it either;
+  * a written contract whose write is not in the books (a short opening
+    balance held before the data, or one received by TRANSFER): its
+    premium and write year are unknown, so nothing can be placed;
+  * a written contract TRANSFERRED out of the account: the close is in
+    other books (2026-10-24 audit A26, A27).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from taxjson.lib.core import (TaxTransaction,
                               _make_assign_underlying_resolver,
@@ -101,42 +106,96 @@ def _expired_test(transactions, year: int, today: Optional[date], date_of):
 @dataclass
 class Close:
     date: str
-    kind: str            # buy-back | expiry | assignment | cash-settled
-    units: float
+    kind: str            # buy-back | expiry | assignment | cash-settled | transferred
+    units: float         # contracts, in the denomination of the close's moment
     paid: float          # amount paid to close (0 for expiry/assignment)
+    # The lot's premium these units carried: its per-contract premium
+    # in that moment's denomination (after a 2-for-1 split each
+    # contract carries half; the as-written per-unit doubled the
+    # premium of a post-split close, 2026-10-24 audit A23).
+    premium: float = 0.0
+
+
+# Where a WriteLot came from: a write in the books (the premium is
+# known), a short OPENING_BALANCE (held before the data) or a TRANSFER
+# in — the premium of either is not in this account's books.
+ORIGIN_WRITE = 'write'
+ORIGIN_BEFORE_DATA = 'before-data'
+ORIGIN_TRANSFER = 'transfer'
+# A close that moved the contracts out of the account (no money, no
+# close here).
+TRANSFERRED = 'transferred'
 
 
 @dataclass
 class WriteLot:
-    symbol: str
+    symbol: str          # the series as it stands (a SPLIT rename moves it)
     account: str
     write_date: str
     write_year: int
-    units: float
-    premium: float       # net premium received for these units
+    units: float         # contracts as written
+    premium: float       # net premium received for these units (0: unknown)
     closes: List[Close] = field(default_factory=list)
-    open_units: float = 0.0
+    open_units: float = 0.0     # contracts open now, in today's denomination
     # The broker coded the sale that "wrote" this lot CLOSING (IB code
     # C) with no long position in the data to close: it sold a long
     # bought before the data — not a write (audit S013-00).
     broker_closing: bool = False
     broker_basis: str = ''
+    # The split ratios since the write (today's units = units * factor).
+    factor: float = 1.0
+    # The replay ordinal of the write: FIFO within a series, kept when a
+    # rename merges two series' queues (2026-10-24 audit A25).
+    seq: int = 0
+    origin: str = ORIGIN_WRITE
+
+    @property
+    def unknown_premium(self) -> bool:
+        """The write is not in the books: its premium is unknown."""
+        return self.origin != ORIGIN_WRITE
 
     @property
     def per_unit(self) -> float:
-        return self.premium / self.units if self.units else 0.0
+        """The premium per contract in today's denomination."""
+        u = self.units * self.factor
+        return self.premium / u if u else 0.0
+
+
+def kept_transfers(rows: List[TaxTransaction]) -> Set[int]:
+    """ids of the TRANSFER rows of `rows` the gains run keeps: a
+    zero-net cluster of one account's TRANSFER rows (a custody move out
+    and back within days, a cancel and rebook) is a no-op there
+    (pipeline._drop_self_cancelling_transfers), so the option walks
+    read it as one too; the rest move contracts out of the account or
+    in (2026-10-24 audit A06, A27)."""
+    if not any(t.action == 'TRANSFER' for t in rows):
+        return set()
+    from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+    kept, _dropped = _drop_self_cancelling_transfers(list(rows))
+    return {id(t) for t in kept if t.action == 'TRANSFER'}
 
 
 def write_lots(transactions: List[TaxTransaction],
                tax_date: Optional[str] = None) -> List[WriteLot]:
-    """FIFO walk of the option rows, per symbol. Follows the engine
-    (lib/core.py) on two points it used to miss (R1-179, S075-09):
+    """FIFO walk of the option rows, per account and symbol. Follows
+    the engine (lib/core.py) on these points it used to miss (R1-179,
+    S075-09, 2026-10-24 audit A23-A27, A47):
       * a SPLIT on an option symbol re-denominates the open position
         (quantity = ratio) and, with `symbol_new`, renames it — a lot
         written under the old symbol is closed by the buy-back under the
-        new one;
+        new one, and the lot's symbol is the new series; two series'
+        queues merge in write order; a close after the split carries the
+        premium per post-split contract;
       * an ASSIGN whose underlying never trades as stock for that account
-        is CASH-SETTLED (index options): no share leg, no s.49(3) fold.
+        is CASH-SETTLED (index options): no share leg, no s.49(3) fold;
+      * a short OPENING_BALANCE (a written contract held before the
+        data) or a short arriving by TRANSFER is queued as a lot whose
+        premium is unknown (`unknown_premium`), so the next buy-back
+        closes it, not a later write; a TRANSFER out closes the oldest
+        contracts, kind `transferred` (a zero-net transfer cluster is a
+        no-op, `kept_transfers`);
+      * positions are per account: one account's purchase never closes
+        another's write (handoff hands several accounts' books in).
     Premiums and buy-back costs keep their sign (a write whose commission
     exceeds the premium nets a loss). Writes and closes are dated on
     `tax_date` (settle, the default, or trade)."""
@@ -151,71 +210,102 @@ def write_lots(transactions: List[TaxTransaction],
         transactions, _date_of, quiet=True)
     rows = sorted((t for t in transactions
                    if t.action in ("BUYSELL", "ASSIGN", "SPLIT",
-                                   "OPENING_BALANCE")
+                                   "OPENING_BALANCE", "TRANSFER")
                    and is_option_symbol(t.symbol or "")),
                   key=lambda x: event_sort_key(x, profile="ca_main", date_of=_date_of))
     # One split reported twice is ONE event (split_copies, CA-CORP-12);
-    # positions here are keyed by symbol, so the event is too.
-    rows = dedupe_split_events(rows)
-    pos: Dict[str, float] = {}
-    lots: Dict[str, List[WriteLot]] = {}
+    # positions here are keyed by account and symbol, so the event is too.
+    rows = dedupe_split_events(rows, per_account=True)
+    transfers = kept_transfers(rows)
+    pos: Dict[Tuple[str, str], float] = {}
+    lots: Dict[Tuple[str, str], List[WriteLot]] = {}
     out: List[WriteLot] = []
     orders = OrderStarts()
-    for t in rows:
+    for seq, t in enumerate(rows):
         q = float(t.quantity or 0.0)
         sym = t.symbol
+        acct = t.account or ""
+        key = (acct, sym)
         if t.action == "SPLIT":
             ratio = q if q > 0 else 1.0
             new = (getattr(t, "symbol_new", "") or "").strip() or sym
-            p_old = pos.pop(sym, 0.0) * ratio
-            moved = lots.pop(sym, [])
+            p_old = pos.pop(key, 0.0) * ratio
+            moved = lots.pop(key, [])
             for lot in moved:
                 lot.open_units *= ratio
-            if new != sym:
-                pos[new] = pos.get(new, 0.0) + p_old
-            else:
-                pos[sym] = p_old
+                lot.factor *= ratio
+                # The lot is the renamed series now: its expiry, its
+                # name in the rows (the old series' expiry flagged a
+                # contract moved to a later one, 2026-10-24 audit A24).
+                lot.symbol = new
+            nk = (acct, new)
+            pos[nk] = pos.get(nk, 0.0) + p_old
             if moved:
-                lots.setdefault(new, []).extend(moved)
+                # Renamed into a series with open writes of its own: the
+                # queue stays first in, first out, by write order
+                # (appended behind, a moved older write closed after the
+                # destination's newer one, 2026-10-24 audit A25).
+                dest = lots.setdefault(nk, [])
+                dest.extend(moved)
+                dest.sort(key=lambda lot: lot.seq)
             continue
-        p = pos.get(sym, 0.0)
-        p_order = orders.prev(sym, t, p)
+        transfer = t.action == "TRANSFER"
+        if transfer and id(t) not in transfers:
+            continue
+        p = pos.get(key, 0.0)
+        p_order = orders.prev(key, t, p)
         if t.action == "OPENING_BALANCE":
             # A missing-history opening (a .tt OPENING cost=unknown line,
-            # --include-options): the
-            # contracts were held LONG before the history starts, so the
-            # sale that follows closes them — it is not a write (S044-09;
-            # the engine books it the same way).
-            pos[sym] = p + q
+            # --include-options). Long: the contracts were held before
+            # the history starts, so the sale that follows closes them —
+            # it is not a write (S044-09; the engine books it the same
+            # way). Short: a written contract held before the data — a
+            # lot with no premium in the books, first in the queue (with
+            # no lot, the next buy-back closed a later write and the
+            # unknown contract stayed open for ever, 2026-10-24 audit A26).
+            if q < -1e-9:
+                lot = WriteLot(symbol=sym, account=acct, write_date=_date_of(t),
+                               write_year=int(_date_of(t)[:4]), units=-q,
+                               premium=0.0, open_units=-q, seq=seq,
+                               origin=ORIGIN_BEFORE_DATA)
+                lots.setdefault(key, []).append(lot); out.append(lot)
+            pos[key] = p + q
             continue
-        net = float(t.net_amount or 0.0)
+        # A transfer moves no money: the premium is in the books the
+        # contract came from.
+        net = 0.0 if transfer else float(t.net_amount or 0.0)
         if q < 0:
             opening = -q - min(-q, max(p, 0.0))
             if opening > 1e-9:
                 # Base books store net magnitudes with the direction on
                 # the quantity: a SELL's net is the premium received, and
                 # a negative net (commission > premium) is a loss — kept.
-                lot = WriteLot(symbol=sym, account=t.account or "", write_date=_date_of(t),
+                lot = WriteLot(symbol=sym, account=acct, write_date=_date_of(t),
                                write_year=int(_date_of(t)[:4]), units=opening,
                                premium=net * (opening / -q),
-                               open_units=opening,
-                               broker_closing=unbacked_close(t, p, p_order),
+                               open_units=opening, seq=seq,
+                               origin=(ORIGIN_TRANSFER if transfer
+                                       else ORIGIN_WRITE),
+                               broker_closing=(False if transfer else
+                                               unbacked_close(t, p, p_order)),
                                broker_basis=str(getattr(t, "broker_basis", "")
                                                 or ""))
-                lots.setdefault(sym, []).append(lot); out.append(lot)
+                lots.setdefault(key, []).append(lot); out.append(lot)
         elif q > 0 and p < -1e-9:
             rem = min(q, -p)
             # A buy-back's cost is the money paid: parser books carry it
             # positive, a .tt book negative (money out, A2-1111).
             per_paid = abs(net) / q if q else 0.0
-            if t.action == "ASSIGN":
+            if transfer:
+                kind = TRANSFERRED
+            elif t.action == "ASSIGN":
                 kind = ("assignment" if resolve_underlying(t)
                         else "cash-settled")
             elif abs(float(t.price or 0.0)) < 1e-12 and abs(net) < 1e-9:
                 kind = "expiry"
             else:
                 kind = "buy-back"
-            for lot in lots.get(sym, []):
+            for lot in lots.get(key, []):
                 if rem <= 1e-9:
                     break
                 take = min(rem, lot.open_units)
@@ -223,10 +313,11 @@ def write_lots(transactions: List[TaxTransaction],
                     lot.closes.append(Close(date=_date_of(t), kind=kind, units=take,
                                             paid=(per_paid * take
                                                   if kind in ("buy-back", "cash-settled")
-                                                  else 0.0)))
+                                                  else 0.0),
+                                            premium=lot.per_unit * take))
                     lot.open_units -= take; rem -= take
-            lots[sym] = [l for l in lots.get(sym, []) if l.open_units > 1e-9]
-        pos[sym] = p + q
+            lots[key] = [l for l in lots.get(key, []) if l.open_units > 1e-9]
+        pos[key] = p + q
     return out
 
 
@@ -291,6 +382,58 @@ def _filed_on_close(wy: int, filed_timing: Optional[Dict[int, Dict[str, Any]]]) 
     return since is not None and wy < int(since)
 
 
+def _unknown_rows(lot: WriteLot, later: List[Close], still_open: bool,
+                  expired, grant_mode: bool,
+                  since: Optional[int]) -> List[Dict[str, Any]]:
+    """The rows of a lot whose write is not in the books (a short
+    opening balance, a TRANSFER in): its premium and write year are
+    unknown, so no amount is placed and each row says what to add
+    (2026-10-24 audit A26). `expired(expiry)`: the missing-row test."""
+    wy = lot.write_year
+    grant = grant_mode and (since is None or wy >= since)
+    if lot.origin == ORIGIN_TRANSFER:
+        held = f"received by transfer on {lot.write_date}"
+        add = ("add the books of the account it came from, or the "
+               "export covering the write")
+    else:
+        held = f"held before the data ({lot.write_date})"
+        add = ("add the export covering the write (`taxjson "
+               "find-missing-history`)")
+    out: List[Dict[str, Any]] = []
+
+    def _row(units: float, closed: str, kind: str, cy: Optional[int],
+             paid: float, where: str, action: str) -> Dict[str, Any]:
+        return {"symbol": lot.symbol, "account": lot.account,
+                "written": lot.write_date, "write_year": wy,
+                "units": units, "premium": None, "closed": closed,
+                "close_kind": kind, "close_year": cy, "paid": round(paid, 2),
+                "timing": "grant" if grant else "close",
+                "where": where, "action": action, "attention": True,
+                "question": False}
+    for c in later:
+        cy = int(c.date[:4])
+        out.append(_row(
+            c.units, c.date, c.kind, cy, c.paid,
+            f"written contract {held}: the premium and the write year "
+            f"are not in the books; {c.kind} in {cy}",
+            f"ATTENTION: {add} — until then the premium's amount and "
+            f"year are unknown"))
+    if still_open:
+        expiry = parse_option_expiry(lot.symbol)
+        gone = expired(expiry)
+        out.append(_row(
+            lot.open_units, "", "expired?" if gone else "open", None, 0.0,
+            f"written contract {held}: the premium and the write year "
+            f"are not in the books; "
+            + (f"expired {expiry} but no expiry/assignment row — check "
+               f"the export" if gone else "open"),
+            f"ATTENTION: {add}"
+            + (f"; import the expiry, assignment or buy-back row for "
+               f"{lot.open_units:g} unit(s)" if gone else "")
+            + " — until then the premium's amount and year are unknown"))
+    return out
+
+
 def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                since: Optional[int], filed_years: Optional[set] = None,
                filed_timing: Optional[Dict[int, Dict[str, Any]]] = None,
@@ -326,6 +469,10 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         later = [c for c in lot.closes if int(c.date[:4]) > lot.write_year]
         still_open = lot.open_units > 1e-9 and lot.write_year <= year
         if not later and not still_open:
+            continue
+        if lot.unknown_premium:
+            rows.extend(_unknown_rows(lot, later, still_open, _expired,
+                                      grant_mode, since))
             continue
         if lot.broker_closing:
             # Not a write at all (audit S013-00): the broker says the
@@ -426,8 +573,36 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                     f"confirm with `taxjson checklist --done "
                     f"option-boundary`")
         for c in later:
-            prem = lot.per_unit * c.units
+            prem = c.premium
             cy = int(c.date[:4])
+            if c.kind == TRANSFERRED:
+                # The contracts left the account with their premium:
+                # nothing closed here (2026-10-24 audit A27).
+                if grant:
+                    where = (f"premium {prem:,.2f} recognised in {wy}; "
+                             f"transferred out in {cy}: the close is in "
+                             f"the receiving account's books")
+                    action = ("no amendment here; the receiving account's "
+                              "books close the contract")
+                else:
+                    where = (f"transferred out in {cy}: nothing in {wy} "
+                             f"(close timing), and the close is not in "
+                             f"this account's books")
+                    action = (f"ATTENTION: close timing taxes the "
+                              f"{prem:,.2f} premium when the contract "
+                              f"closes, and the close is in the receiving "
+                              f"account's books — check they carry the "
+                              f"contract with its premium")
+                rows.append({"symbol": lot.symbol, "account": lot.account,
+                             "written": lot.write_date, "write_year": wy,
+                             "units": c.units, "premium": round(prem, 2),
+                             "closed": c.date, "close_kind": c.kind,
+                             "close_year": cy, "paid": 0.0,
+                             "timing": "grant" if grant else "close",
+                             "where": where, "action": action,
+                             "attention": action.startswith("ATTENTION"),
+                             "question": False})
+                continue
             if c.kind == "assignment":
                 if grant and missed:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
@@ -526,12 +701,16 @@ def expired_open(transactions: List[TaxTransaction], year: int,
     _date_of = date_basis_of(tax_date)
     rows = sorted((t for t in transactions
                    if t.action in ("BUYSELL", "ASSIGN", "SPLIT",
-                                   "OPENING_BALANCE")
+                                   "OPENING_BALANCE", "TRANSFER")
                    and is_option_symbol(t.symbol or "")),
                   key=lambda x: event_sort_key(x, profile="ca_main",
                                                date_of=_date_of))
     # One split reported twice is ONE event per account (CA-CORP-12).
     rows = dedupe_split_events(rows, per_account=True)
+    # A contract transferred out is not open past its expiry here
+    # (the walk skipped TRANSFER rows and asked for its expiry row,
+    # 2026-10-24 audit A27); a zero-net transfer cluster is a no-op.
+    transfers = kept_transfers(rows)
     pos: Dict[Any, float] = {}
     # Positions the broker says were opened before the data (a sale
     # coded IB C with no long held, a buy coded C with no short): the
@@ -549,6 +728,8 @@ def expired_open(transactions: List[TaxTransaction], year: int,
             pos[nk] = pos.get(nk, 0.0) + p
             if closing.pop(key, False):
                 closing[nk] = True
+            continue
+        if t.action == "TRANSFER" and id(t) not in transfers:
             continue
         _p = pos.get(key, 0.0)
         if unbacked_close(t, _p, orders.prev(key, t, _p)):

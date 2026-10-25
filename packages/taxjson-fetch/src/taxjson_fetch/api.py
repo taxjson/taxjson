@@ -341,33 +341,85 @@ def qt_activities(session: Dict[str, str], number: str,
                   http_get: Callable[[str], bytes]) -> List[Dict[str, Any]]:
     """All activities for the account number over [start, end], fetched
     in <=31-day chunks (the API's hard window cap)."""
+    from collections import Counter
     seg = qt_account_segment(number)
     out: List[Dict[str, Any]] = []
-    seen_prev: set = set()
+    # Per activity identity, the MOST copies any earlier chunk held.
+    seen_prev: Counter = Counter()
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=_QT_CHUNK_DAYS), end)
         qs = urllib.parse.urlencode({
             "startTime": _toronto_stamp(cur, "00:00:00"),
             "endTime": _toronto_stamp(chunk_end, "23:59:59")})
+        path = f"/v1/accounts/{seg}/activities?{qs}"
         doc = _qt_get(session["api_server"], session["access_token"],
-                      f"/v1/accounts/{seg}/activities?{qs}", http_get)
+                      path, http_get)
         # Boundary-day activities come back in BOTH adjacent chunks
         # (a trade on the boundary date settles inside the next
         # window, and the server matches it in each) — drop repeats
         # of rows an EARLIER chunk already returned. Within-chunk
         # duplicates are kept: identical same-chunk rows are genuine
-        # split fills, exactly as the manual export shows them.
-        chunk_keys = []
-        for act in doc.get("activities") or []:
-            k = json.dumps(act, sort_keys=True, default=str)
-            if k in seen_prev:
+        # split fills, exactly as the manual export shows them. So a
+        # row is a repeat only up to the number of copies an earlier
+        # chunk held: when the first chunk had ONE copy and the next
+        # has TWO, the second copy is a fill the first chunk did not
+        # see, kept — the way _merge_csv_text keeps the max count per
+        # side (audit 2026-10-24 A21: a set dropped both copies).
+        keys = [json.dumps(act, sort_keys=True, default=str)
+                for act in _qt_activity_list(doc, path, session, seg)]
+        skipped: Counter = Counter()
+        for act, k in zip(doc["activities"], keys):
+            if skipped[k] < seen_prev[k]:
+                skipped[k] += 1
                 continue
-            chunk_keys.append(k)
             out.append(act)
-        seen_prev.update(chunk_keys)
+        for k, n in Counter(keys).items():
+            seen_prev[k] = max(seen_prev[k], n)
         cur = chunk_end + timedelta(days=1)
     return out
+
+
+def _qt_activity_list(doc: Dict[str, Any], path: str,
+                      session: Dict[str, str],
+                      seg: str) -> List[Dict[str, Any]]:
+    """The `activities` list of one chunk's response, or a RuntimeError
+    naming the (masked) request. An object WITHOUT that list — an
+    upstream error passed through at HTTP 200, a changed payload — used
+    to read as a successful EMPTY window: nothing added, and with
+    --trim-overlap the manual export's rows inside the window were
+    deleted as if the download now held them (audit 2026-10-24 B01).
+    `null` is refused too: only a real list is a window's activities."""
+    return _qt_response_list(doc, "activities", path, session, seg,
+                             "the window was not downloaded; nothing "
+                             "written, nothing trimmed")
+
+
+def _qt_response_list(doc: Dict[str, Any], key: str, path: str,
+                      session: Dict[str, str], seg: str,
+                      consequence: str) -> List[Dict[str, Any]]:
+    """`doc[key]` when it is a list, else a RuntimeError naming the
+    (masked) request, what `key` was instead, the response's keys and
+    its scrubbed `code` / `message`, and `consequence` (what did not
+    happen). Shared by the activities and the positions endpoints: a
+    positions response without a `positions` list became an EMPTY
+    live-holdings snapshot at exit 0 (audit 2026-10-24 B01 follow-up)."""
+    items = doc.get(key)
+    if isinstance(items, list):
+        return items
+    where = _masked_path(path.split("?")[0])
+    secrets = (session.get("access_token", ""), seg)
+    what = (f"'{key}' is a JSON {type(items).__name__}, not a list"
+            if key in doc else f"no '{key}' list")
+    detail = "; ".join(
+        f"{k}: {scrub_detail(str(doc[k]), secrets)[:200]}"
+        for k in ("code", "message")
+        if isinstance(doc.get(k), (str, int)) and str(doc[k]).strip())
+    keys = ", ".join(sorted(str(k) for k in doc)) or "none"
+    raise RuntimeError(
+        f"unexpected response from {where}: {what} (keys: {keys}"
+        f"{'; ' + detail if detail else ''}) — {consequence}. Retry "
+        f"later or check the proxy.")
 
 
 def _qt_date(iso: str) -> str:
@@ -453,11 +505,18 @@ def qt_to_csv(activities: List[Dict[str, Any]], number: str) -> str:
 def qt_positions(session: Dict[str, str], number: str,
                  http_get: Callable[[str], bytes]) -> List[Dict[str, Any]]:
     """Live open positions for the account — symbol, openQuantity,
-    averageEntryPrice, currentPrice, currentMarketValue."""
+    averageEntryPrice, currentPrice, currentMarketValue. A response
+    without a `positions` list is refused (_qt_response_list): read as
+    no positions, it wrote an EMPTY live-holdings snapshot at exit 0,
+    and `taxjson sanity` then compared the books with nothing (audit
+    2026-10-24 B01 follow-up). An explicit empty list is an empty
+    account."""
     seg = qt_account_segment(number)
+    path = f"/v1/accounts/{seg}/positions"
     doc = _qt_get(session["api_server"], session["access_token"],
-                  f"/v1/accounts/{seg}/positions", http_get)
-    return doc.get("positions") or []
+                  path, http_get)
+    return _qt_response_list(doc, "positions", path, session, seg,
+                             "no live-holdings snapshot was written")
 
 
 _QT_OPT_RE = None  # compiled lazily below
@@ -716,13 +775,34 @@ def _flex_field(xml_text: str, tag: str) -> Optional[str]:
 
 
 def flex_statement_count(text: str) -> int:
-    """Number of per-account statements in a Flex download — a
-    multi-account query concatenates one 'Statement,Data' block per
-    account, and blending two accounts' books into one inputs folder
-    must be refused, not parsed."""
-    import re as _re
-    return len(_re.findall(r'^"?Statement"?,"?Data"?,', text,
-                           flags=_re.M))
+    """Number of per-account statements in a Flex download: its runs
+    of `Statement` section rows — the section's Header and the Data
+    rows under it (BrokerName, Title, Period, WhenGenerated, ...). A
+    multi-account query concatenates one statement per account, each
+    with a Statement section of its own, and blending two accounts'
+    books into one inputs folder must be refused, not parsed. Counting
+    the 'Statement,Data' ROWS read one statement's metadata rows as
+    that many accounts and refused every real download (audit
+    2026-10-24 B02). A Header row always opens a new statement; a Data
+    row only when no Statement row came right before it."""
+    import csv as _csv
+    import io as _io
+    count = 0
+    in_statement = False
+    for row in _csv.reader(_io.StringIO(text)):
+        if len(row) < 2:
+            continue                    # a blank line splits nothing
+        sec, kind = row[0].lstrip("﻿").strip(), row[1].strip()
+        if sec == "Statement" and kind == "Header":
+            count += 1
+            in_statement = True
+        elif sec == "Statement" and kind == "Data":
+            if not in_statement:
+                count += 1
+            in_statement = True
+        else:
+            in_statement = False
+    return count
 
 
 def looks_like_ib_statement(text: str) -> bool:

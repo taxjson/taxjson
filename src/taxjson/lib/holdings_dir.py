@@ -12,7 +12,9 @@ per broker account, as a download tool writes it (taxjson-fetch
   one taxjson account spans several broker accounts), else the account
   its name starts with
   (`<account>_..._holdings.toml`, `<account>.toml`); several files of
-  one account are compared together;
+  one account at one date are summed; at different dates each broker
+  account's snapshots are compared one date at a time (`taxjson
+  sanity` refuses files that do not name their broker account);
 - a snapshot is compared at its date (`[meta] as_of`, else the day of
   `[meta] generated_at`); one newer than the books' last day is compared
   with the latest books, with a note;
@@ -42,7 +44,8 @@ generated_at), with no setting: a file belongs to the account whose
 broker account id is its [meta] broker_account (or [meta] account)
 ([accounts.NAME] account or broker_accounts in taxjson.toml), else the
 account its name starts with
-(margin_holdings.toml, margin_ib_holdings.toml).
+(margin_holdings.toml, margin_ib_holdings.toml). To keep two dates of
+one broker account, give each file its [meta] broker_account.
 """
 
 
@@ -149,11 +152,16 @@ def discover(folder: Path, accounts_cfg: Dict[str, Any],
     wins), and so is a file such a setting names (`root`: the project
     the paths are relative to; default the folder's parent); a file no
     account claims, or two do, is named in a note."""
-    accts = {str(n): a for n, a in (accounts_cfg or {}).items()
-             if isinstance(a, dict) and not a.get("holdings")}
+    every = {str(n): a for n, a in (accounts_cfg or {}).items()
+             if isinstance(a, dict)}
+    accts = {n: a for n, a in every.items() if not a.get("holdings")}
     listed = listed_files(Path(root) if root is not None
                           else Path(folder).parent, accounts_cfg)
-    ids = {n: set(broker_ids(a)) for n, a in accts.items()}
+    # Ownership by broker id is settled against EVERY account, the ones
+    # with their own `holdings = [...]` included: a snapshot stating
+    # such an account's id used to fall through to the file-name rule
+    # and land on another account (audit 2026-10-24 A13).
+    ids = {n: set(broker_ids(a)) for n, a in every.items()}
     files_of: Dict[str, List[str]] = {}
     notes: List[str] = []
     by_len = sorted(accts, key=lambda n: (-len(n), n))
@@ -170,7 +178,7 @@ def discover(folder: Path, accounts_cfg: Dict[str, Any],
         acc = None
         for key in ("broker_account", "account"):
             acc = meta.get(key)
-            hits = ([n for n in accts if _norm(acc) in ids[n]]
+            hits = ([n for n in every if _norm(acc) in ids[n]]
                     if acc else [])
             if hits:
                 break
@@ -180,6 +188,13 @@ def discover(folder: Path, accounts_cfg: Dict[str, Any],
                          f"{', '.join(hits)} — not compared")
             continue
         who = hits[0] if hits else None
+        if who is not None and who not in accts:
+            notes.append(f"{folder.name}/{mask(p.name)}: broker account "
+                         f"{mask(str(acc))} is {who}'s, whose own "
+                         f"`holdings = [...]` setting names its files — "
+                         f"not compared (list it there, or drop the "
+                         f"setting)")
+            continue
         if who is None:
             stem = p.stem.lower()
             who = next((n for n in by_len if stem == n.lower()

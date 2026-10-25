@@ -63,20 +63,50 @@ _MANUAL = 'manual_reporting_required'
 _DEFAULT_BY = "action,date,time,symbol,quantity,price,account"
 
 
+def _what(v: Any) -> str:
+    return ("an object" if isinstance(v, dict) else
+            "a list" if isinstance(v, list) else
+            "text" if isinstance(v, str) else
+            "null" if v is None else
+            "a boolean" if isinstance(v, bool) else
+            "a number" if isinstance(v, (int, float)) else
+            type(v).__name__)
+
+
+def _rows(doc: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
+    """The section `key` of `doc` as a list of records; [] when absent or
+    null. ValueError naming the section and the entry when the section
+    is not a list or an entry is not an object: a malformed entry used
+    to be skipped, so a file whose manual-reporting section held junk
+    compared equal to an empty one, "no change" at exit 0 (audit
+    2026-10-24 B48)."""
+    rows = doc.get(key)
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise ValueError(f'"{key}" is {_what(rows)}, not a list')
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            raise ValueError(f'"{key}"[{i}] is {_what(r)}, not an object '
+                             f'(a record)')
+    return list(rows)
+
+
 def extract_records(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The records of a document, each manual-reporting one marked with
+    its section. ValueError (see _rows) when a section is malformed."""
     # Both transactions JSON and taxjson-gains output use the same top-level
     # key. Be defensive: also accept a bare list.
     if isinstance(doc, list):
-        return doc
-    recs = list(doc.get('transactions', []) or [])
+        return _rows({'transactions': doc}, 'transactions')
+    recs = _rows(doc, 'transactions')
     # The pipeline moves unknown-cost dispositions OUT of transactions
     # into manual_reporting_required; a diff that read only transactions
     # said "no change" when such a hand-reported disposition appeared,
     # vanished or moved (2026-09 audit S029-16). They are compared too,
     # matched only against each other (the section is part of the key).
-    for r in doc.get(_MANUAL) or []:
-        if isinstance(r, dict):
-            recs.append({**r, '_section': _MANUAL})
+    for r in _rows(doc, _MANUAL):
+        recs.append({**r, '_section': _MANUAL})
     return recs
 
 
@@ -108,20 +138,28 @@ def make_key(rec: Dict[str, Any], fields: List[str]) -> Tuple:
     return tuple(parts)
 
 
+def _missing(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and v == '')
+
+
 def values_equal(a: Any, b: Any, tol: float = 1e-6) -> bool:
     """Floats are equal when they differ by less than `tol` absolute AND
     relative — the absolute floor alone called 9.4e-7 and 5.6e-7 equal
-    (S029-18)."""
+    (S029-18). A missing value (None or '') beside a number is a
+    difference: `float(v or 0)` read an unknown cost as 0.0 and hid
+    the move from unknown to zero (audit 2026-10-24 B10)."""
+    # None and '' are one another (common when one parser sets a default).
+    if _missing(a) and _missing(b):
+        return True
     if isinstance(a, float) or isinstance(b, float):
+        if _missing(a) or _missing(b):
+            return False
         try:
-            fa, fb = float(a or 0), float(b or 0)
+            fa, fb = float(a), float(b)
         except (TypeError, ValueError):
             return a == b
         d = abs(fa - fb)
         return d < tol and d <= tol * max(abs(fa), abs(fb), 1e-9)
-    # Treat None and '' as equal (common when one parser sets a default).
-    if (a is None or a == '') and (b is None or b == ''):
-        return True
     return a == b
 
 
@@ -204,10 +242,10 @@ def main():
     # traceback: name the file and exit 2 (the usage-error code every
     # sibling tool uses).
     from taxjson.lib.json_input import InputFileError, read_json_doc
+    recs: List[List[Dict[str, Any]]] = []
     try:
-        old_doc = read_json_doc(args.old)
-        new_doc = read_json_doc(args.new)
-        for path, doc in ((args.old, old_doc), (args.new, new_doc)):
+        for path in (args.old, args.new):
+            doc = read_json_doc(path)
             # A document with neither list ({"Transactions": [...]}, a
             # report JSON) compared as empty: "no change" at exit 0
             # (issue #6).
@@ -215,11 +253,16 @@ def main():
                 raise InputFileError(
                     f'{path}: no "transactions" list (keys: '
                     f"{', '.join(sorted(map(str, doc))) or 'none'})")
+            # A malformed section or entry is refused here, never
+            # skipped into a "no change" verdict (audit 2026-10-24 B48).
+            try:
+                recs.append(extract_records(doc))
+            except ValueError as e:
+                raise InputFileError(f"{path}: {e}") from None
     except InputFileError as e:
         print(f"taxjson-diff: cannot read input {e}", file=sys.stderr)
         sys.exit(2)
-    old_recs = extract_records(old_doc)
-    new_recs = extract_records(new_doc)
+    old_recs, new_recs = recs
 
     # A --by field no record on either side carries keys every record
     # as None and pairs rows by list order: 'modified' noise for a typo

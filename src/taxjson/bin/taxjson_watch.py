@@ -21,6 +21,7 @@ says so. State updates on every run (atomic write).
 """
 from taxjson.lib.out import exit_text
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -86,6 +87,20 @@ def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def _sheltered_only(rec: Dict[str, Any]) -> bool:
+    """A radar row whose units are all in sheltered accounts: a known
+    taxable quantity of zero beside a sheltered holding. A row without
+    the scope fields (an older radar) is not judged."""
+    try:
+        taxable = rec.get("taxable_qty")
+        sheltered = rec.get("sheltered_qty")
+        if taxable is None or sheltered is None:
+            return False
+        return abs(float(taxable)) <= 0.01 and abs(float(sheltered)) > 0.01
+    except (TypeError, ValueError):
+        return False
+
+
 def diff_radar(prev: Dict[str, Dict[str, Any]],
                cur: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Transition records, stable order (severity of the CURRENT state,
@@ -123,10 +138,21 @@ def diff_radar(prev: Dict[str, Dict[str, Any]],
         pcat = p.get("category") or ""
         if ccat != pcat:
             if ccat == "CLEAR":
-                changes.append({
-                    "kind": "cleared", "ticker": t, "was": pcat,
-                    "line": f"{t}: {pcat} -> CLEAR — safe to sell at a "
-                            f"loss (don't buy back for 30 days)"})
+                rec = {"kind": "cleared", "ticker": t, "was": pcat}
+                if _sheltered_only(c):
+                    # Held only in registered accounts / IRAs: there is
+                    # no taxable loss to sell, so no sale instruction —
+                    # sell-check's wording (audit 2026-10-24 B08).
+                    rec["scope"] = "sheltered"
+                    rec["line"] = (
+                        f"{t}: {pcat} -> CLEAR — held only in sheltered "
+                        f"account(s): nothing to sell at a loss (a "
+                        f"sheltered disposition has no tax effect)")
+                else:
+                    rec["line"] = (
+                        f"{t}: {pcat} -> CLEAR — safe to sell at a loss "
+                        f"(don't buy back for 30 days)")
+                changes.append(rec)
             else:
                 # Advisory text starts with "<CAT>: ..." — strip the
                 # prefix so the line doesn't say the category twice.
@@ -190,20 +216,25 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
 
 
 def _state_shape_problem(doc: Dict[str, Any]) -> Optional[str]:
+    """Why the state's radar or harvest_now cannot be diffed, or None.
+    The two fields are independent: a state with no radar (null or
+    absent) and a damaged harvest_now returned None here, and
+    diff_harvest crashed on it (audit 2026-10-24 B07)."""
     radar = doc.get("radar")
-    if radar is None:
-        return None
-    if not isinstance(radar, dict):
-        return '"radar" is not an object'
-    for t, rec in radar.items():
-        if not isinstance(rec, dict):
-            return f'"radar" entry {t!r} is not an object'
-        for k in ("category", "advisory", "clears_at"):
-            if rec.get(k) is not None and not isinstance(rec.get(k), str):
-                return f'"radar" entry {t!r}: {k} is not text'
+    if radar is not None:
+        if not isinstance(radar, dict):
+            return '"radar" is not an object'
+        for t, rec in radar.items():
+            if not isinstance(rec, dict):
+                return f'"radar" entry {t!r} is not an object'
+            for k in ("category", "advisory", "clears_at"):
+                if rec.get(k) is not None and not isinstance(rec.get(k),
+                                                             str):
+                    return f'"radar" entry {t!r}: {k} is not text'
     h = doc.get("harvest_now")
     if h is not None and (isinstance(h, bool)
-                          or not isinstance(h, (int, float))):
+                          or not isinstance(h, (int, float))
+                          or not math.isfinite(h)):
         return '"harvest_now" is not a number'
     return None
 

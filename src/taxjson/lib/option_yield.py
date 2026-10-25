@@ -14,7 +14,13 @@ BUYS one; the opposite trade closes the oldest open contract of that
 series. A close at price 0 with no money is an expiry; an ASSIGN row
 is an assignment (of a written contract) or an exercise (of a bought
 one). A SPLIT on the series re-denominates and renames the open
-contracts. Money keeps the engine's convention — the quantity carries
+contracts. A TRANSFER row moves contracts out of the account (the
+oldest open contracts of the series leave, "transferred": no money,
+no P/L here) or in (a contract whose premium is in the books it came
+from: unknown here, said so); a zero-net cluster of one account's
+TRANSFER rows (a custody move out and back, a cancel and rebook) is a
+no-op, as the gains run reads it (2026-10-24 audit A06). Money keeps
+the engine's convention — the quantity carries
 the direction, a purchase's amount is a magnitude (a .tt book's negative
 buy-back amount and a parser's positive one read the same), a sale's is
 signed (a write whose commission exceeds the premium nets a loss).
@@ -54,6 +60,8 @@ BOUGHT_BACK = "bought back"
 ASSIGNED = "assigned"
 SOLD = "sold"
 EXERCISED = "exercised"
+# Either side: the contracts left the account (no money, no P/L).
+TRANSFERRED = "transferred"
 _EPS = 1e-9
 
 
@@ -90,6 +98,13 @@ class Lot:
     size: float          # units of the underlying per contract
     cash_open: float     # signed: a write's premium (+), a purchase's cost (-)
     unknown_cost: bool = False
+    # Opened by a TRANSFER in: the premium is in the books the contract
+    # came from (unknown here), not missing history.
+    transfer_in: bool = False
+    # The replay ordinal of the opening row: the FIFO order, finer than
+    # `open_date` (two writes of one day renamed into one series:
+    # 2026-10-24 audit A28).
+    seq: int = 0
     open_units: float = 0.0          # contracts open now, in today's units
     closes: List[Close] = field(default_factory=list)
     notional: float = 0.0    # strike x size x units at the open (split-invariant)
@@ -183,6 +198,30 @@ def default_size(t: Dict[str, Any]) -> float:
     return m if m > 0 else 100.0
 
 
+def _kept_transfer_ids(opts: List[Tuple[str, Dict[str, Any]]]) -> set:
+    """ids of the TRANSFER rows of `opts` the gains run keeps: a
+    zero-net cluster of one account's TRANSFER rows (a custody move out
+    and back within days, a cancel and rebook) is a no-op there
+    (pipeline._drop_self_cancelling_transfers), so it is one here."""
+    if not any(_row(t, "action") == "TRANSFER" for _a, t in opts):
+        return set()
+    from taxjson.lib.core import TaxTransaction
+    from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+    fields = TaxTransaction.__dataclass_fields__
+    objs: List[TaxTransaction] = []
+    back: Dict[int, int] = {}
+    for a, t in opts:
+        try:
+            o = TaxTransaction(**{k: v for k, v in dict(t, account=a).items()
+                                  if k in fields})
+        except (TypeError, ValueError):
+            continue
+        back[id(o)] = id(t)
+        objs.append(o)
+    kept, _dropped = _drop_self_cancelling_transfers(objs)
+    return {back[id(o)] for o in kept if o.action == "TRANSFER"}
+
+
 def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
               size_of: Optional[Callable[[Dict[str, Any]], float]] = None,
               through: Optional[str] = None) -> List[Lot]:
@@ -193,10 +232,17 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
     size_of = size_of or default_size
     opts = [(a, t) for a, t in rows
             if _row(t, "action", "") in ("BUYSELL", "ASSIGN", "SPLIT",
-                                         "OPENING_BALANCE")
+                                         "OPENING_BALANCE", "TRANSFER")
             and is_option_symbol(str(_row(t, "symbol", "") or "").upper())
             and (through is None or str(_row(t, "date", "") or "") <= through)]
+    # A day's order: the opening balance first whatever its stamp (it
+    # is the position the day starts from: a native close stamped
+    # midnight sorted before its synthetic midnight opening and read as
+    # a new write, 2026-10-24 audit A22), then by clock, a split before
+    # the trades of its moment.
     opts.sort(key=lambda at: (str(_row(at[1], "date", "")),
+                              0 if _row(at[1], "action") == "OPENING_BALANCE"
+                              else 1,
                               str(_row(at[1], "time", "") or "00:00:00"),
                               0 if _row(at[1], "action") == "SPLIT" else 1))
     # One split reported twice is one event, per account here.
@@ -204,10 +250,11 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
         [t for _a, t in opts if _row(t, "action") == "SPLIT"],
         per_account=True)
     split_ids = {id(t) for t in splits}
+    transfer_ids = _kept_transfer_ids(opts)
     pos: Dict[Tuple[str, str], float] = {}
     open_lots: Dict[Tuple[str, str], List[Lot]] = {}
     out: List[Lot] = []
-    for acct, t in opts:
+    for seq, (acct, t) in enumerate(opts):
         sym = str(_row(t, "symbol", "") or "").upper()
         key = (acct, sym)
         q = float(_row(t, "quantity", 0.0) or 0.0)
@@ -227,18 +274,26 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
             pos[nk] = pos.get(nk, 0.0) + p_old
             if moved:
                 # Renamed into a series with open contracts of its own:
-                # the queue stays first in, first out by open date
-                # (2026-10 audit #36).
+                # the queue stays first in, first out, by the opening's
+                # replay order (2026-10 audit #36; by open date alone a
+                # 09:00 write moved in closed after the destination's
+                # 10:00 write, 2026-10-24 audit A28).
                 dest = open_lots.setdefault(nk, [])
                 dest.extend(moved)
-                dest.sort(key=lambda lot: lot.open_date)
+                dest.sort(key=lambda lot: lot.seq)
             continue
         if q == 0:
+            continue
+        transfer = action == "TRANSFER"
+        if transfer and id(t) not in transfer_ids:
             continue
         p = pos.get(key, 0.0)
         # A purchase's money is a magnitude, a sale's signed (2026-10
         # audit #34: a write netting less than its commission is a loss).
-        money = float(_row(t, "net_amount", 0.0) or 0.0)
+        # A transfer moves no money here: the contract's premium stays
+        # in the books it came from.
+        money = (0.0 if transfer
+                 else float(_row(t, "net_amount", 0.0) or 0.0))
         if q > 0:
             money = abs(money)
         und = parse_option_underlying(sym) or sym
@@ -251,7 +306,7 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
                       strike=strike, expiry=parse_option_expiry(sym) or "",
                       currency=cur, side=(BOUGHT if q > 0 else WRITTEN),
                       open_date=d, units=abs(q), size=size, cash_open=0.0,
-                      unknown_cost=True, open_units=abs(q),
+                      unknown_cost=True, seq=seq, open_units=abs(q),
                       notional=strike * size * abs(q))
             open_lots.setdefault(key, []).append(lot)
             out.append(lot)
@@ -260,13 +315,15 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
         if q < 0:
             closing = min(-q, max(p, 0.0))
             opening = -q - closing
-            kind = (EXERCISED if action == "ASSIGN"
+            kind = (TRANSFERRED if transfer
+                    else EXERCISED if action == "ASSIGN"
                     else EXPIRED if _is_flat(t) else SOLD)
             sign = 1.0
         else:
             closing = min(q, max(-p, 0.0))
             opening = q - closing
-            kind = (ASSIGNED if action == "ASSIGN"
+            kind = (TRANSFERRED if transfer
+                    else ASSIGNED if action == "ASSIGN"
                     else EXPIRED if _is_flat(t) else BOUGHT_BACK)
             sign = -1.0
         aq = abs(q)
@@ -285,13 +342,14 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
                 # is not the lot's, so the lot's premium and P/L are
                 # unknown (never converted here: 2026-10 audit #37).
                 other = (cur if cur and lot.currency and cur != lot.currency
-                         else "")
+                         and not transfer else "")
                 if other:
                     lot.unknown_cost = True
                 lot.closes.append(Close(date=d, kind=kind, units=take,
                                         cash=c_cash,
-                                        pnl=lot.per_unit_on(d) * take
-                                        + c_cash,
+                                        pnl=(0.0 if transfer else
+                                             lot.per_unit_on(d) * take
+                                             + c_cash),
                                         splits_seen=len(lot.splits),
                                         currency=other))
                 lot.open_units -= take
@@ -305,7 +363,8 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
                       currency=cur, side=(WRITTEN if q < 0 else BOUGHT),
                       open_date=d, units=opening, size=size,
                       cash_open=sign * money * (opening / aq),
-                      open_units=opening,
+                      unknown_cost=transfer, transfer_in=transfer,
+                      seq=seq, open_units=opening,
                       notional=strike * size * opening)
             open_lots.setdefault(key, []).append(lot)
             out.append(lot)
@@ -343,14 +402,30 @@ def _blank() -> Dict[str, Any]:
             "outcomes": {}, "wins": 0.0,
             "open_contracts": 0.0, "open_cash": 0.0,
             "notional_days": 0.0, "unknown_cost": 0,
-            "unknown_closes": 0.0, "currency_mismatch": []}
+            "unknown_closes": 0.0, "currency_mismatch": [],
+            "transferred_out": 0.0, "transferred_in": 0.0}
 
 
 def _add_notional_days(acc: Dict[str, Any], lot: Lot, start: str,
                        end: str, end_excl: str) -> None:
     units = lot.units_on(end)
-    per_unit = lot.notional_on(end) / units if units else 0.0
+    if units <= _EPS:
+        return
     opened = lot.open_date
+
+    def span(a: str, b: str, cu: float) -> None:
+        """`cu` contracts (the units of `end`) open over [a, b): the
+        lot's per-contract notional of each stretch between its splits
+        and renames. One notional over the whole stretch priced the
+        days before a strike adjustment at the strike after it
+        (2026-10-24 audit A05)."""
+        if b <= a:
+            return
+        marks = sorted({d for d, _r, _n in lot.splits if a < d < b})
+        edges = [a] + marks + [b]
+        for lo, hi in zip(edges, edges[1:]):
+            acc["notional_days"] += (_days(lo, hi) * cu
+                                     * lot.notional_on(lo) / units)
     # Each close ends the exposure of its units; the rest runs to the
     # window's end.
     taken = 0.0
@@ -359,14 +434,10 @@ def _add_notional_days(acc: Dict[str, Any], lot: Lot, start: str,
             continue
         cu = lot.close_units_on(c, end)
         taken += cu
-        a, b = max(opened, start), min(c.date, end_excl)
-        if b > a:
-            acc["notional_days"] += _days(a, b) * cu * per_unit
+        span(max(opened, start), min(c.date, end_excl), cu)
     left = units - taken
     if left > _EPS:
-        a, b = max(opened, start), end_excl
-        if b > a:
-            acc["notional_days"] += _days(a, b) * left * per_unit
+        span(max(opened, start), end_excl, left)
 
 
 def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
@@ -376,14 +447,17 @@ def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
     # close in another currency alone: that close is named on its own,
     # whenever it is (it makes the lot's every P/L unknown).
     mixed = [c for c in lot.closes if c.currency]
-    before_data = lot.unknown_cost and not mixed
+    before_data = lot.unknown_cost and not mixed and not lot.transfer_in
     acc["currency_mismatch"].extend(
         f"{lot.underlying_on(end)} {c.date} {c.currency}" for c in mixed)
     # Received / paid: every dollar in and out of the window, the opens
     # and the closes alike (a put written and bought back: received
     # its premium, paid the buy-back).
     if start <= lot.open_date <= end:
-        if lot.side == WRITTEN:
+        if lot.transfer_in:
+            # Not written or bought here: the contract arrived.
+            acc["transferred_in"] += lot.units_on(end)
+        elif lot.side == WRITTEN:
             acc["written_contracts"] += lot.units_on(end)
         else:
             acc["bought_contracts"] += lot.units_on(end)
@@ -402,6 +476,11 @@ def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
                 acc["paid"] += max(-c.cash, 0.0)
                 acc["cash_flow"] += c.cash
             acc["outcomes"][c.kind] = acc["outcomes"].get(c.kind, 0.0) + cu
+            if c.kind == TRANSFERRED:
+                # The contracts left with their premium: nothing was
+                # realized here, nothing is unknown.
+                acc["transferred_out"] += cu
+                continue
             if lot.unknown_cost:
                 # The premium is unknown: no P/L, no win or loss (a
                 # zero placeholder read as a definite loss: 2026-10
@@ -440,19 +519,22 @@ def _finish(acc: Dict[str, Any], days: int,
     else:
         basis, cap = "", 0.0
     unknown = acc["unknown_closes"] > _EPS
+    # A contract transferred out closed nothing: no P/L, no yield on it.
+    settled = acc["closed_contracts"] - acc["transferred_out"]
     y = ((acc["realized"] / cap)
-         if cap > 0.005 and not unknown and acc["closed_contracts"] > _EPS
+         if cap > 0.005 and not unknown and settled > _EPS
          else None)
     out = {k: (round(v, 2) if isinstance(v, float) else v)
            for k, v in acc.items() if k != "notional_days"}
     out["outcomes"] = {k: round(v, 4) for k, v in
                        sorted(acc["outcomes"].items())}
     for k in ("written_contracts", "bought_contracts", "closed_contracts",
-              "open_contracts", "wins", "unknown_closes"):
+              "open_contracts", "wins", "unknown_closes",
+              "transferred_out", "transferred_in"):
         out[k] = round(acc[k], 4)
     out["shares_held"] = round(sq, 4)
     out["shares_cost"] = round(sc, 2)
-    known = acc["closed_contracts"] - acc["unknown_closes"]
+    known = settled - acc["unknown_closes"]
     # The win rate: the contracts closed at a profit over the contracts
     # closed in the window (a close at exactly zero is not a win).
     out["win_rate"] = (round(acc["wins"] / known, 4)
@@ -518,6 +600,7 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
         for c in lot.closes:
             if start <= c.date <= end:
                 cu = lot.close_units_on(c, end)
+                moved = c.kind == TRANSFERRED
                 closed.append({
                     "underlying": und, "symbol": sym,
                     "account": lot.account, "side": lot.side,
@@ -527,9 +610,11 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
                     "how": c.kind, "contracts": round(cu, 4),
                     "premium": (None if lot.unknown_cost
                                 else round(per_unit * cu, 2)),
-                    "close_cash": (None if c.currency
+                    # (a transfer out has no close money and no P/L)
+                    "close_cash": (None if c.currency or moved
                                    else round(c.cash, 2)),
-                    "pnl": (None if lot.unknown_cost else round(c.pnl, 2)),
+                    "pnl": (None if lot.unknown_cost or moved
+                            else round(c.pnl, 2)),
                     "days_open": _days(lot.open_date, c.date)})
         left = lot.units_open_on(end)
         if lot.open_date <= end and left > _EPS:
@@ -654,13 +739,15 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
     if doc["closed"]:
         body = []
         for c in doc["closed"]:
+            moved = c["how"] == TRANSFERRED
             body.append([
                 c["closed"], c["symbol"], c["account"], c["currency"],
                 _side_right(c["side"], c["right"]), _n(c["contracts"]),
                 c["how"], str(c["days_open"]),
                 ("?" if c["premium"] is None else fmt_money(c["premium"])),
-                _money(c["close_cash"]),
-                ("?" if c["pnl"] is None else fmt_money(c["pnl"]))])
+                ("-" if moved else _money(c["close_cash"])),
+                ("-" if moved else "?" if c["pnl"] is None
+                 else fmt_money(c["pnl"]))])
         d.table(["CLOSED", "SERIES", "ACCOUNT", "CUR", "SIDE", "QTY", "HOW",
                  "DAYS", "PREMIUM", "CLOSE", "P/L"],
                 body, aligns=["<", "<", "<", "<", "<", ">", "<", ">", ">",
@@ -728,11 +815,13 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
                        f"had no premium in the books; net cash "
                        f"{fmt_money(t['cash_flow'])}"))
             continue
+        moved = (f"; {_n(t['transferred_out'])} transferred out (no P/L)"
+                 if t["transferred_out"] > _EPS else "")
         kv.append((f"Realized, {cur}",
                    f"{fmt_money(t['realized'])} on {_n(t['closed_contracts'])}"
                    f" contract(s) closed ({_n(t['wins'])} at a profit: "
                    f"win rate {_rate(t['win_rate'])}); "
-                   f"net cash {fmt_money(t['cash_flow'])}"))
+                   f"net cash {fmt_money(t['cash_flow'])}{moved}"))
         if t["yield_basis"] == "shares":
             on = (f"the {fmt_money(t['shares_cost'])} cost of "
                   f"{_n(t['shares_held'])} share(s) held")
@@ -762,6 +851,12 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
             f"{len(unk)} underlying(s) with a contract opened before the "
             f"data (premium unknown): {', '.join(unk[:3])}",
             "tjs find-missing-history"))
+    moved_in = sum(r["transferred_in"] for r in rows)
+    if moved_in > _EPS:
+        acts.append(out.act(
+            f"{_n(moved_in)} contract(s) received by transfer (premium "
+            f"unknown: it is in the books the contract came from)",
+            "tjs events"))
     # (one close row taking two contracts is one row to check)
     mixed = list(dict.fromkeys(m for r in rows
                                for m in r["currency_mismatch"]))

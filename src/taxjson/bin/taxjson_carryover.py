@@ -470,15 +470,19 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
     lines (form_lines: Schedule 3 13200/15300/15301 and 2024's Period 1
     10690/10694, Form 8949 Part I/II
     — per-row rounded, what the return carries; audit A2-1132), else
-    the lock's realized total. A lock that cannot be read, or whose
-    numbers are missing or not finite (NaN, Infinity), raises
-    LockUnreadable — it never silently matches (A2-0336, A2-1131)."""
+    the lock's realized total. A lock that fails the one check every
+    reader of a lock applies (taxjson_filed.read_lock: unreadable,
+    damaged — its carryforwards block too — or closed under the other
+    country's law), or whose numbers are missing or not finite (NaN,
+    Infinity), raises LockUnreadable naming the lock and the fix — it
+    never silently matches (A2-0336, A2-1131; 2026-10-25 audit
+    year-end#1, robustness#1)."""
+    from taxjson.bin import taxjson_filed
     try:
-        doc = json.loads(Path(path).read_text(encoding='utf-8'))
-    except (OSError, ValueError, UnicodeDecodeError) as e:
+        doc = taxjson_filed.read_lock(Path(path), {"country": country},
+                                      prior=True)
+    except taxjson_filed.LockProblem as e:
         raise LockUnreadable(str(e)) from None
-    if not isinstance(doc, dict):
-        raise LockUnreadable("not a close-year lock (not a JSON object)")
     try:
         totals = doc.get('totals')
         if not isinstance(totals, dict):
@@ -542,7 +546,9 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
                     cf['net_capital_loss'].get('carried_back') or 0.0,
                     'net_capital_loss.carried_back')
     except (KeyError, TypeError, ValueError) as e:
-        raise LockUnreadable(f"{type(e).__name__}: {e}") from None
+        raise LockUnreadable(
+            f"{path}: no usable filed figure ({type(e).__name__}: {e}) — "
+            f"{taxjson_filed.LOCK_FIX}") from None
     return out
 
 # S028-03: what NET GAIN(LOSS) leaves out. A net capital loss nets
@@ -1194,11 +1200,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             info = lock_figure(Path(lp), country)
         except LockUnreadable as exc:
+            if args.project_year is not None and y < args.project_year:
+                # A year before the project year takes the lock's filed
+                # figure and the balance it carried: dropping the lock
+                # with a warning left the year out and printed a 0.00
+                # carryforward at exit 0, where the estimate, amt,
+                # handoff and close-year refuse the same lock
+                # (2026-10-25 audit robustness#1, year-end#1). The
+                # estimate's own words, one message (its last line is
+                # what `taxjson checklist` shows).
+                from taxjson.lib.out import error as _error
+                _error(str(exc), prog="taxjson-carryover")
+                return 1
+            # The project year (or a later one) is only compared with
+            # its lock: the row stands, unchecked.
             from taxjson.lib.out import warn as _warn
             _warn(f"{y}: the filed-year lock {lp} could not be read — the "
                   f"{y} row is not checked against the filed return",
-                  details=_dl([f"{exc}", "Fix or restore the lock (it is the "
-                           "record of that return)."]))
+                  details=_dl([f"{exc}"]))
             continue
         info['path'] = lp
         lock_info[y] = info

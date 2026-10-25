@@ -112,6 +112,29 @@ class TestAnalyze(unittest.TestCase):
                                            "weekend-trade"])
         self.assertGreater(doc["errors"], 0)
 
+    def test_assignment_leg_settles_with_its_stock_leg(self):
+        # A Friday expiry assigned, the option leg settling the Monday
+        # with its stock leg: not an expiry settling late.
+        td, root, cfg = _project({("ib", "a.csv"): [
+            _r("2025-06-20", "2025-06-23", sym="ABC250620C00010000.US",
+               time_="16:20:00", price=0.0, action="ASSIGN"),
+            _r("2025-06-20", "2025-06-23", sym="ABC.US", time_="16:20:00",
+               price=10.0, action="ASSIGN"),
+            # A year-end one too: the stock leg lands in January, and so
+            # does its premium.
+            _r("2025-12-31", "2026-01-02", sym="ABC251231P00010000.US",
+               time_="16:20:00", price=0.0, action="ASSIGN")]})
+        with td:
+            doc = analyze(root, cfg, today=date(2026, 2, 1))
+        self.assertEqual(doc["issues"], [])
+        # An expiry row (not an assignment) settling late is still one.
+        td, root, cfg = _project({("ib", "a.csv"): [
+            _r("2025-06-20", "2025-06-23", sym="ABC250620C00010000.US",
+               time_="16:20:00", price=0.0)]})
+        with td:
+            doc = analyze(root, cfg, today=date(2026, 2, 1))
+        self.assertEqual(self.codes(doc), ["settle-after-expiry"])
+
     def test_tt_weekend_settle(self):
         td, root, cfg = _project({("tt", "start.tt"): [
             _r("2025-06-07", "2025-06-07")]})
