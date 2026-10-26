@@ -577,7 +577,7 @@ class TestOwnAccountCustodyMove(unittest.TestCase):
     accounts carries the lots (basis and purchase dates) to the
     receiving account — the stopgap ATTENTION + --strict stop is gone
     (owner request). Canada pools the ACB across the accounts (s.47):
-    no legs are written."""
+    this stage writes no legs there."""
 
     def _cache(self, tmp):
         cache = Path(tmp)
@@ -616,9 +616,12 @@ class TestOwnAccountCustodyMove(unittest.TestCase):
         from taxjson.bin import taxjson_run
         cfg = {"accounts": {"qa": {"type": "taxable"},
                             "qb": {"type": "taxable"}}}
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = self._cache(tmp)
-            for country, expect in (("usa", True), ("canada", False)):
+        # Canada carries no lots: its books' legs of a move of your own
+        # (units only, backlog TJ-0093) are stage_transfer_arrivals'
+        # (CA-ACB-OWN-MOVE), never this stage's.
+        for country, expect in (("usa", True), ("canada", False)):
+            with tempfile.TemporaryDirectory() as tmp:
+                cache = self._cache(tmp)
                 out = io.StringIO()
                 with redirect_stderr(io.StringIO()), \
                         contextlib.redirect_stdout(out):

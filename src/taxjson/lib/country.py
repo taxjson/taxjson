@@ -398,6 +398,7 @@ FLAG_COUNTRY: Dict[str, str] = {
     "--corporate-distribution": CANADA,
     "--ric-january-dividend": USA,
     "--slip-gains": CANADA,
+    "--return-row": CANADA,
     "--locked-year": USA,
 }
 
@@ -421,6 +422,9 @@ FLAG_WHY: Dict[str, str] = {
     "--slip-gains": "T5 box 18 capital-gains dividends (ITA s.130.1(4) / "
                     "s.131(1)); US fund capital-gain distributions are "
                     "not modelled",
+    "--return-row": "the net-capital-loss ledger takes Schedule 3's "
+                    "RETURN row; a US carryover keeps its term, from "
+                    "the books' short- and long-term gains",
 }
 
 # One VALUE of a two-country flag that belongs to one country: the flag
@@ -666,6 +670,7 @@ _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
                "--corporate-distribution": "corporate_distribution",
                "--ric-january-dividend": "ric_january_dividend",
                "--slip-gains": "slip_gains",
+               "--return-row": "return_row",
                "--locked-year": "locked_year",
                "--foreign-roc": "foreign_roc"}
 

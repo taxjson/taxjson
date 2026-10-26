@@ -295,6 +295,7 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
     problems: a malformed line, a line in a sheltered account (its cash
     is outside s.39(1.1) / §988), a .tt file that cannot be read (its
     lines would be missing from the ledger)."""
+    from taxjson.bin.taxjson_convert_tt import tt_lines
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.dated_events import _where, tt_files
     out: List[Dict[str, Any]] = []
@@ -315,7 +316,7 @@ def read_project_lines(root: Path, accounts: Dict[str, Any]
                 problems.append(f"inputs/{acct}/{shown_name(tt)}: cannot "
                                 f"be read ({why})")
                 continue
-            for n, raw in enumerate(text.splitlines(), 1):
+            for n, raw in enumerate(tt_lines(text), 1):
                 if not any(k in raw for k in KEYWORDS):
                     continue
                 where = _where(acct, tt, n)

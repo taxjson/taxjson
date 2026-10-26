@@ -863,6 +863,11 @@ class Extras:
     trailing: Dict[Slot, List[str]] = field(default_factory=dict)
     verbatim: Dict[Slot, str] = field(default_factory=dict)
     notes: List[Run] = field(default_factory=list)
+    # The key slots whose template example line (`# key = default`) the
+    # file holds: in a commented-out table, a key the user wrote
+    # commented out takes the example's place only where the file has
+    # no example line (new-year's reference copy, backlog TJ-0191).
+    examples: Set[Slot] = field(default_factory=set)
 
 
 @dataclass
@@ -923,9 +928,16 @@ class _Renderer:
         self.tables.add(T)
         self.slots.add(("end", T))
 
-    def user_runs(self, slot: Slot) -> None:
+    def user_runs(self, slot: Slot, trim: int = 0) -> None:
+        """The user's comment runs at `slot`; `trim`: that many lines
+        left off the end of the last run (written by the caller)."""
         self.slots.add(slot)
-        runs = self.x.runs.get(slot, ())
+        runs = list(self.x.runs.get(slot, ()))
+        if trim and runs:
+            last = runs.pop()
+            rest = last.lines[:len(last.lines) - trim]
+            if rest:
+                runs.append(Run(rest, last.blank_before, last.blank_after))
         for i, run in enumerate(runs):
             for ln in run.lines:
                 self.emit(ln, template=False)
@@ -954,8 +966,30 @@ class _Renderer:
                 self.emit(ln, template=False)
         self.emit(("# " if commented else "") + text)
 
+    def own_example(self, slot: Slot, key: str) -> Optional[List[str]]:
+        """The user's own commented-out `key` (`# key = value`, a value
+        over several lines included) ending the last comment run at
+        `slot`, when the file holds no template example line for it:
+        its lines, else None."""
+        runs = self.x.runs.get(slot)
+        if not runs or slot in self.x.examples:
+            return None
+        lines = runs[-1].lines
+        for i in range(len(lines) - 1, max(-1, len(lines) - 61), -1):
+            m = _COMMENTED_KEY.match(lines[i])
+            if not m or m.group(1) != key:
+                continue
+            body = "\n".join(re.sub(r"^# ?", "", ln) for ln in lines[i:])
+            try:
+                got = tomllib.loads(body)
+            except Exception:  # noqa: BLE001 — not one whole key
+                return None
+            return lines[i:] if list(got) == [key] else None
+        return None
+
     def keys(self, T: Tuple[Any, ...],
-             entries: Sequence[Union[_Entry, str]]) -> None:
+             entries: Sequence[Union[_Entry, str]],
+             own_examples: bool = False) -> None:
         """A table's key lines (and its heading lines, as str), directly
         under its table line: one `=` column for the whole table, each
         key's description and the user's comments above it, no blank line
@@ -963,7 +997,9 @@ class _Renderer:
         heading included, so the table line stays apart from its data. An entry's inline text is an end-of-line
         comment at one column per group (the run of keys between two
         headings) — or, when its value is too long or spans lines, a line
-        above the key."""
+        above the key. `own_examples` (a commented-out table): a key the
+        user wrote commented out replaces the template's example line
+        when the file has none (own_example), aligned with the others."""
         K = max([len(e.prefix) for e in entries if isinstance(e, _Entry)]
                 or [0])
 
@@ -1016,8 +1052,19 @@ class _Renderer:
                 doc.append(PROSE + e.inline)
             for ln in doc:
                 self.emit(ln)
+            own = (self.own_example(s, e.key)
+                   if own_examples and e.commented and e.slot else None)
             if e.slot:
-                self.user_runs(s)
+                self.user_runs(s, trim=len(own) if own else 0)
+            if own:
+                # The user's value in the example's place: one line per
+                # key, its `=` in the table's column.
+                m = _COMMENTED_KEY.match(own[0])
+                self.emit(f"{e.prefix.ljust(K)} = "
+                          f"{own[0][m.end():].lstrip()}", template=False)
+                for ln in own[1:]:
+                    self.emit(ln, template=False)
+                continue
             for ln in tr or ():
                 self.emit(ln, template=False)
             value, verbatim = value_of(e)
@@ -1177,7 +1224,8 @@ class _Renderer:
         vals = values if isinstance(values, dict) else {}
         self.keys(T, [self.entry(k, vals) for k in keys]
                   + self.unknown_entries(vals, [k.name for k in keys],
-                                         t.name, owner_table=t.name))
+                                         t.name, owner_table=t.name),
+                  own_examples=not present)
         self.end(T)
 
     def aot(self, t: Table, entries: Any) -> None:
@@ -1835,14 +1883,19 @@ def format_config(text: str) -> FormatResult:
 
 def _missing_lines(kept: List[str], out_lines: List[str]) -> int:
     from collections import Counter
-    have = Counter(ln.strip() for ln in out_lines)
+    # (Compared with the blanks collapsed: a commented-out key of the
+    # user's put in the template example's place is aligned —
+    # _Renderer.own_example.)
+    def norm(t: str) -> str:
+        return " ".join(t.split())
+    have = Counter(norm(ln) for ln in out_lines)
     for ln in out_lines:
         # A kept trailing comment sits after a value.
         i = ln.find("#")
         while i >= 0:
-            have[ln[i:].strip()] += 1
+            have[norm(ln[i:])] += 1
             i = ln.find("#", i + 1)
-    need = Counter(k.strip() for k in kept)
+    need = Counter(norm(k) for k in kept)
     return sum(max(0, c - have[k]) for k, c in need.items())
 
 
@@ -2063,6 +2116,7 @@ def _associate(items: List[_Item], probe: _Renderer, is_template
                 slot = resolve(ctx + (m.group(1),))
                 if slot is not None and slot[0] == "key":
                     flush(slot)
+                    x.examples.add(slot)
             continue
         if it.kind == "header":
             # A block directly above a table line stays with it.

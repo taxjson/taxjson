@@ -215,6 +215,31 @@ def aggregates_from_gains(doc: Dict[str, Any],
     }
 
 
+def income_as_summed(lock: Dict[str, Any]) -> Optional[float]:
+    """A lock's income as `taxjson sum`'s taxable SUBTOTAL row adds it:
+    each account's DIVIDEND and PIL to the cent, summed. The lock's
+    `totals` round the accounts' unrounded sum once (what check-filed
+    compares), a cent or so apart: close-year and `taxjson years` show
+    this (display only; backlog TJ-0212). None when the lock has no
+    per-account figures."""
+    accts = lock.get("accounts") if isinstance(lock, dict) else None
+    if not isinstance(accts, dict) or not accts:
+        return None
+    total = 0.0
+    for a in accts.values():
+        if not isinstance(a, dict):
+            return None
+        parts = ([a.get("dividend"), a.get("pil")]
+                 if "dividend" in a or "pil" in a else [a.get("income")])
+        for v in parts:
+            if v is None:
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return None
+            total += round(float(v), 2)
+    return round(total, 2) + 0.0
+
+
 def snapshot_path(root: Path, year) -> Path:
     return Path(root) / "filed" / f"{year}.json"
 
@@ -433,8 +458,9 @@ def lock_damage(lock: Any, year: Any, label: str) -> Optional[str]:
     per-account table, finite figures, a `year` field that is `year`,
     the file's) and its `carryforwards` block
     (carryforward.block_problem — each present section with its closing
-    balance, numbers, one entry per year, no negative balance). `year`
-    None: the year field is not judged."""
+    balance, numbers, one entry per year, no negative balance), and its
+    `fx_cash_v2` close (fx_cash_v2.close_problem). `year` None: the
+    year field is not judged."""
     if year is None and isinstance(lock, dict):
         year = lock.get("year")
     prob = lock_shape_problem(lock, year)
@@ -443,6 +469,14 @@ def lock_damage(lock: Any, year: Any, label: str) -> Optional[str]:
     if isinstance(lock, dict) and lock.get("carryforwards") is not None:
         from taxjson.lib.carryforward import block_problem
         prob = block_problem(lock["carryforwards"])
+        if prob:
+            return f"{label}: {prob}"
+    if isinstance(lock, dict) and lock.get("fx_cash_v2") is not None:
+        # The FX-on-cash ledger v2's close, the next year's opening
+        # pool: the ledger refuses a damaged one, so the lock is damaged
+        # (backlog TJ-0068).
+        from taxjson.lib.fx_cash_v2 import close_problem
+        prob = close_problem(lock["fx_cash_v2"], year)
         if prob:
             return f"{label}: {prob}"
     return None

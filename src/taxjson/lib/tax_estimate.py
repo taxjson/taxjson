@@ -698,10 +698,16 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
     if carry.get("entered"):
         src = carry.get("source") or "the input"
         if carry.get("recovered", 0.0) > 0.005:
+            _sur = float(carry.get("recovered_provincial_surtax") or 0.0)
+            _share = carry.get("recovered_provincial_credit",
+                               carry["recovered_provincial"])
             notes.append(
                 f"Minimum tax carryover applied (ITA s.120.2; T691 Part "
                 f"8, line 40427): {m(carry['recovered_federal'])} federal"
-                f" + {m(carry['recovered_provincial'])} {prov_key}, oldest "
+                f" + {m(_share)} {prov_key}"
+                + (f" (and {m(_sur)} of {prov_key} surtax it saves)"
+                   if abs(_sur) > 0.005 else "")
+                + f", oldest "
                 f"year first, limited to the {m(carry['limit'])} by which "
                 f"regular federal tax exceeds the minimum — from {src}.")
         elif amt["binding"]:
@@ -897,6 +903,13 @@ def estimate_canada(*, realized: float, eligible_div: float,
                             ftc=ftc, net_income=net_income,
                             fed_mtc=fed_rec, prov_mtc=fed_rec * factor)
         prov_rec = with_inv["provincial"] - after["provincial"]
+        # Of the provincial drop, the share deducted from basic
+        # provincial tax (what the provincial form's carryover line
+        # takes); the rest is the surtax the lower basic tax saves.
+        # Labelled "before ON surtax", the whole drop was printed as the
+        # share (backlog TJ-0016).
+        prov_credit = (with_inv["detail"]["prov_basic"]
+                       - after["detail"]["prov_basic"])
         fed_rec_t = with_inv["federal"] - after["federal"]
         base_amt = _amt_canada(
             realized=0.0, eligible_div=0.0, foreign_div=0.0, pil=0.0,
@@ -921,6 +934,10 @@ def estimate_canada(*, realized: float, eligible_div: float,
             "source": amt_carryover_source,
             "recovered_federal": round(fed_rec_t, 2),
             "recovered_provincial": round(prov_rec, 2),
+            "recovered_provincial_credit": round(prov_credit, 2),
+            # The two parts add up to the rounded drop.
+            "recovered_provincial_surtax": round(
+                round(prov_rec, 2) - round(prov_credit, 2), 2),
             "recovered": round(recovered, 2),
             "base_recovered": round(base_rec, 2),
             "attributed": round(recovered_attr, 2),

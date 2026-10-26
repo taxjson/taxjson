@@ -179,19 +179,23 @@ security and quantity within 10 days of each other cancel as one move of your ow
 (so an unrelated departure and arrival in that window cancel too). A slower move of your own cancels too
 when the transfer in posts 11 to 45 days after a transfer out of the same security and quantity in another
 of your taxable accounts and neither has another candidate: said as Info with both dates (an unrelated
-pair like that cancels as well). Legs that could pair otherwise, legs in one account, a departure partly
-paired or of another quantity, a leg of an in-kind move, legs more than 45 days apart and a departure
-after the arrival are an arrival and a departure of their own: the arrival is said as ATTENTION, naming a
-departure nothing paired up to 45 days before it, while the sending account's books keep the departed
-shares (a transfer out never leaves the books), so a move of your own among them is held twice
+pair like that cancels as well). Such an unrelated pair, exact or slow, is undone by a `.tt` `NOTOWN` line
+in the receiving account's folder (the slow pair's Info line prints it): the arrival is then booked as one
+from outside your books. No line makes or forces a pairing. Legs that could pair otherwise, legs in one
+account, a departure partly paired or of another quantity, a leg of an in-kind move, legs more than 45
+days apart and a departure after the arrival are an arrival and a departure of their own: the arrival is
+said as ATTENTION, naming a departure nothing paired up to 45 days before it, while the sending account's
+books keep the departed shares (a transfer out never leaves the books), so a move of your own among them
+is held twice
 (`taxjson sanity` shows it against each broker's holdings). A listing journal with no pair id and no
 ticker.map rule cancels only two listings of one root (`QZQ.TO` / `QZQ.US`); two tickers that differ need
 a `TOBASE` line. A stated book value of 0 is read as no cost, never a $0 lot. `.tt` purchases for part of
 an arrival's units cover nothing: the arrival is said as ATTENTION and not booked until the rest is
 declared.
 **Instead:** a `.tt` purchase dated on or before the arrival, or an `OPENING … cost=unknown` line,
-replaces the stated value (tax-logic CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
-**Code:** `src/taxjson/lib/transfer_in.py` — `arrivals`, `attention_lines`, `OWN_MOVE_DAYS`, `SLOW_MOVE_DAYS`, `slow_pairs`
+replaces the stated value; a `.tt` `NOTOWN` line undoes a pairing that is not one move (tax-logic
+CA-ACB-TRANSFER-BV / US-BASIS-TRANSFER-BV).
+**Code:** `src/taxjson/lib/transfer_in.py` — `arrivals`, `attention_lines`, `OWN_MOVE_DAYS`, `SLOW_MOVE_DAYS`, `slow_pairs`, `NotOwn`
 
 #### Positions reports: what is read
 
@@ -551,7 +555,10 @@ IB's daily futures cash settlement is not modelled (an IB account holding future
 not reconcile); a futures commission leaves the cash on its own fill's date, and a close brings in its
 P/L before commissions. A combined IB statement is one cash account. Rows from corporate actions,
 crypto-for-crypto swaps and fees or rewards paid in a coin move no foreign cash; the cash a corporate
-action paid (cash in lieu, boot) is ledgered.
+action paid (cash in lieu, boot) is ledgered. The ledger walks each account's day in trade order and
+does not net a settlement day: a spend that overdraws at its place in the day is a borrow, and so is a
+same-day move through three of your own accounts (a to b to c) when b's broker dates b's send before b's
+arrival (a small FX result on the borrow).
 **Instead:** use v2 only with those lines declared; it stays opt-in until it has been checked on real
 books.
 **Code:** `src/taxjson/lib/fx_cash_v2.py` — `build`; `src/taxjson/lib/cash_events.py` — `collect`; `src/taxjson/bin/taxjson_fx_cash.py` — `_non_cash`

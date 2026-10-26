@@ -230,10 +230,13 @@ detectors.
       input wins over the lock; `taxjson handoff` names the difference).
 - [ ] A late correction (a corrected export, a late election, an
       assignment) saved in the shared `inputs/` does not reach the filed
-      year: it reads its own frozen copy, so its `run` and `check-filed`
-      stay OK. Next year's `taxjson handoff` (positions and cost at
-      Dec 31 against the filed books) and `taxjson option-boundary` are
-      where it shows. To amend, put the corrected file in the filed
+      year: it reads its own frozen copy, so its figures stay OK. Its
+      `taxjson check-filed` (and `taxjson run` there) names a shared
+      export that changed or lost a row of that year since the close.
+      Next year's `taxjson handoff` (positions and cost at Dec 31
+      against the filed books) and `taxjson option-boundary` show what
+      moves the year-end; a corrected sale (its proceeds, or the cost of
+      a lot sold that year) shows in neither. To amend, put the corrected file in the filed
       year's own `inputs/<account>/` (or `taxjson elect` in its folder)
       and `taxjson run` there: it names the frozen input that changed
       and warns `DRIFTED` when the filed figures moved. Then file the

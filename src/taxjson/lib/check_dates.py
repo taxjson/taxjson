@@ -257,9 +257,13 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
     issues: List[Dict[str, Any]] = []
     checked = 0
     # With exports shared by every year (`inputs_dir`), rows of later
-    # years are expected here: counted (one Info line), not errors.
-    from taxjson.lib.project_layout import shared_inputs
+    # years are expected here: counted (one Info line), not errors. So
+    # in a year close-year froze from them: its inputs/ is their copy,
+    # the input as filed (backlog TJ-0013).
+    from taxjson.lib.project_layout import frozen_from_shared, shared_inputs
     shared = shared_inputs(root)
+    frozen = not shared and frozen_from_shared(root, year)
+    shared = shared or frozen
     later = 0
     per_source: Dict[str, int] = {}
 
@@ -449,6 +453,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
             counts[i["severity"]].get(i["code"], 0) + 1
     return {"year": year, "checked": checked, "sources": per_source,
             "issues": issues, "counts": counts, "later_years": later,
+            "later_frozen": frozen,
             "errors": sum(counts.get("ERROR", {}).values()),
             "warnings": sum(counts.get("WARN", {}).values())}
 
@@ -502,9 +507,11 @@ def render(doc: Dict[str, Any], show_all: bool = False,
     if doc.get("later_years") and details:
         d.blank()
         d.para(f"Info: {doc['later_years']} row(s) dated after "
-               f"{doc['year'] + 1}: later years' exports in the shared "
-               f"inputs folder, expected (checked like the others; a "
-               f"date after today is still an error).")
+               f"{doc['year'] + 1}: later years' exports in the "
+               + ("copy close-year froze of the shared inputs folder"
+                  if doc.get("later_frozen") else "shared inputs folder")
+               + ", expected (checked like the others; a date after "
+               "today is still an error).")
     d.blank()
     if not doc["issues"]:
         d.para("Every date lands where its market allows.")

@@ -122,12 +122,14 @@ def _inventory(doc: Dict[str, Any], p: Path) -> List[Dict[str, Any]]:
 
 def load_positions(files: List[Path],
                    include_options: bool = False,
-                   base_currency: Optional[str] = None
+                   base_currency: Optional[str] = None,
+                   skipped_options: Optional[List[str]] = None
                    ) -> List[Dict[str, Any]]:
     """Open positions from each gains file's `inventory`: one dict per
     (account, symbol) with qty, base-currency book cost and start date.
     CASH rows are always skipped. OCC option rows are skipped unless
-    `include_options` (they price only through the IBKR tier); futures
+    `include_options` (they price only through the IBKR tier), each
+    skipped symbol appended to `skipped_options` when given; futures
     and futures options stay out either way — no live tier serves
     them."""
     out: List[Dict[str, Any]] = []
@@ -156,6 +158,8 @@ def load_positions(files: List[Path],
                 sys.exit(2)
             is_opt = is_option_symbol(sym)
             if is_opt and not include_options:
+                if skipped_options is not None:
+                    skipped_options.append(sym)
                 continue
             out.append({
                 "account": acct,
@@ -168,6 +172,12 @@ def load_positions(files: List[Path],
                 "recognised_premium": float(
                     h.get("recognised_premium", 0) or 0),
                 "start": str(h.get("position_start_date") or "") or None,
+                # The holding period's start (a wash-sale replacement's
+                # tacked one, US-WASH-10): LT_IN counts from it (backlog
+                # TJ-0138). Books written before it fall back to start.
+                "holding_start": (str(h.get("holding_start_date") or "")
+                                  or str(h.get("position_start_date") or "")
+                                  or None),
                 "is_option": is_opt,
                 "multiplier": ((_declared_multiplier(h) or OPTION_MULTIPLIER)
                                if is_opt else 1.0),
@@ -722,8 +732,10 @@ def main(argv: Optional[List[str]] = None,
     _scope = scope_note(args.country)
 
     files = [Path(f) for f in args.files]
+    skipped_options: List[str] = []
     positions = load_positions(files, include_options=args.options,
-                               base_currency=args.base_currency)
+                               base_currency=args.base_currency,
+                               skipped_options=skipped_options)
     if args.symbol:
         want = {s.upper() for s in args.symbol}
         held = {r["symbol"].upper() for r in positions}
@@ -740,10 +752,24 @@ def main(argv: Optional[List[str]] = None,
                          "BBB.US (not account names)."])
             if not positions:
                 return 1
+    if args.symbol:
+        skipped_options = [s for s in skipped_options
+                           if s.upper() in {w.upper() for w in args.symbol}]
+    if skipped_options:
+        # Said like the crypto accounts the wrapper leaves out: a book
+        # holding only a written put showed "No open positions." with no
+        # word of the option (backlog TJ-0167).
+        _opts = sorted(set(skipped_options))
+        from taxjson.lib.cli_diag import note as _note_opts
+        _note_opts(PROG, f"{len(skipped_options)} option position(s) "
+                         f"excluded (pass --options to include them): "
+                         f"{', '.join(_opts[:3])}"
+                         + (f" +{len(_opts) - 3} more"
+                            if len(_opts) > 3 else "") + ".")
     if not positions:
         scope = (f" for {', '.join(args.symbol)}" if args.symbol else "")
         if args.json:
-            print(json.dumps({"rows": [], "totals": {},
+            print(json.dumps({"rows": [], "totals": {}, "omitted": [],
                               "scope_note": _scope}, indent=2,
                              sort_keys=True))
         else:
@@ -851,6 +877,16 @@ def main(argv: Optional[List[str]] = None,
         return 2
     today_iso = date.today().isoformat()
     stale_warned: set = set()
+    # The positions left out, and why: --json lists them, and a quote
+    # currency with no rate is said once, naming its symbols (backlog
+    # TJ-0024: it was said per row, the symbol cut off the one-line
+    # view, and --json had no trace of the row).
+    omitted: List[Dict[str, Any]] = []
+    no_rate: Dict[str, List[str]] = {}
+
+    def _omit(r: Dict[str, Any], reason: str) -> None:
+        omitted.append({"account": r["account"], "symbol": r["symbol"],
+                        "reason": reason})
 
     rows: List[Dict[str, Any]] = []
     tot_cost = tot_value = 0.0
@@ -861,6 +897,7 @@ def main(argv: Optional[List[str]] = None,
     for r in positions:
         q = quotes.get(r["symbol"])
         if q is None:
+            _omit(r, "no price")
             continue
         if r.get("is_option"):
             # Premium currency follows the UNDERLYING's listing — the
@@ -884,6 +921,7 @@ def main(argv: Optional[List[str]] = None,
                            f"({_spelled}) does not say whether it is in "
                            f"pence or pounds — omitted. Refresh it online "
                            f"(Yahoo names the unit).")
+                _omit(r, "quote unit unknown (pence or pounds)")
                 continue
             qcur = q.currency or quote_currency(_spelled)
         if qcur is None:
@@ -891,14 +929,16 @@ def main(argv: Optional[List[str]] = None,
                        f"{r['symbol']} ({yf_map.get(r['symbol'], r['symbol'])}"
                        f") is in — omitted. Map it with a ticker.map QUOTE line to a "
                        f"listing with a known suffix (.US/.TO/.L/...).")
+            _omit(r, "quote currency unknown")
             continue
         fx = 1.0
         if qcur != base:
             fx, rate_date = latest_rate(fx_history, qcur, today_iso)
             if fx is None:
-                warn(PROG, f"no {qcur}->{base} rate in {rates_path} — "
-                           f"{r['symbol']} omitted (run `taxjson run` to "
-                           f"refresh rates).")
+                _omit(r, f"no {qcur}->{base} rate")
+                syms = no_rate.setdefault(qcur, [])
+                if r["symbol"] not in syms:
+                    syms.append(r["symbol"])
                 continue
             age = (date.today() - date.fromisoformat(rate_date)).days
             if age > _STALE_RATE_DAYS and qcur not in stale_warned:
@@ -967,7 +1007,7 @@ def main(argv: Optional[List[str]] = None,
             "verdict": verdict,
             # A stand-alone short sale is short-term whenever it is
             # covered (US-HOLD-03): no countdown to LT (audit A2-1176).
-            "days_to_long_term": (_days_to_long_term(r["start"])
+            "days_to_long_term": (_days_to_long_term(r["holding_start"])
                                   if is_usa and r["qty"] > 0 else None),
             "short": r["qty"] < 0,
             "radar": radar.get(r["symbol"]),
@@ -977,6 +1017,17 @@ def main(argv: Optional[List[str]] = None,
         tot_cost += cost_basis
         tot_gross += abs(cost_basis)
         tot_value += value
+    for qcur, syms in sorted(no_rate.items()):
+        # `taxjson run` fetches the rates of [settings] source_currencies
+        # only: a currency only a QUOTE line's listing is in is never
+        # fetched, so "run `taxjson run`" alone fixed nothing (TJ-0024).
+        warn(PROG, f"{', '.join(syms)} omitted: no {qcur}->{base} rate — "
+                   f"add \"{qcur}\" to source_currencies in taxjson.toml, "
+                   f"then `taxjson run`",
+             details=[f"{rates_path} has no {qcur} rate: `taxjson run` "
+                      f"fetches the rates of the [settings] "
+                      f"source_currencies only, not the currency of a "
+                      f"ticker.map QUOTE line's listing."])
     rows.sort(key=lambda x: x["unrealized"])    # harvestable losses first
 
     schedule = _recovery_schedule(rows)
@@ -993,6 +1044,7 @@ def main(argv: Optional[List[str]] = None,
     if args.json:
         # CA-PLAN-04 / US-PLAN-04 in the JSON too (audit A2-1171).
         print(json.dumps({"rows": rows, "totals": totals,
+                          "omitted": omitted,
                           "scope_note": _scope}, indent=2,
                          sort_keys=True))
         return 0
@@ -1242,9 +1294,11 @@ def main(argv: Optional[List[str]] = None,
                   "(ADVISORY clear dates), from the most recent buy on "
                   "either side.")
     if is_usa:
-        legend.append("LT_IN approximates from the position start date; "
-                      "per-lot ST/LT is decided by the engine at sale "
-                      "time; an open short shows ST (US-HOLD-03).")
+        legend.append("LT_IN approximates from the earliest lot's "
+                      "holding period (a wash-sale replacement's includes "
+                      "the loss shares' days, US-WASH-10); per-lot ST/LT "
+                      "is decided by the engine at sale time; an open "
+                      "short shows ST (US-HOLD-03).")
     doc.section("COLUMNS")
     doc.items(legend)
 

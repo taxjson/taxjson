@@ -12,17 +12,22 @@
 # request, and has it rebase-merged once its checks pass: by GitHub's
 # auto-merge (`gh pr merge --auto --rebase`) when main's ruleset requires
 # checks and the repository allows auto-merge; otherwise it waits for every
-# check itself and merges (`gh pr merge --rebase`). Then it brings local
+# check itself and merges (`gh pr merge --rebase`) — only while origin's
+# main is still the base it pushed on, so the rebase replays the commits
+# onto the base they were gated on (docs/releasing.md, "Why a rebase
+# merge"). Then it brings local
 # main to what landed: a rebase merge gives the commits new ids, so
 # `git pull --rebase` drops the local copies. Uncommitted work is left as
 # it was (--autostash).
 #
-# A failed check (or a pull request closed meanwhile) turns auto-merge off,
-# closes the pull request and deletes its branch: nothing merges later
-# behind your back; the commits stay on local main to fix and land again.
+# A failed check, a main that moved on meanwhile (another pull request
+# merged, a promote from another clone) or a pull request closed meanwhile
+# turns auto-merge off, closes the pull request and deletes its branch:
+# nothing merges later behind your back; the commits stay on local main to
+# fix (or pull --rebase) and land again.
 #
-# Exit: 0 landed (or nothing to land); 1 a check failed, the pull request
-# was closed, or a push / merge failed; 2 refused before anything was
+# Exit: 0 landed (or nothing to land); 1 a check failed, main moved on, the
+# pull request was closed, or a push / merge failed; 2 refused before anything was
 # pushed; 3 still waiting at the timeout (the pull request stays open; with
 # auto-merge it merges by itself, else the message says how to merge it).
 #
@@ -38,7 +43,7 @@ while [ $# -gt 0 ]; do
     --no-wait) WAIT=0; shift ;;
     --timeout) TIMEOUT="${2:-}"; shift 2 ;;
     --footer) FOOTER="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0"; exit 0 ;;   # the comment block above
     *) die "unknown option $1 (scripts/land.sh [--no-wait] [--timeout MINUTES] [--footer TEXT])" ;;
   esac
 done
@@ -53,6 +58,7 @@ AHEAD="$(git rev-list --count origin/main..HEAD)"
 BEHIND="$(git rev-list --count HEAD..origin/main)"
 [ "$AHEAD" -gt 0 ] || { echo "Nothing to land: main is origin/main."; exit 0; }
 [ "$BEHIND" = 0 ] || die "main moved on by $BEHIND commit(s) — git pull --rebase first, then land."
+BASE="$(git rev-parse origin/main)"     # the base the commits were gated on
 HEAD_SHA="$(git rev-parse HEAD)"
 Z=0000000000000000000000000000000000000000
 URL_ORIGIN="$(git remote get-url origin)"
@@ -111,11 +117,13 @@ else
 fi
 [ "$WAIT" = 1 ] || exit 0
 
-fail() {   # fail MESSAGE — nothing may merge later behind the caller's back
+fail() {   # fail MESSAGE [NEXT] — nothing may merge later behind the caller's back
   [ "$AUTO" = 0 ] || gh pr merge "$URL" --repo "$SLUG" --disable-auto >/dev/null 2>&1 || true
   gh pr close "$URL" --repo "$SLUG" --delete-branch >/dev/null 2>&1 || true
-  die "$1 — the pull request is closed and its branch deleted; the commits stay on local main: fix, commit, and land again." 1
+  die "$1 — the pull request is closed and its branch deleted; the commits stay on local main: ${2:-fix, commit, and land again}." 1
 }
+# origin's main now (empty when it cannot be read).
+origin_main() { git ls-remote origin refs/heads/main 2>/dev/null | cut -f1 || true; }
 # Every check of the pushed commit, one "name<TAB>pass|fail|cancel|skipping|pending" line each:
 # the jobs of its Actions runs on this branch, and its commit statuses. Not `gh pr checks`: the
 # check-runs API it reads needs a permission fine-grained personal tokens cannot have, and the
@@ -173,7 +181,19 @@ while :; do
   # Counted whole (wc reads everything): `grep -q` would stop early and,
   # with pipefail, turn a writer's SIGPIPE into "every check passed".
   NOTPASS="$(printf '%s\n' "$CHECKS" | awk -F'\t' 'NF >= 2 && $2 != "pass" && $2 != "skipping"' | wc -l)"
-  if [ "$AUTO" = 0 ] && [ -n "$CHECKS" ] && [ "$NOTPASS" -eq 0 ]; then
+  # Only onto the base the commits were gated on (docs/releasing.md, "Why
+  # a rebase merge"): GitHub's rebase merge replays them onto whatever main
+  # is by then, and a main that moved meanwhile would make the landed
+  # commits trees no gate (local or this pull request's) ran. A main that
+  # cannot be read is asked again next round; a merge GitHub's auto-merge
+  # just made is the move itself.
+  NOW_MAIN="$(origin_main)"
+  if [ -n "$NOW_MAIN" ] && [ "$NOW_MAIN" != "$BASE" ]; then
+    [ "$(gh pr view "$URL" --repo "$SLUG" --json state -q .state 2>/dev/null || echo UNKNOWN)" != MERGED ] || break
+    fail "main moved on while the checks ran (origin/main is ${NOW_MAIN:0:9}; they ran on ${BASE:0:9}): $URL" \
+         "git pull --rebase, run the gate again, and land again"
+  fi
+  if [ "$AUTO" = 0 ] && [ -n "$CHECKS" ] && [ "$NOTPASS" -eq 0 ] && [ "$NOW_MAIN" = "$BASE" ]; then
     gh pr merge "$URL" --repo "$SLUG" --rebase --delete-branch >/dev/null \
       || die "Every check passed but the merge failed: $URL (merge it on GitHub, then git pull --rebase)." 1
     break        # merged: not "still waiting" when the timeout falls in the same round

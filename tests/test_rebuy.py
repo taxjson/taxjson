@@ -75,10 +75,12 @@ class TestRebuyRows(unittest.TestCase):
     def test_canada_date_is_the_radar_reentry_on_settlement(self):
         doc = _build("canada", _CA_LOSS)
         r = _by(doc)["ZZQ.TO"]
-        # settlement 2026-05-04 + 31: a trade that day settles after the
-        # window; the radar's own CLEARS date (wash-radar, buy-check).
-        self.assertEqual(r["rebuy_at"], "2026-06-04")
-        self.assertEqual(r["days_left"], 15)
+        # settlement 2026-05-04 + 30 is Wed 06-03, the window's last
+        # day: a trade then settles Thu, after it (TJ-0186; it was
+        # settlement + 31). The radar's own CLEARS date (wash-radar,
+        # buy-check).
+        self.assertEqual(r["rebuy_at"], "2026-06-03")
+        self.assertEqual(r["days_left"], 14)
         self.assertEqual(r["sold_on"], "2026-05-01")
         self.assertEqual(r["accounts"], ["margin"])
         self.assertAlmostEqual(r["loss"], 1000.0)
@@ -96,7 +98,7 @@ class TestRebuyRows(unittest.TestCase):
         book = [dict(t, currency="USD", symbol="ZZQ.US") for t in _CA_LOSS]
         ca = _by(_build("canada", book))["ZZQ.US"]
         us = _by(_build("usa", book))["ZZQ.US"]
-        self.assertEqual(ca["rebuy_at"], "2026-06-04")   # settle + 31
+        self.assertEqual(ca["rebuy_at"], "2026-06-03")   # settles after
         self.assertEqual(us["rebuy_at"], "2026-06-01")   # trade + 31
 
     @rule("CA-PLAN-05")
@@ -113,9 +115,10 @@ class TestRebuyRows(unittest.TestCase):
         rows = _by(doc)
         self.assertEqual(rows[opt]["underlying"], "ZZQ.TO")
         self.assertTrue(rows[opt]["is_option"])
-        # Each series keeps its own window: 2026-05-13 + 31.
-        self.assertEqual(rows[opt]["rebuy_at"], "2026-06-13")
-        self.assertEqual(rows["ZZQ.TO"]["rebuy_at"], "2026-06-04")
+        # Each series keeps its own window: 2026-05-13 + 30 is Fri
+        # 06-12, and a trade that day settles after it.
+        self.assertEqual(rows[opt]["rebuy_at"], "2026-06-12")
+        self.assertEqual(rows["ZZQ.TO"]["rebuy_at"], "2026-06-03")
 
     @rule("CA-PLAN-05")
     def test_registered_rebuy_is_flagged_rebought(self):
@@ -135,7 +138,7 @@ class TestRebuyRows(unittest.TestCase):
         doc = _build("canada", _CA_LOSS, as_of="2026-06-07")
         self.assertEqual(doc["rows"], [])
         self.assertEqual([c["ticker"] for c in doc["cleared"]], ["ZZQ.TO"])
-        self.assertEqual(doc["cleared"][0]["rebuy_at"], "2026-06-04")
+        self.assertEqual(doc["cleared"][0]["rebuy_at"], "2026-06-03")
         from taxjson.lib import rebuy as RB
         text = RB.render(doc, "CAD").text()
         self.assertIn("Cleared in the last 7 days: ZZQ.TO.", text)
@@ -240,7 +243,9 @@ class TestRebuyStyle(unittest.TestCase):
                                         "--json")
         doc = json.loads(r.stdout)
         rows = {x["ticker"]: x for x in doc["rows"]}
-        self.assertEqual(rows["NVDA.US"]["rebuy_at"], "2024-12-22")
+        # The window closes Sat 12-21: Fri 12-20 settles after it (it
+        # was Sun 12-22, a day nothing trades — TJ-0186).
+        self.assertEqual(rows["NVDA.US"]["rebuy_at"], "2024-12-20")
         self.assertEqual(rows["SAMPA.TO"]["status"], "rebought")
         self.assertEqual(rows["SAMPA.TO"]["rescue_by"], "2024-11-28")
         self.assertEqual(doc["country"], "canada")

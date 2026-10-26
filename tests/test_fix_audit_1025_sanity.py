@@ -159,8 +159,9 @@ class TestWholeSnapshot(unittest.TestCase):
                                       _BOTH[1]]))
             r = _tjs(root, "sanity", f"margin={f}", "--details")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("its cost is not compared (quantities are)",
-                          r.stderr)
+            # (the reason before the clause break: backlog TJ-0160)
+            self.assertIn("cost is not compared: total_cost 'abc' is not "
+                          "a number — its quantities are.", r.stderr)
         # taxjson-export's file for an option of unknown contract size.
         from taxjson.lib import positions_reports as pr
         with tempfile.TemporaryDirectory() as td:

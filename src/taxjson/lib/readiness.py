@@ -44,7 +44,8 @@ def conservation_lines(gains_paths: Iterable[Any]) -> List[str]:
 
 def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
           no_purchase: int = 0,
-          conservation: Iterable[str] = ()) -> Dict[str, Any]:
+          conservation: Iterable[str] = (),
+          in_kind_unbooked: int = 0) -> Dict[str, Any]:
     """{"complete": bool, "issues": [{"kind", "detail", "count"?}]}."""
     issues: List[Dict[str, Any]] = []
     for t in run_state:
@@ -67,4 +68,13 @@ def build(*, run_state: Iterable[str] = (), unknown_cost: int = 0,
         issues.append({"kind": "conservation", "detail": str(ln),
                        "fix": "taxjson audit; check the account's rows "
                               "for the symbol"})
+    if in_kind_unbooked:
+        # A contribution's deemed sale (a withdrawal's purchase) the run
+        # could not value: missing from the books (backlog TJ-0095).
+        issues.append({
+            "kind": "in-kind-not-booked", "count": int(in_kind_unbooked),
+            "detail": f"{int(in_kind_unbooked)} in-kind move(s) with a "
+                      f"registered account are NOT booked",
+            "fix": "taxjson transfers; value each with a .tt INKIND line, "
+                   "then taxjson run"})
     return {"complete": not issues, "issues": issues}

@@ -4131,7 +4131,8 @@ def read_tt_sales(paths) -> List[dict]:
             text = p.read_text(encoding='utf-8-sig')
         except (OSError, UnicodeDecodeError):
             continue
-        for n, line in enumerate(text.splitlines(), 1):
+        from taxjson.bin.taxjson_convert_tt import tt_lines
+        for n, line in enumerate(tt_lines(text), 1):
             i = line.find('#')
             parts = (line if i < 0 else line[:i]).split()
             if len(parts) < 5 or parts[0] != 'BUYSELL':

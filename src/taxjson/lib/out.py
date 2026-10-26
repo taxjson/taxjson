@@ -367,8 +367,11 @@ def message(kind: str, text: str, *, prog: Optional[str] = None,
     if kind == "attention":
         text = shown_topic(text)
     # Shown to a person: every line after the label's is flush-left.
+    # The label never stands alone: a first word longer than the rest
+    # of the line (a long path) stays on the label's line — it left a
+    # bare "Error:" above the headline (backlog TJ-0123).
     out = []
-    for part in (head + text).split("\n"):
+    for part in (head.rstrip() + _NBSP + text).split("\n"):
         if part.strip():
             out.extend(wrap(part.strip(), w, "", "", stream))
     for d in details:

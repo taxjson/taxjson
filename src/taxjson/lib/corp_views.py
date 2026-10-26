@@ -36,6 +36,25 @@ class ViewError(ValueError):
     line rather than reporting an empty (and wrongly clean) view."""
 
 
+def cash_in_lieu_line(received: float, fraction: float, cash: float,
+                      currency: str, paid: str, sold: bool = False) -> str:
+    """A spin-off's cash in lieu of a fraction, in words: the fraction of
+    the new shares the holding was entitled to that was paid in cash,
+    and the cash ('' when none was paid). The ratio the broker's row
+    gives counts the delivered shares only (backlog TJ-0166), while
+    s.86.1 books the fraction with them (CA-CORP-05). `sold`: the
+    booking sells the fraction for the cash."""
+    if cash < 0.005:
+        return ""
+    money = f"{cash:,.2f} {currency}".rstrip() + (f" on {paid}" if paid
+                                                   else "")
+    if fraction <= 1e-9:
+        return f"{money}, for a fraction the export does not size"
+    return (f"{fraction:g} of the {received + fraction:g} new shares, "
+            f"paid in cash: {money}"
+            + (" (booked as their sale)" if sold else ""))
+
+
 def _rows(path: Path) -> List[Dict[str, Any]]:
     """The rows of a work/<acct>_base.json. A missing file is an account
     with no books yet; an unreadable or malformed one is refused (it
@@ -218,6 +237,25 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                     child = ev.target_symbol
             ratio = (f"{ev.ratio:.6g} new per share ({ev.ratio_new:g} for "
                      f"{ev.ratio_old:g})" if ev else "")
+            frac = float(getattr(ev, "fraction_in_lieu", 0) or 0) \
+                if ev else 0.0
+            cil = float(getattr(ev, "cash_in_lieu", 0) or 0) if ev else 0.0
+            if ev and frac > 1e-9 and cil >= 0.005 \
+                    and abs(ev.ratio_new - ev.qty_received) < 1e-9 \
+                    and ev.ratio_old:
+                # The row's ratio counts the delivered shares; the
+                # holding was entitled to the fraction too (TJ-0166).
+                ent = ev.ratio_new + frac
+                ratio = (f"{ent / ev.ratio_old:.6g} new per share "
+                         f"({ent:g} for {ev.ratio_old:g})")
+            cil_text = cash_in_lieu_line(
+                float(ev.qty_received or 0), frac, cil,
+                getattr(ev, "cash_in_lieu_currency", "") or
+                getattr(ev, "currency", ""),
+                getattr(ev, "cash_in_lieu_date", "") or "",
+                sold=any(r.get("action") == "BUYSELL"
+                         and float(r.get("quantity") or 0) < 0
+                         for r in by_ev.get(eid, []))) if ev else ""
             broker_fmv = float(getattr(ev, "target_fmv", 0) or 0) or \
                 float(getattr(ev, "fmv", 0) or 0) if ev else 0.0
             broker_cur = ((getattr(ev, "target_currency", "") or
@@ -228,12 +266,16 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 r.get("corp_election") == SHELTERED_DEFAULT for r in booked)
             hints = rec.get("hints") or {}
             fmv_ps = hints.get("fmv_per_share")
+            # The hint is per share in the event's currency (corp_actions
+            # ._emit_distribution); the broker's value in its own.
+            fmv_cur = (getattr(ev, "currency", "") if ev else "") or base_cur
             # The value the booking used: a positive hint, else the
             # broker's own value (taxable_deemed_dividend defaults to it).
             from_broker = False
             if not fmv_ps and broker_fmv and ev is not None \
                     and ev.qty_received and not defaulted:
                 fmv_ps = broker_fmv / ev.qty_received
+                fmv_cur = broker_cur or fmv_cur
                 from_broker = True
             income = sum(float(r.get("net_amount") or 0) for r in booked
                          if r.get("action") == "DIVIDEND")
@@ -335,6 +377,10 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 "date": date, "parent": parent, "child": child,
                 "ratio": ratio, "election": election,
                 "fmv_per_share": fmv_ps, "value_from_broker": from_broker,
+                # The currency of fmv_per_share (backlog TJ-0134: the
+                # broker's USD value was labelled CAD).
+                "fmv_currency": fmv_cur,
+                "cash_in_lieu": cil_text,
                 "broker_fmv": broker_fmv,
                 "broker_currency": broker_cur, "income": round(income, 2),
                 "new_qty": new_qty, "new_cost": round(new_cost, 2),
@@ -481,15 +527,18 @@ def render_spinoffs(doc: Dict[str, Any],
         tag = f" [{', '.join(s['flags'])}]" if s["flags"] else ""
         _hang(d, f"{s['date']}  {s['account']}  {s['parent']} -> "
                f"{s['child']}  {s['ratio']}{tag}", "", "  ")
-        fmv = (f"{s['fmv_per_share']:,.2f} {s['currency']}/share"
+        fmv = (f"{s['fmv_per_share']:,.2f} "
+               f"{s.get('fmv_currency') or s['currency']}/share"
                + (" (the broker's value)" if s.get("value_from_broker")
                   else "")
                if s["fmv_per_share"] else "0")
         d.kv([("election", s["election"]), ("value used", fmv),
               ("booked", f"income {s['income']:,.2f} {s['currency']}, "
                          f"{s['new_qty']:g} new shares costing "
-                         f"{s['new_cost']:,.2f} {s['currency']}"),
-              ("held now", f"{s['held_now']:g}")], "  ")
+                         f"{s['new_cost']:,.2f} {s['currency']}")]
+             + ([("cash in lieu", s["cash_in_lieu"])]
+                if s.get("cash_in_lieu") else [])
+             + [("held now", f"{s['held_now']:g}")], "  ")
         d.items(s["why"], "  ")
     n = sum(1 for s in items if set(s["flags"]) - {"TWO-SOURCES"})
     if stale:

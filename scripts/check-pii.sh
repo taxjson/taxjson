@@ -57,8 +57,9 @@
 # matching is case-insensitive, and a run of 4+ literal digits in a
 # denylist pattern also matches with spaces or dashes between the digits
 # (1234 5678, 1234-5678). --identity reads "Name <email>" lines and
-# applies the denylist and the e-mail allowlist. Exit 1 with a masked
-# file:line for every hit. Mark a genuine false positive with a
+# applies the denylist and the e-mail allowlist. Exit 1 naming the
+# file:line of every hit (in --diff the new file's line; a path part that
+# would itself be refused stays masked), its content masked. Mark a genuine false positive with a
 # COMMENT marker on that line — `# pii-ok`, `// pii-ok`, `<!-- pii-ok`
 # or `pii-ok:` — the bare word inside other text does not count.
 set -uo pipefail
@@ -407,6 +408,103 @@ fail() { hits=$((hits + 1)); echo "!! $1"; [ -n "${2:-}" ] && printf '%s\n' "$2"
 # Non-ASCII bytes print as '?' (a Latin-1 hit line must not garble the report).
 mask() { LC_ALL=C sed -E 's/[^ -~]/?/g' | sed -E 's/[A-Za-z0-9@._%+~-]*[0-9@][A-Za-z0-9@._%+~-]*/<masked>/g' | cut -c1-140; }
 
+# Does a file NAME (a path, or one part of it) carry an account-id shape?
+# An IB id (U + 7-8 digits; a lower-case u1234567 too, as IB HTML names
+# carry it, when no letter is glued before the u: A2-0449) or an 8+ digit
+# run, unless synthetic (U1234567…, U9990…, 9990…) or a REAL date
+# (YYYYMMDD that parses: 20991399 is an id). The file-name check refuses
+# such a name; a hit's location hides such a part (hide_loc).
+id_in_name() {
+  printf '%s\n' "$1" | grep -oE 'U[0-9]{7,8}' | grep -vE '^U1234567[0-9]?$|^U9990' >/dev/null && return 0
+  printf '%s\n' "$1" | grep -oE '(^|[^A-Za-z])u[0-9]{7,8}' | sed -E 's/^[^u]//' \
+    | grep -vE '^u1234567[0-9]?$|^u9990' >/dev/null && return 0
+  local tok
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case "$tok" in 9990*) continue ;; esac
+    if [ "${#tok}" -eq 8 ] && is_date8 "$tok"; then continue; fi
+    return 0
+  done <<< "$(printf '%s\n' "$1" | grep -oE '[0-9]{8,}' || true)"
+  return 1
+}
+
+# Where a hit is, shown so it can be found (TJ-0150): the file and line
+# are not personal data. Only a path part that would itself be refused
+# is masked: one with an account-id shape (id_in_name) or an '@', one the
+# hit's own pattern matches, or one a denylist pattern matches. The
+# content after the line number is masked (mask); a denylist hit's
+# content is hidden whole (report).
+DENY_PATS=()
+load_deny_pats() {   # the denylist's valid patterns, loosened as the scan uses them
+  local pat loose
+  DENY_PATS=()
+  [ -f "$DENY" ] && [ -r "$DENY" ] || return 0
+  while IFS= read -r pat || [ -n "$pat" ]; do
+    pat="${pat%$'\r'}"; pat="${pat#$'\xef\xbb\xbf'}"
+    case "$pat" in ''|'#'*) continue ;; esac
+    printf '' | grep -qE -e "$pat" -- - 2>/dev/null; [ $? -eq 2 ] && continue
+    loose="$(printf '%s\n' "$pat" | loosen)"
+    printf '' | grep -qE -e "$loose" -- - 2>/dev/null; [ $? -eq 2 ] && loose="$pat"
+    DENY_PATS+=("$loose")
+  done < "$DENY"
+}
+part_hit() {   # part_hit TEXT PATTERN [EXEMPT]: 0 when PATTERN matches TEXT once EXEMPT is removed, or cannot be applied
+  local t="$1" rc
+  [ -z "${3:-}" ] || t="$(printf '%s\n' "$t" | sed -E "s#$3##g")"
+  printf '%s\n' "$t" | grep -aiqE -e "$2" 2>/dev/null; rc=$?
+  [ "$rc" -ne 1 ]
+}
+hide_part() {   # hide_part TEXT [PATTERN [EXEMPT]]: 0 when this path part must not be shown
+  local pat
+  [[ "$1" == *@* ]] && return 0
+  id_in_name "$1" && return 0
+  [ -n "${2:-}" ] && part_hit "$1" "$2" "${3:-}" && return 0
+  for pat in ${DENY_PATS[@]+"${DENY_PATS[@]}"}; do part_hit "$1" "$pat" && return 0; done
+  return 1
+}
+hide_loc() {   # hide_loc PATH [PATTERN [EXEMPT]]: PATH with every part hide_part refuses masked
+  local p="$1" out="" c
+  local -a parts
+  if [ -n "${HOME:-}" ] && [ "$HOME" != / ]; then
+    case "$p" in "$HOME"/*) p="~/${p#"$HOME"/}" ;; esac
+  fi
+  IFS=/ read -ra parts <<< "$p"
+  for c in ${parts[@]+"${parts[@]}"}; do
+    if [ -n "$c" ] && hide_part "$c" "${2:-}" "${3:-}"; then c="<masked>"; fi
+    out="$out/$c"
+  done
+  printf '%s\n' "${out#/}" | LC_ALL=C sed -E 's/[^ -~]/?/g'
+}
+hide_paths() {   # one path per line on stdin
+  local f
+  load_deny_pats
+  while IFS= read -r f; do [ -z "$f" ] || hide_loc "$f"; done
+}
+# Hit lines on stdin, "PATH<SEP>LINE:TEXT" or "(added|text|identity) line
+# N: TEXT", out as PATH:LINE:TEXT with hide_loc's path and mask's text.
+mask_hit() {   # mask_hit [PATTERN [EXEMPT]]
+  local line loc rest num txt
+  load_deny_pats
+  while IFS= read -r line; do
+    case "$line" in
+      *"$SEP"*)
+        loc="${line%%"$SEP"*}"; rest="${line#*"$SEP"}"
+        num="${rest%%:*}"; txt="${rest#*:}"
+        [ "$num" != "$rest" ] || { num=""; txt="$rest"; }
+        case "$num" in ''|*[!0-9]*) [ "$num" = "added row" ] || num="$(printf '%s\n' "$num" | mask)" ;; esac
+        printf '%s:%s:%s\n' "$(hide_loc "$loc" "${1:-}" "${2:-}")" "$num" "$(printf '%s\n' "$txt" | mask)"
+        ;;
+      *)
+        if [[ "$line" =~ ^((added|text|identity)\ line\ [0-9]+):\ ?(.*)$ ]]; then
+          printf '%s: %s\n' "${BASH_REMATCH[1]}" "$(printf '%s\n' "${BASH_REMATCH[3]}" | mask)"
+        else
+          printf '%s\n' "$line" | mask
+        fi
+        ;;
+    esac
+  done
+}
+
 SEP=$'\001'  # path / line separator in tree-mode hit lines (a path may hold ':')
 XT=""        # scratch dir holding the text extracted from binary files
 # Text inside a binary file, one string per line, written to argv[1]/<path>
@@ -484,6 +582,9 @@ for path in sys.stdin.read().splitlines():
 NAMES=""     # newline-separated file names (tree mode), for the name scan
 RAWF=""
 AMT_INPUT="" # --diff: the added prose / comment text checked for money amounts
+AMT_IDX=""   # --diff: for each AMT_INPUT line, its line number in INPUT
+IDXMAP=""    # AMT_IDX while the amount check runs (locate_added)
+RAW=""
 if [ "$mode" != tree ]; then
   RAWF="$(mktemp)"; trap 'rm -f "$RAWF"' EXIT
   cat > "$RAWF"
@@ -566,15 +667,20 @@ if [ "$mode" = diff ]; then
   # markdown / reST doc, and the COMMENT part (from a #, //, /* or <!--
   # at the start or after a blank) of any other added line, each
   # prefixed with its file. Data and code are not: fixtures carry
-  # synthetic amounts.
-  AMT_INPUT="$(printf '%s\n' "$RAW" | LC_ALL=C awk -v H="$HDR" '
+  # synthetic amounts. AMT_IDX: each such line's place among the added
+  # lines (INPUT), which locate_added turns into its file and line.
+  AMT_RAW="$(printf '%s\n' "$RAW" | LC_ALL=C awk -v H="$HDR" '
     /^diff --git / { f = ""; next }
     index($0, H "+++ ") == 1 { f = substr($0, 6); sub(/^b\//, "", f); next }
     /^\+/ {
-      s = substr($0, 2)
-      if (f ~ /(^|\/)CHANGELOG[^\/]*$/ || f ~ /\.(md|markdown|rst)$/) { print f ": " s; next }
-      if (match(s, /(^|[ \t])(#|\/\/|\/\*|<!--)/)) print f ": " substr(s, RSTART)
+      k++; s = substr($0, 2)
+      if (f ~ /(^|\/)CHANGELOG[^\/]*$/ || f ~ /\.(md|markdown|rst)$/) { print k "\t" f ": " s; next }
+      if (match(s, /(^|[ \t])(#|\/\/|\/\*|<!--)/)) print k "\t" f ": " substr(s, RSTART)
     }')"
+  if [ -n "$AMT_RAW" ]; then
+    AMT_INPUT="$(printf '%s\n' "$AMT_RAW" | cut -f2-)"
+    AMT_IDX="$(printf '%s\n' "$AMT_RAW" | cut -f1)"
+  fi
   # Destination paths: +++ lines, plus the headers a PURE rename/copy
   # or an empty new file carries instead (no +++ line at all).
   NAMES="$( { printf '%s\n' "$RAW" | sed -nE "s#^$HDR\\+\\+\\+ b/##p; s#^(rename|copy) to ##p"
@@ -584,7 +690,7 @@ if [ "$mode" = diff ]; then
   # calls binary is a UTF-16 (or NUL-stuffed) export and must not slip
   # through unscanned.
   b="$(printf '%s\n' "$RAW" | sed -nE 's#^Binary files .* and (b/)?(.*) differ$#\2#p' | grep -viE "\.($BIN_EXT)$" || true)"
-  [ -z "$b" ] || fail "non-binary file(s) git treats as binary (UTF-16?) — cannot be scanned; convert to UTF-8" "$(printf '%s\n' "$b" | mask)"
+  [ -z "$b" ] || fail "non-binary file(s) git treats as binary (UTF-16?) — cannot be scanned; convert to UTF-8" "$(printf '%s\n' "$b" | head -20 | hide_paths)"
   scan() { printf '%s\n' "$INPUT" | grep -anE $CI -e "$1" | sed -E 's/^([0-9]+):/added line \1: /'; }
 elif [ "$mode" = text ] || [ "$mode" = identity ]; then
   INPUT="$(tr -d '\0' < "$RAWF")"
@@ -625,7 +731,7 @@ else
       SCANLIST="$SCANLIST
 $(cd "$XT" && find . -type f | sed "s#^\./#$XT/#")"
     else
-      fail "binary file(s) present but no python3 to extract their text — cannot be scanned" "$(printf '%s\n' "$BINLIST" | mask)"
+      fail "binary file(s) present but no python3 to extract their text — cannot be scanned" "$(printf '%s\n' "$BINLIST" | head -20 | hide_paths)"
     fi
   fi
   scan() {   # NUL-delimited names so spaces/quotes cannot split or abort;
@@ -773,13 +879,58 @@ report() {   # report LABEL PATTERN [EXEMPT-REGEX [FILTER]]
   [ -n "${3:-}" ] && out="$(printf '%s\n' "$out" | still_hit "$2" "$3")"
   [ -n "${4:-}" ] && out="$(printf '%s\n' "$out" | "$4")"
   [ -n "$out" ] || return 0
+  # fail() shows twenty lines: only those are located and masked.
+  out="$(printf '%s\n' "$out" | head -20)"
+  [ "$mode" != diff ] || out="$(printf '%s\n' "$out" | locate_added)"
   # A denylist hit IS the private string (names have no digit for mask()
   # to catch): show where, never what.
   [ -n "$CI" ] && out="$(printf '%s\n' "$out" | sed -E \
-      -e "s/^([^$SEP]*)$SEP([0-9]+):.*\$/\1:\2: <content hidden>/" \
+      -e "s/^([^$SEP]*)$SEP([0-9]+):.*\$/\1$SEP\2: <content hidden>/" \
       -e 's/^((added|text|identity) line [0-9]+):.*$/\1: <content hidden>/')"
-  out="$(printf '%s\n' "$out" | tr "$SEP" ':')"
-  fail "$1" "$(printf '%s\n' "$out" | mask)"
+  fail "$1" "$(printf '%s\n' "$out" | mask_hit "$2" "${3:-}")"
+}
+
+# --diff: "added line N: TEXT" (N counts the push's added lines, INPUT)
+# becomes "PATH<SEP>LINE:TEXT", the new file's path and line number,
+# counted through the hunks as the figure list's reader (FIG_PY diff)
+# does. While the amount check runs, N counts AMT_INPUT's lines, which
+# IDXMAP maps back to INPUT's. A line outside any hunk keeps its count.
+locate_added() {
+  LC_ALL=C awk -v H="$HDR" -v S="$SEP" -v AMT="${IDXMAP:+1}" '
+    FNR == 1 { part++ }
+    part == 1 {
+      if (hunk) {
+        c = substr($0, 1, 1)
+        if (c == "+") { L[++k] = (p == "" ? "" : p S n); n++; nw-- }
+        else if (c == "-") od--
+        else if (c != "\\") { n++; od--; nw-- }
+        if (od <= 0 && nw <= 0) hunk = 0
+        next
+      }
+      if ($0 ~ /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/) {
+        h = $0; sub(/^@@ -/, "", h); split(h, A, " ")
+        m = split(A[1], O, ","); od = (m > 1) ? O[2] + 0 : 1
+        sub(/^\+/, "", A[2]); m = split(A[2], N, ","); n = N[1] + 0; nw = (m > 1) ? N[2] + 0 : 1
+        hunk = (od > 0 || nw > 0); next
+      }
+      if (index($0, H "+++ ") == 1) { p = substr($0, 6); sub(/^b\//, "", p); next }
+      if ($0 ~ /^diff --git /) { p = ""; next }
+      if ($0 ~ /^\+/) L[++k] = ""
+      next
+    }
+    part == 2 { X[FNR] = $0 + 0; next }
+    {
+      if (match($0, /^added line [0-9]+: /)) {
+        i = substr($0, 12, RLENGTH - 13) + 0
+        if (AMT) i = X[i]
+        if (L[i] != "") {
+          t = substr($0, RLENGTH + 1); split(L[i], Q, S)
+          if (index(t, Q[1] ": ") == 1) t = substr(t, length(Q[1]) + 3)
+          print L[i] ":" t; next
+        }
+      }
+      print
+    }' <(printf '%s\n' "$RAW") <(printf '%s\n' "$IDXMAP") -
 }
 
 # ---- NUL bytes in any non-binary file (UTF-16 exports read as binary) --
@@ -787,7 +938,7 @@ if [ "$mode" = tree ]; then
   while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     if LC_ALL=C tr -d '\0' < "$f" | cmp -s - "$f"; then :; else
-      fail "text file contains NUL bytes (UTF-16? cannot be scanned): $(printf '%s\n' "$f" | sed "s#^$HOME#~#")"; fi
+      fail "text file contains NUL bytes (UTF-16? cannot be scanned): $(printf '%s\n' "$f" | hide_paths)"; fi
   done <<< "$SCANLIST"
 fi
 
@@ -798,23 +949,8 @@ if [ -n "$NAMES" ]; then
     [ -n "$f" ] || continue
     # The whole (relative) path: an id-named FOLDER (inputs/<U-id>/)
     # published the id as surely as an id-named file (S024-16).
-    b="$f"
-    if printf '%s\n' "$b" | grep -oE 'U[0-9]{7,8}' | grep -qvE '^U1234567[0-9]?$|^U9990'; then n="$n$f
-"; continue; fi
-    # A lower-case id (IB HTML names: u1234567.html) — not glued to a
-    # letter before it, so an ordinary word ending in 'u' is not one (A2-0449).
-    if printf '%s\n' "$b" | grep -oE '(^|[^A-Za-z])u[0-9]{7,8}' | sed -E 's/^[^u]//' \
-        | grep -qvE '^u1234567[0-9]?$|^u9990'; then n="$n$f
-"; continue; fi
-    # 8+ digit runs: only a synthetic 9990… id or a REAL date (YYYYMMDD
-    # that parses) is exempt — 20991399 is an id, not a date.
-    while IFS= read -r tok; do
-      [ -n "$tok" ] || continue
-      case "$tok" in 9990*) continue ;; esac
-      if [ "${#tok}" -eq 8 ] && is_date8 "$tok"; then continue; fi
-      n="$n$f
-"; break
-    done <<< "$(printf '%s\n' "$b" | grep -oE '[0-9]{8,}' || true)"
+    if id_in_name "$f"; then n="$n$f
+"; fi
   done <<< "$NAMES"
   [ -z "$n" ] || fail "file NAME carries an account-id shape (IB names downloads after the account)" "$(printf '%s' "$n" | sort -u | mask)"
 fi
@@ -877,10 +1013,10 @@ report "money amount in a commit/tag message (thousands separators and cents; ma
   "$AMOUNT_RE" '' amount_filter
 fi
 if [ "$mode" = diff ] && [ -n "$AMT_INPUT" ]; then
-  _input="$INPUT"; INPUT="$AMT_INPUT"
+  _input="$INPUT"; INPUT="$AMT_INPUT"; IDXMAP="$AMT_IDX"
   report "money amount added to a CHANGELOG / doc or a code comment (thousands separators and cents; mark a synthetic one pii-ok)" \
     "$AMOUNT_RE" '' amount_filter
-  INPUT="$_input"
+  INPUT="$_input"; IDXMAP=""
 fi
 fi
 # ---- account-number columns (tree / ad hoc / pre-push diff) ----------
@@ -929,7 +1065,7 @@ if [ "$mode" = tree ]; then
       LC_ALL=C awk -v FN="$f" -v SEP="$SEP" -v MARKED=0 "$ACCT_AWK" "$f"
     done
   }
-  acct_out="$(acct_cols | grep -avE -e "$PII_OK" | sed "s#^${XT:-/nonexistent}/##" | tr "$SEP" ':')"
+  acct_out="$(acct_cols | grep -avE -e "$PII_OK" | sed "s#^${XT:-/nonexistent}/##")"
 elif [ "$mode" = diff ]; then
   # The pre-push diff (A2-1388): split the hunks of every .csv/.tsv per
   # file, then read them with the file's header row in front.
@@ -951,9 +1087,9 @@ elif [ "$mode" = diff ]; then
         | LC_ALL=C awk -v FN="$path" -v SEP="$SEP" -v MARKED=1 "$ACCT_AWK"
     done
   }
-  acct_out="$(acct_diff | grep -avE -e "$PII_OK" | tr "$SEP" ':')"
+  acct_out="$(acct_diff | grep -avE -e "$PII_OK")"
 fi
-[ -z "$acct_out" ] || fail "8-9 digit account number under an Account column" "$(printf '%s\n' "$acct_out" | mask)"
+[ -z "$acct_out" ] || fail "8-9 digit account number under an Account column" "$(printf '%s\n' "$acct_out" | head -20 | mask_hit)"
 
 # Show where a denylisted name is, never what: every path component the
 # pattern matches is hidden (and the whole path when no single one does).

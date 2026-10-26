@@ -1577,6 +1577,10 @@ def engine_options(req: GainsRequest) -> Dict[str, Any]:
         extra['option_buyback_loss_superficial'] = \
             req.option_buyback_loss_superficial
         extra['option_grant_basis'] = req.effective_tax_date()
+        # The pools at the end of the year too (inventory_year_end:
+        # backlog TJ-0282).
+        if req.year:
+            extra['year_end'] = f"{req.year}-12-31"
     return extra
 
 

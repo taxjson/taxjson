@@ -202,7 +202,7 @@ class TestOutsideAProject(unittest.TestCase):
             r = _cli("-C", d, "checklist", "--run", "--json")
         self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads(r.stdout)
-        self.assertEqual(doc["schema_version"], 2)
+        self.assertEqual(doc["schema_version"], 3)
         self.assertFalse(doc["in_project"])
         for k in ("counts", "next", "all_passed", "year", "country"):
             self.assertIsNone(doc[k], k)
@@ -581,6 +581,13 @@ class TestCleanProject(unittest.TestCase):
                 "BUYSELL 2024-01-10 10:00:00 ZZA.TO 100 CAD 10 1000\n"
                 "BUYSELL 2024-06-03 10:00:00 ZZA.TO -100 CAD 12 1200\n"
                 "BUYSELL 2025-02-03 10:00:00 ZZB.TO 10 CAD 10 100\n")
+            # The broker's positions, which the books tie to: a project
+            # holding a position with no holdings file has its sanity
+            # step need attention (backlog TJ-0136).
+            (root / "holdings").mkdir()
+            (root / "holdings" / "margin_holdings.toml").write_text(
+                '[meta]\nas_of = "2025-02-03"\n\n'
+                '[[holding]]\nsymbol = "ZZB.TO"\nquantity = 10\n')
             r = _cli("-C", str(root), "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             # This machine's own hooks and signing never apply.
@@ -601,7 +608,7 @@ class TestCleanProject(unittest.TestCase):
                     "missing-history", "transfers", "ticker-map",
                     "journals", "renames", "inputs-committed",
                     "option-boundary", "wash-reviewed", "check-dates",
-                    "audit", "form-export"):
+                    "audit", "form-export", "sanity"):
             self.assertEqual(st[sid], "done", sid)
         for sid in ("crypto-sends", "crypto-inputs", "sheltered-inputs",
                     "filing-positions"):

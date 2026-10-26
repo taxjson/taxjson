@@ -49,6 +49,7 @@ Or through the project wrapper: `taxjson carryover`.
 from taxjson.lib.stage_msg import emit_line
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -176,7 +177,8 @@ def yearly_nets(results: dict, tax_date: str) -> Dict[int, Dict[str, float]]:
 def build_canada_ledger(nets: Dict[int, Dict[str, float]],
                         claimed: Dict[int, float],
                         carried: Optional[Dict[int, float]] = None,
-                        locked_back: Optional[Dict[int, float]] = None
+                        locked_back: Optional[Dict[int, float]] = None,
+                        locked_applied: Optional[Dict[int, float]] = None
                         ) -> Dict[str, Any]:
     """`carried`: {year: balance a close-year lock recorded as carried
     out of that year} — at the end of that year the running balance
@@ -186,9 +188,15 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     year). `locked_back`: {year: the carry-back that lock recorded
     (carried_back; 0 when it records none)} — a locked year meets
     claims under earlier years only up to it, and the rest of those
-    claims stays pending for a later year's loss (CA-CARRY-04)."""
+    claims stays pending for a later year's loss (CA-CARRY-04).
+    `locked_applied`: {year: the earlier losses that lock recorded as
+    applied on its return} — with no claim under that year, the row's
+    APPLIED is it, and that much of the year's gain is used: no
+    carryforward left to apply to it, no carry-back room (backlog
+    TJ-0052)."""
     carried = carried or {}
     locked_back = locked_back or {}
+    locked_applied = locked_applied or {}
     # Union of book years and CLAIM years: a claim is applied on the
     # year of the RETURN it appears on, which may have no dispositions
     # in the broker book at all (T3 distributions, a no-trade year).
@@ -283,21 +291,35 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             # claim is still on its return.
             excess = carried_back - max(0.0, float(locked_back.get(y)
                                                    or 0.0))
-            for _cy, take in reversed(backs):
+            for _i in range(len(backs) - 1, -1, -1):
                 if excess <= 0.005:
                     break
+                _cy, take = backs[_i]
                 give = min(take, excess)
                 pending_by_year[_cy] = pending_by_year.get(_cy, 0.0) + give
                 applied -= give
                 carried_back -= give
                 excess -= give
+                backs[_i] = (_cy, take - give)
         pending_by_year = {k: v for k, v in pending_by_year.items()
                            if v > 0.005}
         rebuilt_balance = None
+        # The losses the lock applied on this year's return: with no
+        # claim under the year the row showed APPLIED 0.00 while its
+        # balance fell by them, and offered them again (TJ-0052).
+        lock_applied = 0.0
         if y in carried:
             rebuilt_balance = balance
             balance = max(0.0, float(carried[y]))
             slack = 0.0
+            if y not in claimed:
+                lock_applied = min(max(0.0, float(locked_applied.get(y)
+                                                  or 0.0)),
+                                   max(0.0, net))
+                applied += lock_applied
+                if y in cb_capacity:
+                    cb_capacity[y] = max(0.0, cb_capacity[y]
+                                         - lock_applied)
 
         carryback: List[Dict[str, float]] = []
         if loss:
@@ -321,13 +343,22 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             'claimed_applied': round(applied, 2),
             'carried_back': round(carried_back, 2),
             'carryforward_balance': round(balance, 2),
-            'available_to_apply': round(min(balance, max(0.0, net)), 2)
-                                  if net > 0 else 0.0,
+            'available_to_apply': round(min(balance, max(
+                0.0, net - lock_applied)), 2) if net > 0 else 0.0,
             'carryback_candidates': carryback,
         }
         if rebuilt_balance is not None:
             row['balance_from_lock'] = True
             row['rebuilt_balance'] = round(rebuilt_balance, 2)
+        if carried_back > 0.005:
+            # The carry-back by the year it went to: handoff checks a
+            # claim under the closed year less the part this year's loss
+            # carries back to it (backlog TJ-0078).
+            _to: Dict[str, float] = {}
+            for _cy, take in backs:
+                _to[str(_cy)] = _to.get(str(_cy), 0.0) + take
+            row['carried_back_to'] = {k: round(v, 2) for k, v in
+                                      sorted(_to.items()) if v > 0.005}
         rows.append(row)
     out = {'country': 'canada', 'rows': rows,
            'final_carryforward': round(balance, 2)}
@@ -449,6 +480,7 @@ _GAIN_LINES = {'canada': ('13200', '15300', '15301', '10690', '10694'),
 
 LOCK_SOURCE_TEXT = {
     'filed_totals': "the total filed with another tool: filed_totals",
+    'return_row': "the RETURN row close-year recorded: return_row",
     'form_lines': "the filed gain lines: form_lines",
     'realized': "the lock's realized total",
 }
@@ -466,9 +498,10 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
     """What a close-year lock says was FILED for its year: {figure,
     source, st, lt, dispositions}. The figure is, by preference, the
     gain the return reported with another tool (filed_totals.gain;
-    Canada — it has no term split), else the sum of the return's gain
-    lines (form_lines: Schedule 3 13200/15300/15301 and 2024's Period 1
-    10690/10694, Form 8949 Part I/II
+    Canada — it has no term split), else (Canada) the RETURN row
+    close-year recorded (return_row.realized), else the sum of the
+    return's gain lines (form_lines: Schedule 3 13200/15300/15301 and
+    2024's Period 1 10690/10694, Form 8949 Part I/II
     — per-row rounded, what the return carries; audit A2-1132), else
     the lock's realized total. A lock that fails the one check every
     reader of a lock applies (taxjson_filed.read_lock: unreadable,
@@ -518,8 +551,20 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
                 source = 'realized'
             out.update(figure=st + lt, st=st, lt=lt, source=source)
         else:
+            # The RETURN row close-year recorded (`taxjson sum`'s, all
+            # the taxable accounts' Schedule 3 rows together): what
+            # close-year and `taxjson years` show (TJ-0192, TJ-0208).
+            # Display only in the lock (check-filed does not hold it):
+            # one that is not a number is passed over, as `years` does.
+            rr = (doc.get('return_row') or {}).get('realized') \
+                if isinstance(doc.get('return_row'), dict) else None
+            rr_gain = (float(rr) if isinstance(rr, (int, float))
+                       and not isinstance(rr, bool)
+                       and math.isfinite(float(rr)) else None)
             if ft_gain is not None:
                 fig, source = ft_gain, 'filed_totals'
+            elif rr_gain is not None:
+                fig, source = rr_gain, 'return_row'
             elif lines is not None:
                 fig = sum(lines.get(k, 0.0) for k in _GAIN_LINES['canada'])
                 source = 'form_lines'
@@ -545,6 +590,10 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
                 out['carried_back'] = _finite(
                     cf['net_capital_loss'].get('carried_back') or 0.0,
                     'net_capital_loss.carried_back')
+                # ...and the earlier losses it applied (locked_applied).
+                out['applied'] = _finite(
+                    cf['net_capital_loss'].get('applied') or 0.0,
+                    'net_capital_loss.applied')
     except (KeyError, TypeError, ValueError) as e:
         raise LockUnreadable(
             f"{path}: no usable filed figure ({type(e).__name__}: {e}) — "
@@ -684,12 +733,15 @@ def render_brief(ledger: Dict[str, Any], cur: str,
 
 
 def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
-           claimed_used: bool) -> str:
+           claimed_used: bool, in_project: bool = False) -> str:
     """The console ledger in the house style (docs/output-style.md): a
     table fitted to the width, each year's carry notes listed under it,
-    then the notes. `--json` is the machine form."""
+    then the notes. `--json` is the machine form. `in_project`: run by
+    `taxjson carryover`, whose claims are taxjson.toml's [carryover]
+    claimed — it rejects --claimed FILE (backlog TJ-0145)."""
     from taxjson.lib import out as _out
     lines: List[str] = []
+    _claims = ("[carryover] claimed" if in_project else "--claimed")
     # `Warning: ` shown to a person, `warning: ` captured (lib/out.label).
     _W = _out.label("warning", stream=sys.stdout)
 
@@ -745,8 +797,10 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
              f"{_money(ledger['final_carryforward'])}")
         if ledger.get('unmatched_claims'):
             para(f"{_W}{_money(ledger['unmatched_claims'])} "
-                 f"of --claimed amounts exceed the losses this "
-                 f"history supports — check the claimed file.", "", "  ")
+                 f"of {_claims} amounts exceed the losses this "
+                 f"history supports — check "
+                 + ("taxjson.toml's [carryover] claimed." if in_project
+                    else "the claimed file."), "", "  ")
         for _y, _amt in (ledger.get('expired_claims') or {}).items():
             para(f"{_W}{_money(_amt)} claimed for {_y} "
                  f"was never met by a loss of {_y} or earlier "
@@ -768,15 +822,28 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
              "inclusion rate on Schedule 3 / T1A: CRA's 'net capital "
              "loss' balance is that figure.")
     item("The ledger is what the transaction history supports"
-         + (" plus your --claimed records." if claimed_used else
+         + (f" plus your {_claims} records." if claimed_used else
             "; what you claimed on filed returns may differ: "
-            "--claimed FILE (`YEAR AMOUNT` lines)."))
+            + ("record it in taxjson.toml, [carryover] then `claimed = "
+               "{ YEAR = AMOUNT }`." if in_project else
+               "--claimed FILE (`YEAR AMOUNT` lines).")))
     if country == 'canada':
         item("Carryback candidates are advisory: capped at each earlier "
              "year's remaining net gain, 3 years back (ITA 111(1)(b)).")
+        # The project year's net is the RETURN row (TJ-0208).
+        for r in ledger['rows']:
+            if (r.get('net_source') == 'return_row'
+                    and abs(r['net_gain'] - r.get('slip_gains', 0.0)
+                            - r['engine_net_gain']) >= 0.005):
+                item(f"{r['year']}'s NET GAIN(LOSS) has the RETURN row "
+                     f"of `taxjson sum` (each Schedule 3 row's cents, as "
+                     f"filed); the books' unrounded total is "
+                     f"{_money(r['engine_net_gain'])}.")
     else:
         item("The $3,000 ordinary-income offset is assumed used whenever "
-             "available; a --claimed line overrides a year (0 is valid).")
+             f"available; a {_claims} "
+             + ("entry" if in_project else "line")
+             + " overrides a year (0 is valid).")
     if ledger.get('filing_positions'):
         _fps = ledger['filing_positions']
         item(f"Includes {len(_fps)} filing position(s) taken against the "
@@ -938,6 +1005,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "figure instead of the rebuilt one; a later "
                              "year is compared with it. An unreadable "
                              "lock is named.")
+    parser.add_argument("--return-row", action="append", default=[],
+                        metavar="YEAR=GAIN",
+                        help="Canada: a year's gain as the return files "
+                             "it (`taxjson sum`'s RETURN row, each "
+                             "Schedule 3 row's cents): that year's NET "
+                             "GAIN(LOSS) instead of the engine's unrounded "
+                             "total (the wrapper passes the project "
+                             "year's); a year a lock seeds keeps the "
+                             "lock's figure.")
     parser.add_argument("--slip-gains", action="append", default=[],
                         metavar="YEAR=AMOUNT",
                         help="Canada: capital gains from slips (T5 box 18 "
@@ -987,6 +1063,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Canada, grant timing: buy-back loss of a "
                              "written option can be superficial.")
+    # The wrapper's claims are taxjson.toml's [carryover] claimed: the
+    # notes name that, not --claimed FILE, which `taxjson carryover`
+    # rejects (backlog TJ-0145).
+    parser.add_argument("--claims-in-project", action="store_true",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--brief", action="store_true",
                         help="The essentials only (what `taxjson carryover` prints "
                              "without --details): the notes and each "
@@ -1171,6 +1252,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             claimed[y] = claimed.get(y, 0.0) + v
         filed: Dict[int, float] = dict(
             _year_amount(i, "--filed") for i in args.filed)
+        return_row: Dict[int, float] = dict(
+            _year_amount(i, "--return-row") for i in args.return_row)
     except ValueError as exc:
         print(f"taxjson-carryover: {exc}", file=sys.stderr)
         return 2
@@ -1189,6 +1272,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     lock_info: Dict[int, Dict[str, Any]] = {}
     carried: Dict[int, Any] = {}
     locked_back: Dict[int, float] = {}
+    locked_applied: Dict[int, float] = {}
     for item in args.filed_lock:
         try:
             y_s, lp = item.split("=", 1)
@@ -1215,9 +1299,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             # The project year (or a later one) is only compared with
             # its lock: the row stands, unchecked.
             from taxjson.lib.out import warn as _warn
-            _warn(f"{y}: the filed-year lock {lp} could not be read — the "
-                  f"{y} row is not checked against the filed return",
-                  details=_dl([f"{exc}"]))
+            # A warning, not a refusal (backlog TJ-0069): the row is
+            # this project's books either way — the lock gives it no
+            # figure — and check-filed, the run and `taxjson years`
+            # report the damage itself.
+            _warn(f"{y}: the filed-year lock {lp} could not be read or "
+                  f"is damaged — the {y} row is not checked against the "
+                  f"filed return",
+                  details=_dl([f"{exc}", "`taxjson check-filed` checks "
+                               "the lock."]))
             continue
         info['path'] = lp
         lock_info[y] = info
@@ -1225,6 +1315,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 and info.get('carried') is not None):
             carried[y] = info['carried']
             locked_back[y] = float(info.get('carried_back') or 0.0)
+            locked_applied[y] = float(info.get('applied') or 0.0)
         if args.project_year is not None and y < args.project_year:
             rebuilt = dict(nets.get(y, _zero))
             nets[y] = {'net': info['figure'], 'st': info['st'],
@@ -1235,12 +1326,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             seeded[y] = {'rebuilt': float(rebuilt.get('net') or 0.0),
                          'had_rows': bool(rebuilt.get('dispositions')),
                          **info}
+    # A year's net as the return files it (`taxjson sum`'s RETURN row,
+    # each Schedule 3 row's cents), not the engine's unrounded total a
+    # cent or two apart: the carryforward balance, and the carry-back
+    # close-year records, are built on the return (backlog TJ-0208). A
+    # year a lock seeds keeps the lock's filed figure.
+    engine_net: Dict[int, float] = {}
+    for y, v in return_row.items():
+        if y in seeded:
+            continue
+        rec = nets.setdefault(y, dict(_zero))
+        engine_net[y] = float(rec.get('net') or 0.0)
+        rec['net'] = v
     for y, v in slip_by.items():
         rec = nets.setdefault(y, dict(_zero))
         rec['net'] = rec.get('net', 0.0) + v
 
     if country == 'canada':
-        ledger = build_canada_ledger(nets, claimed, carried, locked_back)
+        ledger = build_canada_ledger(nets, claimed, carried, locked_back,
+                                     locked_applied)
     else:
         ledger = build_usa_ledger(nets, claimed, carried)
 
@@ -1297,6 +1401,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         y = r['year']
         if slip_by.get(y):
             r['slip_gains'] = round(slip_by[y], 2)
+        if y in engine_net:
+            # NET GAIN(LOSS) is the RETURN row; the rebuild's own total
+            # beside it (TJ-0208).
+            r['net_source'] = 'return_row'
+            r['engine_net_gain'] = round(engine_net[y], 2)
         if y in seeded:
             sd = seeded[y]
             r.update(from_lock=True, filed_lock=sd['path'],
@@ -1326,7 +1435,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                       details=_dl([f"The ledger uses the lock's own Part "
                                    f"I/II split ({sd['figure']:,.2f}) — "
                                    f"enter the filed carryover with "
-                                   f"--claimed if they differ."]))
+                                   + ("[carryover] claimed"
+                                      if args.claims_in_project
+                                      else "--claimed")
+                                   + " if they differ."]))
             continue
         if y in lock_info:
             info = lock_info[y]
@@ -1336,6 +1448,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             continue
         net = float(r.get('net_gain') or 0.0) - slip_by.get(y, 0.0)
+        if src == 'realized' and y in engine_net:
+            # The lock's realized is the engine total rounded once:
+            # like with like, not the RETURN row's cents (TJ-0208).
+            net = engine_net[y]
         r['filed_realized'] = round(fig, 2)
         r['filed_source'] = src
         # The return's lines are rounded per row; the ledger is not.
@@ -1376,7 +1492,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                            first_tx_year))
     else:
         print(render(ledger, args.base_currency.upper(), first_tx_year,
-                     claimed_used=bool(claimed)))
+                     claimed_used=bool(claimed),
+                     in_project=args.claims_in_project))
     return 0
 
 

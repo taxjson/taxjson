@@ -1,7 +1,8 @@
 """Export coverage, the checklist's line (owner, 2026-10-09;
 lib/export_coverage): a broker whose exports stop while it holds
-positions is said as "N open position(s) — `taxjson list <account>
-<end>` lists them", not a list of symbols, and, when a .tt line or a
+positions is said as "N open position(s) in <broker>'s rows — `taxjson
+list <account> <end>` lists the account's positions on that day (every
+source)", not a list of symbols, and, when a .tt line or a
 later export of the account records the next activity on those
 positions, "next recorded activity: <date> (<file>)". The run's Warning
 keeps its symbols and says the same. A data check (both countries).
@@ -43,9 +44,11 @@ class TestNextActivity(unittest.TestCase):
                                           date(2026, 3, 1)))
         self.assertEqual(res.status, "attention")
         self.assertIn("Webull exports for margin end 2025-09-30 with 1 "
-                      "open position(s) — `taxjson list margin "
-                      "2025-09-30` lists them; next recorded activity: "
-                      "2026-01-05 (wb_2026_manual.tt)", res.detail)
+                      "open position(s) in Webull's rows — `taxjson list "
+                      "margin 2025-09-30` lists the account's positions "
+                      "on that day (every source); next recorded "
+                      "activity: 2026-01-05 (wb_2026_manual.tt)",
+                      res.detail)
         self.assertNotIn("ZZBB", res.detail)
         self.assertIn("download the rest of the year", res.detail)
 
@@ -83,8 +86,10 @@ class TestNoLaterActivity(unittest.TestCase):
             tj(root, "run", "--no-input")
             res = cl.d_export_coverage(ctx_of(root, 2025, date(2026, 3, 1)))
             g, = EC.find_gaps(root, cfg_of(root), today=date(2026, 3, 1))
-        self.assertIn("with 1 open position(s) — `taxjson list margin "
-                      "2025-09-30` lists them — download", res.detail)
+        self.assertIn("with 1 open position(s) in Webull's rows — "
+                      "`taxjson list margin 2025-09-30` lists the "
+                      "account's positions on that day (every source) — "
+                      "download", res.detail)
         self.assertNotIn("next recorded activity", res.detail)
         self.assertIsNone(g.next_activity)
 

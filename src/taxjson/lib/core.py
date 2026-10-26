@@ -948,6 +948,14 @@ def canonical_date(value: Any, ctx: str, field: str = 'date') -> str:
             f"date written YYYY-MM-DD) — fix the input data.") from None
 
 
+@functools.lru_cache(maxsize=1)
+def _tx_field_names():
+    """TaxTransaction's constructor keywords, read once (reading the
+    signature for every row was a third of a large run: TJ-0105)."""
+    import inspect
+    return inspect.signature(TaxTransaction).parameters.keys()
+
+
 def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     """One row's coercion + validation — the shared body of
     load_transactions and pipeline.load_stdin_transactions, so the
@@ -955,8 +963,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     the FUZZ #K hard guards. Handles TaxTransaction passthrough,
     mapping coercion, `qty` aliasing, known-field filtering, and the
     non-finite / impossible-date / SPLIT-ratio refusals."""
-    import inspect
-    valid_keys = inspect.signature(TaxTransaction).parameters.keys()
+    valid_keys = _tx_field_names()
     if isinstance(t, TaxTransaction):
         return t
     if not isinstance(t, dict):
@@ -1903,6 +1910,164 @@ def _place_wash_adjusts(stream):
     return out
 
 
+# The Canada solver's superficial-loss scans ask, for each loss sale,
+# about the rows of ONE identity class inside ONE +/-30-day window.
+# Walking every row of the book for every sale made a run cost loss
+# sales x rows (TJ-0105: 50,000 rows took half an hour; TJ-0060: 8,000
+# rows of one symbol took minutes). The indexes below hand each scan the
+# same rows, in the same order, that the full walk kept, so every sum
+# adds the same numbers in the same order and every result is unchanged.
+
+@functools.lru_cache(maxsize=8192)
+def _iso_ordinal(s: str) -> int:
+    """The day number of `datetime.strptime(s, '%Y-%m-%d')`, cached (the
+    scans ask for the same few hundred dates again and again)."""
+    return datetime.strptime(s, '%Y-%m-%d').toordinal()
+
+
+class _DatedRows:
+    """Rows of one key in their book order, found by date window.
+    `date_of(row)` is the date the scan tests, parsed as the scan parses
+    it. `ok` is False when a date does not parse: the caller then walks
+    the book as before, so it fails (or skips the row) where it did."""
+
+    __slots__ = ('rows', 'ok', '_order', '_ords')
+
+    def __init__(self, rows, date_of):
+        self.rows = rows
+        self.ok = True
+        try:
+            ords = [_iso_ordinal(date_of(t)) for t in rows]
+        except (TypeError, ValueError):
+            self.ok = False
+            return
+        self._order = sorted(range(len(rows)), key=ords.__getitem__)
+        self._ords = [ords[i] for i in self._order]
+
+    def within(self, center: int, days: int) -> list:
+        """The rows dated `center` +/- `days` (inclusive), in book order."""
+        import bisect
+        lo = bisect.bisect_left(self._ords, center - days)
+        hi = bisect.bisect_right(self._ords, center + days)
+        return [self.rows[i] for i in sorted(self._order[lo:hi])]
+
+
+class _ClassBalances:
+    """One identity class's balance rows (BUYSELL, ASSIGN, TRANSFER,
+    OPENING_BALANCE) in processing order, for the day-30 balance walks.
+
+    `prefix(end)` is the number of leading rows whose sort date is on or
+    before `end` — None when the rows are not in sort-date order (then
+    the caller walks them all, as before). When the class is one raw
+    symbol that no split or rename acts on, every row's quantity is
+    already in the loss's units (the lineage factor is exactly 1.0), and
+    the per-holder running sums answer a walk in one lookup: each is the
+    walk's own sum, added in the walk's order from 0.0."""
+
+    __slots__ = ('rows', 'dates', 'sorted', 'unit_symbol', '_hpos',
+                 '_hsum', '_tpos', '_tsum', '_cum', '_int_exact')
+
+    def __init__(self, rows, sort_date, holder_of, is_taxable,
+                 split_symbols):
+        self.rows = rows
+        self.dates = [sort_date(t) for t in rows]
+        self.sorted = all(a <= b for a, b in zip(self.dates,
+                                                 self.dates[1:]))
+        syms = {t.symbol for t in rows}
+        self.unit_symbol = None
+        if (self.sorted and len(syms) == 1
+                and not (syms & split_symbols)):
+            self.unit_symbol = next(iter(syms))
+            self._hpos: Dict[Any, list] = {}
+            self._hsum: Dict[Any, list] = {}
+            self._tpos: list = []
+            self._tsum: list = []
+            self._cum: list = []
+            acc = 0.0
+            exact = True
+            mag = 0.0
+            for i, t in enumerate(rows):
+                u = t.quantity * 1.0
+                h = holder_of(t)
+                hs = self._hsum.setdefault(h, [])
+                self._hpos.setdefault(h, []).append(i)
+                hs.append((hs[-1] if hs else 0.0) + u)
+                if is_taxable(t):
+                    self._tpos.append(i)
+                    self._tsum.append((self._tsum[-1] if self._tsum
+                                       else 0.0) + u)
+                acc += u
+                self._cum.append(acc)
+                mag += abs(u)
+                if exact and not (float(u).is_integer() and mag < 2.0**52):
+                    exact = False
+            self._int_exact = exact
+
+    def prefix(self, end: str) -> Optional[int]:
+        if not self.sorted:
+            return None
+        import bisect
+        return bisect.bisect_right(self.dates, end)
+
+    def holder_sums(self, k: int) -> Dict[Any, float]:
+        """{holder: the sum of its units among the first k rows}, for
+        each holder with a row there (the walk's dict, key for key)."""
+        import bisect
+        out: Dict[Any, float] = {}
+        for h, pos in self._hpos.items():
+            j = bisect.bisect_left(pos, k)
+            if j:
+                out[h] = self._hsum[h][j - 1]
+        return out
+
+    def taxable_sum(self, k: int) -> Tuple[int, float]:
+        """(how many taxable rows among the first k, their running sum)."""
+        import bisect
+        j = bisect.bisect_left(self._tpos, k)
+        return j, (self._tsum[j - 1] if j else 0.0)
+
+    def first_taxable(self):
+        return self.rows[self._tpos[0]]
+
+    def total(self, k: int):
+        """`sum()` of the first k rows' units. Whole units add exactly
+        whatever the order or the algorithm (Python 3.12's compensated
+        sum() included), so the running sum is sum()'s own result;
+        otherwise sum() runs over the same values in the same order."""
+        if not k:
+            return 0
+        if self._int_exact:
+            return self._cum[k - 1]
+        import itertools
+        return sum(itertools.islice((t.quantity * 1.0 for t in self.rows),
+                                    k))
+
+
+class _WashAdjustIndex:
+    """The solver's ADJUST rows by each `WASH_<loss id>__` prefix their
+    id starts with, in list order: `of(x)` is exactly the rows `v` of
+    the list with v.action == 'ADJUST' and
+    v.id.startswith(f"WASH_{x}__")."""
+
+    def __init__(self, rows=()):
+        self._by: Dict[str, list] = {}
+        for v in rows:
+            self.add(v)
+
+    def add(self, v) -> None:
+        s = v.id
+        if (v.action != 'ADJUST' or not isinstance(s, str)
+                or not s.startswith('WASH_')):
+            return
+        p = s.find('__', 5)
+        while p != -1:
+            self._by.setdefault(s[:p + 2], []).append(v)
+            p = s.find('__', p + 1)
+
+    def of(self, loss_id) -> list:
+        return self._by.get(f"WASH_{loss_id}__", [])
+
+
 class _AssignPremiumLedger:
     """Staged option-assignment premiums, each paired with ITS OWN stock
     leg(s) (audit R1-28/32/34/178, S070-18/20, S071-11, A2-0050/0052/
@@ -1949,18 +2114,25 @@ class _AssignPremiumLedger:
         self._leg_owner = {l: o for o, ls in self._pairs.items()
                            for l in ls}
         self._e: Dict[Any, list] = {}
+        self.last_deferred = 0.0
 
     _direction = staticmethod(_assign_direction)
 
-    def stage(self, opt_tx, underlying: str, amount: float) -> None:
+    def stage(self, opt_tx, underlying: str, amount: float,
+              deferred: float = 0.0) -> None:
+        """`deferred`: the part of `amount` that is an earlier
+        superficial loss added to the option's cost (its pool's
+        deferred_wash share): the stock leg's pool tallies it, so the
+        economic P/L views count that loss once (backlog TJ-0061)."""
         key = (opt_tx.account, underlying)
         lst = self._e.setdefault(key, [])
         for e in lst:
             if e['src'] == opt_tx.id:
                 e['amt'] += amount
+                e['dw'] += deferred
                 return
         shares = _assign_delivery_shares(opt_tx)
-        lst.append({'src': opt_tx.id, 'amt': amount,
+        lst.append({'src': opt_tx.id, 'amt': amount, 'dw': deferred,
                     'dir': self._direction(opt_tx),
                     'shares': shares if shares and shares > 1e-9 else None,
                     'date': opt_tx.date or '',
@@ -1987,20 +2159,29 @@ class _AssignPremiumLedger:
         return out
 
     def _take_entry(self, lst, e, need, later) -> Tuple[float, float]:
-        """Take up to `need` shares of entry `e`: (amount, shares)."""
+        """Take up to `need` shares of entry `e`: (amount, shares); its
+        deferral share adds to `last_deferred`."""
         if e['shares'] is None:
             lst.remove(e)
+            self.last_deferred += e['dw']
             return e['amt'], 0.0
         take_sh = min(need, e['shares'])
         if take_sh >= e['shares'] - 1e-9 or not later:
             lst.remove(e)
+            self.last_deferred += e['dw']
             return e['amt'], take_sh
         part = e['amt'] * take_sh / e['shares']
+        dw = e['dw'] * take_sh / e['shares']
         e['amt'] -= part
+        e['dw'] -= dw
         e['shares'] -= take_sh
+        self.last_deferred += dw
         return part, take_sh
 
     def take(self, tx) -> float:
+        """The staged amount this stock trade absorbs; the deferral part
+        of it in `last_deferred`."""
+        self.last_deferred = 0.0
         key = (tx.account, tx.symbol)
         lst = self._e.get(key)
         if not lst:
@@ -2099,8 +2280,8 @@ def _verify_share_conservation(position_rows, actual_qty_by_symbol,
                     redirect[k] = tk
         elif t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
                           'TRANSFER'):
-            # (TRANSFER: the US engine's own-account move legs only —
-            # the callers pass no other.)
+            # (TRANSFER: own-account move legs only — the callers pass
+            # no other.)
             k = rkey(t.symbol)
             expected[k] = expected.get(k, 0.0) + t.quantity
 
@@ -2377,10 +2558,104 @@ SPINOFF_355_TYPE = 'spinoff_355'
 # moment, quantity and description) that `taxjson run` adds to a US
 # blended book: the US engine moves the sender's FIFO lots — basis and
 # purchase dates — to the receiver, with no disposition (US-BASIS-05).
-# Canada pools the ACB across the accounts (s.47): nothing to move.
+# Canada pools the ACB across the accounts (s.47): a book of several
+# accounts moves nothing; a book of one account moves its units only
+# (CA-ACB-OWN-MOVE, _own_move_view).
 LOT_MOVE_TYPE = 'lot_move'
 # "own-account move #N: FROM -> TO (...)" — the legs' description.
 _MOVE_DESC_RE = re.compile(r'own-account move #\d+: (\S+) -> (\S+)')
+
+
+def _is_lot_move(t) -> bool:
+    return t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE
+
+
+def _own_move_view(transactions: List['TaxTransaction']
+                   ) -> List['TaxTransaction']:
+    """Canada (CA-ACB-OWN-MOVE): the rows the engine books of the legs
+    of a move between two of your own taxable accounts. The ACB is one
+    pool across the accounts (s.47), so a book of more than one account
+    (the blended pass) books no leg — the pool, its gains and its
+    superficial losses are what they are without the move. A book of
+    one account is that account's own view: its legs stay, and the
+    engine moves the units (_own_move_units) — never a disposition,
+    never an acquisition — each said once as a note."""
+    legs = [t for t in transactions if _is_lot_move(t)]
+    if not legs:
+        return transactions
+    if len({t.account for t in transactions if t.account}) > 1:
+        return [t for t in transactions if not _is_lot_move(t)]
+    for t in legs:
+        _m = _MOVE_DESC_RE.match(t.description or '')
+        _peer = (_m.group(2) if t.quantity < 0 else _m.group(1)) \
+            if _m else 'another of your accounts'
+        q = abs(t.quantity or 0.0)
+        emit_line(
+            f"note: {t.symbol}: {q:g} moved "
+            f"{'to' if t.quantity < 0 else 'from'} {_peer} on {t.date} "
+            f"(your own account): this book has only {t.account}, so "
+            + ("they leave it at its average cost with no sale"
+               if t.quantity < 0 else
+               "their cost is unknown here and its sales of them are "
+               "set apart in this account's own view")
+            + " — the blended pass of `taxjson run`, the figures you "
+              "file, keeps one ACB across your taxable accounts "
+              "(CA-ACB-OWN-MOVE).")
+    return transactions
+
+
+def _own_move_units(pools: Dict[Any, Dict[str, Any]], key: Any, tx) -> str:
+    """One account's own view of a leg of a move between two of your
+    taxable accounts (_own_move_view; CA-ACB-OWN-MOVE): units in join
+    the pool at a cost unknown in this book (the pool is tainted, as an
+    opening balance's: its sales are left to report by hand here);
+    units out leave it at its average cost — no disposition, no gain,
+    never a superficial-loss replacement (only BUYSELL / ASSIGN rows
+    are). Units out beyond the pool's long position have no purchase in
+    this book (missing history in the sender): the pool goes short by
+    them, tainted, as the history checks read the account. Returns the
+    trace text."""
+    pool = pools.get(key)
+    if pool is None:
+        pool = pools[key] = {
+            'qty': 0.0, 'total_cost': Decimal(0),
+            'last_acq_date': '1970-01-01', 'currency': '', 'tainted': False,
+            'position_start_date': None, 'deferred_wash': 0.0, 'grants': []}
+    q = float(tx.quantity or 0.0)
+    if q > 0:
+        if pool['position_start_date'] is None:
+            pool['position_start_date'] = tx.date
+        pool['qty'] += q
+        pool['tainted'] = True
+        return (f"OWN MOVE IN {q:10.4f} | cost unknown in this book "
+                f"(its sales here: unknown cost)")
+    held = pool['qty']
+    take = min(-q, held) if held > 0 else 0.0
+    out_cost = Decimal(0)
+    if take > 0:
+        out_cost = pool['total_cost'] * D(take) / D(held)
+        pool['total_cost'] -= out_cost
+        pool['deferred_wash'] = (pool.get('deferred_wash', 0.0)
+                                 * max(0.0, 1.0 - take / held))
+        pool['qty'] = held - take
+    rest = -q - take
+    eps = pool_qty_eps(tx.symbol, held, q)
+    if rest > eps:
+        if pool['qty'] >= 0:
+            pool['position_start_date'] = tx.date
+        pool['qty'] -= rest
+        pool['tainted'] = True
+    elif abs(pool['qty']) < eps:
+        pool['qty'] = 0.0
+        pool['position_start_date'] = None
+        pool['grants'] = []
+        pool['tainted'] = False
+        if abs(pool['total_cost']) < Decimal('0.001'):
+            pool['total_cost'] = Decimal(0)
+    return (f"OWN MOVE OUT {-q:10.4f} | Cost_Moved: {float(out_cost):10.4f}"
+            f" | Pool_Qty: {pool['qty']:10.4f} | no sale"
+            + (f" | {rest:g} with no purchase in this book"
+               if rest > eps else ""))
 REORG_356_TYPE = 'reorg_356'
 _LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
 # An opening balance (`taxjson opening`, a .tt OPENING line): a BUYSELL
@@ -2432,6 +2707,21 @@ IN_KIND_DISPOSITION_TYPE = 'in_kind_disposition'
 IN_KIND_WITHDRAWAL_TYPE = 'in_kind_withdrawal'
 IN_KIND_TYPES = (IN_KIND_CONTRIBUTION_TYPE, IN_KIND_DISPOSITION_TYPE,
                  IN_KIND_WITHDRAWAL_TYPE)
+
+
+def _pools_copy(pools: Dict[str, Any]) -> Dict[str, Any]:
+    """The Canadian engine's pools as they stand (units, cost, currency,
+    deferred_wash), rename aliases still sharing one entry: the year-end
+    snapshot (backlog TJ-0282)."""
+    memo: Dict[int, Dict[str, Any]] = {}
+    out: Dict[str, Any] = {}
+    for k, p in pools.items():
+        c = memo.get(id(p))
+        if c is None:
+            c = memo[id(p)] = {f: p.get(f) for f in (
+                'qty', 'total_cost', 'currency', 'deferred_wash')}
+        out[k] = c
+    return out
 
 
 def _fold_short_futures_pools(pools: Dict[str, Any]) -> Dict[str, Any]:
@@ -2487,7 +2777,7 @@ class TaxRules:
         raise NotImplementedError()
 
 class CanadaTaxRules(TaxRules):
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False, option_grant_basis: str = 'settle', loss_overrides: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False, option_grant_basis: str = 'settle', loss_overrides: Sequence[Dict[str, Any]] = (), year_end: Optional[str] = None) -> Dict[str, Any]:
         """
         Detects Superficial Losses (Wash Sales) based on CRA rules and calculates gains.
         Handles multi-account pooling and iterative adjustments.
@@ -2521,10 +2811,9 @@ class CanadaTaxRules(TaxRules):
             _by_account_name(transactions, sheltered_transactions,
                              affiliated_transactions)
         # A move between two of your own taxable accounts changes nothing
-        # in Canada: the ACB is one pool across them (s.47).
-        transactions = [t for t in transactions
-                        if not (t.action == 'TRANSFER'
-                                and t.type == LOT_MOVE_TYPE)]
+        # in Canada: the ACB is one pool across them (s.47). A book of
+        # one account moves its units (CA-ACB-OWN-MOVE).
+        transactions = _own_move_view(transactions)
         # The same holds for futures (issue #76): each account's books
         # were settled on their own, so a close of a contract held in
         # several taxable accounts is re-averaged over all of them here
@@ -2715,6 +3004,12 @@ class CanadaTaxRules(TaxRules):
         permanent_by_loss: Dict[str, float] = {}  # loss tx.id -> sheltered-allocated denial
         wash_windows: Dict[str, Dict[str, Any]] = {}  # loss tx.id -> ±30d window listing
         final_pool_snapshots: Dict[str, Dict[str, float]] = {}  # tx.id -> pool state after that tx
+        # The pools at the end of `year_end` (YYYY-12-31, the project
+        # year's last day, on this engine's settlement-date order), the
+        # converged pass's: `taxjson edge-cases` reads the denied losses
+        # still held at the year end from them, not from the pools after
+        # every later row (backlog TJ-0282). None without a year_end.
+        final_year_end_pools: Optional[Dict[str, Any]] = None
 
         # Symbol-alias map for SPLIT-renames. CRA s. 85.1(5) and
         # similar reorgs treat the pre- and post-rename security as
@@ -2752,9 +3047,14 @@ class CanadaTaxRules(TaxRules):
         # this, post-rename ABH.US buys wouldn't show up in the 30-day
         # affiliated check for an ABG.TO loss.
         running_bal_by_tx: Dict[str, float] = {}
-        for rep in set(row_cls(t) for t in all_txs):
+        # Each class's rows in book order, grouped in one pass (one
+        # walk of the book per class cost classes x rows: TJ-0105).
+        _rows_of_cls: Dict[str, list] = {}
+        for t in all_txs:
+            _rows_of_cls.setdefault(row_cls(t), []).append(t)
+        for _cls_rows in _rows_of_cls.values():
             txs_sym = sorted(
-                [t for t in all_txs if row_cls(t) == rep],
+                _cls_rows,
                 key=lambda t: event_sort_key(t, profile='ca_balance',
                                               date_of=get_sort_date),
             )
@@ -2814,9 +3114,21 @@ class CanadaTaxRules(TaxRules):
         _grant_mode = (str(option_premium_timing or 'close').lower() == 'grant')
         _lot_seq = [0]
 
+        # A book row's key, kept: the superficial-loss scans ask for it
+        # once per loss and pass (TJ-0105). Book rows are never changed
+        # here and all_txs keeps them alive (so no id is reused); the
+        # solver's own rows (DISALLOW, ADJUST) are keyed afresh.
+        _ev_memo: Dict[int, Tuple] = {}
+        _book_ids = frozenset(id(t) for t in all_txs)
+
         def _ev_key(t):
-            return event_sort_key(t, profile='ca_main',
-                                  date_of=get_sort_date)
+            k = _ev_memo.get(id(t))
+            if k is None:
+                k = event_sort_key(t, profile='ca_main',
+                                   date_of=get_sort_date)
+                if id(t) in _book_ids:
+                    _ev_memo[id(t)] = k
+            return k
 
         def _trade_money(tx) -> float:
             """The trade's money in pool terms: a BUY's cost (magnitude —
@@ -3019,6 +3331,14 @@ class CanadaTaxRules(TaxRules):
         # Each sale's pre-loss bump placement, kept across passes (see
         # _disp_last).
         _disp_last_seen: Dict[int, Any] = {}
+        # The superficial-loss scans' indexes of the book (see
+        # _DatedRows; built on the first pass, the book never changes):
+        # each class's candidate replacements, the calls on each class,
+        # each symbol's rows for the window listing.
+        _sl_trg: Optional[Dict[str, _DatedRows]] = None
+        _sl_call: Optional[Dict[str, _DatedRows]] = None
+        _sl_sym: Optional[Dict[str, _DatedRows]] = None
+        _split_syms = {t.symbol for t in all_txs if t.action == 'SPLIT'}
         solver_converged = False
         solver_iterations_used = 0
         for iteration in range(1000):
@@ -3028,6 +3348,12 @@ class CanadaTaxRules(TaxRules):
                 key=lambda x: event_sort_key(x, profile='ca_main',
                                              date_of=get_sort_date))
             current_tx_list = _place_wash_adjusts(current_tx_list)
+            # This pass's denials by loss id, in list order (a lookup
+            # per sale walked every denial: TJ-0105).
+            _dis_by_id: Dict[Any, list] = {}
+            for _dv in final_virtual_txs:
+                if _dv.action == 'DISALLOW':
+                    _dis_by_id.setdefault(_dv.id, []).append(_dv)
 
             # Each option ASSIGN paired with its own stock leg; a leg
             # dated before its option row gets the option moved in front
@@ -3058,13 +3384,35 @@ class CanadaTaxRules(TaxRules):
             iteration_trace = []
             symbol_acb_traces = {}
             pool_snapshots_this_iter: Dict[str, Dict[str, float]] = {}
+            # An ACB reallocation (an s.86.1 spin-off): the parent's
+            # negative ADJUST and the new shares' BUYSELL, joined by
+            # (account, corp_event_id). The parent's deferred_wash
+            # tally moves with the share of the ACB it gives up, so the
+            # economic P/L views split the recovered loss as the ACB is
+            # split (backlog TJ-0062; the filed figures never read it).
+            _cev_adj_sym = {(t.account, t.corp_event_id): t.symbol
+                            for t in current_tx_list
+                            if t.action == 'ADJUST' and t.corp_event_id
+                            and float(t.net_amount or 0.0) < 0}
+            _cev_moves = {(t.account, t.corp_event_id)
+                          for t in current_tx_list
+                          if t.action == 'BUYSELL' and t.corp_event_id
+                          and float(t.quantity or 0.0) > 0
+                          and _cev_adj_sym.get((t.account, t.corp_event_id))
+                          not in (None, t.symbol)}
+            _cev_stash: Dict[tuple, float] = {}
+            _cev_child: Dict[tuple, Dict[str, Any]] = {}
             
             if trace:
                 iteration_trace.append("# " + "-" * 215)
                 iteration_trace.append("# ACCOUNT                    | NOTE         | DATE                | SYMBOL                     | ACTION   | QTY        | PRICE      | FEE/SH     | PRICE_FEE  | VALUE_NET  | ADJUSTMENT | GLOBAL_BAL | POOL_ACB   | ACB/SHARE  | REALIZED   | DISALLOWED | TRIGGER_INFO")
                 iteration_trace.append("# " + "-" * 215)
 
+            _ye_pools: Optional[Dict[str, Any]] = None
             for tx in current_tx_list:
+                if (year_end and _ye_pools is None
+                        and str(get_sort_date(tx) or '')[:10] > year_end):
+                    _ye_pools = _pools_copy(global_pools)
                 symbol = tx.symbol
                 account = tx.account
                 is_sheltered = tx.id in sheltered_ids
@@ -3087,7 +3435,18 @@ class CanadaTaxRules(TaxRules):
                 # CLI layer — for sheltered files it's rewritten to BUYSELL
                 # before reaching the engine, and for taxable files the CLI
                 # errors out before invoking compute_gains. By the time
-                # the engine runs, no TRANSFER rows should be present.
+                # the engine runs, no TRANSFER rows should be present —
+                # but one account's own view of a move between two of
+                # your taxable accounts (_own_move_view): its units move.
+                if _is_lot_move(tx):
+                    if not is_other_scope:
+                        _mv_txt = _own_move_units(global_pools,
+                                                  _fut_pool_key(tx), tx)
+                        if trace:
+                            symbol_acb_traces.setdefault(symbol, [
+                                f"# --- ACB CALCULATION TRACE: {symbol} ---"
+                            ]).append(f"# {tx.date} {_mv_txt}")
+                    continue
                 if tx.action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE', 'TRANSFER') \
                    or tx.type in ('dividend', 'dividend_in_lieu', 'tax', 'interest', 'fee'):
                     continue
@@ -3155,10 +3514,14 @@ class CanadaTaxRules(TaxRules):
                     # ADJUST / SPLIT / OB row on the underlying used to
                     # pop — and drop — the staged premium).
                     internal_adj = 0.0
+                    internal_dw = 0.0
                 else:
                     # The ledger keeps a premium whose own (paired) leg
                     # is still to come away from this trade.
                     internal_adj = pending_adjustments.take(tx)
+                    # The earlier superficial loss in that premium (an
+                    # exercised replacement call: backlog TJ-0061).
+                    internal_dw = pending_adjustments.last_deferred
                 
                 action = tx.action
                 qty = tx.quantity
@@ -3345,6 +3708,7 @@ class CanadaTaxRules(TaxRules):
                                     pool.get('pending_wash', 0.0)
                                     + _mag)
                                 _applied_adj = 0.0
+                        _tc_before = float(pool['total_cost'])
                         pool['total_cost'] += D(_applied_adj)
                         # Superficial-loss deferrals arrive as virtual
                         # ADJUSTs (id WASH_<loss>__...). Tally the
@@ -3355,6 +3719,22 @@ class CanadaTaxRules(TaxRules):
                             pool['deferred_wash'] = (
                                 pool.get('deferred_wash', 0.0)
                                 + abs(float(tx.net_amount)))
+                        _ck = (tx.account, tx.corp_event_id)
+                        if (_ck in _cev_moves and _applied_adj < 0
+                                and _tc_before > 0.005
+                                and pool.get('deferred_wash', 0.0) > 1e-9):
+                            # The ACB given up carries its share of the
+                            # tally to the new shares (TJ-0062).
+                            _mv = (pool['deferred_wash']
+                                   * min(1.0, -_applied_adj / _tc_before))
+                            pool['deferred_wash'] -= _mv
+                            _cp = _cev_child.get(_ck)
+                            if _cp is not None:
+                                _cp['deferred_wash'] = (
+                                    _cp.get('deferred_wash', 0.0) + _mv)
+                            else:
+                                _cev_stash[_ck] = (_cev_stash.get(_ck, 0.0)
+                                                   + _mv)
                         # ITA s.40(3): return-of-capital that drives ACB
                         # below zero is a deemed capital gain in that
                         # year. Rare enough to warrant human eyes rather
@@ -3615,6 +3995,23 @@ class CanadaTaxRules(TaxRules):
                             # BUY (or Short opening)
                             effective_cost = _trade_money(tx) + (internal_adj if qty > 0 else -internal_adj)
                             pool['total_cost'] += D(effective_cost)
+                            if internal_dw > 1e-9:
+                                # The option's deferral rides its
+                                # premium into these shares (TJ-0061).
+                                pool['deferred_wash'] = (
+                                    pool.get('deferred_wash', 0.0)
+                                    + internal_dw)
+                            _ck = (tx.account, tx.corp_event_id)
+                            if qty > 0 and _ck in _cev_moves:
+                                # A reallocation's new shares: the
+                                # parent's tally share, if it gave its
+                                # ACB up first (TJ-0062).
+                                _cev_child[_ck] = pool
+                                _mv = _cev_stash.pop(_ck, 0.0)
+                                if _mv > 1e-9:
+                                    pool['deferred_wash'] = (
+                                        pool.get('deferred_wash', 0.0)
+                                        + _mv)
                             _pw = pool.pop('pending_wash', 0.0)
                             if _pw > 1e-9:
                                 # Deferred superficial-loss dollars
@@ -3741,7 +4138,7 @@ class CanadaTaxRules(TaxRules):
                             
                             if is_taxable and not is_option_assign and not _suppress_record:
                                 # Check for virtual disallowance for this specific ID
-                                disallowance_tx = next((v for v in final_virtual_txs if v.action == 'DISALLOW' and v.id == tx.id), None)
+                                disallowance_tx = next(iter(_dis_by_id.get(tx.id, ())), None)
                                 if disallowance_tx:
                                     disallowed_amt = disallowance_tx.net_amount
                                 
@@ -3807,6 +4204,10 @@ class CanadaTaxRules(TaxRules):
                                     pool.get('deferred_wash', 0.0)
                                     * min(1.0, closing_qty / _dw_abs)
                                     if _dw_abs > _qeps else 0.0)
+                                # ...and an exercised option's, in the
+                                # premium this sale absorbs (TJ-0061).
+                                _dw_out += internal_dw * (closing_qty
+                                                          / abs(qty))
                                 iteration_realized_gains.append({
                                     'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
                                     'date_settle': tx.date_settle or tx.date,
@@ -3886,8 +4287,17 @@ class CanadaTaxRules(TaxRules):
                             if is_option_assign:
                                 underlying = _assign_underlying(tx)
                                 if underlying:
+                                    # The contracts' share of the pool's
+                                    # deferral tally goes with the
+                                    # premium (TJ-0061).
+                                    _dw_opt = (
+                                        pool.get('deferred_wash', 0.0)
+                                        * min(1.0, closing_qty
+                                              / abs(pool['qty']))
+                                        if abs(pool['qty']) > _qeps
+                                        else 0.0)
                                     pending_adjustments.stage(
-                                        tx, underlying, -gain)
+                                        tx, underlying, -gain, _dw_opt)
 
                             pool['total_cost'] -= D(cost_basis)
                             # Deferred-wash dollars are part of the ACB,
@@ -3926,7 +4336,8 @@ class CanadaTaxRules(TaxRules):
                                 )
                                 pool['qty'] = (leftover if qty > 0 else -leftover)
                                 pool['total_cost'] = D(eff_cost_leftover)
-                                pool['deferred_wash'] = 0.0
+                                pool['deferred_wash'] = (internal_dw
+                                                         * leftover_ratio)
                                 pool['last_acq_date'] = tx.date
                                 pool['last_acq_settle'] = get_sort_date(tx)
                                 # Position flipped direction (long→short
@@ -4000,6 +4411,8 @@ class CanadaTaxRules(TaxRules):
                     'pool_qty': pool['qty'],
                     'pool_acb': float(pool['total_cost']),
                 }
+            if year_end and _ye_pools is None:
+                _ye_pools = _pools_copy(global_pools)
 
             # Grant records fully retracted by an assignment (s.49(3)/(3.1))
             # leave the record list; their losses leave the solver.
@@ -4128,10 +4541,14 @@ class CanadaTaxRules(TaxRules):
                 of its holder. Only a long acquisition replaces (s.54;
                 CA-SL-07), so there is no short-side variant (A2-1596:
                 its branch was never reached)."""
+                if id(t) in _open_memo:      # (this pass's, TJ-0105)
+                    return _open_memo[id(t)]
                 bal = _bal_before.get(t.id, 0.0)
                 q = t.quantity
                 covering = min(q, max(0.0, -bal))
-                return max(0.0, q - covering)
+                _open_memo[id(t)] = r = max(0.0, q - covering)
+                return r
+            _open_memo: Dict[int, float] = {}
             # Skip wash-sale detection entirely when disabled. The main loop
             # has already produced realized gains assuming no disallowance,
             # so converging on iteration 1 with no virtual txs is correct.
@@ -4173,6 +4590,52 @@ class CanadaTaxRules(TaxRules):
             _trg_used: Dict[str, float] = {}
             _grp_claim: Dict[Any, float] = {}
             _grp_state: Dict[str, float] = {}
+            if iteration_losses_to_check and _sl_trg is None:
+                # Each class's candidate replacements (purchases), dated
+                # by the sort date the trigger scan tests.
+                _sl_trg = {}
+                for _c, _rows in _rows_of_cls.items():
+                    _cand = [t for t in _rows
+                             if t.action in ('BUYSELL', 'ASSIGN')
+                             and not not_a_purchase(t)]
+                    if _cand:
+                        _sl_trg[_c] = _DatedRows(_cand, get_sort_date)
+            # This pass's balance rows per class and per symbol, in
+            # processing order (the day-30 walks), built on first use.
+            _sl_bal: Optional[Dict[str, list]] = None
+            _sl_bal_sym: Dict[str, list] = {}
+            _sl_views: Dict[str, _ClassBalances] = {}
+            _sl_wpos: Optional[Dict[Any, int]] = None
+            _adj_idx = _WashAdjustIndex(final_virtual_txs)
+
+            def _class_balances(c) -> Optional[_ClassBalances]:
+                nonlocal _sl_bal
+                if _sl_bal is None:
+                    _sl_bal = {}
+                    for t in current_tx_list:
+                        if t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
+                                        'OPENING_BALANCE'):
+                            _sl_bal.setdefault(row_cls(t), []).append(t)
+                            _sl_bal_sym.setdefault(t.symbol, []).append(t)
+                if c not in _sl_views:
+                    _sl_views[c] = _ClassBalances(
+                        _sl_bal.get(c, []), get_sort_date, _holder,
+                        lambda t: (t.id not in sheltered_ids
+                                   and t.id not in affiliated_ids),
+                        _split_syms)
+                return _sl_views[c]
+
+            # "Owns the substituted property" is measured per holder
+            # (see the day-30 walk below): the taxable book, or one
+            # registered / affiliated account.
+            def _holder(t):
+                if t.id in sheltered_ids or t.id in affiliated_ids:
+                    return ('other', t.account)
+                return ('taxable',)
+
+            def _holder_rank(t):
+                return (2 if t.id in affiliated_ids
+                        else 1 if t.id in sheltered_ids else 0)
             for loss in sorted(iteration_losses_to_check,
                                key=lambda l: _pkey(l['tx'])):
                 tx = loss['tx']
@@ -4195,8 +4658,15 @@ class CanadaTaxRules(TaxRules):
                 # renamed, so this is a no-op for the common case.
                 loss_alias = row_cls(tx)
                 potential_triggers = []
-                for t in all_txs:
-                    if row_cls(t) != loss_alias:
+                # The class's purchases dated inside the window, in book
+                # order (the walk of the whole book kept exactly these);
+                # the whole book when a date there does not parse.
+                _trg_rows = _sl_trg.get(loss_alias)
+                _indexed = _trg_rows is None or _trg_rows.ok
+                for t in (all_txs if not _indexed
+                          else _trg_rows.within(loss_date.toordinal(), 30)
+                          if _trg_rows is not None else ()):
+                    if not _indexed and row_cls(t) != loss_alias:
                         continue
                     # The loss row itself is a candidate only when it is
                     # a cover that also OPENS a long (buy 150 while short
@@ -4215,17 +4685,20 @@ class CanadaTaxRules(TaxRules):
                     # silently disallow the entire loss. Same exclusion
                     # for TRANSFER (informational), OPENING_BALANCE
                     # (synthetic), and the bookkeeping actions.
-                    if t.action not in ('BUYSELL', 'ASSIGN'):
+                    if not _indexed and t.action not in ('BUYSELL',
+                                                         'ASSIGN'):
                         continue
                     # A transfer-in at its book value (an arrival) and an
                     # opening balance (a positions report's snapshot) are
                     # not purchases: never a replacement, never "acquired
                     # in the window" — their shares still count as held
                     # at day 30 through the balances (CA-OPEN-01).
-                    if not_a_purchase(t):
+                    if not _indexed and not_a_purchase(t):
                         continue
-                    t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
-                    if abs((t_date - loss_date).days) <= 30:
+                    if not _indexed:
+                        t_date = datetime.strptime(get_sort_date(t),
+                                                   '%Y-%m-%d')
+                    if _indexed or abs((t_date - loss_date).days) <= 30:
                         if t.quantity > 0:
                             # Only the OPENING portion is replacement
                             # property; a pure cover/close is not a
@@ -4286,19 +4759,44 @@ class CanadaTaxRules(TaxRules):
                 call_triggers = []
                 if (loss.get('direction', 'LONG') == 'LONG'
                         and not is_option_symbol(tx.symbol)):
-                    for t in all_txs:
-                        if (t.id == tx.id or t.action != 'BUYSELL'
-                                or t.quantity <= 0
-                                or not_a_purchase(t)
-                                or parse_option_right(t.symbol) != 'C'):
+                    if _sl_call is None:
+                        # The long-call purchases on each class (by the
+                        # class of the underlying on the trade date).
+                        _calls_of: Dict[str, list] = {}
+                        for t in all_txs:
+                            if (t.action != 'BUYSELL' or t.quantity <= 0
+                                    or not_a_purchase(t)
+                                    or parse_option_right(t.symbol) != 'C'):
+                                continue
+                            _und = _call_und(t.symbol)
+                            if not _und or _FUTURES_PREFIX_RE.match(_und):
+                                continue
+                            _calls_of.setdefault(
+                                split_timeline.class_at(_und, t.date),
+                                []).append(t)
+                        _sl_call = {c: _DatedRows(r, get_sort_date)
+                                    for c, r in _calls_of.items()}
+                    _call_rows = _sl_call.get(loss_alias)
+                    _cindexed = _call_rows is None or _call_rows.ok
+                    for t in (all_txs if not _cindexed
+                              else _call_rows.within(loss_date.toordinal(),
+                                                     30)
+                              if _call_rows is not None else ()):
+                        if t.id == tx.id:
                             continue
-                        _und = _call_und(t.symbol)
-                        if (not _und or _FUTURES_PREFIX_RE.match(_und)
-                                or split_timeline.class_at(_und, t.date) != loss_alias):
-                            continue
-                        t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
-                        if abs((t_date - loss_date).days) > 30:
-                            continue
+                        if not _cindexed:
+                            if (t.action != 'BUYSELL'
+                                    or t.quantity <= 0
+                                    or not_a_purchase(t)
+                                    or parse_option_right(t.symbol) != 'C'):
+                                continue
+                            _und = _call_und(t.symbol)
+                            if (not _und or _FUTURES_PREFIX_RE.match(_und)
+                                    or split_timeline.class_at(_und, t.date) != loss_alias):
+                                continue
+                            t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
+                            if abs((t_date - loss_date).days) > 30:
+                                continue
                         if _opening_qty(t) <= 1e-6:
                             continue          # a buy-to-close acquires nothing
                         call_triggers.append(t)
@@ -4375,16 +4873,16 @@ class CanadaTaxRules(TaxRules):
                             and (parse_option_expiry(t.symbol) or '9999')
                             < end_window_date)
 
-                bal_at_end = sum(
-                    _row_loss_units(t, t.quantity)
-                    for t in current_tx_list
-                    if row_cls(t) == loss_alias
-                    and not _gone_by_end(t)
-                    and get_sort_date(t) <= end_window_date
-                    # OPENING_BALANCE counts — missing-history shares are held
-                    # (see running_bal_by_tx walk above).
-                    and t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
-                                     'OPENING_BALANCE'))
+                # The class's balance rows (BUYSELL, ASSIGN, TRANSFER and
+                # OPENING_BALANCE — missing-history shares are held: see
+                # the running_bal_by_tx walk above) in processing order;
+                # the first _k_end are dated by day 30 (None: not in date
+                # order, every row is tested). _unit: no split or rename
+                # acts on the class, so its quantities are loss units.
+                _cb = _class_balances(loss_alias)
+                _k_end = _cb.prefix(end_window_date)
+                _unit = (_cb.unit_symbol == tx.symbol
+                         and _k_end is not None)
 
                 # ITA s.54: the trigger must be an ACQUISITION of identical
                 # property still OWNED at the end of the window. A new
@@ -4406,25 +4904,18 @@ class CanadaTaxRules(TaxRules):
                 # RRSP's 2020 shares turn a taxable rebuy that was sold
                 # again inside the window into a PERMANENT denial (2026-09
                 # engine audit).
-                def _holder(t):
-                    if t.id in sheltered_ids or t.id in affiliated_ids:
-                        return ('other', t.account)
-                    return ('taxable',)
-
-                def _holder_rank(t):
-                    return (2 if t.id in affiliated_ids
-                            else 1 if t.id in sheltered_ids else 0)
+                # (_holder, _holder_rank: defined above the loop.)
                 _bal_end_h: Dict[Any, float] = {}
-                for t in current_tx_list:
-                    if (row_cls(t) == loss_alias
-                            and not _gone_by_end(t)
-                            and get_sort_date(t) <= end_window_date
-                            and t.action in ('BUYSELL', 'ASSIGN',
-                                             'TRANSFER',
-                                             'OPENING_BALANCE')):
-                        _h = _holder(t)
-                        _bal_end_h[_h] = (_bal_end_h.get(_h, 0.0)
-                                          + _row_loss_units(t, t.quantity))
+                if _unit:
+                    if not _gone_by_end(tx):
+                        _bal_end_h = _cb.holder_sums(_k_end)
+                else:
+                    for t in _cb.rows:
+                        if (not _gone_by_end(t)
+                                and get_sort_date(t) <= end_window_date):
+                            _h = _holder(t)
+                            _bal_end_h[_h] = (_bal_end_h.get(_h, 0.0)
+                                              + _row_loss_units(t, t.quantity))
                 # Each holder backs this sale with min(acquired in the
                 # window, held at day 30), less what an earlier fill of
                 # the same sale already claimed from it (CA-SL-08). A
@@ -4435,7 +4926,9 @@ class CanadaTaxRules(TaxRules):
                         continue
                     _h = _holder(t)
                     _acq_h[_h] = (_acq_h.get(_h, 0.0)
-                                  + _row_loss_units(t, _opening_qty(t)))
+                                  + (_opening_qty(t) * 1.0 if _unit
+                                     else _row_loss_units(t,
+                                                          _opening_qty(t))))
                 _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0))
                                   - _grp_claim.get(h, 0.0))
                            for h, a in _acq_h.items()}
@@ -4456,13 +4949,10 @@ class CanadaTaxRules(TaxRules):
                     _expired = {sym for sym in _call_syms
                                 if (parse_option_expiry(sym) or '9999')
                                 < end_window_date}
-                    for t in current_tx_list:
-                        if (t.symbol in _call_syms
-                                and t.symbol not in _expired
-                                and get_sort_date(t) <= end_window_date
-                                and t.action in ('BUYSELL', 'ASSIGN',
-                                                 'TRANSFER',
-                                                 'OPENING_BALANCE')):
+                    for t in (t for _cs in sorted(_call_syms)
+                              for t in _sl_bal_sym.get(_cs, ())):
+                        if (t.symbol not in _expired
+                                and get_sort_date(t) <= end_window_date):
                             _k = ('call', _holder(t), t.symbol)
                             _call_end[_k] = (_call_end.get(_k, 0.0)
                                              + _call_units(t, t.quantity))
@@ -4522,8 +5012,9 @@ class CanadaTaxRules(TaxRules):
                     _loss_pkey = _pkey(tx)
                     post_loss = [t for t in potential_triggers
                                  if _pkey(t) > _loss_pkey]
+                    _post_ids = {id(t) for t in post_loss}
                     pre_loss = [t for t in potential_triggers
-                                if t not in post_loss]
+                                if id(t) not in _post_ids]
                     # Triggers at the SAME moment: the taxpayer's own
                     # (taxable) acquisition first, then registered, then
                     # affiliated accounts; within one rank, the main
@@ -4598,14 +5089,17 @@ class CanadaTaxRules(TaxRules):
                     _pool_repr: Dict[str, Any] = {}
                     # A key after every row of the window's last day.
                     _eow_key = (end_window_date, 99, '99:99:99', 99)
-                    for t in current_tx_list:
-                        if (row_cls(t) == loss_alias
-                                and get_sort_date(t) <= end_window_date
+                    if _unit:
+                        # One pool (no rename acts on the symbol): the
+                        # taxable rows' running sum.
+                        _n_tax, _s_tax = _cb.taxable_sum(_k_end)
+                        if _n_tax:
+                            _pool_back[tx.symbol] = _s_tax
+                            _pool_repr[tx.symbol] = _cb.first_taxable()
+                    for t in (() if _unit else _cb.rows):
+                        if (get_sort_date(t) <= end_window_date
                                 and t.id not in sheltered_ids
-                                and t.id not in affiliated_ids
-                                and t.action in ('BUYSELL', 'ASSIGN',
-                                                 'TRANSFER',
-                                                 'OPENING_BALANCE')):
+                                and t.id not in affiliated_ids):
                             _k = _symbol_asof(t.symbol, _eow_key,
                                               _ev_key(t))
                             _pool_back[_k] = (_pool_back.get(_k, 0.0)
@@ -4733,7 +5227,8 @@ class CanadaTaxRules(TaxRules):
                     # "solver stale-mate" where DISALLOW amounts would stay
                     # stuck at their first-iteration values even as the
                     # underlying realized loss drifted.
-                    existing_disallow = next((v for v in final_virtual_txs if v.id == tx.id and v.action == 'DISALLOW'), None)
+                    existing_disallow = next(iter(_dis_by_id.get(tx.id, ())),
+                                             None)
                     if existing_disallow:
                         # A pre-loss bump follows its sale's last losing
                         # fill as it moves (see _disp_last; A2-1596).
@@ -4742,9 +5237,8 @@ class CanadaTaxRules(TaxRules):
                         for trg, _q, _amt in allocations:
                             if _pkey(trg) >= _loss_pkey:
                                 continue
-                            _v = next((v for v in final_virtual_txs
-                                       if v.action == 'ADJUST'
-                                       and v.id == f"WASH_{tx.id}__{trg.id}"),
+                            _v = next((v for v in _adj_idx.of(tx.id)
+                                       if v.id == f"WASH_{tx.id}__{trg.id}"),
                                       None)
                             if (_v is not None
                                     and getattr(_v, '_wash_after', _wa) != _wa):
@@ -4760,18 +5254,18 @@ class CanadaTaxRules(TaxRules):
                         # FULL loss-tx id: 8-hex prefixes collided across losses, so a
                         # solver re-iteration could update the WRONG ADJUST and a
                         # report row could attach another loss's adjustment.
-                        adj_id_prefix = f"WASH_{tx.id}__"
+                        # (every ADJUST whose id starts WASH_<tx.id>__)
                         _new_amts = {f"WASH_{tx.id}__{trg.id}": amt
                                      for trg, _q, amt in allocations}
                         _seen_adj = set()
-                        for v in final_virtual_txs:
-                            if v.action == 'ADJUST' and v.id.startswith(adj_id_prefix):
-                                v.net_amount = _new_amts.get(v.id, 0.0)
-                                _seen_adj.add(v.id)
+                        for v in _adj_idx.of(tx.id):
+                            v.net_amount = _new_amts.get(v.id, 0.0)
+                            _seen_adj.add(v.id)
                         for trg, _q, amt in allocations:
                             a_id = f"WASH_{tx.id}__{trg.id}"
                             if a_id not in _seen_adj:
                                 final_virtual_txs.append(_mk_adjust(trg, amt))
+                                _adj_idx.add(final_virtual_txs[-1])
                         permanent_by_loss[tx.id] = perm_amt
                         found_new_wash_sale = True
                         continue
@@ -4791,7 +5285,32 @@ class CanadaTaxRules(TaxRules):
                     window_end_dt = loss_date + timedelta(days=30)
                     win_txs = []
                     seen = set()
-                    for t in all_txs:
+                    # The loss symbol's rows dated inside the window and
+                    # the call replacements, in book order (the walk of
+                    # the whole book kept only these); the whole book
+                    # when a trade date there does not parse.
+                    if _sl_sym is None:
+                        _sym_rows: Dict[str, list] = {}
+                        for t in all_txs:
+                            if t.action not in ('DISALLOW', 'ADJUST',
+                                                'DIVIDEND', 'TAX',
+                                                'INTEREST', 'FEE'):
+                                _sym_rows.setdefault(t.symbol,
+                                                     []).append(t)
+                        _sl_sym = {_s: _DatedRows(_r, lambda t: t.date)
+                                   for _s, _r in _sym_rows.items()}
+                        _sl_book_pos = {id(t): i
+                                        for i, t in enumerate(all_txs)}
+                    _wrows = _sl_sym.get(tx.symbol)
+                    if _wrows is not None and not _wrows.ok:
+                        _wscan = all_txs
+                    else:
+                        _wscan = list({id(t): t for t in (
+                            (_wrows.within(loss_date.toordinal(), 30)
+                             if _wrows is not None else [])
+                            + call_triggers)}.values())
+                        _wscan.sort(key=lambda t: _sl_book_pos[id(t)])
+                    for t in _wscan:
                         if t.id in seen:
                             continue
                         seen.add(t.id)
@@ -4842,7 +5361,10 @@ class CanadaTaxRules(TaxRules):
                         })
                     # Processing order, so the running balance reads in
                     # the order the main pass applied the rows (A2-0965).
-                    _wpos = {t.id: _pos.get(id(t), -1) for t in all_txs}
+                    if _sl_wpos is None:
+                        _sl_wpos = {t.id: _pos.get(id(t), -1)
+                                    for t in all_txs}
+                    _wpos = _sl_wpos
                     win_txs.sort(key=lambda r: (r['days_from_loss'],
                                                 r['date'],
                                                 _wpos.get(r['tx_id'], -1)))
@@ -4851,29 +5373,36 @@ class CanadaTaxRules(TaxRules):
                         'window_end': end_window_date,
                         'loss_date': tx.date,
                         'loss_direction': loss['direction'],
-                        'bal_at_end': bal_at_end,
+                        'bal_at_end': (
+                            (0 if _gone_by_end(tx) else _cb.total(_k_end))
+                            if _unit else
+                            sum(_row_loss_units(t, t.quantity)
+                                for t in _cb.rows
+                                if not _gone_by_end(t)
+                                and get_sort_date(t) <= end_window_date)),
                         'loss_qty': loss['qty'],
                         'disallowed_qty': disallowed_qty,
                         'transactions': win_txs,
                     }
                     final_virtual_txs.extend([disallow_vtx] + adjust_vtxs)
+                    _dis_by_id.setdefault(disallow_vtx.id,
+                                          []).append(disallow_vtx)
+                    for _a in adjust_vtxs:
+                        _adj_idx.add(_a)
                     found_new_wash_sale = True
                 else:
                     # Nothing left to back this loss (an earlier fill of
                     # the same sale took the replacement, or a later pass
                     # moved the balance): withdraw a denial an earlier
                     # pass attached.
-                    _stale = next((v for v in final_virtual_txs
-                                   if v.id == tx.id and v.action == 'DISALLOW'
-                                   and abs(float(v.net_amount)) > 0.001),
+                    _stale = next((v for v in _dis_by_id.get(tx.id, ())
+                                   if abs(float(v.net_amount)) > 0.001),
                                   None)
                     if _stale is not None:
                         _stale.net_amount = 0.0
                         _stale.quantity = 0.0
-                        for v in final_virtual_txs:
-                            if (v.action == 'ADJUST'
-                                    and v.id.startswith(f"WASH_{tx.id}__")):
-                                v.net_amount = 0.0
+                        for v in _adj_idx.of(tx.id):
+                            v.net_amount = 0.0
                         permanent_by_loss[tx.id] = 0.0
                         found_new_wash_sale = True
 
@@ -4911,15 +5440,36 @@ class CanadaTaxRules(TaxRules):
             if not found_new_wash_sale:
                 final_realized_gains = iteration_realized_gains
                 final_global_pools = global_pools
+                final_year_end_pools = _ye_pools
                 final_pool_snapshots = pool_snapshots_this_iter
 
                 # Backfill wash-window rows with the final, converged pool
                 # state. Earlier iterations may have written different pool
                 # values (before later ADJUSTs landed), so this overwrite is
                 # important for accuracy.
-                for ww in wash_windows.values():
+                for _wl_id, ww in wash_windows.items():
+                    # A row's state "after the row" includes this
+                    # denial's taxable ACB bump placed right after it
+                    # (`_wash_after`: the trigger purchase, or a pre-loss
+                    # trigger's loss sale) — the last one processed, as
+                    # `list` shows the pool (backlog TJ-0111).
+                    _bump_after: Dict[str, Any] = {}
+                    for _a in final_virtual_txs:
+                        _w = getattr(_a, '_wash_after', None)
+                        if (_w and _a.action == 'ADJUST'
+                                and _a.id.startswith(f"WASH_{_wl_id}__")
+                                and _a.id not in sheltered_ids
+                                and _a.id not in affiliated_ids
+                                and _a.id in final_pool_snapshots
+                                and (_w not in _bump_after
+                                     or _pos.get(id(_a), -1)
+                                     > _pos.get(id(_bump_after[_w]), -1))):
+                            _bump_after[_w] = _a
                     for entry in ww.get('transactions', []):
-                        snap = final_pool_snapshots.get(entry.get('tx_id', ''))
+                        _eid = entry.get('tx_id', '')
+                        snap = final_pool_snapshots.get(
+                            _bump_after[_eid].id if _eid in _bump_after
+                            else _eid)
                         if snap:
                             entry['pool_qty_after'] = snap['pool_qty']
                             entry['pool_acb_after'] = snap['pool_acb']
@@ -4931,6 +5481,7 @@ class CanadaTaxRules(TaxRules):
                             else:
                                 entry['acb_per_share_after'] = 0.0
                 final_wash_sales = []
+                _adj_idx = _WashAdjustIndex(final_virtual_txs)
                 for v in final_virtual_txs:
                     if v.action == 'DISALLOW':
                         # ALL of this loss's ADJUST vtxs (a multi-trigger
@@ -4941,10 +5492,8 @@ class CanadaTaxRules(TaxRules):
                         # stranded the difference. Present the poolable
                         # (taxable-deferral) total; the permanent/
                         # sheltered share has no ADJUST by design.
-                        _adjs = [a for a in final_virtual_txs
-                                 if a.action == 'ADJUST'
-                                 and a.id.startswith(f"WASH_{v.id}__")
-                                 and abs(a.net_amount) > 1e-9
+                        _adjs = [a for a in _adj_idx.of(v.id)
+                                 if abs(a.net_amount) > 1e-9
                                  # sheltered/affiliated allocations DO
                                  # get ADJUST vtxs (their ids join
                                  # sheltered_ids/affiliated_ids at
@@ -5049,10 +5598,17 @@ class CanadaTaxRules(TaxRules):
             if not final_realized_gains:
                 final_realized_gains = iteration_realized_gains
                 final_global_pools = global_pools
+                final_year_end_pools = _ye_pools
         
         # Format results
         processed_gains = []
         by_ticker = {}
+        # Each denial's trigger row and ADJUSTs by id (first in list
+        # order, as the walks of every row found them: TJ-0105).
+        _book_row_of: Dict[Any, Any] = {}
+        for t in all_txs:
+            _book_row_of.setdefault(t.id, t)
+        _adj_out = _WashAdjustIndex(final_virtual_txs)
         for g in final_realized_gains:
             # Signed cash-flow convention for SHORT positions: a sell-to-open
             # is a cash inflow (negative cost) and a buy-to-close is a cash
@@ -5140,12 +5696,8 @@ class CanadaTaxRules(TaxRules):
                 trigger_id = loss_to_trigger.get(g['tx_id'])
                 trigger_tx = None
                 if trigger_id:
-                    trigger_tx = next((t for t in all_txs if t.id == trigger_id), None)
-                adj_vtx = next(
-                    (v for v in final_virtual_txs
-                     if v.action == 'ADJUST' and v.id.startswith(f"WASH_{g['tx_id']}__")),
-                    None,
-                )
+                    trigger_tx = _book_row_of.get(trigger_id)
+                adj_vtx = next(iter(_adj_out.of(g['tx_id'])), None)
                 wash_trigger: Dict[str, Any] = {
                     'is_full_disallowance': abs(g['taxable_gain']) < 0.01,
                     'loss_raw_gain': g['gain'],
@@ -5289,6 +5841,9 @@ class CanadaTaxRules(TaxRules):
         # A short futures pool reports under its symbol (net of a long
         # held in another account).
         final_global_pools = _fold_short_futures_pools(final_global_pools)
+        if final_year_end_pools is not None:
+            final_year_end_pools = _fold_short_futures_pools(
+                final_year_end_pools)
         # Conservation post-conditions (see the helpers' docstrings).
         _pool_qty: Dict[str, float] = {}
         _seen_pool_objs: set = set()
@@ -5300,8 +5855,8 @@ class CanadaTaxRules(TaxRules):
         _verify_share_conservation(
             [t for t in current_tx_list
              if t.id in taxable_ids
-             and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
-                              'SPLIT')],
+             and (t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
+                               'SPLIT') or _is_lot_move(t))],
             _pool_qty, 'canada',
             zero_ratio_skips=False)     # CA applies a ratio-0 SPLIT blindly
         _warn_stranded_basis(final_global_pools)
@@ -5377,6 +5932,18 @@ class CanadaTaxRules(TaxRules):
                 for s, p in final_global_pools.items()
                 if abs(p['qty']) > pool_qty_eps(s)
             ],
+            # The pools at the end of year_end (see final_year_end_pools),
+            # the inventory's sign convention for shorts.
+            **({'inventory_year_end': [
+                {'symbol': s, 'qty': p['qty'],
+                 'total_cost': (float(p['total_cost']) if p['qty'] >= 0
+                                else -float(p['total_cost'])),
+                 'currency': p.get('currency', ''),
+                 'deferred_wash': round(
+                     float(p.get('deferred_wash', 0.0)), 4)}
+                for s, p in final_year_end_pools.items()
+                if abs(p['qty']) > pool_qty_eps(s)]}
+               if final_year_end_pools is not None else {}),
             'summary': {
                 'total_gain': sum_taxable,
                 'total_disallowed': sum_disallowed_on_washes,
@@ -6202,8 +6769,11 @@ class USATaxRules(TaxRules):
             _assign_pairs)
 
         def _take_option_adj(tx) -> float:
+            # The deferral part of what it returns:
+            # pending_option_adjustments.last_deferred (backlog TJ-0061).
             if (is_option_symbol(tx.symbol) or exercise_target(tx)
                     or tx.action not in ('BUYSELL', 'ASSIGN')):
+                pending_option_adjustments.last_deferred = 0.0
                 return 0.0
             return pending_option_adjustments.take(tx)
 
@@ -7216,6 +7786,9 @@ class USATaxRules(TaxRules):
                 # trade sorted between the option leg and the stock leg
                 # used to hijack the premium.
                 option_adj = _take_option_adj(tx)
+                # An exercised replacement option's wash deferral in
+                # that premium: these shares' lots tally it (TJ-0061).
+                option_dw = pending_option_adjustments.last_deferred
                 if not is_option_assign:
                     _plan_disposition(inventory_short, ikey, tx,
                                       'short_lot_ref', 'proceeds')
@@ -7296,7 +7869,8 @@ class USATaxRules(TaxRules):
                         # subtracts pending_adj from cost; SELL of stock adds
                         # pending_adj to proceeds).
                         pending_option_adjustments.stage(
-                            tx, underlying_for_assign, -raw_gain)
+                            tx, underlying_for_assign, -raw_gain,
+                            float(chunk_wd_d))
                         if trace:
                             symbol_traces[symbol].append(
                                 f"# {tx.date} ASSIGN-CLOSE {chunk_qty:10.4f} | "
@@ -7485,7 +8059,8 @@ class USATaxRules(TaxRules):
                         rg_trace=rg_trace,
                         tainted=short_lot.get('tainted', False),
                         raw_acq_date=short_lot['date'],
-                        deferred=chunk_wd_d,
+                        deferred=chunk_wd_d + D(option_dw * (chunk_qty
+                                                             / tx_qty_abs)),
                     )
                     realized_gains.append(entry)
 
@@ -7530,6 +8105,7 @@ class USATaxRules(TaxRules):
                     base_cost_d = D(leftover_share) * D(tx_net)
                     if option_adj != 0:
                         base_cost_d += D(option_adj * leftover_share)
+                    _odw = D(option_dw * leftover_share)
                     # A replacement matched BEFORE its own buy (the loss
                     # preceded it): only the matched shares carry the
                     # tacked holding period and the deferred basis, one
@@ -7591,7 +8167,8 @@ class USATaxRules(TaxRules):
                         _new_lots.append({
                             'qty': _bq,
                             'cost_basis': _c + _pb,
-                            'wash_deferred': _pb,
+                            'wash_deferred': (_pb + _odw * D(_bq)
+                                              / D(qty_remaining)),
                             'date': tx.date,
                             # When the lot is the holder of record's
                             # (a 'dist' ADJUST, US-DIST-01).
@@ -7603,7 +8180,8 @@ class USATaxRules(TaxRules):
                         _new_lots.append({
                             'qty': _left,
                             'cost_basis': base_cost_d - _alloc,
-                            'wash_deferred': Decimal(0),
+                            'wash_deferred': (_odw * D(_left)
+                                              / D(qty_remaining)),
                             'date': tx.date,
                             'date_settle': tx.date_settle or tx.date,
                             'effective_acq_date': tx.date,
@@ -7640,6 +8218,7 @@ class USATaxRules(TaxRules):
             # — subtracting it from per-chunk proceeds yields proceeds + gain.
             # Same marked-leg gate as the BUY path above.
             option_adj_sell = _take_option_adj(tx)
+            option_dw_sell = pending_option_adjustments.last_deferred
             if not is_option_assign:
                 _plan_disposition(inventory_long, ikey, tx,
                                   'lot_ref', 'cost_basis')
@@ -7700,7 +8279,8 @@ class USATaxRules(TaxRules):
                 if is_option_assign:
                     # Long option exercised: roll premium into underlying.
                     pending_option_adjustments.stage(
-                        tx, underlying_for_assign, -raw_gain)
+                        tx, underlying_for_assign, -raw_gain,
+                        float(chunk_wd_d))
                     if trace:
                         symbol_traces[symbol].append(
                             f"# {tx.date} ASSIGN-EXERCISE {chunk_qty:10.4f} | "
@@ -7960,7 +8540,8 @@ class USATaxRules(TaxRules):
                     rg_trace=rg_trace,
                     raw_acq_date=lot['date'],
                     tainted=lot.get('tainted', False),
-                    deferred=chunk_wd_d,
+                    deferred=chunk_wd_d + D(option_dw_sell * (chunk_qty
+                                                              / tx_qty_abs)),
                 )
                 realized_gains.append(entry)
                 _record_sold_replacement(lot, entry, chunk_qty, tx)
@@ -8013,7 +8594,8 @@ class USATaxRules(TaxRules):
                     # surfaced so inventory reports show it.
                     'wash_deferred': (rep_record['pending_proceeds_reduction']
                                       if rep_record is not None
-                                      else Decimal(0)),
+                                      else Decimal(0))
+                    + D(option_dw_sell * leftover_share),
                 }
                 inventory_short[ikey].append(short_lot)
                 if rep_record is not None:
@@ -8251,6 +8833,14 @@ class USATaxRules(TaxRules):
                     # position-start when the original lots have all
                     # been closed and replaced by later buys.
                     'position_start_date': min(l['date'] for l in lots),
+                    # The earliest remaining lot's holding period start:
+                    # a wash-sale replacement's is moved back by the
+                    # loss shares' period (§1223(3), US-WASH-10), the
+                    # date the sale's term is decided from (harvest's
+                    # LT_IN read the buy date: backlog TJ-0138).
+                    'holding_start_date': min(
+                        l.get('effective_acq_date') or l['date']
+                        for l in lots),
                     # Most recent surviving lot — the wash-window signal.
                     'last_acq_date': max(l['date'] for l in lots),
                     # §1091 basis bumps still embedded in surviving lots.

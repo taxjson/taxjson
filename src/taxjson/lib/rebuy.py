@@ -134,7 +134,18 @@ def _row(sym, live, r, cat, as_of, usa, canon, underlying, members,
         elif cat == "WASHED":
             status = "washed-part"
     elif cat == "VIOLATION":
-        if r.get("deadline_passed"):
+        if any("rescue_by" in l for l in live):
+            # Each loss carries its own rescue date (backlog TJ-0079):
+            # one whose date has passed is denied for good, whatever a
+            # later loss of the same ticker still allows.
+            keep = [l for l in live
+                    if l.get("rescue_by") and not l.get("rescue_passed")]
+            if keep:
+                status = "rebought"
+                rescue_by = min(str(l["rescue_by"]) for l in keep)
+            elif any(l.get("rescue_passed") for l in live):
+                status = "denied"
+        elif r.get("deadline_passed"):
             status = "denied"
         else:
             status = "rebought"
@@ -158,6 +169,21 @@ def _row(sym, live, r, cat, as_of, usa, canon, underlying, members,
         "days_left": (_days(rebuy_at, as_of) if rebuy_at else None),
         "status": status,
         "rescue_by": rescue_by,
+        # USA, a short-cover loss: the first day a new short sale no
+        # longer replaces it (§1091(e); backlog TJ-0122).
+        "reshort_ok_from": (
+            max([str(l["rebuy_at"]) for l in live
+                 if l.get("direction") == "SHORT" and l.get("rebuy_at")]
+                or [str((r.get("short_cover_loss") or {}).get(
+                    "reshort_ok_from") or "")]) or None
+            if status == "short-cover" else None),
+        # Canada: the trade dates of the losses a sale by rescue_by
+        # keeps, and of those denied for good (their rescue date passed).
+        "rescues": sorted({str(l.get("trade_date") or "") for l in live
+                           if l.get("rescue_by")
+                           and not l.get("rescue_passed")}),
+        "final": sorted({str(l.get("trade_date") or "") for l in live
+                         if l.get("rescue_passed")}),
         "also": others,
         # Look-alike funds (ticker.map SIMILAR): a buy of these is
         # flagged, not counted (CA-SL-20 / US-WASH-26).
@@ -198,18 +224,35 @@ def _acts(doc: Dict[str, Any], country: str) -> List[str]:
     from taxjson.lib import out
     usa = canonical_country(country) == USA
     acts = []
+    # A SYMBOL asked for that has no row (backlog TJ-0104).
+    n = int(doc.get("others_open") or 0)
+    for u in doc.get("unmatched") or []:
+        if u.get("in_books"):
+            text = f"{u['symbol']}: no loss with an open window"
+            if n:
+                text += f" ({n} other ticker(s) have one)"
+        else:
+            text = f"{u['symbol']}: not in the books"
+            if n:
+                text += f" ({n} other ticker(s) have an open window)"
+        acts.append(out.act(text, "tjs rebuy" if n else None))
     reb = [r for r in doc["rows"] if r["status"] == "rebought"]
     if reb:
         if len(reb) == 1:
             r = reb[0]
+            # Name the loss a sale keeps when another of the ticker's
+            # losses is denied for good (backlog TJ-0079).
+            what = (f"the {', '.join(r['rescues'])} loss"
+                    if r.get("final") and r.get("rescues") else "the loss")
             line = (f"{r['ticker']}: already bought back; sell it by "
-                    f"{r['rescue_by']} to keep the loss")
+                    f"{r['rescue_by']} to keep {what}")
         else:
             line = (f"{len(reb)} already bought back "
                     f"({_few([r['ticker'] for r in reb], 2)}): sell to "
                     f"keep the loss")
         acts.append(out.act(line, "tjs wash-radar"))
-    den = [r for r in doc["rows"] if r["status"] == "denied"]
+    den = [r for r in doc["rows"]
+           if r["status"] == "denied" or r.get("final")]
     if den:
         acts.append(out.act(f"{len(den)} loss(es) already denied "
                             f"({_few([r['ticker'] for r in den], 2)})",
@@ -217,10 +260,15 @@ def _acts(doc: Dict[str, Any], country: str) -> List[str]:
     if usa:
         sc = [r for r in doc["rows"] if r["status"] == "short-cover"]
         if sc:
+            # The date a new short sale stops replacing it, as buy-check
+            # gives it ("before 31 days" read as a count; TJ-0122).
+            _dates = {r.get("reshort_ok_from") or "" for r in sc}
+            _by = _dates.pop() if len(_dates) == 1 else ""
             acts.append(out.act(
                 f"{_few([r['ticker'] for r in sc], 2)}: a short-cover "
-                f"loss; only a new short before 31 days replaces it",
-                "tjs buy-check"))
+                f"loss; only a new short sale "
+                + (f"before {_by} " if _by else "in its window ")
+                + "replaces it", "tjs buy-check"))
     return acts
 
 
@@ -259,6 +307,9 @@ def render(doc: Dict[str, Any], currency: str, details: bool = False):
         d.para("REBUY ON: the first day a buy no longer cancels the "
                "loss; option series under their underlying.")
         d.line("\n".join(_table(doc, d.w)))
+    elif doc.get("asked"):
+        d.para(f"No loss of {', '.join(doc['asked'])} has an open "
+               f"repurchase window.")
     else:
         d.para("No ticker sold at a loss has an open repurchase window.")
     tail = doc["cleared"]
@@ -315,9 +366,9 @@ def _details(d, doc: Dict[str, Any], currency: str) -> None:
             "A loss is a wash sale when the same security is bought "
             "within 30 days before or after the sale (trade dates, "
             "§1091) in any account, IRAs included; no still-held test.",
-            "REBUY ON is the 31st day after the latest loss sale a buy "
-            "can still disallow; a loss already disallowed in full is "
-            "not one.",
+            "REBUY ON is the first trading day from the 31st day after "
+            "the latest loss sale a buy can still disallow; a loss "
+            "already disallowed in full is not one.",
             "After a loss on covering a short only a new short sale "
             "replaces it (§1091(e)); a long call is a note only "
             "(US-PLAN-02); futures and their options are outside §1091 "
@@ -328,9 +379,12 @@ def _details(d, doc: Dict[str, Any], currency: str) -> None:
             "within 30 days before or after the sale (settlement dates, "
             "s.54) by you or an affiliated person and still held 30 "
             "days after it.",
-            "REBUY ON is the day after the latest loss sale's window "
-            "closes, as a trade date: a buy that day settles after the "
-            "window (wash-radar's CLEARS, buy-check's safe-from date).",
+            "REBUY ON is the first trading day whose buy settles after "
+            "the latest loss sale's window closes (30 days after its "
+            "settlement): the window's last day when a trade then "
+            "settles the next day, the Friday before when it closes on "
+            "a weekend (wash-radar's CLEARS, buy-check's safe-from "
+            "date).",
             "A long call on the shares is a replacement too "
             "(CA-PLAN-02); an option series is replaced only by the "
             "same series."], "  ")
@@ -344,14 +398,16 @@ def _row_detail(r: Dict[str, Any], usa: bool) -> str:
         f"{_qty(l.get('qty'))} units, loss {_money(float(l.get('loss') or 0))}"
         + (f", {_money(float(l['disallowed']))} disallowed"
            if usa and float(l.get("disallowed") or 0.0) > 0.005 else "")
-        + (f", {_qty(l['denied_qty'])} units denied as things stand"
+        + (_denied_txt(l)
            if not usa and float(l.get("denied_qty") or 0.0) > 1e-9
            else "")
         for l in r["losses"])
     text = f"{r['ticker']}: {sales}. Rebuy on {_when(r)}."
     if r["status"] == "rebought":
+        what = (f"the {', '.join(r['rescues'])} loss"
+                if r.get("final") and r.get("rescues") else "the loss")
         text += (f" Already bought back: sell the replacement by "
-                 f"{r['rescue_by']} (last trade date) to keep the loss.")
+                 f"{r['rescue_by']} (last trade date) to keep {what}.")
     elif r["status"] == "denied":
         text += " The rescue deadline has passed: the loss is denied."
     elif r["status"] == "washed":
@@ -359,7 +415,10 @@ def _row_detail(r: Dict[str, Any], usa: bool) -> str:
     elif r["status"] == "washed-part":
         text += " Part of it is already disallowed."
     elif r["status"] == "short-cover":
-        text += " A buy does not replace it; a new short before 31 days does."
+        text += (" A buy does not replace it; a new short sale "
+                 + (f"before {r['reshort_ok_from']}"
+                    if r.get("reshort_ok_from") else "in its window")
+                 + " does.")
     if r["also"]:
         text += (" A buy of " + ", ".join(r["also"])
                  + " counts too (the same security).")
@@ -370,6 +429,16 @@ def _row_detail(r: Dict[str, Any], usa: bool) -> str:
                  + ("substantially identical" if usa
                     else "identical property") + ").")
     return text
+
+
+def _denied_txt(l: Dict[str, Any]) -> str:
+    """Canada: a loss's denied units — final once its own last rescue
+    trade date has passed (backlog TJ-0079)."""
+    if l.get("rescue_passed"):
+        return (f", {_qty(l['denied_qty'])} units denied for good (the "
+                f"last trade date to rescue it, {l.get('rescue_by')}, "
+                f"has passed)")
+    return f", {_qty(l['denied_qty'])} units denied as things stand"
 
 
 def _qty(v) -> str:

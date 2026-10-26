@@ -1787,7 +1787,7 @@ def _account_tt_links(paths) -> Dict[tuple, str]:
     of `paths` (inputs/<account>/) that move a position to another
     symbol (`SPLIT <date> <time> OLD NEW <ratio>`): the account's own
     rows already book that change (audit review H6)."""
-    from taxjson.bin.taxjson_convert_tt import strip_tt_comment
+    from taxjson.bin.taxjson_convert_tt import strip_tt_comment, tt_lines
     from taxjson.lib.dated_events import tt_files
     out: Dict[tuple, str] = {}
     dirs = []
@@ -1805,7 +1805,7 @@ def _account_tt_links(paths) -> Dict[tuple, str]:
                 text = tt.read_text(encoding='utf-8-sig')
             except (OSError, UnicodeError):
                 continue        # the .tt stage names an unreadable file
-            for n, raw in enumerate(text.splitlines(), 1):
+            for n, raw in enumerate(tt_lines(text), 1):
                 parts = strip_tt_comment(raw).split()
                 if (len(parts) >= 5 and parts[0] == 'SPLIT'
                         and parts[3].upper() != parts[4].upper()):

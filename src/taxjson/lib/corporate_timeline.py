@@ -221,6 +221,13 @@ def _walk_rest(tx: Any) -> Tuple:
         return (WalkPriority.SPLIT, tx.time or '00:00:00', 0)
     q = float(getattr(tx, 'quantity', 0) or 0)
     rung = 1 if q > 0 else 2
+    if act == 'TRANSFER' and getattr(tx, 'type', '') == 'lot_move' and q > 0:
+        # The in leg of a move between two of your own accounts
+        # (core.LOT_MOVE_TYPE) reads the units held from the start of
+        # its day, as the books do: a sale of them that day settling
+        # later is no short (backlog TJ-0093). The out leg keeps its
+        # place after the day's trades — never a false short either.
+        return (WalkPriority.SPLIT, tx.time or '00:00:00', rung)
     ds = getattr(tx, 'date_settle', '') or ''
     lagged = (act in ('BUYSELL', 'ASSIGN') and bool(ds) and bool(tx.date)
               and ds > tx.date)

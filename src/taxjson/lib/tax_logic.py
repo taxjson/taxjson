@@ -681,7 +681,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "actually paid or received; a move between two of your "
                  "own accounts in the books is not a disposition (the "
                  "units and their cost stay in the one pool while in "
-                 "transit, so how long a move takes changes nothing); "
+                 "transit, so how long a move takes changes nothing, nor "
+                 "an arrival the receiving broker books up to 7 days "
+                 "before the other one books the departure); "
                  "money from outside the "
                  "books costs what you declare (the day's rate only when "
                  "you opt in with `spot`), and money leaving them is "
@@ -697,7 +699,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "exchange's proceeds, and boot); a share-for-share "
                  "exchange, a coin-for-coin swap, a fee paid in a coin "
                  "and a reward in a coin move none. A USD stablecoin is "
-                 "US-dollar cash (CA-CRYPTO-02; the report says so). The "
+                 "US-dollar cash (CA-CRYPTO-02; the report says so): a "
+                 "reward paid in one brings those US dollars in, at the "
+                 "value its income is booked at when that is in Canadian "
+                 "dollars (else at the day's rate). The "
                  "default ledger reads only the trades and income — no "
                  "conversion, deposit, withdrawal, margin balance or "
                  "opening pool — so its figure is NOT RELIABLE and is "
@@ -991,6 +996,23 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-10",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line)."),
+            Rule("CA-ACB-OWN-MOVE",
+                 "A move of shares between two of your taxable accounts "
+                 "(a transfer-out paired with a transfer-in as one move "
+                 "of your own, CA-ACB-TRANSFER-BV) is not a disposition "
+                 "and not an acquisition: the ACB stays one pool "
+                 "(CA-ACB-01), so no figure you file changes, and neither "
+                 "leg is a purchase for the superficial-loss window. Each "
+                 "account's books still carry it — the units leave the "
+                 "sending account and join the receiving one at the start "
+                 "of the earlier row's day — so `taxjson list`, `sanity`, "
+                 "`find-missing-history` and the checklist see the "
+                 "receiving account hold them. In one account's own "
+                 "baseline (<account>.sum) the units leave the sender at "
+                 "its average cost with no sale, and the receiver's sales "
+                 "of them have no cost there. What the pairing leaves of "
+                 "a row stays a transfer in or out; a move to or from a "
+                 "registered account is an in-kind move, never this."),
             Rule("CA-ACB-TRANSFER-BV",
                  "A broker's transfer rows in a taxable account are kept "
                  "out of the books. Shares that arrive from outside your "
@@ -1023,7 +1045,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "of the units cover nothing: the arrival is said as "
                  "ATTENTION and NOT booked until the rest is declared. "
                  "The arrival is not an acquisition for the "
-                 "superficial-loss window."),
+                 "superficial-loss window. A .tt NOTOWN line in the "
+                 "receiving account's folder undoes one such pairing — "
+                 "the two legs of the same units, within 10 days or the "
+                 "slower kind — and never makes one: the transfer-in is "
+                 "then an arrival from outside your books, the "
+                 "transfer-out an ordinary one."),
             Rule("CA-XLIST-01",
                  "Two listings of one company's same class of shares (a "
                  "TSX line and its NYSE line, a US-dollar and a "
@@ -1764,7 +1791,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "never by row order.", cont=True),
             Rule("CA-OPT-07",
                  "If the premium's year was already filed, `taxjson "
-                 "option-boundary` flags the T1-ADJ.", cont=True),
+                 "option-boundary` flags the T1-ADJ, until that year's "
+                 "lock (re-closed after the amendment) no longer reports "
+                 "the premium.", cont=True),
             Rule("CA-OPT-09",
                  "Exercising a warrant or right is not a disposition: its "
                  "cost and the exercise price paid become the shares' ACB "
@@ -2295,7 +2324,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "The province's share is the federal amount recovered "
                  "times the province's minimum-tax factor (the one "
                  "applied to the federal excess), deducted from basic "
-                 "provincial tax before Ontario's surtax.", cont=True),
+                 "provincial tax before Ontario's surtax; the estimate "
+                 "and `amt` show that share (the provincial form's "
+                 "carryover line) and the surtax it saves apart.",
+                 cont=True),
             Rule("CA-AMT-06",
                  "The estimate is incremental, so it counts against the "
                  "investment income only the change in recovery it "
@@ -2320,10 +2352,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "loss carries forward with no time limit and back up to 3 "
                  "years (form T1A). Every year is recomputed with the "
                  "project's own settings (option timing, tax_date, income "
-                 "dating); a year before the project year that has a "
+                 "dating), the project year's net taken from the RETURN "
+                 "row of `taxjson sum` (each Schedule 3 row's cents, as "
+                 "filed); a year before the project year that has a "
                  "close-year lock (filed/<year>.json or prior_year_record) "
                  "takes the lock's FILED gain instead — the total filed "
-                 "with another tool, else the Schedule 3 gain lines — and "
+                 "with another tool, else the RETURN row it recorded, "
+                 "else the Schedule 3 gain lines — and "
                  "a locked later year is compared with it. A year after "
                  "the project year is partial: no carry-back is offered "
                  "and the carryforward stops at the project year."),
@@ -2356,7 +2391,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CARRY-03",
                  "It prints where each carry-forward came from, and notes "
                  "a lock older than last year (that year's changes are "
-                 "missing).", cont=True),
+                 "missing). The unused losses it carries forward leave "
+                 "out the part of the year's loss [carryover] claimed "
+                 "carries back (T1A), as `taxjson carryover` folds it.",
+                 cont=True),
             Rule("CA-CARRY-04",
                  "`taxjson carryover` takes the balance a close-year lock "
                  "recorded as carried out of its year as the running "
@@ -2364,14 +2402,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the claims under earlier years, that year takes only "
                  "the carry-back its lock recorded (none when it records "
                  "none); the rest of such a claim waits for a later "
-                 "year's loss.",
+                 "year's loss. With no [carryover] claimed entry for "
+                 "that year, its APPLIED is the losses its lock applied, "
+                 "and that much of its gain is used: none of it is "
+                 "offered again, to apply or as carry-back room.",
                  cont=True),
             Rule("CA-CARRY-05",
                  "`taxjson handoff` flags a next-year input that differs "
                  "from what the closed year carried out: [estimate] "
                  "other_losses, [carryover] claimed's entry for that year "
-                 "(vs the loss applied), and [estimate] amt_carryover by "
-                 "year of origin.",
+                 "(vs the loss applied, less the part this project's own "
+                 "loss carries back to it, a T1A carry-back the record "
+                 "predates), and [estimate] amt_carryover by year of "
+                 "origin.",
                  cont=True),
             Rule("CA-RPT-11",
                  "`taxjson instalments`: CRA instalments (ITA s.156) when "
@@ -2488,11 +2531,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "those accounts are not in the project."),
             Rule("CA-PLAN-05",
                  "`rebuy` lists every loss sale whose window is still "
-                 "open with its re-entry date, the radar's own: the day "
-                 "after the latest loss's window closes (its settlement "
-                 "date + 31, read as a trade date, so the buy settles "
-                 "after the window), the same date wash-radar and "
-                 "buy-check give. A buy in any of your accounts counts, "
+                 "open with its re-entry date, the radar's own: the "
+                 "first trading day, on the listing's calendar, whose "
+                 "buy settles after the latest loss's window closes "
+                 "(its settlement date + 30) — the window's last day "
+                 "when a trade then settles the next day, the trading "
+                 "day before a weekend it closes on — the same date "
+                 "wash-radar and buy-check give (from that day the loss "
+                 "no longer blocks a buy). A buy in any of your accounts counts, "
                  "an RRSP or TFSA included, where the denied loss is lost "
                  "for good; another listing of the same security "
                  "(ticker.map, tobase.map) counts too, and an option "
@@ -3217,7 +3263,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "(holding period). Out and in rows that look like a move "
                  "but do not pair, or a move larger than the lots the "
                  "sender holds, are said ATTENTION (--strict stops); "
-                 "those shares' sales are then reported by hand."),
+                 "those shares' sales are then reported by hand. A pair "
+                 "a .tt NOTOWN line undoes (US-BASIS-TRANSFER-BV) moves "
+                 "no lots."),
             Rule("US-BASIS-TRANSFER-BV",
                  "A broker's transfer rows in a taxable account are kept "
                  "out of the books. Shares that arrive from outside your "
@@ -3252,7 +3300,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "purchases for some of the units cover nothing: the "
                  "arrival is said as ATTENTION and NOT booked until the "
                  "rest is declared. The arrival is not a §1091 "
-                 "replacement."),
+                 "replacement. A .tt NOTOWN line in the receiving "
+                 "account's folder undoes one such pairing — the two "
+                 "legs of the same units, within 10 days or the slower "
+                 "kind — and never makes one: the transfer-in is then an "
+                 "arrival from outside your books, the transfer-out an "
+                 "ordinary one, and no lots move (US-BASIS-05)."),
             Rule("US-DIST-01",
                  "[[distributions]] (taxjson.toml): a non-cash distribution "
                  "(a reinvested capital-gain distribution, a late return-of-capital "
@@ -4115,8 +4168,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "its own name."),
             Rule("US-PLAN-06",
                  "`rebuy` lists every loss sale whose window is still "
-                 "open with its re-entry date, the radar's own: the 31st "
-                 "day after the latest loss sale's trade date that a buy "
+                 "open with its re-entry date, the radar's own: the "
+                 "first trading day from the 31st day after the latest "
+                 "loss sale's trade date that a buy "
                  "can still disallow (not a loss the engine already "
                  "disallowed in full, nor a short-cover loss, which only "
                  "a new short sale replaces), the same date wash-radar "
@@ -4190,14 +4244,17 @@ def render(country: str, settings: Dict[str, Any],
            width: Optional[int] = None, ids: bool = False) -> str:
     """The plain text: a title, then each section's statements as `- `
     items wrapped at `width` (default: the house width, lib/out; 0 = one
-    line per statement). Words and rule ids are never broken."""
+    line per statement). Words and rule ids are never broken. No
+    settings (outside a project, `--country`): the title says "default
+    settings" — there is no project (backlog TJ-0187)."""
     from taxjson.lib.out import Doc
     c = _C.canonical_country(country)
     name = ("United States (experimental)" if c == _C.USA
             else _C.DISPLAY_NAME[c])
     year = settings.get("year")
     d = Doc(f"TAX LOGIC — {name}" + (f", tax year {year}" if year else "")
-            + ", with this project's settings", width_=width)
+            + (", with this project's settings" if settings
+               else ", default settings"), width_=width)
     for title, rules in sections(c, settings, ids=ids):
         d.section(title.upper())
         d.items(rules, indent="  ")

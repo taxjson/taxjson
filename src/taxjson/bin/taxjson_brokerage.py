@@ -247,6 +247,61 @@ def _refusal(e: Exception) -> str:
     return str(e)
 
 
+def _names_its_file(msg: str, path) -> bool:
+    """The refusal already starts with the file it is about: the parsed
+    file, or another file of its folder the parser read alongside it
+    (the Kraken ledger beside a trades export). Prefixing the parsed
+    file's name then named the wrong file first (backlog TJ-0164)."""
+    shown = shown_name(path)
+    if msg.startswith(shown):
+        return True
+    try:
+        names = {shown_name(q) for q in Path(path).parent.iterdir()
+                 if q.is_file()}
+    except OSError:
+        return False
+    return any(msg.startswith((f"{n}:", f"{n} line")) for n in names)
+
+
+# The fields two files' rows of one broker id must agree on.
+_RESTATED_FIELDS = ('date', 'time', 'action', 'symbol', 'quantity',
+                    'price', 'net_amount', 'currency', 'fee')
+
+
+def _restated_id(rows, given) -> str:
+    """The refusal for one broker row id (a Coinbase ID, a Kraken txid:
+    `given[i]`, the parser kept it as the row's id) carried by rows of
+    two DIFFERENT files with different content, or ''. The dedup reads
+    one id in two overlapping files as the same row exported twice and
+    keeps one version by file name, so a row one download restated (a
+    corrected price, amount or quantity) lost the other version with no
+    message; one file's twin is refused already (_crypto_common.RowIds;
+    backlog TJ-0071)."""
+    seen: dict = {}
+    for t, g in zip(rows, given):
+        if not g:
+            continue
+        src = (t.source, getattr(t, 'source_key', '') or '')
+        content = tuple(round(v, 8) if isinstance(v, float) else v
+                        for v in (getattr(t, f) for f in _RESTATED_FIELDS))
+        prev = seen.setdefault(t.id, (src, content, t))
+        if prev[0] == src or prev[1] == content:
+            continue
+
+        def brief(x):
+            return (f"{x.date} {x.action} {x.symbol or '-'} "
+                    f"{x.quantity:g} {x.currency} {x.net_amount:.2f}")
+        a, b = prev[2], t
+        return (f"{a.source} and {b.source}: row id {str(t.id)[:2]}*** is "
+                f"in both with DIFFERENT content ({a.source}: {brief(a)}; "
+                f"{b.source}: {brief(b)}) — two downloads disagree on one "
+                f"transaction (a restated row), and the books keep one row "
+                f"per id, so one version would be dropped with no message. "
+                f"Keep the newer download only, or correct the row, and "
+                f"run again.")
+    return ''
+
+
 def _dedup_evidence(per_file) -> list:
     """TRANSFER evidence rows from every input file, de-duplicated the
     way the book is (taxjson-sort --dedup): by content id, keeping for
@@ -629,6 +684,11 @@ Examples:
     # declare one). Option and futures rows also keep theirs on the
     # TaxTransaction (`multiplier`); a share's 1 is checked here only.
     multipliers = []
+    # The export line of each row of `normalized` (None: not known),
+    # for the schema check's messages (backlog TJ-0124).
+    row_lines = []
+    # Whether the parser kept the broker's own id on the row (TJ-0071).
+    given_ids = []
     dropped_keys = {}
     lint_problems = 0
     kept_aside_per_file: list = []
@@ -771,7 +831,7 @@ Examples:
             msg = _refusal(e)
             shown = shown_name(input_path)
             emit_line(f"taxjson-brokerage: error: "
-                  f"{msg if msg.startswith(shown) else f'{shown}: {msg}'}")
+                  f"{msg if _names_its_file(msg, input_path) else f'{shown}: {msg}'}")
             sys.exit(1)
         parsed_files.append((input_path, extractor, transactions))
         if args.country is None and hasattr(extractor,
@@ -1039,6 +1099,7 @@ Examples:
             lint_problems += len(_findings)
 
         for t in transactions:
+            _row_line = extractor.row_line(t)
             if 'qty' in t and 'quantity' not in t:
                 t = {**t, 'quantity': t['qty']}
             # Unknown keys are dropped — but no longer silently: a typo'd
@@ -1073,6 +1134,13 @@ Examples:
                 clean['source_key'] = _source_key
             normalized.append(TaxTransaction(**clean))
             multipliers.append(t.get('multiplier'))
+            row_lines.append(_row_line)
+            given_ids.append(bool(str(t.get('id') or '').strip()))
+
+    _restated = _restated_id(normalized, given_ids)
+    if _restated:
+        emit_line(f"taxjson-brokerage: error: {_restated}")
+        sys.exit(1)
 
     # One override line that rewrote two DIFFERENT raw securities pools
     # them (IB 'QZL' vs 'QZL B', 'QZN' vs 'QZN PRA': the key matches
@@ -1098,8 +1166,10 @@ Examples:
     # violations that corrupt tax math; they abort only under --strict
     # (or --lint) so a mid-season odd export still produces output.
     errors, schema_warnings = validate_transactions(
-        [({**t.to_dict(), 'multiplier': m} if m else t.to_dict())
-         for t, m in zip(normalized, multipliers)], lint=args.lint)
+        [{**t.to_dict(), **({'multiplier': m} if m else {}),
+          **({'line': ln} if ln else {})}
+         for t, m, ln in zip(normalized, multipliers, row_lines)],
+        lint=args.lint)
     for w in schema_warnings:
         if w.startswith(SCHEMA_ATTENTION_TAG):
             # `taxjson run` echoes ATTENTION lines to the console

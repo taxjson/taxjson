@@ -377,7 +377,7 @@ class TestCommand(unittest.TestCase):
                 self.assertTrue(r.stderr.startswith("Error: no work/"),
                                 r.stderr)
                 r = cli(root, "journals", "--account", "nosuch")
-                self.assertEqual(r.returncode, 1)
+                self.assertEqual(r.returncode, 2)   # usage (TJ-0157)
                 self.assertIn("no [accounts.nosuch]", r.stderr)
 
     def test_rbc_gambits_joined_then_refused_by_distinct(self):

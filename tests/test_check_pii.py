@@ -1344,7 +1344,11 @@ class TestReleaseAndCiGates(unittest.TestCase):
         for ref, rest in uses:
             self.assertRegex(ref, r"@[0-9a-f]{40}$", ref)
             self.assertRegex(rest, r"#\s*v\d+\.\d+\.\d+", ref)
-        self.assertRegex(wf, r"pip install ruff==\d+\.\d+\.\d+")
+        # ruff is pinned too: the dev lock's, by hash (backlog TJ-0152).
+        self.assertIn("pip install --require-hashes --only-binary :all: "
+                      "-r requirements/dev.txt", wf)
+        lock = (REPO_ROOT / "requirements" / "dev.txt").read_text()
+        self.assertRegex(lock, r"(?m)^ruff==\d+\.\d+\.\d+ \\$")
 
 if __name__ == "__main__":
     unittest.main()

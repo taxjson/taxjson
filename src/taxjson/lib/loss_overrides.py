@@ -172,6 +172,7 @@ def read_project(root: Path, accounts: Dict[str, Any]) -> List[Dict[str, Any]]:
     Raises LossOverrideError listing each line that cannot be used: a
     malformed one, one in a sheltered account (its losses are not on
     the return), two lines naming the same sale."""
+    from taxjson.bin.taxjson_convert_tt import tt_lines
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.dated_events import _where, tt_files
     out: List[Dict[str, Any]] = []
@@ -184,7 +185,7 @@ def read_project(root: Path, accounts: Dict[str, Any]) -> List[Dict[str, Any]]:
                 text = read_text_utf8(tt)
             except (OSError, ValueError):
                 continue        # the .tt stage names an unreadable file
-            for n, raw in enumerate(text.splitlines(), 1):
+            for n, raw in enumerate(tt_lines(text), 1):
                 if KEYWORD not in raw:
                     continue
                 where = _where(acct, tt, n)

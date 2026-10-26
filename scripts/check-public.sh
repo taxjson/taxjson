@@ -75,7 +75,7 @@ commits --message repos/$SLUG/commits?per_page=100$Q"
 # One JSON document per page (gh api --paginate prints them back to
 # back) -> KIND.txt (every item, one after another), and for each item
 # KIND.d/N.txt plus a line "N<TAB>address" in KIND.idx, to name the item
-# that holds a hit (check-pii.sh masks line numbers).
+# that holds a hit (a line number in KIND.txt would not say which item).
 SPLIT_PY='
 import json, os, sys
 kind, src, txt, idx, since = sys.argv[1:6]

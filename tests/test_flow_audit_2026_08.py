@@ -84,10 +84,15 @@ class TestSettingsKeyWhitelist(unittest.TestCase):
 
     def test_year_tokens_are_not_look_backs(self):
         from taxjson.bin.taxjson_run import _tx_period_cutoff
-        with self.assertRaises(SystemExit) as cm:
+        # A usage error: exit 2, its message printed on the way out
+        # (backlog TJ-0157), so the text is read from stderr.
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as cm, redirect_stderr(err):
             _tx_period_cutoff("2025")
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("invalid time period '2025'", err.getvalue())
         # ... and the error must not advertise the unsupported forms.
-        self.assertNotIn("tax_year", str(cm.exception))
+        self.assertNotIn("tax_year", err.getvalue())
 
 
 class TestBasisLabelsFollowResolution(unittest.TestCase):
@@ -419,6 +424,13 @@ class TestCombinedSidecarStaleness(unittest.TestCase):
             work = root / "work"
             os.rename(work / "margin_gains.json",
                       work / "margin_gains_wash.json")
+            # The reports a finished full run leaves: work/ books with no
+            # reports/*.sum are a run that died, which close-year refuses
+            # even with --force (backlog TJ-0015).
+            reports = root / "reports"
+            reports.mkdir()
+            for name in ("margin.sum", "margin_wash.sum"):
+                (reports / name).write_text("validation: 0 errors\n")
             # force=True: the project year (2026) has not ended, and
             # close-year now refuses that without --force (S045-23); the
             # staleness guard under test is a hard stop either way.
@@ -503,9 +515,15 @@ class Test2026_08_21AuditFixes(unittest.TestCase):
             doc = json.loads(out)
             self.assertEqual([a["account"] for a in doc["accounts"]],
                              ["margin"])
-            with self.assertRaises(SystemExit) as cm:
-                _run_cmd(cmd_summary, root, account="nope")
-        self.assertIn("nope", str(cm.exception))
+            # An account with no books: a usage error, exit 2 as in every
+            # command (backlog TJ-0157); the message, printed on the way
+            # out, still names it.
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, redirect_stderr(err):
+                cmd_summary(argparse.Namespace(dir=str(root),
+                                               account="nope"))
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("no gains for account 'nope'", err.getvalue())
 
 
 class TestCanBuy(unittest.TestCase):

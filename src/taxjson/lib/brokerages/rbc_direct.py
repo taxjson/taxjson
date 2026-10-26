@@ -38,6 +38,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          _parse_div_qty_rate,
                                          income_facts_from_description,
                                          is_roc_description,
+                                         PASTED_EXPORTS_FIX,
                                          shown_name)
 from taxjson.lib.corp_actions import (
     RBC_REORG_CODES, RbcReorgPairing, pair_rbc_reorganizations,
@@ -518,6 +519,15 @@ def read_rbc_rows(path: Path) -> RbcExport:
         for i, name in enumerate(canon):
             if name and name not in cell:
                 cell[name] = (cells[i] if i < len(cells) else '').strip()
+        if all(cell.get(c, '').lower() == c.lower()
+               for c in ('Date', 'Activity', 'Symbol')):
+            # The header again: two exports pasted into one file. It was
+            # refused as "Amount 'Amount' is not a number" (backlog
+            # TJ-0099); a plain concatenation (no second header) is
+            # still read as newest-first runs (A2-1046).
+            raise _err(path, line, f"the header repeats here — two "
+                       f"downloads pasted into one file. "
+                       f"{PASTED_EXPORTS_FIX}")
         # Statement furniture: text in the first column only ("Disclaimers",
         # the exchange-rate footnotes) — no activity, no money, no shares.
         if not cell.get('Activity') and not any(

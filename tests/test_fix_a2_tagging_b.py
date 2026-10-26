@@ -228,7 +228,10 @@ class TestEdgeCasesCountryGates(unittest.TestCase):
     @rule("US-RPT-05")
     def test_allowed_verdict_and_header(self):
         ca, us = self.out["canada"], self.out["usa"]
-        self.assertIn("not still held on day 30", ca)
+        # The day-30 holding the books show, with its date (backlog
+        # TJ-0283: never claimed unchecked).
+        self.assertIn("allowed: no units were held at the end of day 30 "
+                      "(2026-01-21)", ca)
         self.assertIn("matched none of those purchases", us)
         self.assertNotIn("matched none of those purchases", ca)
         self.assertIn("(settlement date, CRA)", ca)

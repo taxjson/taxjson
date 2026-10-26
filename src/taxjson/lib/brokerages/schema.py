@@ -122,14 +122,17 @@ def _masked_id(raw: Any) -> str:
 
 
 def _who(tx: Dict[str, Any], i: int) -> str:
-    """The row as the user can find it: its source file and (masked)
-    row id when the parser stamped them, else its place in the parsed
-    list."""
-    what = (f"{tx.get('action', '?')} {tx.get('symbol', '?')} "
-            f"{tx.get('date', '?')}")
+    """The row as the user can find it: its source file and line when
+    the parser gave them (`line`: backlog TJ-0124), else the file and
+    (masked) row id, else its place in the parsed list."""
+    what = (f"{tx.get('action') or '?'} "
+            f"{str(tx.get('symbol') or '').strip() or '(no symbol)'} "
+            f"{tx.get('date') or '?'}")
     src = str(tx.get('source') or '').strip()
     if not src:
         return f"tx[{i}] {what}"
+    if tx.get('line'):
+        return f"{src} line {tx['line']}: {what}"
     rid = _masked_id(tx.get('id'))
     return f"{src}{f' (row id {rid})' if rid else ''}: {what}"
 
@@ -165,7 +168,9 @@ def validate_transactions(txs: List[Dict[str, Any]],
             v = tx.get(field, None)
             if v is None or (isinstance(v, str) and not v.strip()):
                 errors.append(f"{_who(tx, i)}: missing required field "
-                              f"{field!r}")
+                              f"{field!r} — correct the row in the export "
+                              f"(or download it again), or enter it as a "
+                              f".tt line and delete the row.")
 
         for field in ('date', 'date_settle'):
             v = tx.get(field)

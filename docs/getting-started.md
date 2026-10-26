@@ -57,9 +57,9 @@ nothing to answer). Then:
 
 ```bash
 cd ~/taxjson-demo/2024
-tjs run          # the first run downloads 2024's exchange rates
-tjs sum          # the year's gains, as on the return
-tjs checklist --run    # every step to filing, checked
+tjs run              # the first run downloads 2024's exchange rates
+tjs sum              # the year's gains, as on the return
+tjs checklist --run  # every step to filing, checked
 ```
 
 That is what a finished run looks like, before you download anything of
@@ -408,14 +408,19 @@ tjs transfers
 ```
 CUSTODY TRANSFERS — evidence, not tax events
 WHERE: sidecar = kept out of the books, book = kept in; IN_BOOKS: how a transfer-in is booked.
-DATE        ACCOUNT  SYMBOL    QTY  TYPE                       VALUE  FEE  CUR  WHERE    IN_BOOKS
----------------------------------------------------------------------------------------------------
-2024-06-03  margin   SAMPJ.TO   20  SAMPLE_J_CORP_TRANSFE...  600.00    -  CAD  sidecar  book_value
-2024-06-03  margin   SAMPK.TO   40  SAMPLE_K_CORP_TRANSFER      0.00    -  CAD  sidecar  NO_COST
+DATE        ACCOUNT  SYMBOL    QTY  TYPE          VALUE  FEE  CUR  WHERE    IN_BOOKS
+----------------------------------------------------------------------------------------------
+2024-06-03  margin   SAMPJ.TO   20  transfer-in  600.00    -  CAD  sidecar  book_value
+2024-06-03  margin   SAMPK.TO   40  transfer-in    0.00    -  CAD  sidecar  NO_COST_(0_stated)
 
 2 transfer row(s).
-! 1 transfer-in(s) with no cost (SAMPK.TO): add the purchase to a .tt file — tjs transfers --details
+! 1 transfer-in(s) with no cost (SAMPK.TO) — tjs transfers --details
+More: tjs transfers --details (what each IN_BOOKS value means)
 ```
+
+`TYPE` is the broker's kind of transfer where it states one (IB's
+`ACATS`, `Internal`; a crypto exchange's `withdrawal`), else
+`transfer-in` or `transfer-out`.
 
 In a taxable account the transfer rows themselves stay out of the books
 (`sidecar`): a transfer is not a purchase. Most are your own moves (a
@@ -430,6 +435,13 @@ and no other transfer could pair with either; the run says so:
 ```
 Info: Own-account move: SAMPM.TO 50 cash -> margin (out 2024-05-20, in 2024-06-03: 14 days apart, nothing else pairs)
 ```
+
+If the two rows are not one move (the shares left your books, other
+shares arrived), the line's detail (`tjs run --details`) prints the
+`.tt` line that undoes the pairing, `NOTOWN 2024-06-03 SAMPM.TO 50 cash
+2024-05-20`, for a `.tt` file in the receiving account's folder (the
+transfer-in is then one from outside your books). A pairing within 10
+days (`own_move`, no Info line) is undone the same way.
 
 What is left came from **outside your books**, and `IN_BOOKS` says
 what the books did (when a transfer-out of yours that nothing paired
@@ -693,7 +705,12 @@ matters: it is the Bank of Canada rate's date for a US-dollar cost, and
 the superficial-loss window's. If the statement lists Closed Lots, IB's
 own purchase dates are filled in for you, one line per lot. The broker's
 figure is only a start: once you keep a line, the cost is yours. A
+transfer whose row states a book value of 0 (a placeholder, not your
+cost), or one your `.tt` purchases already cover in part (`PARTLY_covered`:
+the line is for the other units), is drafted with `COST` to fill in. A
 second `--write-purchases` keeps your draft unless you pass `--force`.
+The drafts are written from the books in `work/`: after changing the
+inputs, `tjs run` first (the command refuses to write from older books).
 
 **(4) What you cannot recover.** If a sale's purchase cannot be found
 at all, say how many units you held before your download starts, at an
@@ -1002,10 +1019,11 @@ T3's return of capital).
 ## 7. The filing checklist
 
 ```bash
-tjs checklist
+tjs checklist --run
 ```
 
-It runs the checks above and the rest of the filing steps: a table of
+It runs the checks above and the rest of the filing steps (`tjs
+checklist` alone shows the last run's verdicts again): a table of
 the sections with their counts, then one `! ` line per step that needs
 attention, with the command to run, and the next step last. A missing
 purchase that affects the year shows as:
@@ -1106,8 +1124,10 @@ and a complete project per tax year beside them.
   year, their quantities fixed.
 - **Keeping the years aligned:** a map line or setting added in one year
   is not in the others. `tjs years` lists each year with its state (filed
-  or open, last run, whether its inputs changed since) and says when its
-  map or settings differ from the newest year's; `tjs years --diff 2024
+  or open, last run, whether its inputs changed since, a filed year
+  whose last run DRIFTED) and says when its map or settings differ from
+  the newest year's (a filed year's are marked `(filed)`: its own; `align`
+  there warns first); `tjs years --diff 2024
   2025` shows the differences, and `tjs align --from 2025` in `2026/`
   brings chosen lines and settings over (asked one by one, or `--all`;
   the previous file is kept as `.bak`; 2025 is never written; a map line
@@ -1118,10 +1138,13 @@ and a complete project per tax year beside them.
   copy of the exports close-year froze into its own `inputs/`, so a new
   or corrected export, a late election or an `OPENING` line saved in the
   shared `inputs/` never reaches it: its `tjs run`, `tjs sum`,
-  `tjs check-filed` and its row in `tjs years` stay OK. The next year
-  is where it shows: `tjs handoff` there compares the opening positions
+  `tjs check-filed` and its row in `tjs years` stay OK, and its
+  `tjs check-filed` (and `tjs run`) names a shared export that changed
+  or lost a row of that year since the close. The next year shows what
+  moves the year-end: `tjs handoff` there compares the opening positions
   and cost with the filed year's year-end books, and `tjs option-boundary`
-  the options open across Dec 31. To carry a correction into the filed
+  the options open across Dec 31; a corrected sale of the filed year
+  (its proceeds, or the cost of a lot it sold) shows in neither. To carry a correction into the filed
   year, put the corrected file in its `inputs/<account>/` (or run
   `tjs elect` in its folder); `tjs run` there then names the frozen
   input that changed and warns `filed 2024 DRIFTED` when the filed
@@ -1159,11 +1182,17 @@ first refuses an old per-purpose map (`tjs migrate` folds it in), and
 lists the files it leaves at the top (no year reads them). To fold several year projects (`~/taxes/2024/`,
 `~/taxes/2025/`, each with its own `inputs/`) into one: in a new folder,
 `tjs migrate --to-years` the newest one there, copy each older project's
-own files (not its `inputs/`) into a folder named for its year, add
-`inputs_dir = "../inputs"` to its `[settings]`, and copy any export
-the shared `inputs/<account>/` does not have yet (the run reads
-overlapping rows once). Then `tjs run` in each year: a filed year's run
-says whether its figures still match its lock.
+own files into a folder named for its year, and copy any export the
+shared `inputs/<account>/` does not have yet (the run reads overlapping
+rows once). An older project that is open, or was closed by a taxjson
+older than v0.31.0 (its `filed/<year>.json` has no `"frozen"` entry),
+reads the shared exports: copy its files but not its `inputs/`, and add
+`inputs_dir = "../inputs"` to its `[settings]`. One closed by v0.31.0
+or later was closed with its inputs frozen: copy its `inputs/<account>/`
+folders and its `tobase.map` (if it has one) too, and leave `inputs_dir` unset — it
+keeps reading its own copy, as filed (as `tjs migrate --to-years` does
+for a filed year). Then `tjs run` in each year: a filed year's run says
+whether its figures still match its lock.
 
 ## What the books cannot see
 

@@ -70,7 +70,9 @@ def load_base_rows(cache: Path, account: str, *,
     read (not JSON, not a books document) raises BaseBookError instead
     — read as an empty history, it made `sanity` compare a dated
     snapshot with the latest books and certify it (audit 2026-10-24
-    B18); a missing file is still no history."""
+    B18); a missing file is still no history. A books document is the
+    object `taxjson run` writes, with a `transactions` list: `{}` or a
+    bare list is no books either (backlog TJ-0010)."""
     p = Path(cache) / f"{account}_base.json"
     try:
         text = p.read_text(encoding="utf-8")
@@ -87,6 +89,10 @@ def load_base_rows(cache: Path, account: str, *,
         if strict:
             raise BaseBookError(f"work/{p.name}: not JSON ({e})") from None
         return []
+    if strict and not (isinstance(doc, dict)
+                       and isinstance(doc.get("transactions"), list)):
+        raise BaseBookError(f"work/{p.name}: not a books document "
+                            f"(no transactions list)")
     rows = doc.get("transactions") if isinstance(doc, dict) else doc
     if rows is None:
         rows = []
@@ -219,6 +225,37 @@ def spinoff_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
         if (r.get("corp_event_id")
                 or str(r.get("type") or "").lower() == "spinoff_355"):
             out.add(str(r.get("symbol") or ""))
+    return out
+
+
+def fractions_awaiting_cash(rows: Iterable[Dict[str, Any]], day: str
+                            ) -> Dict[str, List[Dict[str, Any]]]:
+    """{symbol: [{"quantity", "received", "paid"}]}: the fractions of
+    s.86.1 spin-offs the books hold at the end of `day` and the broker
+    does not — received with the whole shares on the spin-off date and
+    sold for their cash in lieu on a later day (lib/corp_actions
+    ._allocated_spinoff_selling_fraction, CA-CORP-05). A broker's
+    snapshot between the two shows the whole shares only, which is no
+    difference to report (backlog TJ-0149)."""
+    rows = list(rows)
+    got: Dict[str, str] = {}
+    for r in rows:
+        if (r.get("action") == "BUYSELL" and r.get("corp_event_id")
+                and float(r.get("quantity") or 0.0) > 0):
+            eid = str(r["corp_event_id"])
+            d = str(r.get("date") or "")[:10]
+            got[eid] = min(got.get(eid, d), d)
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        q = float(r.get("quantity") or 0.0)
+        eid = str(r.get("corp_event_id") or "")
+        if (r.get("action") != "BUYSELL" or not -1.0 < q < 0.0 or not eid
+                or r.get("corp_election") != "rollover_s_86_1"):
+            continue
+        rec, paid = got.get(eid, ""), str(r.get("date") or "")[:10]
+        if rec and rec <= day < paid:
+            out.setdefault(str(r.get("symbol") or ""), []).append(
+                {"quantity": -q, "received": rec, "paid": paid})
     return out
 
 

@@ -148,6 +148,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          canonical_ca_listing,
                                          decode_broker_text,
                                          parse_strict_number,
+                                         refuse_pasted_overlap,
                                          shown_name)
 from taxjson.lib.core import is_option_symbol, parse_option_expiry
 from taxjson.lib.dates import settlement_date
@@ -751,6 +752,9 @@ class GenericBrokerage(BaseBrokerage):
                     return default
                 return (row.get(header[col.strip().lower()]) or default)
 
+            # One segment per export pasted into the file (backlog
+            # TJ-0099): their shared rows are refused after the loop.
+            pasted: List[tuple] = [(2, [])]
             for row in reader:
                 if not any((v or "").strip() for v in row.values()
                            if isinstance(v, str) or v is None):
@@ -764,7 +768,11 @@ class GenericBrokerage(BaseBrokerage):
                     self.count_nonevent("repeated header row "
                                         "(concatenated exports)")
                     segments.append((len(row_dates), len(transactions)))
+                    pasted.append((reader.line_num, []))
                     continue
+                pasted[-1][1].append((reader.line_num, tuple(
+                    (str(v) if v is not None else '').strip()
+                    for k, v in row.items() if k is not None)))
                 # A record wider than the header, or a cell holding a
                 # line break: an unescaped quote in a text cell swallowed
                 # the following row(s) and the columns now carry another
@@ -841,17 +849,20 @@ class GenericBrokerage(BaseBrokerage):
 
                 date_raw = str(cell(row, "date")).strip()
                 dt = self.parse_date(date_raw, date_fmt)
+                where = f"{shown_name(path)} line {reader.line_num}"
                 if dt is None:
                     # Same policy as Coinbase/Kraken: a silently
                     # stamped or dropped date distorts years/holding
-                    # periods invisibly.
+                    # periods invisibly. The line and the mapping are
+                    # named (backlog TJ-0057).
                     raise ValueError(
-                        f"generic importer: {shown_name(path)}: unparseable "
-                        f"date {date_raw!r} with [formats].date="
-                        f"{date_fmt!r}")
+                        f"generic importer: {where}: unparseable date "
+                        f"{date_raw!r}: it does not match [formats].date = "
+                        f"{date_fmt!r} "
+                        f"({shown_name(mapping['_path'])}) — fix the "
+                        f"format in the mapping or the cell.")
                 date = dt.strftime("%Y-%m-%d")
                 row_dates.append(date)
-                where = f"{shown_name(path)} line {reader.line_num}"
                 currency = (str(cell(row, "currency")).strip()
                             or str(defaults.get("currency", ""))
                             ).strip().upper()
@@ -962,6 +973,7 @@ class GenericBrokerage(BaseBrokerage):
                         **({"broker_account": row_account}
                            if row_account else {}),
                     })
+                    self.note_row_line(transactions[-1], reader.line_num)
                     continue
                 # Income-style rows: the amount IS the money. A blank
                 # cell used to book 0 silently.
@@ -995,6 +1007,7 @@ class GenericBrokerage(BaseBrokerage):
                         **({"broker_account": row_account}
                            if row_account else {}),
                     })
+                    self.note_row_line(transactions[-1], reader.line_num)
                 elif target in ("tax", "interest", "fee"):
                     transactions.append({
                         "action": target.upper(),
@@ -1022,6 +1035,8 @@ class GenericBrokerage(BaseBrokerage):
                         **({"broker_account": row_account}
                            if row_account else {}),
                     })
+                    self.note_row_line(transactions[-1], reader.line_num)
+        refuse_pasted_overlap(shown_name(path), pasted, "the header")
         # A file that signs its quantities (a sell row carried a
         # negative quantity) must not also carry a sell row with a
         # POSITIVE quantity: that row is a buy under the file's own

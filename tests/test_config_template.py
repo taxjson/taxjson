@@ -1388,7 +1388,9 @@ class TestProseMark(unittest.TestCase):
 
     def test_template_multi_line_value_with_a_user_line_stays_whole(self):
         # A commented `paid` the user edited one line of: kept whole as
-        # the user's (the template's lines in it too), not split.
+        # the user's (the template's lines in it too), not split — in
+        # the example's place: the commented-out [instalments] holds no
+        # other `paid` example (one line per key, backlog TJ-0191).
         text = CT.render_init("canada", 2025)[0].replace(
             '#   { date = "2025-05-20", amount = 12000, '
             'note = "refund transferred" },',
@@ -1399,7 +1401,9 @@ class TestProseMark(unittest.TestCase):
                       '# paid                 = [\n'
                       '#   { date = "2025-03-16", amount = 15000 },\n'
                       '#   { date = "2025-05-21", amount = 99 },\n'
-                      '# ]\n# paid                 = [\n', r.text)
+                      "# ]\n## CRA's overdue-tax rate.", r.text)
+        self.assertEqual(r.text.count("# paid "), 1)
+        self.assertFalse(r.changed)
         self.assertFalse(CT.format_config(r.text).changed)
 
 

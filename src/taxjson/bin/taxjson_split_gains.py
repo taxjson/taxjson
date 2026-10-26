@@ -24,6 +24,9 @@ Per-account content:
   inventory dates position_start_date is the account's own (from its
                   base book); last_acq_date stays the pool's (s.54
                   looks at any acquisition of the identical property)
+  inventory_year_end
+                  the same, apportioned by the account's balance at
+                  the year end
 """
 
 import argparse
@@ -102,6 +105,49 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
     return start
 
 
+def _split_inventory(rows: List[Dict[str, Any]], account: str,
+                     book: Optional[List[dict]], starts: Dict[str, str],
+                     until: str) -> List[Dict[str, Any]]:
+    """The account's inventory rows: its own (US per-account lots), and
+    its share of each blended pool by its balance at the end of `until`."""
+    inventory: List[Dict[str, Any]] = []
+    for row in rows:
+        row_acct = row.get("account")
+        if row_acct:
+            if row_acct == account:
+                inventory.append(dict(row))
+            continue
+        # Blended (account-less) pool row — apportion by the account's
+        # own share count at the blended ACB per share.
+        if book is None:
+            continue
+        qty = balance_on(book, row.get("symbol", ""), until)
+        total_qty = float(row.get("qty") or 0.0)
+        if abs(qty) < 1e-9 or abs(total_qty) < 1e-9:
+            continue
+        share = qty / total_qty
+        r = dict(row)
+        # Full precision (audit S050-21: 6 dp turned 4e-07 ETH into a
+        # 0.0-unit row with a cost); 10 dp only trims float noise.
+        r["qty"] = round(qty, 10)
+        # SINCE is the account's own position start; last_acq_date stays
+        # the POOL's on purpose (s.54 looks at any acquisition of the
+        # identical property, in any account).
+        _st = starts.get(row.get("symbol", ""))
+        if _st and "position_start_date" in row:
+            r["position_start_date"] = _st
+        # Every ADDITIVE field scales with the account's share — the
+        # deferred superficial loss too (audit R1-160: copied whole into
+        # every account, it was counted once per account).
+        for _f in ("total_cost", "deferred_wash", "base_total_cost"):
+            if _f in row:
+                r[_f] = round(float(row.get(_f) or 0.0) * share, 6)
+        r["account"] = account
+        r["blended_pool"] = True    # ACB/share is the s.47 blended figure
+        inventory.append(r)
+    return inventory
+
+
 def split_for_account(combined: Dict[str, Any], account: str,
                       base_txs: Optional[List[dict]]) -> Dict[str, Any]:
     txs = [e for e in combined.get("transactions", [])
@@ -128,42 +174,17 @@ def split_for_account(combined: Dict[str, Any], account: str,
         or "settle"
     starts = (_position_starts(list(base_txs) + openings, _basis)
               if base_txs is not None else {})
-    inventory: List[Dict[str, Any]] = []
-    for row in combined.get("inventory", []):
-        row_acct = row.get("account")
-        if row_acct:
-            if row_acct == account:
-                inventory.append(dict(row))
-            continue
-        # Blended (account-less) pool row — apportion by the account's
-        # own share count at the blended ACB per share.
-        if base_txs is None:
-            continue
-        qty = balance_on(list(base_txs) + openings,
-                         row.get("symbol", ""), "9999-12-31")
-        total_qty = float(row.get("qty") or 0.0)
-        if abs(qty) < 1e-9 or abs(total_qty) < 1e-9:
-            continue
-        share = qty / total_qty
-        r = dict(row)
-        # Full precision (audit S050-21: 6 dp turned 4e-07 ETH into a
-        # 0.0-unit row with a cost); 10 dp only trims float noise.
-        r["qty"] = round(qty, 10)
-        # SINCE is the account's own position start; last_acq_date stays
-        # the POOL's on purpose (s.54 looks at any acquisition of the
-        # identical property, in any account).
-        _st = starts.get(row.get("symbol", ""))
-        if _st and "position_start_date" in row:
-            r["position_start_date"] = _st
-        # Every ADDITIVE field scales with the account's share — the
-        # deferred superficial loss too (audit R1-160: copied whole into
-        # every account, it was counted once per account).
-        for _f in ("total_cost", "deferred_wash", "base_total_cost"):
-            if _f in row:
-                r[_f] = round(float(row.get(_f) or 0.0) * share, 6)
-        r["account"] = account
-        r["blended_pool"] = True    # ACB/share is the s.47 blended figure
-        inventory.append(r)
+    book = (list(base_txs) + openings) if base_txs is not None else None
+    inventory = _split_inventory(combined.get("inventory", []), account,
+                                 book, starts, "9999-12-31")
+    # The pools at the year end (the Canadian engine's
+    # inventory_year_end), by the account's balance at that day
+    # (backlog TJ-0282).
+    _ye_year = str((combined.get("summary") or {}).get("year") or "")
+    ye_inventory = (_split_inventory(combined["inventory_year_end"],
+                                     account, book, {}, f"{_ye_year}-12-31")
+                    if "inventory_year_end" in combined and _ye_year
+                    else None)
 
     realized = disallowed = 0.0
     for e in txs:
@@ -223,6 +244,8 @@ def split_for_account(combined: Dict[str, Any], account: str,
         "manual_reporting_required": manual,
         "wash_sales": wash,
         "inventory": inventory,
+        **({"inventory_year_end": ye_inventory}
+           if ye_inventory is not None else {}),
         "summary": summary,
     }
     # The manual superficial-loss warnings (unknown-cost neighbours)

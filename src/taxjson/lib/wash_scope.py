@@ -86,7 +86,9 @@ def advisory_lines(text: str, width_=None, indent: str = "",
     """An advisory (or a line quoting one) as wrapped report lines: the
     body from `indent` (continuation lines at `hang`, default `indent`),
     then each appended note as an `Info:` paragraph at `indent` (`note:`
-    when nothing wraps — lib/out.label)."""
+    when nothing wraps — lib/out.label), its own continuation lines two
+    columns in from `hang` (a `- ` item's note never repeats the bullet:
+    backlog TJ-0184)."""
     import sys
     from taxjson.lib import out
     hang = indent if hang is None else hang
@@ -94,5 +96,5 @@ def advisory_lines(text: str, width_=None, indent: str = "",
     body, notes = advisory_parts(text, lbl)
     lines = out.wrap(body, width_, indent, hang) if body else []
     for n in notes:
-        lines += out.wrap(lbl + n, width_, indent, indent + "  ")
+        lines += out.wrap(lbl + n, width_, indent, hang + "  ")
     return lines

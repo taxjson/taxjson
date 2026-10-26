@@ -558,6 +558,14 @@ def _items(text: str) -> List[Item]:
             continue
         kw = st.split("#", 1)[0].split()
         kw = kw[0].upper() if kw else ""
+        # The examples `taxjson init` writes stay in their keyword's
+        # group: a line appended at the end of the map took the Lookups
+        # examples above it along as its comment (backlog TJ-0047).
+        ex = [i for i, c in enumerate(pending) if c.strip() in _INIT_EXAMPLES]
+        if ex:
+            rest, pending = pending[ex[-1] + 1:], pending[:ex[-1] + 1]
+            flush()
+            pending = rest
         if lineno in unusable or kw not in ALL_KEYWORDS:
             item = Item("bad", nxt(), line=ln, lineno=lineno,
                         group=UNRECOGNIZED)

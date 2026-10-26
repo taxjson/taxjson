@@ -528,16 +528,37 @@ def find_ticker_map(dirs):
     return None
 
 
+# The map messages (a problem line, a no-op line) this process said:
+# `taxjson run` reads the map in many in-process passes and the
+# checklist in many checks, and each said every line again (one map
+# line warned 22 times, folded to 2 + a count: backlog TJ-0112,
+# TJ-0126). A captured stage is a process of its own, so its .diag
+# keeps its line; `taxjson run` starts each run afresh.
+MAP_MESSAGES_SAID: set = set()
+
+
+def say_map_message(text: str) -> None:
+    """emit_line(`text`) on stderr: every time while it is captured (a
+    stage's .diag keeps every pass's line), once per process while it
+    is shown to a person."""
+    import sys
+    from taxjson.lib.stage_msg import _captured
+    if not _captured(sys.stderr):
+        if text in MAP_MESSAGES_SAID:
+            return
+        MAP_MESSAGES_SAID.add(text)
+    emit_line(text, file=sys.stderr)
+
+
 def side_rules_in(dirs) -> "SideRules":
     """The side rules of the first ticker.map in `dirs` (an empty set
     when none). A line that cannot be read is skipped with a warning
-    naming it (`taxjson run` refuses such a map up front)."""
-    import sys
+    naming it, once (`taxjson run` refuses such a map up front)."""
     p = find_ticker_map(dirs)
     if p is None:
         return SideRules()
     rules = read_side_rules(p)
     for msg in rules.problems:
-        emit_line(f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
-                  f"this map)", file=sys.stderr)
+        say_map_message(f"warning: ticker.map problem: {msg} (`taxjson run` "
+                        f"refuses this map)")
     return rules

@@ -323,9 +323,12 @@ def _require_columns(fieldnames, required, path: Path, kind: str) -> None:
     have = {(h or '').strip().lower() for h in (fieldnames or [])}
     missing = [c for c in required if c not in have]
     if missing:
+        # The file's name first: a sibling read while another file is
+        # parsed (the ledger beside a trades export) is named, not the
+        # file being parsed (backlog TJ-0164).
         raise ValueError(
-            f"Kraken {kind} CSV {shown_name(path)}: required column(s) missing: "
-            f"{', '.join(missing)}. Header: {list(fieldnames or [])}. "
+            f"{shown_name(path)}: Kraken {kind} CSV: required column(s) "
+            f"missing: {', '.join(missing)}. Header: {list(fieldnames or [])}. "
             f"A missing fee/vol/amount column would read as 0 on every "
             f"row — re-export the full {kind} CSV from Kraken.")
 
@@ -343,7 +346,7 @@ def _check_row_width(raw: Dict[Any, Any], path: Path, line: int,
         n_header = len([k for k in raw if k is not None])
         n_row = n_header - len(missing) + len(extra or [])
         raise ValueError(
-            f"Kraken {kind} CSV {shown_name(path)} line {line}: the row has "
+            f"{shown_name(path)} line {line}: the Kraken {kind} row has "
             f"{n_row} cells but the header has {n_header} — a truncated "
             f"or misaligned row (a missing fee would read as 0). "
             f"Re-export the file or fix the row.")
@@ -362,7 +365,7 @@ def _refuse_duplicate_columns(fieldnames, path: Path, kind: str) -> None:
     dup = sorted(k for k, n in seen.items() if n > 1)
     if dup:
         raise ValueError(
-            f"Kraken {kind} CSV {shown_name(path)}: column(s) {', '.join(dup)} "
+            f"{shown_name(path)}: Kraken {kind} CSV: column(s) {', '.join(dup)} "
             f"appear twice in the header — refusing to guess which one "
             f"holds the values. Remove the extra column or re-export the "
             f"file.")
@@ -390,6 +393,14 @@ def _dict_rows(f, path: Path, kind: str, required=()):
         if not raw:
             continue
         cells = [v for k, v in raw.items() if k is not None]
+        if (None not in raw and isinstance(cells[0], str)
+                and not cells[0].strip()
+                and all(c is None for c in cells[1:])):
+            # A line of only spaces or tabs is a blank line, skipped as
+            # an empty one is (the csv module yields it as one cell):
+            # it was refused as a truncated row (backlog TJ-0040).
+            prev_end = reader.line_num
+            continue
         cells += list(raw.get(None) or [])
         cells = [c for c in cells if isinstance(c, str)]
         breaks = sum(c.count('\n') for c in cells)
@@ -400,7 +411,7 @@ def _dict_rows(f, path: Path, kind: str, required=()):
         prev_end = end
         if breaks or any('\r' in c for c in cells):
             raise ValueError(
-                f"Kraken {kind} CSV {shown_name(path)} line {start}: a cell holds "
+                f"{shown_name(path)} line {start}: a Kraken {kind} CSV cell holds "
                 f"a line break — an unterminated or stray quote on that "
                 f"line swallowed the row(s) after it (through line {end}), "
                 f"so they would silently be missing from the books. Fix "
@@ -986,7 +997,7 @@ class KrakenBrokerage(BaseBrokerage):
                   f"{sum(ignored_types.values())} row(s) whose type is "
                   f"neither buy nor sell ({detail}) are NOT in the books "
                   f"— fix the type cell, or enter each fill via a .tt "
-                  f"file{_TT_REMOVE}.")
+                  f"file and remove the row from the export.")
         if unverified:
             where = ("no Kraken ledgers export (kr_ledgers*.csv) is in "
                      "the same folder" if ledger_idx is None else
@@ -2218,7 +2229,13 @@ def kraken_cash_events(path, stable_cash: bool = True
         fee_cur = (_normalize_asset(fc, fold_stable=stable_cash)
                    if fc in cashlike else None)
         if (r.get('balance') or '').strip():
-            bal_rows.append((cur, bare, day, when, i, strict_money(
+            # One balance series per wallet: USDC.F (Earn) and USD.HOLD
+            # keep their own balance beside the spot USDC / ZUSD, so the
+            # wallet suffix stays in the key (backlog TJ-0019: the
+            # reward wallet's balance replaced the spot one's).
+            sfx = _ASSET_SUFFIX_RE.search(raw_asset)
+            wallet = bare + (sfx.group(0).upper() if sfx else '')
+            bal_rows.append((cur, wallet, day, when, i, strict_money(
                 r.get('balance'), 'balance', f"Kraken {where}"), amt,
                 fee if fc == bare else 0.0))
         typ = (r.get('type') or '').strip().lower()

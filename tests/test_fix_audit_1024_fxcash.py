@@ -92,7 +92,10 @@ class TestOwnTransferOrder(unittest.TestCase):
                          {"USD": {"units": 100.0, "acb": 100.0}})
         self.assertEqual(doc["close"]["books"],
                          {"margin/b": {"USD": {"units": 100.0,
-                                               "cost": 100.0}}})
+                                               "cost": 100.0}},
+                          # emptied: recorded at zero (backlog TJ-0028)
+                          "margin/a": {"USD": {"units": 0.0,
+                                               "cost": 0.0}}})
         self.assertEqual(doc["per_currency"]["USD"]["gain"], 0.0)
 
 

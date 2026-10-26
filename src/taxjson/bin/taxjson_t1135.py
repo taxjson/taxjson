@@ -194,13 +194,38 @@ def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
     from taxjson.lib.ticker_map import read_side_rules
     rules = read_side_rules(path)
     if rules.t1135_problems:
-        more = len(rules.t1135_problems) - 1
-        raise InputContentError(
-            f"{path}: {rules.t1135_problems[0]}"
-            + (f" (and {more} more)" if more else "")
-            + " — T1135 overrides are `T1135 SYMBOL COUNTRY` lines "
-              "(`taxjson migrate` converts an old t1135.map)")
+        raise InputContentError(_overrides_problem(Path(path),
+                                                   rules.t1135_problems))
     return {sym: override_value(code) for sym, code in rules.t1135.items()}
+
+
+# side_rules_from_text's no-keyword problem: its place, the line.
+_NO_KEYWORD_RE = re.compile(r"^(?P<where>\S+:\d+): line has no ticker\.map "
+                            r"keyword \([^)]*\): (?P<line>.*)$")
+
+
+def _overrides_problem(path: Path, problems: List[str]) -> str:
+    """The one-line refusal of a ticker.map whose T1135 lines cannot be
+    read: the first problem by its line (`ticker.map:54`, not the
+    absolute path), what to write, `taxjson migrate` only when an old
+    t1135.map is there to convert — it was named for every problem, and
+    then said "nothing to migrate" (backlog TJ-0083)."""
+    first = problems[0]
+    more = len(problems) - 1
+    m = _NO_KEYWORD_RE.match(first)
+    if m:
+        words = m["line"].strip("'\"").split()
+        head = f"{m['where']}: {m['line']} has no ticker.map keyword"
+        fix = ("a T1135 override is a `T1135 SYMBOL COUNTRY` line"
+               + (f" (`T1135 {' '.join(words)}`)" if len(words) == 2
+                  else "")
+               + "; another line: fix it or delete it")
+    else:
+        head = first
+        fix = "T1135 overrides are `T1135 SYMBOL COUNTRY` lines"
+    if (path.parent / "t1135.map").exists():
+        fix += " (`taxjson migrate` converts the old t1135.map)"
+    return (head + (f" (and {more} more)" if more else "") + " — " + fix)
 
 
 # ---------------------------------------------------------------- classify
@@ -1478,7 +1503,7 @@ def render_report(rep: Dict[str, Any]) -> str:
     item(".TO/.V/.CN/.NE symbols count as Canadian. A foreign corp on "
          "a Canadian exchange is still SFP (`T1135 SYMBOL <ISO3>` in "
          "ticker.map); a Canadian corp on a US exchange is not "
-         "(`SYMBOL CA`).")
+         "(`T1135 SYMBOL CA`).")
     if rep.get("futures_symbols"):
         item(f"Futures contracts ({len(rep['futures_symbols'])}: "
              f"{', '.join(rep['futures_symbols'][:6])}"
@@ -1490,7 +1515,7 @@ def render_report(rep: Dict[str, Any]) -> str:
         item("CRYPTO rows: crypto on a foreign exchange is generally "
              "SFP under that exchange's country (`T1135 SYMBOL <ISO3>` "
              "in ticker.map); on a Canadian platform it may not be "
-             "(`SYMBOL CA` once checked). Until then it counts toward "
+             "(`T1135 SYMBOL CA` once checked). Until then it counts toward "
              "the threshold.")
     item("Registered accounts (RRSP/TFSA/...) are excluded by law and "
          "were not read.")

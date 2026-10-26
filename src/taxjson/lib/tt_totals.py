@@ -137,10 +137,11 @@ def _acquired(source: str):
 def source_line(tt: Path, where: str) -> str:
     """The line of the .tt file `tt` that a .diag's `<file>:<line>`
     names, as written ("" when it cannot be read)."""
+    from taxjson.bin.taxjson_convert_tt import tt_lines
     try:
         n = int(str(where).rsplit(":", 1)[-1])
-        lines = Path(tt).read_text(encoding="utf-8-sig",
-                                   errors="replace").splitlines()
+        lines = tt_lines(Path(tt).read_text(encoding="utf-8-sig",
+                                            errors="replace"))
     except (OSError, ValueError):
         return ""
     return lines[n - 1].strip() if 0 < n <= len(lines) else ""

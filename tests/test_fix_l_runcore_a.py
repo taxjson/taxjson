@@ -616,7 +616,9 @@ class TestViewsSayWhatTheySkip(unittest.TestCase):
                                   "currency": "USD"}]}))
             (work / "rrsp_base.json").write_text("{ trunc")
             r = _run_cli(root, "transfers", "margn")
-            self.assertEqual(r.returncode, 1)
+            # An account the project does not have: a usage error, exit
+            # 2 as in every command (backlog TJ-0157).
+            self.assertEqual(r.returncode, 2)
             self.assertIn("margn", r.stderr)
             r = _run_cli(root, "transfers", "--json")
             self.assertEqual(r.returncode, 0, r.stderr)

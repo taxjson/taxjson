@@ -566,13 +566,15 @@ def map_file_problems(file_path: Path) -> List[str]:
 def load_map_file(file_path: Path) -> "TickerMap":
     """Parse a keyword-prefixed ticker-map file into a TickerMap. A
     malformed line is skipped with a warning naming its line number
-    (`taxjson run` refuses such a map up front — map_file_problems)."""
+    (`taxjson run` refuses such a map up front — map_file_problems),
+    said once per process (lib/ticker_map.say_map_message)."""
+    from taxjson.lib.ticker_map import say_map_message
     tmap, problems, notes = _parse_map_file(file_path)
     for msg in problems:
-        emit_line(f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
-              f"this map)")
+        say_map_message(f"warning: ticker.map problem: {msg} (`taxjson run` "
+                        f"refuses this map)")
     for msg in notes:
-        emit_line(f"warning: {msg} — skipping")
+        say_map_message(f"warning: {msg} — skipping")
     return tmap
 
 

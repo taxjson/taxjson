@@ -18,3 +18,11 @@ Dividends,Data,Total,,,75.00
 Withholding Tax,Header,Currency,Date,Description,Amount,Code
 Withholding Tax,Data,USD,2024-03-14,MSFT (US5949181045) CASH DIVIDEND USD 0.75 PER SHARE - US TAX,-5.63,
 Withholding Tax,Data,USD,2024-06-13,MSFT (US5949181045) CASH DIVIDEND USD 0.75 PER SHARE - US TAX,-5.63,
+Cash Report,Header,Currency Summary,Currency,Total,Securities,Futures,
+Cash Report,Data,Starting Cash,USD,0,0,0,
+Cash Report,Data,Commissions,USD,-5.00,-5.00,0,
+Cash Report,Data,Dividends,USD,75.00,75.00,0,
+Cash Report,Data,Withholding Tax,USD,-11.26,-11.26,0,
+Cash Report,Data,Trades (Sales),USD,23400.00,23400.00,0,
+Cash Report,Data,Trades (Purchase),USD,-22830.00,-22830.00,0,
+Cash Report,Data,Ending Cash,USD,628.74,628.74,0,

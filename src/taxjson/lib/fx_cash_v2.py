@@ -51,6 +51,11 @@ _COMPLETE = "complete"          # lib/cash_events.COMPLETE
 # by (IB rounds each line to the cent; a few hundred rows of rounding).
 TOL = 1.00
 _EPS = 1e-6
+# An own arrival that settles before its departure (the receiving
+# broker credits the move first) is walked on that departure when it
+# settles within this many days and its account holds the units until
+# it leaves (backlog TJ-0067).
+OWN_EARLY_DAYS = 7
 
 RateOf = Callable[[str, str], Optional[float]]
 
@@ -67,6 +72,31 @@ def _p(kind: str, text: str, date: str = "", book: str = "",
 def _finite(v: Any) -> bool:
     return (isinstance(v, (int, float)) and not isinstance(v, bool)
             and math.isfinite(float(v)))
+
+
+def close_problem(close: Any, year: Any) -> Optional[str]:
+    """What is wrong with a lock's `fx_cash_v2` close (the next year's
+    opening pool, CA-FX-07), else None: the shape close-year writes — a
+    table naming its year (the lock's), books that are tables of
+    currencies, each with finite units and cost. The one lock check
+    (taxjson_filed.lock_damage) applies it, so check-filed no longer
+    calls a lock OK whose close the next year's ledger refuses (backlog
+    TJ-0068)."""
+    if not isinstance(close, dict) or not isinstance(close.get("books"),
+                                                     dict):
+        return "fx_cash_v2 is not a table of books"
+    if year is not None and close.get("year") != year:
+        return (f"fx_cash_v2 is the close of {close.get('year')!r}, not "
+                f"{year}")
+    for book, curs in close["books"].items():
+        if not isinstance(curs, dict):
+            return f"fx_cash_v2.books.{book} is not a table of currencies"
+        for cur, v in curs.items():
+            if not isinstance(v, dict) or not _finite(v.get("units")) \
+                    or not _finite(v.get("cost")):
+                return (f"fx_cash_v2.books.{book}.{cur} has no finite "
+                        f"units and cost")
+    return None
 
 
 def _book_parts(book: str) -> Tuple[str, str, str, str]:
@@ -163,12 +193,27 @@ def _carry_openings(carry: Dict[str, Any],
     y0 = f"{year}-01-01"
     cy = carry.get("year")
     src = f"close of {cy}"
-    repair = (f"the prior-year record is damaged: restore filed/{cy}.json "
+    # The record the close came from: [settings] prior_year_record may
+    # name another file than filed/<year>.json (backlog TJ-0068).
+    rec = carry.get("record") or f"filed/{cy}.json"
+    repair = (f"the prior-year record is damaged: restore {rec} "
               f"from git or re-close {cy} with this ledger")
+    # A record of the other country, or costs in another base
+    # currency, cannot open this year; its advice is to open the year
+    # with CASHOPEN lines, and with them the record is noted, not a
+    # problem (backlog TJ-0022: the refusal stayed with the lines in).
     if carry.get("problem"):
+        if carry.get("foreign") and opening:
+            notes.append(str(carry["foreign"]))
+            return 0, notes
         problems.append(_p("carry", str(carry["problem"])))
     ccur = str(carry.get("currency") or "").upper()
     if ccur and ccur != base:
+        if opening:
+            notes.append(f"{src}: its costs are in {ccur}, not this "
+                         f"project's {base}: not carried — the year opens "
+                         f"from its CASHOPEN lines")
+            return 0, notes
         problems.append(_p(
             "carry", f"{src}: its costs are in {ccur}, and this project's "
             f"base currency is {base} — a pool carried from a project of "
@@ -218,6 +263,9 @@ def _carry_openings(carry: Dict[str, Any],
                     f"CASHOPEN line, {unsound}; {repair}",
                     y0, book, cur, units))
                 continue
+            if target is None and abs(units) <= _EPS \
+                    and abs(cost) <= _EPS:
+                continue        # a zero book: nothing to place
             if target is None:
                 mine = sorted(k for k in opening
                               if k[1] == cur and k[0].startswith(f"{book}:"))
@@ -247,6 +295,30 @@ def _carry_openings(carry: Dict[str, Any],
             opening[k] = {"units": units, "cost": cost, "source": src}
             carried += 1
     return carried, notes
+
+
+def _reward_cash(row: Dict[str, Any], stable_cash: bool
+                 ) -> Optional[Tuple[str, float]]:
+    """(currency, units) of a reward paid in cash that the export prices
+    in ANOTHER currency: a Coinbase "Rewards Income" of 5 USDC valued at
+    6.85 CAD is booked as income in CAD (its DIVIDEND row's currency),
+    while the 5 US dollars (a USD stablecoin is US-dollar cash,
+    CA-CRYPTO-02) came into the account (backlog TJ-0038). None for
+    any other row, or when the row's currency is the reward's own."""
+    if row.get("action") != "DIVIDEND" or not str(
+            row.get("description") or "").lower().startswith(
+                "staking reward"):
+        return None
+    from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
+                                                       USD_STABLECOINS)
+    sym = str(row.get("symbol") or "").upper().split(".")[0]
+    cur = (sym if sym in FIAT_CURRENCIES else
+           "USD" if stable_cash and sym in USD_STABLECOINS else "")
+    units = abs(float(row.get("quantity") or 0.0))
+    if not cur or cur == str(row.get("currency") or "").upper() \
+            or units < _EPS:
+        return None
+    return cur, units
 
 
 def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
@@ -307,7 +379,18 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if ps and td < ps:
             td, sd = ps, max(sd, ps)
             redated += 1
-        for cur, amt in _cash_legs(row):
+        legs = [(c, a, None) for c, a in _cash_legs(row)]
+        rw = _reward_cash(row, bool(cash.get("stablecoins_as_cash")))
+        if rw is not None:
+            # The reward's own currency comes in, at the value the
+            # income is booked at when that is in the base currency
+            # (else at the day's rate, as a reward priced in it).
+            v = float(row.get("gross_amount") or row.get("net_amount")
+                      or 0.0)
+            legs = [(rw[0], rw[1], abs(v) if str(row.get("currency")
+                                                 or "").upper() == base
+                     else None)]
+        for cur, amt, cost in legs:
             cur = (cur or "").upper()
             if not cur or cur == base or abs(amt) < _EPS:
                 continue
@@ -320,7 +403,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                                          0) + 1
                 continue
             op(kind="flow", sd=sd, td=td, time=str(row.get("time") or ""),
-               book=book, currency=cur, amount=float(amt),
+               book=book, currency=cur, amount=float(amt), cost=cost,
                desc=f"{row.get('action')} {row.get('symbol') or ''}"
                     .strip(), where=str(row.get("source") or ""))
     if redated:
@@ -472,6 +555,15 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                     f"{book.split('/', 1)[0]}, then `CASHBOOK {short} "
                     f"{_COMPLETE}` to say they are all there",
                     "", book, curs[0]))
+    # The remedy a missing opening names: re-closing the prior year
+    # helps only when it was not closed with this ledger (backlog
+    # TJ-0028: the message asked for the close that was already there).
+    if carry and not carry.get("problem") and str(
+            carry.get("currency") or base).upper() == base:
+        reclose = (f" (the close of {year - 1} does not list it: it "
+                   f"held none then, or is new)")
+    else:
+        reclose = f", or close {year - 1} with this ledger"
     stmt_open = {(c["book"], c["currency"]): c for c in checks
                  if c["date"] == prev_end}
     need = set(active) | {(c["book"], c["currency"]) for c in checks
@@ -492,15 +584,14 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 f"start of {year} and nothing gives their cost — add "
                 f"`CASHOPEN {y0} {cur} {settled:.2f} <cost in {base}> "
                 f"at={book.split('/', 1)[1]}` to a .tt of "
-                f"{book.split('/', 1)[0]}, or close {year - 1} with this "
-                f"ledger", y0, book, cur, settled))
+                f"{book.split('/', 1)[0]}{reclose}", y0, book, cur,
+                settled))
         else:
             problems.append(_p(
                 "opening", f"no opening pool for {book} {cur} — add "
                 f"`CASHOPEN {y0} {cur} <settled units> <cost in {base}> "
                 f"at={book.split('/', 1)[1]}` (0 0 when it held none) to a "
-                f".tt of {book.split('/', 1)[0]}, or close {year - 1} with "
-                f"this ledger", y0, book, cur))
+                f".tt of {book.split('/', 1)[0]}{reclose}", y0, book, cur))
 
     # ------------------------------------------------ the walk
     pool: Dict[str, List[float]] = {}            # cur -> [units, cost]
@@ -511,6 +602,10 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     # and cost stay in `pool` (issue #78) — this only tracks WHERE they
     # are, to match the arrival and to reconcile each account.
     transit: Dict[str, float] = {}
+    # Units of an own departure (by its seq) an arrival walked before it
+    # already took (_promise): the departure puts only the rest in
+    # transit.
+    promised: Dict[int, float] = {}
     for (book, cur), o in opening.items():
         u, c = float(o["units"]), float(o["cost"])
         if u > _EPS:
@@ -584,7 +679,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             # yours too and joins the pool at that cost.
             p[0] += x
             p[1] += rel
-            transit[cur] = transit.get(cur, 0.0) + x
+            transit[cur] = transit.get(cur, 0.0) + x - promised.pop(
+                o.get("seq"), 0.0)
         elif mode == "kept":
             declared.append({"date": o["sd"], "book": o["book"],
                              "currency": cur, "amount": round(-x, 2),
@@ -692,11 +788,20 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         cur, sd = o["currency"], o["sd"]
         if transit.get(cur, 0.0) + TOL >= o["amount"]:
             return False
+        # The departure it waits for leaves ANOTHER account: one of its
+        # own account's (a chain a -> b -> c on one day) needs this
+        # arrival first, and walked before it made up a debt (backlog
+        # TJ-0067). Of several, one its account holds the units for
+        # (no overdraft), and of those one that holds them only by an
+        # own arrival before it (the chain's next link: an account that
+        # holds them from the start is left for that arrival).
+        best = None
         for j in range(i + 1, len(walk)):
             d = walk[j]
             if d["sd"] != sd:
                 break
-            if not (_own(d) and d["amount"] < 0 and d["currency"] == cur):
+            if not (_own(d) and d["amount"] < 0 and d["currency"] == cur) \
+                    or d["book"] == o["book"]:
                 continue
             # Its account's balance before each event from the arrival
             # to the departure's own place; the earliest point from
@@ -708,15 +813,92 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                     if x["kind"] != "check" and x["book"] == d["book"]
                     else 0.0))
             need, at = -d["amount"] - _EPS, j - i
-            if bal_at[at] >= need:      # else it overdraws in place
+            holds = bal_at[at] >= need  # else it overdraws in place
+            if holds:
                 while at > 0 and bal_at[at - 1] >= need:
                     at -= 1
-            dep, arr = walk.pop(j), walk.pop(i)
-            pos = i + max(at - 1, 0)
-            walk.insert(pos, dep)
-            walk.insert(pos + 1, arr)
-            return True
-        return False
+            link = holds and any(
+                _own(x) and x["amount"] > 0 and x["currency"] == cur
+                and x["book"] == d["book"] for x in walk[i + 1:j])
+            rank = (2 if link else 1 if holds else 0)
+            if best is None or rank > best[0]:
+                best = (rank, j, at)
+        if best is None:
+            return False
+        _rank, j, at = best
+        dep, arr = walk.pop(j), walk.pop(i)
+        pos = i + max(at - 1, 0)
+        walk.insert(pos, dep)
+        walk.insert(pos + 1, arr)
+        return True
+
+    def _promise(k: int, short: float) -> str:
+        """walk[k] an own arrival the units in transit fall `short` of,
+        with no departure of another account later on its settlement
+        day (_waits): it is walked on a later own departure, which then
+        puts only the rest of its units in transit (`promised`) —
+        either its own account's later that day (the units pass
+        through it: a chain a -> b -> c whose middle account books the
+        arrival after another one took the first units), or another
+        account's that settles within OWN_EARLY_DAYS days after it
+        while that account holds the units until they leave (the
+        receiving broker credited the move first: the units are in the
+        pool the whole time, so no figure moves; backlog TJ-0067). ""
+        when promised, else why not (for the refusal)."""
+        from datetime import date, timedelta
+        o = walk[k]
+        cur, sd = o["currency"], o["sd"]
+        try:
+            last = (date.fromisoformat(sd)
+                    + timedelta(days=OWN_EARLY_DAYS)).isoformat()
+        except ValueError:
+            last = sd
+        why = ""
+        for j in range(k + 1, len(walk)):
+            d = walk[j]
+            if not (_own(d) and d["amount"] < 0 and d["currency"] == cur):
+                continue
+            room = -d["amount"] - promised.get(d["seq"], 0.0)
+            if room + TOL < short:
+                continue
+            if d["sd"] == sd and d["book"] == o["book"]:
+                pass                    # its own account sends them on
+            elif d["sd"] == sd or d["book"] == o["book"]:
+                continue
+            elif d["sd"] > last:
+                why = why or (f"the next move out of another of your "
+                              f"accounts, {d['book']}'s on {d['sd']}, "
+                              f"settles more than {OWN_EARLY_DAYS} days "
+                              f"after it")
+                break
+            else:
+                # The departure's account holds the units from now
+                # until it leaves (its balance before the departure is
+                # what that row adds back).
+                low = min([held.get((d["book"], cur), 0.0)]
+                          + [v for v in _running(k, j, d["book"], cur)])
+                if low + _EPS < -d["amount"]:
+                    why = why or (f"{d['book']}'s move out of "
+                                  f"{-d['amount']:,.2f} {cur} settles "
+                                  f"later, on {d['sd']}, and {d['book']} "
+                                  f"does not hold them until then")
+                    continue
+            take = min(short, room)
+            promised[d["seq"]] = promised.get(d["seq"], 0.0) + take
+            transit[cur] = transit.get(cur, 0.0) + take
+            return ""
+        return why or (f"no move out of another of your accounts settles "
+                       f"on its day or in the {OWN_EARLY_DAYS} days after")
+
+    def _running(k: int, j: int, book: str, cur: str) -> List[float]:
+        """`book`'s balance of `cur` after each event from walk[k+1] to
+        the one before walk[j]."""
+        v, out_ = held.get((book, cur), 0.0), []
+        for x in walk[k + 1:j]:
+            if x["kind"] != "check" and x["book"] == book:
+                v += sum(a for c, a in _legs(x) if c == cur)
+                out_.append(v)
+        return out_
 
     i = 0
     while i < len(walk):
@@ -748,6 +930,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             continue
         if o["kind"] == "flow":
             cur = o["currency"]
+            if o.get("cost") is not None and o["amount"] > 0:
+                inflow(o, cur, o["amount"], o["cost"])
+                continue
             r = rate(cur, o["sd"])
             if r is None:
                 continue
@@ -814,12 +999,16 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                              "where": o.get("decl_where") or ""})
         if how == "own" and amt > 0:
             t = transit.get(cur, 0.0)
+            why = _promise(i - 1, amt - t) if t + TOL < amt else ""
+            t = transit.get(cur, 0.0)
             if t + TOL < amt:
                 problems.append(_p(
                     "own", f"{o['book']}: {amt:,.2f} {cur} came in on "
                     f"{o['sd']} as a move between your own accounts, but "
                     f"only {t:,.2f} {cur} had left one of them before "
-                    f"it — check the dates, or declare it cost= / spot",
+                    f"it, and {why} — check the dates (the settlement "
+                    f"dates of the two CASHMOVE lines), or declare it "
+                    f"cost= / spot",
                     o["sd"], o["book"], cur, amt))
                 r = rate(cur, o["sd"])
                 if r is not None:
@@ -910,6 +1099,12 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if d[0] > _EPS:
             close_books.setdefault(book, {})[cur] = {
                 "units": round(-d[0], 6), "cost": round(d[1], 6)}
+    # A book the year walked that ends it at zero is recorded at zero:
+    # left out, the next year asked for a `CASHOPEN ... 0 0` for it
+    # (backlog TJ-0028).
+    for book, cur in sorted(need):
+        close_books.setdefault(book, {}).setdefault(
+            cur, {"units": 0.0, "cost": 0.0})
     # The close names its base currency and each book's broker account
     # (hashed, as the books do): next year checks the first and places
     # each book by the second (_carry_openings).
@@ -1080,14 +1275,26 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
     for n in doc.get("notes") or []:
         lines.append("")
         lines += out.wrap(out.label("note", w) + n, w, "", "")
-    if cash_events:
+    if cash_events is not None:
         lines.append("")
         lines.append("CASH EVENTS READ")
-        lines += out.fit_table(
-            ["DATE", "BOOK", "KIND", "DETAIL"],
-            [[e.get("date", ""), e.get("book") or "-", e["kind"],
-              _detail(e)] for e in cash_events],
-            aligns=["<", "<", "<", "<"], width_=w, key=0)
+        # A .tt CASHMOVE that declared a broker's move is shown once, on
+        # that move (DECLARED BY names the line), not as a second move
+        # (backlog TJ-0054); an empty list says so (TJ-0168).
+        shown = [e for e in cash_events if not e.get("matched")]
+        by = [str(e.get("decl_where") or "") if e.get("origin") != "tt"
+              else "" for e in shown]
+        if shown:
+            head = ["DATE", "BOOK", "KIND", "DETAIL"] + (
+                ["DECLARED BY"] if any(by) else [])
+            lines += out.fit_table(
+                head,
+                [[e.get("date", ""), e.get("book") or "-", e["kind"],
+                  _detail(e)] + ([b] if any(by) else [])
+                 for e, b in zip(shown, by)],
+                aligns=["<"] * len(head), drop=[4], width_=w, key=0)
+        else:
+            lines.append("None read from the exports or .tt lines.")
     return "\n".join(lines)
 
 

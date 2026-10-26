@@ -80,5 +80,5 @@ case "${1:-}" in
     [ -n "$BEST" ] || exit 1
     printf '%s\n' "$BEST"
     ;;
-  *) sed -n '2,24p' "$0"; exit 2 ;;
+  *) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0"; exit 2 ;;   # the comment block at the top
 esac

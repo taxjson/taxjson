@@ -316,18 +316,20 @@ def _stamp_problem(txs: List[dict], symbol: str, record_date: str,
     """Why a backdated stamp (`_stamp_date`) cannot reach exactly the
     holder of record's lots in a per-lot, trade-date-ordered engine, or
     None: a trade of the symbol between the stamp and the record date
-    that is NOT a straddling sale — a purchase settled by the record
-    date (open only after the stamp: it gets no share) or a sale settled
-    by it (its lot is open at the stamp: it gets one). Said, never
-    silently misplaced (audit 2026-10-24 B14)."""
+    that settles by the record date — a purchase (open only after the
+    stamp: it gets no share) or a sale (its lot is open at the stamp:
+    it gets one). Said, never silently misplaced (audit 2026-10-24
+    B14). A trade that straddles the record date is placed right
+    either way: a sale's lot is the holder's and open at the stamp, a
+    purchase is not the holder's and opens after it (backlog TJ-0021,
+    TJ-0027: a straddling purchase was named as a miss)."""
     if stamp >= record_date:
         return None
     between = sorted(
         (str(t.get("date") or ""), float(t.get("quantity") or 0.0))
         for t in _symbol_trades(txs, symbol, account)
         if stamp < str(t.get("date") or "") <= record_date
-        and not (_straddles(t, record_date)
-                 and float(t.get("quantity") or 0.0) < 0))
+        and not _straddles(t, record_date))
     if not between:
         return None
     rows = ", ".join(f"{'bought' if q > 0 else 'sold'} {abs(q):g} on {d}"
@@ -682,8 +684,12 @@ def main(argv=None) -> int:
     from taxjson.lib.safe_write import write_atomic
     write_atomic(args.base_json,
                  json.dumps(doc, indent=2, sort_keys=True) + "\n")
-    print(f"{PROG}: applied {applied} adjustment(s) to "
-          f"{args.base_json.name}.", file=sys.stderr)
+    # A labelled note naming the account, not the file: the run's
+    # console showed "taxjson-apply-distributions: applied 2
+    # adjustment(s) to margin_base.json.stage." (backlog TJ-0163).
+    emit_line(f"{PROG}: note: {applied} [[distributions]] adjustment(s) "
+              f"applied" + (f" to {account}'s books" if account else ""),
+              file=sys.stderr)
     return 0
 
 

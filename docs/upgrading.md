@@ -59,6 +59,373 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.36.1
+
+- **`tjs edge-cases` reads the denied losses held at the year end from
+  the year-end pools.** Re-run `tjs run` once: a gains file written
+  before says "held at the end of the books, which may be after <year>"
+  until it is rebuilt. Canada's gains files gain `inventory_year_end`
+  (the pools at Dec 31; nothing filed changes), and the report's JSON
+  gains `as_of` on each deferred row and `allowed_by` on each loss
+  window across Dec 31.
+
+### v0.36.0
+
+- **`tjs checklist --json` is now `schema_version` 3, and `tjs years
+  --json` `schema_version` 2.** v0.35.0 renamed the `skipped` status
+  and mark to `forced` (in `counts`, a step's `effective` and
+  `override`, and the years' `marks`) under the old numbers. Nothing
+  else changed: a script that checks the version accepts the new
+  number and reads `forced` where v0.34 wrote `skipped`.
+- **A `.tt` `NOTOWN` line undoes a pairing that is not a move of your
+  own**. A transfer-out and a transfer-in of the same
+  stock and quantity in two taxable accounts (within 10 days, or 11 to
+  45 days apart with no other candidate) are still paired as one move,
+  and nothing changes without the line. When they are not one move
+  (`tjs transfers` shows the transfer-in as `own_move`), add `NOTOWN
+  <date> <symbol> <qty> <from-account> <from-date>` to a `.tt` file in
+  the receiving account's folder (the slow pairing's `Own-account move`
+  Info line prints it with `tjs run --details`) and run again: the
+  transfer-in is booked as one from outside your books, so the ACB or
+  basis of that stock and the gains on its later sales change.
+- **Check a redacted copy again before sharing it.** `tjs redact
+  --check` now reads a `NAME.redacted.EXT` copy (it skipped one, exit
+  0, whatever it held) and passes a clean one; in a year folder it lists
+  the comments of taxjson.toml and ticker.map that still hold a name
+  ("Read line N of the copy"), which it kept without a word. Run `tjs
+  redact --check` on a copy made by an older release, read the lines it
+  lists, and fix them before sharing.
+- **`tjs check-tt` names more of the lines `tjs run` refuses, and exits
+  1 on them.** A `TRANSFER` or `ACQUIRED` line in a taxable account
+  that the run does not net away, a `SPLIT` ratio of 0 or below, and,
+  for a file named by its path, the account's checks across lines (a
+  symbol opened twice at an unknown cost, a file name the run refuses)
+  used to say "Every line parses.". Run `tjs check-tt` once after
+  upgrading and fix what it names; `tjs checklist --run` now marks the
+  ".tt lines" step attention while such a line is left. The closing
+  line reads "N problems the run refuses" (was "N lines cannot be
+  read"), and a FILE argument is also looked for in the project (`-C
+  DIR`) and its inputs folder.
+- **`tjs new-year 2027` refuses while 2026 has no year folder.** It used
+  to start 2027 from the newest earlier year (2025), pointing
+  `prior_year_record` at 2025's lock, so the carryforwards skipped
+  whatever 2026 used. Run `tjs new-year 2026` first, then `tjs new-year
+  2027`. A year an older release started that way: check its
+  `prior_year_record` (`grep prior_year_record 2027/taxjson.toml`).
+- **A filed year that names the shared folders again is a `Warning:`, and
+  `tjs run --strict` stops on it.** A year closed with its inputs frozen
+  whose `taxjson.toml` has a live `inputs_dir` or `tobase_map` again reads
+  the shared exports, not its frozen copy: it was an `Info:` followed by
+  OK. Delete those lines from its `[settings]` (`tjs years` names the
+  year). A lock of an earlier year kept in a later year's `filed/` is no
+  longer told to delete them: that year reads the shared exports rightly.
+
+- **A usage error exits 2 in every command.** A malformed `--date` or
+  time period (`tjs events 1x`), or an account name the project does not
+  have or has no books for, exited 1 in some commands (`wash-radar`,
+  `list`, `events`, `trades`, `divs-sum` and the other transaction
+  views, `winners`, `stats`, `leaps`, `option-yield`, `ccd-sum`, `sum`,
+  `fees-sum`, `wash-sales`, `find-missing-history`, `transfers`,
+  `journals`) and 2 in others. All exit 2 now, as the exit-code table
+  says; exit 1 stays a command's failure or finding. A script that
+  tested for 1 there tests for 2.
+- **US `tjs harvest`: run `tjs run` once for LT_IN.** The US books now
+  carry each position's holding period start (`holding_start_date`: a
+  wash-sale replacement's includes the loss shares' days), and LT_IN
+  counts from it; books written before the upgrade still count from the
+  purchase. `tjs harvest --json` also lists the positions it left out,
+  and why, under `omitted`.
+- **`tjs div-estimate 0m` (or `0y`) is refused** as `--months 0` is:
+  give a window of 1 to 120 months.
+- **Canada: a move of your own between two taxable accounts now shows
+  in each account** (backlog TJ-0093). `tjs list`, `tjs sanity`, `tjs
+  find-missing-history` and the checklist see the receiving account hold
+  the moved shares (they read it short, "missing history?", and called a
+  correct sale "fix before filing"). No figure you file changes: the
+  pooled ACB, Schedule 3 and the superficial-loss result are as before.
+  The per-account baselines change: `<account>.sum` moves the units, so
+  the sender's holdings drop and the receiver's sales of them are listed
+  there for manual reporting (their cost is known only in the blended
+  figures). If you wrote an `OPENING … cost=unknown` line for such a
+  sale, the run now says its rows never go short any more: delete it and
+  run again, and the sale joins the totals at the pool's cost (while the
+  line stays, the sale stays out of them, as before).
+- **An in-kind move to or from a registered account that is NOT booked
+  is flagged at filing time.** `tjs sum` prints a `! ` line for it,
+  `sum --json` readiness carries an `in-kind-not-booked` issue (so
+  `complete` is false) and the checklist's transfers step needs
+  attention. A project that had such a move (the run's "in-kind
+  move(s) … NOT booked" warning) shows it after the upgrade: add the
+  `INKIND` line `tjs sum --details` prints, then `tjs run`.
+- **`sum --json` `run_state_problems` counts one problem per problem.**
+  An inputs change ("changed: …; added: …") was two entries, and two
+  `run-state` readiness issues; it is one. A reader counting them sees
+  fewer.
+- **Report commands in a project whose last run had no input** (every
+  account's folder empty) stop with "Error: the last run had no input:
+  inputs/margin is empty, so it made no books", naming each empty
+  folder, instead of "Run `taxjson run` first" (the exit is 1, as
+  before).
+- **`tjs gains` in a project whose only books are crypto exits 0**
+  after its "crypto account … is not shown" line (it exited 1 with
+  "run `taxjson run` first").
+
+- **`tjs close-year` stops on uncommitted inputs in a git repository.**
+  Inputs, `taxjson.toml` or the maps changed but not committed used to
+  be locked without a word; now the close asks on a terminal and,
+  piped, refuses naming `inputs-committed`. Commit them, then close; a
+  script that closes on purpose passes `--yes`.
+- **`tjs close-year --force` no longer locks books whose last run did
+  not finish** (no `reports/`): fix the run and `tjs run` first.
+- **`tjs close-year` and `tjs years` show realized and disallowed as
+  the RETURN row of `tjs sum` files them** (each sale's cents), a cent
+  or two from the engine totals they showed; `check-filed` still
+  compares the engine totals. A year closed before this release keeps
+  showing its totals until it is closed again.
+- **`tjs close-year` and `tjs years --json` show income as `tjs sum`'s
+  taxable SUBTOTAL adds it** (each account's DIVIDEND and PIL to the
+  cent), a cent or so from the lock's total they showed; a year closed
+  before shows it too. The lock and what `check-filed` compares are
+  unchanged.
+- **`tjs carryover` (Canada) takes the project year's NET GAIN(LOSS)
+  from the RETURN row of `tjs sum`** (each Schedule 3 row's cents, as
+  filed), not the books' unrounded total. A cent or two moves in that
+  row and, in a loss year, in the carryforward balance after it
+  (CARRYFWD BAL, "Net-capital-loss carryforward after …", `--json`'s
+  `carryforward_balance`, `final_carryforward`, `available_to_apply`)
+  and the T1A carry-back amounts it suggests or finds (`carryback_candidates`,
+  `carried_back`, `carried_back_to`, which `tjs handoff` reads). It now
+  agrees with the "Unused capital losses" of `tjs estimate` and what
+  `tjs close-year` carries forward, which already used the RETURN row
+  (their figures do not move). An earlier year's lock closed by this
+  release gives its recorded RETURN row (`return_row`) in place of the
+  per-account gain lines, a cent apart where one symbol is sold from
+  two accounts. `--json` rows add `net_source` and `engine_net_gain`.
+- **`tjs sum` says, above the RETURN row, when the taxable SUBTOTAL
+  (or TOTAL) and the RETURN row differ** ("The SUBTOTAL adds the
+  account rows, RETURN each sale's cents"): one more line in the default
+  view; `--json` is unchanged.
+- **`tjs estimate --json` (Canada) adds `losses_carried_back` and
+  `losses_carried_forward`** to `estimate`: the part of the year's loss
+  `[carryover] claimed` carries back (T1A) and the rest, the two
+  figures the console prints. `losses_unused` is unchanged: the figure
+  before the carry-back. A script that read `losses_unused` as the
+  balance carried forward reads `losses_carried_forward`.
+- **A year frozen by close-year no longer calls later years' rows of
+  its exports impossible** (`tjs check-dates`, its checklist step, the
+  re-close gate), and no longer reports the generated
+  `crypto_sends.tt` as a changed frozen input: both need only the
+  upgrade, no re-close.
+- **`tjs years` shows a filed year whose last run DRIFTED.** Each drift
+  check (`tjs run`, `tjs check-filed`) keeps its verdict in
+  `work/filed_check.state`; `years` then shows `filed … DRIFTED` with an
+  `! ` line naming `tjs -C 2024 check-filed`, and `years --json` has
+  `drifted`. A filed year shows it after its next `tjs run` or
+  `check-filed`.
+- **A filed year's settings that differ from the newest year's are its
+  own.** `tjs years` marks them `(filed)` and no longer points at `years
+  --diff` for them; `tjs align --write` in a filed year warns before it
+  changes the taxjson.toml and ticker.map the lock was closed with.
+- **A blended account's `.sum` DIAGNOSTICS names the account of a
+  message about another account's file.** The blended pass's messages
+  go into every blended account's `<account>_wash.sum`; one about a
+  file of another account (`inputs/margin/hand.tt:1 …` in
+  `reports/ib_wash.sum`) now starts `[margin] `. The DIAGNOSTICS text
+  changes once: a script or diff that reads those lines sees the tag.
+  The account's own `.sum` files, and messages about the whole blend,
+  are unchanged.
+- **A filed year whose lock was deleted stays frozen.** While its
+  taxjson.toml still carries close-year's freeze note, a year with no
+  `filed/<year>.json` is no longer taken as never closed: `tjs years`
+  shows `lock missing` ("restore it or run close-year again"; `--json`
+  `filed` true with a `problem`), `tjs check-filed` exits 1 and `tjs
+  run` warns, the checklist's lock steps are blocked, and `tjs migrate`
+  leaves the year alone. Restore the lock (`git checkout --
+  2024/filed/2024.json`, or a backup) or close the year again.
+  `new-year` from a frozen year whose lock is missing or damaged now
+  reads the shared folders; a year an older release started that way
+  carries the freeze note copied from it: delete the note and set
+  `inputs_dir` (and `tobase_map`) under its `[settings]`.
+- **The checklist's year-end steps.** `lock-committed` needs attention
+  when `.gitignore` hides the reports as filed (`filed/<year>/reports/`,
+  an older scaffold's unanchored `reports/`): anchor the line as
+  `/reports/` and commit them; outside any repository it names `git
+  init`. `inputs-frozen` is done once the year is
+  filed (a late export is an amendment), and `next-year` in a
+  single-folder project names `tjs migrate --to-years`, then `new-year`.
+- **`tjs winners` / `tjs losers`: a DENIED column.** When a row shown
+  has a superficial-loss (US: wash-sale) denial, the table has DENIED
+  before GAIN, so PROCEEDS − COST + DENIED is the GAIN; `--json` rows
+  carry `denied` (COST is unchanged). A script that reads the text
+  table's columns by position reads one more on such a table.
+- **`tjs win-rates SYMBOL --json`:** `denied_total`, `denied_count` and
+  `tainted_skipped` cover the symbols named, no longer every ticker.
+- **`tjs stats` / `tjs win-rates` after `tjs run`:** a loss denied on
+  an option whose replacement was exercised now counts once (the
+  shares' sale recovers it), and an s.86.1 spin-off splits the
+  recovered loss between the parent and the new shares as it splits
+  the ACB. Their NET_P/L can move; no filed figure does.
+- **`tjs audit` with a corp-action election pending:** the taxable
+  accounts blended with the deferred one are not audited either (they
+  have no cross-account pass to tie to) and the warning names them;
+  the exit code is 1, as before. Decide the election, then `tjs run`.
+- **A purchase line drafted from a transfer stated at 0 needs your
+  cost.** `tjs find-missing-history --write-purchases` used to draft a
+  transfer-in whose row states a book value of 0 (`NO_COST_(0_stated)`
+  in `tjs transfers`) at a cost of 0.00; filled in with only its date,
+  its sale was filed at a $0 cost. Now the line reads `COST  COST`. If
+  you kept such a line in a `.tt` file, check its cost: unless your cost
+  really was nil, put in the real one and `tjs run`.
+- **Drafts you kept from IB's Basis may hold an extra line.** When the
+  files bought shares between two sales coded closing, the drafts had a
+  line for each sale, more than were missing. `tjs list` (or `tjs
+  sanity` against the broker's holdings) shows the extra units; remove
+  the line for the sale of shares the files bought.
+- **A transfer-in only partly covered by `.tt` purchases is drafted**:
+  the line is for the other units, at `COST` with a CHECK note.
+- **`--write-missing-history` and `--write-purchases` refuse books
+  older than the inputs** ("the books in work/ are older than the
+  inputs ... nothing was written"): `tjs run` first. `tjs
+  find-missing-history`, `tjs sanity` and `tjs transfers` open with the
+  "not the clean result of the current inputs" warning then.
+- **A written option booked at grant (`option_grant_timing_since`) with
+  no purchase in the files** is no longer "NOT in the totals": it is
+  listed under `no_purchase_in_totals` (`booked`: `short_cover`) in
+  `tjs sum --json`, and `readiness` can be complete. The figures do not
+  change.
+- **`tjs transfers`' TYPE column** shows the kind of transfer (IB's
+  `ACATS`, a crypto exchange's `withdrawal`, else `transfer-in` /
+  `transfer-out`), not the broker's description; `--json`'s `type` is
+  unchanged. Its `! ` lines are shorter: "N transfer-in(s) with no cost
+  (…)" and "N transfer-in(s) only partly covered, NOT booked (…)", the
+  fix in `--details`.
+- **The checklist's sanity step needs attention when no account has a
+  holdings file** and some account holds positions (it was `[m]`, to
+  confirm, so `--done sanity` closed it with nothing compared). Save the
+  broker's positions snapshots in `holdings/`, or accept the step
+  unchecked with `tjs checklist --done sanity --force`. A project whose
+  books hold no position keeps the confirm step.
+- **`tjs sanity` with no holdings file:** `--json` prints a JSON document
+  (`complete: false`, `uncovered_accounts`), not the text; `UNCHECKED`
+  counts every account with open positions, registered ones included
+  (it counted the taxable accounts with books). A script that read the
+  text, or the "with books" wording, reads the new form.
+- **`tjs sanity --json` has `accounts_not_checked`** (the accounts whose
+  `holdings = [...]` file is missing or unreadable), and `complete` stays
+  true when the only note is about a `holdings/` snapshot of an account
+  compared with its own `holdings = [...]` files.
+- **`tjs sanity` refuses books that are `{}` or a bare list** (`work/<account>_base.json`),
+  as it refuses books that are not JSON: re-run `tjs run`.
+- **Two downloads pasted into one export file are refused when they
+  overlap.** A Questrade, Webull or generic-importer file whose header
+  (Webull: the statement's Account Number preamble) repeats, and whose
+  two parts share rows, booked the shared rows twice; the run now stops
+  with "line N: the header repeats here — two downloads pasted into one
+  file". Save each download as its own file in the account's folder:
+  overlapping rows of two files are read once. Parts that share no row
+  are read as before. Then `tjs run`: the doubled rows leave the books,
+  so a filed year that read such a file changes.
+- **Two Coinbase or Kraken downloads that disagree on one row are
+  refused.** When overlapping downloads of one account carried a row id
+  with different content (a restated price or amount), the run kept the
+  version of the file whose name sorts first, with no message; it now
+  stops with "row id … is in both with DIFFERENT content". Keep the
+  newer download only (or correct the row) and `tjs run`.
+- **A large export runs in seconds, not minutes.** Canada's
+  superficial-loss check walked every row of the books for every loss
+  sale (8,000 rows of one symbol: about 2.5 minutes; 50,000 rows: half an
+  hour). It now reads each security's rows by date window; no figure
+  changes, so a filed year does not drift. Nothing to do but `tjs run`.
+- **`tjs amt` / `tjs estimate`: the Ontario share of a minimum-tax
+  carryover recovery is smaller, and the surtax it saves is shown
+  apart.** "Recovered: ON share" used to be the whole drop in Ontario
+  tax; it is now the share deducted from basic Ontario tax (the figure
+  for the provincial form's carryover line), with the surtax it saves on
+  its own row. The total recovered and the tax do not change. A script
+  reading `--json` finds the two parts in `recovered_provincial_credit`
+  and `recovered_provincial_surtax` (`recovered_provincial` is still the
+  total), and a new lock records `recovered_provincial_credit`.
+- **`tjs check-filed` exits 1 on a lock whose `fx_cash_v2` close is
+  damaged** (it said OK; the next year's FX-on-cash ledger refuses
+  it). Restore the lock from git, or re-close that year.
+- **`tjs estimate`'s INSTALMENTS line reads "=> instalments behind"**
+  (it said "=> balance due April 30" for the instalments still
+  owing). A script that matched the old wording needs the new one.
+- **`tjs estimate` in a loss year carries forward only what is not
+  carried back** when `[carryover] claimed` records a T1A carry-back
+  ("Unused capital losses: … (carry forward; … carried back:
+  [carryover] claimed, T1A)"), as close-year does; `--json`'s
+  `losses_unused` is unchanged.
+- **`tjs carryover`: a closed year with no `[carryover] claimed` entry
+  shows APPLIED as what its lock applied** (it showed 0.00), and no
+  longer offers that gain again.
+- **FX on cash, ledger v2: a USDC reward priced in CAD.** A USDC (or
+  other USD stablecoin) reward that Coinbase prices in CAD now brings
+  its US dollars in at the income's CAD value. If you added a
+  `CASHMOVE` line for it to clear the gap, remove the line (else the
+  reward counts twice and the year is NOT COMPUTED), then re-run `tjs
+  fx-cash --ledger v2`.
+- **FX on cash, ledger v2: moves between your own accounts.** A chain
+  of moves on one day (a to b to c) no longer makes up a debt of the
+  middle account, and an own move the receiving broker books up to 7
+  days before the sending one computes instead of being refused.
+  Re-run `tjs fx-cash --ledger v2` before filing its figure: one
+  computed with a BORROWED row for such a chain changes.
+- **`close-year` with ledger v2 records a book that ends the year at
+  zero.** A record written by an older release does not list it: the
+  next year still asks for its `CASHOPEN <date> <cur> 0 0` line once
+  (or re-close the prior year with `tjs close-year --force` there).
+- **`tjs sanity` exits 0 for an s.86.1 spin-off's fraction awaiting
+  its cash in lieu** on the snapshot's date (a `fraction` line, and
+  `fractions_awaiting_cash_in_lieu` in `--json`), where it reported
+  `QTY_MISMATCH` and exit 1.
+- **`tjs spinoffs --json`** adds `fmv_currency` (the currency of
+  `fmv_per_share`) and `cash_in_lieu`; its `ratio` counts a fraction
+  paid in cash.
+- **A `.tt` line ends at a line feed only, for every reader of it.** A
+  form feed, a vertical tab or a Unicode line separator (U+2028, U+2029,
+  U+0085) inside a line, often pasted into a comment, made the run's
+  readers of `RENAME`, `JOURNAL`, `ALLOWLOSS`, `INKIND`, the cash lines
+  and `OPENING ... cost=unknown` read the text after it as a line of its
+  own and book it. Now it stays part of the comment. A project whose
+  `.tt` files hold one (`grep -nP '[\x0b\x0c\x{85}\x{2028}\x{2029}]'
+  inputs/*/*.tt`) can see its positions, ACB, a superficial-loss denial
+  or the FX gain on cash change on the next `tjs run`; put a line you
+  meant on a line of its own.
+- **`tjs wash-radar --verbose` prints the full report**, as `--details`
+  does (every advisory, the definitions, the scope). It used to change
+  nothing; a script that passed it now gets the long form.
+- **The wash radar's advisories print money as the tables do**
+  (thousands separators, the base currency after it: `250.00 CAD`, not
+  `$250.00`), in `wash-radar`, `watch`,
+  `buy-check`, `sell-check` and the `--json` `advisory` text. The first
+  `tjs watch` after the upgrade reports each such advisory as changed,
+  once.
+- **Re-entry dates are trading days.** `tjs rebuy`'s REBUY ON, the radar's
+  COOLING / BLOCKED CLEARS and `tjs buy-check`'s safe-from date are the
+  first trading day a buy no longer replaces the loss. In Canada that is
+  the first day whose buy settles after the window, up to two days
+  earlier than before (never a weekend); in the US a weekend date moves
+  to the Monday. From that day the loss no longer shows BLOCKED or
+  COOLING. The first `tjs watch` after the upgrade reports the moved
+  dates, once.
+- **Canada: a buy counts from its trade date in the planning views.**
+  `wash-radar`, `rebuy`, `buy-check` and `sell-check` treat a buy made
+  today as acquired and held before it settles, so right after a rebuy
+  the loss reads VIOLATION (or the position LOCKED) at once, not a day
+  or two later.
+- **A file you made read-only is no longer rewritten.** `tjs format
+  --write`, `format-map --write`, `migrate`, `init --force`, `ticker-map --suggest
+  --write` and the other commands that rewrite taxjson.toml, ticker.map,
+  tobase.map or slips.toml now refuse one you cannot write ("cannot
+  write taxjson.toml: the file is read-only"); before, they replaced it
+  and put the read-only mode back. To let them rewrite it, `chmod u+w`
+  the file the message names.
+- **`tjs fetch --list` works in any folder again.** Since v0.32.0 it
+  was refused outside a project ("not a taxjson project"), so the
+  installer printed an `Error:` and a blank `taxjson-fetch installed:`
+  line. It reads no project; `tjs fetch` itself still needs one.
+
 ### v0.35.0
 
 - **`tjs checklist --skip` is gone: `tjs checklist --done ID --force`.**
@@ -67,7 +434,7 @@ needed nothing.
   the step. The `skipped` marks already in a project's `checklist.json`
   need nothing: they read as forced done marks (`[f]`, `--json`
   `effective: "forced"`); a script that read `skipped` from `--json`
-  reads `forced`.
+  (or from `tjs years --json` `marks`) reads `forced`.
 - **`tjs fetch` (IBKR Flex) works again.** Every release since the
   multi-account guard was added refused a normal single-account Flex
   download as "contains 3 account statements" (it counted the
@@ -150,6 +517,12 @@ needed nothing.
   contract: re-run `tjs run` and compare `tjs transfers` (the move's
   value and the booked row's price change; a value from an `INKIND` line
   or the broker's market value is unchanged).
+- **Canada: `tjs t1135` gives a lower cost amount for shares an assigned
+  put delivered, where the delivery also covered a short** (audit D02,
+  `CA-RPT-12`). The shares kept were costed at their gross price; their
+  share of the put's premium now lowers it, as it lowers their ACB in
+  `tjs run`. Re-run `tjs t1135` and compare the maximum and year-end
+  cost with a T1135 already filed: both are filing figures.
 - **`tjs stats` / `tjs win-rates` count a denied superficial loss (US: a
   disallowed wash-sale loss) once.** The replacement's sale counted it
   again through the amount the rule added to its cost (s.53(1)(f) /
@@ -264,7 +637,7 @@ needed nothing.
 - **`tjs compare` exits 1 when an account figure moved,** even when every report file matches (it exited 0). A script reading the exit code sees a difference there.
 - **An ALLOWLOSS line dated the settlement day of only some fills of a sale now names none,** and the run stops on it: date the line with the sale's trade date.
 - **Refused now, named by line:** an IB dividends report with a blank GrossInBase beside a Gross, an impossible date or an amount like `1,5` (download it again); a CRA slip page whose box figure is not an amount (print it again or type the slip into slips.toml); an RBC Holdings Export whose cost column is neither a total nor per share (rename the column).
-- **US projects with futures from a generic CSV with a settle column:** run `tjs run` again; a gain can change where settle dates ran out of trade order.
+- **US projects with futures from a generic CSV with a settle column:** run `tjs run` again; a gain can change, up or down, where settle dates ran out of trade order: a partial close now takes the contract traded first (`US-FUT-01`).
 
 ### v0.30.1
 
@@ -497,9 +870,11 @@ needed nothing.
 ## Problems an upgrade fixes
 
 A message you see on an older release may be a bug a later release fixed.
-Check `tjs --version` against the list below; if the fix is newer, upgrade
-first. Problems that still need something from you are in
-[troubleshooting.md](troubleshooting.md).
+Search [troubleshooting.md](troubleshooting.md) for it: every known
+problem is there, and an entry whose **Fixed in** is newer than
+`tjs --version` is fixed by upgrading. The list below is the older form
+of that record and stops at v0.28.0: check `tjs --version` against it;
+if the fix is newer, upgrade first.
 
 #### Fixed in v0.28.0
 - The first run of a recent project downloads exchange rates back to 2000 ("Info: FX USD→CAD: Bank of Canada Valet for 2,400 dates, Yahoo fallback for …") — fixed in v0.28.0: the window starts a few days before the earliest date in your files

@@ -488,9 +488,12 @@ class TestElectStyle(_NoWidthEnv):
                 _elect(root, account="margin",
                        set=[f"{_EV}=rollover_s_86_1"])
         msg = str(cm.exception)
+        # The headline, what the hint is (backlog TJ-0037), the fix.
         self.assertTrue(msg.startswith("Error: "
                                        "rollover_s_86_1 needs "
-                                       "allocated_acb_cad\nAdd "), msg)
+                                       "allocated_acb_cad\n"
+                                       "allocated_acb_cad: "), msg)
+        self.assertTrue(msg.splitlines()[-1].startswith("Add "), msg)
         self.assertEqual(out.lint(msg), [], msg)
 
     def test_set_confirmation_and_zero_warning(self):

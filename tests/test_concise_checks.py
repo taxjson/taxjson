@@ -184,8 +184,12 @@ class TestYears(unittest.TestCase):
         self.assertRegex(r.stdout, r"\n2024 +filed ")
         self.assertIn("! Inputs changed since the last run of 2024 — "
                       "tjs -C 2024 run", r.stdout)
-        self.assertIn("tjs years --diff 2024 2025", r.stdout)
+        # A filed year's differences are its own, never a step
+        # (backlog TJ-0103): marked, and --details names the diff.
+        self.assertIn("1 rule(s) (filed)", r.stdout)
+        self.assertNotIn("What differs", r.stdout)
         d = years("--details")
+        self.assertIn("taxjson years --diff 2024 2025", d.stdout)
         self.assertIn("rechecks the filed figures against the lock",
                       _flat(d.stdout))
 

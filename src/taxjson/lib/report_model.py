@@ -337,7 +337,8 @@ def grant_write_closes(transactions, inventory,
 
 
 def resolve_gains_files(cache, account: Optional[str] = None, *,
-                        prefer_wash: bool = True) -> "dict[str, Path]":
+                        prefer_wash: bool = True,
+                        warn_stale: bool = True) -> "dict[str, Path]":
     """THE canonical discovery of per-account gains files under work/.
 
     The 2026-07b audit found six hand-copied variants of this walk in
@@ -354,7 +355,9 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
     plain file is required — pre-wash means pre-wash, no fallback.
     Raw/native derivatives (_raw_gains, _raw_base_gains) are never
     returned. Accounts with no qualifying file are omitted; the caller
-    owns the empty-result policy.
+    owns the empty-result policy. `warn_stale=False`: no word about a
+    stale wash file (a full run snapshotting the books it is about to
+    rebuild, backlog TJ-0154).
     """
     cache = Path(cache)
     if account is not None:
@@ -386,7 +389,7 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
             # STALE, and sum/form-export/t1135/reconcile-slips served it
             # silently (2026-09 audit). Loud, not fatal: partial runs
             # are a legitimate iteration loop.
-            newer = stale_wash_inputs(wash)
+            newer = stale_wash_inputs(wash) if warn_stale else []
             if newer and (wash.name, tuple(newer)) in _STALE_SAID:
                 newer = []          # said once per process (harvest and
                                     # checklist read the books twice)

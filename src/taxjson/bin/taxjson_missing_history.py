@@ -433,12 +433,32 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
             _diag(f"taxjson-missing-history: warning: could not read "
                   f"{args.ticker_map} ({e}) — transfer-ins are matched "
                   f"to the books by their own spelling.", file=sys.stderr)
+    # The transfer rows an in-kind move to or from a registered account
+    # names (the last run's work/in_kind.json): never a slower move of
+    # your own (backlog TJ-0074).
+    try:
+        from taxjson.bin.taxjson_run import in_kind_taxable_legs
+        in_kind = in_kind_taxable_legs(Path(args.files[0]).resolve().parent,
+                                       every=True)
+    except Exception:                                   # noqa: BLE001
+        in_kind = set()
+    # The project's .tt NOTOWN lines: a transfer-in whose pairing one
+    # undoes came from outside the books (backlog TJ-0075).
+    not_own = []
+    _root = _project_root(args.files[0])
+    if _root is not None:
+        try:
+            from taxjson.lib.transfer_in import read_not_own
+            not_own = read_not_own(_root, list(
+                (_PL.read_config_soft(_root) or {}).get("accounts") or {}))
+        except Exception:                               # noqa: BLE001
+            not_own = []
     drafts, gaps = draft_purchases(
         txs, accounts=set(accounts), country=country, symbol_key=key,
         year=None if args.all_history else args.year, date_basis=basis,
         transfer_rows=transfers, registered_accounts=types or None,
         journal_symbols=journal, listed_pairs=mh_pairs,
-        rename_sources=renamed)
+        rename_sources=renamed, in_kind_legs=in_kind, not_own=not_own)
     by_acct = {}
     for d in drafts:
         by_acct.setdefault(d.account, [[], []])[0].append(d)

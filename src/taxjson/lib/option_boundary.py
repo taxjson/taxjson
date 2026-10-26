@@ -148,6 +148,9 @@ class WriteLot:
     # rename merges two series' queues (2026-10-24 audit A25).
     seq: int = 0
     origin: str = ORIGIN_WRITE
+    # The series as written (before a SPLIT renamed it): what the write
+    # year's lock reports the premium under (TJ-0085).
+    written_as: str = ''
 
     @property
     def unknown_premium(self) -> bool:
@@ -284,6 +287,7 @@ def write_lots(transactions: List[TaxTransaction],
                                write_year=int(_date_of(t)[:4]), units=opening,
                                premium=net * (opening / -q),
                                open_units=opening, seq=seq,
+                               written_as=sym,
                                origin=(ORIGIN_TRANSFER if transfer
                                        else ORIGIN_WRITE),
                                broker_closing=(False if transfer else
@@ -321,8 +325,38 @@ def write_lots(transactions: List[TaxTransaction],
     return out
 
 
+def reported_premiums(doc: Any) -> Optional[Dict[Tuple[str, str], float]]:
+    """{(option symbol, date): gain} — what a close-year lock's return
+    reported for each written option (its `filed_dispositions` when the
+    return was filed with another tool, else its `dispositions`), keyed
+    by the trade and the settlement date both; None when the lock
+    records no disposition list. After an amendment re-closed without a
+    premium the assignment folded into the shares, the lock no longer
+    reports it, and no T1-ADJ is left to make (backlog TJ-0085)."""
+    if not isinstance(doc, dict):
+        return None
+    rows = doc.get("filed_dispositions")
+    if not isinstance(rows, list):
+        rows = doc.get("dispositions")
+    if not isinstance(rows, list):
+        return None
+    out: Dict[Tuple[str, str], float] = {}
+    for d in rows:
+        if not isinstance(d, dict):
+            continue
+        sym = str(d.get("symbol") or "")
+        g = d.get("gain")
+        if parse_option_expiry(sym) is None or isinstance(g, bool) \
+                or not isinstance(g, (int, float)):
+            continue
+        for k in {str(d.get("date") or "")[:10],
+                  str(d.get("date_settle") or "")[:10]} - {""}:
+            out[(sym, k)] = out.get((sym, k), 0.0) + float(g)
+    return out
+
+
 def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
-                warn=None):
+                warn=None, premiums: Optional[Dict[int, Any]] = None):
     """Every filed-year lock this project can see — taxjson_filed.
     project_locks: its own ``filed/<year>.json`` files plus the previous
     year's record named by ``[settings] prior_year_record`` — as
@@ -331,33 +365,50 @@ def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
     (``option_premium_timing``, ``option_grant_since``) — what
     `straddling` takes as ``filed_years`` and ``filed_timing``.
     ``warn(text)`` is called for a lock that cannot be read (its timing
-    is then unknown). A ``prior_year_record`` that is not a path string
+    is then unknown). ``premiums`` (a dict, when given) receives each
+    lock's ``reported_premiums``, what `straddling` takes as
+    ``filed_premiums``. A ``prior_year_record`` that is not a path string
     is skipped here (every config reader refuses it). Shared by
     option-boundary's twin edge-cases, so the two give one verdict on
     the same contract (audit A2-0390, A2-1205, A2-0360)."""
-    import json as _json
     from pathlib import Path as _Path
     from taxjson.bin import taxjson_filed as _tfl
+    from taxjson.lib.country import CountryError, settings_country
     root = _Path(root)
     try:
         locks = _tfl.project_locks(root, settings or {})
     except _tfl.PriorRecordError:
         locks = [(y, p, "local") for y, p in _tfl.list_snapshots(root)]
+    # The lock's country is judged against a project that has one.
+    try:
+        settings_country(settings or {})
+        _judge = settings
+    except CountryError:
+        _judge = None
     years: set = set()
     timing: Dict[int, Dict[str, Any]] = {}
     for fy, f, _where in locks:
         years.add(fy)
+        _lbl = _tfl.lock_label(root, f)
         try:
-            doc = _json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
+            # The one check every reader of a lock applies (read_lock;
+            # backlog TJ-0069): a damaged or other-country lock's timing
+            # and dispositions are not taken.
+            doc = _tfl.read_lock(f, _judge, label=_lbl,
+                                 prior=_where != "local")
+        except _tfl.LockProblem as e:
             doc = None
             if warn:
-                warn(f"cannot read {_tfl.lock_label(root, f)} ({e}) — its "
+                warn(f"cannot read {_lbl} as a close-year lock ({e}) — its "
                      f"recorded option timing is unknown; `taxjson "
                      f"check-filed` checks the lock.")
         ot = doc.get("option_timing") if isinstance(doc, dict) else None
         if isinstance(ot, dict):
             timing[fy] = ot
+        if premiums is not None:
+            rp = reported_premiums(doc)
+            if rp is not None:
+                premiums[fy] = rp
     return years, timing
 
 def expired_test(transactions: List[TaxTransaction], year: int,
@@ -439,7 +490,9 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                filed_timing: Optional[Dict[int, Dict[str, Any]]] = None,
                today: Optional[date] = None,
                tax_date: Optional[str] = None,
-               filed_labels: Optional[Dict[int, str]] = None
+               filed_labels: Optional[Dict[int, str]] = None,
+               filed_premiums: Optional[Dict[int, Dict[Tuple[str, str],
+                                                      float]]] = None
                ) -> List[Dict[str, Any]]:
     """Rows for `taxjson option-boundary`: every write lot with a close in a
     later year than the write, or still open at the end of `year`.
@@ -450,7 +503,10 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
     `tax_date` is the project's date basis (settle|trade).
     `filed_labels` names each locked year's lock in the advice (default
     filed/<year>.json; a lock reached through [settings]
-    prior_year_record is named by its path, A2-0036)."""
+    prior_year_record is named by its path, A2-0036).
+    `filed_premiums` ({locked year: reported_premiums}): a lock that no
+    longer reports an assigned contract's premium is the amended
+    return — no T1-ADJ is asked for (TJ-0085)."""
     filed_years = set(filed_years or set()) | set((filed_timing or {}).keys())
 
     def _lk(y: int) -> str:
@@ -548,6 +604,19 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                        f" (if {wy} was in fact filed on close timing the "
                        f"transition is right and this can be ignored)"))
 
+        # The wy lock's return no longer reports the premium of the
+        # units assigned later (an amendment re-closed without it, as
+        # docs/filing.md step 6 has it): what it still reports is at
+        # most the premium of the units not assigned (TJ-0085).
+        _rep = (filed_premiums or {}).get(wy)
+        _assigned = sum(c.premium for c in later
+                        if c.kind == "assignment")
+        amended = (grant and wy in filed_years and _rep is not None
+                   and _assigned > 0.005
+                   and _rep.get((lot.written_as or lot.symbol,
+                                 lot.write_date[:10]), 0.0)
+                   <= lot.premium - _assigned + 0.01)
+
         def _switch(prem_text: str) -> str:
             if transition:
                 return (f"kept on close timing by option_grant_timing_since = {since} (transition): "
@@ -608,6 +677,10 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"no amendment — {_lk(wy)} records close timing, so the {wy} "
                               f"return never reported the {prem:,.2f} premium; the fold in {cy} is right")
+                elif grant and amended:
+                    where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
+                    action = (f"no amendment — {_lk(wy)} no longer reports the {prem:,.2f} premium for {wy} "
+                              f"(the amended return, s.49(4))")
                 elif grant:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"T1-ADJ {wy}: remove the {prem:,.2f} premium reported for {wy} (s.49(4)) — the {wy} return was filed with it"

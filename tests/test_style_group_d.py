@@ -42,7 +42,7 @@ class TestDiagnostics(unittest.TestCase):
     def test_errors_start_with_the_label(self):
         p = project("usa")
         r = p.run("list", "--date", "2024-13-01")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 2)       # a usage error (TJ-0157)
         self.assertIn("Error: --date 2024-13-01 is not a "
                       "real calendar date", r.stderr)
         # Captured (width 0, as the checklist reads it): the GNU bytes.
@@ -50,7 +50,7 @@ class TestDiagnostics(unittest.TestCase):
         self.assertIn("taxjson list: error: --date 2024-13-01 is not a "
                       "real calendar date", r.stderr)
         r = p.run("fees-sum", "nosuch")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 2)       # a named input (TJ-0157)
         lines = r.stderr.strip().splitlines()
         self.assertTrue(lines[0].startswith(
             "Error: no files for account 'nosuch' in "

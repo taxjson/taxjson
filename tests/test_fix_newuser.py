@@ -348,7 +348,7 @@ class TestInitDemo(unittest.TestCase):
         self.assertEqual(self.init.returncode, 0, self.init.stderr)
         out = self.init.stdout
         self.assertIn(f"cd {self.year}\n", out)
-        for cmd in ("run", "sum", "checklist"):
+        for cmd in ("run", "sum", "checklist --run"):
             self.assertRegex(out, rf"(?m)^  taxjson {cmd} +# ")
         for cmd in ("find-missing-history", "spinoffs", "wash-sales",
                     "option-boundary"):

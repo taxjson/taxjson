@@ -799,6 +799,14 @@ def apply(pl: Plan) -> None:
             path = path.resolve()
         write_atomic(path, text, suffix=".migrate.part", keep_mode=True)
 
+    # A file made read-only is refused before anything is written
+    # (lib/safe_write.ReadOnlyFileError; backlog TJ-0107): ticker.map
+    # rewritten and taxjson.toml refused would leave the two out of step.
+    from taxjson.lib.safe_write import refuse_read_only
+    for _p, _todo in ((root / "ticker.map", pl.map_append),
+                      (root / "taxjson.toml", pl.toml_text is not None)):
+        if _todo:
+            refuse_read_only(_p.resolve() if _p.is_symlink() else _p)
     if pl.map_append:
         tm = root / "ticker.map"
         # A new map starts with the header `taxjson format-map` writes.

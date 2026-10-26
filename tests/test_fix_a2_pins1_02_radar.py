@@ -139,8 +139,9 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
         self.assertEqual(r["category"], "BLOCKED", r["advisory"])
         self.assertAlmostEqual(r["recent_loss"], 1030.0, places=4)
         self.assertAlmostEqual(r["recent_loss_qty"], 130.0, places=4)
-        self.assertEqual(r["clears_at"], "2026-06-05")
-        self.assertIn("$7.92 of it for each unit bought back",
+        # Window end Thu 06-04: a trade that day settles after it.
+        self.assertEqual(r["clears_at"], "2026-06-04")
+        self.assertIn("7.92 CAD of it for each unit bought back",
                       r["advisory"])
 
     def test_exitable_safe_date_and_countdown(self):
@@ -155,7 +156,9 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
         r = _rows("canada", [_row("2026-04-01", A, 100, 50),
                              _row("2026-05-01", A, -100, 40)])[A]
         self.assertEqual(r["category"], "COOLING")
-        self.assertEqual(r["clears_in_at_generation"], "2026-06-01 (12d)")
+        # The window closes Sun 2026-05-31: Fri 05-29 settles after it
+        # (backlog TJ-0186; it was 06-01).
+        self.assertEqual(r["clears_in_at_generation"], "2026-05-29 (9d)")
         self.assertEqual((r["recent_loss"], r["recent_loss_qty"]),
                          (1000.0, 100.0))
 
@@ -333,11 +336,11 @@ class TestUsRadarEngineAmounts(unittest.TestCase):
         r = _rows("usa", book)[A]
         self.assertEqual(r["category"], "WASHED")
         adv = r["advisory"]
-        self.assertIn("the loss of $3000.00 on 2026-05-01", adv)
-        self.assertIn("$500.00 disallowed", adv)
+        self.assertIn("the loss of 3,000.00 USD on 2026-05-01", adv)
+        self.assertIn("500.00 USD disallowed", adv)
         self.assertIn("('margin' bought 50 on 2026-05-10)", adv)
-        self.assertIn("$500.00 is added to the replacement's basis", adv)
-        self.assertIn("The remaining $2500.00 of loss is disallowed too if "
+        self.assertIn("500.00 USD is added to the replacement's basis", adv)
+        self.assertIn("The remaining 2,500.00 USD of loss is disallowed too if "
                       "you buy again before 2026-06-01.", adv)
         self.assertNotIn("lost for good", adv)
         self.assertEqual(r["denied_qty"], 50.0)
@@ -351,8 +354,8 @@ class TestUsRadarEngineAmounts(unittest.TestCase):
                 _row("2026-05-10", A, 100, 41, "margA", rid="x4")]
         r = _rows("usa", book)[A]
         self.assertEqual(r["category"], "WASHED", r["advisory"])
-        self.assertIn("the loss of $1000.00 on 2026-05-01", r["advisory"])
-        self.assertIn("$1000.00 disallowed", r["advisory"])
+        self.assertIn("the loss of 1,000.00 USD on 2026-05-01", r["advisory"])
+        self.assertIn("1,000.00 USD disallowed", r["advisory"])
         self.assertNotIn("remaining", r["advisory"])
         self.assertIsNone(r["clears_at"])
         self.assertEqual(r["denied_qty"], 100.0)
@@ -363,7 +366,7 @@ class TestUsRadarEngineAmounts(unittest.TestCase):
         self.assertEqual(r["category"], "COOLING")
         self.assertEqual((r["recent_loss"], r["recent_loss_qty"]),
                          (1000.0, 100.0))
-        self.assertIn("Loss of $1000.00 on 2026-05-01. Safe to re-enter "
+        self.assertIn("Loss of 1,000.00 USD on 2026-05-01. Safe to re-enter "
                       "on 2026-06-01.", r["advisory"])
         self.assertEqual(r["clears_in_at_generation"], "2026-06-01 (12d)")
 
@@ -373,12 +376,12 @@ class TestUsRadarEngineAmounts(unittest.TestCase):
                   [_row("2026-05-05", A, 30, 41, "ira")])[A]
         adv = r["advisory"]
         self.assertEqual(r["category"], "WASHED")
-        self.assertIn("$300.00 disallowed", adv)
+        self.assertIn("300.00 USD disallowed", adv)
         self.assertIn("(IRA 'ira' bought 30 on 2026-05-05)", adv)
-        self.assertIn("$300.00 matched an IRA purchase and is lost for "
+        self.assertIn("300.00 USD matched an IRA purchase and is lost for "
                       "good.", adv)
         self.assertNotIn("added to the replacement's basis", adv)
-        self.assertIn("The remaining $700.00", adv)
+        self.assertIn("The remaining 700.00 USD", adv)
         self.assertEqual(r["denied_qty"], 30.0)
 
     def test_taxable_and_ira_replacements_split_the_amount(self):
@@ -387,12 +390,12 @@ class TestUsRadarEngineAmounts(unittest.TestCase):
                           _row("2026-05-06", A, 20, 41)],
                   [_row("2026-05-05", A, 30, 41, "ira")])[A]
         adv = r["advisory"]
-        self.assertIn("$500.00 disallowed", adv)
+        self.assertIn("500.00 USD disallowed", adv)
         self.assertIn("(IRA 'ira' bought 30 on 2026-05-05; 'margin' bought "
                       "20 on 2026-05-06)", adv)
-        self.assertIn("$200.00 is added to the replacement's basis", adv)
-        self.assertIn("$300.00 matched an IRA purchase", adv)
-        self.assertIn("The remaining $500.00", adv)
+        self.assertIn("200.00 USD is added to the replacement's basis", adv)
+        self.assertIn("300.00 USD matched an IRA purchase", adv)
+        self.assertIn("The remaining 500.00 USD", adv)
         self.assertEqual(r["denied_qty"], 50.0)
 
     def test_washed_safe_date_is_after_the_loss(self):
@@ -401,9 +404,9 @@ class TestUsRadarEngineAmounts(unittest.TestCase):
                           _row("2026-05-10", A, 40, 41)])[A]
         self.assertEqual(r["category"], "WASHED")
         self.assertEqual(r["clears_at"], "2026-06-01")
-        self.assertIn("$400.00 is added to the replacement's basis", r[
+        self.assertIn("400.00 USD is added to the replacement's basis", r[
             "advisory"])
-        self.assertIn("remaining $600.00", r["advisory"])
+        self.assertIn("remaining 600.00 USD", r["advisory"])
 
     def test_us_exitable_safe_date(self):
         r = _rows("usa", [_row("2026-05-15", A, 100, 50)])[A]
@@ -593,7 +596,7 @@ class TestUsRadarGates(unittest.TestCase):
         r = _rows("usa", book, as_of="2026-10-01")["XYZ.US"]
         self.assertEqual(r["category"], "WASHED", r["advisory"])
         self.assertEqual(r["taxable_qty"], 42.0)
-        self.assertIn("The remaining $790.00", r["advisory"])
+        self.assertIn("The remaining 790.00 USD", r["advisory"])
 
     def test_short_cover_loss_note(self):
         book = [self._r("2026-08-03", "2026-08-04", -100, 40.0, 4000.0),
@@ -601,7 +604,7 @@ class TestUsRadarGates(unittest.TestCase):
                 self._r("2026-09-22", "2026-09-23", 100, 49.0, 4900.0)]
         r = _rows("usa", book, as_of="2026-10-01")["XYZ.US"]
         self.assertEqual(r["category"], "EXITABLE", r["advisory"])
-        self.assertIn("NOTE: the loss of $1000.00 on covering a short on "
+        self.assertIn("NOTE: the loss of 1,000.00 USD on covering a short on "
                       "2026-09-15 is disallowed only by a new SHORT sale "
                       "before 2026-10-16", r["advisory"])
         self.assertEqual(r["short_cover_loss"]["reshort_ok_from"],

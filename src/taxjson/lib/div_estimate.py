@@ -19,7 +19,9 @@ Per payer (a listing, across the accounts that hold it):
   beside the dividend on the rest is one payment on all of them; a
   dividend charged on a short position (a negative row while the books
   put the account short the symbol, splits and renames counted) is an
-  expense, not a correction of earlier income.
+  expense, not a correction of earlier income; a dividend paid while
+  the books put it short counts, and the command warns (the books
+  likely miss a trade: backlog TJ-0073).
 
 Per position (account, listing) held now: the shares, the next pay
 dates on the payer's schedule and their amounts (latest per-share x
@@ -100,11 +102,16 @@ def add_months(iso: str, n: int) -> str:
 
 
 def parse_window(token: str) -> Optional[int]:
-    """Months in a forward window token (6m, 1y, 13w, 90d), or None."""
+    """Months in a forward window token (6m, 1y, 13w, 90d), or None;
+    0 for a zero-length one ('0m', '0y'), which the caller refuses as
+    it refuses --months 0 (backlog TJ-0039: it was read as one month).
+    A few days or weeks still count as one month."""
     m = re.fullmatch(r"\s*(\d+)\s*([dwmy])\s*", str(token or "").lower())
     if not m:
         return None
     n, u = int(m.group(1)), m.group(2)
+    if n == 0:
+        return 0
     months = {"d": n / 30.4375, "w": n * 7 / 30.4375, "m": n,
               "y": n * 12}[u]
     return max(1, int(round(months)))
@@ -147,9 +154,13 @@ class Payments(dict):
     books said on it: 2026-10 audit R09; a later split still sets the
     denomination, the current holdings'). `notes`: {(account, symbol):
     [what the reading had to decide without the books' say-so]}, shown
-    as the position's flags."""
+    as the position's flags. `short_paid`: {(account, symbol): [the pay
+    dates of the positive rows paid while the books put the account
+    short the symbol]}: counted as income, and the command warns
+    (backlog TJ-0073)."""
     rows: List[Tuple[str, Dict[str, Any]]] = []
     notes: Dict[Tuple[str, str], List[str]] = {}
+    short_paid: Dict[Tuple[str, str], List[str]] = {}
 
 
 def _money(v: float) -> str:
@@ -236,7 +247,11 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
     is a reversal (IB back-computes a negative count from the signed
     amount); with no trade row of the symbol in that account, a
     negative count decides (a short's expense) and `notes` says so,
-    a positive one is a reversal. A corporate action's deemed dividend
+    a positive one is a reversal. A positive row while the books put
+    the account short (the same test) still counts as a payment, but
+    the books likely miss a trade: `notes` and `short_paid` say so,
+    once per account and symbol (backlog TJ-0073). A corporate
+    action's deemed dividend
     (a spin-off election) is not part of a payer's schedule; a row
     with no share count (the broker's description names none) takes
     the count of the account's nearest dated payment of that symbol
@@ -294,6 +309,7 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
     inc: Dict[tuple, Dict[str, Any]] = {}
     tax: Dict[tuple, float] = {}
     notes: Dict[Tuple[str, str], List[str]] = {}
+    short_paid: Dict[Tuple[str, str], List[str]] = {}
     for acct, t in rows:
         key = _ok(t)
         if key is None:
@@ -311,16 +327,22 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
         amt = (float(t.get("gross_amount") or 0.0)
                or float(t.get("net_amount") or 0.0))
         qraw = float(t.get("quantity") or 0.0)
+        # Short or long on the record (or pay) date by the books,
+        # whatever the row's own count says: Questrade's charge names
+        # "ON 100 SHS", a positive count (2026-10-25 audit
+        # planning-us#4).
+        when = d
+        for f in ("record_date", "ex_date"):
+            rd = str(t.get(f) or "")[:10]
+            if len(rd) == 10 and rd <= d:
+                when = min(when, rd)
+        if amt > 0.005 and _short_on(acct, sym, when):
+            # Paid while the books put the account short: still income
+            # (the broker paid it), but a short is charged a dividend,
+            # not paid one: the books likely miss a trade before it
+            # (backlog TJ-0073).
+            short_paid.setdefault((acct, sym), []).append(d)
         if amt < -0.005:
-            # Short or long on the record (or pay) date by the books,
-            # whatever the row's own count says: Questrade's charge
-            # names "ON 100 SHS", a positive count (2026-10-25 audit
-            # planning-us#4).
-            when = d
-            for f in ("record_date", "ex_date"):
-                rd = str(t.get(f) or "")[:10]
-                if len(rd) == 10 and rd <= d:
-                    when = min(when, rd)
             short = _short_on(acct, sym, when)
             if short is None and qraw < 0:
                 notes.setdefault((acct, sym), []).append(
@@ -392,9 +414,18 @@ def payments(rows: Iterable[Tuple[str, Dict[str, Any]]],
                     if pe["qty"] > 1e-9 and _same_src(src, psrc)]
             if near:
                 e["qty"] = min(near)[1]
+    for (acct, sym), ds in short_paid.items():
+        ds.sort()
+        notes.setdefault((acct, sym), []).append(
+            (f"the {ds[0]} payment" if len(ds) == 1
+             else f"{len(ds)} payments from {ds[0]}")
+            + f" arrived while the books show {acct} short {sym}: "
+            f"counted as income; the books likely miss a trade (taxjson "
+            f"find-missing-history)")
     out = Payments()
     out.rows = rows
     out.notes = notes
+    out.short_paid = short_paid
     for (acct, src, sym, d, cur), e in inc.items():
         if e["gross"] <= 0.005 or e["qty"] <= 1e-9:
             continue
@@ -742,10 +773,12 @@ def _ps(v: float) -> str:
 
 
 def render(doc: Dict[str, Any], details: bool = False,
-           cmd: str = "tjs div-estimate"):
+           cmd: str = "tjs div-estimate", country: Optional[str] = None):
     """The text view (lib/out.Doc): a legend, one row per position,
     the totals as figures, then what to check; --details adds each
-    payer's schedule and projected payments and the omitted positions."""
+    payer's schedule and projected payments and the omitted positions.
+    `country`: the project's, for the dating rule HOW IT IS ESTIMATED
+    names (CA-PLAN-06 / US-PLAN-07)."""
     from taxjson.lib import out
     from taxjson.lib.report_model import fmt_money
     base = doc["currency"]
@@ -852,6 +885,18 @@ def render(doc: Dict[str, Any], details: bool = False,
     else:
         d.line("  (none)")
     d.section("HOW IT IS ESTIMATED")
+    # The project's own dating rule: a Canadian trust's record date is
+    # Canada's (CA-INC-DATE-TRUST); a US project dates by the pay date,
+    # a listed RIC's January dividend the year before (US-PLAN-07;
+    # backlog TJ-0140: the Canadian rule was shown in a US project).
+    from taxjson.lib.country import canonical_country, is_usa
+    try:
+        _us = is_usa(canonical_country(country)) if country else None
+    except ValueError:
+        _us = None
+    dating = {True: " (a fund in ric_january_dividends: its January "
+                    "dividend in the year before)",
+              False: " (a Canadian trust's: its record date)"}.get(_us, "")
     d.items([
         "Frequency: the grid (weekly, monthly, quarterly, semi-annual, "
         "annual) most of the last payments fall on, anchored at the "
@@ -860,7 +905,7 @@ def render(doc: Dict[str, Any], details: bool = False,
         "per share.",
         "Each projected payment: the latest per-share amount x the shares "
         "held now, at the books' latest rate, in the tax year of its pay "
-        "date (a Canadian trust's: its record date), as in divs-sum.",
+        f"date{dating}, as in divs-sum.",
         "A payment more than a few days overdue is missing from the books; "
         "two missing stop the projection. Planning numbers: a payer can "
         "change a dividend at any time."], "  ")

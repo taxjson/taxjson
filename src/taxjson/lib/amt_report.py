@@ -173,10 +173,19 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
                       c.get("limit")))
         L.append(_row("Recovered: federal (line 40427)",
                       c.get("recovered_federal")))
+        # The share deducted from basic provincial tax, what the
+        # provincial form's carryover line takes; the surtax it saves
+        # apart (backlog TJ-0016).
+        _sur = float(c.get("recovered_provincial_surtax") or 0.0)
         L.append(_row(f"Recovered: {prov} share",
-                      c.get("recovered_provincial"),
+                      c.get("recovered_provincial_credit",
+                            c.get("recovered_provincial")),
                       f"[{a['provincial_factor'] * 100:.2f}% of the "
-                      f"federal amount, before {prov} surtax]"))
+                      f"federal amount, off basic {prov} tax]"))
+        if abs(_sur) > 0.005:
+            L.append(_row(f"  {prov} surtax it saves", _sur,
+                          f"[the {prov} tax drop: "
+                          f"{m(c.get('recovered_provincial', 0.0))}]"))
         if abs(float(c.get("attributed", 0.0))
                - float(c.get("recovered", 0.0))) > 0.005:
             L.append(_row("  change due to the investment income",
@@ -227,8 +236,18 @@ def render_recorded(year: Any, label: str, mt: Dict[str, Any]
         L.append(f"    expired: {o} {m(v)}")
     L.append(_row("Recovered: federal (line 40427)",
                   mt.get("recovered_federal")))
-    L.append(_row("Recovered: provincial share",
-                  mt.get("recovered_provincial")))
+    if mt.get("recovered_provincial_credit") is not None:
+        L.append(_row("Recovered: provincial share",
+                      mt.get("recovered_provincial_credit")))
+        _sur = (float(mt.get("recovered_provincial") or 0.0)
+                - float(mt.get("recovered_provincial_credit") or 0.0))
+        if abs(_sur) > 0.005:
+            L.append(_row("  provincial surtax it saves", _sur))
+    else:
+        # A lock written before the share was recorded apart: its figure
+        # is the whole provincial drop (backlog TJ-0016).
+        L.append(_row("Recovered: provincial tax (surtax included)",
+                      mt.get("recovered_provincial")))
     L.append(_row("Created (additional tax)", mt.get("created")))
     L.append(_row(f"Carried forward to {int(year) + 1}", mt.get("closing")))
     for o, v in (mt.get("closing_by_year") or {}).items():

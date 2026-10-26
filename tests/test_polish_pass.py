@@ -155,7 +155,10 @@ class TestSingleProject(unittest.TestCase):
         self.assertEqual(r.returncode, 2, console(r))
         self.assertIn("Error:", r.stderr)
         self.assertIn("no slip CSV matches inputs/slips/*.csv", r.stderr)
-        self.assertIn("--done t5008 --force", r.stderr)
+        # The step is to do, not flagged: a plain --done (TJ-0046).
+        self.assertIn("`taxjson checklist --done t5008`", r.stderr)
+        self.assertNotIn("--force", r.stderr)
+        self.assertNotIn("skip", r.stderr)
 
     def test_done_over_a_finding_is_refused_unless_forced(self):
         # No kept verdict: a plain done, no sermon.
@@ -267,7 +270,8 @@ class TestDemo(unittest.TestCase):
     def test_wash_radar_money(self):
         r = tj(self.root, "wash-radar", "--date", "2024-11-25", "--details")
         self.assertNotRegex(r.stdout, r"\$\d+\.\d{4}\b")
-        self.assertRegex(r.stdout, r"[Ll]oss of \$\d+\.\d\d on ")
+        # fmt_money with the base currency (backlog TJ-0121).
+        self.assertRegex(r.stdout, r"[Ll]oss of \d[\d,]*\.\d\d CAD on ")
 
 
 if __name__ == "__main__":

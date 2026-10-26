@@ -409,6 +409,10 @@ def record_block(country: str, r: Dict[str, Any],
                                            or 0.0),
                 "recovered_provincial": float(
                     c.get("recovered_provincial") or 0.0),
+                # Of it, the share off basic provincial tax (the
+                # provincial form's line); the rest is surtax saved.
+                "recovered_provincial_credit": float(
+                    c.get("recovered_provincial_credit") or 0.0),
                 "created": float(c.get("created") or 0.0),
                 "closing_by_year": dict(c.get("closing_by_year") or {}),
                 "closing": float(c.get("closing") or 0.0),
@@ -434,13 +438,19 @@ def _close(a: float, b: float) -> bool:
 
 
 def handoff_issues(root: Path, cfg: Dict[str, Any],
-                   record: Dict[str, Any]) -> List[Dict[str, Any]]:
+                   record: Dict[str, Any],
+                   carried_back_to: Optional[Dict[int, float]] = None
+                   ) -> List[Dict[str, Any]]:
     """What this (next) project's carry-forward inputs say vs what the
     closed year's record carried forward: [estimate] other_losses /
     long_term_losses, [carryover] claimed's entry for the record year,
     [estimate] amt_carryover (tax-logic CA-CARRY-05,
     US-CARRY-03). An input that is not set is not a
-    mismatch (the estimate then reads the record)."""
+    mismatch (the estimate then reads the record). `carried_back_to`
+    ({year: amount}, the carryover ledger's): the part of this
+    project's loss a claim under the record year carries back (T1A) —
+    the record, closed before it, applied none of it (backlog
+    TJ-0078)."""
     from taxjson.lib.country import CountryError, settings_country
     block = record.get("carryforwards")
     if not isinstance(block, dict):
@@ -476,11 +486,16 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
         if "applied" in ncl:
             from taxjson.lib.project_tables import claimed_losses
             claimed = claimed_losses(cfg)[0]
-            if ry in claimed and not _close(claimed[ry], ncl["applied"]):
+            back = float((carried_back_to or {}).get(ry) or 0.0)
+            if ry in claimed and not _close(claimed[ry] - back,
+                                            ncl["applied"]):
                 item(f"{CLAIMED_KEY} {ry}", claimed[ry],
                      float(ncl["applied"]),
                      f"{CLAIMED_KEY} records {claimed[ry]:,.2f} applied "
-                     f"on the {ry} return; the {ry} record applied "
+                     f"on the {ry} return"
+                     + (f" ({back:,.2f} of it carried back from this "
+                        f"project's loss, T1A)" if back > 0.005 else "")
+                     + f"; the {ry} record applied "
                      f"{float(ncl['applied']):,.2f}.")
         mt = block.get("minimum_tax")
         given: Dict[str, Any] = {"source": None}

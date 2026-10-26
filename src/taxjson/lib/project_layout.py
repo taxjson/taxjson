@@ -1245,6 +1245,22 @@ def _edit_text(text: str, doc: Dict[str, Any], path: KeyPath, value: Any,
     return "\n".join(res) + "\n"
 
 
+# The note close-year's freeze writes over the shared folders' settings
+# it comments out (taxjson_run._FROZEN_NOTE_PREFIX).
+FROZEN_NOTE_PREFIX = "## frozen by `taxjson close-year`"
+
+
+def _freeze_noted(d) -> bool:
+    """The year project `d`'s taxjson.toml carries close-year's freeze
+    note (FROZEN_NOTE_PREFIX)."""
+    try:
+        text = (Path(d) / CONFIG).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        return False
+    return any(ln.strip().startswith(FROZEN_NOTE_PREFIX)
+               for ln in text.splitlines())
+
+
 def frozen_year(d, year) -> bool:
     """The year project `d` was closed with its inputs frozen (its
     filed/<year>.json lock carries a `frozen` record: `taxjson
@@ -1252,7 +1268,59 @@ def frozen_year(d, year) -> bool:
     year's own folders, which the year reads from then on). A lock
     taken before the year ended (close-year --force) records the
     inputs' hashes with `partial` set and copies nothing: that year
-    still reads the shared folders, so it is not frozen."""
+    still reads the shared folders, so it is not frozen. A lock that
+    is there but cannot be read counts as frozen when the year's
+    taxjson.toml still carries the freeze note: the year reads its own
+    copy whatever the lock says, so `years` and `migrate` never offer
+    to merge its tobase.map while the lock is damaged (backlog
+    TJ-0158); so does a lock that was deleted (lock_missing_frozen,
+    backlog TJ-0263). A year never closed has no note."""
+    import json
+    lock = Path(d) / "filed" / f"{year}.json"
+    try:
+        doc = json.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _freeze_noted(d)
+    if not isinstance(doc, dict):
+        return _freeze_noted(d)
+    fz = doc.get("frozen")
+    return isinstance(fz, dict) and not fz.get("partial")
+
+
+def lock_missing_frozen(d, year) -> bool:
+    """The year project `d`'s filed/<year>.json is gone while its
+    taxjson.toml still carries close-year's freeze note: a filed year
+    whose lock was deleted. It is treated as a damaged lock is (backlog
+    TJ-0158, TJ-0263): the year stays frozen (frozen_year), `years`,
+    check-filed and the checklist name the lock to restore. A year
+    never closed has no note; a lock taken before the year ended
+    (`close-year --force`) froze nothing and wrote none."""
+    return (not os.path.lexists(Path(d) / "filed" / f"{year}.json")
+            and _freeze_noted(d))
+
+
+def lock_missing_parts(year) -> Tuple[str, str]:
+    """(headline, detail) of what `years`, check-filed, new-year and the
+    checklist say about a lock_missing_frozen year."""
+    return (f"filed/{year}.json is missing: restore it or run close-year "
+            f"again",
+            "The year's taxjson.toml still carries close-year's freeze "
+            "note, so the year stays frozen: restore the lock from git or "
+            "a backup, or `taxjson close-year` locks the year again.")
+
+
+def lock_missing_text(year) -> str:
+    """lock_missing_parts as one text (its headline is the `years`
+    line)."""
+    head, detail = lock_missing_parts(year)
+    return f"{head} — {detail[:1].lower()}{detail[1:].rstrip('.')}"
+
+
+def frozen_from_shared(d, year) -> bool:
+    """frozen_year, with the exports copied from a folder shared by
+    every year (the lock's `frozen` record names the `inputs_dir` it
+    stopped reading): the year's own inputs/ is that folder's copy,
+    later years' rows and all (backlog TJ-0013)."""
     import json
     try:
         doc = json.loads((Path(d) / "filed" / f"{year}.json").read_text(
@@ -1260,7 +1328,9 @@ def frozen_year(d, year) -> bool:
     except (OSError, ValueError):
         return False
     fz = doc.get("frozen") if isinstance(doc, dict) else None
-    return isinstance(fz, dict) and not fz.get("partial")
+    return (isinstance(fz, dict) and not fz.get("partial")
+            and isinstance(fz.get("inputs_dir"), str)
+            and bool(fz["inputs_dir"].strip()))
 
 
 def frozen_project(d, settings: Optional[Dict[str, Any]] = None) -> bool:
@@ -1319,6 +1389,65 @@ def set_key_after(text: str, dotted: str, value: Any,
 
 # ------------------------------------------------------------ years view
 
+# The last drift check of the project's filed years, in work/ (written
+# by taxjson_run._check_filed_years: `taxjson run`, `check-filed`).
+FILED_CHECK_STATE = "filed_check.state"
+_FILED_CHECK_FORMAT = "filed_check/1"
+
+
+def _lock_digest(lock: Path) -> Optional[str]:
+    import hashlib
+    try:
+        return hashlib.sha256(lock.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def record_filed_check(root, verdicts: Dict[Any, str]) -> None:
+    """Keep the drift check's verdict on each filed year it judged
+    (`verdicts`: {year: "drifted" | "ok"}) in work/FILED_CHECK_STATE,
+    with the digest of the lock it judged, so `taxjson years` shows a
+    filed year whose last run DRIFTED (filed_check, backlog TJ-0159).
+    Advisory: nothing is written without a work/ folder, and a write
+    that fails is let go."""
+    import json
+    work = Path(root) / "work"
+    if not work.is_dir():
+        return
+    years: Dict[str, Any] = {}
+    for y, res in sorted(verdicts.items()):
+        digest = _lock_digest(Path(root) / "filed" / f"{y}.json")
+        if digest is not None:
+            years[str(y)] = {"result": res, "lock": digest}
+    from taxjson.lib.safe_write import write_atomic
+    try:
+        write_atomic(work / FILED_CHECK_STATE, json.dumps(
+            {"format": _FILED_CHECK_FORMAT, "years": years}, indent=2,
+            sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def filed_check(root, year) -> Optional[bool]:
+    """True when the last drift check of the project's filed `year`
+    (record_filed_check) found it DRIFTED from its lock, False when it
+    matched; None when there is no verdict on the lock as it is now (no
+    check yet, a lock closed again since, a record that cannot be
+    read)."""
+    import json
+    try:
+        doc = json.loads((Path(root) / "work" / FILED_CHECK_STATE)
+                         .read_text(encoding="utf-8"))
+        rec = doc["years"][str(year)]
+        res, digest = rec["result"], rec["lock"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if res not in ("drifted", "ok") or digest != _lock_digest(
+            Path(root) / "filed" / f"{year}.json"):
+        return None
+    return res == "drifted"
+
+
 def years_report(folder: Path) -> Dict[str, Any]:
     """`taxjson years --json`: each year project of the multi-year folder
     with its state (docs/settings.md, `taxjson years --json`)."""
@@ -1334,9 +1463,10 @@ def years_report(folder: Path) -> Dict[str, Any]:
                                "changed": None, "problem": None,
                                "differs_from_newest": None,
                                "tobase_map": None, "tobase_shared": False,
-                               "tobase_frozen": False,
+                               "tobase_frozen": False, "drifted": None,
                                "marks": {"done": 0, "forced": 0}}
         lock = d / "filed" / f"{y}.json"
+        doc = None
         if lock.is_file():
             rec["filed"] = True
             try:
@@ -1358,10 +1488,35 @@ def years_report(folder: Path) -> Dict[str, Any]:
                     if isinstance(t, dict):
                         rec["totals"] = {k: t.get(k) for k in (
                             "realized", "disallowed", "income") if k in t}
+                        # Realized and disallowed as filed: the RETURN
+                        # row close-year recorded, not the engine total
+                        # a cent or two apart (backlog TJ-0192).
+                        rr = doc.get("return_row")
+                        if isinstance(rr, dict):
+                            rec["totals"].update(
+                                (k, rr[k]) for k in ("realized",
+                                                     "disallowed")
+                                if isinstance(rr.get(k), (int, float))
+                                and not isinstance(rr.get(k), bool))
+                        # ...and income as `taxjson sum`'s taxable
+                        # SUBTOTAL adds it (backlog TJ-0212).
+                        from taxjson.bin.taxjson_filed import \
+                            income_as_summed
+                        _inc = income_as_summed(doc)
+                        if _inc is not None and "income" in rec["totals"]:
+                            rec["totals"]["income"] = _inc
                     from taxjson.bin.taxjson_filed import partial_year_note
                     rec["partial_lock"] = bool(partial_year_note(doc, y))
+                    # The last run's drift check, never a recompute here
+                    # (backlog TJ-0159).
+                    rec["drifted"] = filed_check(d, y)
             except (OSError, ValueError):
                 rec["problem"] = f"filed/{y}.json cannot be read"
+        elif lock_missing_frozen(d, y):
+            # A frozen year whose lock was deleted: filed, its lock to
+            # restore, as a damaged one (backlog TJ-0263).
+            rec["filed"] = True
+            rec["problem"] = lock_missing_text(y)
         fp = d / "work" / CL.FINGERPRINT_FILE
         try:
             rec["last_run"] = _dt.datetime.fromtimestamp(
@@ -1370,6 +1525,20 @@ def years_report(folder: Path) -> Dict[str, Any]:
             pass
         try:
             cfg = read_config(d)
+            if isinstance(doc, dict) and not rec["problem"]:
+                # The country check every reader of a lock applies
+                # (taxjson_filed.read_lock): a lock closed under the
+                # other country's law was shown as a clean filed year
+                # (backlog TJ-0069).
+                from taxjson.bin.taxjson_filed import lock_country_problem
+                from taxjson.lib.country import CountryError
+                try:
+                    rec["problem"] = lock_country_problem(
+                        doc, cfg.get("settings") or {}, f"filed/{y}.json")
+                except CountryError:
+                    pass                # no country here to judge it by
+                if rec["problem"]:
+                    rec["totals"] = None    # the other country's figures
             if rec["last_run"] is not None:
                 why = CL.inputs_changed(d, cfg)
                 rec["stale"] = bool(why) if why is not None else None
@@ -1381,13 +1550,27 @@ def years_report(folder: Path) -> Dict[str, Any]:
             p = tobase_setting(d)
         except LayoutError:
             p = None
-        rec["tobase_map"] = (shown(p, _resolved(folder)) if p is not None
+        # The copy close-year froze: the filed year's own by design —
+        # its file even beside a setting written back, which is the
+        # year's problem (its run refuses the two; backlog TJ-0108).
+        fz = frozen_year(d, y)
+        own_frozen = fz and (d / TOBASE_MAP).is_file()
+        rec["tobase_map"] = (f"{d.name}/{TOBASE_MAP}" if own_frozen
+                             else shown(p, _resolved(folder))
+                             if p is not None
                              else f"{d.name}/{TOBASE_MAP}"
                              if (d / TOBASE_MAP).is_file() else None)
-        rec["tobase_shared"] = p is not None
-        # The copy close-year froze: the filed year's own by design.
-        rec["tobase_frozen"] = (p is None and (d / TOBASE_MAP).is_file()
-                                and frozen_year(d, y))
+        rec["tobase_shared"] = p is not None and not own_frozen
+        rec["tobase_frozen"] = own_frozen
+        back = [k for k, on in ((INPUTS_KEY, shared_inputs(d)),
+                                (TOBASE_KEY, p is not None)) if on]
+        if fz and back:
+            # A frozen filed year naming the shared folders again reads
+            # them, not its frozen copy (the run warns).
+            rec["problem"] = "; ".join(x for x in (
+                rec["problem"], f"frozen, but [settings] names "
+                f"{', '.join(back)} again: delete "
+                f"{'them' if len(back) > 1 else 'it'}") if x)
         if newest is not None and d != newest:
             try:
                 c = compare(d, newest)
@@ -1410,5 +1593,7 @@ def years_report(folder: Path) -> Dict[str, Any]:
         except Exception:                               # noqa: BLE001
             rec["problem"] = rec["problem"] or "checklist.json cannot be read"
         out_years.append(rec)
-    return {"schema_version": 1, "root": str(folder),
+    # 2: `marks` counts "forced", not "skipped" (v0.35 renamed it under
+    # 1; backlog TJ-0030).
+    return {"schema_version": 2, "root": str(folder),
             "newest": yrs[-1][0] if yrs else None, "years": out_years}

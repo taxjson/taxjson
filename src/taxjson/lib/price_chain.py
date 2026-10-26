@@ -21,6 +21,7 @@ Every quote carries its source so reports can say where a number came
 from instead of implying freshness.
 """
 
+import contextlib
 import math
 from taxjson.lib.stage_msg import emit_line
 import json
@@ -545,6 +546,28 @@ def _ibkr_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
     return out
 
 
+@contextlib.contextmanager
+def _quiet_yfinance():
+    """Silence yfinance while it is asked: it logs every miss as a raw,
+    unlabelled line of its own (an HTTP 404 body, '$ZZB.TO: possibly
+    delisted', 'Cookie/crumb fetch failed') and older releases print
+    some to stdout / stderr. The callers say what matters ('no price
+    from any tier for: ...', the in-kind move not booked) — backlog
+    TJ-0118, TJ-0161, TJ-0182; `tips --online` quiets the same
+    logger."""
+    import io
+    import logging
+    lg = logging.getLogger("yfinance")
+    level = lg.level
+    lg.setLevel(logging.CRITICAL)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            yield
+    finally:
+        lg.setLevel(level)
+
+
 def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
                         verbose: bool
                         ) -> Dict[str, Tuple[Dict[str, float], Optional[str]]]:
@@ -569,14 +592,16 @@ def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
         return {}
     for sym, ysym in pairs.items():
         try:
-            tk = yf.Ticker(ysym)
-            hist = tk.history(start=start, end=end_x, auto_adjust=False)
+            with _quiet_yfinance():
+                tk = yf.Ticker(ysym)
+                hist = tk.history(start=start, end=end_x, auto_adjust=False)
+                yf_cur = _yf_currency(tk)
         except Exception:                                   # noqa: BLE001
             continue
         # The unit Yahoo names, read after the request that fills the
         # metadata: an LSE close is in pence (issue #75 — dropping it
         # booked 125p as 125 pounds).
-        div, cur, problem = provider_unit(_yf_currency(tk))
+        div, cur, problem = provider_unit(yf_cur)
         if problem:
             emit_line(f"warning: price-chain: Yahoo history for {sym} "
                       f"({ysym}): {problem} — not used", file=sys.stderr)
@@ -619,8 +644,10 @@ def _yfinance_fetcher(pairs: Dict[str, str], *,
     out: Dict[str, Tuple[float, Optional[str]]] = {}
     for sym, yf_sym in pairs.items():
         try:
-            tk = yf.Ticker(yf_sym)
-            hist = tk.history(period="1d", timeout=5)
+            with _quiet_yfinance():
+                tk = yf.Ticker(yf_sym)
+                hist = tk.history(period="1d", timeout=5)
+                yf_cur = _yf_currency(tk)
             if not hist.empty:
                 px = float(hist["Close"].iloc[-1])
                 # NaN guard (x == x is False for NaN), matching every
@@ -629,8 +656,7 @@ def _yfinance_fetcher(pairs: Dict[str, str], *,
                 # fossilizes into the price cache and surfaces as a
                 # bare NaN token in --json output downstream.
                 if px == px and px > 0:
-                    px, cur, problem = clean_quote_currency(
-                        px, _yf_currency(tk))
+                    px, cur, problem = clean_quote_currency(px, yf_cur)
                     if problem:
                         emit_line(f"warning: price-chain: Yahoo quote for "
                                   f"{sym} ({yf_sym}): {problem} — not used",

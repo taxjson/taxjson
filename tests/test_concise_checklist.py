@@ -94,7 +94,11 @@ class TestChecklistDefault(unittest.TestCase):
         p = project("canada")
         full = p.run("checklist", "--run", "--all", TAXJSON_WIDTH=100)
         det = p.run("checklist", "--run", "--details", TAXJSON_WIDTH=100)
-        self.assertEqual(full.stdout, det.stdout)
+        # The two runs may straddle a minute: the header's HH:MM is each
+        # run's own time.
+        def unclocked(s):
+            return re.sub(r"\b\d{2}:\d{2}\b", "HH:MM", s)
+        self.assertEqual(unclocked(full.stdout), unclocked(det.stdout))
         flat = " ".join(full.stdout.split())
         for phrase in ("1. SET UP", "[!] 10. missing-history",
                        "tjs find-missing-history", "Why: ",

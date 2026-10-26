@@ -24,7 +24,11 @@ class TestSumConcise(unittest.TestCase):
 
     def test_canada_default_view(self):
         r = self._sum("canada")
-        assert_concise(self, r.stdout, r.stderr, budget=6,
+        # The FOR THE RETURN rounding legend, when shown, is outside
+        # the budget (docs/output-style.md; backlog TJ-0209).
+        assert_concise(self, r.stdout, r.stderr,
+                       budget=6 + ("RETURN each sale's cents"
+                                   in r.stdout),
                        legend=["REALIZED = NON-OPT",
                                "GAIN = PROCEEDS − COST(ACB) − OUTLAYS"])
         acts = [ln for ln in r.stdout.splitlines() if ln.startswith("! ")]

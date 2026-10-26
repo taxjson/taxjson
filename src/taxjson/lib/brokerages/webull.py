@@ -13,6 +13,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          declared_rename_where,
                                          OPTION_STRIKE_RE, parse_strict_number,
                                          read_broker_text,
+                                         refuse_pasted_overlap,
                                          shown_name)
 from taxjson.lib.core import is_option_symbol, parse_option_expiry
 
@@ -191,11 +192,16 @@ class WebullBrokerage(BaseBrokerage):
             return row[j].strip() if j is not None and j < len(row) else ""
 
         width = len(header_row)
+        # One segment per download: a second statement preamble (its
+        # 'Account Number' line) starts another (backlog TJ-0099).
+        segs: List[tuple] = [(header_index + 1, [])]
         for row in reader:
             # File line of this record (the header record is the first
             # one the reader returns; line_num counts physical lines
             # read so far, so a record's LAST physical line).
             where = f"{shown_name(path)} line {header_index + reader.line_num}"
+            if row and row[0].strip().lower().startswith('account number'):
+                segs.append((header_index + reader.line_num, []))
             if (row and len(row) < width and any(c.strip() for c in row)
                     and row[0].strip().upper() in _CURRENCY_PREFIXES):
                 # A data row cut short — the last line of a download
@@ -265,6 +271,8 @@ class WebullBrokerage(BaseBrokerage):
                     f"quote in the CSV.")
 
             data_rows += 1
+            segs[-1][1].append((header_index + reader.line_num,
+                                tuple(c.strip() for c in row)))
             if len(row) != width:
                 # A row wider or narrower than its header (a 2025-layout
                 # row under the 9-column 2024 header, a hand edit) reads
@@ -468,6 +476,8 @@ class WebullBrokerage(BaseBrokerage):
             transactions.append(_tx)
             if is_expiry:
                 expiries.append(_tx)
+        refuse_pasted_overlap(shown_name(path), segs,
+                              "the statement preamble (Account Number)")
         if len(transactions) != data_rows:
             # Row accounting: every dated BUY/SELL data row becomes one
             # transaction. A mismatch means a row was dropped or split.

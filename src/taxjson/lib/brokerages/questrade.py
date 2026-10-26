@@ -25,6 +25,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          income_facts_from_description,
                                          is_roc_description,
                                          parse_strict_number,
+                                         refuse_pasted_overlap,
                                          shown_name)
 
 
@@ -214,9 +215,17 @@ def _canon_action(raw: Optional[str]) -> str:
     return _QT_ACTION_CANON.get(a.upper(), a.upper())
 
 
+def _is_qt_header(row: Dict[str, Any]) -> bool:
+    """The header repeated as a row: two exports concatenated."""
+    return [(row.get(c) or '').strip() for c in _QT_COLUMNS[:5]] == \
+        list(_QT_COLUMNS[:5])
+
+
 def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
     """(line number, row) for every data row of a Questrade export. The
-    header must carry every column in _QT_COLUMNS."""
+    header must carry every column in _QT_COLUMNS. Two exports pasted
+    into one file (the header repeated) are read as they are, unless
+    they share rows: refused (refuse_pasted_overlap)."""
     path = Path(path)
     text = decode_broker_text(path.read_bytes(), shown_name(path))
     reader = csv.DictReader(io.StringIO(text, newline=''))
@@ -281,6 +290,15 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
                 f"row; refusing to read the missing cells as blank. "
                 f"Re-export the file.")
         rows.append((lineno, row))
+    segs: List[tuple] = [(2, [])]
+    for lineno, row in rows:
+        if _is_qt_header(row):
+            segs.append((lineno, []))
+        else:
+            segs[-1][1].append((lineno, tuple(
+                str(v or '').strip() for k, v in row.items()
+                if k is not None)))
+    refuse_pasted_overlap(shown_name(path), segs, "the header")
     return rows
 
 
@@ -1029,6 +1047,8 @@ class QuestradeBrokerage(BaseBrokerage):
         on the console."""
         accts: Dict[str, set] = {}
         for _ln, r in rows:
+            if _is_qt_header(r):
+                continue      # its 'Account #' cell is no account
             a = (r.get('Account #') or '').strip()
             if a:
                 accts.setdefault(a, set()).add(
@@ -1277,7 +1297,8 @@ class QuestradeBrokerage(BaseBrokerage):
         # Taxable hint from the Account Type column: a registered-plan
         # marker -> sheltered; "margin"/"cash" without one -> taxable;
         # anything else ("API" from `taxjson fetch`) -> unknown.
-        _types = {(r.get('Account Type') or '').strip() for _, r in rows}
+        _types = {(r.get('Account Type') or '').strip() for _, r in rows
+                  if not _is_qt_header(r)}
         _types.discard('')
         if _types and all(_QT_REGISTERED_RE.search(t) for t in _types):
             self._qt_taxable_hint = False
@@ -1313,13 +1334,15 @@ class QuestradeBrokerage(BaseBrokerage):
         # never collapses two accounts' identical rows (audit A2-0008).
         self._qt_accounts = {(r.get('Account #') or '').strip()
                              for _, r in rows} - {''}
-        _acct_from, _acct = 0, ''
+        _acct_from, _acct, _line = 0, '', 0
         for lineno, row in rows:
             for _t in transactions[_acct_from:]:
                 if _acct:
                     _t.setdefault('broker_account', _acct)
+                self.note_row_line(_t, _line)
             _acct_from = len(transactions)
             _acct = (row.get('Account #') or '').strip()
+            _line = lineno
             self._rows_seen += 1
             action_raw = _canon_action(row.get('Action'))
             activity_type = (row.get('Activity Type') or '').strip()
@@ -1960,6 +1983,8 @@ class QuestradeBrokerage(BaseBrokerage):
             transactions.append(_tx)
             if is_expired and not is_assigned:
                 expiries.append(_tx)
+        for _t in transactions[_acct_from:]:
+            self.note_row_line(_t, _line)
         self._pair_reversals(transactions, rev_originals, reversals)
         _kept = {id(t) for t in transactions}
         for _tx, _msg in sd_notes:

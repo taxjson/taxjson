@@ -143,7 +143,7 @@ class TestEngineDecidesLosses(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             rows = _radar(tmp, self._BUMP, "2026-09-29", gains=[g])
         self.assertEqual(rows["XYZ.TO"]["category"], "COOLING")
-        self.assertIn("$100.00", rows["XYZ.TO"]["advisory"])
+        self.assertIn("100.00 CAD", rows["XYZ.TO"]["advisory"])
 
     def test_without_engine_gains_the_pool_fallback_is_kept(self):
         # Documents the fallback (rows the engine does not cover): the

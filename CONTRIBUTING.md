@@ -18,6 +18,7 @@ source setup.sh          # activate it (each new shell)
 ```
 
 `scripts/dev-setup.sh` is idempotent (re-run it after a pull). It installs
+the dev lock (`requirements/dev.txt`, hash-pinned: the ruff CI lints with),
 the core with `pip install -e ".[fx,dev]"`, then the broker-fetch plugin
 with `pip install --no-deps -e packages/taxjson-fetch` (`--no-deps`: its
 only dependency is the core you just installed — taxjson is not published
@@ -203,13 +204,14 @@ private lists); the workflow file (`.github/workflows/tests.yml`, Python
 only: a hosted runner has no private denylist), gitleaks and the suite —
 and its checks must pass before a change lands and before a release is
 tagged (docs/releasing.md). A missing `ruff` fails
-the lint stage; `pip install -e ".[dev]"` (or `scripts/dev-setup.sh`)
-installs it:
+the lint stage, and one of another version than the dev lock's
+(`requirements/dev.txt`, which CI installs) gets a note;
+`scripts/dev-setup.sh` installs the lock's:
 
 ```bash
 scripts/ci.sh            # lint (ruff, critical tier) + suite + fuzzers at CI depth
 scripts/ci.sh --nightly  # fuzzers at 5000/3000/1600 books
-scripts/ci.sh --quick    # lint + suite only
+scripts/ci.sh --quick    # every stage but the fuzzers
 scripts/ci.sh --serial   # ...with the suite in one process (the old way; a fallback)
 ```
 
@@ -441,7 +443,10 @@ release; the pull request is then closed with a note saying which.
 - [ ] `scripts/ci.sh` passes — read its **last line**: it must say `PASS`
       (a pipe such as `scripts/ci.sh | tail` hides the exit status).
       `scripts/ci.sh --quick` while iterating; the full gate before you
-      push, once in a fresh `git clone` (it catches untracked files).
+      push, once in a fresh `git clone` (it catches untracked files). The
+      clone has no venv: run `scripts/dev-setup.sh` there, or test its code
+      with your clone's venv:
+      `PYTHONPATH=$PWD/src PYTHON=<your clone>/venv/bin/python3 scripts/ci.sh`.
 - [ ] New behavior has a test that would have failed before the change
 - [ ] A tax change edits its `Rule` in `src/taxjson/lib/tax_logic.py` and
       the test cites it (`@rule("CA-...")`)

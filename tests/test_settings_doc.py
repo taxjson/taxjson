@@ -134,7 +134,9 @@ class TestSettingsDocFiles(unittest.TestCase):
         sec = _section(SETTINGS, "## .tt files", level="## ")
         named = set(re.findall(r"`([A-Z_]+)`", " ".join(
             re.findall(r"^#### (.*)$", sec, re.M))))
-        want = set(tt._VALID_ACTIONS) | set(tt._SUGAR_ACTIONS)
+        # The dated events and declarations too (NOTOWN: backlog TJ-0075).
+        want = (set(tt._VALID_ACTIONS) | set(tt._SUGAR_ACTIONS)
+                | set(tt._EVENT_ACTIONS))
         self.assertEqual(want - named, set())
 
     def test_generic_mapping_vocabulary(self):

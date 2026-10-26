@@ -914,8 +914,9 @@ def keep_written_lines(entries: Iterable[Dict[str, Any]],
     shown price (written before the full-precision value) stays as
     written: the same send at the same price is not rewritten for a
     rounding cent."""
+    from taxjson.bin.taxjson_convert_tt import tt_lines
     try:
-        have = set((read_tt(path) or "").splitlines())
+        have = set(tt_lines(read_tt(path) or ""))
     except ValueError:
         return
     for e in entries:
@@ -1727,8 +1728,9 @@ def tt_ids(path: Path) -> Optional[set]:
     """Send ids recorded in a generated crypto_sends.tt (None: no file)."""
     if not path.is_file():
         return None
+    from taxjson.bin.taxjson_convert_tt import tt_lines
     ids = set()
-    for ln in (read_tt(path) or "").splitlines():
+    for ln in tt_lines(read_tt(path) or ""):
         m = re.match(r"^# ((?:kr|cb|[a-z]{2})-\d{8}T\d{6}-\S+): ", ln)
         if m:
             ids.add(m.group(1))
@@ -1744,8 +1746,9 @@ def tt_stale_ids(acct_doc: Dict[str, Any], path: Path) -> List[str]:
     want = tt_want_ids(acct_doc)
     have = tt_ids(path) or set()
     stale = set(want ^ have)
+    from taxjson.bin.taxjson_convert_tt import tt_lines
     try:
-        lines = set((read_tt(path) or "").splitlines())
+        lines = set(tt_lines(read_tt(path) or ""))
     except ValueError:
         lines = set()
     for e in list(acct_doc["sends"]) + list(acct_doc.get("network_fees") or []):
@@ -1817,7 +1820,8 @@ def duplicate_lines(acct_dir: Path, entries: List[Dict[str, Any]]
             except (OSError, UnicodeDecodeError):
                 continue
             lines = []
-            for n, ln in enumerate(text.splitlines(), 1):
+            from taxjson.bin.taxjson_convert_tt import tt_lines
+            for n, ln in enumerate(tt_lines(text), 1):
                 tok = ln.split("#", 1)[0].split()
                 if len(tok) < 5 or tok[0].upper() != "BUYSELL":
                     continue

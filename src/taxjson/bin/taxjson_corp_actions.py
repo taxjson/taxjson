@@ -364,6 +364,13 @@ def _pending_doc(missing: List[CorporateAction], manifest_path: Path,
             "ratio_new": ev.ratio_new,
             "ratio_old": ev.ratio_old,
             "source_rows": list(ev.raw_descriptions or []),
+            # A spin-off's fraction paid in cash: the holding was
+            # entitled to it too (`taxjson elect --pending` says so; the
+            # s.86.1 allocation covers it, CA-CORP-05; backlog TJ-0166).
+            "cash_in_lieu": float(ev.cash_in_lieu or 0.0),
+            "cash_in_lieu_currency": ev.cash_in_lieu_currency or "",
+            "fraction_in_lieu": float(ev.fraction_in_lieu or 0.0),
+            "cash_in_lieu_date": ev.cash_in_lieu_date or "",
             "options": options,
             # A sheltered account's event that is asked: no tax in the
             # account depends on it (sheltered_note).

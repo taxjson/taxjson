@@ -221,17 +221,33 @@ def render(doc: Dict[str, Any], width: int = 120, cmd: str = "tjs plot-tax"):
     if wa is not None and abs(wa - doc["year_estimate"]) > 0.005:
         kv.append(("With the minimum tax", f"{fmt_money(wa)} {base}"))
     d.kv(kv)
+    # The project's country, from the label `build` gives the document
+    # ("canada/ON", "usa"): the footer names only what that country's
+    # law and commands have (backlog TJ-0139: a US project was sent to
+    # `tjs instalments`, which refuses it, US-CTRY-02).
+    from taxjson.lib.country import command_country_problem, is_usa
+    country = str(doc.get("label") or "").split("/")[0]
+    try:
+        us = is_usa(country)
+        instalments = command_country_problem("instalments",
+                                              country) is None
+    except ValueError:
+        us, instalments = None, False
     acts = []
     if doc.get("year_adjustment"):
+        what = {True: "a §1256 reclassification",
+                False: "a T5 box 18 capital gains dividend"}.get(
+                    us, "a T5 box 18 or §1256 reclassification")
         acts.append(out.act(
             f"{fmt_money(doc['year_adjustment'])} of the year's estimate "
-            f"is dated to the year, not a month (a T5 box 18 or §1256 "
-            f"reclassification): the months add up to "
-            f"{fmt_money(doc['months_total'])}", "tjs estimate --details"))
+            f"is dated to the year, not a month ({what}): the months add "
+            f"up to {fmt_money(doc['months_total'])}",
+            "tjs estimate --details"))
     if acts:
         d.blank()
         for a in acts:
             d.item(a[len(out.ACT):], bullet=out.ACT)
-    d.para(f"The year's estimate line by line: tjs estimate; the "
-           f"instalments it calls for: tjs instalments.")
+    d.para("The year's estimate line by line: tjs estimate"
+           + ("; the instalments it calls for: tjs instalments."
+              if instalments else "."))
     return d

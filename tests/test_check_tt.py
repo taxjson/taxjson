@@ -230,8 +230,8 @@ class TestRender(unittest.TestCase):
         self.assertIn("ERRORS — lines the run refuses (1)", text)
         self.assertIn("- inputs/margin/a.tt:1: unknown .tt action", text)
         self.assertRegex(text, r"(?m)^  inputs/margin/a\.tt +margin +2 +1 +0 +1 error$")
-        self.assertIn("! 1 line cannot be read; fix it before `tjs run`",
-                      text)
+        self.assertIn("! 1 problem the run refuses; fix it before "
+                      "`tjs run`", text)
         empty = CT.render({"files": [], "problems": [], "lines": 0,
                            "rows": 0, "events": 0, "errors": 0,
                            "warnings": 0})

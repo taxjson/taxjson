@@ -125,17 +125,20 @@ def normalized(data: bytes, *, display: bool = False) -> str:
                    if not _STAMP_RE.match(ln))
 
 
-def aggregates(root: Path, cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def aggregates(root: Path, cfg: Dict[str, Any], *, warn_stale: bool = True
+               ) -> Dict[str, Dict[str, Any]]:
     """Each taxable account's filing aggregates from the books in
     work/ (the figures close-year locks); {} when they cannot be read
-    (the files that differ still tell)."""
+    (the files that differ still tell). `warn_stale`: as
+    report_model.resolve_gains_files."""
     from taxjson.bin.taxjson_filed import aggregates_from_gains
     from taxjson.lib.report_model import load_report_json, resolve_gains_files
     accounts = cfg.get("accounts") or {}
     year = (cfg.get("settings") or {}).get("year")
     out: Dict[str, Dict[str, Any]] = {}
     try:
-        files = resolve_gains_files(Path(root) / "work")
+        files = resolve_gains_files(Path(root) / "work",
+                                    warn_stale=warn_stale)
     except Exception:                                   # noqa: BLE001
         return out
     for acct, path in sorted(files.items()):
@@ -155,8 +158,8 @@ def aggregates(root: Path, cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str
-         ) -> Optional[Dict[str, Any]]:
+def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
+         warn_stale: bool = True) -> Optional[Dict[str, Any]]:
     """Snapshot reports/ into `dest` (replaced): dest/reports/<files>
     and dest/snapshot.json. None (nothing written, an old snapshot
     there kept) when reports/ holds no file; CompareError (nothing
@@ -178,7 +181,7 @@ def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str
            "taken": taken.isoformat(timespec="seconds"),
            "year": (cfg.get("settings") or {}).get("year"),
            "files": fp,
-           "accounts": aggregates(root, cfg),
+           "accounts": aggregates(root, cfg, warn_stale=warn_stale),
            "reports": sorted(files)}
     from taxjson.lib.safe_write import write_atomic
     dest = Path(dest)
@@ -250,9 +253,12 @@ def rotate_previous(root: Path, cfg: Dict[str, Any]) -> bool:
     """Called by a full `taxjson run` before it writes: the reports it
     is about to replace become the `prev` snapshot. True when kept;
     CompareError naming the path when reports/ cannot be read (the run
-    warns that the previous reports were not kept)."""
-    return take(Path(root), cfg, snap_dir(root, PREV), "previous run") \
-        is not None
+    warns that the previous reports were not kept). A wash file a `run
+    --account` left stale is not warned about: this run rebuilds it,
+    and the warnings said `taxjson run` to the run doing it (backlog
+    TJ-0154)."""
+    return take(Path(root), cfg, snap_dir(root, PREV), "previous run",
+                warn_stale=False) is not None
 
 
 def save(root: Path, cfg: Dict[str, Any], name: str) -> Dict[str, Any]:
@@ -324,14 +330,27 @@ def load(root: Path, cfg: Dict[str, Any], name: str
         year = (cfg.get("settings") or {}).get("year")
         lock = root / "filed" / f"{year}.json"
         rep = filed_reports_dir(root, year)
+        from taxjson.lib.project_layout import (lock_missing_frozen,
+                                                lock_missing_text)
+        if lock_missing_frozen(root, year):
+            # A frozen year whose lock was deleted: never "not closed"
+            # (backlog TJ-0263).
+            raise CompareError(lock_missing_text(year))
         if not lock.is_file():
             raise CompareError(f"{year} is not closed (no filed/{year}.json)"
                                f" — `taxjson close-year` keeps the reports "
                                f"as filed")
+        from taxjson.bin.taxjson_filed import LockProblem, read_lock
         try:
-            snap = json.loads(lock.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            raise CompareError(f"filed/{year}.json cannot be read: {e}")
+            # The one check every reader of a lock applies: a damaged
+            # lock, or one closed under the other country's law, is not
+            # the reports as filed (backlog TJ-0069).
+            snap = read_lock(lock, cfg.get("settings") or {},
+                             label=f"filed/{year}.json")
+        except LockProblem as e:
+            raise CompareError(str(e))
+        except ValueError as e:         # the project's own country
+            raise CompareError(f"filed/{year}.json cannot be checked: {e}")
         frozen = snap.get("frozen") if isinstance(snap, dict) else None
         if not isinstance(frozen, dict) or not rep.is_dir():
             raise CompareError(f"filed/{year}.json was closed before "
@@ -427,7 +446,8 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
     missing): what moved per account, which report files differ, which
     inputs changed, and with `details` a unified diff per report."""
     from taxjson.lib.checklist import (fingerprint_delta, frozen_files,
-                                       input_fingerprint)
+                                       input_fingerprint,
+                                       unrecorded_generated)
     root = Path(root)
     doc, rep = load(root, cfg, name)
     before = report_files(rep, f"filed/{doc.get('year')}/reports/"
@@ -450,6 +470,9 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
         # The frozen record holds the files only (the year's own lock
         # is no input it was filed from).
         old_fp, new_fp = frozen_files(old_fp), frozen_files(new_fp)
+        # A generated crypto_sends.tt an older freeze did not record
+        # (backlog TJ-0089).
+        new_fp = unrecorded_generated(root, old_fp, new_fp)
     _ch, _ad, _rm = fingerprint_delta(old_fp, new_fp)
     inputs = {"changed": _ch, "added": _ad, "removed": _rm,
               "same": len(old_fp) - len(_ch) - len(_rm)}

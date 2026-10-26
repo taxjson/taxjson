@@ -78,8 +78,9 @@ class TestNoPhantomCommands(unittest.TestCase):
 
     def test_no_taxjson_fees_console_script(self):
         # The console script is taxjson-fees-sum; the taxjson-fees alias
-        # was removed (CHANGELOG v0.15 era).
-        pat = re.compile(r"taxjson-fees(?!-sum)\b")
+        # was removed (CHANGELOG v0.15 era). `commands.md#taxjson-fees`
+        # is the `taxjson fees` section's anchor, not a script (TJ-0181).
+        pat = re.compile(r"(?<!#)taxjson-fees(?!-sum)\b")
         self.assertIsNone(pat.search(_unreleased()))
         for d in self.DOCS:
             self.assertIsNone(pat.search(_read(d)), d)

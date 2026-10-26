@@ -339,14 +339,28 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
         perm = float(g.get('permanently_disallowed', 0.0) or 0.0)
         deferred = float(dis or 0.0) - perm
         if deferred > 0.005:
+            if perm > 0.005:
+                # Part permanent: `adjust_*` may be the registered or
+                # affiliated trigger's (no ACB bump). The deferred part
+                # lands with the first taxable trigger in the window —
+                # on its date, or the loss sale's for a trigger bought
+                # before it (backlog TJ-0096).
+                ww = g.get('wash_window') or {}
+                tw = next((t for t in ww.get('transactions') or []
+                           if t.get('role') == 'trigger'
+                           and not t.get('sheltered')
+                           and not t.get('affiliated')), None)
+                day = (max(str(tw.get('date') or ''),
+                           str(ww.get('loss_date') or '')) if tw else "")
+                when = (f", on {day} ({tw.get('account', '')})" if tw
+                        else "")
+            else:
+                when = (f", on {wt['adjust_date']}" if 'adjust_date' in wt
+                        else "")
             out.append(
                 f"#   deferred {_fmt_money(deferred)}: added to the ACB of the "
                 f"replacement units in your taxable pool (recovered when "
-                f"they are sold)"
-                + (f"; first bump {_fmt_signed_money(wt['adjust_amount'])} "
-                   f"on {wt['adjust_date']}"
-                   if 'adjust_amount' in wt and perm > 0.005 else
-                   f", on {wt['adjust_date']}" if 'adjust_date' in wt else "")
+                f"they are sold)" + when
             )
         if perm > 0.005:
             # An affiliated person's purchase is permanent for THIS
@@ -667,6 +681,10 @@ def _trace_table(rows: List[str], w: int, indent: str
                                   " ".join(head[at + 1:]))
         else:
             action, qty, price = " ".join(head[1:-1]), head[-1], "-"
+        if action == "ADJUST":
+            # Its number is the amount (shown under COST+/-), never a
+            # quantity (backlog TJ-0113).
+            qty = "-"
         kv: Dict[str, str] = {}
         for c in cells[1:]:
             if ":" not in c:

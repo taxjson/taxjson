@@ -11,7 +11,7 @@
 #   scripts/ci.sh --mutation ...plus the mutation harness (an hour+;
 #                            mutates engine files in place — run it
 #                            alone, never alongside edits)
-#   scripts/ci.sh --quick    lint + suite (and no-extras) only
+#   scripts/ci.sh --quick    every stage but the fuzzers (no PASS record)
 #   scripts/ci.sh --release-edits
 #                            consistency + the tests that read the lines
 #                            release.sh rewrites (versions, CHANGELOG,
@@ -50,9 +50,21 @@ for a in "$@"; do case "$a" in
   --nightly) MODE=nightly ;; --mutation) MODE=mutation ;; --quick) MODE=quick ;;
   --release-edits) MODE=release-edits ;;
   --serial) SERIAL=--serial ;;
-  -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+  -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0"; exit 0 ;;   # the comment block above
   *) echo "unknown flag: $a" >&2; exit 2 ;;
 esac; done
+# The Python every stage runs: $PYTHON, else this clone's venv
+# (scripts/dev-setup.sh). Without it every stage would fail, and the lint
+# stage would blame a missing ruff — as in a fresh `git clone`, which has
+# no venv (AGENTS.md: the gate runs there with the dev venv's Python).
+if ! command -v "$PY" >/dev/null 2>&1; then
+  if [ -n "${PYTHON:-}" ]; then
+    echo "scripts/ci.sh: PYTHON=$PYTHON cannot be run — point it at a venv's python3 (one with the [dev] extra)." >&2
+  else
+    echo "scripts/ci.sh: no venv at ./venv (venv/bin/python3): run scripts/dev-setup.sh here, or set PYTHON=. In a fresh clone of a dev checkout: PYTHONPATH=\$PWD/src PYTHON=<dev checkout>/venv/bin/python3 scripts/ci.sh" >&2
+  fi
+  exit 2
+fi
 
 mkdir -p .ci
 SHA=$(git rev-parse --short HEAD 2>/dev/null || echo nogit)
@@ -65,12 +77,11 @@ stage() {   # stage NAME cmd...
   printf '\n== %s ==\n' "$name"
   if "$@"; then printf '   %s: ok\n' "$name"; else printf '   %s: FAILED\n' "$name"; FAILED+=("$name"); fi
 }
-finish() {  # the result line, the history log, the PASS record; exits
+finish() {  # the history log, the PASS record, the result line; exits
   ELAPSED=$(( $(date +%s) - START ))
   if [ ${#FAILED[@]} -eq 0 ]; then RESULT=PASS; else RESULT="FAIL(${FAILED[*]})"; fi
   LINE="$(date -u +%Y-%m-%dT%H:%M:%SZ) $SHA$DIRTY $MODE $RESULT ${ELAPSED}s"
   echo "$LINE" >> .ci/history.log
-  printf '\n%s\n' "$LINE"
   # The PASS record release.sh may reuse: a full gate, from a clean tree
   # that is still the same tree, of this tree's own code (not a taxjson
   # that PYTHONPATH or another install put first).
@@ -84,6 +95,9 @@ finish() {  # the result line, the history log, the PASS record; exits
       echo "   gate record: not written (the gate imported taxjson from ${PKG:-nowhere}, not this tree's src/)"
     fi
   fi
+  # The result line comes last in every mode: `scripts/ci.sh | tail -1`
+  # is the verdict (AGENTS.md; a pipe hides the exit status).
+  printf '\n%s\n' "$LINE"
   [ "$RESULT" = PASS ] && exit 0
   exit 1
 }
@@ -113,12 +127,19 @@ fi
 # 1. Lint, critical tier only (syntax errors, undefined names,
 #    misused comparisons) — the class of defect audits kept finding.
 #    A missing linter FAILS the stage (it used to print 'skipped' and
-#    the gate stayed green; release.sh tags on that). The [dev] extra
-#    installs ruff (S024-23).
+#    the gate stayed green; release.sh tags on that). scripts/dev-setup.sh
+#    installs the dev lock's ruff (requirements/dev.txt), the one CI's lint
+#    job installs; another version here is named (S024-23).
 if "$PY" -m ruff --version >/dev/null 2>&1; then
   stage lint "$PY" -m ruff check --select E9,F63,F7,F82 src/ tests/ packages/
+  RUFF_HERE="$("$PY" -m ruff --version 2>/dev/null | sed -n 's/^ruff //p')"
+  RUFF_LOCK="$(sed -n 's/^ruff==\([^ ;\\]*\).*/\1/p' requirements/dev.txt 2>/dev/null | head -1)"
+  if [ -n "$RUFF_LOCK" ] && [ "$RUFF_HERE" != "$RUFF_LOCK" ]; then
+    printf '   lint: note: ruff %s here, %s in requirements/dev.txt (what CI lints with): scripts/dev-setup.sh installs it\n' \
+      "${RUFF_HERE:-?}" "$RUFF_LOCK"
+  fi
 else
-  printf '\n== lint ==\n   lint: FAILED (ruff is not installed: pip install -e ".[dev]")\n'
+  printf '\n== lint ==\n   lint: FAILED (ruff is not installed in %s: scripts/dev-setup.sh installs the dev lock, requirements/dev.txt)\n' "$PY"
   FAILED+=("lint")
 fi
 

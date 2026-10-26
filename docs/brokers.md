@@ -19,6 +19,8 @@ broker; brokers rename menus often, so look for the report by its name.
 - **Any file name works.** taxjson recognises each export by its header
   ([How a file's broker is detected](#how-a-files-broker-is-detected)).
   Several files per account are fine: overlapping rows are read once.
+  Keep each download in a file of its own: two overlapping downloads
+  pasted into one file are refused.
 - **Don't edit the files.** Re-saving a CSV in a spreadsheet can drop
   columns or change dates and the encoding.
 - **Keep two positions reports with book cost** for each account (the

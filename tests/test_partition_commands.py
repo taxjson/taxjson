@@ -235,7 +235,9 @@ class TestRadarDateBasis(unittest.TestCase):
         r = _radar_both(book, "2025-03-12")
         for c in COUNTRIES:
             self.assertEqual(r[c]["ABC.US"]["category"], "COOLING")
-        self.assertEqual(r["canada"]["ABC.US"]["clears_at"], "2025-04-10")
+        # Canada: the window closes Wed 04-09, and a trade that day
+        # settles after it (CA-PLAN-05); the US: trade date + 31.
+        self.assertEqual(r["canada"]["ABC.US"]["clears_at"], "2025-04-09")
         self.assertEqual(r["usa"]["ABC.US"]["clears_at"], "2025-04-07")
 
 

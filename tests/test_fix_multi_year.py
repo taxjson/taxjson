@@ -218,7 +218,9 @@ class TestYearTools(unittest.TestCase):
         new = (top / "2026" / "taxjson.toml").read_text()
         self.assertRegex(new, r"(?m)^year\s+= 2026$")
         self.assertRegex(new, r'(?m)^prior_year_record\s+= "\.\./2025/filed/2025\.json"$')
-        self.assertIn("# other_income = 900", new)
+        # (in the template example's place, aligned: backlog TJ-0191)
+        self.assertRegex(new, r"(?m)^# other_income += 900$")
+        self.assertEqual(new.count("# other_income "), 1)
         self.assertNotIn("\nother_income", new)
         self.assertEqual((top / "2026" / "ticker.map").read_text(),
                          "TOBASE ZZB.US ZZB.TO\n")
@@ -255,7 +257,7 @@ class TestYearTools(unittest.TestCase):
         top = multi("canada", years=(2024, 2025))
         run_ok(self, top / "2024")
         doc = json.loads(tjs("years", "--json", cwd=top / "2024").stdout)
-        self.assertEqual(doc["schema_version"], 1)
+        self.assertEqual(doc["schema_version"], 2)
         self.assertEqual(doc["newest"], 2025)
         y = {r["year"]: r for r in doc["years"]}
         self.assertIsNotNone(y[2024]["last_run"])

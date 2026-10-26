@@ -898,11 +898,12 @@ def _timing_issues(cache: Path, cfg: Dict[str, Any],
 
 
 def _same_row(r: Dict[str, Any], x: Dict[str, Any],
-              account: Optional[str] = None) -> bool:
+              account: Optional[str] = None, amount: bool = True) -> bool:
     """A base row of this project (of taxjson account `account`) and a
     record's boundary row are the same row: account (when both name
     one: an older record's rows do not), action, symbol, own date,
-    quantity and amount."""
+    quantity and amount (`amount` False: any amount — the row as the
+    broker corrected it)."""
     if account and x.get("account") and x.get("account") != account:
         return False
     if str(r.get("action") or "").upper() != x.get("action") \
@@ -913,13 +914,17 @@ def _same_row(r: Dict[str, Any], x: Dict[str, Any],
     if not _qty_eq(float(r.get("quantity") or 0.0),
                    float(x.get("quantity") or 0.0)):
         return False
+    if not amount:
+        return True
     n, xn = float(r.get("net_amount") or 0.0), float(x.get("net") or 0.0)
     return abs(n - xn) <= max(0.01, 0.005 * abs(xn))
 
 
 def _boundary_issues(cache: Path, cfg: Dict[str, Any],
                      record: Dict[str, Any], basis: str,
-                     section2: set) -> List[Dict[str, Any]]:
+                     section2: set,
+                     notes: Optional[List[str]] = None
+                     ) -> List[Dict[str, Any]]:
     """Rows reported in neither year or in both because this project and
     the closed one date them on different sides of Dec 31 (see
     boundary_rows). Three cases:
@@ -930,7 +935,10 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
       (b) the closed books counted an income row in the closed year and
           this project counts it again in the next;
       (c) the closed project's inputs held an early-January row (an
-          overnight fill moved past Dec 31) that this project lacks."""
+          overnight fill moved past Dec 31) that this project lacks — a
+          row here of the same date and quantity at another amount (the
+          broker corrected the export) is that row: a note in `notes`,
+          not "in neither return" (backlog TJ-0014)."""
     settings = cfg.get("settings", {}) or {}
     ir = _income_rules(settings)
     ry = int(record["year"])
@@ -1016,6 +1024,25 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
         elif (xd > ye and xd <= date(ry + 1, 1, 10) and hit is None
               and not (a in _TRADES
                        and (_d(x.get("date")) or date.max) <= ye)):
+            fixed = None
+            for r in here:
+                if id(r) not in taken and _same_row(
+                        r, x, acct_of.get(id(r)), amount=False):
+                    eff = _eff_date(r, basis, ir)
+                    if eff is not None and eff > ye:
+                        fixed = r
+                        taken.add(id(r))
+                        break
+            if fixed is not None:
+                if notes is not None:
+                    notes.append(
+                        f"{x.get('symbol')} {a} dated {x.get('date')}: "
+                        f"{float(fixed.get('net_amount') or 0.0):,.2f} "
+                        f"here, {float(x.get('net') or 0.0):,.2f} when "
+                        f"the {ry} project read it (the export was "
+                        f"corrected) — both count it in {ry + 1}, so it "
+                        f"is in this return once.")
+                continue
             out.append({"symbol": x.get("symbol"), "action": a,
                         "date": x.get("date"), "tax_date": str(xd),
                         "amount": x.get("net"),
@@ -1028,9 +1055,13 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
 
 
 def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
-          opening: Dict[str, Any]) -> Dict[str, Any]:
+          opening: Dict[str, Any],
+          carried_back_to: Optional[Dict[int, float]] = None
+          ) -> Dict[str, Any]:
     """Compare a closed year's record with this project's books.
-    `opening` is `snapshot(...)` of THIS project at the record's Dec 31."""
+    `opening` is `snapshot(...)` of THIS project at the record's Dec 31.
+    `carried_back_to`: {year: the part of this project's net capital
+    loss carried back to it} (the carryover ledger's, Canada)."""
     cache = Path(root) / "work"
     settings = cfg.get("settings", {}) or {}
     ry = int(record["year"])
@@ -1134,10 +1165,14 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     parts.append(f"the {ry} return reported {filed_diff:+,.2f}"
                                  f" of gain on this security differently "
                                  f"from the {ry} books")
+                # The amend choice opens with the corrected cost (this
+                # project's), the as-filed one with the record's: it
+                # named the record's cost for both (backlog TJ-0144).
                 parts.append(
                     f"choose one: keep {ry} as filed and open with the "
-                    f"cost that return implied, or amend {ry} and open "
-                    f"with {p['acb']:,.2f}; never both")
+                    f"cost that return implied ({p['acb']:,.2f}), or "
+                    f"amend {ry} and open with {n['acb']:,.2f}; never "
+                    f"both")
                 item["why"] = "; ".join(parts) + "."
             issues["positions"].append(item)
 
@@ -1351,7 +1386,8 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
         issues["boundary"] = _boundary_issues(
             cache, cfg, record, basis,
             {str(here[i].get("id")) for i in used_here
-             if here[i].get("id") not in (None, "")})
+             if here[i].get("id") not in (None, "")},
+            issues["notes"])
     else:
         issues["notes"].append(
             f"The {ry} record predates the Dec-31 row list: income or a "
@@ -1362,7 +1398,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     # 5. Carry-forwards: this project's inputs vs what the closed year
     # carried forward (tax-logic CA-CARRY-05, US-CARRY-03).
     from taxjson.lib.carryforward import handoff_issues
-    issues["carry"] = handoff_issues(root, cfg, record)
+    issues["carry"] = handoff_issues(root, cfg, record, carried_back_to)
     if record.get("carryforwards") is None:
         issues["notes"].append(
             f"The {ry} record predates the carry-forward record (net "
@@ -1384,14 +1420,19 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                              "boundary", "carry", "partial"))}
 
 
-def render(rep: Dict[str, Any], record_path: str) -> List[str]:
+def render(rep: Dict[str, Any], record_path: str,
+           project_year: Optional[int] = None) -> List[str]:
     """The console report in the house style (docs/output-style.md): a
     section per check — its findings as `- ` items, each with its why
-    indented under it — then the notes and a one-line verdict."""
+    indented under it — then the notes and a one-line verdict.
+    `project_year` is this project's year: a record two years back
+    (`--prior`) opened "into 2024 (this project)" in a 2025 project
+    (backlog TJ-0115)."""
     import sys
     from taxjson.lib.out import label, wrap
     y = rep["year"]
-    L = [f"HAND-OFF CHECK — {y} (closed) into {y + 1} (this project)"]
+    py = project_year or y + 1
+    L = [f"HAND-OFF CHECK — {y} (closed) into {py} (this project)"]
     import os as _os
     L += wrap(f"Record: {_os.path.normpath(str(record_path))}")
     L.append("")

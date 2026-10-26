@@ -38,6 +38,7 @@ overwrites whatever it points at — a file outside the project too.
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import stat
 import tempfile
@@ -105,6 +106,36 @@ def publish(tmp: Union[str, Path], final: Union[str, Path], *,
     os.replace(str(tmp), str(final))
 
 
+class ReadOnlyFileError(PermissionError):
+    """A user file to rewrite that this user may not write: refused,
+    nothing written (refuse_read_only)."""
+
+
+# The reason a ReadOnlyFileError gives, and its fix.
+READ_ONLY = "the file is read-only"
+READ_ONLY_FIX = "`chmod u+w {shown}` lets taxjson rewrite it"
+
+
+def refuse_read_only(path: Union[str, Path]) -> None:
+    """Raise ReadOnlyFileError when `path` is a regular file this user
+    may not write: one made read-only (`chmod a-w`) to keep it as it
+    is — a filed year's taxjson.toml. The rename that replaces a file
+    ignores the file's own mode, and keep_mode put the 0444 back, so it
+    was rewritten without a word (backlog TJ-0107); an editor asks
+    first. A missing file, a symlink (its writer resolves it first) and
+    a file this user can write pass."""
+    p = str(path)
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return
+    if stat.S_ISREG(st.st_mode) and not os.access(p, os.W_OK):
+        raise ReadOnlyFileError(
+            errno.EACCES,
+            f"{READ_ONLY} ({READ_ONLY_FIX.format(shown=Path(p).name)})",
+            p)
+
+
 def temp_name(final: Union[str, Path], suffix: str = ".part") -> Path:
     final = Path(final)
     return final.with_name(final.name + suffix)
@@ -121,8 +152,12 @@ def atomic_open(final: Union[str, Path], *, binary: bool = False,
     block ends cleanly. On an exception the temp is removed and `out`
     keeps its previous contents. Overlapping writers of one `out` never
     see each other's temp file: each publishes only its own complete
-    data, and the last rename wins."""
+    data, and the last rename wins. keep_mode (a file the user keeps:
+    see publish) also refuses to replace one this user may not write
+    (refuse_read_only: ReadOnlyFileError, nothing written)."""
     final = Path(final)
+    if keep_mode:
+        refuse_read_only(final)
     fd, name = tempfile.mkstemp(prefix=final.name + ".", suffix=suffix,
                                 dir=str(final.parent))
     tmp = Path(name)
@@ -135,15 +170,43 @@ def atomic_open(final: Union[str, Path], *, binary: bool = False,
         raise
     done = False
     try:
-        with f:
+        try:
             yield f
-            f.flush()
-            os.fsync(f.fileno())
+        except BaseException as e:
+            # The block failed: its exception is the error. Closing the
+            # temp can fail too (a full disk, a file-size limit) — the
+            # temp is removed below, so that second error must not
+            # replace the first: it hid a failed stage behind a bare
+            # "[Errno 27] File too large" (backlog TJ-0106).
+            _name_full_disk(e, final)
+            try:
+                f.close()
+            except OSError:
+                pass
+            raise
+        try:
+            with f:
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError as e:
+            _name_full_disk(e, final)
+            raise
         publish(tmp, final, keep_mode=keep_mode)
         done = True
     finally:
         if not done:
             discard(tmp)
+
+
+def _name_full_disk(exc: BaseException, final: Path) -> None:
+    """A write a full disk (or a quota, a file-size limit) refused raises
+    an OSError that names no file: it is given the final file's name, so
+    its message says which file could not be written (backlog TJ-0106).
+    Any other exception is left as it is."""
+    if (isinstance(exc, OSError) and not exc.filename
+            and exc.errno in (errno.ENOSPC, errno.EFBIG,
+                              getattr(errno, "EDQUOT", errno.ENOSPC))):
+        exc.filename = str(final)
 
 
 def write_atomic(final: Union[str, Path], data: Union[str, bytes], *,
@@ -322,7 +385,8 @@ def write_user_file(path: Union[str, Path], data: Union[str, bytes],
     (OutsideLinkError, nothing written); a link inside it is followed —
     the link stays and its target is replaced; the previous contents are
     kept by backup_copy (when `backup` and there were any); the new file
-    keeps the replaced file's permission bits (keep_mode). Returns the
+    keeps the replaced file's permission bits (keep_mode); a file this
+    user may not write is refused (ReadOnlyFileError). Returns the
     backup's path, or None."""
     path = Path(path)
     target = link_outside(path, root)
@@ -333,6 +397,9 @@ def write_user_file(path: Union[str, Path], data: Union[str, bytes],
             f"run in the folder that holds the real file")
     if path.is_symlink():
         path = path.resolve()
+    # A file made read-only is refused before a backup is taken
+    # (ReadOnlyFileError, nothing written; backlog TJ-0107).
+    refuse_read_only(path)
     bak = None
     if backup and path.is_file():
         bak = backup_copy(path)

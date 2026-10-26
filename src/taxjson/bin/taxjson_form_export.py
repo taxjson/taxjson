@@ -1354,8 +1354,9 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
     lines += _item("Apply the inclusion rate on Schedule 3 itself; these "
                    "are 100% amounts.")
     lines += _item("PROCEEDS re-adds sell-side commissions so OUTLAYS can "
-                   "be shown separately (a commission rebate stays netted "
-                   "in PROCEEDS); the gain is unchanged.")
+                   "be shown separately (a commission rebate, and a short "
+                   "sale's opening commission, stay netted in PROCEEDS); "
+                   "the gain is unchanged.")
     lines += _rounding_note(rep)
     lines += _item("FX gains on foreign cash (s.39(1.1), `taxjson "
                    "fx-cash`) are not in these rows; T4037 puts them on "

@@ -104,7 +104,15 @@ def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None
         # it pointed at). newline="": the text keeps the line endings
         # pandas wrote, as its path writer does.
         from taxjson.lib.safe_write import write_atomic
-        write_atomic(output_file, df.to_csv(index=False), newline="")
+        try:
+            write_atomic(output_file, df.to_csv(index=False), newline="")
+        except OSError as e:
+            # The file asked for, not the temp staged beside it, and
+            # what to do (backlog TJ-0056).
+            head, fix = cli_diag.cannot_write(output_file, e,
+                                              alt=", or choose another -o")
+            cli_diag.error(PROG, head, [fix] if fix else ())
+            sys.exit(2)
         print(f"Successfully converted to {output_file!r}.", file=sys.stderr)
     else:
         df.to_csv(sys.stdout, index=False, encoding='utf-8')

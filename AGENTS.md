@@ -19,15 +19,15 @@ user's own machine. Python 3.10+, `src/taxjson/`; the CLI is `taxjson` (`tjs`).
 2. **`docs/troubleshooting.md`: known problems.** Search it for the exact
    message text. Each entry says how to **check** it, the cause, the fix,
    the release that **fixed** it (newer than `tjs --version`: upgrade) and
-   the code. Bugs an upgrade alone fixes, and breaking changes:
-   `docs/upgrading.md`.
+   the code; bugs an upgrade fixes stay listed. What an upgrade asks of
+   the user (figures a re-run changes, breaking changes): `docs/upgrading.md`.
 3. **Settings:** `docs/settings.md` (every taxjson.toml key). **Tax
    rules:** `docs/tax-rules.md`; the spec is `tjs tax-logic` (`--ids`).
    Commands: `docs/commands.md`; downloads: `docs/brokers.md`; out of
    scope: `docs/limits.md`; terms: `docs/glossary.md`; a first project:
    `docs/getting-started.md`; the year end: `docs/filing.md`.
 4. **Where the code is:** `docs/architecture-map.md`. Don't read
-   `src/taxjson/bin/taxjson_run.py` (28k lines) top to bottom: search it for
+   `src/taxjson/bin/taxjson_run.py` (31k lines) top to bottom: search it for
    the `cmd_<command>` or `stage_` name the map gives.
 
 **Privacy.** Work from tjs command output. Never read the raw CSVs in a
@@ -59,21 +59,21 @@ IRS guidance and a tax professional.
 - **The gate:** `scripts/ci.sh` (lint, consistency, tax-rules, PII, suite in
   parallel, no-extras, fuzzers; `--quick` skips the fuzzers). Read its last
   line for PASS: a pipe hides the exit status. One module: `cd tests &&
-  TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing, run the gate in
-  a fresh `git clone` (it catches untracked files), then the publish kit's
-  checks there: `python3 -I scripts/kit_checks.py` (CI's `kit-checks` job; a
-  hit is fixed, or excepted in `kit-checks.toml` with a reason and an expiry).
+  TAXJSON_WIDTH=0 python -m unittest test_x`. Before pushing, in a fresh `git clone`
+  (it catches untracked files): `PYTHONPATH=$PWD/src PYTHON=<dev clone>/venv/bin/python3 scripts/ci.sh`,
+  then `python3 -I scripts/kit_checks.py` (CI's `kit-checks` job; a hit is fixed, or
+  excepted in `kit-checks.toml` with a reason and an expiry).
 - **Landing and releasing** (`docs/releasing.md`): `origin` is the private dev
   repo; only the publisher changes the public one, a day after a release tag.
   Commit, then `scripts/land.sh` (PII gate, PR, merged on green CI; never
   `--no-verify`). Release: `scripts/release.sh vX.Y.Z --prepare`, then, once
   CI passed, `scripts/release.sh vX.Y.Z`; once published, `scripts/promote.sh`.
+  Known bugs and tasks: `backlog.md` (TJ ids; dev repo only, not published).
 - **Conventions the tests and hooks enforce:**
   - Canadian and US law never mix. Read the country only through
     `src/taxjson/lib/country.py`. `tjs tax-logic` is the spec: a tax change
-    edits its `Rule` in `src/taxjson/lib/tax_logic.py`, and the test cites
-    it with `@rule("CA-...")` (`tests/tax_rules/`; checked by
-    `scripts/check_tax_rules.py`).
+    edits its `Rule` in `src/taxjson/lib/tax_logic.py`, and the test cites it
+    with `@rule("CA-...")` (`tests/tax_rules/`; `scripts/check_tax_rules.py`).
   - No personal data in the repo (pre-push: `scripts/check-pii.sh`). A money
     amount with thousands separators and cents added to a doc, CHANGELOG or
     comment stays under 1,000 or carries a `pii-ok` marker on its line.
@@ -99,12 +99,12 @@ IRS guidance and a tax professional.
 
 `docs/troubleshooting.md`, `docs/architecture-map.md`, `docs/tax-rules.md`,
 `docs/settings.md` and the user pages above. Keep it true: a fix for a problem
-users can still hit adds or updates its troubleshooting entry (Fixed in:
-`unreleased`; the release script fills it in); one only an upgrade fixes gets
-a line in `docs/upgrading.md`; moved code updates the map. A code reference:
-`` `path` — `sym1`, `sym2` `` (repo-relative path; each symbol an identifier
-or literal fragment in that file). `tests/test_knowledge_pack.py` fails on a
-missing file or symbol, an unknown `tjs` command, a "Fixed in" that is not a
-CHANGELOG release, or anything that looks like personal data.
+users can hit adds or updates its troubleshooting entry (Fixed in: `unreleased`;
+the release script fills it in); one that moves a figure or asks something of
+users also goes in `docs/upgrading.md`; moved code updates the map. A code
+reference: `` `path` — `sym1`, `sym2` `` (repo-relative path; each symbol an
+identifier or literal fragment in that file). `tests/test_knowledge_pack.py`
+fails on a missing file or symbol, an unknown `tjs` command, a "Fixed in" that
+is not a CHANGELOG release, or anything that looks like personal data.
 `tests/test_settings_doc.py` fails when a taxjson.toml key, a project-file
 keyword or a tax-logic rule is missing from settings.md or tax-rules.md.

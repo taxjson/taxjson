@@ -149,8 +149,8 @@ what it sends: [SECURITY.md](SECURITY.md#network-access-and-data-egress).
 1. **`tjs checklist --run`** in your project: the next step and its
    command (`tjs checklist` alone: the last run's verdicts, in a second).
 2. **A message you don't understand:** search
-   [docs/troubleshooting.md](docs/troubleshooting.md) for its text; on an
-   older release, also [docs/upgrading.md](docs/upgrading.md#problems-an-upgrade-fixes).
+   [docs/troubleshooting.md](docs/troubleshooting.md) for its text; an
+   entry fixed in a release newer than `tjs --version` is fixed by upgrading.
 3. **A bug:** open an issue with the
    [bug-report template](.github/ISSUE_TEMPLATE/bug_report.md). Never
    attach a raw export. Reproduce the problem on a made-up file (copy the
@@ -172,7 +172,7 @@ what it sends: [SECURITY.md](SECURITY.md#network-access-and-data-egress).
 | [Glossary](docs/glossary.md) | ACB, superficial loss, TOBASE, journal … |
 | [Limits](docs/limits.md) | what taxjson does not do; Canada vs US status |
 | [Troubleshooting](docs/troubleshooting.md) | a message, its cause and the fix |
-| [Upgrading](docs/upgrading.md) | channels, breaking changes, fixes by release |
+| [Upgrading](docs/upgrading.md) | channels, what each release asks of you |
 | [Known issues](KNOWN_ISSUES.md) | open bugs |
 | [Security](SECURITY.md) | network egress, files on disk, reporting a vulnerability |
 | [Contributing](CONTRIBUTING.md) | development setup, tests, adding a broker |
@@ -247,7 +247,7 @@ country's commands (`taxjson help --all` lists them). Every command takes
 | [`taxjson dil`](docs/commands.md#taxjson-dil) | Payments in lieu of dividends over a window |
 | [`taxjson divs`](docs/commands.md#taxjson-divs) | Dividends over a window |
 | [`taxjson events`](docs/commands.md#taxjson-events) | Every transaction over a window |
-| [`taxjson fees`](docs/commands.md#row-listings) | Fees per trade over a window |
+| [`taxjson fees`](docs/commands.md#taxjson-fees) | Fees per trade over a window |
 | [`taxjson gains`](docs/commands.md#taxjson-gains) | Realized gains in the trade's own currency |
 | [`taxjson leaps`](docs/commands.md#taxjson-leaps) | Closed LEAPS positions |
 | [`taxjson roc`](docs/commands.md#taxjson-roc) | Return-of-capital and other cost adjustments |

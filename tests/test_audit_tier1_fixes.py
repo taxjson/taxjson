@@ -175,15 +175,31 @@ def _tx(date, sym, qty, net, account="margin"):
 
 class TestWashRadarDst(unittest.TestCase):
     def test_day30_across_fallback_still_in_window(self):
-        # Loss sale 2026-10-04; 2026-11-03 is day 30 and the window spans the
+        # Loss 2026-10-04; 2026-11-03 is day 30 and the window spans the
         # Nov 1 DST fall-back. Pre-fix the local-epoch math aged it out a day
-        # early and the row vanished.
-        txs = [_tx("2026-09-01", "DST.TO", 100, 1000.0),
-               _tx("2026-10-04", "DST.TO", -100, 500.0)]     # loss, fully out
+        # early and the row vanished. A coin settles on its trade date, so
+        # a buy on day 30 is still inside the window.
+        txs = [_tx("2026-09-01", "DSTC", 100, 1000.0),
+               _tx("2026-10-04", "DSTC", -100, 500.0)]       # loss, fully out
         out = _radar(txs, "2026-11-03")
-        line = next((l for l in radar_rows(out) if l.startswith("DST.TO")), "")
+        line = next((l for l in radar_rows(out) if l.startswith("DSTC")), "")
         self.assertTrue(line, "day-30 loss must still be reported:\n" + out)
         self.assertIn("COOLING", line)
+
+    def test_share_loss_across_fallback_until_reentry(self):
+        # The same loss on a T+1 listing: a buy on day 29 (Mon 11-02)
+        # settles on day 30, inside the window; one on day 30 settles
+        # after it, so the loss stops blocking that day (backlog TJ-0186,
+        # CA-PLAN-05).
+        txs = [_tx("2026-09-01", "DST.TO", 100, 1000.0),
+               _tx("2026-10-04", "DST.TO", -100, 500.0)]     # loss, fully out
+        out = _radar(txs, "2026-11-02")
+        line = next((l for l in radar_rows(out) if l.startswith("DST.TO")), "")
+        self.assertTrue(line, "day-29 loss must still be reported:\n" + out)
+        self.assertIn("COOLING", line)
+        out = _radar(txs, "2026-11-03")
+        line = next((l for l in radar_rows(out) if l.startswith("DST.TO")), "")
+        self.assertNotIn("COOLING", line)
 
     def test_locked_buy_day30_across_fallback_not_clear(self):
         # Buy 2026-10-04 still held on 2026-11-03 (day 30): selling at a loss

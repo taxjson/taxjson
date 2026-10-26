@@ -45,10 +45,100 @@ def note(prog: str, msg: str, details=()) -> None:
 # JSON used to surface as a traceback (exit 1) in a dozen tools while their
 # siblings printed `no such file` and exited 2.
 
+def _no_space_errnos() -> frozenset:
+    import errno
+    return frozenset(e for e in (errno.ENOSPC, errno.EFBIG,
+                                 getattr(errno, "EDQUOT", None))
+                     if e is not None)
+
+
+# A write that failed for want of room: a full disk (ENOSPC), a quota
+# (EDQUOT) or a file-size limit (EFBIG, `ulimit -f`).
+NO_SPACE_ERRNOS = _no_space_errnos()
+# Their fix, said after the headline (backlog TJ-0106).
+NO_SPACE_FIX = "free some space on the disk and run again"
+
+
+def is_no_space(exc: BaseException) -> bool:
+    """True for an OSError a full disk, a quota or a file-size limit
+    raised."""
+    return isinstance(exc, OSError) and exc.errno in NO_SPACE_ERRNOS
+
+
+def no_space_text(exc: OSError, what=None) -> str:
+    """`cannot write <what>: No space left on device (disk full?)`; with
+    no `what` (a write to stdout, which has no file name) the file the
+    exception names, else "the output"."""
+    if what is None and getattr(exc, "filename", None):
+        what = _shown_here(exc.filename)
+    what = what or "the output"
+    return f"cannot write {what}: {exc.strerror or exc} (disk full?)"
+
+
+def _shown_here(path) -> str:
+    """`path` relative to the folder the command was run in when it is
+    inside it, else as given."""
+    from pathlib import Path
+    from taxjson.lib.out import relpath
+    return relpath(path, Path.cwd())
+
+
+def cannot_write(shown, exc: OSError, path=None, *, alt: str = ""):
+    """(headline, fix) for an output that could not be written:
+    `cannot write <shown>: <reason>`, naming the file asked for — never
+    the temporary or backup file beside it — and what to do: free some
+    space, or make the folder (or the file) writable; `alt` is appended
+    to the fix (", or choose another -o"). `path`: the file on disk
+    (default `shown`). It was "[Errno 13] Permission denied:
+    '<out>.x1y2.part'" (backlog TJ-0056)."""
+    import errno
+    import os
+    from pathlib import Path
+    from taxjson.lib.safe_write import (READ_ONLY, READ_ONLY_FIX,
+                                        ReadOnlyFileError)
+    head = f"cannot write {shown}: {exc.strerror or exc}"
+    if is_no_space(exc):
+        return f"{head} (disk full?)", f"Free some space on the disk{alt}."
+    if exc.errno == errno.EROFS:
+        return head, f"The disk it is on is mounted read-only{alt}."
+    if exc.errno not in (errno.EACCES, errno.EPERM):
+        return head, ""
+    folder = Path(path if path is not None else shown).parent
+    if (isinstance(exc, ReadOnlyFileError)
+            or os.access(folder, os.W_OK | os.X_OK)):
+        # The file itself (the folder can be written).
+        return (f"cannot write {shown}: {READ_ONLY}",
+                f"{READ_ONLY_FIX.format(shown=shown)}{alt}.")
+    fs = str(Path(str(shown)).parent)
+    if fs == ".":
+        return head, f"This folder is not writable: `chmod u+w .`{alt}."
+    return head, (f"The folder {fs.rstrip('/')}/ is not writable: "
+                  f"`chmod u+w {fs}`{alt}.")
+
+
 class InputReadError(OSError):
     """An input file that exists but cannot be read as text (not UTF-8).
     An OSError, not a ValueError: the tools' data-error handlers (exit 1)
     must not swallow it — it is an environment error, exit 2."""
+
+
+def utf8_fix(path) -> str:
+    """What to do about a text input that is not UTF-8: a file the
+    person types (a .tt, ticker.map, taxjson.toml, a JSON they edit) is
+    saved again as UTF-8; an export is downloaded again too — a
+    hand-typed .tt was told to "re-export it" (backlog TJ-0123)."""
+    from pathlib import Path
+    typed = Path(str(path)).suffix.lower() in (".tt", ".map", ".toml",
+                                               ".txt", ".json")
+    return ("save it as UTF-8 in your editor" if typed
+            else "re-export it, or save it as UTF-8 in your editor")
+
+
+def not_utf8_headline(shown, exc: UnicodeDecodeError) -> str:
+    """`<shown>: not UTF-8 text (byte 0xNN at offset N)`: the headline
+    of the message (the fix: utf8_fix)."""
+    return (f"{shown}: not UTF-8 text (byte 0x{exc.object[exc.start]:02x} "
+            f"at offset {exc.start})")
 
 
 def not_utf8(path, exc: UnicodeDecodeError) -> InputReadError:
@@ -57,10 +147,8 @@ def not_utf8(path, exc: UnicodeDecodeError) -> InputReadError:
     ticker.map or a cp1252 re-saved broker export printed a traceback
     (or a one-liner) that never said WHICH file (audits S024-03 /
     S053-06)."""
-    return InputReadError(
-        f"{path}: not UTF-8 text (byte 0x{exc.object[exc.start]:02x} at "
-        f"offset {exc.start}) — re-export it, or save it as UTF-8 in "
-        f"your editor")
+    return InputReadError(f"{not_utf8_headline(path, exc)} — "
+                          f"{utf8_fix(path)}")
 
 
 def read_text_utf8(path, encoding: str = "utf-8-sig") -> str:
@@ -178,11 +266,34 @@ def _stdout_closed_exit() -> None:
     raise SystemExit(BROKEN_PIPE_EXIT)
 
 
-def _flush_stdout() -> None:
+def _flush_stdout(prog=None) -> None:
+    """Flush stdout at the top of the process. `prog`: the command
+    succeeded, so output a full disk refused is its error (exit 2);
+    without it the command is already failing and has said why."""
     try:
         sys.stdout.flush()
     except BrokenPipeError:
         _stdout_closed_exit()
+    except OSError as e:
+        if is_no_space(e):
+            # Pointed at /dev/null, so the interpreter's own flush at
+            # exit cannot fail again ("Exception ignored ...", exit 120).
+            _stdout_to_devnull()
+            if prog is not None:
+                error(prog, describe_input_error(e))
+                raise SystemExit(2)
+    except (ValueError, AttributeError):
+        pass
+
+
+def _stdout_to_devnull() -> None:
+    """Point this process's stdout at /dev/null (top of the process
+    only: run_top_level)."""
+    import os
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
     except (OSError, ValueError, AttributeError):
         pass
 
@@ -223,7 +334,7 @@ def run_top_level(prog, fn, *a, interrupt_note="", **kw):
         # included (lib/out.show, docs/output-style.md).
         with _out.settling_streams():
             r = fn(*a, **kw)
-        _flush_stdout()
+        _flush_stdout(prog() if callable(prog) else prog)
         return r
     except SystemExit as e:
         if e.code is not None and not isinstance(e.code, int):
@@ -255,12 +366,23 @@ def describe_input_error(exc: BaseException) -> str:
     fn = getattr(exc, "filename", None)
     if isinstance(exc, (InputReadError, OutputWriteError)):
         return str(exc)
+    if is_no_space(exc):
+        # A full disk: a write failed — often to stdout, which a stage's
+        # caller redirects to a work/ file, and an OSError for that names
+        # no file. It was the bare "[Errno 27] File too large" (backlog
+        # TJ-0106); `taxjson run` names the work/ file.
+        return f"{no_space_text(exc)} — {NO_SPACE_FIX}"
     if isinstance(exc, FileNotFoundError):
         return f"no such file: {fn}"
     if isinstance(exc, IsADirectoryError):
         return f"cannot read {fn}: is a directory"
     if isinstance(exc, NotADirectoryError):
         return f"no such file: {fn}"
+    from taxjson.lib.safe_write import ReadOnlyFileError
+    if isinstance(exc, ReadOnlyFileError):
+        # A user file made read-only, refused (lib/safe_write; TJ-0107).
+        h, fix = cannot_write(_shown_here(fn), exc)
+        return f"{h} — {fix[:-1]}"
     if isinstance(exc, PermissionError):
         return f"permission denied: {fn}"
     if isinstance(exc, UnicodeDecodeError):
@@ -310,8 +432,19 @@ def guard_main(prog: str, *, value_errors: bool = False):
             try:
                 try:
                     r = fn(*a, **kw)
-                except SystemExit:
-                    _guard_flush()
+                except SystemExit as e:
+                    try:
+                        _guard_flush()
+                    except BrokenPipeError:
+                        raise
+                    except OSError:
+                        # Already failing (an inner guard said why: the
+                        # tools' main is guarded, and so is the entry
+                        # that runs it): the output that cannot be
+                        # flushed — a full disk — is not said again
+                        # (backlog TJ-0106).
+                        if e.code in (None, 0):
+                            raise
                     raise
                 _guard_flush()      # a broken pipe surfaces here, not
                 return r            # at interpreter exit (exit 120)

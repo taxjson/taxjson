@@ -185,6 +185,11 @@ class Book:
         from taxjson.lib.pipeline import option_timing_from_settings
         _kw = option_timing_from_settings(settings) or {}
         self.timing = _kw.get("option_premium_timing", "close")
+        # Canada: whether a written option's loss is tested (CA-SL-12)
+        # or exempt (CA-SL-11); the gains files' summary says what the
+        # engine ran with.
+        self.buyback_superficial = bool(
+            _kw.get("option_buyback_loss_superficial"))
         accounts = cfg.get("accounts") or {}
         self.taxable = sorted(n for n, a in accounts.items()
                               if isinstance(a, dict)
@@ -213,9 +218,19 @@ class Book:
         _walk(self.txs, self.bdate, pre=self.pre_pos)
         self.gains: List[Dict[str, Any]] = []
         self.inventory: List[Dict[str, Any]] = []
+        # The pools at the end of the project year: the Canadian
+        # engine's inventory_year_end; a gains file without it (the US
+        # engine's, or one written before it) gives its final inventory,
+        # marked `_year_end` False (backlog TJ-0282).
+        self.year_end_pools: List[Dict[str, Any]] = []
         resolved = resolve_gains_files(self.cache, None) or {}
         for acct, f in resolved.items():
             doc = _work_doc(Path(f))
+            _summ = doc.get("summary")
+            if (isinstance(_summ, dict)
+                    and "option_buyback_loss_superficial" in _summ):
+                self.buyback_superficial = bool(
+                    _summ["option_buyback_loss_superficial"])
             for t in doc.get("transactions") or []:
                 if t.get("gain") is None or t.get("action"):
                     continue
@@ -228,6 +243,13 @@ class Book:
                 h = dict(h)
                 h["_acct"] = h.get("account") or acct
                 self.inventory.append(h)
+            _ye = doc.get("inventory_year_end")
+            for h in (_ye if isinstance(_ye, list)
+                      else doc.get("inventory") or []):
+                if isinstance(h, dict):
+                    self.year_end_pools.append(dict(
+                        h, _acct=h.get("account") or acct,
+                        _year_end=isinstance(_ye, list)))
 
     def _missing_history(self):
         """The (symbol, account) pairs the accounts' .tt OPENING
@@ -688,6 +710,7 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
             perm = float(g.get("permanently_disallowed") or 0)
             acq = ", ".join(f"{r['_acct']} {book.wdate(r)} +{float(r.get('quantity') or 0):g}"
                             for r in other_side[:4])
+            allowed_by = None
             if denied > 0.005:
                 verdict = (f"denied {denied:,.2f}"
                            + (f" ({perm:,.2f} permanently, "
@@ -695,17 +718,13 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
                               f"replacement)" if perm > 0.005 else
                               f"; added to the replacement's cost, so it "
                               f"comes back when that lot is sold"))
-            elif book.usa:
-                verdict = ("allowed (the engine matched none of those "
-                           "purchases as a replacement: it was the lot "
-                           "sold, or an earlier loss used it)")
             else:
-                verdict = "allowed (the replacement was not still held on day 30, " \
-                          "or it was sold before the window closed)"
+                allowed_by, verdict = _allowed_why(book, g, hi)
             out.append({"account": g["_acct"], "symbol": g.get("symbol"),
                         "loss_date": str(ld),
                         "raw_loss": round(float(g.get("raw_gain") or 0), 2),
                         "denied": round(denied, 2), "permanent": round(perm, 2),
+                        "allowed_by": allowed_by,
                         "other_year_acquisitions": acq,
                         "why": (f"a {ty.year} loss whose window runs "
                                 f"{lo}..{hi}, across Dec 31 {yy}: acquisitions "
@@ -715,19 +734,72 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
     return out
 
 
+def _allowed_why(book: Book, g: Dict[str, Any], day30: date
+                 ) -> Tuple[str, str]:
+    """(allowed_by, verdict) for a loss the engine denied nothing of,
+    from what the books show, never a guess (backlog TJ-0283): a .tt
+    ALLOWLOSS position, a written option's exempt loss (Canada,
+    CA-SL-11), an in-kind contribution's loss denied by s.40(2)(g)(iv)
+    instead (CA-INKIND-03), nothing held at the end of day 30 (Canada,
+    CA-SL-02); otherwise no reason is claimed."""
+    from taxjson.lib.trace_format import filing_position_text
+    fp = filing_position_text(g, book.country)
+    if fp:
+        return "filing_position", f"allowed by your {fp}"
+    if book.usa:
+        return "unknown", ("allowed (the engine matched none of those "
+                           "purchases as a replacement: it was the lot "
+                           "sold, or an earlier loss used it)")
+    sym = g.get("symbol") or ""
+    if (_is_option(sym) and g.get("direction") == "SHORT"
+            and not book.buyback_superficial):
+        return "buyback_exempt", (
+            "allowed: a written option's loss is exempt from the rule "
+            "(option_buyback_loss_superficial = false), so its window is "
+            "not tested")
+    dc = float(g.get("denied_contribution") or 0)
+    if dc > 0.005:
+        return "in_kind_contribution", (
+            f"not a superficial loss: an in-kind contribution to a "
+            f"registered plan, whose loss ({dc:,.2f}) s.40(2)(g)(iv) "
+            f"denies for good")
+    held = _held_at(book, sym, day30)
+    if abs(held) <= 1e-9:
+        return "not_held_day30", (f"allowed: no units were held at the end "
+                                  f"of day 30 ({day30})")
+    return "unknown", (f"no denial applied by the engine ({held:g} units "
+                       f"were held at the end of day 30, {day30}; the books "
+                       f"do not record why)")
+
+
 def deferred_into_next_year(book: Book) -> List[Dict[str, Any]]:
+    """The denied losses in the cost of units held at the end of the
+    project year (`as_of` that day): the engine's year-end pools, so a
+    later sale or purchase does not change them. A gains file without
+    them gives its final inventory, `as_of` "end_of_data", and the text
+    says so (backlog TJ-0282)."""
     out = []
-    for h in book.inventory:
+    for h in book.year_end_pools:
         dw = float(h.get("deferred_wash") or 0)
         if dw > 0.005 and book.wanted(h["_acct"]):
+            qty = float(h.get("qty") or 0)
+            if h["_year_end"]:
+                held = (f"still held at the end of {book.year}"
+                        + (" (by settlement date)"
+                           if book.basis == "trade" else ""))
+            else:
+                held = (f"held at the end of the books, which may be after "
+                        f"{book.year}" + ("" if book.usa else
+                                          " (re-run `tjs run` for the "
+                                          "year-end figure)"))
             out.append({"account": h["_acct"], "symbol": h.get("symbol"),
-                        "qty": float(h.get("qty") or 0),
-                        "deferred": round(dw, 2),
+                        "qty": qty, "deferred": round(dw, 2),
+                        "as_of": (f"{book.year}-12-31" if h["_year_end"]
+                                  else "end_of_data"),
                         "why": (f"{dw:,.2f} of denied losses sits in the cost "
-                                f"of the {float(h.get('qty') or 0):g} units "
-                                f"still held at the end of {book.year}; it "
-                                f"reduces the gain (or grows the loss) of the "
-                                f"year they are sold")})
+                                f"of the {qty:g} units {held}; it reduces "
+                                f"the gain (or grows the loss) of the year "
+                                f"they are sold")})
     out.sort(key=lambda x: -x["deferred"])
     return out
 
@@ -985,13 +1057,15 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
     # A2-1205).
     filed: set = set()
     filed_timing: Dict[int, Dict[str, Any]] = {}
+    filed_premiums: Dict[int, Any] = {}
     if not book.usa:
         import sys as _sys
         from taxjson.lib.option_boundary import filed_locks
         filed, filed_timing = filed_locks(
             root, settings,
             warn=lambda m: emit_line(f"taxjson edge-cases: warning: {m}",
-                                     file=_sys.stderr))
+                                     file=_sys.stderr),
+            premiums=filed_premiums)
     # Written options across a year end are an s.49(1) grant-timing
     # boundary (option-boundary is Canada-only); a US premium is taxed
     # at the close (§1234), so there is nothing to place.
@@ -1009,7 +1083,8 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
                 continue
         for r in straddling(txs, book.year, timing, since, filed,
                             filed_timing=filed_timing,
-                            tax_date=book.basis):
+                            tax_date=book.basis,
+                            filed_premiums=filed_premiums):
             r["account"] = r.get("account") or name
             written.append(r)
     return {
@@ -1134,7 +1209,10 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
             ["ACCOUNT", "SYMBOL", "LOSS", "ON", "DENIED"],
             lambda r: (r["account"], r["symbol"], _money(r["raw_loss"]),
                        r["loss_date"], _money(r["denied"])))
-    section(f"Denied losses carried in positions held at the end of {y}",
+    _eod = any(r.get("as_of") == "end_of_data"
+               for r in yb["deferred_at_year_end"])
+    section("Denied losses carried in positions held at the end of "
+            + ("the books" if _eod else str(y)),
             yb["deferred_at_year_end"],
             ["ACCOUNT", "SYMBOL", "UNITS", "DEFERRED"],
             lambda r: (r["account"], r["symbol"], f"{r['qty']:g}",

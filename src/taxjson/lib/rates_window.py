@@ -62,6 +62,12 @@ _COMPACT = re.compile(rb"(?<![0-9A-Za-z])((?:19|20)[0-9]{2})(0[1-9]|1[0-2])"
 # read as a header and every later row's compact date was skipped
 # (2026-10-25 audit diff-engine#1).
 _DATE_HEAD = re.compile(rb"(?<![A-Za-z])(?i:date)|(?<=[a-z])Date")
+# A header written all in capitals runs its words together (TRADEDATE,
+# SETTLEDATE): there "DATE" inside a cell names a date column when every
+# cell of the row is such a capitals name (TRADEDATE,SYMBOL,NOTE) — a
+# data row holds an amount, a date or a cell like ZZQ.US (backlog
+# TJ-0072).
+_CAPS_NAME = re.compile(rb"[A-Z][A-Z0-9_]*")
 _HEAD_CELL_MAX = 32
 # A cell no header row holds: a number (an amount, a quantity, an id).
 _NUMBER_CELL = re.compile(rb"[-+(]?[$]?[0-9][0-9,.]*\)?%?")
@@ -96,11 +102,13 @@ def _date_heads(cells: List[bytes]) -> List[int]:
     short (at most _HEAD_CELL_MAX bytes) — a description that mentions
     a date is not one."""
     heads: List[int] = []
+    caps = all(_CAPS_NAME.fullmatch(c) for c in cells if c)
     for i, c in enumerate(cells):
         if _NUMBER_CELL.fullmatch(c) or any(r.search(c)
                                             for r in _DATE_SHAPES):
             return []
-        if len(c) <= _HEAD_CELL_MAX and _DATE_HEAD.search(c):
+        if len(c) <= _HEAD_CELL_MAX and (_DATE_HEAD.search(c)
+                                         or (caps and b"DATE" in c)):
             heads.append(i)
     return heads
 
@@ -119,7 +127,7 @@ def _compact_in_date_columns(data: bytes, last_year: int) -> List[date]:
     cols: List[int] = []
     delim = b","
     for line in data.splitlines():
-        if _DATE_HEAD.search(line):
+        if _DATE_HEAD.search(line) or b"DATE" in line:
             d = max((b",", b";", b"\t"), key=line.count)
             heads = _date_heads(_cells(line, d))
             if heads:

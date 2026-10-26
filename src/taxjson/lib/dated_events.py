@@ -204,7 +204,7 @@ def read_declarations(root: Path, accounts: Dict[str, Any]) -> Declarations:
     booked: a malformed one (the message names the form), a JOURNAL in
     a crypto account, two RENAME lines of one ticker that disagree."""
     from taxjson.bin.taxjson_convert_tt import (parse_journal_line,
-                                                parse_rename_line)
+                                                parse_rename_line, tt_lines)
     from taxjson.lib.brokerages.base import shown_name, source_key
     from taxjson.lib.cli_diag import read_text_utf8
     from taxjson.lib.renames import DatedRename
@@ -220,7 +220,7 @@ def read_declarations(root: Path, accounts: Dict[str, Any]) -> Declarations:
                 text = read_text_utf8(tt)
             except (OSError, ValueError):
                 continue        # the .tt stage names an unreadable file
-            for n, raw in enumerate(text.splitlines(), 1):
+            for n, raw in enumerate(tt_lines(text), 1):
                 if "JOURNAL" not in raw and "RENAME" not in raw:
                     continue
                 where = _where(acct, tt, n)

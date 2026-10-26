@@ -143,8 +143,12 @@ class TestSingleFolderProject(unittest.TestCase):
     def test_sanity_without_holdings_names_the_unchecked(self):
         r = tj(self.root, "sanity", check=False)
         self.assertEqual(r.returncode, 0, console(r))
-        self.assertIn("UNCHECKED: 1 account(s) with books and no holdings "
-                      "file: margin — nothing to compare with", r.stdout)
+        # The books hold no open position: none is unchecked (positions,
+        # as the compare counts them), and a single-folder project has
+        # no holdings/README.txt to point at (backlog TJ-0135).
+        self.assertIn("No account holds a position in the books, and no "
+                      "holdings file — nothing to compare with", r.stdout)
+        self.assertNotIn("README", r.stdout)
 
     def test_audit_is_blocked_on_a_pending_election(self):
         from taxjson.lib import checklist as cl
@@ -184,7 +188,7 @@ class TestChecklistHints(unittest.TestCase):
         year = self.top / "2024"
         r = tj(year, "checklist", "--run", "--only", "inputs-frozen", check=False)
         text = " ".join(r.stdout.split())
-        self.assertIn("Next (step 4, inputs-frozen): no work/*_base.json — "
+        self.assertIn("Next (step 4, inputs-frozen): no books yet — "
                       "run `taxjson run`", text)
         self.assertNotIn("download the exports", text)
         tj(year, "run", "--no-input")

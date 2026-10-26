@@ -8,14 +8,18 @@
 # The run that counts is the tests.yml run for the PUSH of that commit to
 # main (event push, branch main, head_sha the commit): a pull request's
 # run tested a merge onto whatever its base was then, not the commit main
-# holds. A run still going is waited for (polled). Right after a
+# holds. A run still going is waited for (polled), up to
+# TAXJSON_CI_WAIT_MINS minutes (default 60: a run queued for a
+# self-hosted runner that is offline waits as long as the runner is off);
+# a failed poll is tried again, up to 5 in a row. Right after a
 # push GitHub takes a few seconds to list the run: --appear-wait gives it
 # that long to appear (polling every TAXJSON_CI_POLL_SECS, default 10).
 # <label> names the commit in messages (a tag, or "the version commit").
 #
 # Exit 0: the run passed ("✓ CI passed on <label>" on stdout). Exit 1: it
-# failed (the run's address is named), there is no such run, GitHub could
-# not be asked, or gh is missing — the reason on stderr, prefixed "✗".
+# failed (the run's address is named), there is no such run, it was still
+# queued or running at the time limit, GitHub could not be asked, or gh is
+# missing — the reason on stderr, prefixed "✗".
 # Read-only: `gh api` GETs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -33,6 +37,8 @@ done
 [ -n "$SHA" ] || { echo "usage: scripts/github-ci.sh <commit> <label> [--slug OWNER/NAME] [--appear-wait SECONDS]" >&2; exit 2; }
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "github-ci.sh: '$SHA' is not a full commit sha" >&2; exit 2; }
 [[ "$APPEAR" =~ ^[0-9]+$ ]] || { echo "github-ci.sh: --appear-wait takes whole seconds" >&2; exit 2; }
+WAIT_MINS="${TAXJSON_CI_WAIT_MINS:-60}"
+[[ "$WAIT_MINS" =~ ^[0-9]+$ ]] || { echo "github-ci.sh: TAXJSON_CI_WAIT_MINS takes whole minutes (got '$WAIT_MINS')" >&2; exit 2; }
 LABEL="${LABEL:-${SHA:0:9}}"
 if [ -z "$SLUG" ]; then
   SLUG="${TAXJSON_SLUG:-$(git remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]+([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//')}"
@@ -59,12 +65,22 @@ if [ "${st%% *}" != completed ]; then
   echo "CI for $LABEL is still running — waiting for it: https://github.com/$SLUG/actions/runs/$id"
   # Polled through `gh api`, not `gh run watch`: watch reads check-run
   # annotations, which a fine-grained token may not, and so called every
-  # run still going "failed".
+  # run still going "failed". Bounded, as land.sh's wait is: a run queued
+  # for an offline self-hosted runner would otherwise hold the cut (or the
+  # promote) for ever.
+  deadline=$(( $(date +%s) + WAIT_MINS * 60 )); errors=0
   while :; do
     sleep "${TAXJSON_CI_POLL_SECS:-10}"
-    st="$(gh api "repos/$SLUG/actions/runs/$id" --jq '"\(.status) \(.conclusion)"')" \
-      || no "Could not ask GitHub about CI for $LABEL (${SHA:0:9})."
-    [ "${st%% *}" != completed ] || break
+    if now="$(gh api "repos/$SLUG/actions/runs/$id" --jq '"\(.status) \(.conclusion)"')"; then
+      st="$now"; errors=0
+      [ "${st%% *}" != completed ] || break
+    else
+      errors=$((errors + 1))
+      [ "$errors" -lt 5 ] || no "Could not ask GitHub about CI for $LABEL (${SHA:0:9}): $errors tries in a row failed."
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      no "CI for $LABEL is still ${st%% *} after $WAIT_MINS min (TAXJSON_CI_WAIT_MINS): https://github.com/$SLUG/actions/runs/$id — is the runner online? Once the run has finished, cut (or promote) again."
+    fi
   done
 fi
 if [ "$st" != "completed success" ]; then

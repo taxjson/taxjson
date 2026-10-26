@@ -65,7 +65,8 @@ requests, and a release is public about a day after it is tagged. The
 publisher runs on a schedule that GitHub may start hours late; the
 maintainer can start a run by hand. Never published: `publish.toml`
 (where and how the publisher publishes; its own copy must match),
-`.github/dependabot.yml` (dependency updates run in the dev repo) and the
+`.github/dependabot.yml` (dependency updates run in the dev repo),
+`backlog.md` (the list of known bugs and tasks, open ones included) and the
 private-values provider `scripts/private-values`, which reads the
 maintainer's private lists for the publisher's fingerprints. It prints
 values: never run it where its output would be kept.
@@ -139,8 +140,9 @@ The channel's current release is read from `origin/main:channels.json`
 (the public `main` gets that file through the fast lane). Moving a channel **forward** also needs CI: the
 GitHub Actions `tests.yml` run for the push of the tag's commit to
 `main` must have passed (`scripts/github-ci.sh`, the same check the
-release cut makes; a run still going is waited for; no run, a failed run
-or no `gh` refuses).
+release cut makes; a run still going is waited for, up to
+`TAXJSON_CI_WAIT_MINS` (60); no run, a failed run, one still going at
+that limit, or no `gh` refuses).
 `TAXJSON_PROMOTE_IGNORE_CI=1` promotes without that check and prints a
 warning. A forward move then runs `scripts/check-public.sh`: it reads
 what the public repo serves beside the code — every release's notes,
@@ -218,6 +220,11 @@ Regenerate and commit them:
 
 Review the diff (new packages especially) before committing.
 
+The dev lock (`requirements/dev.txt`) also pins the linter: `tests.yml`'s
+lint job and `scripts/dev-setup.sh` both install ruff from it, so the local
+gate lints as CI does, and a regenerated lock moves both (re-run
+`scripts/dev-setup.sh`; `scripts/ci.sh` notes a venv whose ruff differs).
+
 ## Dependency and code checks (the publish kit's)
 
 Every pull request of the dev repo also runs the publish kit's checks
@@ -257,6 +264,19 @@ above). `scripts/land.sh` waits for the job like every other pull-request
 check, and counts a workflow every pull request triggers (no `paths`
 filter) whose run GitHub has not created yet as pending.
 
+`scripts/release.sh --prepare` does not run `kit_checks.py` itself, on
+purpose: it lands the version commit through `land.sh`, so the
+`kit-checks` job runs on that commit's pull request, on the very tree the
+cut tags (`land.sh` merges only onto the base the checks ran on), and a
+hit closes the pull request before anything is tagged. A local run would
+repeat the same script on the same tree, and would need an export of it
+(the tools scan every file of a working tree), Python 3.11+ and the
+network. What the job cannot see is an advisory published after it ran;
+`kit preflight taxjson` runs the publisher's gate and the kit checks on
+the version commit again before you cut, if you want that answer first
+(the publish kit's command: yours to run, since it runs the private-values
+provider); Dependabot alerts cover the time after.
+
 ## Cutting a release
 
 Two steps, so the commit that is tagged is one GitHub CI has passed:
@@ -292,8 +312,10 @@ tag is free here, on origin and on the public repo (a tag name the public
 repo has is used for good); and the GitHub Actions `tests.yml` run for
 the push of **that exact commit** to `main` succeeded
 (`scripts/github-ci.sh`: it waits up to three minutes for the run to be
-listed, waits for a run still going, and names a failed one; there is no
-override). A pull request's run does not count: it tested a merge onto
+listed, waits for a run still going — up to an hour,
+`TAXJSON_CI_WAIT_MINS`, then stops with the run's address: a run queued
+while the self-hosted runner is offline would wait as long as it is
+off — and names a failed one; there is no override). A pull request's run does not count: it tested a merge onto
 whatever its base was then. Then it makes the annotated tag on the version
 commit (not on later commits, which it names), runs the pre-push gate on
 it, and pushes that one tag by name to the dev repo — never
@@ -431,30 +453,49 @@ first) or when the pre-push PII gate refuses — which it runs itself,
 through `bash`, on exactly what it publishes. Then it pushes the new
 commits as a branch `land/<time>-<sha>`, opens the pull request (title:
 the commit subject; body: the subjects), waits for every check and
-rebase-merges it once all have passed. (Were `main` given a ruleset that
+rebase-merges it once all have passed — if `origin`'s `main` is still the
+commit it pushed on. (Were `main` given a ruleset that
 requires checks, and auto-merge allowed, it would hand the merge to
-GitHub's auto-merge instead; the private dev repo, on GitHub's free plan,
-has neither.) It waits (`--timeout`, 60 minutes; `--no-wait` returns once
+GitHub's auto-merge instead, and the ruleset's "require branches to be up
+to date" would have to keep that base; the private dev repo, on GitHub's
+free plan, has neither.) It waits (`--timeout`, 60 minutes; `--no-wait` returns once
 the pull request is open) and brings local `main` to what landed
 (`git pull --rebase --autostash`: the rebase merge gave the commits new
 ids, and the local copies drop out). A failed check (exit 1) closes the
 pull request and deletes its branch, so nothing merges later behind your
-back; the commits stay on local `main` to fix and land again. Exit 3:
+back; the commits stay on local `main` to fix and land again. So does a
+`main` that moved on while the checks ran (another pull request merged, a
+promote from another clone, a merge on the web; exit 1): `git pull
+--rebase`, run the gate again, and land again. Exit 3:
 still waiting at the timeout; the pull request stays open. Never
 `git push --no-verify`. `TAXJSON_LAND_DIRECT=1` pushes straight to `main`
 after the same gate — only for the script tests' throwaway remotes and
 the emergency below.
 
-**Why a rebase merge**, not a merge commit or a squash: `land.sh` lands
-only when `main` has not moved on, so the rebase replays the commits on
-the base they were gated on: every commit on `main` is a tree the local
-gate passed, and a gate record (keyed by tree, "Reusing a PASS") still
-applies to it. `main` stays linear, with no merge commit whose
-resolution could add content neither parent had (the merge case the PII
-gate had to learn). Unlike a squash, each commit keeps its own message,
-and `git bisect` stays precise. The cost: the landed commits get new ids, hence the
-`git pull --rebase` and `release.sh` finding the version commit by
-content.
+**Why a rebase merge**, not a merge commit or a squash:
+
+- **What lands is what was gated.** `land.sh` pushes only when `main` has
+  not moved on and merges only while it still has not, so the rebase
+  replays the commits unchanged onto the base they were gated on: after a
+  landing, `main`'s tip is the very tree the local gate and the pull
+  request's CI passed, each landed commit keeps the tree it had locally,
+  and a gate record (keyed by tree, "Reusing a PASS") still applies to it.
+- **A linear `main`**, with no merge commit whose resolution could add
+  content neither parent had (the merge case the PII gate had to learn).
+- **CI on the version commit itself.** GitHub runs `tests.yml` on the head
+  of each push to `main`, and the release cut tags only a version commit
+  whose own push passed (`scripts/github-ci.sh`). A rebase merge of
+  `release.sh --prepare`'s one-commit pull request makes the version
+  commit that head; a merge commit would be the head instead.
+- **Each commit keeps its own message**, unlike a squash, and `git bisect`
+  stays precise. Squashing is the public side's job: the publisher
+  (`mode = "squash"` in `publish.toml`) publishes each release as one
+  commit of the tagged tree, so the dev history's commits, messages and
+  branches never reach the public repo either way, and keeping every
+  commit here costs nothing public.
+
+The cost: the landed commits get new ids, hence the `git pull --rebase`
+and `release.sh` finding the version commit by content.
 
 Nothing enforces this on the dev repo but the tooling: land through
 `scripts/land.sh`. Every `tests.yml` job that runs on a pull request runs

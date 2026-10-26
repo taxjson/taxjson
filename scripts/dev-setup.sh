@@ -57,6 +57,10 @@ if [ "${1:-}" = --hook-only ]; then install_hook; exit 0; fi
 
 python3 -m venv venv                       # no-op if venv already exists
 venv/bin/pip install --upgrade pip --quiet
+# The dev lock first (hash-pinned): the ruff CI's lint job installs from
+# the same file, so scripts/ci.sh lints as CI does. The editable install
+# below keeps it (the [dev] extra's ruff>=0.4 is already met).
+venv/bin/pip install --require-hashes --only-binary :all: -r requirements/dev.txt
 venv/bin/pip install -e ".[fx,dev]"
 # The broker-fetch plugin (`taxjson fetch`: Questrade, IBKR Flex) — a separate
 # distribution in packages/, installed beside the core. --no-deps: its only

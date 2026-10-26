@@ -145,13 +145,17 @@ def listed_files(root: Path, accounts_cfg: Dict[str, Any]) -> set:
 
 
 def discover(folder: Path, accounts_cfg: Dict[str, Any],
-             root: Optional[Path] = None
+             root: Optional[Path] = None,
+             info: Optional[List[str]] = None
              ) -> Tuple[Dict[str, List[str]], List[str]]:
     """({account: [file paths]}, notes) for the folder's snapshots. An
     account with its own `holdings = [...]` is left out (its setting
     wins), and so is a file such a setting names (`root`: the project
     the paths are relative to; default the folder's parent); a file no
-    account claims, or two do, is named in a note."""
+    account claims, or two do, is named in a note. `info`, when given,
+    takes the notes that leave nothing unchecked instead — a snapshot
+    of an account whose own setting names its files: that account is
+    compared with those (backlog TJ-0020)."""
     every = {str(n): a for n, a in (accounts_cfg or {}).items()
              if isinstance(a, dict)}
     accts = {n: a for n, a in every.items() if not a.get("holdings")}
@@ -189,11 +193,11 @@ def discover(folder: Path, accounts_cfg: Dict[str, Any],
             continue
         who = hits[0] if hits else None
         if who is not None and who not in accts:
-            notes.append(f"{folder.name}/{mask(p.name)}: broker account "
-                         f"{mask(str(acc))} is {who}'s, whose own "
-                         f"`holdings = [...]` setting names its files — "
-                         f"not compared (list it there, or drop the "
-                         f"setting)")
+            (notes if info is None else info).append(
+                f"{folder.name}/{mask(p.name)}: broker account "
+                f"{mask(str(acc))} is {who}'s, whose own "
+                f"`holdings = [...]` setting names its files — "
+                f"not compared (list it there, or drop the setting)")
             continue
         if who is None:
             stem = p.stem.lower()

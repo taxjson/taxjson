@@ -137,8 +137,10 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
     the engine closed against a long position carry the sale's id
     (matched) only as far as the engine closed the whole sale against a
     long position; units still short are covered by the year's short-close
-    records of the symbol (short_cover); what is left the gains files
-    lack (open). A row whose account has no readable gains file is
+    records of the symbol, or booked as an option written at grant (a
+    `grant` record carrying the sale's id: its premium is in the totals,
+    backlog TJ-0017) — short_cover; what is left the gains files lack
+    (open). A row whose account has no readable gains file is
     "open" (the claim the summary always made). `prefer_wash=False`
     reads each account's plain gains file: a run's mid-run note comes
     before the cross-account wash pass rebuilds `<acct>_gains_wash.json`,
@@ -170,6 +172,7 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
             out[(sym, acct)] = BOOKED_OPEN
             continue
         long_by_id: Dict[str, float] = {}
+        written_by_id: Dict[str, float] = {}
         covered = 0.0
         for x in recs:
             try:
@@ -179,12 +182,19 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
             if x.get("direction") == "SHORT":
                 d = str((x.get("date_settle") if date_basis == "settle"
                          else None) or x.get("date") or "")
-                if not x.get("grant") and d.startswith(ys):
+                if x.get("grant"):
+                    # A write booked at grant (option_grant_timing_since,
+                    # ITA s.49(1)): the sale's premium is in the totals
+                    # on its own day, carrying the sale's id (backlog
+                    # TJ-0017).
+                    i = str(x.get("id") or "")
+                    written_by_id[i] = written_by_id.get(i, 0.0) + q
+                elif d.startswith(ys):
                     covered += q
             else:
                 i = str(x.get("id") or "")
                 long_by_id[i] = long_by_id.get(i, 0.0) + q
-        matched = rest = 0.0
+        matched = rest = written = 0.0
         for sale in r.in_year_short_sales:
             sid, units = sale[0], float(sale[1])
             # The engine's short units of the sale are the sale less what
@@ -195,11 +205,16 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
             m = units - min(units, max(0.0, whole
                                        - long_by_id.get(sid, 0.0)))
             matched += m
-            rest += units - m
+            # Units booked as a write at grant are in the totals too, at
+            # no cost of yours: said as a short covered (a Warning).
+            w = min(units - m, written_by_id.get(sid, 0.0))
+            written += w
+            rest += units - m - w
         sales = bool(r.in_year_short_sales)
         if rest - covered > 1e-6:
             out[(sym, acct)] = BOOKED_OPEN
-        elif rest > 1e-6 or (not sales and covered > 1e-6):
+        elif (rest > 1e-6 or written > 1e-6
+              or (not sales and covered > 1e-6)):
             # (no sale of the year: a cover of a short carried in)
             out[(sym, acct)] = BOOKED_SHORT_COVER
         else:
@@ -522,6 +537,11 @@ def render(doc: Dict[str, Any], *, mh_name: str = "missing_history.tt",
                                          width_=width_))
 
 
+def _distinct(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """`items` with one entry per (symbol, account), in order."""
+    return list({(i["symbol"], i["account"]): i for i in items}.values())
+
+
 def _syms(items: Sequence[Dict[str, Any]], n: int = 2) -> str:
     """`GHOSTQ.TO, OLDCO.US +1 more`: the symbols only (one-line form)."""
     shown = ", ".join(str(i["symbol"]) for i in items[:n])
@@ -552,8 +572,11 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
                       f"({_syms(cov)}) — `taxjson find-missing-history`"))
     zs, zh = doc.get("zero_cost_sold") or [], doc.get("zero_cost_held") or []
     if zs or zh:
-        items.append(("Warning", f"{_n(len(zs) + len(zh), 'position', 'positions')}"
-                      f" at a $0 cost ({_syms(zs + zh)}) — "
+        # A $0 lot part sold and part held is one position (backlog
+        # TJ-0044: "2 positions ... (SAMPK.TO, SAMPK.TO)").
+        zp = _distinct(zs + zh)
+        items.append(("Warning", f"{_n(len(zp), 'position', 'positions')}"
+                      f" at a $0 cost ({_syms(zp)}) — "
                       f"`taxjson find-missing-history`"))
     tn = doc.get("transfer_in_no_cost") or []
     if tn:
@@ -662,9 +685,10 @@ def render_blocks(doc: Dict[str, Any], *,
     if zs or zh:
         parts = ([f"{len(zs)} sold in {yr}"] if zs else []) \
             + ([f"{len(zh)} still held"] if zh else [])
-        items.append(("Warning", f"{_n(len(zs) + len(zh), 'position', 'positions')}"
+        zp = _distinct(zs + zh)
+        items.append(("Warning", f"{_n(len(zp), 'position', 'positions')}"
                      f" at a $0 cost ({', '.join(parts)}): "
-                     f"{_names(zs + zh)}. Run `taxjson "
+                     f"{_names(zp)}. Run `taxjson "
                      f"find-missing-history`."))
     zd = doc.get("zero_cost_declared") or []
     if zd:

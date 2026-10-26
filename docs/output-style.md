@@ -53,6 +53,7 @@ command, the docs). Every command follows these rules.
    | `run` | each message one line (its headline; the detail with `--details` and in work/*.diag); the closing block under `==> Before you trust these numbers` at most 6 lines; `==> ` steps are not counted |
    | `checklist` | the list (each step one line with its mark, number, id and title, its finding under it; an open step's commands; how and why only for the next step and those needing attention), then the summary: one line per section with its counts (a table), one `! ` line per item needing attention, the legend, the next step last. `--all` adds every step's how, commands and why; `--section N` one section |
    | `format`, `format-map` | the diff is the data; the note after it one line |
+   | `sum` | 6, and the FOR THE RETURN block's rounding legend when it is shown (the taxable SUBTOTAL and the RETURN row differ by cents) |
    | `init --force` over another project | 8: the backup it kept and the leftover folders are never left out |
    | `tax-logic`, `help`, `-h` | exempt: they are the reference text |
    | `form-export --form txf`, `--json`, `events` `.tt` lines | exempt: machine output |
@@ -299,7 +300,10 @@ line-buffered, so a pipe (`2>&1 | tee`) keeps whole lines in order.
 
 The captured text never changes for this: at width 0 (TAXJSON_WIDTH=0,
 a stage's stderr in work/*.diag, the `.sum` DIAGNOSTICS) every message
-keeps its bytes. The display form is made at display time —
+keeps its bytes. One addition, made where the blended pass's messages
+are copied into every blended account's `<account>_wash.sum`: a message
+about another account's `inputs/<account>/` file starts `[<account>] `
+there (the `.diag` itself is unchanged). The display form is made at display time —
 `out.relabel` (the label, ATTENTION dropped, the topic capitalised),
 `stage_msg.reword` (a table of the frequent wordy stage notes, keyed on
 their captured text, in a short display form; a line it does not match
@@ -391,7 +395,8 @@ bytes alone:
   that follow it — so a wrapped message keeps its marker on the first line
   and indents the rest;
 - the text `taxjson checklist` reads from other commands: `sanity` (lines
-  starting `INCOMPLETE` / `UNCHECKED`, the last line), `find-missing-history`
+  starting `INCOMPLETE` / `UNCHECKED`, the `N discrepancy(ies).` line of
+  `--details` and the table rows above it, the last line), `find-missing-history`
   (the `AFFECTS` / `REMOVE from ` / `STALE in ` sections and their row
   shape),
   `elect --pending` (`No pending elections`, the last line), `audit`

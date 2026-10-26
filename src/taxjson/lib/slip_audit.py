@@ -2435,7 +2435,10 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
                 f" — {g['broker_account']}" if g["broker_account"] else "")
             d.section(head)
             for b in g["buckets"]:
-                d.para(f"{b['currency']}: {', '.join(b['slips'])}")
+                # The currency and its slips as a `label:  value` line,
+                # not prose: one per bucket kept the default view over
+                # its budget (backlog TJ-0179).
+                d.kv([(b["currency"], ", ".join(b["slips"]))])
                 if legend:
                     # The legend, before the first table (Essentials
                     # first).
@@ -2573,6 +2576,9 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
         d.items(rep["problems"])
     d.blank()
     issues = rep.get("issues") or []
+    # "apply the suggestions" only when SUGGESTIONS was printed (it said
+    # so with none to apply: backlog TJ-0179).
+    suggested = bool(sg["capital_gains_dividends"] or sg["tt_lines"])
     if issues:
         by: Dict[str, int] = {}
         for i in issues:
@@ -2580,8 +2586,11 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
         if details:
             d.para(f"{len(issues)} finding(s) ("
                    + ", ".join(f"{a} {n}" for a, n in sorted(by.items()))
-                   + "): apply the suggestions, or explain each difference "
-                   "and mark the checklist's t5-t3 step done.")
+                   + ("): apply the suggestions, or explain each difference "
+                      if suggested else
+                      "): correct the books or slips.toml where one is "
+                      "wrong, or explain each difference ")
+                   + "and mark the checklist's t5-t3 step done.")
         else:
             if sg["notes"]:
                 d.line(f"{len(sg['notes'])} note(s) on these findings — "
@@ -2589,7 +2598,8 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
             _by = ", ".join(f"{a} {n}" for a, n in sorted(by.items())[:3])
             d.line(act(f"{len(issues)} finding(s) ({_by}"
                        + (" ..." if len(by) > 3 else "")
-                       + "): apply or explain each",
+                       + ("): apply or explain each" if suggested
+                          else "): correct or explain each"),
                        "tjs slip-audit --details"))
     elif not rep["sources"]:
         if details:

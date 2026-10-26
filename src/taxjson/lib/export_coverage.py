@@ -510,8 +510,11 @@ def account_gaps(root: Path, acct: str, year: int, today: date
             last[b] = rd
     # Every position-moving row of the account, any source (a .tt line,
     # another broker, a transfer leg): what happened after an export's end.
-    all_rows = [r for r in _rows(base)] + [r for v in sidecars.values()
-                                           for r in v]
+    # A move between two of your accounts is there twice — its sidecar
+    # row and the books' lot-move leg (backlog TJ-0093): the row counts.
+    from taxjson.lib.core import LOT_MOVE_TYPE
+    all_rows = ([r for r in _rows(base) if r.get("type") != LOT_MOVE_TYPE]
+                + [r for v in sidecars.values() for r in v])
     gaps: List[Gap] = []
     for b, _p in files:
         rows = rows_by.get(b, []) + sidecars.get(b, [])
@@ -778,15 +781,20 @@ def message(g: Gap, year: int) -> Tuple[str, List[str]]:
 
 def _count_text(g: Gap) -> str:
     """The checklist's short form of what the broker still held: a
-    count, the command that lists them, and the next activity the
-    books record on them (no symbol list: `taxjson list` has it)."""
+    count, the command that lists the account's positions, and the next
+    activity the books record on them (no symbol list: `taxjson list`
+    has it). The count is the broker's own rows'; the list is the whole
+    account's on that day, every source (a .tt opening too), so the text
+    says which is which (backlog TJ-0114)."""
     parts = []
     if g.positions:
-        parts.append(f"{len(g.positions)} open position(s)")
+        parts.append(f"{len(g.positions)} open position(s) in "
+                     f"{broker_name(g.broker)}'s rows")
     if g.expired:
         parts.append(f"{len(g.expired)} option(s) that expired after it "
                      f"with no expiry row")
-    out = (" and ".join(parts) + f" — `{list_command(g)}` lists them")
+    out = (" and ".join(parts) + f" — `{list_command(g)}` lists the "
+           f"account's positions on that day (every source)")
     if g.next_activity:
         out += (f"; next recorded activity: {g.next_activity[0]} "
                 f"({g.next_activity[1]})")

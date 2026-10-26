@@ -104,7 +104,10 @@ class TestHandCases(unittest.TestCase):
         self.assertAlmostEqual(doc["net_gain"], 723.40, places=2)
         self.assertEqual(apply_jurisdiction(doc["net_gain"],
                                             "canada")["reportable"], 523.40)
-        self.assertEqual(doc["close"]["books"], {})
+        # Converted out to nothing: the book closes at zero, recorded so
+        # next year opens it (backlog TJ-0028).
+        self.assertEqual(doc["close"]["books"],
+                         {IB: {"USD": {"units": 0.0, "cost": 0.0}}})
         self.assertTrue(doc["reliable"])
         self.assertEqual(doc["label"], "v2 (opt-in, under audit)")
 
@@ -293,7 +296,8 @@ class TestPerAccount(unittest.TestCase):
         self.assertEqual(doc["status"], "computed", doc["problems"])
         self.assertAlmostEqual(doc["net_gain"], -50.0, places=2)
         self.assertEqual(doc["close"]["books"],
-                         {IB: {"USD": {"units": 10000.0, "cost": 13000.0}}})
+                         {IB: {"USD": {"units": 10000.0, "cost": 13000.0}},
+                          rbc: {"USD": {"units": 0.0, "cost": 0.0}}})
         # A balance the statement disagrees with is caught per account.
         doc = ledger(native, cash([], [
             tt("CASHOPEN 2025-01-01 USD 10000 13000"),
@@ -380,7 +384,8 @@ class TestOwnTransferInTransit(unittest.TestCase):
                                  {"USD": {"units": 10000.0, "acb": 13500.0}})
                 self.assertEqual(
                     doc["close"]["books"],
-                    {self.RBC: {"USD": {"units": 10000.0, "cost": 13500.0}}})
+                    {self.RBC: {"USD": {"units": 10000.0, "cost": 13500.0}},
+                     IB: {"USD": {"units": 0.0, "cost": 0.0}}})
                 # A move between your own accounts acquires nothing.
                 self.assertAlmostEqual(
                     doc["per_currency"]["USD"]["acquired"], 10000.0)

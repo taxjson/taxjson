@@ -83,6 +83,7 @@ from __future__ import annotations
 from taxjson.lib.out import exit_text
 import argparse
 import csv
+import functools
 import io
 import os
 import re
@@ -537,7 +538,7 @@ class Report:
     # Bookkeeping, not identity: transaction ids are pseudonymised but
     # name no person; the rest describe the run.
     NOT_IDENTITY = ("txids", "description_columns", "encoding", "notes",
-                    "name_patterns", "known_ids", "pseudonyms")
+                    "name_patterns", "known_ids", "pseudonyms", "stand_ins")
 
     def __init__(self) -> None:
         self.accounts: Dict[str, str] = {}      # original -> placeholder
@@ -568,6 +569,10 @@ class Report:
         # Ids found only in the input's FILE NAME (an IB download is
         # named after the account): masked shapes, never the id.
         self.name_ids: List[str] = []
+        # A redacted copy checked again (in_redacted_copy): the stand-ins
+        # this redactor writes (9990 placeholders, pseudonyms, broker
+        # keys) are redacted already, not findings (backlog TJ-0097).
+        self.stand_ins = False
 
     def found_anything(self) -> bool:
         return bool(self.accounts or self.identity_rows or self.emails
@@ -635,6 +640,51 @@ def _pseudonym(orig: str, n: int) -> str:
     it = iter(fill)
     return orig[:keep] + "".join(next(it) if c.isalnum() else c
                                  for c in orig[keep:])
+
+
+def _emails_found(line: str) -> int:
+    """The e-mail addresses of `line`, the redactor's own stand-in
+    (redacted@example.com: a copy checked again) not counted."""
+    return sum(m.group(0).lower() != "redacted@example.com"
+               for m in _EMAIL.finditer(line))
+
+
+def _is_placeholder_id(v: str) -> bool:
+    """An account id in the shape _placeholder writes: its digits a
+    9990-prefixed counter (U9990001, 99900001, 9990-0002)."""
+    d = re.sub(r"\D", "", v)
+    return len(d) >= 5 and d.startswith("9990")
+
+
+def _is_pseudonym(v: str) -> bool:
+    """A wallet / transaction-id stand-in _pseudonym writes: after the
+    kept prefix (0x, bc1 ..., a base58 version character) every letter
+    or digit is a digit of a 9990-prefixed counter."""
+    low = v.lower()
+    keeps = [len(p) for p in ("0x", "bc1", "tb1", "ltc1", "addr1", "stake1")
+             if low.startswith(p)] or [0]
+    if v[:1] in "13rTLM":
+        keeps.append(1)
+    for k in keeps:
+        body = "".join(c for c in v[k:] if c.isalnum())
+        if len(body) >= 5 and body.isdigit() and body.startswith("9990"):
+            return True
+    return False
+
+
+def in_redacted_copy(path: Path) -> bool:
+    """Whether `path` is (in) a copy `taxjson redact` wrote: a
+    NAME.redacted.EXT file, or a file or folder inside a tree that
+    holds its `.taxjson-redacted` marker. `--check` of such a copy takes
+    the copy's own placeholders as redacted already (backlog TJ-0097)."""
+    if path.is_file() and path.stem.endswith(".redacted"):
+        return True
+    try:
+        here = path.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any((d / TREE_MARKER).is_file()
+               for d in ([here] if here.is_dir() else []) + list(here.parents))
 
 
 def _plausible_wallet(v: str) -> bool:
@@ -989,6 +1039,8 @@ def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     mixed = []
 
     def decide(m: re.Match) -> str:
+        if all(w.strip(".,") == "REDACTED" for w in m.group(2).split()):
+            return m.group(0)           # a copy's own stand-in
         v, n = _vocab_split([w.strip(".") for w in m.group(2).split()])
         if v == 0:
             rep.names += 1
@@ -1218,6 +1270,8 @@ def _redact_broker_keys(text: str, rep: "Report") -> str:
     def sub(m: "re.Match") -> str:
         nonlocal n
         k = m.group(3).lower()
+        if rep.stand_ins and k.startswith("000000"):
+            return m.group(0)           # a copy's own stand-in key
         if k not in keys:
             keys[k] = f"{len(keys) + 1:010x}"
         n += 1
@@ -1229,15 +1283,18 @@ def _redact_broker_keys(text: str, rep: "Report") -> str:
 
 def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                 known_ids: Optional[Dict[str, str]] = None,
-                pseudonyms: Optional[Pseudonyms] = None
+                pseudonyms: Optional[Pseudonyms] = None,
+                stand_ins: bool = False
                 ) -> Tuple[str, Report]:
     """Redact one export. `known_ids` (original -> placeholder) and
     `pseudonyms` (wallets, transaction ids) are shared by every file of
     one invocation: a value seen in an earlier file keeps its stand-in,
     and a new one gets the next number — two accounts' files used to
     both become U9990001 (S036-18), two files' distinct txids both
-    ...0001 (A2-0454)."""
+    ...0001 (A2-0454). `stand_ins`: the text is a redacted copy checked
+    again — its own placeholders and pseudonyms stay, uncounted."""
     rep = Report()
+    rep.stand_ins = stand_ins
     if known_ids is not None:
         rep.known_ids = known_ids
     if pseudonyms is not None:
@@ -1249,9 +1306,16 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     text = _redact_html_identity(text, rep)
     text = _redact_broker_keys(text, rep)
     lines = text.splitlines(keepends=True)
+    kept = set()
     for orig in _collect_ids(lines):
+        if stand_ins and _is_placeholder_id(orig):
+            # The copy's own placeholder: kept as it is (and never
+            # given to another id of the run).
+            kept.add(orig.upper())
+            rep.known_ids.setdefault(orig, orig)
+            continue
         rep.accounts[orig] = _known_placeholder(rep.known_ids, orig)
-    acct_upper = {a.upper() for a in rep.accounts}
+    acct_upper = {a.upper() for a in rep.accounts} | kept
     # Longest first so a shorter id that is a substring of a longer one
     # cannot pre-empt it.
     ordered = sorted(rep.accounts.items(), key=lambda kv: -len(kv[0]))
@@ -1260,8 +1324,11 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     txid_cols: Dict[str, List[int]] = {}
     free_cols: Dict[str, List[Tuple[int, str]]] = {}
     in_preamble = True
-    wallet_repl = _mapper(rep.pseudonyms.wallets, rep.wallets, _plausible_wallet)
-    txid_repl = _mapper(rep.pseudonyms.txids, rep.txids)
+    wallet_repl = _mapper(rep.pseudonyms.wallets, rep.wallets,
+                          lambda v: _plausible_wallet(v) and not (
+                              stand_ins and _is_pseudonym(v)))
+    txid_repl = _mapper(rep.pseudonyms.txids, rep.txids,
+                        lambda v: not (stand_ins and _is_pseudonym(v)))
     out: List[str] = []
     for lineno, line in enumerate(lines, start=1):
         body = line.rstrip("\r\n")
@@ -1329,7 +1396,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                     cells = _split(line.rstrip("\r\n")) or []
             for i in txid_cols.get(sect, []):
                 v = cells[i].strip() if i < len(cells) else ""
-                if len(v) >= 6 and any(c.isdigit() for c in v):
+                if len(v) >= 6 and any(c.isdigit() for c in v) and not (
+                        stand_ins and _is_pseudonym(v)):
                     ph = _pseudo(v, rep.pseudonyms.txids, rep.txids)
                     line = _replace_field(line, cells, i, ph)
                     cells = _split(line.rstrip("\r\n")) or []
@@ -1408,8 +1476,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             if orig.lower() in lowline:
                 line = id_pats[orig].sub(ph, line)
         if _EMAIL.search(line):
-            line, k = _EMAIL.subn("redacted@example.com", line)
-            rep.emails += k
+            rep.emails += _emails_found(line)
+            line = _EMAIL.sub("redacted@example.com", line)
         line = _WALLET.sub(wallet_repl, line)
         line = _TXID.sub(txid_repl, line)
         if any(_wallet_like(m.group(0)) for m in _WALLETISH.finditer(line)):
@@ -1651,12 +1719,14 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
                 check_only: bool, force: bool = False,
                 known_ids: Optional[Dict[str, str]] = None,
                 written: Optional[set] = None,
-                pseudonyms: Optional[Pseudonyms] = None
+                pseudonyms: Optional[Pseudonyms] = None,
+                stand_ins: bool = False
                 ) -> Tuple[Optional[Path], Report]:
     """`known_ids` and `written` are shared by the files of one
     invocation: one pseudonym table, and no output path written twice
     — `--force` let a second account's copy (or a second
-    `activity.csv`) silently replace the first (S036-18)."""
+    `activity.csv`) silently replace the first (S036-18). `stand_ins`:
+    `src` is a redacted copy checked again (redact_text)."""
     raw = src.read_bytes()
     why = sniff_binary(raw, src.name)
     if why:
@@ -1673,13 +1743,14 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"{src.name} starts with a UTF-16 byte-order mark but is not "
             f"valid UTF-16 (byte {e.start}: {e.reason}; a truncated "
             f"file?) — nothing written. Re-export it.") from None
-    new, rep = redact_text(text, extra, known_ids, pseudonyms)
+    new, rep = redact_text(text, extra, known_ids, pseudonyms, stand_ins)
     # A denylisted string in the file NAME counts as a finding too.
     rep.patterns += sum(len(p.findall(src.stem)) for p in rep.name_patterns)
     # So does an account id that only the NAME carries: --check said
     # 'account ids: none found' and exited 0 while the write mode
     # renamed the copy (A2-0459).
-    rep.name_ids = [Report.masked(t) for t in name_only_ids(src.stem, rep.accounts)]
+    rep.name_ids = [Report.masked(t) for t in name_only_ids(src.stem, rep.accounts)
+                    if not (stand_ins and _is_placeholder_id(t))]
     rep.encoding = enc
     if enc != "utf-8":
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
@@ -1854,7 +1925,9 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
         for ln in wrap(text, None, indent, hang):
             print(ln)
     shown_src = redacted_name(src, rep.accounts, rep.name_patterns,
-                              rep.known_ids).replace(".redacted", "")
+                              rep.known_ids)
+    # (only the `.redacted` it adds: a copy checked again keeps its own)
+    shown_src = shown_src[:-len(".redacted" + src.suffix)] + src.suffix
     where = f" -> {dst}" if dst else " (check only)"
     say(f"{shown_src}{where}", "", "  ")
     if rep.accounts and rep.unreplaced:
@@ -2126,6 +2199,8 @@ def _sweep(files: List[_TreeFile], known_ids: Dict[str, str],
     sends.json, stayed in the copy."""
     ids = {}
     for o, ph in known_ids.items():
+        if o == ph:
+            continue                # a copy's own placeholder (TJ-0097)
         ids.setdefault(o.upper(), (o, ph))
     ordered = sorted(ids.values(), key=lambda kv: -len(kv[0]))
     pats = [(_id_pattern(o), ph) for o, ph in ordered]
@@ -2506,6 +2581,24 @@ def _comment_at(line: str) -> int:
     return len(line)
 
 
+@functools.lru_cache(maxsize=1)
+def _generated_comments() -> frozenset:
+    """The comment lines taxjson itself writes in a settings file (the
+    ticker.map `taxjson init` writes, the tobase.map header): template
+    text, never a person's, so never listed for review."""
+    lines: List[str] = []
+    try:
+        from taxjson.lib import ticker_map_format, tobase_map
+        lines += ticker_map_format.init_template().splitlines()
+        master = tobase_map.load_master()
+        for shared in (False, True):
+            lines += tobase_map.header(master, shared)
+    except Exception:                                   # noqa: BLE001
+        pass                        # (each comment is then reviewed)
+    return frozenset(ln.strip() for ln in lines
+                     if ln.strip().startswith("#"))
+
+
 def redact_project_text(text: str, compiled: List[re.Pattern],
                         known_ids: Dict[str, str],
                         cfg_ids: Tuple[List[str], List[str]] = ([], [])
@@ -2515,9 +2608,12 @@ def redact_project_text(text: str, compiled: List[re.Pattern],
     (`cfg_ids`, from config_ids) and any id the free-text detectors find
     get the invocation's placeholders (an id-shaped one the same as in
     the exports); e-mail addresses anywhere; phones, addresses, SINs
-    and names in its comments; every denylist / --also match anywhere.
-    Its rule and setting lines are never read as an export's rows (a
-    `GLOBAL OLD NEW` line is not a name)."""
+    and names after a title or a `transfer from` in its comments; every
+    denylist / --also match anywhere. A comment still carrying
+    name-like words or a long number is listed for review, as an
+    export's free text is (backlog TJ-0098). Its rule and setting lines
+    are never read as an export's rows (a `GLOBAL OLD NEW` line is not
+    a name)."""
     rep = Report()
     rep.known_ids = known_ids
     rep.name_patterns = compiled
@@ -2537,14 +2633,17 @@ def redact_project_text(text: str, compiled: List[re.Pattern],
             rep.accounts[orig] = ph
     out: List[str] = []
     for lineno, line in enumerate(text.split("\n"), start=1):
-        line, k = _EMAIL.subn("redacted@example.com", line)
-        rep.emails += k
+        rep.emails += _emails_found(line)
+        line = _EMAIL.sub("redacted@example.com", line)
         at = _comment_at(line)
         if at < len(line):
             line = line[:at] + _redact_contact(line[at:], rep, lineno)
         for pat in compiled:
             line, k = pat.subn("REDACTED", line)
             rep.patterns += k
+        at = _comment_at(line)
+        if at < len(line) and line[at:].strip() not in _generated_comments():
+            _review(lineno, line[at + 1:], "a comment", rep)
         out.append(line)
     return "\n".join(out), rep
 
@@ -2580,7 +2679,17 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                "files to redact: taxjson redact FILE ..."])
         return 2
     dst = out if out is not None else root / TREE_DEFAULT
-    shown_dst = (relpath(dst, root) if out is None else str(dst)).rstrip("/") + "/"
+    # The copy as the shell reaches it: inputs_redact/ in the project's
+    # own folder; else (-C DIR, --out DIR: a relative DIR is the shell's
+    # folder's) its full path — `Review inputs/` named the project's
+    # unredacted exports, and `taxjson -C inputs_redact/ run` a folder
+    # the shell did not have (backlog TJ-0100, TJ-0110).
+    try:
+        here = Path.cwd().resolve() == root.resolve()
+    except (OSError, RuntimeError):
+        here = False
+    shown_dst = (relpath(dst, root) if out is None and here
+                 else os.path.abspath(dst)).rstrip("/") + "/"
     if not check_only:
         why = _check_dest(dst, inputs, force, shown_dst)
         if why:
@@ -2612,6 +2721,16 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     # The configuration's broker ids (GitHub #22): replaced in its copy
     # and, id-shaped, wherever they appear in the exports and file names.
     cfg_ids = config_ids(root)
+    # `--check` of a copy this command wrote (its marker): the copy's
+    # own placeholders are redacted already (backlog TJ-0097).
+    stand_ins = check_only and in_redacted_copy(inputs)
+    if stand_ins:
+        for v in cfg_ids[0]:
+            if _is_placeholder_id(v):
+                known_ids.setdefault(v, v)
+        cfg_ids = ([v for v in cfg_ids[0] if not _is_placeholder_id(v)],
+                   [v for v in cfg_ids[1]
+                    if set(re.sub(r"\D", "", v)) - {"9"}])
     for f in files:
         if f.skip is not None:
             continue
@@ -2647,7 +2766,8 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                 cfg_ids if f.rel == Path(_PL.CONFIG) else ([], []))
             continue
         f.orig = text
-        f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms)
+        f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms,
+                                    stand_ins)
         f.rep.patterns += sum(len(p.findall(f.rel.stem)) for p in compiled)
         if enc != "utf-8":
             f.rep.notes.append(f"The input was {enc}; the copy is UTF-8.")
@@ -2745,7 +2865,8 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         _diag("error", f"{dst}: {e.strerror or e} — nothing written")
         return 2
     step(f"Done. Review {shown_dst} before sharing it."
-         + (f" It is a single-folder project of {root.name}: inputs/ "
+         + (f" It is a single-folder project of "
+            f"{Path(os.path.abspath(root)).name}: inputs/ "
             f"(the shared exports and the year's own), holdings/, "
             f"taxjson.toml and ticker.map; `taxjson -C {shown_dst} run` "
             f"runs it." if shared else ""))
@@ -2818,13 +2939,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             _diag("error", f"{f}: not a file")
             rc = 2
             continue
-        if src.stem.endswith(".redacted"):
+        if src.stem.endswith(".redacted") and not args.check:
+            # Never NAME.redacted.redacted.EXT; `--check` reads it
+            # (backlog TJ-0097: a leak in the copy passed the check).
             _diag("note", f"{f}: already a redacted copy — skipped")
             continue
         try:
             dst, rep = redact_file(src, Path(args.out) if args.out else None,
                                    extra, args.check, args.force,
-                                   known_ids, written, pseudonyms)
+                                   known_ids, written, pseudonyms,
+                                   args.check and in_redacted_copy(src))
         except InputRefused as e:
             _diag("error", str(e))
             rc = 2

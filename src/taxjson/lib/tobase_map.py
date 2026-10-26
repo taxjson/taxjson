@@ -1296,6 +1296,9 @@ class SharedPlan:
     sharing: List[int] = field(default_factory=list)
     # Canadian years with no tobase.map at all (left as they are).
     without: List[int] = field(default_factory=list)
+    # Filed years reading the copy close-year froze: their own by
+    # design, never pointed at the shared file (backlog TJ-0086).
+    frozen: List[int] = field(default_factory=list)
     identical: bool = True
     source: str = ""              # whose text the shared file gets
     text: bytes = b""
@@ -1339,8 +1342,10 @@ def plan_shared(folder) -> SharedPlan:
         return plan
     plan.set_years = sorted(y for y in plan.copies
                             if y not in plan.sharing)
+    plan.frozen = sorted(lay["frozen"])
     for y, d in _PL.year_dirs(folder):
         if y not in plan.copies and y not in plan.sharing \
+                and y not in lay["frozen"] \
                 and project_country(d) == "canada":
             plan.without.append(y)
     # Each candidate: (year, label, bytes). The shared file counts as the
@@ -1382,8 +1387,12 @@ def plan_shared(folder) -> SharedPlan:
             continue
         try:
             tf = parse_tobase(data.decode("utf-8-sig"))
-        except UnicodeDecodeError:
-            plan.problems.append(f"{label} is not UTF-8 text")
+        except UnicodeDecodeError as e:
+            # Named as the winner is: the byte and where (TJ-0050).
+            plan.problems.append(
+                f"{label} is not UTF-8 text (byte "
+                f"0x{e.object[e.start]:02x} at offset {e.start}) — save "
+                f"it as UTF-8 in your editor first")
             continue
         mine = [ln.rule for ln in tf.lines if ln.rule not in have and (
             not ln.figi or is_edited(ln, master))]

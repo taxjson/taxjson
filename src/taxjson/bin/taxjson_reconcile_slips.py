@@ -986,12 +986,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             if "*" in str(sp) or "?" in str(sp):
                 # The documented `inputs/slips/*.csv` with no slip saved
                 # yet reaches here unexpanded (workflow audit 2026-10).
+                # With no slip file the checklist's t5008 step is to do,
+                # not flagged: a plain --done marks it (backlog TJ-0046).
                 _out.fail(f"no slip CSV matches {sp}: nothing to "
                           f"reconcile yet", prog="taxjson reconcile-slips",
                           details=["Save the broker's T5008 / 1099-B slip "
-                                   "CSV there (docs/filing.md), or skip "
-                                   "the step: `taxjson checklist --done "
-                                   "t5008 --force`."], code=2)
+                                   "CSV there (docs/filing.md); with no "
+                                   "slip to reconcile, mark the step done: "
+                                   "`taxjson checklist --done t5008`."],
+                          code=2)
             _out.fail(f"no such file: {sp}", prog="taxjson reconcile-slips",
                       code=2)
         if not sp.is_file():

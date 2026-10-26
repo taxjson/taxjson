@@ -259,7 +259,7 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
             close = min(held, c)
             longs[key] = held - close
             if close > _EPS and r.get("action") == "ASSIGN":
-                exercises.append({"date": date_of(r),
+                exercises.append({"date": date_of(r), "symbol": sym,
                                   "in_books": in_books is None
                                   or bool(in_books(r))})
             rest = c - close
@@ -287,7 +287,7 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
                 # A write from before the data: its premium is unknown,
                 # so its close is not a trade (counted, never silent).
                 if not unknown_said:
-                    unknown.append({"date": date_of(r),
+                    unknown.append({"date": date_of(r), "symbol": sym,
                                     "in_books": in_books is None
                                     or bool(in_books(r))})
                     unknown_said = True
@@ -615,18 +615,24 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
                   date_of: Callable[[Dict[str, Any]], str],
                   crypto_accounts: Iterable[str] = (),
                   in_books: Optional[Callable[[Dict[str, Any]], bool]] = None,
+                  symbol_ok: Optional[Callable[[str], bool]] = None,
                   ) -> Dict[str, Any]:
     """Every closed trade in the window `keep` (applied to
     `date_of(row)`), one record each: {date, symbol, underlying (an
     option's share listing, else the symbol), account, cls, pnl,
     kind (a written option's close)}; with the denied total, the
     tainted dispositions skipped and the option counts `compute`
-    reports.
+    reports. `symbol_ok(symbol)`, when given, keeps only the rows of
+    the symbols it accepts: the trades and the denied and unknown-cost
+    tallies alike (`win-rates SYMBOL`: backlog TJ-0025).
 
     gains_docs: {account: gains document} (the engine's rows);
     books: {account: base-currency book rows} for the same accounts
     (the written options and the assignment credits)."""
     crypto = set(crypto_accounts)
+    if symbol_ok is None:
+        def symbol_ok(_sym: str) -> bool:
+            return True
     out: List[Dict[str, Any]] = []
     denied = 0.0
     denied_n = 0
@@ -656,9 +662,11 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
         written += wo["trades"]
         # Counted in the window, as the trades are (2026-10 audit #67).
         exercised += sum(1 for e in wo.get("exercises") or []
-                         if e["in_books"] and keep(e["date"]))
+                         if e["in_books"] and keep(e["date"])
+                         and symbol_ok(str(e.get("symbol") or "")))
         tainted += sum(1 for u in wo.get("unknown") or []
-                       if u["in_books"] and keep(u["date"]))
+                       if u["in_books"] and keep(u["date"])
+                       and symbol_ok(str(u.get("symbol") or "")))
         for sid, amt in credits_by_sale(rows, wo["credits"],
                                         covers.get(acct)).items():
             credit[(acct, sid)] = credit.get((acct, sid), 0.0) + amt
@@ -676,7 +684,8 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
 
     for acct, doc in gains_docs.items():
         for t in doc.get("manual_reporting_required") or []:
-            if isinstance(t, dict) and keep(date_of(t)):
+            if (isinstance(t, dict) and keep(date_of(t))
+                    and symbol_ok(str(t.get("symbol") or ""))):
                 tainted += 1
         for t in doc.get("transactions") or []:
             if not isinstance(t, dict) or "gain" not in t:
@@ -684,6 +693,8 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
             if t.get("action") in _INCOME or t.get("deemed"):
                 continue
             if not keep(date_of(t)):
+                continue
+            if not symbol_ok(str(t.get("symbol") or "")):
                 continue
             denied += _f(t.get("disallowed_amount"))
             if _f(t.get("disallowed_amount")) > 0.001:
@@ -708,6 +719,8 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
 
     for tr in written:
         if not tr["in_books"] or not keep(tr["date"]):
+            continue
+        if not symbol_ok(str(tr["symbol"] or "")):
             continue
         if tr["kind"] == "assigned":
             assigned += 1

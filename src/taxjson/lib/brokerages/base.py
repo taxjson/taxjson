@@ -447,6 +447,40 @@ def extract_words_match(desc_sub: str, desc: str) -> bool:
                      + r'(?![a-z0-9])', (desc or '').lower()) is not None
 
 
+# The advice of every "two downloads pasted into one file" refusal.
+PASTED_EXPORTS_FIX = ("Save each download as its own file in the folder: "
+                      "rows two exports share are then read once.")
+
+
+def refuse_pasted_overlap(name: str, segments, what: str) -> None:
+    """Refuse a file holding two downloads pasted together that share
+    rows (backlog TJ-0099). `segments` is one (start line, [(line, row
+    content)]) per export in the file: the first, then one from each
+    repeated `what` (the header, the statement preamble). A row of one
+    content in two segments is the overlap of two downloads: inside one
+    file it was booked twice (two identical rows of one file are two
+    fills), while two files' overlap is read once (taxjson-sort
+    --dedup). Downloads that share no row are booked as they are."""
+    first: Dict[tuple, Tuple[int, int]] = {}
+    shared: List[Tuple[int, int, int]] = []
+    for si, (_start, rows) in enumerate(segments):
+        mine: Dict[tuple, Tuple[int, int]] = {}
+        for line, key in rows:
+            prev = first.get(key)
+            if prev is not None and prev[0] != si:
+                shared.append((prev[1], line, si))
+            mine.setdefault(key, (si, line))
+        for key, hit in mine.items():
+            first.setdefault(key, hit)
+    if shared:
+        a, b, si = shared[0]
+        raise BrokerageParseError(
+            f"{name} line {segments[si][0]}: {what} repeats here — two "
+            f"downloads pasted into one file, and {len(shared)} row(s) "
+            f"are in both (line {b} repeats line {a}), so they would be "
+            f"booked twice. {PASTED_EXPORTS_FIX}")
+
+
 def shown_name(path) -> str:
     """A file's name as diagnostics print it: account-id-shaped tokens
     masked to their first 2 characters + *** (the parsers' rule for ids
@@ -578,6 +612,11 @@ def desc_number(text: str, *, where: str = '', field: str = 'value',
 
 
 # Unicode minus signs and dashes spreadsheets substitute for '-'.
+# The money and quantity columns BaseBrokerage.require_columns names
+# when it refuses a missing one (the others get a reason of their own).
+_MONEY_COLUMNS = frozenset({'Amount', 'Proceeds', 'Value', 'T. Price',
+                            'Comm/Fee', 'Market Value', 'Notional Value',
+                            'Quantity', 'Qty'})
 _MINUS_CHARS = ('−', '‒', '–', '—', '﹣', '－')
 _CURRENCY_SIGNS = ('$', '€', '£', '¥')
 
@@ -783,6 +822,21 @@ class BaseBrokerage:
 
     def note_row_consumed(self) -> None:
         self._rows_consumed += 1
+
+    def note_row_line(self, tx: Dict[str, Any], line: Optional[int]) -> None:
+        """Remember the export line a parsed row dict came from, for a
+        message about the row after the parse (the schema check names
+        `FILE line N`, not a masked content id: backlog TJ-0124). The
+        first line given wins; the row is held so its id() is never
+        another row's."""
+        if line:
+            self.__dict__.setdefault('_row_lines', {}).setdefault(
+                id(tx), (tx, line))
+
+    def row_line(self, tx: Dict[str, Any]) -> Optional[int]:
+        """The export line note_row_line gave for `tx`, or None."""
+        hit = self.__dict__.get('_row_lines', {}).get(id(tx))
+        return hit[1] if hit is not None and hit[0] is tx else None
 
     # Skip-category prefix for rows the parser RECOGNIZES as non-events
     # (a fiat deposit, an FX conversion, a statement-metadata section).
@@ -1009,18 +1063,31 @@ class BaseBrokerage:
         or currency columns. `required` items may be a tuple of
         alternatives (any one present satisfies it)."""
         missing = []
+        gone = set()
         for col in required:
             alts = col if isinstance(col, tuple) else (col,)
             if not any(a in header_map for a in alts):
                 missing.append(' or '.join(repr(a) for a in alts))
+                gone.update(alts)
         if missing:
             loc = f"{where}: " if where else ''
+            # The reason fits the columns missing: a Code column was
+            # refused as "a missing money column" (backlog TJ-0053).
+            why = []
+            if gone & _MONEY_COLUMNS:
+                why.append("a missing money column read as 0 corrupts "
+                           "the return")
+            if 'Code' in gone:
+                why.append("without the Code column a cancelled row "
+                           "(code Ca) reads as a new event")
+            if gone - _MONEY_COLUMNS - {'Code'}:
+                why.append("a row's date, security, currency or kind "
+                           "cannot be read without it")
             raise BrokerageParseError(
                 f"{loc}section {section!r} is missing required "
                 f"column(s) {', '.join(missing)} — refusing to guess "
-                f"(a missing money column read as 0 corrupts the "
-                f"return). Re-export the statement in the standard "
-                f"English layout.")
+                f"({'; '.join(why)}). Re-export the statement in the "
+                f"standard English layout.")
 
     # ------------------------------------------------------- fee back-compute
 

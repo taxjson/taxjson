@@ -242,8 +242,8 @@ class TestOutputs(unittest.TestCase):
         text = _flat(r.stdout)
         self.assertIn("claimed as your filing position against §1091 "
                       "(ALLOWLOSS inputs/margin/m.tt:4): the rule would "
-                      "disallow $1000.00; the books allow it", text)
-        self.assertNotIn("$1000.00 is added to the replacement's basis",
+                      "disallow 1,000.00 USD; the books allow it", text)
+        self.assertNotIn("1,000.00 USD is added to the replacement's basis",
                          text)
 
     def test_carryover_both(self):

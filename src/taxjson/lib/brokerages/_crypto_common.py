@@ -180,6 +180,27 @@ def missing_timezone_message(where: str = "project") -> str:
             f"local_timezone ({hint}).")
 
 
+def timezone_typo(settings) -> Optional[str]:
+    """The [settings] key that looks like a misspelled local_timezone
+    (`local_timezoen`, `Local_Timezone`), else None: the run's and the
+    checklist's 'has no local_timezone' name it, as the unknown-key
+    warning they stop before would have (backlog TJ-0034)."""
+    import difflib
+    keys = {str(k).lower(): str(k) for k in (settings or {})
+            if k != "local_timezone"}
+    close = difflib.get_close_matches("local_timezone", list(keys), n=1,
+                                      cutoff=0.8)
+    return keys[close[0]] if close else None
+
+
+def timezone_typo_note(settings) -> str:
+    """` (it has 'local_timezoen': is that local_timezone misspelled?)`,
+    or "" when no [settings] key looks like one."""
+    typo = timezone_typo(settings)
+    return (f" (it has {typo!r}: is that local_timezone misspelled?)"
+            if typo else "")
+
+
 def local_tz_name() -> str:
     """The zone crypto rows are dated in (TAXJSON_LOCAL_TZ; `taxjson`
     sets it from [settings] local_timezone). LocalTimezoneMissing when

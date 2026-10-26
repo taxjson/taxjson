@@ -146,7 +146,10 @@ scan_notes() {
 # main takes pull requests only: scripts/land.sh pushes the new commits as
 # a branch, opens the pull request, has it rebase-merged once its checks
 # pass and brings local main to what landed (it runs the pre-push PII gate
-# first). Every push of main this script makes goes through here.
+# first). Every push of main this script makes goes through here. Those
+# checks include the publish kit's (kit-checks.yml, on the very tree the
+# cut tags), so --prepare runs no scripts/kit_checks.py of its own
+# (docs/releasing.md, "Dependency and code checks").
 publish_main() {
   bash scripts/land.sh
 }

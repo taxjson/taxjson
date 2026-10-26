@@ -47,10 +47,12 @@ _SUGAR_ACTIONS = ('ACQUIRED', 'INKIND')
 # SPLIT row in each account holding the old symbol) — they are checked
 # here and never rows of the converted file.
 _EVENT_ACTIONS = ('JOURNAL', 'RENAME', 'ALLOWLOSS', 'FXCONV', 'CASHMOVE',
-                  'CASHOPEN', 'CASHBAL', 'CASHBOOK')
+                  'CASHOPEN', 'CASHBAL', 'CASHBOOK', 'NOTOWN')
 # ALLOWLOSS (lib/loss_overrides) is a filing position against the loss
 # rule on one sale of the account: read by `taxjson run`, checked here,
-# never a row of the books.
+# never a row of the books. NOTOWN (lib/transfer_in.NotOwn) undoes one
+# pairing of a transfer-in with a transfer-out as a move of your own:
+# read by `taxjson run`, checked here, never a row of the books.
 JOURNAL_FORM = "JOURNAL <date> <FROM> <TO> <qty> [separate]"
 # The trailing word that marks a .tt JOURNAL line as a journal of its
 # own, never a restatement of a broker's journal near it
@@ -68,6 +70,25 @@ _MAX_TOKENS = {
     'BUYSELL': 10, 'ASSIGN': 10, 'SPLIT': 6,
     'DIVIDEND': 9, 'DIVIDEND_IN_LIEU': 9, 'TAX': 9,
     'INTEREST': 5, 'FEE': 5, 'ADJUST': 6, 'DISALLOW': 6,
+}
+# Each row action's fields, the required ones first (docs/settings.md,
+# ".tt files"): a short line is named with the fields it lacks — the
+# reader indexed past its end and said "IndexError: list index out of
+# range" (backlog TJ-0128).
+_FORMS = {
+    'BUYSELL': ('DATE TIME SYMBOL QTY CUR PRICE TOTAL', '[FEE] [xSIZE]'),
+    'ASSIGN': ('DATE TIME SYMBOL QTY CUR PRICE TOTAL', '[FEE] [xSIZE]'),
+    'TRANSFER': ('DATE TIME SYMBOL QTY CUR PRICE TOTAL', '[DECLARED]'),
+    'SPLIT': ('DATE TIME OLD NEW RATIO', ''),
+    'DIVIDEND': ('DATE TIME SYMBOL QTY CUR PRICE GROSS', '[NET] [facts]'),
+    'DIVIDEND_IN_LIEU': ('DATE TIME SYMBOL QTY CUR PRICE GROSS',
+                         '[NET] [facts]'),
+    'TAX': ('DATE TIME SYMBOL QTY CUR PRICE GROSS', '[NET] [facts]'),
+    'INTEREST': ('DATE TIME CUR AMOUNT', ''),
+    'FEE': ('DATE TIME CUR AMOUNT', ''),
+    'ADJUST': ('DATE TIME SYMBOL CUR AMOUNT',
+               '[type=roc|dist] [record=YYYY-MM-DD]'),
+    'DISALLOW': ('DATE TIME SYMBOL CUR AMOUNT', ''),
 }
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # Futures symbol prefixes (lib/futures.py): the contract size is not on
@@ -101,6 +122,23 @@ def strip_tt_comment(line: str) -> str:
     silently granted the attestation token."""
     i = line.find('#')
     return line if i < 0 else line[:i]
+
+
+def tt_lines(text: str) -> list:
+    """A .tt file's lines as `tt_to_json` reads and numbers them (and an
+    editor shows them): split at a line feed only — read_text has made
+    \\r\\n and \\r one — without the line ends, no final empty piece.
+    str.splitlines also splits at a form feed, a vertical tab, U+001C-
+    U+001E, U+0085, U+2028 and U+2029 inside a line: a reader that used
+    it numbered every later line differently from the books and read
+    the text after one in a comment as a line of its own (check-tt,
+    backlog TJ-0029; the run's declared-line readers booked a RENAME,
+    an ALLOWLOSS or a cash line there). Every reader of a .tt file
+    splits it here."""
+    lines = text.split('\n')
+    if lines and lines[-1] == '':
+        lines.pop()
+    return lines
 
 
 def _where(source: str) -> str:
@@ -197,6 +235,16 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"{_where(source)}{action} row has {len(parts) - _max} "
             f"unexpected trailing token(s) {parts[_max:]} — put notes "
             f"after `#`: {line.strip()!r}")
+    _form = _FORMS.get(action)
+    if _form is not None and len(parts) < 1 + len(_form[0].split()):
+        _fields = _form[0].split()
+        _missing = _fields[len(parts) - 1:]
+        _named = (" and ".join(_missing) if len(_missing) < 3 else
+                  ", ".join(_missing[:-1]) + " and " + _missing[-1])
+        raise ValueError(
+            f"{_where(source)}{action} needs {_named} after "
+            f"{_fields[len(parts) - 2]} ({action} {_form[0]}"
+            f"{' ' + _form[1] if _form[1] else ''}): {line.strip()!r}")
 
     # Any short-row IndexError or bad-numeric ValueError below is a
     # malformed `.tt` row. Raise loudly with the offending line so the
@@ -360,13 +408,24 @@ def parse_tt_line(line: str, account_name: str = 'default',
             tx['currency'] = parts[4].upper()
             tx['net_amount'] = _tt_num(parts[5])
     except (ValueError, IndexError) as e:
+        # The reason and the line as written: never the Python
+        # exception's name or a repr with its line end (TJ-0128).
         raise ValueError(
             f"{_where(source)}taxjson-convert-tt: malformed .tt line "
-            f"({type(e).__name__}: "
-            f"{e}). Action={action!r}, line={line!r}. Hand-edit or remove "
-            f"the row before re-running — silent skip would lose a "
-            f"transaction the engine downstream needs."
+            f"({e}). Action={action!r}, line={line.strip()!r}. Hand-edit "
+            f"or remove the row before re-running — silent skip would "
+            f"lose a transaction the engine downstream needs."
         ) from e
+
+    # A SPLIT ratio of 0 or below is never a corporate action: refused
+    # here, at its line, as the books' loader refuses it (core.
+    # coerce_transaction_row) — that refusal named the converted work
+    # file, and `taxjson check-tt` said the line parses (TJ-0006).
+    if action == 'SPLIT' and not tx['quantity'] > 0:
+        raise ValueError(
+            f"{_where(source)}SPLIT ratio must be > 0 (got {parts[5]}) — "
+            f"a zero or negative ratio is never a real corporate action "
+            f"(RATIO is new shares per old: 0.1 for one-for-ten): {line.strip()!r}")
 
     # A SELL total is the net proceeds (qty x price - fee; direction
     # lives in the qty sign). A negative one is either a cash-signed
@@ -1364,7 +1423,7 @@ def tt_to_json(input_path: Path, account_name: str,
     # still parses, as fee 4 (audit A2-1086). Say so; editors and the
     # writers here always end the last line.
     if _text and not _text.endswith(('\n', '\r')):
-        _last = strip_tt_comment(_text.splitlines()[-1]).strip()
+        _last = strip_tt_comment(tt_lines(_text)[-1]).strip()
         if _last:
             emit_line(f"warning: {shown_name(input_path)}: the last line has no line "
                       f"end — if the file was cut short, its last number may "
@@ -1390,6 +1449,11 @@ def tt_to_json(input_path: Path, account_name: str,
             # read by `taxjson run`, never a row of the books.
             from taxjson.lib.loss_overrides import parse_line as _allowloss
             if _allowloss(line, source) is not None:
+                continue
+            # Not one move of your own (lib/transfer_in.NotOwn): read by
+            # `taxjson run`, never a row of the books.
+            from taxjson.lib.transfer_in import parse_not_own_line
+            if parse_not_own_line(line, source) is not None:
                 continue
             # A line of the FX-on-cash ledger v2 (lib/cash_events: FXCONV,
             # CASHMOVE, CASHOPEN, CASHBAL, CASHBOOK): checked here, read by

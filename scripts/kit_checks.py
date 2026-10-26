@@ -8,12 +8,13 @@ CI and by `kit preflight`. A dev repo keeps an unchanged copy as scripts/kit_che
 
 deps: osv-scanner reads the lock files kit-checks.toml lists and asks OSV about each pinned version.
 code: opengrep runs the kit's selection of the opengrep-rules security rules over the tree.
-Both tools and the rules are pinned here and checked (sha256; the rules by their git commit), and
-fetched once into the cache. Every hit blocks unless kit-checks.toml excepts it: one advisory in one
+Both tools and the rules are pinned here and checked (sha256; the rules file by file against their
+git commit's objects), and fetched once into the cache. Every hit blocks unless kit-checks.toml excepts it: one advisory in one
 lock file, or one rule in one path, each with a reason and an expiry date; an expired exception
 fails like a hit. Inline `nosemgrep` comments, .semgrepignore files and osv-scanner.toml are not
-honoured: the exceptions are in kit-checks.toml, in one place. Prints advisory ids, rule ids and
-locations, never a line of the code. Exit 0 clean, 1 a hit, 3 incomplete (as the gate).
+honoured: the exceptions are in kit-checks.toml, in one place. The code check takes no hit in the
+repo's scripts/kit_checks.py when it is this file unchanged: that is the kit's code, not the repo's.
+Prints advisory ids, rule ids and locations, never a line of the code. Exit 0 clean, 1 a hit, 3 incomplete (as the gate).
 
 Python 3.11 or later, standard library only.
 """
@@ -25,8 +26,10 @@ import hashlib
 import json
 import os
 import platform
+import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -87,6 +90,7 @@ def load_config(text: str) -> dict:
         if not sep:
             parser, path = ("requirements.txt" if f.endswith(".txt") else ""), f
         literal_path(path, "lock_files")
+        path = posixpath.normpath(path)               # as the reports write it: a/b, not ./a//b
         locks.append((f"{parser}:{path}" if parser else path, path))
     paths = {p for _, p in locks}
     out = {"lock_files": locks, "vuln_exceptions": [], "code_exceptions": []}
@@ -105,6 +109,7 @@ def load_config(text: str) -> dict:
                 raise Incomplete(f"{where}: expires must be a date, written expires = 2026-12-31 (no quotes)")
             for k in keys:
                 literal_path(e[k], f"{kind} {k}")
+            e[keys[1]] = posixpath.normpath(e[keys[1]])    # lock_file, path: as the reports write it
             if kind == "vuln_exceptions" and e["lock_file"] not in paths:
                 raise Incomplete(f"{where}: lock_file {e['lock_file']} is not in lock_files")
             out[kind].append(e)
@@ -188,6 +193,8 @@ def tool(name: str, given: str | None, env: str, version: str, url: str, builds:
     asset, sha = builds[machine]
     dest = cache / f"{name}-{version}-{machine}"
     if dest.is_file() and file_sha256(dest) == sha:
+        if not os.access(dest, os.X_OK):
+            os.chmod(dest, 0o755)                      # a cache restore can keep the bytes and drop the mode
         return str(dest), f"{version}, pinned"
     fetch(url.format(version=version, asset=asset), sha, dest)
     return str(dest), f"{version}, pinned, downloaded"
@@ -200,25 +207,93 @@ def git(d: Path, *args: str) -> tuple[int, str]:
 
 
 def rules_checkout(cache: Path) -> Path:
-    """opengrep-rules at RULES_COMMIT, unchanged (a cached one is checked again each time)."""
+    """opengrep-rules at RULES_COMMIT, unchanged: a cached one is checked again each time, file by
+    file (unchanged), and fetched again when it differs."""
     d = cache / f"opengrep-rules-{RULES_COMMIT[:12]}"
-    if d.is_dir() and git(d, "rev-parse", "HEAD") == (0, RULES_COMMIT) \
-            and git(d, "status", "--porcelain", "--untracked-files=all") == (0, ""):
+    if d.is_dir() and unchanged(d):
         return d
     shutil.rmtree(d, ignore_errors=True)
     tmp = Path(tempfile.mkdtemp(dir=cache, prefix=".rules."))
     try:
         for args in (("init", "-q"), ("fetch", "-q", "--depth", "1", RULES_REPO, RULES_COMMIT),
-                     ("-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD")):
+                     ("-c", "advice.detachedHead=false", "-c", "core.autocrlf=false", "checkout", "-q", "FETCH_HEAD")):
             code, out = git(tmp, *args)
             if code != 0:
                 raise Incomplete(f"could not fetch {RULES_REPO} at {RULES_COMMIT[:12]} (git {args[0]}: {out[-200:]})")
         if git(tmp, "rev-parse", "HEAD") != (0, RULES_COMMIT):
             raise Incomplete(f"{RULES_REPO} did not give commit {RULES_COMMIT}")
+        if not unchanged(tmp):
+            raise Incomplete(f"the checkout of {RULES_REPO} at {RULES_COMMIT[:12]} is not the commit's files "
+                             "(a git setting that changes files on checkout?)")
         os.replace(tmp, d)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return d
+
+
+def pinned_tree(d: Path) -> dict[str, tuple[bool, str]]:
+    """RULES_COMMIT's files as the git objects in d hold them: {path: (a symbolic link, blob id)}.
+    Each object read is checked against the id that names it, from RULES_COMMIT down (git does not
+    check what it reads back from its own store). Incomplete when one is missing or changed."""
+    files = {}
+    with subprocess.Popen(["git", "-C", str(d), "cat-file", "--batch"], stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          env={**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1"}) as p:
+        def read(oid: str, kind: bytes) -> bytes:
+            p.stdin.write(oid.encode() + b"\n")
+            p.stdin.flush()
+            head = p.stdout.readline().split()
+            if len(head) != 3 or head[1] != kind or not head[2].isdigit():
+                raise Incomplete(f"{d}: object {oid} is missing or not a {kind.decode()}")
+            body = p.stdout.read(int(head[2]) + 1)[:-1]
+            if hashlib.sha1(b"%s %d\0" % (kind, len(body)) + body).hexdigest() != oid:
+                raise Incomplete(f"{d}: object {oid} is not the one its id names")
+            return body
+        commit = read(RULES_COMMIT, b"commit")
+        if not re.match(rb"tree [0-9a-f]{40}\n", commit):
+            raise Incomplete(f"{d}: commit {RULES_COMMIT[:12]} names no tree")
+        trees = [("", commit[5:45].decode())]
+        while trees:
+            prefix, oid = trees.pop()
+            body, i = read(oid, b"tree"), 0
+            while i < len(body):                       # entries: <mode> <name>\0<20-byte id>
+                sp = body.index(b" ", i)
+                nul = body.index(b"\0", sp)
+                mode, name, entry = body[i:sp], os.fsdecode(body[sp + 1:nul]), body[nul + 1:nul + 21].hex()
+                i = nul + 21
+                if mode == b"40000":
+                    trees.append((f"{prefix}{name}/", entry))
+                elif mode != b"160000":                # a submodule is not checked out
+                    files[prefix + name] = (mode == b"120000", entry)
+    return files
+
+
+def unchanged(d: Path) -> bool:
+    """d's files are RULES_COMMIT's, byte for byte, with nothing added: each one (an ignored one too)
+    hashed as git hashes a blob, against the commit's objects (pinned_tree). Not git status, which
+    trusts the index (its stat data, assume-unchanged and skip-worktree) and leaves ignored files out."""
+    def fail(e: OSError):
+        raise e
+    have = {}
+    try:
+        want = pinned_tree(d)
+        for root, dirs, names in os.walk(d, onerror=fail):
+            if root == str(d):
+                dirs.remove(".git")
+            for name in names + [x for x in dirs if os.path.islink(os.path.join(root, x))]:
+                p = os.path.join(root, name)
+                mode = os.lstat(p).st_mode
+                if stat.S_ISLNK(mode):
+                    data = os.fsencode(os.readlink(p))
+                elif stat.S_ISREG(mode):
+                    data = Path(p).read_bytes()
+                else:                                   # a fifo or a device is no rule file
+                    return False
+                blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+                have[os.path.relpath(p, d)] = (stat.S_ISLNK(mode), blob)
+    except (Incomplete, OSError, ValueError):
+        return False
+    return have == want
 
 
 def selected(rel: str, text: str) -> bool:
@@ -259,6 +334,10 @@ def deps(repo: Path, cfg: dict, osv: str, today: dt.date) -> tuple[list[dict], s
     missing = [p for _, p in cfg["lock_files"] if not (repo / p).is_file()]
     if missing:
         raise Incomplete(f"lock_files not in the tree: {', '.join(missing)} (fix {CONFIG})")
+    outside = [p for _, p in cfg["lock_files"] if not (repo / p).resolve().is_relative_to(repo.resolve())]
+    if outside:     # osv-scanner would read, and ask OSV about, a file of this machine's
+        raise Incomplete(f"lock_files outside the tree (through a symbolic link): {', '.join(outside)} "
+                         f"(the check reads the tree's own files only: fix the link or {CONFIG})")
     with tempfile.TemporaryDirectory() as tmp:
         empty = Path(tmp) / "osv-scanner.toml"            # instead of any osv-scanner.toml in the repo
         empty.write_text("")
@@ -268,10 +347,9 @@ def deps(repo: Path, cfg: dict, osv: str, today: dt.date) -> tuple[list[dict], s
         r = subprocess.run(args, cwd=repo, capture_output=True, text=True)
     if r.returncode not in (0, 1):
         raise Incomplete(f"osv-scanner exited {r.returncode}: {r.stderr.strip()[-300:]}")
-    try:
-        report = json.loads(r.stdout or "{}")
-    except json.JSONDecodeError:
-        raise Incomplete("osv-scanner's output is not JSON") from None
+    report = json_report("osv-scanner", r.stdout)
+    if "results" not in report or not isinstance(report["results"], (list, type(None))):   # null: Go's empty list
+        raise Incomplete("osv-scanner printed no report (its JSON has no results)")
     hits = []
     for res in report.get("results") or []:
         src = Path(res.get("source", {}).get("path", ""))
@@ -305,20 +383,51 @@ def code(repo: Path, opengrep: str, rules: Path) -> tuple[list[dict], str]:
                             "--quiet", "."], cwd=repo, capture_output=True, text=True)
     if r.returncode != 0:
         raise Incomplete(f"opengrep exited {r.returncode}: {r.stderr.strip()[-300:]}")
-    try:
-        report = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        raise Incomplete("opengrep's output is not JSON") from None
+    report = json_report("opengrep", r.stdout)
+    paths = report.get("paths")
+    if not (isinstance(report.get("results"), list) and isinstance(report.get("errors"), list)
+            and isinstance(paths, dict) and isinstance(paths.get("scanned"), list)):
+        # A report of no files scanned still lists them (none): this is no report at all.
+        raise Incomplete("opengrep printed no report (its JSON lacks results, errors or paths.scanned)")
     errors = [e for e in report.get("errors") or [] if e.get("level") != "warn"]
     if errors:   # a rule that did not load, a file it stopped on: not a clean answer
         kinds = sorted({str(e.get("type") if isinstance(e.get("type"), str) else (e.get("type") or ["?"])[0]) for e in errors})
         raise Incomplete(f"opengrep reported {len(errors)} errors ({', '.join(kinds)})")
     partial = len({e.get("path") for e in report.get("errors") or [] if e.get("level") == "warn"})
-    hits = [{"rule": h.get("check_id", "?").split(RULES_MARK + ".", 1)[-1], "path": h.get("path", "?"),
+    hits = [{"rule": h.get("check_id", "?").split(RULES_MARK + ".", 1)[-1],
+             "path": posixpath.normpath(h.get("path") or "?"),          # as kit-checks.toml's are kept
              "line": h.get("start", {}).get("line", 0)} for h in report.get("results") or []]
+    own = own_copy(repo)
+    if own:
+        hits = [h for h in hits if h["path"] != SCRIPT_PATH]
     scanned = len((report.get("paths") or {}).get("scanned") or [])
     return hits, (f"rules {RULES_COMMIT[:12]} ({n} files), {scanned} files scanned"
-                  + (f" ({partial} parsed in part)" if partial else ""))
+                  + (f" ({partial} parsed in part)" if partial else "")
+                  + (f", {SCRIPT_PATH} this checker's own (its hits not the repo's)" if own else ""))
+
+
+def own_copy(repo: Path) -> bool:
+    """Whether the repo's SCRIPT_PATH is this very file, byte for byte, and a file, not a link. Its hits
+    are then the kit's code, reviewed in the kit (it names git objects by their SHA-1 ids, which the
+    sha1 rule flags), not the repo's. A changed copy, or anything else there, is checked as any file
+    is; kit doctor fails a changed copy too."""
+    p = repo / SCRIPT_PATH
+    try:
+        return stat.S_ISREG(os.lstat(p).st_mode) and p.read_bytes() == Path(__file__).read_bytes()
+    except OSError:
+        return False
+
+
+def json_report(tool: str, text: str) -> dict:
+    """The tool's JSON report: an empty output, or anything but a JSON object, is no report (never a
+    clean one)."""
+    try:
+        report = json.loads(text)
+    except json.JSONDecodeError:
+        report = None
+    if not isinstance(report, dict):
+        raise Incomplete(f"{tool} printed no report ({'an empty output' if not text.strip() else 'not a JSON object'})")
+    return report
 
 
 def apply_exceptions(hits: list[dict], entries: list[dict], match, today: dt.date) -> tuple[list, list, set]:

@@ -271,7 +271,7 @@ class TestB41PartialCoverageIsNotBooked(unittest.TestCase):
                              ["PARTLY covered"])
             t = cli(root, "transfers").stdout
             self.assertIn("PARTLY_covered", t)
-            self.assertIn("only partly covered by .tt purchases, NOT "
+            self.assertIn("only partly covered, NOT "
                           "booked (QZX.TO)", t)
             # The other units declared: covered, quiet.
             (root / "inputs" / "margin" / "start.tt").write_text(
