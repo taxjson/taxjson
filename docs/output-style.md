@@ -336,7 +336,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Merging the exports`, `==> Sorting, de-duplicating`, `==> Mapping tickers`, `==> Looking up crypto prices`, `==> Converting currency to CAD` | the books (crypto) |
 | `==> Writing crypto sends inputs/crypto/crypto_sends.tt` | decided sends booked |
 | `==> Calculating capital gains` | the gains |
-| `==> Writing holdings reports/tfsa_holdings.toml` | equity accounts (the native-currency holdings stages are not shown) |
+| `==> Writing holdings reports/tfsa_holdings.toml` | every account (a securities account's native-currency holdings stages are not shown) |
 | `==> Writing summary reports/tfsa.sum` | every account |
 | `==> Combining sheltered accounts` | registered accounts, for the loss checks |
 | `==> Checking for missing purchase history` | a position goes short with no purchase in the files: after every account's books, each one that bears on the tax year as a `Warning:` (or one `Info:` per taxable account), the rest in ONE `Info:` line naming `find-missing-history` (`--write-missing-history --outside-year` in its detail, `run --details`) |

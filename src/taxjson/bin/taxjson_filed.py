@@ -36,6 +36,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from taxjson.lib import channels as _channels
 from taxjson.lib import cli_diag
 
 PROG = "taxjson-filed"
@@ -44,6 +45,8 @@ _TOL = 0.01
 _NUMERIC_KEYS = ("realized", "disallowed", "income", "dividend", "pil",
                  "proceeds", "st_gain", "lt_gain", "dispositions",
                  "tainted")
+# The RETURN row's figures (close-year's _return_row_totals).
+_RETURN_ROW_KEYS = ("realized", "disallowed")
 
 
 def _finite_num(v: Any) -> bool:
@@ -57,9 +60,11 @@ def _finite_num(v: Any) -> bool:
             and math.isfinite(float(v)))
 
 
-# What every OK line says the lock does not cover (S032-11).
+# What every OK line says the lock does not cover (S032-11); the RETURN
+# row is checked for its shape only (backlog TJ-0274).
 NOT_LOCKED = ("interest, foreign tax withheld and the FX gain on foreign "
-              "cash are not locked")
+              "cash are not locked; the RETURN row (return_row) is not "
+              "recomputed")
 
 
 def form_lines(entries: List[Dict[str, Any]], *, crypto: bool = False,
@@ -282,6 +287,9 @@ def write_snapshot(root: Path, year, country: str, basis: str,
         "country": country,
         "basis": basis,
         "closed_at": datetime.now().isoformat(timespec="seconds"),
+        # Which taxjson computed the figures (backlog TJ-0341):
+        # check-filed names it when a later run drifts from them.
+        "taxjson": _channels.running_build(),
         "accounts": accounts,
         "totals": totals,
         # 'tainted' includes manual_reporting_required rows; locks
@@ -390,6 +398,21 @@ def lock_shape_problem(lock: Any, year) -> Optional[str]:
         if k in _NUMERIC_KEYS and not _finite_num(v):
             return (f"records totals.{k} as {v!r}, not a finite number — "
                     f"the lock is damaged")
+    # The RETURN row close-year recorded (`taxjson sum`'s, each sale's
+    # cents): not recomputed by the drift check (display only there),
+    # but `taxjson years` shows it and the next year's carryover takes
+    # it as the filed figure (Canada), so a damaged one is a damaged
+    # lock, never passed over in silence (backlog TJ-0274).
+    if "return_row" in lock:
+        rr = lock.get("return_row")
+        if not isinstance(rr, dict):
+            return ("records return_row as "
+                    + ("null" if rr is None else type(rr).__name__)
+                    + ", not a table — the lock is damaged")
+        for k in _RETURN_ROW_KEYS:
+            if k in rr and not _finite_num(rr[k]):
+                return (f"records return_row.{k} as {rr[k]!r}, not a "
+                        f"finite number — the lock is damaged")
     y = lock.get("year")
     if y is not None:
         try:

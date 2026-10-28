@@ -72,9 +72,9 @@ GENERIC = "generic"
 
 
 def _iso_date(text: str) -> str:
-    """argparse type for --since: a real YYYY-MM-DD date. The filter
-    compares date strings, so '2025-6-1' or '2025/06/01' silently
-    dropped every fee at exit 0 (S031-06)."""
+    """argparse type for --since / --until: a real YYYY-MM-DD date.
+    The filter compares date strings, so '2025-6-1' or '2025/06/01'
+    silently dropped every fee at exit 0 (S031-06)."""
     from datetime import date
     try:
         if len(text) != 10:
@@ -145,9 +145,11 @@ def add_stat(s: Dict[str, Any], fee: float, qty: float,
 
 
 def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
-              deleted=frozenset()):
+              deleted=frozenset(), until=None):
     """Walk the parsed files, dedup by id, accumulate per-key buckets.
-    Each bucket = {'base': stats, 'cur': {CUR: stats}}."""
+    Each bucket = {'base': stats, 'cur': {CUR: stats}}. `since` /
+    `until`: the first and last trade date counted (inclusive; None:
+    no bound)."""
     buckets: Dict[str, Dict[str, Any]] = {}
     grand = {"base": new_stats(), "cur": {}}
     brokers_seen: set = set()
@@ -223,6 +225,10 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         if year and not date.startswith(year):
             continue
         if since and (not date or date < since):
+            continue
+        # A window ends: `fees-sum 30d` / `mtd` / `ytd` pass today, so a
+        # trade dated after it is not in them (backlog TJ-0329).
+        if until and (not date or date[:10] > until):
             continue
         if i in dropped:
             n_dups += 1
@@ -468,7 +474,7 @@ class _StdoutList:
 # ---------------------------------------------------------------- json render
 
 def render_json(buckets, grand, info, *, to_curr, by_account, year,
-                since=None) -> str:
+                since=None, until=None) -> str:
     def serialize(bucket):
         # The no-data path hands us a bare {"total": 0.0} placeholder —
         # indexing bucket["base"] raised KeyError and broke the FUZZ #H
@@ -492,7 +498,8 @@ def render_json(buckets, grand, info, *, to_curr, by_account, year,
         "meta": {
             "generated_at": datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"),
-            "year": year, "since": since, "base_currency": to_curr,
+            "year": year, "since": since, "until": until,
+            "base_currency": to_curr,
             "date_basis": "trade",
             "group_by": "account_brokerage" if by_account else "brokerage",
             "files_read": info["files_read"], "fee_rows": info["rows"],
@@ -523,6 +530,9 @@ def main():
     p.add_argument("--since", metavar="YYYY-MM-DD", type=_iso_date,
                    help="Only count fees on/after this date — the cutoff "
                         "channel `taxjson fees-sum PERIOD` drives.")
+    p.add_argument("--until", metavar="YYYY-MM-DD", type=_iso_date,
+                   help="Only count fees on/before this date (`taxjson "
+                        "fees-sum PERIOD` passes today with --since).")
     p.add_argument("--to", dest="to_curr", metavar="CURR",
                    # 'cad' / ' CAD' converted every CAD fee at the
                    # --default-rate fallback (A2-0645).
@@ -585,8 +595,11 @@ def main():
     buckets, grand, info = aggregate(
         files, year=year, since=args.since, to_curr=args.to_curr,
         history=history, default_rate=args.default_rate,
-        by_account=args.by_account, deleted=deleted)
-    scope = f"since {args.since}" if args.since else None
+        by_account=args.by_account, deleted=deleted, until=args.until)
+    scope = (f"since {args.since}" if args.since else None)
+    if args.until:
+        scope = (f"{scope} through {args.until}" if scope
+                 else f"through {args.until}")
 
     if not buckets:
         # No-data is SUCCESS (exit-code convention: 0 = success incl.
@@ -597,7 +610,7 @@ def main():
             print(render_json({}, {"total": 0.0}, info,
                               to_curr=args.to_curr,
                               by_account=args.by_account, year=year,
-                              since=args.since))
+                              since=args.since, until=args.until))
         else:
             scope_s = scope or (f"tax year {year}" if year else "all")
             print(f"No trading fees found ({scope_s}).")
@@ -609,7 +622,7 @@ def main():
     if args.json:
         print(render_json(buckets, grand, info, to_curr=args.to_curr,
                           by_account=args.by_account, year=year,
-                          since=args.since))
+                          since=args.since, until=args.until))
     else:
         for line in render_text(buckets, grand, info, to_curr=args.to_curr,
                                 by_account=args.by_account, year=year,

@@ -276,6 +276,19 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
     return doc
 
 
+def baseline_date(path: Path) -> Optional[str]:
+    """The saved baseline's `as_of`, or None, read without a word: a
+    run that compares nothing (its books incomplete, backlog TJ-0303)
+    names the baseline it keeps and records no new one, so
+    load_state's "recording a NEW baseline" would be false there."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    v = doc.get("as_of") if isinstance(doc, dict) else None
+    return v if isinstance(v, str) else None
+
+
 def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
                harvest_now: Optional[float],
                as_of: str) -> None:

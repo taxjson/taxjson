@@ -43,6 +43,7 @@ the detail.
 from __future__ import annotations
 
 import itertools
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1896,8 +1897,32 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "still deemed a dividend — take it from the dealer's "
                  "slip.", cont=True),
             Rule("CA-INC-04",
-                 "Crypto staking rewards are income at fair value when "
-                 "received; that value is the coins' cost."),
+                 "Centralized-exchange staking rewards are booked as "
+                 "income at Canadian-dollar fair value when credited; "
+                 "the acquired coins' fair value enters their ACB. The "
+                 "export's timestamp is dated in `local_timezone`; "
+                 "the run's crypto prices and exchange rates supply "
+                 "missing valuations. A later disposal has its own "
+                 "gain or loss, separate from reward income."),
+            Rule("CA-INC-STAKING",
+                 "Custodial staking assumption: Coinbase and Kraken "
+                 "imports treat rewards as an entitlement net of the "
+                 "platform commission. A commission withheld in the "
+                 "reward asset reduces received units, income and ACB; "
+                 "it is not another disposal or deduction. Coinbase "
+                 "uses Subtotal (or quantity times price); Kraken uses "
+                 "amount minus fee. A Kraken fee in another asset or "
+                 "fiat instead leaves the reward units and their full "
+                 "acquisition value intact, reduces booked income, and "
+                 "disposes of a separately paid fee coin where "
+                 "applicable. Cash/stablecoin approximations still "
+                 "apply (CA-CRYPTO-02). This is a software treatment, "
+                 "not a CRA ruling that every commission reduces gross "
+                 "income. Source balances establish the credit, not "
+                 "legal entitlement: check the applicable contract and "
+                 "tax treatment. Gross income plus a separate expense "
+                 "is not modeled and can have different AMT effects. "
+                 "Do not deduct a netted commission again."),
             Rule("CA-INC-05",
                  "Dividends are booked gross; withholding tax is its own "
                  "TAX row."),
@@ -2074,7 +2099,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A Kraken fee paid in a coin is a sale of that coin: on a "
                  "move of coins (a withdrawal, a deposit, a transfer to "
                  "another Kraken user or a Hybrid Earn withdrawal), on a "
-                 "fiat deposit or withdrawal, or on a staking reward."),
+                 "fiat deposit or withdrawal, or a staking fee paid in "
+                 "another coin. A commission withheld in the reward "
+                 "asset is already netted from the acquisition, not "
+                 "another sale (CA-INC-STAKING)."),
             Rule("CA-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
@@ -2197,7 +2225,36 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "(CA-CORP-13), a coin held below a millionth of a unit "
                  "is property with its cost amount (the share tolerance "
                  "does not apply to it), and a futures contract has no "
-                 "cost amount."),
+                 "cost amount. A property held at a known zero cost (free "
+                 "shares) is still a property row, and a cost unknown "
+                 "while the property was held (an opening of unknown "
+                 "cost) leaves its maximum cost for the year unknown, "
+                 "after a sale too."),
+            Rule("CA-RPT-19",
+                 "A property row is a position held long at some time in "
+                 "the year. A foreign position held only short in the "
+                 "year (a written option bought back or left to expire, "
+                 "a short sale covered) is an obligation, not property "
+                 "held: it is not a row and adds nothing to the "
+                 "per-country totals, and its cost amount is nil, so the "
+                 "threshold test is unchanged. It is named, and its gain "
+                 "or loss stays in the capital gains. A position held "
+                 "long at any time in the year keeps its row, with its "
+                 "whole gain for the year; a rename carries both to the "
+                 "new symbol."),
+            Rule("CA-RPT-18",
+                 "Each property row carries the form's category (1 funds "
+                 "held outside Canada, 2 shares of non-resident "
+                 "corporations, 3 indebtedness owed by non-residents, 4 "
+                 "interests in non-resident trusts, 5 real property "
+                 "outside Canada, 6 other property). It is taken from the "
+                 "instrument: 6 for an option, a futures contract or "
+                 "crypto, 2 for any other listed security. A security "
+                 "the interlisted master records as units or a fund is "
+                 "left without one and named, for the user to set. A "
+                 "`T1135 SYMBOL COUNTRY CATEGORY` line in ticker.map sets "
+                 "it (1 to 6, with a foreign country) and follows its "
+                 "symbol through a rename, as its country does."),
             Rule("CA-RPT-16",
                  "`taxjson stats` (and `taxjson win-rates`, the same "
                  "trades per ticker, account or month) is a view, not a "
@@ -2373,7 +2430,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "loss) and carried out (100% amounts); with "
                  "--filed-dispositions (Canada) the net capital loss is "
                  "the filed return's: the filed gain stands in for the "
-                 "books' dispositions. And the minimum tax carryover by "
+                 "books' dispositions (that year's sales only: a row "
+                 "dated in another year is refused, naming it, before "
+                 "anything is written, as is one a replaced lock "
+                 "recorded). And the minimum tax carryover by "
                  "year of "
                  "origin — opening, expired, recovered, created, carried "
                  "out. With no supported [settings] province it uses a "
@@ -2480,7 +2540,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson close-year` records each closed year's sales, "
                  "year-end positions and cost (each superficial-loss "
                  "addition where the engine lands it, so a January "
-                 "replacement's share is not in the Dec 31 cost), and "
+                 "replacement's share is not in the Dec 31 cost; the "
+                 "deferral it records in that cost is what the sales "
+                 "before Dec 31 left of each addition, released in "
+                 "their share as the engine's pools release it), and "
                  "trades settling in January; `taxjson handoff` checks the next year starts "
                  "from exactly that, so no sale is reported twice or "
                  "never. It also flags a written option carried out of "
@@ -2569,7 +2632,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "income, carry-forwards, deductions, province), a "
                  "month's tax being that run less the month before's; "
                  "the running total through December is the year's "
-                 "estimate. Planning numbers, never a filed figure."),
+                 "estimate. The foreign tax credit of a month's run is "
+                 "the withholding the books record by its end (the "
+                 f"{_pct(_te().CA_FOREIGN_WITHHOLDING)} assumption only "
+                 "for an account that records none in the year), as "
+                 "`estimate` credits the year's. Planning numbers, never "
+                 "a filed figure."),
         ]),
         ("Project country", _ownership(c)),
     ]
@@ -3788,8 +3856,31 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "a basis reduction), whoever the issuer or the dealer. "
                  "Form 1099-MISC / 1099-DIV is authoritative."),
             Rule("US-INC-02",
-                 "Crypto staking rewards are ordinary income at fair value "
-                 "when received; that value is the coins' cost."),
+                 "For a cash-method taxpayer, staking rewards enter "
+                 "gross ordinary income at US-dollar fair value when "
+                 "the taxpayer gains dominion and control (can sell, "
+                 "exchange or otherwise dispose of them), including "
+                 "through an exchange (IRS Rev. Rul. 2023-14). The "
+                 "acquired coins take fair-value basis. Imports use "
+                 "the credited timestamp in `local_timezone`, with "
+                 "the run's prices and rates; check that it represents "
+                 "dominion and control. Later disposal is separate."),
+            Rule("US-INC-STAKING",
+                 "Custodial staking import assumption: Coinbase uses "
+                 "Subtotal (or quantity times price) and Kraken nets "
+                 "same-asset commission from received units, income "
+                 "and basis, without a second fee sale or deduction. "
+                 "For a Kraken reward in a non-stablecoin, a fee in "
+                 "another asset or fiat leaves gross acquired units "
+                 "and basis, nets the fee from booked income, and "
+                 "disposes of a separately paid fee coin. The "
+                 "stablecoin valuation convention is US-CRYPTO-02. "
+                 "This shared parser convention does not determine "
+                 "US gross-income entitlement or fee deductibility: "
+                 "Rev. Rul. 2023-14 does not decide transaction fees. "
+                 "Check the applicable contract and dominion/control; "
+                 "gross income plus a separate expense is not modeled. "
+                 "Do not deduct a netted fee again."),
             Rule("US-INC-03",
                  "Dividends are booked gross; withholding tax is its own "
                  "TAX row (a foreign tax credit is not computed)."),
@@ -3886,7 +3977,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A Kraken fee paid in a coin is a sale of that coin: on a "
                  "move of coins (a withdrawal, a deposit, a transfer to "
                  "another Kraken user or a Hybrid Earn withdrawal), on a "
-                 "fiat deposit or withdrawal, or on a staking reward."),
+                 "fiat deposit or withdrawal, or a staking fee paid in "
+                 "another coin. A commission withheld in the reward "
+                 "asset is already netted by the import convention, "
+                 "not another sale (US-INC-STAKING)."),
             Rule("US-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
@@ -4020,7 +4114,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "filing number: its "
                  "win/lose statistics count each closed trade's economic "
                  "P/L before any wash-sale denial (the denied total on its "
-                 "own line): a disallowed loss counts once, in the loss "
+                 "own line). A closed trade is one closing disposition: "
+                 "a sale that takes several FIFO lots is one trade, its "
+                 "lots' P/L added. A disallowed loss counts once, in the loss "
                  "sale's P/L, and the replacement's sale counts without "
                  "the §1091(d) basis add (a short: without the cut to its "
                  "proceeds). It covers the taxable accounts unless a "
@@ -4075,7 +4171,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "or prior_year_record) takes the lock's filed Form 8949 "
                  "Part I / Part II gains instead of the rebuilt ones; a "
                  "year after the project year is partial and the carryover "
-                 "stops at the project year."),
+                 "stops at the project year. Each year's net is the "
+                 "run's: a wash-sale basis add that reaches a sale in a "
+                 "locked year is booked in the loss's year (US-WASH-22), "
+                 "and a sale with an unknown cost (no purchase in the "
+                 "books, in a crypto account too) is in no year's net: "
+                 "it is named and its year marked incomplete."),
             Rule("US-CARRY-01",
                  "`taxjson close-year` records in filed/<year>.json the "
                  "short- and long-term capital loss carryover carried in "
@@ -4111,6 +4212,19 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "is listed as a warning only, a stock dividend is not a "
                  "purchase (never an in-window acquisition), and crypto "
                  "has no window."),
+            Rule("US-RPT-13",
+                 "Its disallowed losses carried into the next year are "
+                 "the ones still in the basis of the lots held at the "
+                 "end of Dec 31 of the project year, as the engine's "
+                 "walk on trade dates leaves them (a tax_date = "
+                 "\"settle\" project is told the day is read on trade "
+                 "dates): a later trade changes nothing; the walk is "
+                 "not cut at Dec 31, so a January purchase still "
+                 "disallows a December loss, and that lot, which takes "
+                 "the basis add, is not a Dec 31 lot; a basis add to "
+                 "shares sold before the loss (US-WASH-22) is in that "
+                 "sale, never in a held lot.", cont=True,
+                 keys=("tax_date",)),
             Rule("US-RPT-10",
                  "`taxjson checklist`'s slip step names Form 1099-B for "
                  "securities and, from tax year 2025, Form 1099-DA for a "
@@ -4119,7 +4233,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-RPT-06",
                  "`taxjson close-year` records each closed year's sales, "
                  "year-end positions and basis (a disallowed loss "
-                 "included in the replacement's basis, as `list` shows), "
+                 "included in the replacement's basis, as `list` shows; "
+                 "none in an account marked crypto, US-WASH-13), "
                  "its country and date basis; `handoff` also flags "
                  "income the two projects date on different sides of "
                  "Dec 31 (a RIC January dividend kept in one and not the "
@@ -4240,11 +4355,84 @@ def sections(country: str, settings: Dict[str, Any],
             rule_sections(country, settings)]
 
 
+# A full stop after these is not a sentence's end: "e.g. ZZZ.TO",
+# "Treas. Reg. §1.1091-1", "Rev. Rul. 2023-14", "IRS Pub. 550", "s. 47".
+_ABBREVIATIONS = frozenset(("e.g", "i.e", "etc", "vs", "cf", "No", "Reg",
+                            "Rev", "Rul", "Pub", "Treas", "s", "ss"))
+_YEAR_TABLE = re.compile(r": (?=\d{4}: )")
+
+
+def _sentences(text: str) -> List[str]:
+    """`text` cut into its sentences: at a full stop, `?` or `!` that a
+    space and a capital, a digit, a backtick, a quote or a `[rule id]`
+    follow, never inside brackets or backticks, after an abbreviation or
+    in an ellipsis. A first sentence that opens a table of years ("...:
+    2024: ...") ends at its colon, each year its own sentence."""
+    out: List[str] = []
+    start = depth = 0
+    tick = False
+    for i, ch in enumerate(text):
+        if ch == "`":
+            tick = not tick
+        elif tick:
+            continue
+        elif ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        elif (ch in ".?!" and depth == 0 and text[i + 1:i + 2] == " "
+              and (text[i + 2:i + 3].isupper() or text[i + 2:i + 3].isdigit()
+                   or text[i + 2:i + 3] in ("`", '"', "["))
+              and text[i - 1:i] != "."):
+            word = re.search(r"[A-Za-z.]*$", text[start:i]).group(0)
+            if word.split(".")[-1] not in _ABBREVIATIONS \
+                    and word not in _ABBREVIATIONS:
+                out.append(text[start:i + 1])
+                start = i + 2
+    out.append(text[start:])
+    if out:
+        lead = _YEAR_TABLE.split(out[0], maxsplit=1)
+        if len(lead) == 2:
+            out[:1] = [lead[0] + ":", lead[1]]
+    return [s.strip() for s in out if s.strip()]
+
+
+# A sentence longer than this (three lines or more at the house width)
+# is cut at its top-level semicolons too: its clauses are the items.
+_LONG_SENTENCE = 230
+
+
+def _clauses(sentence: str) -> List[str]:
+    """`sentence` cut after each `; ` outside brackets and backticks
+    when it is longer than _LONG_SENTENCE; else the sentence."""
+    if len(sentence) <= _LONG_SENTENCE:
+        return [sentence]
+    out: List[str] = []
+    start = depth = 0
+    tick = False
+    for i, ch in enumerate(sentence):
+        if ch == "`":
+            tick = not tick
+        elif tick:
+            continue
+        elif ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        elif ch == ";" and depth == 0 and sentence[i + 1:i + 2] == " ":
+            out.append(sentence[start:i + 1])
+            start = i + 2
+    out.append(sentence[start:])
+    return [s.strip() for s in out if s.strip()]
+
+
 def render(country: str, settings: Dict[str, Any],
            width: Optional[int] = None, ids: bool = False) -> str:
     """The plain text: a title, then each section's statements as `- `
     items wrapped at `width` (default: the house width, lib/out; 0 = one
-    line per statement). Words and rule ids are never broken. No
+    line per sentence). A statement of several sentences is its first
+    sentence, the others `- ` items under it (`_sentences`); `--json`
+    keeps each statement whole. Words and rule ids are never broken. No
     settings (outside a project, `--country`): the title says "default
     settings" — there is no project (backlog TJ-0187)."""
     from taxjson.lib.out import Doc
@@ -4257,7 +4445,11 @@ def render(country: str, settings: Dict[str, Any],
                else ", default settings"), width_=width)
     for title, rules in sections(c, settings, ids=ids):
         d.section(title.upper())
-        d.items(rules, indent="  ")
+        for statement in rules:
+            lead, *more = [c for s in _sentences(statement)
+                           for c in _clauses(s)]
+            d.item(lead, indent="  ")
+            d.items(more, indent="    ")
     d.blank()
     d.para("Detail and sources: docs/tax-rules.md and REFERENCES.md. taxjson "
            "computes; it does not give tax advice.")

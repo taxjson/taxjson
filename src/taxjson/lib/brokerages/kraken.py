@@ -1118,9 +1118,15 @@ class KrakenBrokerage(BaseBrokerage):
                             f"reward reversal is not modeled; hand-check "
                             f"it, enter the correction via a .tt file"
                             f"{_TT_REMOVE}.")
-                    transactions.extend(self._income_row(
+                    income_rows = self._income_row(
                         row, ctx, asset_name, fee_ccy, amount, fee,
-                        date, time, txid))
+                        date, time, txid)
+                    for income in income_rows:
+                        if income['action'] == 'DIVIDEND':
+                            income['staking_reward'] = self._reward_evidence(
+                                row, asset_name, fee_ccy, amount, fee,
+                                path, line, date, txid, income)
+                    transactions.extend(income_rows)
                 elif (type_raw == 'earn' and subtype in (
                         'allocation', 'deallocation', 'autoallocation',
                         # A move between two Earn programs (paired rows,
@@ -1510,6 +1516,79 @@ class KrakenBrokerage(BaseBrokerage):
             except UnicodeDecodeError:
                 continue
         return txids if found else None
+
+    def _reward_evidence(self, row, asset, fee_ccy, amount, fee,
+                         path, line, date, txid, income):
+        """Source facts for one income event; never an additional tax row.
+
+        Monetary values stay in the stated valuation currency. Old exports
+        lack USD valuations: preserve that absence until the pricing stage
+        records the actual quote used, rather than calling it a broker price.
+        """
+        known = bool((row.get('fee') or '').strip())
+        gross_qty, fee_qty = abs(amount), abs(fee)
+        same = fee_ccy == asset
+        net_qty = _dec_sub(gross_qty, fee_qty) if same else gross_qty
+        ctx = f"ledger {shown_name(path)} line {line}"
+        gross_value = (abs(strict_money(row['amountusd'], 'amountusd', ctx))
+                       if row.get('amountusd') not in (None, '') else None)
+        fee_value = (abs(strict_money(row['feeusd'], 'feeusd', ctx))
+                     if known and row.get('feeusd') not in (None, '') else None)
+        valuation_currency = 'USD'
+        if gross_value is None and asset in _FIAT_CURRENCIES:
+            gross_value = gross_qty
+            valuation_currency = asset
+        elif gross_value is None and asset in _STABLECOINS:
+            gross_value = gross_qty
+        if known and fee_qty == 0:
+            fee_value = 0.0
+        elif known and fee_value is None:
+            if same and gross_value is not None and gross_qty:
+                fee_value = gross_value * fee_qty / gross_qty
+            elif valuation_currency == 'USD' and (
+                    fee_ccy == 'USD' or fee_ccy in _STABLECOINS):
+                fee_value = fee_qty
+        value = {
+            'schema_version': 1, 'broker': 'kraken',
+            'kind': ('staking' if (row.get('type') or '').strip().lower() == 'staking'
+                     or ((row.get('type') or '').strip().lower() == 'earn'
+                         and (row.get('subtype') or '').strip().lower() == 'reward'
+                         and asset not in _FIAT_CURRENCIES and asset not in _STABLECOINS)
+                     else 'other_reward'),
+            'source_type': '/'.join(x for x in (row.get('type'), row.get('subtype')) if x),
+            'source_file': shown_name(path), 'source_line': line,
+            'source_timestamp': (row.get('time') or '').strip(),
+            'source_id': txid, 'asset': asset,
+            'gross_quantity': gross_qty, 'fee_quantity': fee_qty if known else None,
+            'fee_currency': fee_ccy, 'net_quantity': net_qty,
+            'valuation_currency': valuation_currency,
+            'gross_value': gross_value, 'fee_value': fee_value,
+            'net_value': (gross_value - fee_value
+                          if gross_value is not None and fee_value is not None else None),
+            'price': gross_value / gross_qty if gross_value is not None and gross_qty else None,
+            'commission_known': known,
+            'commission_method': ('unknown' if not known else
+                                  'withheld_from_reward' if same or fee_qty == 0 else
+                                  'paid_in_other_asset'),
+        }
+        # The source's gross value per coin is not always the selected
+        # book price (net-value rounding, cash/stablecoin treatment). Keep
+        # both facts and identify the price the emitted row actually uses.
+        book_price = income.get('price', 0)
+        if book_price > 0:
+            price_source = 'broker amount / reward quantity'
+            if asset in _FIAT_CURRENCIES:
+                price_source = 'fiat unit value'
+            elif asset in _STABLECOINS and (
+                    not self.stablecoins_as_cash or asset in _CASH_STABLECOINS):
+                price_source = ('stablecoin par assumption' if book_price == 1
+                                else 'stablecoin net income / reward quantity')
+            value['valuation'] = {
+                'price': book_price, 'currency': income['currency'],
+                'date': date, 'source': price_source,
+                'fx_rate': None, 'target_currency': '',
+            }
+        return value
 
     def _income_row(self, row, ctx, asset_name, fee_ccy, amount, fee,
                     date, time, txid):

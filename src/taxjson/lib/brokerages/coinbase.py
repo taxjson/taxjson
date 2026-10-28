@@ -551,6 +551,39 @@ class CoinbaseBrokerage(BaseBrokerage):
                         'type': 'dividend', 'account': self.DEFAULT_ACCOUNT,
                         'description': 'Staking Reward',
                     }
+                    # Preserve the export's original commission evidence for
+                    # the staking views. The monetary fee is a VALUE in the
+                    # export currency, not a separately debited cash quantity.
+                    # An absent/blank fee is unknown even when the books'
+                    # existing numeric default is zero. No accounting changes.
+                    fee_known = bool(self._col(row, header_map, 'fees').strip())
+                    original_total = self._col(row, header_map, 'total').strip()
+                    evidence = {
+                        'schema_version': 1, 'broker': 'coinbase',
+                        'kind': ('staking' if re.search(r'\bstaking\b', type_raw, re.I)
+                                 else 'other_reward'),
+                        'source_type': type_raw.strip(),
+                        'source_file': shown_name(path), 'source_line': row_start,
+                        'source_timestamp': self._col(row, header_map, 'timestamp').strip(),
+                        'source_id': cb_id, 'asset': symbol,
+                        'gross_quantity': None, 'fee_quantity': None,
+                        'fee_currency': currency, 'net_quantity': abs(qty),
+                        'valuation_currency': currency,
+                        'gross_value': (abs(self._num(row, header_map, 'total'))
+                                        if original_total else None),
+                        'fee_value': abs(fee) if fee_known else None,
+                        'net_value': total if (_sub or (price and qty)) else None,
+                        'price': price if price > 0 else None,
+                        'commission_known': fee_known,
+                        'commission_method': ('withheld_from_reward' if fee_known
+                                              else 'unknown'),
+                    }
+                    if price > 0:
+                        evidence['valuation'] = {
+                            'price': price, 'currency': currency, 'date': date_str,
+                            'source': 'broker', 'fx_rate': None, 'target_currency': '',
+                        }
+                    div['staking_reward'] = evidence
                     # Stake the reward into inventory at FMV (income = cost
                     # basis). Without this the BUYSELL enters at $0 cost,
                     # and the FMV gets taxed twice: once as staking income,

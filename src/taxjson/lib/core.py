@@ -92,6 +92,11 @@ class TaxTransaction:
     income_label: str = ''
     dealer_country: str = ''
     issuer_country: str = ''
+    # Original crypto reward/commission evidence, on the income leg only.
+    # Source amounts retain their declared currencies through conversion;
+    # nested `valuation` records the price and FX actually used by the books.
+    # Evidence only: never part of compute_id or a second accounting event.
+    staking_reward: Optional[Dict[str, Any]] = None
     # The broker's own clock stamp ("2025-01-02 22:00:00 ET") on a trade
     # whose exchange trade date differs from it — an overnight-session US
     # fill, an ASX fill stamped in the US Eastern evening (tax-logic
@@ -282,7 +287,61 @@ EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'source', 'source_key',
                    'source_account', 'exercise_of', 'corp_cash',
                    'lot_date', 'market_value', 'journal_pair',
-                   'event_source', 'listing_currency', 'settle_native')
+                   'event_source', 'listing_currency', 'settle_native',
+                   'staking_reward')
+
+
+def validate_staking_reward(value, context='staking_reward'):
+    """Validate optional versioned reward evidence without inventing facts.
+
+    Null monetary/quantity values mean unknown, not zero. Evidence does not
+    participate in tax arithmetic; malformed types must not make a reporting
+    command silently display a known commission or a made-up valuation.
+    """
+    import math
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ValueError(f"{context}: staking_reward must be an object or null")
+    if type(value.get('schema_version')) is not int or value['schema_version'] != 1:
+        raise ValueError(f"{context}: staking_reward schema_version must be 1")
+    if type(value.get('commission_known')) is not bool:
+        raise ValueError(f"{context}: staking_reward commission_known must be boolean")
+    if value.get('kind') not in ('staking', 'other_reward'):
+        raise ValueError(f"{context}: staking_reward kind must be staking or other_reward")
+    if value.get('commission_method') not in (
+            'withheld_from_reward', 'paid_in_other_asset', 'unknown'):
+        raise ValueError(f"{context}: staking_reward has an unknown commission_method")
+    for field in ('broker', 'source_file', 'source_type', 'source_timestamp',
+                  'source_id', 'asset', 'fee_currency', 'valuation_currency'):
+        if field in value and not isinstance(value[field], str):
+            raise ValueError(f"{context}: staking_reward {field} must be a string")
+    line = value.get('source_line')
+    if line is not None and (type(line) is not int or line < 1):
+        raise ValueError(f"{context}: staking_reward source_line must be a positive integer or null")
+    for field in ('gross_quantity', 'fee_quantity', 'net_quantity',
+                  'gross_value', 'fee_value', 'net_value', 'price'):
+        v = value.get(field)
+        if v is not None and (isinstance(v, bool)
+                              or not isinstance(v, (int, float))
+                              or not math.isfinite(v)):
+            raise ValueError(f"{context}: staking_reward {field} must be a finite number or null")
+        if v is not None and field != 'net_value' and v < 0:
+            raise ValueError(f"{context}: staking_reward {field} must not be negative")
+    valuation = value.get('valuation')
+    if valuation is not None:
+        if not isinstance(valuation, dict):
+            raise ValueError(f"{context}: staking_reward valuation must be an object")
+        for field in ('currency', 'date', 'source', 'target_currency',
+                      'fx_date', 'fx_source', 'market_symbol'):
+            if field in valuation and not isinstance(valuation[field], str):
+                raise ValueError(f"{context}: staking_reward valuation {field} must be a string")
+        for field in ('price', 'fx_rate'):
+            v = valuation.get(field)
+            if v is not None and (isinstance(v, bool)
+                                  or not isinstance(v, (int, float))
+                                  or not math.isfinite(v) or v <= 0):
+                raise ValueError(f"{context}: staking_reward valuation {field} must be positive or null")
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "SAMPLG250120C00150000.US", "ABC271217P00029000.TO", or
@@ -997,6 +1056,10 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     _ctx = (f"{ctx_prefix}: transaction at index {i} "
             f"(id={t.get('id', '?')!r}, symbol="
             f"{t.get('symbol', '?')!r})")
+    if clean_t.get('staking_reward') is not None:
+        validate_staking_reward(clean_t['staking_reward'], _ctx)
+        if clean_t.get('action') != 'DIVIDEND':
+            raise ValueError(f"{_ctx}: staking_reward belongs on the DIVIDEND income leg only")
     # Type funnel (stage-tools audit): every numeric field must be a
     # real number (a numeric STRING is coerced with float(); null,
     # bools, lists, non-numeric strings are refused) and every string
@@ -2280,8 +2343,8 @@ def _verify_share_conservation(position_rows, actual_qty_by_symbol,
                     redirect[k] = tk
         elif t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
                           'TRANSFER'):
-            # (TRANSFER: own-account move legs only — the callers pass
-            # no other.)
+            # (TRANSFER: own-account move legs and a native book's
+            # listing journal legs only — the callers pass no other.)
             k = rkey(t.symbol)
             expected[k] = expected.get(k, 0.0) + t.quantity
 
@@ -2656,6 +2719,148 @@ def _own_move_units(pools: Dict[Any, Dict[str, Any]], key: Any, tx) -> str:
             f" | Pool_Qty: {pool['qty']:10.4f} | no sale"
             + (f" | {rest:g} with no purchase in this book"
                if rest > eps else ""))
+
+
+# A journal between two listings of one security inside one account (a
+# TSX line moved to its US line: lib/listing_journals, backlog TJ-0361):
+# two TRANSFER rows `taxjson run` writes into the NATIVE-currency books
+# only (work/<account>_raw*.json, behind the holdings export), the
+# out-leg of the listing the units left and the in-leg of the one they
+# reached, sharing a `journal_pair` id. The engines move the units with
+# their cost from one listing's pool to the other's on the journal's
+# date: never a disposition, never an acquisition. The in-leg's `price`
+# restates the cost in its listing's currency when the source pool is
+# in another (_journal_factor). The tax books never hold these rows:
+# they join the listings, and the broker's legs cancel there.
+LISTING_JOURNAL_TYPE = 'listing_journal'
+
+
+def _is_listing_journal(t) -> bool:
+    return t.action == 'TRANSFER' and t.type == LISTING_JOURNAL_TYPE
+
+
+def _journal_legs(transactions) -> Dict[str, Tuple[Any, Any]]:
+    """journal_pair -> (out-leg, in-leg) of each listing journal
+    (LISTING_JOURNAL_TYPE) whose two legs are both in the book."""
+    legs: Dict[str, list] = {}
+    for t in transactions:
+        if _is_listing_journal(t) and t.journal_pair:
+            legs.setdefault(t.journal_pair, []).append(t)
+    out: Dict[str, Tuple[Any, Any]] = {}
+    for k, ts in legs.items():
+        neg = [t for t in ts if (t.quantity or 0.0) < 0]
+        pos = [t for t in ts if (t.quantity or 0.0) > 0]
+        if (len(neg) == 1 and len(pos) == 1
+                and neg[0].symbol != pos[0].symbol):
+            out[k] = (neg[0], pos[0])
+    return out
+
+
+def _journal_factor(src_currency: str, src_leg, dst_leg) -> Optional[Decimal]:
+    """The factor that restates a journaled cost in the receiving
+    listing's currency: 1 when the source pool is already in it (every
+    pool of a base-currency book); else the in-leg's `price` (the
+    source's currency over the receiver's), inverted when a short moves
+    the other way (from the in-leg's listing to the out-leg's). None:
+    no rate on file — the cost is unknown in this book."""
+    cur = dst_leg.currency
+    if not src_currency or not cur or src_currency == cur:
+        return Decimal(1)
+    f = float((dst_leg if dst_leg.quantity > 0 else src_leg).price or 0.0)
+    if f <= 0:
+        return None
+    return D(f) if dst_leg.quantity > 0 else Decimal(1) / D(f)
+
+
+def _journal_units(pools: Dict[Any, Dict[str, Any]], out_leg, in_leg,
+                   eps: float = 1e-9) -> str:
+    """One listing journal (LISTING_JOURNAL_TYPE) in a Canadian book: a
+    long's units leave the out-leg's pool at its average cost and join
+    the in-leg's with that cost restated (_journal_factor), the
+    position's start date and holding dates with them. When the out-leg's
+    listing holds no long and the in-leg's holds a short, the short
+    moves instead (a short journaled shows the opposite legs, audit
+    2026-10-24 B13). Units beyond what the source holds have no purchase
+    in this book: the source goes short by them and the receiver holds
+    them at an unknown cost, both tainted, as an own move's are
+    (_own_move_units). Returns the trace text."""
+    def pool(sym, cur):
+        p = pools.get(sym)
+        if p is None:
+            p = pools[sym] = {
+                'qty': 0.0, 'total_cost': Decimal(0),
+                'last_acq_date': '1970-01-01', 'currency': cur,
+                'tainted': False, 'position_start_date': None,
+                'deferred_wash': 0.0, 'grants': []}
+        if not p['currency']:
+            p['currency'] = cur
+        return p
+
+    q = abs(float(out_leg.quantity or 0.0))
+    a = pool(out_leg.symbol, out_leg.currency)
+    b = pool(in_leg.symbol, in_leg.currency)
+    if a['qty'] <= eps and b['qty'] < -eps:
+        src, dst, s_leg, d_leg, sign = b, a, in_leg, out_leg, -1.0
+    else:
+        src, dst, s_leg, d_leg, sign = a, b, out_leg, in_leg, 1.0
+    f = _journal_factor(src['currency'], s_leg, d_leg)
+    held = src['qty'] * sign
+    take = min(q, held) if held > eps else 0.0
+    rest = q - take
+    if take > 0:
+        frac = D(take) / D(held)
+        cost = src['total_cost'] * frac
+        dw = src.get('deferred_wash', 0.0) * float(frac)
+        src['total_cost'] -= cost
+        src['deferred_wash'] = src.get('deferred_wash', 0.0) - dw
+        src['qty'] -= take * sign
+        if dst['qty'] * sign < -eps:
+            dst['tainted'] = True        # into an opposite position
+        elif abs(dst['qty']) <= eps or (
+                src['position_start_date'] and (
+                    dst['position_start_date'] is None
+                    or src['position_start_date']
+                    < dst['position_start_date'])):
+            dst['position_start_date'] = src['position_start_date']
+        dst['qty'] += take * sign
+        if f is None:
+            dst['tainted'] = True
+        else:
+            dst['total_cost'] += cost * f
+            dst['deferred_wash'] = (dst.get('deferred_wash', 0.0)
+                                    + dw * float(f))
+        _sl = src.get('last_acq_date') or '1970-01-01'
+        if _sl != '1970-01-01' and (
+                dst['last_acq_date'] == '1970-01-01'
+                or _sl < dst['last_acq_date']):
+            dst['last_acq_date'] = _sl
+            dst['last_acq_settle'] = src.get('last_acq_settle')
+        if src.get('opening_acq'):
+            dst['opening_acq'] = min(dst.get('opening_acq')
+                                     or src['opening_acq'],
+                                     src['opening_acq'])
+        dst['tainted'] = dst['tainted'] or src['tainted']
+    if rest > eps:
+        for p, d in ((src, -sign), (dst, sign)):
+            if abs(p['qty']) <= eps:
+                p['position_start_date'] = out_leg.date
+            p['qty'] += rest * d
+            p['tainted'] = True
+    if abs(src['qty']) <= pool_qty_eps(s_leg.symbol, held, q):
+        src['qty'] = 0.0
+        src['position_start_date'] = None
+        src['grants'] = []
+        src['tainted'] = False
+        if abs(src['total_cost']) < Decimal('0.001'):
+            src['total_cost'] = Decimal(0)
+    return (f"LISTING JOURNAL {s_leg.symbol} -> {d_leg.symbol} "
+            f"{take:10.4f}{' (a short)' if sign < 0 else ''} | cost "
+            + ("unknown here (no rate)" if f is None else
+               f"carried x{float(f):.6g}")
+            + (f" | {rest:g} with no purchase in this book"
+               if rest > eps else ""))
+
+
 REORG_356_TYPE = 'reorg_356'
 _LOT_EVENT_TYPES = (SPINOFF_355_TYPE, REORG_356_TYPE)
 # An opening balance (`taxjson opening`, a .tt OPENING line): a BUYSELL
@@ -3402,6 +3607,10 @@ class CanadaTaxRules(TaxRules):
                           not in (None, t.symbol)}
             _cev_stash: Dict[tuple, float] = {}
             _cev_child: Dict[tuple, Dict[str, Any]] = {}
+            # A native book's journals between listings (one leg books
+            # the pair: _journal_units; backlog TJ-0361).
+            _jlegs = _journal_legs(current_tx_list)
+            _jdone: set = set()
             
             if trace:
                 iteration_trace.append("# " + "-" * 215)
@@ -3437,7 +3646,20 @@ class CanadaTaxRules(TaxRules):
                 # errors out before invoking compute_gains. By the time
                 # the engine runs, no TRANSFER rows should be present —
                 # but one account's own view of a move between two of
-                # your taxable accounts (_own_move_view): its units move.
+                # your taxable accounts (_own_move_view): its units move;
+                # and a native book's journal between two listings.
+                if _is_listing_journal(tx):
+                    _jl = _jlegs.get(tx.journal_pair)
+                    if (_jl and not is_other_scope
+                            and tx.journal_pair not in _jdone):
+                        _jdone.add(tx.journal_pair)
+                        _jtxt = _journal_units(global_pools, *_jl)
+                        if trace:
+                            for _js in (_jl[0].symbol, _jl[1].symbol):
+                                symbol_acb_traces.setdefault(_js, [
+                                    f"# --- ACB CALCULATION TRACE: {_js} ---"
+                                ]).append(f"# {tx.date} {_jtxt}")
+                    continue
                 if _is_lot_move(tx):
                     if not is_other_scope:
                         _mv_txt = _own_move_units(global_pools,
@@ -5856,7 +6078,8 @@ class CanadaTaxRules(TaxRules):
             [t for t in current_tx_list
              if t.id in taxable_ids
              and (t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
-                               'SPLIT') or _is_lot_move(t))],
+                               'SPLIT') or _is_lot_move(t)
+                  or _is_listing_journal(t))],
             _pool_qty, 'canada',
             zero_ratio_skips=False)     # CA applies a ratio-0 SPLIT blindly
         _warn_stranded_basis(final_global_pools)
@@ -6000,7 +6223,7 @@ class USATaxRules(TaxRules):
 
     WASH_WINDOW_DAYS = 30
 
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False, loss_overrides: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False, loss_overrides: Sequence[Dict[str, Any]] = (), year_end: Optional[str] = None) -> Dict[str, Any]:
         _check_engine_allowed("usa")  # test-only guard (lib/country)
         # The computation's input contract (issues #14, #16; as Canada).
         require_computable_rows(transactions, sheltered_transactions,
@@ -6196,6 +6419,16 @@ class USATaxRules(TaxRules):
                 # An own-account custody move: never an acquisition, but
                 # the per-account position moves with it (US-BASIS-05).
                 if per_account_basis and abs(ev.quantity or 0.0) >= epsilon:
+                    _nk = _nkey(ev.account, ev.symbol)
+                    net_qty_state[_nk] = (net_qty_state.get(_nk, 0.0)
+                                          + ev.quantity)
+                continue
+            if _is_listing_journal(ev):
+                # A native book's journal between two listings: each
+                # leg is its listing's position change (TJ-0361).
+                if (ev.id not in sheltered_ids
+                        and ev.id not in affiliated_ids
+                        and abs(ev.quantity or 0.0) >= epsilon):
                     _nk = _nkey(ev.account, ev.symbol)
                     net_qty_state[_nk] = (net_qty_state.get(_nk, 0.0)
                                           + ev.quantity)
@@ -6903,6 +7136,104 @@ class USATaxRules(TaxRules):
                     _move_pair[_i.id] = _o
                     break
 
+        # A native book's journals between two listings (TJ-0361):
+        # one leg books the pair (_carry_lots).
+        _jlegs = _journal_legs(taxable_sorted)
+        _jdone: set = set()
+        for _jo, _ji in _jlegs.values():
+            for _jt in (_jo, _ji):
+                if _jt.currency:
+                    symbol_currency.setdefault(_jt.symbol, _jt.currency)
+
+        def _carry_lots(inv, src, dst, q, f, field):
+            """Move `q` units of `inv[src]`'s FIFO lots to `inv[dst]` (a
+            listing journal): the lots keep their dates and wash-sale
+            deferrals; their `field` (a long's cost_basis, a short's
+            proceeds) and deferral restated by `f` (None: no rate — held
+            at an unknown cost, tainted). Returns the units moved."""
+            lots = inv.get(src, [])
+            moved = []
+            left = q
+            while left > epsilon and lots:
+                lot = lots[0]
+                if lot['qty'] <= left + epsilon:
+                    moved.append(lots.pop(0))
+                    left -= lot['qty']
+                    continue
+                frac = D(left) / D(lot['qty'])
+                part = dict(lot)
+                part['qty'] = left
+                part[field] = lot[field] * frac
+                _wd = lot.get('wash_deferred', Decimal(0))
+                part['wash_deferred'] = _wd * frac
+                lot['qty'] -= left
+                lot[field] -= part[field]
+                lot['wash_deferred'] = _wd - part['wash_deferred']
+                moved.append(part)
+                left = 0.0
+            for lot in moved:
+                if f is None:
+                    lot[field] = Decimal(0)
+                    lot['wash_deferred'] = Decimal(0)
+                    lot['tainted'] = True
+                elif f != 1:
+                    lot[field] = lot[field] * f
+                    lot['wash_deferred'] = (lot.get('wash_deferred',
+                                                    Decimal(0)) * f)
+            if moved:
+                lots_ = inv.setdefault(dst, [])
+                lots_.extend(moved)
+                lots_.sort(key=lambda l: (l['date'],
+                                          _lot_time.get(l.get('id'), '')))
+            return sum(l['qty'] for l in moved)
+
+        def _book_journal(out_leg, in_leg):
+            """One listing journal: a long's lots move from the out-leg's
+            listing to the in-leg's; when the out-leg's holds no long and
+            the in-leg's holds a short, the short's lots move the other
+            way (audit 2026-10-24 B13). Units beyond what the source
+            holds have no purchase in this book: the receiver holds them
+            at an unknown cost and the source is short by them, both
+            tainted. Returns the trace text."""
+            q = abs(out_leg.quantity or 0.0)
+            ka = _ikey(out_leg.account, out_leg.symbol)
+            kb = _ikey(in_leg.account, in_leg.symbol)
+            a_long = sum(l['qty'] for l in inventory_long.get(ka, []))
+            b_short = sum(l['qty'] for l in inventory_short.get(kb, []))
+            short = a_long <= epsilon and b_short > epsilon
+            if short:
+                src_leg, dst_leg, inv, src, dst = (in_leg, out_leg,
+                                                   inventory_short, kb, ka)
+            else:
+                src_leg, dst_leg, inv, src, dst = (out_leg, in_leg,
+                                                   inventory_long, ka, kb)
+            f = _journal_factor(symbol_currency.get(src_leg.symbol, ''),
+                                src_leg, dst_leg)
+            got = _carry_lots(inv, src, dst, q, f,
+                              'proceeds' if short else 'cost_basis')
+            rest = q - got
+            if rest > max(epsilon, _dust_noise(q)):
+                for k, side in ((dst, inventory_short if short
+                                 else inventory_long),
+                                (src, inventory_long if short
+                                 else inventory_short)):
+                    side.setdefault(k, []).append({
+                        'qty': rest,
+                        ('proceeds' if side is inventory_short
+                         else 'cost_basis'): Decimal(0),
+                        'wash_deferred': Decimal(0),
+                        'date': out_leg.date,
+                        ('effective_open_date' if side is inventory_short
+                         else 'effective_acq_date'): out_leg.date,
+                        'id': out_leg.id, 'tainted': True})
+            return (f"LISTING JOURNAL {src_leg.symbol} -> "
+                    f"{dst_leg.symbol} {got:10.4f}"
+                    f"{' (a short)' if short else ''} | basis "
+                    + ("unknown here (no rate)" if f is None else
+                       f"carried x{float(f):.6g}")
+                    + (f" | {rest:g} with no purchase in this book"
+                       if rest > max(epsilon, _dust_noise(q)) else ""))
+
         def _move_long_lots(src, dst, sym, q, on_date):
             """Hand `q` units of `src`'s FIFO lots (the lot objects
             themselves: basis, purchase dates, wash-sale deferrals and
@@ -6983,8 +7314,40 @@ class USATaxRules(TaxRules):
                 return [k for k in inv if k[1] == sym]
             return [sym] if sym in inv else []
 
+        # The lots as they stand at the end of `year_end` (YYYY-12-31,
+        # the project year's last day) on this engine's trade-date walk
+        # (tax-logic US-RPT-13): `taxjson edge-cases` reads the
+        # disallowed losses still in the basis of the lots held at the
+        # year end from them, not from the lots after every later row
+        # (backlog TJ-0284). The walk is not cut there: a January
+        # purchase still decides a December loss, and its lot, which
+        # takes the basis add, was not held on Dec 31. Taken before the
+        # row after the last one dated on or before year_end (an option
+        # row an assignment moved in front of its December stock leg
+        # stays in). None without a year_end.
+        _ye_lots: Optional[Tuple[Dict[Any, List[Dict[str, Any]]],
+                                 Dict[Any, List[Dict[str, Any]]]]] = None
+        _ye_next: Optional[TaxTransaction] = None
+        if year_end:
+            _ye_last = -1
+            for _i, _t in enumerate(taxable_sorted):
+                if str(get_sort_date(_t) or '')[:10] <= year_end:
+                    _ye_last = _i
+            if _ye_last + 1 < len(taxable_sorted):
+                _ye_next = taxable_sorted[_ye_last + 1]
+
+        def _lots_copy():
+            """The long and short lots now (each lot's own fields: units,
+            basis or proceeds, wash_deferred, dates)."""
+            return ({k: [dict(l) for l in v]
+                     for k, v in inventory_long.items()},
+                    {k: [dict(l) for l in v]
+                     for k, v in inventory_short.items()})
+
         _main_split_groups: set = set()     # _split_covers, the main pass
         for tx in taxable_sorted:
+            if tx is _ye_next and _ye_lots is None:
+                _ye_lots = _lots_copy()
             symbol = tx.symbol
             ikey = _ikey(tx.account, symbol)
             inventory_long.setdefault(ikey, [])
@@ -6992,6 +7355,17 @@ class USATaxRules(TaxRules):
             if trace and symbol not in symbol_traces:
                 symbol_traces[symbol] = [f"# --- FIFO CALCULATION TRACE: {symbol} ---"]
 
+            if _is_listing_journal(tx):
+                _jl = _jlegs.get(tx.journal_pair)
+                if _jl and tx.journal_pair not in _jdone:
+                    _jdone.add(tx.journal_pair)
+                    _jtxt = _book_journal(*_jl)
+                    if trace:
+                        for _js in (_jl[0].symbol, _jl[1].symbol):
+                            symbol_traces.setdefault(_js, [
+                                f"# --- FIFO CALCULATION TRACE: {_js} ---"
+                            ]).append(f"# {tx.date} {_jtxt}")
+                continue
             if tx.action == 'TRANSFER' and tx.type == LOT_MOVE_TYPE:
                 # A custody move between two of your own taxable
                 # accounts: not a sale — the lots keep their basis and
@@ -8630,6 +9004,9 @@ class USATaxRules(TaxRules):
                         f"Effective_Open: {short_lot['effective_open_date']}"
                     )
 
+        if year_end and _ye_lots is None:
+            _ye_lots = _lots_copy()     # no row after the year end
+
         # Dividends — report the gross dividend (1099-DIV box 1a). Withheld
         # foreign tax flows via separate TAX records into the foreign tax
         # credit, not the dividend income line.
@@ -8780,7 +9157,8 @@ class USATaxRules(TaxRules):
              if (not non_capital(t.action, t.type)
                  and t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE',
                                   'SPLIT'))
-             or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)],
+             or (t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE)
+             or _is_listing_journal(t)],
             _inv_qty, 'usa',
             zero_ratio_skips=True)      # US: ratio-0 skips the scale,
                                         # rename still migrates
@@ -8815,59 +9193,73 @@ class USATaxRules(TaxRules):
         # lots (short qty reported as a negative number for clarity).
         # Currency comes from the symbol_currency map built at pass start;
         # falls back to '' if a symbol somehow has no currency on any tx
-        # (defensive — taxjson-export tolerates the empty case).
-        inventory_report = []
-        for s, lots in inventory_long.items():
-            _acct = s[0] if per_account_basis else ''
-            s = s[1] if per_account_basis else s
-            tot_qty = sum(l['qty'] for l in lots)
-            if tot_qty > epsilon:
-                inventory_report.append({
-                    'symbol': s, 'qty': tot_qty,
-                    **({'account': _acct} if _acct else {}),
-                    'total_cost': float(sum(l['cost_basis'] for l in lots)),
-                    'currency': symbol_currency.get(s, ''),
-                    # Earliest acquisition date among the REMAINING
-                    # lots. After a FIFO close, the consumed lots are
-                    # gone, so `min` correctly returns the new
-                    # position-start when the original lots have all
-                    # been closed and replaced by later buys.
-                    'position_start_date': min(l['date'] for l in lots),
-                    # The earliest remaining lot's holding period start:
-                    # a wash-sale replacement's is moved back by the
-                    # loss shares' period (§1223(3), US-WASH-10), the
-                    # date the sale's term is decided from (harvest's
-                    # LT_IN read the buy date: backlog TJ-0138).
-                    'holding_start_date': min(
-                        l.get('effective_acq_date') or l['date']
-                        for l in lots),
-                    # Most recent surviving lot — the wash-window signal.
-                    'last_acq_date': max(l['date'] for l in lots),
-                    # §1091 basis bumps still embedded in surviving lots.
-                    'deferred_wash': round(float(sum(
-                        l.get('wash_deferred', Decimal(0))
-                        for l in lots)), 4),
-                })
-        for s, lots in inventory_short.items():
-            _acct = s[0] if per_account_basis else ''
-            s = s[1] if per_account_basis else s
-            tot_qty = sum(l['qty'] for l in lots)
-            if tot_qty > epsilon:
-                inventory_report.append({
-                    'symbol': s, 'qty': -tot_qty,  # signed: negative = short
-                    **({'account': _acct} if _acct else {}),
-                    # NEGATIVE: opening proceeds credited — the repo-wide
-                    # short-inventory convention (cost_per_share =
-                    # total_cost/qty comes out positive; see
-                    # test_holdings_toml / test_taxjson_export_report).
-                    'total_cost': float(-sum(l['proceeds'] for l in lots)),
-                    'currency': symbol_currency.get(s, ''),
-                    'position_start_date': min(l['date'] for l in lots),
-                    'last_acq_date': max(l['date'] for l in lots),
-                    'deferred_wash': round(float(sum(
-                        l.get('wash_deferred', Decimal(0))
-                        for l in lots)), 4),
-                })
+        # (defensive — taxjson-export tolerates the empty case). One
+        # builder for the final lots and the year-end ones (US-RPT-13).
+        def _inventory_rows(inv_long, inv_short):
+            rows = []
+            for s, lots in inv_long.items():
+                _acct = s[0] if per_account_basis else ''
+                s = s[1] if per_account_basis else s
+                tot_qty = sum(l['qty'] for l in lots)
+                if tot_qty > epsilon:
+                    rows.append({
+                        'symbol': s, 'qty': tot_qty,
+                        **({'account': _acct} if _acct else {}),
+                        'total_cost': float(sum(l['cost_basis']
+                                                for l in lots)),
+                        'currency': symbol_currency.get(s, ''),
+                        # Earliest acquisition date among the REMAINING
+                        # lots. After a FIFO close, the consumed lots
+                        # are gone, so `min` correctly returns the new
+                        # position-start when the original lots have
+                        # all been closed and replaced by later buys.
+                        'position_start_date': min(l['date']
+                                                   for l in lots),
+                        # The earliest remaining lot's holding period
+                        # start: a wash-sale replacement's is moved back
+                        # by the loss shares' period (§1223(3),
+                        # US-WASH-10), the date the sale's term is
+                        # decided from (harvest's LT_IN read the buy
+                        # date: backlog TJ-0138).
+                        'holding_start_date': min(
+                            l.get('effective_acq_date') or l['date']
+                            for l in lots),
+                        # Most recent surviving lot — the wash-window
+                        # signal.
+                        'last_acq_date': max(l['date'] for l in lots),
+                        # §1091 basis bumps still embedded in surviving
+                        # lots.
+                        'deferred_wash': round(float(sum(
+                            l.get('wash_deferred', Decimal(0))
+                            for l in lots)), 4),
+                    })
+            for s, lots in inv_short.items():
+                _acct = s[0] if per_account_basis else ''
+                s = s[1] if per_account_basis else s
+                tot_qty = sum(l['qty'] for l in lots)
+                if tot_qty > epsilon:
+                    rows.append({
+                        'symbol': s,
+                        'qty': -tot_qty,    # signed: negative = short
+                        **({'account': _acct} if _acct else {}),
+                        # NEGATIVE: opening proceeds credited — the
+                        # repo-wide short-inventory convention
+                        # (cost_per_share = total_cost/qty comes out
+                        # positive; see test_holdings_toml /
+                        # test_taxjson_export_report).
+                        'total_cost': float(-sum(l['proceeds']
+                                                 for l in lots)),
+                        'currency': symbol_currency.get(s, ''),
+                        'position_start_date': min(l['date']
+                                                   for l in lots),
+                        'last_acq_date': max(l['date'] for l in lots),
+                        'deferred_wash': round(float(sum(
+                            l.get('wash_deferred', Decimal(0))
+                            for l in lots)), 4),
+                    })
+            return rows
+
+        inventory_report = _inventory_rows(inventory_long, inventory_short)
 
         _ov_items = (_LO.summarize(_ov_plan, _ov_would, country='usa')
                      if _ov_plan else [])
@@ -8880,6 +9272,10 @@ class USATaxRules(TaxRules):
             'option_replacement_warnings': option_replacement_warnings,
             'dated_notes': [list(n) for n in _dated_notes],
             'inventory': inventory_report,
+            # The lots at the end of year_end (see _ye_lots), in the
+            # inventory's shape.
+            **({'inventory_year_end': _inventory_rows(*_ye_lots)}
+               if _ye_lots is not None else {}),
             'summary': {
                 'total_gain': sum(g['gain'] for g in realized_gains),
                 'total_disallowed': sum(w['disallowed_amount'] for w in wash_sale_records),

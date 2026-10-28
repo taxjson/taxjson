@@ -597,9 +597,14 @@ account, in trade-date order; §1256 is above.
 elsewhere (a foreign bank account, certificates, real estate, a debt owed by a non-resident) counts
 toward the same $100,000 and is not seen; the report says "on these books", and "so far" until the year
 has ended. Its cost amounts are the books' ACB: a transferred-in position with no history opened by an
-`OPENING … cost=unknown` line has no cost and is flagged "cost understated" while held.
-**Instead:** add the property held elsewhere yourself; declare the real history of transferred-in shares.
-**Code:** `src/taxjson/bin/taxjson_t1135.py` — `build_report`
+`OPENING … cost=unknown` line has no cost and is flagged "cost understated" for the year, a sale included.
+The category (CAT) is taken from the instrument: 2 for a listed security is right for a corporation's shares,
+not always for a fund's or a trust's units, and only the units and funds the interlisted master knows are named.
+A position held only short in the year (a written option, a short sale) is named, not listed: taxjson reads it as an
+obligation, not property held (tax-logic CA-RPT-19).
+**Instead:** add the property held elsewhere yourself; declare the real history of transferred-in shares;
+check each property's category and set another with `T1135 SYMBOL COUNTRY CATEGORY` in ticker.map.
+**Code:** `src/taxjson/bin/taxjson_t1135.py` — `build_report`, `property_category`
 
 #### `tjs audit` and the gains traces show a row's own id
 

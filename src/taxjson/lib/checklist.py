@@ -2442,7 +2442,8 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
     """Canada: `taxjson slip-audit` (lib/slip_audit) — done when every
     taxable account with income has a slip and every box agrees within
     the tolerance; a finding is a question answered per account by a
-    DONE mark (QUESTION_STEPS). US: compared by hand."""
+    DONE mark (QUESTION_STEPS); something not compared (the report's
+    `not_compared`) is never done. US: compared by hand."""
     if ctx is None or is_us(ctx.settings.get("country")):
         return Result("t5-t3", "manual", "compare the slips with the TAXABLE "
                       "line of `taxjson divs-sum` / `roc-sum`"
@@ -2463,6 +2464,22 @@ def d_t5_t3(ctx: Optional[Ctx]) -> Result:
     except Exception as e:                              # noqa: BLE001
         return Result("t5-t3", "blocked", str(e))
     issues = rep.get("issues") or []
+    # What the audit could not compare keeps the step open: an account
+    # with no readable books is blocked until `taxjson run` builds them;
+    # a report, a slip or an IB component matched to nothing needs
+    # attention a DONE mark does not answer (fix the input, or accept
+    # it with --done --force). Done over them certified an account it
+    # never read (backlog TJ-0305).
+    nc = rep.get("not_compared") or []
+    unread = [e["text"] for e in nc if e.get("kind") == "no-books"]
+    if unread:
+        return Result("t5-t3", "blocked", "; ".join(unread[:2]) + (
+            f" (+{len(unread) - 2} more)" if len(unread) > 2 else ""))
+    if nc:
+        found = (f"; and {len(issues)} finding(s)" if issues else "")
+        return Result("t5-t3", "attention",
+                      f"{len(nc)} slip input(s) not compared, e.g. "
+                      f"{nc[0]['text']}{found} — `taxjson slip-audit`")
     if not rep.get("sources"):
         if not issues:
             return Result("t5-t3", "done", "no taxable income that a T5 or "
@@ -3505,8 +3522,11 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
              "rule.",
              (Cmd("tjs audit SYMBOL", "each gain traced to its broker "
                   "row"),
-              Cmd("tjs tax-logic", "every rule taxjson applies, one line "
+              Cmd("tjs tax-logic", "every rule taxjson applies, a bullet "
                   "each"),
+              Cmd("tjs staking --details", "reward quantities, commissions, "
+                  "valuation and acquisition cost; `tjs staking-sum`: "
+                  "totals by exchange and coin"),
               Cmd("tjs gains", "rows; also `tjs trades`, `tjs events`, "
                   "`tjs divs`, `tjs dil`, `tjs roc`, `tjs fees`, "
                   "`tjs leaps`"),
@@ -4017,18 +4037,56 @@ def s_format(ctx: Ctx, f: _Facts) -> Result:
         try:
             res = format_map(tm.read_bytes().decode("utf-8-sig"),
                              migrate=True)
+            # The map the run reads: ticker.map with its tobase.map (a
+            # line there the run refuses was "laid out", backlog TJ-0250).
+            from taxjson.bin.taxjson_ticker_map import map_file_problems
+            probs = list(map_file_problems(tm))
         except Exception as e:                          # noqa: BLE001
             return Result("format", "attention", f"ticker.map: {e}")
-        if res.problems:
-            return Result("format", "attention",
-                          f"{len(res.problems)} ticker.map problem(s) `tjs "
-                          f"run` refuses — `tjs format-map` names them")
+        probs += [p for p in res.problems if p not in probs]
+        if probs:
+            return _map_problems(ctx, probs, set(res.problems))
         if res.changed or res.migration_pending:
             loose.append("ticker.map")
     if loose:
         return Result("format", "review", " and ".join(loose)
                       + " not in the template layout")
     return Result("format", "done", "taxjson.toml and ticker.map laid out")
+
+
+def _map_problems(ctx: Ctx, probs: List[str], own: set) -> Result:
+    """The format step on the map lines `tjs run` refuses (`probs`, each
+    `<file>:<n>: <message>`; `own` the ones `tjs format-map` names):
+    the files, the first line and what is wrong with it (backlog
+    TJ-0250). The checks' loader no longer repeats them (TJ-0112)."""
+    from taxjson.lib.ticker_map import mark_map_problems_said
+    mark_map_problems_said(probs)
+    files: List[str] = []
+    for p in probs:
+        m = re.match(r"(.+?):\d+: ", p)
+        n = Path(m.group(1)).name if m else "ticker.map"
+        if n not in files:
+            files.append(n)
+    files.sort(key=lambda n: n != "ticker.map")
+    first = probs[0]
+    m = re.match(r"((.+?):\d+): (.*)", first)
+    where, msg = (m.group(1), m.group(3)) if m else ("ticker.map", first)
+    if m and Path(m.group(2)).name == "tobase.map":
+        # A multi-year project's years share one tobase.map: say where.
+        tob = _PL.tobase_map_path(ctx.root)
+        try:
+            rel = os.path.relpath(tob, ctx.root)
+        except ValueError:          # another drive (Windows)
+            rel = str(tob)
+        where = rel + where[len(m.group(2)):]
+    cut = min((i for i in (msg.find(s) for s in (". ", ": '", " — "))
+               if i > 0), default=len(msg))
+    return Result("format", "attention",
+                  f"{len(probs)} {' and '.join(files)} problem(s) `tjs run` "
+                  f"refuses — {where}: {msg[:cut]}"
+                  + (" ..." if len(probs) > 1 else ""),
+                  cmd=("tjs format-map" if all(p in own for p in probs)
+                       else "tjs run"))
 
 
 def _review(sid: str) -> Callable[[Ctx, _Facts], Result]:

@@ -379,11 +379,13 @@ def broker_key(salt: str, book_hash: str) -> str:
 
 
 def resolve_keys(slips: List["Slip"], hashes: Iterable[str],
-                 salt: Optional[str], problems: List[str]) -> List["Slip"]:
+                 salt: Optional[str], problems: List[str], *,
+                 not_compared: Optional[List[Dict[str, Any]]] = None
+                 ) -> List["Slip"]:
     """Each slip's broker_key turned back into the books' hash of its
     broker account (`hashes`: every one the books and IB's reports
     carry). A key no account matches is said and kept apart (its slip
-    then has no books)."""
+    then has no books; with `not_compared`, it is listed there too)."""
     hashes = set(hashes)
     by_key = {broker_key(salt, h): h for h in hashes} if salt else {}
     out = []
@@ -401,12 +403,16 @@ def resolve_keys(slips: List["Slip"], hashes: Iterable[str],
                 f"table and import the slip again to write a salted key")
             out.append(s)
         else:
-            problems.append(
-                f"{s.where}: broker_key {k} is no broker account in the "
-                f"books — written with another salt (work/{KEY_SALT_FILE} "
-                f"deleted?) or for an account no longer in the books: "
-                f"delete the table and import the slip again, or type "
-                f"broker_account")
+            text = (f"{s.where}: broker_key {k} is no broker account in "
+                    f"the books — written with another salt (work/"
+                    f"{KEY_SALT_FILE} deleted?) or for an account no "
+                    f"longer in the books: delete the table and import "
+                    f"the slip again, or type broker_account")
+            problems.append(text)
+            if not_compared is not None:
+                not_compared.append({"kind": "broker-key",
+                                     "account": s.account or None,
+                                     "text": text})
             out.append(s)
     return out
 
@@ -821,13 +827,20 @@ def slip_accounts(cfg: Dict[str, Any]) -> List[str]:
                   and not (a or {}).get("crypto"))
 
 
+def _no_books_text(acct: str) -> str:
+    return f"{acct}: no readable work/{acct}_base.json — run `taxjson run`"
+
+
 def load_books(root: Path, cfg: Dict[str, Any], year: int,
-               accounts: Iterable[str]) -> Tuple[List[BookRow], List[str]]:
+               accounts: Iterable[str], *,
+               unread: Optional[List[str]] = None
+               ) -> Tuple[List[BookRow], List[str]]:
     """The year's income rows of `accounts` (BookRow), and the problems
     (an account with no books). Dividends and payments in lieu by their
     tax date (a Canadian trust's by its record date, CA-INC-DATE-TRUST),
     withholding with its payment, ROC by its ACB date, interest when
-    paid."""
+    paid. `unread` gets each account with inputs and no readable books:
+    its income was not compared (backlog TJ-0305)."""
     from taxjson.lib.cg_dividends import allocate, entries_from_config
     from taxjson.lib.income_dating import (IncomeRules, is_canadian_issuer,
                                            is_return_of_capital)
@@ -859,8 +872,9 @@ def load_books(root: Path, cfg: Dict[str, Any], year: int,
         base = _load_doc(cache / f"{acct}_base.json")
         if base is None:
             if (_PL.inputs_dir(Path(root)) / acct).is_dir():
-                problems.append(f"{acct}: no readable work/{acct}_base.json "
-                                f"— run `taxjson run`")
+                problems.append(_no_books_text(acct))
+                if unread is not None:
+                    unread.append(acct)
             continue
         rows = [t for t in base.get("transactions") or []
                 if isinstance(t, dict)]
@@ -1099,15 +1113,26 @@ def audit(root: Path, cfg: Dict[str, Any], *,
         slips, reports_map, avg_override = load_slips_file(sf, cfg, year)
         sources.append({"kind": "slips.toml", "file": f"inputs/slips/"
                         f"{SLIPS_FILE}", "slips": len(slips)})
+    unread: List[str] = []
     try:
-        books, problems = load_books(root, cfg, year, accts)
+        books, problems = load_books(root, cfg, year, accts, unread=unread)
     except CgDividendMapError as e:
         raise SlipsError(str(e)) from None
+    # The problems that leave part of the slips or the books uncompared:
+    # they make the audit incomplete (its status, exit 1, the
+    # checklist's t5-t3 step; backlog TJ-0305). The rest of `problems`
+    # are notices: a second copy of a report (read once), a pay-dated
+    # ROC line counted in its record year, a broker_key written
+    # unsalted.
+    not_compared: List[Dict[str, Any]] = [
+        {"kind": "no-books", "account": a, "text": _no_books_text(a)}
+        for a in unread]
     # IB reports: matched to the account whose books carry the IB account.
     fx_notes: List[str] = []
     seen_reports: Dict[Tuple, Tuple[Path, Tuple]] = {}
     report_hashes: set = set()
-    for p, rep, acct in _reports(root, books, reports_map, problems):
+    for p, rep, acct in _reports(root, books, reports_map, problems,
+                                 not_compared):
         report_hashes.add(rep.account_hash)
         # Two copies of one report (`... (1).csv`): read once; two
         # different reports of one account and year: which is right
@@ -1148,16 +1173,22 @@ def audit(root: Path, cfg: Dict[str, Any], *,
             fx_notes.append(_usd_base_note(rep, acct, year, fx_cache, new))
         sources.append(src)
         for k, v in rep.unknown:
-            problems.append(f"inputs/slips/{_shown(p)}: IB component "
-                            f"{k!r} ({v:.2f} {rep.base_currency}) is not "
-                            f"one taxjson knows — not compared")
+            text = (f"inputs/slips/{_shown(p)}: IB component {k!r} "
+                    f"({v:.2f} {rep.base_currency}) is not one taxjson "
+                    f"knows — not compared")
+            problems.append(text)
+            if abs(v) >= 0.005:
+                # (a component of no amount leaves nothing out)
+                not_compared.append({"kind": "unknown-component",
+                                     "account": acct, "text": text})
     # Every broker account an export names, also one with no income
     # rows (a Webull export: trades only) — a slip --import-cra keyed to
     # it is that account's.
     known_files = broker_account_files(root, slip_accounts(cfg))
     slips = resolve_keys(slips, {h for r in books for h in r.hashes}
                          | report_hashes | set(known_files),
-                         key_salt(root), problems)
+                         key_salt(root), problems,
+                         not_compared=not_compared)
     if account:
         slips = [s for s in slips if s.account == account]
     slips = [s for s in slips if s.account in accts or s.account == account]
@@ -1189,8 +1220,13 @@ def audit(root: Path, cfg: Dict[str, Any], *,
         if acc is not None:
             res_accounts.append(acc)
     t5008 = _t5008(root, slips, year, tolerance, rate)
-    status = ("no-slips" if not slips
-              else "attention" if issues else "ok")
+    # Something not compared is never "ok" (backlog TJ-0305); a finding
+    # still leads.
+    if not slips:
+        status = "incomplete" if not_compared else "no-slips"
+    else:
+        status = ("attention" if issues
+                  else "incomplete" if not_compared else "ok")
     return {
         "schema_version": SCHEMA_VERSION,
         "year": year,
@@ -1210,16 +1246,20 @@ def audit(root: Path, cfg: Dict[str, Any], *,
                          if ls],
             "notes": fx_notes + notes},
         "problems": problems,
+        "not_compared": not_compared,
         "issues": issues,
         "status": status,
     }
 
 
 def _reports(root: Path, books: List[BookRow],
-             reports_map: List[Dict[str, str]], problems: List[str]):
+             reports_map: List[Dict[str, str]], problems: List[str],
+             not_compared: Optional[List[Dict[str, Any]]] = None):
     """(path, report, project account) of every IB dividends report in
     inputs/slips/: the account named in [[ib_report]], else the one
-    whose books carry the IB account. Raises SlipsError."""
+    whose books carry the IB account (a report no account carries is
+    not compared: said in `problems` and `not_compared`). Raises
+    SlipsError."""
     from taxjson.lib.ib_dividends import IBReportError, read_report
     hashes_of: Dict[str, set] = {}
     for r in books:
@@ -1244,13 +1284,17 @@ def _reports(root: Path, books: List[BookRow],
                     f"[[ib_report]] file = \"<this file's name>\" "
                     f"account = \"<account>\"")
             else:
-                problems.append(
-                    f"inputs/slips/{_shown(p)}: no taxable account's books "
-                    f"carry IB account {rep.account_masked} (a registered "
-                    f"account gets no T5/T3; else an IB statement for it "
-                    f"in inputs/<account>/?) — not compared; name the "
-                    f"account in slips.toml: [[ib_report]] file = "
-                    f"\"<this file's name>\" account = \"<account>\"")
+                text = (f"inputs/slips/{_shown(p)}: no taxable account's "
+                        f"books carry IB account {rep.account_masked} (a "
+                        f"registered account gets no T5/T3; else an IB "
+                        f"statement for it in inputs/<account>/?) — not "
+                        f"compared; name the account in slips.toml: "
+                        f"[[ib_report]] file = \"<this file's name>\" "
+                        f"account = \"<account>\"")
+                problems.append(text)
+                if not_compared is not None:
+                    not_compared.append({"kind": "report-no-account",
+                                         "account": None, "text": text})
                 continue
         yield p, rep, acct
 
@@ -2394,7 +2438,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
     the findings and the lines to add, each said in one line; `details`
     adds the annual-average rates, the per-payment notes, each
     suggestion's reason and the Notes section."""
-    from taxjson.lib.out import Doc, act
+    from taxjson.lib.out import Doc, act, act_list
     d = Doc(f"SLIP AUDIT — tax year {rep['year']}, CAD, tolerance "
             f"{rep['tolerance']:.2f}", width_=width_)
     d.section("SLIPS")
@@ -2576,6 +2620,7 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
         d.items(rep["problems"])
     d.blank()
     issues = rep.get("issues") or []
+    nc = rep.get("not_compared") or []
     # "apply the suggestions" only when SUGGESTIONS was printed (it said
     # so with none to apply: backlog TJ-0179).
     suggested = bool(sg["capital_gains_dividends"] or sg["tt_lines"])
@@ -2607,5 +2652,17 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
     else:
         if sg["notes"] and not details:
             d.line(f"{len(sg['notes'])} note(s) — tjs slip-audit --details")
-        d.para("Every slip agrees with the books within the tolerance.")
+        # "Every slip" only when nothing was left out (backlog TJ-0305).
+        d.para("The slips compared agree with the books within the "
+               "tolerance." if nc else
+               "Every slip agrees with the books within the tolerance.")
+    # What was not compared makes the audit incomplete: said last, as
+    # what to do (NOT COMPARED lists each).
+    unread = [e["account"] for e in nc if e["kind"] == "no-books"]
+    if unread:
+        d.line(act_list("Incomplete: income not compared, no readable "
+                        "books", unread, "tjs run"))
+    if len(nc) > len(unread):
+        d.line(act(f"Incomplete: {len(nc) - len(unread)} slip input(s) "
+                   f"not compared (NOT COMPARED above)"))
     return d.lines()

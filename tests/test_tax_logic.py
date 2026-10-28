@@ -75,5 +75,51 @@ class TestTaxLogic(unittest.TestCase):
             self.assertIn("Canada", r.stdout)
 
 
+class TestStatementItems(unittest.TestCase):
+    """A statement of several sentences is its first sentence, the
+    others `- ` items under it; a long sentence's clauses are items too."""
+
+    def test_sentences_end_only_at_a_sentence_end(self):
+        from taxjson.lib.tax_logic import _sentences
+        self.assertEqual(_sentences(
+            "One ZZZ.TO, e.g. ZZY.US. Two (a. B) `x. Y` here. "
+            "Treas. Reg. §1.1091-1 and Rev. Rul. 2023-14 apply... "
+            "Three. [US-X-01] Four. 2025: five."),
+            ["One ZZZ.TO, e.g. ZZY.US.", "Two (a. B) `x. Y` here.",
+             "Treas. Reg. §1.1091-1 and Rev. Rul. 2023-14 apply... Three.",
+             "[US-X-01] Four.", "2025: five."])
+        # A table of years: the lead ends at its colon.
+        self.assertEqual(_sentences("Tax by year: 2024: 15%. 2025: 14%."),
+                         ["Tax by year:", "2024: 15%.", "2025: 14%."])
+
+    def test_only_a_long_sentence_is_cut_at_its_semicolons(self):
+        from taxjson.lib.tax_logic import _LONG_SENTENCE, _clauses
+        short = "A; b (c; d)."
+        self.assertEqual(_clauses(short), [short])
+        long_ = "A " + "x" * _LONG_SENTENCE + "; b (c; d); `e; f` g."
+        self.assertEqual(_clauses(long_), ["A " + "x" * _LONG_SENTENCE + ";",
+                                           "b (c; d);", "`e; f` g."])
+
+    def test_every_statement_is_kept_whole_in_its_items(self):
+        from taxjson.lib.tax_logic import _clauses, _sentences, variants
+        for country in ("canada", "usa"):
+            for st in variants(country):
+                for _t, rules in sections(country, st, ids=True):
+                    for r in rules:
+                        parts = [c for s in _sentences(r) for c in _clauses(s)]
+                        self.assertEqual(" ".join(parts), " ".join(r.split()))
+
+    def test_items_nest_under_the_first_sentence(self):
+        text = render("canada", {"year": 2025}, width=0)
+        self.assertIn("\n  - Settle dates come from the broker when printed",
+                      text)
+        self.assertIn("\n    - Days skip weekends and settlement holidays",
+                      text)
+        # --json keeps each statement whole.
+        flat = [r for _t, rs in sections("canada", {"year": 2025}) for r in rs]
+        self.assertTrue(any(r.startswith("Settle dates come") and
+                            "Days skip weekends" in r for r in flat))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,6 @@ a no-op row, and a ratio that leaves a fractional share.
 """
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -58,20 +57,21 @@ def cash_in_lieu_line(received: float, fraction: float, cash: float,
 def _rows(path: Path) -> List[Dict[str, Any]]:
     """The rows of a work/<acct>_base.json. A missing file is an account
     with no books yet; an unreadable or malformed one is refused (it
-    used to read as 'No splits in the books', A2-0969)."""
+    used to read as 'No splits in the books', A2-0969). Read with the
+    shared work/ reader (json_input.read_work_doc): a row that is not an
+    object, or a non-list `transactions`, is refused naming the file and
+    the row — such rows were dropped and the view reported clean
+    (backlog TJ-0320). A valid empty list is no rows."""
+    from taxjson.lib.json_input import InputFileError, read_work_doc
     path = Path(path)
     if not path.exists() and not path.is_symlink():
         return []
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise ViewError(f"cannot read {path} ({e}) — re-run `taxjson run` "
-                        f"to rebuild it") from None
-    rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
-    if not isinstance(rows, list):
-        raise ViewError(f"{path} holds no transaction list — re-run "
-                        f"`taxjson run` to rebuild it")
-    return [r for r in rows if isinstance(r, dict)]
+        doc = read_work_doc(path)
+    except InputFileError as e:
+        raise ViewError(f"{e} — re-run `taxjson run` to rebuild it") \
+            from None
+    return list(doc.get("transactions") or [])
 
 
 def _manifest(root: Path, acct: str) -> Dict[str, Any]:

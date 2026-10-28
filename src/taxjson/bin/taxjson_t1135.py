@@ -30,11 +30,15 @@ addition joins the walk where the engine applied it.
 
 Domicile classification is by market suffix (.US → USA, .L → GBR,
 .AX → AUS; .TO/.V/.CN/.NE → Canadian, i.e. not SFP), overridable per symbol
-via `T1135 SYMBOL COUNTRY` lines in the project's ticker.map:
+via `T1135 SYMBOL COUNTRY [CATEGORY]` lines in the project's ticker.map;
+each property's form category (1-6) is 6 for an option, a futures
+contract or crypto and 2 for any other listed security unless a line
+gives it:
 
     #     symbol  country  (ISO-3 code, or CA/CAN/CANADA/EXCLUDE to exclude)
     T1135 SAMPLW.US  CA       # interlisted Canadian corp held on NYSE — not SFP
     T1135 GLXY.TO USA      # foreign corp listed on TSX — still SFP
+    T1135 SAMPLT.US USA 4  # a US trust's units: category 4
 
 Caveats printed with every report (also see --help):
   - Amounts are COST (ACB-style). That is the correct basis for the filing
@@ -120,6 +124,17 @@ REVIEW = "??"
 # carry — so it is counted toward the threshold and flagged for review.
 CRYPTO = "CRYPTO"
 
+# The form's six categories of specified foreign property (its Part B):
+# each property row carries one (tax-logic CA-RPT-18).
+CATEGORY_NAMES = {
+    1: "funds held outside Canada",
+    2: "shares of non-resident corporations",
+    3: "indebtedness owed by non-residents",
+    4: "interests in non-resident trusts",
+    5: "real property outside Canada",
+    6: "other property outside Canada",
+}
+
 
 # ---------------------------------------------------------------- loading
 
@@ -199,6 +214,16 @@ def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
     return {sym: override_value(code) for sym, code in rules.t1135.items()}
 
 
+def load_categories(path: Optional[Path]) -> Dict[str, int]:
+    """The T1135 categories of a ticker.map's `T1135 SYMBOL COUNTRY
+    CATEGORY` lines, {SYMBOL: 1-6}. load_overrides has refused a map
+    whose T1135 lines cannot be read."""
+    if path is None:
+        return {}
+    from taxjson.lib.ticker_map import read_side_rules
+    return dict(read_side_rules(path).t1135_category)
+
+
 # side_rules_from_text's no-keyword problem: its place, the line.
 _NO_KEYWORD_RE = re.compile(r"^(?P<where>\S+:\d+): line has no ticker\.map "
                             r"keyword \([^)]*\): (?P<line>.*)$")
@@ -245,6 +270,27 @@ def classify_country(symbol: str,
     # No suffix: equities parsers always stamp one, so this is almost
     # certainly crypto (exchange-held crypto is generally SFP per CRA).
     return CRYPTO
+
+
+def property_category(symbol: str, categories: Dict[str, int],
+                      kinds: Dict[str, str]) -> Tuple[Optional[int], str]:
+    """A property's T1135 category and where it comes from (tax-logic
+    CA-RPT-18): the ticker.map line's (`T1135 SYMBOL COUNTRY CATEGORY`);
+    6 for crypto (no market suffix, as classify_country reads it), an
+    option or a futures contract; none for a security the interlisted
+    master records as units or a fund (`kinds`, lib/tobase_map.
+    t1135_kinds), named for the user to set; else 2, a listed security
+    taken as a corporation's shares."""
+    from taxjson.lib.core import is_option_symbol
+    if symbol in categories:
+        return categories[symbol], "ticker.map"
+    if "." not in symbol:
+        return 6, "crypto"
+    if is_option_symbol(symbol) or is_plain_future(symbol):
+        return 6, "derivative"
+    if symbol in kinds:
+        return None, kinds[symbol]
+    return 2, "listing"
 
 
 # ---------------------------------------------------------------- cost walk
@@ -459,6 +505,19 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # enters the pools or the threshold test. Options on futures stay in
     # the walk at their premium cost.
     futures_seen: set = set()
+    # Foreign pools held at some point of the year, and those held while
+    # their cost was unknown: a holding at a known zero cost is still a
+    # property row, and a cost unknown while held leaves the year's
+    # maximum unknown even once the shares are sold (the drained pool
+    # clears its own flag).
+    held_in_year: set = set()
+    unknown_in_year: set = set()
+    # Foreign pools held long, and held short, at some point of the
+    # year: a position only ever short (a written option, a short sale)
+    # is an obligation, not property held (CA-RPT-19). Never cleared:
+    # a rename carries both to the new symbol and keeps the old one's.
+    long_in_year: set = set()
+    short_in_year: set = set()
 
     def total_foreign_cost() -> float:
         return sum(p.cost_amount() for s, p in pools.items()
@@ -470,6 +529,13 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             if classify_country(s, overrides) is None:
                 continue
             c = p.cost_amount()
+            if p.qty > p.eps():
+                held_in_year.add(s)
+                long_in_year.add(s)
+                if p.tainted:
+                    unknown_in_year.add(s)
+            elif p.qty < -p.eps():
+                short_in_year.add(s)
             if c > p.max_cost_in_year:
                 p.max_cost_in_year = c
         tot = total_foreign_cost()
@@ -558,6 +624,13 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                 # the "maximum cost during the year" column.
                 dest.max_cost_in_year = max(dest.max_cost_in_year,
                                             pool.max_cost_in_year)
+                for seen in (held_in_year, unknown_in_year):
+                    if symbol in seen:
+                        seen.discard(symbol)
+                        seen.add(new_symbol)
+                for seen in (long_in_year, short_in_year):
+                    if symbol in seen:
+                        seen.add(new_symbol)
                 pools[symbol] = _Pool(symbol)
         elif action == "ADJUST":
             # The engine's ADJUST rules (CA-ACB-06/07/14), so the cost
@@ -726,13 +799,13 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         # even though its tracked cost is 0.
         still_held_unknown = p.tainted and p.qty > p.eps()
         if p.max_cost_in_year <= 0 and year_end_cost <= 0 \
-                and not still_held_unknown:
+                and not still_held_unknown and s not in held_in_year:
             continue
         per_symbol[s] = {
             "country": country,
             "max_cost": round(p.max_cost_in_year, 2),
             "year_end_cost": round(year_end_cost, 2),
-            "unknown_acb": p.tainted,
+            "unknown_acb": p.tainted or s in unknown_in_year,
         }
     return {
         "per_symbol": per_symbol,
@@ -740,6 +813,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         "max_total_date": max_total_date,
         "futures_symbols": sorted(futures_seen),
         "expired_options_held": expired_held,
+        "short_only_symbols": sorted(short_in_year - long_in_year),
         "last_date": last_date,
     }
 
@@ -1040,7 +1114,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  full_history: bool = True,
                  income_rules: Optional[Dict[str, Any]] = None,
                  issuer_countries: Optional[Dict[str, str]] = None,
-                 key_renames: Optional[Dict[str, str]] = None
+                 key_renames: Optional[Dict[str, str]] = None,
+                 categories: Optional[Dict[str, int]] = None,
+                 kinds: Optional[Dict[str, str]] = None
                  ) -> Dict[str, Any]:
     """The T1135 report model. `today` (ISO date, default the real
     date) decides whether the year is complete: before Dec 31 the
@@ -1058,7 +1134,11 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     pairs book under its US listing (BMU for a Bermuda issuer, not the
     .US suffix's USA); a user override wins. `key_renames` (the map's
     renames to the base symbol): a user `T1135 SYMBOL` line naming a
-    listing a TOBASE line books under another symbol follows it."""
+    listing a TOBASE line books under another symbol follows it.
+
+    `categories` ({SYMBOL: 1-6}, load_categories) and `kinds` (the
+    master's units and funds, lib/tobase_map.t1135_kinds) give each
+    property row its T1135 category (property_category)."""
     from datetime import date as _date
     today = today or _date.today().isoformat()
     check_currency(list(base_paths) + list(gains_paths), base_currency)
@@ -1074,6 +1154,12 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         if nk != k:
             written[nk] = k
     user_keys = set(mapped)
+    cats: Dict[str, int] = {}
+    for k, v in (categories or {}).items():
+        nk = key_renames.get(k, k)
+        if nk != k and nk in (categories or {}):
+            continue        # the user's line for the booked symbol wins
+        cats[nk] = v
     overrides = dict(issuer_countries or {})
     overrides.update(mapped)            # the walk adds rename targets
     # Every denied superficial loss joins the walk as ADJUST rows where
@@ -1090,6 +1176,14 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
             if _tx_date(w, tax_date) <= year_end_key]
     txs = txs + wash
     walk = walk_costs(txs, year, overrides, tax_date, today=today)
+    # A category follows its symbol through a rename, as the walk has
+    # carried its country.
+    for t in sorted((t for t in txs
+                     if (t.get("action") or "").upper() == "SPLIT"
+                     and t.get("symbol_new")),
+                    key=lambda t: _sort_key(t, tax_date)):
+        if t.get("symbol") in cats and t["symbol_new"] not in cats:
+            cats[t["symbol_new"]] = cats[t["symbol"]]
     inc = join_income_gains(gains_paths, year, overrides, tax_date)
     # An override that matches nothing (a ticker change, a ticker.map
     # consolidation, a typo) silently reversed the filing verdict
@@ -1145,9 +1239,12 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     for symbol in sorted(walk["per_symbol"]):
         s = walk["per_symbol"][symbol]
         ig = inc.get(symbol, {})
+        cat, cat_from = property_category(symbol, cats, kinds or {})
         rows.append({
             "symbol": symbol,
             "country": s["country"],
+            "category": cat,
+            "category_from": cat_from,
             "max_cost": s["max_cost"],
             "year_end_cost": s["year_end_cost"],
             "income": round(ig.get("income", 0.0), 2),
@@ -1157,7 +1254,11 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         })
     # Income or gain on a foreign symbol whose cost never showed up in the
     # walk (e.g. fully disposed via a corp action the walk didn't model)
-    # still belongs on the form.
+    # still belongs on the form. A position the walk saw only short (a
+    # written option bought back or expired, a short sale covered) is
+    # not property held: named, not a row (CA-RPT-19).
+    short_only = set(walk.get("short_only_symbols") or ())
+    short_left_out: List[str] = []
     for symbol, ig in sorted(inc.items()):
         if symbol in walk["per_symbol"]:
             continue
@@ -1166,8 +1267,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
             continue
         if abs(ig.get("income", 0.0)) < 0.005 and abs(ig.get("gain", 0.0)) < 0.005:
             continue
+        if symbol in short_only:
+            short_left_out.append(symbol)
+            continue
+        cat, cat_from = property_category(symbol, cats, kinds or {})
         rows.append({
             "symbol": symbol, "country": country,
+            "category": cat, "category_from": cat_from,
             "max_cost": 0.0, "year_end_cost": 0.0,
             "income": round(ig.get("income", 0.0), 2),
             "gain": round(ig.get("gain", 0.0), 2),
@@ -1229,6 +1335,10 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "crypto_symbols": [r["symbol"] for r in rows
                            if r["country"] == CRYPTO],
         "unknown_acb_symbols": [r["symbol"] for r in rows if r["unknown_acb"]],
+        # The rows whose category is the user's to set (units or a fund
+        # in the interlisted master): property_category.
+        "category_review_symbols": [r["symbol"] for r in rows
+                                    if r["category"] is None],
         "futures_symbols": sorted(futures),
         "missing_history_applied": phantoms is not None,
         "unused_overrides": unused_overrides,
@@ -1244,6 +1354,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "as_of": as_of,
         "expired_options_held": expired,
         "canadian_issuer_symbols": canadian_issuer,
+        # Held only short in the year, with a gain or income: not rows
+        # (CA-RPT-19); their gains are in the capital gains report.
+        "short_only_symbols": short_left_out,
     }
 
 
@@ -1254,6 +1367,12 @@ _money = fmt_money                  # shared report-layer formatter
 # t1135` passes unless --details) a message is its headline and the
 # report is render_brief; the standalone tool prints everything.
 _DETAILS = True
+
+
+def _cat(row: Dict[str, Any]) -> str:
+    """A property row's CAT cell: its T1135 category, `?` for the user
+    to set."""
+    return "?" if row.get("category") is None else str(row["category"])
 
 
 def _dl(lines: List[str]) -> List[str]:
@@ -1312,6 +1431,11 @@ def render_brief(rep: Dict[str, Any]) -> str:
                         "verdict NOT reliable")
     rows = rep["properties"]
     end_col = "COST AT DEC 31" if complete else f"COST AT {as_of}"
+    _so = rep.get("short_only_symbols") or []
+    if _so:
+        acts.append(f"{_so[0]}"
+                    f"{' +' + str(len(_so) - 1) + ' more' if len(_so) > 1 else ''}"
+                    f": held only short: an obligation, not a row")
     if rows:
         by_note: Dict[str, List[str]] = {}
         for r in rows:
@@ -1324,6 +1448,10 @@ def render_brief(rep: Dict[str, Any]) -> str:
             elif r["country"] == CRYPTO:
                 by_note.setdefault("crypto, check where held",
                                    []).append(r["symbol"])
+            if r["category"] is None:
+                by_note.setdefault(f"{r['category_from']}s, not shares: "
+                                   f"set the T1135 category",
+                                   []).append(r["symbol"])
         for n, syms in by_note.items():
             acts.append(f"{', '.join(syms[:3])}"
                         f"{' +' + str(len(syms) - 3) + ' more' if len(syms) > 3 else ''}"
@@ -1332,13 +1460,16 @@ def render_brief(rep: Dict[str, Any]) -> str:
         lines.append("PER PROPERTY — taxable accounts only")
         lines.append("Amounts are cost (ACB), not market value; MAX COST "
                      "IN YR: the most held at once.")
-        table = [(r["symbol"], r["country"], _money(r["max_cost"]),
+        lines.append("CAT: the form's category (2 shares; 6 options, "
+                     "futures, crypto); ticker.map `T1135 SYMBOL COUNTRY "
+                     "CAT` sets another.")
+        table = [(r["symbol"], r["country"], _cat(r), _money(r["max_cost"]),
                   _money(r["year_end_cost"]), _money(r["income"]),
                   _money(r["gain"])) for r in rows]
         lines.extend(_out.fit_table(
-            ("SYMBOL", "COUNTRY", "MAX COST IN YR", end_col, "INCOME",
-             "GAIN(LOSS)"), table,
-            aligns=["<", "<", ">", ">", ">", ">"], drop=(4,)))
+            ("SYMBOL", "COUNTRY", "CAT", "MAX COST IN YR", end_col,
+             "INCOME", "GAIN(LOSS)"), table,
+            aligns=["<", "<", "<", ">", ">", ">", ">"], drop=(5,)))
         lines.append("")
         lines.append("PER COUNTRY — upper-bound aggregates")
         ctable = [(c, _money(v["max_cost"]), _money(v["year_end_cost"]),
@@ -1449,7 +1580,7 @@ def render_report(rep: Dict[str, Any]) -> str:
     # is open — 'COST AT DEC 31' labelled a September figure (S051-22).
     end_col = "COST AT DEC 31" if complete else f"COST AT {as_of}"
     if rows:
-        header = ("SYMBOL", "COUNTRY", "MAX COST IN YR", end_col,
+        header = ("SYMBOL", "COUNTRY", "CAT", "MAX COST IN YR", end_col,
                   "INCOME", "GAIN(LOSS)")
         table = []
         # A property's notes are listed under the table, one line per
@@ -1467,15 +1598,21 @@ def render_report(rep: Dict[str, Any]) -> str:
                 notes.append("unclassified — review / add a ticker.map T1135 line")
             elif r["country"] == CRYPTO:
                 notes.append("crypto — check where held (see the notes)")
+            if r["category"] is None:
+                notes.append(f"{r['category_from']}s in the interlisted "
+                             f"master, not a corporation's shares — set "
+                             f"the category: `T1135 SYMBOL COUNTRY CAT` "
+                             f"in ticker.map")
             for n in notes:
                 by_note.setdefault(n, []).append(r["symbol"])
-            table.append((r["symbol"], r["country"], _money(r["max_cost"]),
-                          _money(r["year_end_cost"]), _money(r["income"]),
-                          _money(r["gain"])))
+            table.append((r["symbol"], r["country"], _cat(r),
+                          _money(r["max_cost"]), _money(r["year_end_cost"]),
+                          _money(r["income"]), _money(r["gain"])))
         lines.append("PER PROPERTY (taxable accounts only)")
         lines.extend(_out.fit_table(header, table,
-                                    aligns=["<", "<", ">", ">", ">", ">"],
-                                    drop=(4,)))
+                                    aligns=["<", "<", "<", ">", ">", ">",
+                                            ">"],
+                                    drop=(5,)))
         for n, syms in by_note.items():
             item(f"{', '.join(syms)}: {n}")
         lines.append("")
@@ -1500,6 +1637,12 @@ def render_report(rep: Dict[str, Any]) -> str:
          "fetched: take it from the broker's month-end statements.")
     item("Per-country MAX COST sums per-symbol maxima (an upper "
          "bound); the threshold test uses the true simultaneous total.")
+    item("CAT is the form's category: "
+         + ", ".join(f"{n} {name}" for n, name in CATEGORY_NAMES.items())
+         + ". taxjson takes 6 for an option, a futures contract or "
+           "crypto and 2 for any other listed security; units of a fund, "
+           "trust or partnership may be another category: check them and "
+           "set it with `T1135 SYMBOL COUNTRY CAT` in ticker.map.")
     item(".TO/.V/.CN/.NE symbols count as Canadian. A foreign corp on "
          "a Canadian exchange is still SFP (`T1135 SYMBOL <ISO3>` in "
          "ticker.map); a Canadian corp on a US exchange is not "
@@ -1511,6 +1654,14 @@ def render_report(rep: Dict[str, Any]) -> str:
              "carry no cost amount (margin is a deposit): out of the "
              "cost columns and the threshold; options on futures count "
              "at their premium.")
+    if rep.get("short_only_symbols"):
+        _so = rep["short_only_symbols"]
+        item(f"Held only short in {rep['year']} ({', '.join(_so[:6])}"
+             f"{' ...' if len(_so) > 6 else ''}): a written option or a "
+             f"short sale is an obligation, not property held, so it is "
+             f"not a row and adds nothing to the totals; its gain or "
+             f"loss is in the capital gains (`tjs gains`). A position "
+             f"held long at any time in the year keeps its row.")
     if rep.get("crypto_symbols"):
         item("CRYPTO rows: crypto on a foreign exchange is generally "
              "SFP under that exchange's country (`T1135 SYMBOL <ISO3>` "
@@ -1635,13 +1786,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     overrides = load_overrides(args.map)
-    # The interlisted pairs (lib/tobase_map): a foreign issuer's country
-    # and the renames a user T1135 key follows.
+    categories = load_categories(args.map)
+    # The interlisted pairs (lib/tobase_map): a foreign issuer's country,
+    # the units and funds whose category is the user's, and the renames
+    # a user T1135 key follows.
     issuer_countries: Dict[str, str] = {}
+    kinds: Dict[str, str] = {}
     key_renames: Dict[str, str] = {}
     if args.map is not None:
-        from taxjson.lib.tobase_map import t1135_countries
+        from taxjson.lib.tobase_map import t1135_countries, t1135_kinds
         issuer_countries = t1135_countries(args.map)
+        kinds = t1135_kinds(args.map)
         try:
             from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
                                                         merge_renames)
@@ -1690,6 +1845,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                            full_history=not args.year_wash_only,
                            issuer_countries=issuer_countries,
                            key_renames=key_renames,
+                           categories=categories, kinds=kinds,
                            income_rules=dict(corporate_distributions=tuple(
                                args.corporate_distribution or ()),
                                # The ALLOWLOSS positions the books took

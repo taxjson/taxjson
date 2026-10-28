@@ -263,19 +263,23 @@ _FALLBACK_ROWS: list = []
 _RATES_USED: set = set()
 
 
-def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str, Decimal]], default_rate: Optional[Decimal]) -> Optional[Decimal]:
+def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str, Decimal]], default_rate: Optional[Decimal], *, rate_evidence: Optional[Dict[str, str]] = None) -> Optional[Decimal]:
     """The rate for the exact date, else the latest of the LOOKBACK_DAYS
     days before it, else `default_rate` — an explicit --default-rate,
     or None (no rate: the caller stops with the date and pair).
 
     Records every miss into `_DEFAULT_RATE_FALLBACKS` so callers can
-    surface a summary or the error.
+    surface a summary or the error. Optional rate_evidence receives the
+    selected history date and lookup method during this same lookup.
     """
     currency = norm_currency(currency)
 
     def _record_fallback(reason: str) -> Decimal:
         key = (currency, reason)
         _DEFAULT_RATE_FALLBACKS[key] = _DEFAULT_RATE_FALLBACKS.get(key, 0) + 1
+        if rate_evidence is not None:
+            rate_evidence.update(fx_date='', fx_source=(
+                'explicit default' if default_rate is not None else 'unavailable'))
         return default_rate
 
     if currency not in history:
@@ -294,6 +298,9 @@ def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str,
         test_date = (dt - timedelta(days=i)).strftime("%Y-%m-%d")
         if test_date in curr_history:
             _RATES_USED.add((currency, test_date))
+            if rate_evidence is not None:
+                rate_evidence.update(fx_date=test_date, fx_source=(
+                    'history exact date' if i == 0 else 'history prior date'))
             return curr_history[test_date]
 
     # Distinguish "before the rates file even starts" from an interior gap:
@@ -305,6 +312,52 @@ def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str,
         if date_str < first:
             return _record_fallback(f"date predates rates file start {first}")
     return _record_fallback(f"no rate within {LOOKBACK_DAYS}-day lookback")
+
+def _stamp_reward_fx(converted, original, target, rate, rate_evidence):
+    """Keep the reward's native valuation and record the applied conversion.
+
+    to_dict()/dataclasses.asdict above already deep-copies the evidence. Copy
+    the valuation again here so no nested object is borrowed from the input.
+    Re-converting an already converted row composes its original FX rate.
+    """
+    if not converted.staking_reward:
+        return
+    evidence = dict(converted.staking_reward)
+    valuation = dict(evidence.get('valuation') or {})
+    source = norm_currency(original.currency)
+    if not valuation and original.price > 0:
+        valuation = {
+            'price': original.price, 'currency': source,
+            'date': original.date, 'source': 'booked price (source unavailable)',
+        }
+    if not valuation:
+        return
+    previous_target = valuation.get('target_currency')
+    previous_rate = valuation.get('fx_rate')
+    provenance = dict(rate_evidence)
+    if previous_target == source and previous_rate is not None:
+        if target == source and rate == 1:
+            # An identity pass must not overwrite the historical quote
+            # that originally converted the native source valuation.
+            return
+        applied = float(Decimal(str(previous_rate)) * Decimal(str(rate)))
+        if previous_rate != 1 or valuation.get('fx_source') != 'identity':
+            provenance['fx_source'] = (
+                f"{valuation.get('fx_source') or 'previous conversion'}; then "
+                f"{provenance['fx_source']}")
+            if valuation.get('fx_date') != provenance['fx_date']:
+                # A composite rate has no single quote date when its
+                # component conversions used different dated quotes.
+                provenance['fx_date'] = ''
+    elif norm_currency(valuation.get('currency')) == source:
+        applied = float(rate)
+    else:
+        # Evidence in another currency must never be relabelled as this rate.
+        return
+    valuation.update(fx_rate=applied, target_currency=target, **provenance)
+    evidence['valuation'] = valuation
+    converted.staking_reward = evidence
+
 
 def convert_transaction(
     tx: TaxTransaction, target_curr: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal
@@ -320,6 +373,8 @@ def convert_transaction(
         # foreign currency, apply the default rate and stamp them CAD.
         converted.currency = target_curr
         stamp_rate(converted, 1)
+        _stamp_reward_fx(converted, tx, target_curr, 1,
+                         {'fx_date': '', 'fx_source': 'identity'})
     elif tx.action == 'SPLIT' and not any(
             float(getattr(tx, f, 0) or 0) for f in (
                 "proceeds", "commission", "fee", "price", "net_amount",
@@ -334,7 +389,9 @@ def convert_transaction(
         tx_date = tx.date_settle if tx.date_settle else tx.date
         before = dict(_DEFAULT_RATE_FALLBACKS)
         _fallback = default_rate_for(src_curr, target_curr, default_rate)
-        rate = get_rate_for_date(src_curr, tx_date, history, _fallback)
+        rate_evidence = {}
+        rate = get_rate_for_date(src_curr, tx_date, history, _fallback,
+                                 rate_evidence=rate_evidence)
         if _DEFAULT_RATE_FALLBACKS != before:
             reason = next(r for (c, r), n in _DEFAULT_RATE_FALLBACKS.items()
                           if n != before.get((c, r), 0))
@@ -398,6 +455,7 @@ def convert_transaction(
             # converted at: the Canadian engine re-averages a close
             # across accounts in the native currency (issue #76).
             stamp_rate(converted, rate)
+            _stamp_reward_fx(converted, tx, target_curr, rate, rate_evidence)
 
     return converted
 

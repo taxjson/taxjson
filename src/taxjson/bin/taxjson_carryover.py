@@ -554,8 +554,10 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
             # The RETURN row close-year recorded (`taxjson sum`'s, all
             # the taxable accounts' Schedule 3 rows together): what
             # close-year and `taxjson years` show (TJ-0192, TJ-0208).
-            # Display only in the lock (check-filed does not hold it):
-            # one that is not a number is passed over, as `years` does.
+            # check-filed does not recompute it, but read_lock refuses
+            # one that is not a finite number (lock_shape_problem,
+            # backlog TJ-0274); the type check stays for a hand-built
+            # document.
             rr = (doc.get('return_row') or {}).get('realized') \
                 if isinstance(doc.get('return_row'), dict) else None
             rr_gain = (float(rr) if isinstance(rr, (int, float))
@@ -638,6 +640,17 @@ def _dl(lines: List[str]) -> List[str]:
     return list(lines) if _DETAILS else []
 
 
+def _no_rows(ledger: Dict[str, Any]) -> str:
+    """The ledger's line when no year has a disposition with a known
+    cost: one whose unknown-cost sales were all excluded is not "no
+    dispositions" (backlog TJ-0323)."""
+    n = len(ledger.get('excluded_unknown_cost') or [])
+    if n:
+        return (f"No disposition with a known cost: {n} with an unknown "
+                f"cost excluded (no purchase in your files).")
+    return "No dispositions found."
+
+
 def render_brief(ledger: Dict[str, Any], cur: str,
                  first_tx_year: Optional[int]) -> str:
     """The default view: a legend, the table, the balance, then one
@@ -649,7 +662,7 @@ def render_brief(ledger: Dict[str, Any], cur: str,
     lines = [f"CAPITAL-LOSS CARRYOVER LEDGER — {country}, {cur}"]
     rows = ledger['rows']
     if not rows:
-        lines.append("No dispositions found.")
+        lines.append(_no_rows(ledger))
         return "\n".join(lines)
     if country == 'canada':
         lines.append(f"100% amounts after the {rule} rule; CARRYFWD "
@@ -759,7 +772,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     lines.append("")
     rows = ledger['rows']
     if not rows:
-        lines.append("No dispositions found.")
+        lines.append(_no_rows(ledger))
         return "\n".join(lines)
     year_notes: List[str] = []
     if country == 'canada':
@@ -1174,6 +1187,61 @@ def main(argv: Optional[List[str]] = None) -> int:
         sheltered.extend(_ltx("taxjson-carryover", p))
 
     country = args.country
+    # Filed-year locks: a year before the project year is rebuilt from
+    # this project's books and may be partial (a later project holds
+    # last year only as a start .tt), so the ledger takes what the lock
+    # says was FILED — the return CRA's balance is built on (A2-0121,
+    # A2-0338, A2-0666). The project year (and later) is compared.
+    # Read before the gains run: a US wash-sale basis add whose
+    # replacement was sold in a locked year is booked in the loss's
+    # year, as the pipeline books it (US-WASH-22) — run unlocked, the
+    # add went to the locked year, whose lock figure then replaced it,
+    # and the loss was in no year (backlog TJ-0296).
+    lock_info: Dict[int, Dict[str, Any]] = {}
+    lock_years: List[int] = []
+    for item in args.filed_lock:
+        try:
+            y_s, lp = item.split("=", 1)
+            y = int(y_s)
+        except ValueError:
+            print(f"taxjson-carryover: --filed-lock expects YEAR=PATH, got "
+                  f"{item!r}", file=sys.stderr)
+            return 2
+        lock_years.append(y)
+        try:
+            info = lock_figure(Path(lp), country)
+        except LockUnreadable as exc:
+            if args.project_year is not None and y < args.project_year:
+                # A year before the project year takes the lock's filed
+                # figure and the balance it carried: dropping the lock
+                # with a warning left the year out and printed a 0.00
+                # carryforward at exit 0, where the estimate, amt,
+                # handoff and close-year refuse the same lock
+                # (2026-10-25 audit robustness#1, year-end#1). The
+                # estimate's own words, one message (its last line is
+                # what `taxjson checklist` shows).
+                from taxjson.lib.out import error as _error
+                _error(str(exc), prog="taxjson-carryover")
+                return 1
+            # The project year (or a later one) is only compared with
+            # its lock: the row stands, unchecked.
+            from taxjson.lib.out import warn as _warn
+            # A warning, not a refusal (backlog TJ-0069): the row is
+            # this project's books either way — the lock gives it no
+            # figure — and check-filed, the run and `taxjson years`
+            # report the damage itself.
+            _warn(f"{y}: the filed-year lock {lp} could not be read or "
+                  f"is damaged — the {y} row is not checked against the "
+                  f"filed return",
+                  details=_dl([f"{exc}", "`taxjson check-filed` checks "
+                               "the lock."]))
+            continue
+        info['path'] = lp
+        lock_info[y] = info
+    # Every lock the wrapper names, readable or not: the pipeline's
+    # --locked-year flags (taxjson_filed.locked_year_flags) do the same.
+    locked_years = (tuple(sorted(set(lock_years))) if country == 'usa'
+                    else ())
     crypto_txs = [t for txs in crypto_loaded for t in txs]
     if country == 'canada' and crypto_txs:
         # Symbol-global ACB pools: crypto symbols don't collide with
@@ -1196,7 +1264,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     args.corporate_distribution or ()),
                 ric_january_dividends=tuple(
                     args.ric_january_dividend or ()),
-                loss_overrides=loss_overrides_from_args(args))
+                loss_overrides=loss_overrides_from_args(args),
+                locked_years=locked_years)
     req = GainsRequest(country=country, year=None, taxable=True,
                        tax_date=args.tax_date,
                        incomplete_history=args.incomplete_history,
@@ -1208,6 +1277,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         emit_line(f"taxjson-carryover: error: {exc}", file=sys.stderr)
         return 1
     nets = yearly_nets(results, req.effective_tax_date())
+    # The unknown-cost dispositions every computation left out of the
+    # nets (the equity run's and the US crypto pass's): the US crypto
+    # pass's were dropped in silence (backlog TJ-0323).
+    manual: List[Dict[str, Any]] = list(
+        results.get('manual_reporting_required') or [])
     if crypto_txs:                       # USA crypto: no-wash pass
         req_c = GainsRequest(country=country, year=None, taxable=True,
                              tax_date=args.tax_date,
@@ -1224,6 +1298,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             dst = nets.setdefault(yr, {})
             for k, v in vals.items():
                 dst[k] = dst.get(k, 0.0) + v
+        manual += list(res_c.get('manual_reporting_required') or [])
     claimed_ignored: List[str] = []
     try:
         claimed = load_claimed(args.claimed, ignored=claimed_ignored)
@@ -1263,54 +1338,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     slip_by: Dict[int, float] = {}
     for y, v in slip:
         slip_by[y] = slip_by.get(y, 0.0) + v
-    # Filed-year locks: a year before the project year is rebuilt from
-    # this project's books and may be partial (a later project holds
-    # last year only as a start .tt), so the ledger takes what the lock
-    # says was FILED — the return CRA's balance is built on (A2-0121,
-    # A2-0338, A2-0666). The project year (and later) is compared.
+    # The locks read above: a year before the project year takes the
+    # lock's filed figure and the balance it carried.
     seeded: Dict[int, Dict[str, Any]] = {}
-    lock_info: Dict[int, Dict[str, Any]] = {}
     carried: Dict[int, Any] = {}
     locked_back: Dict[int, float] = {}
     locked_applied: Dict[int, float] = {}
-    for item in args.filed_lock:
-        try:
-            y_s, lp = item.split("=", 1)
-            y = int(y_s)
-        except ValueError:
-            print(f"taxjson-carryover: --filed-lock expects YEAR=PATH, got "
-                  f"{item!r}", file=sys.stderr)
-            return 2
-        try:
-            info = lock_figure(Path(lp), country)
-        except LockUnreadable as exc:
-            if args.project_year is not None and y < args.project_year:
-                # A year before the project year takes the lock's filed
-                # figure and the balance it carried: dropping the lock
-                # with a warning left the year out and printed a 0.00
-                # carryforward at exit 0, where the estimate, amt,
-                # handoff and close-year refuse the same lock
-                # (2026-10-25 audit robustness#1, year-end#1). The
-                # estimate's own words, one message (its last line is
-                # what `taxjson checklist` shows).
-                from taxjson.lib.out import error as _error
-                _error(str(exc), prog="taxjson-carryover")
-                return 1
-            # The project year (or a later one) is only compared with
-            # its lock: the row stands, unchecked.
-            from taxjson.lib.out import warn as _warn
-            # A warning, not a refusal (backlog TJ-0069): the row is
-            # this project's books either way — the lock gives it no
-            # figure — and check-filed, the run and `taxjson years`
-            # report the damage itself.
-            _warn(f"{y}: the filed-year lock {lp} could not be read or "
-                  f"is damaged — the {y} row is not checked against the "
-                  f"filed return",
-                  details=_dl([f"{exc}", "`taxjson check-filed` checks "
-                               "the lock."]))
-            continue
-        info['path'] = lp
-        lock_info[y] = info
+    for y, info in lock_info.items():
         if (args.project_year is not None and y < args.project_year
                 and info.get('carried') is not None):
             carried[y] = info['carried']
@@ -1348,7 +1382,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         ledger = build_usa_ledger(nets, claimed, carried)
 
-    tx_years = [int(t.date[:4]) for t in transactions
+    # Every book's rows, the US crypto pass's too: a crypto-only US
+    # ledger said its history started nowhere (TJ-0323).
+    tx_years = [int(t.date[:4]) for t in transactions + crypto_txs
                 if t.date[:4].isdigit()]
     first_tx_year = min(tx_years) if tx_years else None
     ledger['first_transaction_year'] = first_tx_year
@@ -1473,11 +1509,31 @@ def main(argv: Optional[List[str]] = None) -> int:
                            + "); the lock is what was filed and what "
                            + _authority(country) + " is built on — check "
                            "the settings or use `taxjson check-filed`."]))
-    if results.get('manual_reporting_required'):
-        n = len(results['manual_reporting_required'])
+    if manual:
+        # Machine-readable too (TJ-0323): each excluded disposition
+        # (`excluded_unknown_cost`), and the years whose nets lack them
+        # (`incomplete_years`; each such row `incomplete: true`).
+        _mk = ('date_settle' if req.effective_tax_date() == 'settle'
+               else 'date')
+        excl: List[Dict[str, Any]] = []
+        for t in manual:
+            d = str(t.get(_mk) or t.get('date') or '')
+            excl.append({
+                'year': int(d[:4]) if d[:4].isdigit() else None,
+                'date': t.get('date'), 'symbol': t.get('symbol'),
+                'account': t.get('account'),
+                'qty': abs(float(t.get('qty') or 0.0)),
+                'proceeds': round(float(t.get('proceeds') or 0.0), 2)})
+        ledger['excluded_unknown_cost'] = excl
+        _inc = sorted({e['year'] for e in excl if e['year'] is not None})
+        ledger['incomplete_years'] = _inc
+        for r in ledger['rows']:
+            if r['year'] in _inc:
+                r['incomplete'] = True
         from taxjson.lib.out import warn as _warn
-        _warn(f"{n} disposition(s) with an unknown cost (no purchase in "
-              f"your files) are EXCLUDED from the ledger",
+        _warn(f"{len(excl)} disposition(s) with an unknown cost (no "
+              f"purchase in your files) are EXCLUDED from the ledger"
+              + (f" ({', '.join(str(y) for y in _inc)})" if _inc else ""),
               details=_dl(["See manual_reporting_required in the gains "
                            "output; their years' nets are incomplete "
                            "until resolved."]))

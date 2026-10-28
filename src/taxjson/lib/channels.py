@@ -197,6 +197,67 @@ def _package_checkout() -> Optional[Path]:
     return None
 
 
+def running_build() -> Dict[str, Any]:
+    """What this taxjson is, for a record that outlives it (a filed-year
+    lock: backlog TJ-0341): the installed version and, when it runs from
+    a git checkout (the installer's clone and a dev clone are editable
+    installs), its commit, the release tag it is checked out at and
+    whether a tracked file was modified. A field it cannot read is None;
+    it never raises."""
+    try:
+        from importlib.metadata import version
+        ver: Optional[str] = version("taxjson")
+    except Exception:                                   # noqa: BLE001
+        ver = None
+    out: Dict[str, Any] = {"version": ver, "commit": None,
+                           "release": None, "modified": None}
+    try:
+        root = _package_checkout()
+    except OSError:
+        root = None
+    if root is None:
+        return out
+    out["commit"] = (_git_out(root, "rev-parse", "--short", "HEAD")
+                     or "").strip() or None
+    if out["commit"] is None:
+        return out
+    out["release"] = (_git_out(root, "describe", "--tags", "--exact-match")
+                      or "").strip() or None
+    st = _git_out(root, "status", "--porcelain", "--untracked-files=no")
+    out["modified"] = None if st is None else bool(st.strip())
+    return out
+
+
+def build_label(build: Any) -> Optional[str]:
+    """A lock's `taxjson` record as one phrase — `taxjson 0.36.1`, with
+    `(commit 81c512b, modified)` for a checkout off a release tag — or
+    None when there is none (a lock closed before TJ-0341, or a damaged
+    record)."""
+    if not isinstance(build, dict) or not isinstance(build.get("version"),
+                                                     str):
+        return None
+    text = f"taxjson {build['version']}"
+    commit = build.get("commit")
+    if isinstance(commit, str) and commit and not build.get("release"):
+        text += f" (commit {commit}"
+        text += ", modified)" if build.get("modified") is True else ")"
+    elif build.get("modified") is True:
+        text += " (modified)"
+    return text
+
+
+def same_build(a: Any, b: Any) -> Optional[bool]:
+    """Whether two `running_build` records are the same code: None when
+    either has no version; a commit decides when both have one."""
+    if (not isinstance(a, dict) or not isinstance(b, dict)
+            or not a.get("version") or not b.get("version")):
+        return None
+    if a.get("commit") and b.get("commit"):
+        return (a["commit"] == b["commit"]
+                and not a.get("modified") and not b.get("modified"))
+    return a["version"] == b["version"]
+
+
 def _same(a: Path, b: Path) -> bool:
     try:
         return a.resolve() == b.resolve()

@@ -92,11 +92,27 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
         # [1, 2, 3] passed as a transaction list and died later on
         # row.get (audit S042-18).
         raise InputFileError(f'{p}: "{list_key}" must be a list of JSON '
-                             f"objects")
+                             f"objects{_bad_row(doc.get(list_key))}")
     if require_key and require_key not in doc:
         raise InputFileError(f'{p}: no "{require_key}" key (keys: '
                              f"{', '.join(sorted(map(str, doc))) or 'none'})")
     return doc
+
+
+_JSON_TYPE = {type(None): "null", bool: "true/false", int: "a number",
+              float: "a number", str: "a string", list: "a list"}
+
+
+def _bad_row(rows: Any) -> str:
+    """` (row 3 is null)`: the first row of a list that is not a JSON
+    object, named (backlog TJ-0320); '' when every row is one or `rows`
+    is not a list."""
+    if not isinstance(rows, list):
+        return ""
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            return f" (row {i} is {_JSON_TYPE.get(type(r), 'not an object')})"
+    return ""
 
 
 # The row funnel for report readers (A2-0330): a work/ row whose date is
@@ -261,7 +277,7 @@ def rows_or_exit(prog: str, doc: Dict[str, Any], path, key: str,
     if not isinstance(rows, list) or any(not isinstance(r, dict)
                                          for r in rows):
         cli_diag.error(prog, f'{path}: "{key}" must be a list of JSON '
-                             "objects")
+                             f"objects{_bad_row(rows)}")
         sys.exit(exit_code)
     return rows
 
@@ -306,7 +322,7 @@ def read_work_doc(path) -> Dict[str, Any]:
         if not isinstance(rows, list) or any(not isinstance(r, dict)
                                              for r in rows):
             raise InputFileError(f'{p}: "{key}" must be a list of JSON '
-                                 f"objects")
+                                 f"objects{_bad_row(rows)}")
     if doc.get("summary") is not None and not isinstance(doc["summary"],
                                                          dict):
         raise InputFileError(f'{p}: "summary" must be a JSON object')

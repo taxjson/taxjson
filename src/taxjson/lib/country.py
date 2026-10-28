@@ -169,6 +169,19 @@ def basis_pooled_across_accounts(country: str) -> bool:
     return BASIS_POOLED_ACROSS_ACCOUNTS[canonical_country(country)]
 
 
+# How a sale takes cost from the units held: Canada's average cost (the
+# pool's ACB per unit, CA-ACB-01) or the US's first in, first out
+# (US-BASIS-01). A view that replays a book's cost (`taxjson renames`)
+# replays it by this rule (backlog TJ-0309).
+LOT_RULE = {CANADA: "average", USA: "fifo"}
+
+
+def lot_rule(country: str) -> str:
+    """``"average"`` | ``"fifo"``: the country's rule for the cost a
+    sale takes."""
+    return LOT_RULE[canonical_country(country)]
+
+
 # Whether a stock dividend's new shares are an acquisition for the loss
 # window: Canada counts them for s.54 ($0 cost, CA-STKDIV-01); in the US
 # they are not acquired by purchase, so never a §1091 replacement

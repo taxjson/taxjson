@@ -332,6 +332,20 @@ def ids_seen_in_cache(symbols, cache, ids=None):
     return out
 
 
+def _stamp_reward_price(tx, source, market_symbol=''):
+    """Record a chosen quote without rewriting the original reward facts."""
+    if not tx.staking_reward or tx.action != 'DIVIDEND' or tx.price <= 0:
+        return
+    evidence = dict(tx.staking_reward)
+    evidence['valuation'] = {
+        'price': tx.price, 'currency': tx.currency, 'date': tx.date,
+        'source': source, 'fx_rate': None, 'target_currency': '',
+    }
+    if market_symbol:
+        evidence['valuation']['market_symbol'] = market_symbol
+    tx.staking_reward = evidence
+
+
 def _implausible_yahoo_prices(yahoo_priced, broker_priced):
     """ATTENTION lines for coins whose Yahoo closes are more than
     _IMPLAUSIBLE_FACTOR times off the coin's own broker-priced rows
@@ -436,6 +450,7 @@ def _fill(args):
                 tx.net_amount = abs(tx.quantity)
                 tx.gross_amount = tx.net_amount
                 tx.currency = 'USD'
+                _stamp_reward_price(tx, 'stablecoin par assumption')
                 transactions.append(tx)
                 continue
             if abs(tx.price) < 1e-8 and tx.symbol not in ('USD', 'CAD'):
@@ -453,6 +468,7 @@ def _fill(args):
                     # over a real broker total (re-audit).
                     if abs(tx.quantity) > 1e-12:
                         tx.price = round(abs(tx.net_amount) / abs(tx.quantity), 8)
+                        _stamp_reward_price(tx, 'broker amount / reward quantity')
                     transactions.append(tx)
                     continue
                 if abs(tx.quantity) <= 1e-12:
@@ -528,6 +544,9 @@ def _fill(args):
                     # converted, booking USD FMV as CAD — basis
                     # understated by the full exchange rate.
                     tx.currency = 'USD'
+                    _stamp_reward_price(
+                        tx, 'Yahoo provisional price' if cache_key in provisional
+                        else 'Yahoo daily close', y_symbol)
         transactions.append(tx)
 
     if cache_dirty:

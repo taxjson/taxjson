@@ -188,9 +188,11 @@ class TestDeferredAtYearEnd(unittest.TestCase):
                       r["why"])
 
     def test_books_without_the_year_end_say_so(self):
-        # A gains file written before inventory_year_end (or the US
-        # engine's): its final inventory, said to be the end of the books.
-        for country, rerun in (("canada", True), ("usa", False)):
+        # A gains file written before inventory_year_end: its final
+        # inventory, said to be the end of the books. Both engines now
+        # write the year end (the US one since TJ-0284), so a re-run
+        # gives it in either country.
+        for country in ("canada", "usa"):
             with self.subTest(country=country), \
                     tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -208,7 +210,8 @@ class TestDeferredAtYearEnd(unittest.TestCase):
                 self.assertEqual(r["as_of"], "end_of_data")
                 self.assertIn("held at the end of the books, which may be "
                               "after 2025", r["why"])
-                self.assertEqual("re-run `tjs run`" in r["why"], rerun)
+                self.assertIn("(re-run `tjs run` for the year-end figure)",
+                              r["why"])
                 self.assertNotIn("end of 2025;", r["why"])
                 text = "\n".join(render_text(edge, details=True))
                 self.assertIn("HELD AT THE END OF THE BOOKS (1)", text)

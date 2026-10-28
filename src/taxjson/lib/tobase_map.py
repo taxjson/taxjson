@@ -815,6 +815,41 @@ def t1135_countries(map_path: Path) -> Dict[str, str]:
     return dict(ov.countries) if ov is not None else {}
 
 
+# The master's kinds that are not a corporation's shares: the T1135
+# category of their units is the user's to set (tax-logic CA-RPT-18).
+NOT_SHARE_KINDS = ("unit", "fund")
+
+
+def t1135_kinds(map_path: Path) -> Dict[str, str]:
+    """{symbol: kind} of the symbols tobase.map's lines name (as written
+    and as booked) whose security the interlisted master records as
+    units or a fund (NOT_SHARE_KINDS), by the line's FIGI: the T1135
+    report leaves their category to a ticker.map T1135 line."""
+    from taxjson.lib.cli_diag import read_text_utf8
+    p = Path(map_path)
+    if p.name != "ticker.map" or not p.is_file():
+        return {}
+    try:
+        tob = read_tobase(p.parent)
+        if tob is None:
+            return {}
+        master = load_master()
+        ov = overlay_for(p, read_text_utf8(p))
+    except (OSError, ValueError):
+        return {}
+    out: Dict[str, str] = {}
+    for ln in tob.lines:
+        kind = str((master.security.get(ln.figi) or {}).get("kind") or "")
+        if not ln.figi or kind not in NOT_SHARE_KINDS:
+            continue
+        names = {ln.a, ln.b}
+        if ov is not None:
+            names |= {ov.final(ln.a), ov.final(ln.b)}
+        for x in names:
+            out.setdefault(x, kind)
+    return out
+
+
 def map_text_with_overlay(map_path: Path) -> str:
     """A project ticker.map's text with its tobase.map overlay (the text
     the merge stages read: lib/cross_listings.effective_map_text)."""

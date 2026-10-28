@@ -59,6 +59,177 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+### v0.37.0
+
+- **The holdings export's cost can change for a holding journaled
+  between two listings** (a TSX line to its US line, a Norbert's
+  gambit). Run `tjs run`: `reports/<account>_holdings.toml` gives it the
+  books' cost (`base_total_cost`) and a `total_cost` in its listing's
+  currency, at the journal day's rate, where it had a mixed-currency
+  or market-value figure. A plan or script that read the export's cost
+  reads the new one. Nothing filed changes.
+- **A sheltered account's cost can rise after a move between
+  brokers.** A move with a trade of the security between its legs'
+  dates, or a few weeks after a listing journal with a sale between
+  them, was booked as a sale and a purchase at the rows' values; it is
+  now netted. Run `tjs run`: the account's `.sum` loses the gains on
+  the transfer-out (and journal) dates, and the security's cost (in the
+  books and `reports/<account>_holdings.toml`) carries through the
+  move. A plan or script that read the holdings export's cost reads the
+  new one. Nothing filed changes (a sheltered account is not on the
+  return).
+- **`tjs t1135` has a CAT column.** Check each foreign property's
+  category before you copy the rows to the form: a fund's or trust's units
+  can be another than the 2 taxjson takes for a listed security. Set one
+  with `T1135 SYMBOL COUNTRY CATEGORY` in ticker.map. Two rows can also
+  appear: a holding at a zero cost, and a position of unknown cost sold
+  during the year (flagged "unknown ACB"). The threshold figure does not
+  change. A script reading `tjs t1135 --json` finds the same keys, plus
+  `category` and `category_from` on each property.
+- **`tjs t1135` no longer lists a position held only short.** A written
+  option bought back or left to expire during the year, or a short sale
+  covered, was a property row at 0.00 cost with its gain; it is now named
+  in a `! ` line instead, and its gain leaves the per-country GAIN(LOSS)
+  total. If you copied those rows to a T1135, compare. Its gain is still
+  in `tjs gains`. `--json` adds `short_only_symbols`.
+- **`tjs tax-logic` prints a rule's later sentences as items under its
+  first.** The rules and their ids are the same; a script that reads the
+  text should read `tjs tax-logic --json`, which is unchanged.
+- **A crypto account gets a holdings file.** The next `tjs run` writes
+  `reports/<account>_holdings.toml` for each crypto account (and copies
+  it to `exports/` when `exports_dir` is set). Nothing else changes.
+- **Staking commissions can be explained separately from net income.**
+  `tjs staking` lists rewards; `tjs staking-sum` totals them by exchange and
+  coin. Re-run `tjs run` after upgrading to preserve source reward evidence
+  from Coinbase and Kraken. Existing books remain readable, with missing
+  commission evidence shown as unknown. This change adds evidence and
+  reports; it does not change the reward income or cost calculation.
+  `tjs tax-logic --ids` now states the commission assumptions explicitly.
+- **Re-run `tjs run` once.** A US project's gains files gain
+  `inventory_year_end` (the lots at the end of Dec 31 of the project
+  year; nothing filed changes), which `tjs edge-cases` reads for the
+  losses carried into the next year: until a gains file is rebuilt it
+  says "held at the end of the books, which may be after <year>". Those
+  rows get `as_of` `<year>-12-31` and no longer move with later trades;
+  a `tax_date = "settle"` project's say "(by trade date)".
+- **US `tjs carryover` can rise in the year after a locked year.** A
+  wash-sale loss whose replacement another account bought and sold in
+  the locked year is now in its year. Re-run `tjs carryover` and compare
+  it with the carryover entered on the next return and `[carryover]
+  claimed`; the lock is unchanged. `--json` adds `excluded_unknown_cost`,
+  `incomplete_years` and a row's `incomplete`, and
+  `first_transaction_year` is no longer null for a crypto-only project.
+- **A US lock with a crypto `deferred` above 0.** In
+  `filed/<year>.json`, `year_end.crypto.<SYM>.deferred` above 0 is a
+  cost the run never had. Run `tjs close-year --force` in that year to
+  rewrite `year_end` (the figures and the recorded filed dispositions
+  are kept); the next year's `tjs handoff` then agrees.
+- **Canada: a new lock's `year_end` `deferred` can be smaller** where a
+  sale before Dec 31 released part of a deferral. The `acb` is the same,
+  and `tjs handoff` compares only the quantity and the cost: nothing to
+  do (`close-year --force` is optional, for the label).
+- **`tjs close-year --filed-dispositions` refuses a row of another
+  year.** A lock an older release closed with such rows has wrong
+  `filed_totals` and, in Canada, a wrong net-capital-loss carry: run
+  `tjs close-year --force --filed-dispositions <that year's CSV>`. A
+  plain `--force` now refuses such a lock.
+- **A hand-edited lock with a malformed `return_row`** fails `tjs
+  check-filed` (exit 1) and is refused by the next year's readers:
+  restore it from git or close the year again. check-filed's OK line
+  now says the RETURN row is not recomputed.
+- **Exit statuses that changed** (a script reading the old one):
+  - `tjs slip-audit` exits 1 (was 0) when something could not be
+    compared: `--json` `status` is `incomplete` and `not_compared` lists
+    it. The checklist's `t5-t3` step is blocked or attention where it
+    was done: re-run `tjs run`, or accept an IB component taxjson does
+    not know with `--done t5-t3 --force`.
+  - `tjs t1135` exits 1 with an Error (was 0, with income and gain 0)
+    for an account with books and no gains file; `tjs sanity` with no
+    arguments exits 1 (was 0, clean and complete) for an account whose
+    gains file is missing or cannot be read. Run `tjs run`.
+  - `taxjson-reconcile-slips` exits 2 (was 0) for a `--gains` file in
+    another currency than the country's; `tjs slip-audit` always passed
+    converted files.
+  - `tjs check-dates` exits 1 (was 0) when a parsed source that
+    `work/<account>_sources.list` names is missing (`--json` error code
+    `missing`); `tjs renames` exits 1 without books (was 0, "nothing
+    pending"); `tjs splits`, `tjs spinoffs`, `tjs renames` and `tjs
+    journals` exit 1 on a damaged book or `cross_listings.state` (was 0,
+    nothing found). Run `tjs run`.
+  - `tjs check-tt` exits 1 for two known-cost OPENING snapshots of one
+    symbol on two dates (was 0, "Every line parses."): keep one.
+  - `tjs checklist`: with a tobase.map line the run refuses, step
+    `format` is `attention` (was `review` or `done`) and `--only format`
+    exits 1; the loader's "ticker.map problem" lines no longer repeat on
+    stderr.
+  - `tjs buy-check`, `sell-check` and `rebuy` refuse a ticker.map or
+    tobase.map with a problem line, exit 2 (they answered from the rest
+    of the map). Fix the line it names; treat exit 2 as "no verdict",
+    not as SAFE.
+  - `tjs opening --date` with an unpadded or impossible day exits 1 and
+    writes nothing (was 0, and a file the run refused).
+  - `tjs align --write --json` without `--all` exits 2 (it asked the
+    questions on a terminal); `--write --all --json` prints JSON, not
+    prose.
+  - `tjs fetch --list` beside an old per-purpose file such as
+    `yf_ticker.map` exits 0 (or 2 when no fetcher is installed) instead
+    of 2 with the migrate refusal.
+- **`--json` that changed:** `tjs transfers` `arrival` can be
+  `UNCLASSIFIED` (where a damaged work/ or an unmatched leg read "own
+  move"); `tjs watch` adds `incomplete` (while a book in work/ is
+  missing it compares nothing: `changes` `[]`, `tracked` and
+  `actionable` null; the exit status is still 0); `wash-radar`, `watch`,
+  `rebuy`, `buy-check` and `sell-check` print a document with
+  `not_applicable` in a project the wash rule does not reach (they
+  printed a sentence); `tjs fees` adds `unlisted_small_fees`;
+  `taxjson-fees-sum` takes `--until` and its meta has `until`.
+- **Figures a view shows can move** (nothing filed changes):
+  - `tjs plot-tax` (Canada) credits the foreign withholding the books
+    record, as `tjs estimate` does, not 15%: where it is lower the
+    months and the year show more tax, and a withholding posted after
+    its dividend moves its credit to that later month.
+  - US `tjs stats` and `tjs win-rates` count a sale that took several
+    lots as one trade: TRADES, WINS, LOSSES, the rate, the averages and
+    the largest win or loss can change; NET_P/L does not. `--json`
+    `denied_count` and `tainted_skipped` count sales.
+  - `tjs fees` totals can rise by the fees under half a cent it left
+    out.
+  - A `30d` / `6w` / `3m` / `1y` / `mtd` / `ytd` window ends today: rows
+    dated after today leave its totals (`all` or the year keep them).
+  - US `tjs renames`: `carried.book_cost` is the FIFO basis of the lots
+    carried, as the books have it (it was the average cost).
+- **`tjs find-missing-history --write-missing-history`** in a project
+  whose `tax_date` is not the default may now write an `OPENING ...
+  cost=unknown` line it skipped (a sale traded Dec 31 that settles in
+  January); after the next `tjs run` that sale moves from the totals to
+  the manually reported sales.
+- **`tjs redact`:** a copy an older release made from input that held
+  ids already shaped like placeholders (`9990…`, `U999…`) may have
+  merged or swapped two accounts. Redact again (`--force`).
+- **`tjs migrate`** has the same exit statuses; a refused migrate now
+  leaves the shared tobase.map as it was.
+- **`tjs audit` compares more, so an audit that passed can fail.** It
+  now checks each sale's quantity, proceeds, cost, dates, account, term
+  and lots against the saved gains file, a base-currency sale's amount
+  against the broker's row, and the audited securities' buys. Run `tjs
+  run` before `tjs audit` so work/ is fresh; a FAILED line that stays
+  after a fresh run is worth a bug report. Nothing filed changes. The
+  footer's `fx cross-check` line is now `sale amounts`, with new `pool
+  trades` and `not traced` lines. `--json`:
+  - with several books, `total_gain` no longer counts the unknown-cost
+    (manual) sales; they are in the new `manual_reporting` (`events`,
+    `qty`, `proceeds`);
+  - `failed` is true when an account was not audited (exit 1), with the
+    new `not_audited` and `coverage_failures`;
+  - new `pool_trades` (`checked`, `tied`, `untraced`, `mismatched`) and
+    `scope`; an event's `tie_out` has `mismatched`, and a manual event's
+    `tie_out.ties` is false when it differs (it was always null);
+  - an event's `fx` for a base-currency row carries `nominal_net`,
+    `computed_net`, `book_net`, `ties` and `priced_by_fill` (it was only
+    from, to and native);
+  - `--json --no-trace` events have an empty `trace`; a number that is
+    not finite is written as null.
+
 ### v0.36.1
 
 - **`tjs edge-cases` reads the denied losses held at the year end from

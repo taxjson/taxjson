@@ -218,10 +218,10 @@ class Book:
         _walk(self.txs, self.bdate, pre=self.pre_pos)
         self.gains: List[Dict[str, Any]] = []
         self.inventory: List[Dict[str, Any]] = []
-        # The pools at the end of the project year: the Canadian
-        # engine's inventory_year_end; a gains file without it (the US
-        # engine's, or one written before it) gives its final inventory,
-        # marked `_year_end` False (backlog TJ-0282).
+        # The pools (Canada) or lots (US) at the end of the project
+        # year: the engine's inventory_year_end; a gains file without it
+        # (one written before it) gives its final inventory, marked
+        # `_year_end` False (backlog TJ-0282, TJ-0284).
         self.year_end_pools: List[Dict[str, Any]] = []
         resolved = resolve_gains_files(self.cache, None) or {}
         for acct, f in resolved.items():
@@ -774,24 +774,30 @@ def _allowed_why(book: Book, g: Dict[str, Any], day30: date
 
 def deferred_into_next_year(book: Book) -> List[Dict[str, Any]]:
     """The denied losses in the cost of units held at the end of the
-    project year (`as_of` that day): the engine's year-end pools, so a
-    later sale or purchase does not change them. A gains file without
-    them gives its final inventory, `as_of` "end_of_data", and the text
-    says so (backlog TJ-0282)."""
+    project year (`as_of` that day): the engine's year-end pools (Canada)
+    or lots (US-RPT-13), so a later sale or purchase does not change
+    them. The engine reads the day on its own dates (Canada settlement,
+    the US trade dates: the loss window's); a project whose tax_date is
+    the other is told which. A gains file without them gives its final
+    inventory, `as_of` "end_of_data", and the text says so (backlog
+    TJ-0282, TJ-0284)."""
+    # The engine's walk runs on its loss-window dates (CA-SL-01 settle,
+    # US-WASH-01 trade).
+    walk = book.window_basis
+    on = ("" if book.basis == walk else
+          " (by settlement date)" if walk == "settle" else
+          " (by trade date)")
     out = []
     for h in book.year_end_pools:
         dw = float(h.get("deferred_wash") or 0)
         if dw > 0.005 and book.wanted(h["_acct"]):
             qty = float(h.get("qty") or 0)
             if h["_year_end"]:
-                held = (f"still held at the end of {book.year}"
-                        + (" (by settlement date)"
-                           if book.basis == "trade" else ""))
+                held = f"still held at the end of {book.year}{on}"
             else:
                 held = (f"held at the end of the books, which may be after "
-                        f"{book.year}" + ("" if book.usa else
-                                          " (re-run `tjs run` for the "
-                                          "year-end figure)"))
+                        f"{book.year} (re-run `tjs run` for the year-end "
+                        f"figure)")
             out.append({"account": h["_acct"], "symbol": h.get("symbol"),
                         "qty": qty, "deferred": round(dw, 2),
                         "as_of": (f"{book.year}-12-31" if h["_year_end"]

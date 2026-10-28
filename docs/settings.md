@@ -546,10 +546,10 @@ The project's one mapping file, at the project root; one rule per line, symbols 
 - **Example:** `EXTRACT Sample US Dollar Fund | USD | ZZD.U.TO`
 
 #### `T1135`
-- **Form:** `T1135 SYMBOL COUNTRY`
-- **Meaning:** the T1135 domicile of SYMBOL where its listing suffix is wrong: an ISO 3166 alpha-3 code, or `CA` / `CAN` / `CANADA` / `EXCLUDE` for not specified foreign property. It follows the symbol through a rename; any other value stops the report. An option on a listing a `TOBASE` line pools under a Canadian listing is booked under that listing's code and read as Canadian (taxjson's filing position, tax-logic CA-RPT-17); a `T1135` line on the contract's booked symbol sets another country.
+- **Form:** `T1135 SYMBOL COUNTRY [CATEGORY]`
+- **Meaning:** the T1135 domicile of SYMBOL where its listing suffix is wrong: an ISO 3166 alpha-3 code, or `CA` / `CAN` / `CANADA` / `EXCLUDE` for not specified foreign property. It follows the symbol through a rename; any other value stops the report. CATEGORY, optional, is the form's category of the property, 1 to 6, with a foreign country: taxjson takes 6 for an option, a futures contract or crypto and 2 for any other listed security, and leaves units or a fund the interlisted master knows for you to set (tax-logic CA-RPT-18). Write the country the report shows to set only the category (`T1135 ZZU.US USA 4`). An option on a listing a `TOBASE` line pools under a Canadian listing is booked under that listing's code and read as Canadian (taxjson's filing position, tax-logic CA-RPT-17); a `T1135` line on the contract's booked symbol sets another country.
 - **Country:** Canada (read by `taxjson t1135`).
-- **Example:** `T1135 ZZQ.US CA`
+- **Example:** `T1135 ZZQ.US CA`, `T1135 ZZT.US USA 4`
 
 ### Market lists (extend or override the shipped data)
 
@@ -1042,8 +1042,9 @@ The slip audit as one document: a stable schema for programs (new keys may be ad
 | `coverage` | `no_slip` (an account's income with no slip; `small_interest_only` when it is interest under 50) and `slips_without_books` |
 | `t5008` | aggregated T5008 slips against the books' dispositions, per class (information) |
 | `suggestions` | `capital_gains_dividends` (`{"symbol", "date", "year", "amount", "account", "toml"}`), `tt_lines` (`{"account", "file", "lines"}`), `notes` |
-| `problems` | inputs not compared (an IB report no account carries, a second copy of a report, an unknown component, a `broker_key` no broker account matches) |
-| `issues`, `status` | the findings `{"account", "kind", "text"}` (kinds: `differs`, `no-slip`, `no-books`, `empty-slip`, `missing-from-books`, `missing-from-slip`, `amount-differs`, `currency-differs`) and `ok` / `attention` / `no-slips`; the command exits 1 when `issues` is not empty |
+| `problems` | every input note, as text: what was not compared (below) and the notices that change nothing (a second copy of a report, read once; a pay-dated ROC line counted in its record year; a `broker_key` written unsalted) |
+| `not_compared` | what the audit could not compare, `{"kind", "account", "text"}`: `no-books` (an account with inputs and no readable `work/<account>_base.json`), `report-no-account` (an IB report no account's books carry; `account` null), `unknown-component` (an IB component taxjson does not know, with an amount), `broker-key` (a `broker_key` no broker account matches) |
+| `issues`, `status` | the findings `{"account", "kind", "text"}` (kinds: `differs`, `no-slip`, `no-books`, `empty-slip`, `missing-from-books`, `missing-from-slip`, `amount-differs`, `currency-differs`) and the status: `attention` (slips and a finding), else `incomplete` (something in `not_compared`), else `no-slips` or `ok`; the command exits 1 when `issues` or `not_compared` is not empty |
 
 `taxjson slip-audit --import-cra … --json` prints the import instead (`schema_version` 1): `year`, `slips` (each slip read: `file`, `type`, `status`, `issuer`, `currency`, `boxes`, `account`, `broker_account` (its input files), `fund`, `how`), `add` (the files whose tables are added), `replace` (`{"table", "by"}`: a table in slips.toml an amended slip replaces), `replaced_in_import`, `not_imported`, `tables` (the TOML text), `written`, `backup`. Code: `src/taxjson/bin/taxjson_run.py` — `_slip_audit_import_cra`.
 

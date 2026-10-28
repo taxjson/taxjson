@@ -258,6 +258,10 @@ class TestT1135Phantoms(unittest.TestCase):
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "work").mkdir()
             base, _ph = self._books(root / "work", account="margin")
+            # (the gains file the run writes beside it: t1135 needs it,
+            # backlog TJ-0306)
+            (root / "work" / "margin_gains.json").write_text(
+                json.dumps({"transactions": []}))
             (root / "inputs" / "margin").mkdir(parents=True)
             (root / "inputs" / "margin" / "missing_history.tt").write_text(
                 (_ph / "inputs" / "margin" / "missing_history.tt")

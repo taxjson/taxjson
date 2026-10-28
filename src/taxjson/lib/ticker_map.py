@@ -205,7 +205,8 @@ class SideRules:
     ticker.map. quote: {SYMBOL: (yahoo, ratio)}; crypto: {SYMBOL: yahoo
     id}; extract: [(description words lower-cased, CURRENCY, symbol)] in
     file order; t1135: {SYMBOL: ISO3 code, or "CA" for not foreign
-    property} (lib/t1135_country); similar: the SIMILAR groups as
+    property} (lib/t1135_country); t1135_category: {SYMBOL: the form's
+    category 1-6} of the T1135 lines that give one; similar: the SIMILAR groups as
     written, [(symbols, where, line)] (similar_groups merges the lines
     that share a symbol); problems: the lines that cannot be
     read or that contradict an earlier line, as `<file>:<lineno>:
@@ -219,6 +220,7 @@ class SideRules:
         self.crypto: dict = {}
         self.extract: list = []
         self.t1135: dict = {}
+        self.t1135_category: dict = {}
         self.similar: list = []
         # market-list lines (lib/markets): {KEY: value}
         self.stable: dict = {}
@@ -289,14 +291,25 @@ def parse_side_line(kw: str, line: str):
             yid = yid[:-4]
         return "crypto", toks[0].upper(), yid
     if kw == "T1135":
-        from taxjson.lib.t1135_country import (NOT_FOREIGN_WORDS,
+        from taxjson.lib.t1135_country import (NOT_FOREIGN,
+                                               NOT_FOREIGN_WORDS,
                                                parse_country)
-        if len(toks) != 2:
+        if len(toks) not in (2, 3):
             raise ValueError(
-                f"T1135 needs `T1135 SYMBOL COUNTRY` (COUNTRY an ISO 3166 "
-                f"alpha-3 code, or {'/'.join(NOT_FOREIGN_WORDS)} for not "
-                f"foreign property)")
-        return "t1135", toks[0].upper(), parse_country(toks[1])
+                f"T1135 needs `T1135 SYMBOL COUNTRY [CATEGORY]` (COUNTRY "
+                f"an ISO 3166 alpha-3 code, or "
+                f"{'/'.join(NOT_FOREIGN_WORDS)} for not foreign property; "
+                f"CATEGORY the form's 1 to 6)")
+        code = parse_country(toks[1])
+        if len(toks) == 2:
+            return "t1135", toks[0].upper(), code
+        if toks[2] not in ("1", "2", "3", "4", "5", "6"):
+            raise ValueError(f"T1135 CATEGORY {toks[2]!r} is not one of "
+                             f"the form's categories 1 to 6")
+        if code == NOT_FOREIGN:
+            raise ValueError(f"a T1135 CATEGORY goes with a foreign "
+                             f"country, not {toks[1].upper()}: drop it")
+        return "t1135", toks[0].upper(), (code, int(toks[2]))
     if kw == "SIMILAR":
         syms = []
         for t in toks:
@@ -434,10 +447,20 @@ def add_side_rule(rules: "SideRules", kind: str, key, value,
                 return
         rules.extract.append((key[0], key[1], value))
         return
+    if kind == "t1135" and isinstance(value, tuple):
+        # `T1135 SYMBOL COUNTRY CATEGORY`: the country as any T1135
+        # line's, the category beside it.
+        n = len(rules.problems)
+        add_side_rule(rules, kind, key, value[0], where, line)
+        if len(rules.problems) == n:
+            add_side_rule(rules, "t1135_category", key, value[1], where,
+                          line)
+        return
     table = getattr(rules, kind)
     if key in table and table[key] != value:
+        what = "T1135" if kind == "t1135_category" else kind.upper()
         rules.problems.append(
-            f"{where}: {kind.upper()} {key} is given twice with different "
+            f"{where}: {what} {key} is given twice with different "
             f"values ({table[key]!r} and {value!r}) — keep one: {line!r}")
         return
     table[key] = value
@@ -537,6 +560,21 @@ def find_ticker_map(dirs):
 MAP_MESSAGES_SAID: set = set()
 
 
+def map_problem_line(msg: str) -> str:
+    """The loader's line for a map line `taxjson run` refuses (`msg`:
+    `<file>:<n>: <message>`)."""
+    return (f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
+            f"this map)")
+
+
+def mark_map_problems_said(problems) -> None:
+    """Count the loader's lines for `problems` as said in this process:
+    a command whose own output names them (the checklist's format step)
+    is not followed by the same lines from each check that reads the
+    map (backlog TJ-0112). A captured stream still gets every line."""
+    MAP_MESSAGES_SAID.update(map_problem_line(m) for m in problems)
+
+
 def say_map_message(text: str) -> None:
     """emit_line(`text`) on stderr: every time while it is captured (a
     stage's .diag keeps every pass's line), once per process while it
@@ -559,6 +597,5 @@ def side_rules_in(dirs) -> "SideRules":
         return SideRules()
     rules = read_side_rules(p)
     for msg in rules.problems:
-        say_map_message(f"warning: ticker.map problem: {msg} (`taxjson run` "
-                        f"refuses this map)")
+        say_map_message(map_problem_line(msg))
     return rules

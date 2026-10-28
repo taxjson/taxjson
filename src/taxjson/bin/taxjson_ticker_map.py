@@ -568,11 +568,10 @@ def load_map_file(file_path: Path) -> "TickerMap":
     malformed line is skipped with a warning naming its line number
     (`taxjson run` refuses such a map up front — map_file_problems),
     said once per process (lib/ticker_map.say_map_message)."""
-    from taxjson.lib.ticker_map import say_map_message
+    from taxjson.lib.ticker_map import map_problem_line, say_map_message
     tmap, problems, notes = _parse_map_file(file_path)
     for msg in problems:
-        say_map_message(f"warning: ticker.map problem: {msg} (`taxjson run` "
-                        f"refuses this map)")
+        say_map_message(map_problem_line(msg))
     for msg in notes:
         say_map_message(f"warning: {msg} — skipping")
     return tmap

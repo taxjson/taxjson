@@ -168,73 +168,16 @@ def _evidence_rows(evidence_paths) -> list:
 
 def _evidenced_journals(rows, same_class) -> list:
     """The journals the sidecar rows evidence, as (date, out_symbol,
-    in_symbol, quantity): an out-leg and an in-leg of two listings of
-    one identity class (`same_class(a, b)`), netted per listing and
-    day first (a flip flipped back the same day moves nothing), dated
-    within PAIR_DAYS business days of each other (lib/cross_listings:
-    the window one journal's legs post in), the closest pair first and
-    an exact quantity before a part of one. A leg with no partner in
-    that window is a custody move (a broker switch, ATON in or out) or
-    a journal whose other leg the data lacks, and evidences nothing: a
-    2020 departure and a 2026 arrival used to pair as one journal and
-    move today's shares to the other listing (audit 2026-10-24 B12).
-    Legs that would pair but for the window are said (a `note:` line
-    naming them), so a journal the broker posted in two far-apart rows
-    can be declared with a .tt JOURNAL line."""
-    from datetime import date as _date
-    from taxjson.lib.cross_listings import PAIR_DAYS, business_days
-
-    def day(s):
-        try:
-            return _date.fromisoformat(str(s or "")[:10])
-        except ValueError:
-            return None
-
-    net: Dict[tuple, float] = {}
-    for t in rows:
-        try:
-            q = float(t.get("quantity") or 0)
-        except (TypeError, ValueError):
-            continue
-        k = (str(t.get("date") or ""), t["symbol"])
-        net[k] = net.get(k, 0.0) + q
-    legs = [[d, s, q] for (d, s), q in sorted(net.items())
-            if abs(q) > 1e-9]
-    outs = [x for x in legs if x[2] < 0]
-    ins = [x for x in legs if x[2] > 0]
-    cands = []
-    far = []
-    for n, o in enumerate(outs):
-        for m, i in enumerate(ins):
-            if o[1] == i[1] or not same_class(o[1], i[1]):
-                continue
-            do, di = day(o[0]), day(i[0])
-            if do is None or di is None:
-                continue
-            gap = business_days(do, di)
-            if gap > PAIR_DAYS:
-                far.append((o, i))
-                continue
-            exact = 0 if abs(-o[2] - i[2]) <= 1e-9 else 1
-            cands.append((exact, gap, o[0], i[0], o[1], i[1], n, m))
-    journals = []
-    for _exact, _gap, _do, _di, _so, _si, n, m in sorted(cands):
-        o, i = outs[n], ins[m]
-        move = min(-o[2], i[2])
-        if move <= 1e-9:
-            continue
-        journals.append((min(o[0], i[0]), o[1], i[1], move))
-        o[2] += move
-        i[2] -= move
-    for o, i in far:
-        if -o[2] <= 1e-9 or i[2] <= 1e-9:
-            continue
-        emit_line(f"note: transfer evidence: {o[1]} {o[2]:g} on {o[0]} and "
-                  f"{i[1]} +{i[2]:g} on {i[0]} are more than {PAIR_DAYS} "
-                  f"business days apart: not read as one journal between "
-                  f"the listings (a .tt JOURNAL line declares one).",
-                  file=sys.stderr)
-    return journals
+    in_symbol, quantity): lib/listing_journals.evidenced_journals (an
+    out-leg and an in-leg of two listings of one identity class, netted
+    per listing and day, within PAIR_DAYS business days of each other;
+    audit 2026-10-24 B12), its note on legs too far apart to pair said
+    on stderr."""
+    from taxjson.lib.listing_journals import evidenced_journals
+    return [(j["date"], j["out_symbol"], j["in_symbol"], j["quantity"])
+            for j in evidenced_journals(
+                rows, same_class,
+                note=lambda s: emit_line(s, file=sys.stderr))]
 
 
 def _move_units(agg: Dict[str, Dict[str, Any]], frm: str, to: str,
@@ -298,26 +241,19 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     "left" holds no long and the one they "reached" holds a short, the
     short moves (audit 2026-10-24 B13). Returns the moves applied as
     (from_symbol, to_symbol, units), the units signed like the
-    position (negative: a short), for _replay_moves_on_base."""
+    position (negative: a short), for _replay_moves_on_base.
+
+    `taxjson run` passes no evidence: it books the journals into the
+    native books on their dates instead (lib/listing_journals, backlog
+    TJ-0361), so a later trade of the new listing finds its units."""
     applied: list = []
     if not evidence_paths or tmap is None:
         return applied
     rows = _evidence_rows(evidence_paths)
     if not rows:
         return applied
-    # Identity classes: union-find over every map pair.
-    parent: Dict[str, str] = {}
-
-    def find(x):
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for d in (tmap.glob, tmap.tobase, tmap.journal):
-        for a, b in d.items():
-            parent[find(a)] = find(b)
+    from taxjson.lib.listing_journals import identity_find
+    find = identity_find(tmap)
     journals = _evidenced_journals(
         rows, lambda a, b: find(a) == find(b))
     net: Dict[str, float] = {}
@@ -809,6 +745,14 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
     gain/loss against a base-currency price without re-running FX."""
     base_agg = base_agg or {}
     dust = getattr(args, 'dust_threshold', 1e-9)
+    # A crypto account's books (--crypto): every holding is a coin, its
+    # quantity and per-unit cost kept to significant digits — a sum of
+    # rewards carries float noise (0.05000000000000002), and six
+    # decimals of a low-priced token's cost (0.000012345) lose a tenth.
+    crypto = bool(getattr(args, 'crypto', False))
+
+    def _unit(v: float, places: int) -> float:
+        return float(f"{v:.10g}") if crypto else round(v, places)
     rows = []
     for sym in sorted(agg):
         b = agg[sym]
@@ -852,11 +796,21 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                 None: 'loss-denial adjustments, any cross-account '
                       'pooling'}[_c]
         from taxjson.lib.country import COST_TERM
-        lines.append(f'base_cost_basis = "per-account, per-listing, before '
-                     f'{_adj} and '
-                     f'[[distributions]] adjustments (total_cost excludes '
-                     f'those too; the filing {COST_TERM[_c]} is '
-                     f'`taxjson list`)"')
+        if crypto:
+            # A crypto account's books themselves (the run's prices
+            # and rates): both costs are that one figure.
+            _cross = (' (a superficial loss with another account, the '
+                      's.47 blend)' if _c == 'canada' else '')
+            lines.append(f'base_cost_basis = "this crypto account\'s own '
+                         f'books, before the passes across accounts'
+                         f'{_cross}; total_cost is the same figure; '
+                         f'the filing {COST_TERM[_c]} is `taxjson list`"')
+        else:
+            lines.append(f'base_cost_basis = "per-account, per-listing, '
+                         f'before {_adj} and '
+                         f'[[distributions]] adjustments (total_cost '
+                         f'excludes those too; the filing {COST_TERM[_c]} '
+                         f'is `taxjson list`)"')
     lines.append("")
 
     held_stock = [s for s in agg
@@ -874,7 +828,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         if args.account_name:
             lines.append(f"account = {_toml_str(args.account_name)}")
         lines.append(f"asset_type = "
-                     f"{_toml_str('option' if opt else 'future' if is_fut else 'equity')}")
+                     f"{_toml_str('crypto' if crypto else 'option' if opt else 'future' if is_fut else 'equity')}")
         if opt:
             lines.append(f"underlying = {_toml_str(opt['underlying'])}")
             lines.append(f"right = {_toml_str(opt['right'])}")
@@ -913,7 +867,8 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                 # (audit S030-09).
                 lines.append("# futures option: contract_multiplier "
                              "unknown here (not the equity 100)")
-        lines.append(f"quantity = {float(qty)!r}")
+        lines.append(f"quantity = "
+                     f"{float(f'{qty:.15g}') if crypto else float(qty)!r}")
         if mixed:
             # A JOURNAL-folded cross-currency bucket: summing native
             # USD+CAD costs into one number was currency salad. The
@@ -928,7 +883,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
             if currency:
                 lines.append(f"currency = {_toml_str(currency)}")
             lines.append(f"total_cost = {round(total_cost, 4)!r}")
-            lines.append(f"cost_per_share = {round(cps, 6)!r}")
+            lines.append(f"cost_per_share = {_unit(cps, 6)!r}")
         base = base_agg.get(sym)
         expected_base = getattr(args, 'base_currency', None)
         # A base bucket whose figures are in more than one currency has
@@ -960,7 +915,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
             base_cps = base_total / base_qty if base_qty else 0.0
             lines.append(f"base_currency = {_toml_str(base['currency'])}")
             lines.append(f"base_total_cost = {round(base_total, 4)!r}")
-            lines.append(f"base_cost_per_share = {round(base_cps, 6)!r}")
+            lines.append(f"base_cost_per_share = {_unit(base_cps, 6)!r}")
         if position_start_date:
             # TOML local date — bare YYYY-MM-DD, unquoted, parses
             # back as a date object via tomllib.
@@ -1145,6 +1100,13 @@ def main():
     parser.add_argument(
         "--account-name", default=None,
         help="Account name to stamp into the --holdings-toml output.",
+    )
+    parser.add_argument(
+        "--crypto", action="store_true",
+        help="The inputs are a crypto account's books (`taxjson run` "
+             "passes them twice: as the holdings and as --base-gains): "
+             "each --holdings-toml holding is asset_type \"crypto\", its "
+             "quantity and per-unit costs kept to significant digits.",
     )
     parser.add_argument(
         "--country", type=country_arg, default=None,

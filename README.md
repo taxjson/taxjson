@@ -251,6 +251,7 @@ country's commands (`taxjson help --all` lists them). Every command takes
 | [`taxjson gains`](docs/commands.md#taxjson-gains) | Realized gains in the trade's own currency |
 | [`taxjson leaps`](docs/commands.md#taxjson-leaps) | Closed LEAPS positions |
 | [`taxjson roc`](docs/commands.md#taxjson-roc) | Return-of-capital and other cost adjustments |
+| [`taxjson staking`](docs/commands.md#taxjson-staking) | Rewards, commissions, net income and acquisition evidence |
 | [`taxjson trades`](docs/commands.md#taxjson-trades) | Buys, sells and assignments |
 | [`taxjson transfers`](docs/commands.md#taxjson-transfers) | Custody transfers the books leave out, and what was done with each |
 
@@ -265,6 +266,7 @@ country's commands (`taxjson help --all` lists them). Every command takes
 | [`taxjson leaps-sum`](docs/commands.md#taxjson-leaps-sum) | LEAPS gains per contract |
 | [`taxjson losers`](docs/commands.md#taxjson-losers) | Biggest realized losers |
 | [`taxjson roc-sum`](docs/commands.md#taxjson-roc-sum) | Return of capital per ticker |
+| [`taxjson staking-sum`](docs/commands.md#taxjson-staking-sum) | Reward and commission totals by exchange and coin |
 | [`taxjson trades-sum`](docs/commands.md#taxjson-trades-sum) | Buys, sells and fees per ticker |
 | [`taxjson winners`](docs/commands.md#taxjson-winners) | Biggest realized winners |
 
@@ -300,7 +302,7 @@ country's commands (`taxjson help --all` lists them). Every command takes
 | --- | --- |
 | [`taxjson audit`](docs/commands.md#taxjson-audit) | Trace every capital gain back to its broker row |
 | [`taxjson wash-sales`](docs/commands.md#taxjson-wash-sales) | Each loss denied this year, and why (`--explain`) |
-| [`taxjson tax-logic`](docs/commands.md#taxjson-tax-logic) | Every tax rule applied, one line each (`--ids`) |
+| [`taxjson tax-logic`](docs/commands.md#taxjson-tax-logic) | Every tax rule applied, a bullet each (`--ids`) |
 | [`taxjson edge-cases`](docs/commands.md#taxjson-edge-cases) | Trades on a year-end or 30-day-window edge |
 | [`taxjson check-dates`](docs/commands.md#taxjson-check-dates) | Trade and settlement dates checked against each market |
 | [`taxjson check-tt`](docs/commands.md#taxjson-check-tt) | Every `.tt` line read as the run reads it, each problem named with its file and line |

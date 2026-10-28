@@ -90,7 +90,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from taxjson.lib import project_layout as _PL
 
 _IB_ID = re.compile(r"(?<![A-Za-z0-9])(?:DU|U|F|I)\d{7,8}(?![0-9])")
@@ -1104,6 +1104,30 @@ def _caps_name(text: str) -> bool:
     return judge(seg)
 
 
+# "FROM SAM SAMPLE" / "TO SAM SAMPLE": free text that starts by naming
+# the other party, with no verb before it (_NAME_FROM_TO needs "wire
+# from", "transfer to" ...), and "from" is statement vocabulary, so the
+# upper-case run was no name either (backlog TJ-0248). Listed for
+# review only, never replaced: a description can start the same way.
+_FROM_TO_NAME = re.compile(
+    r"^\s*(?i:from|to)[ ]+(" + _NAME_WORD + r"(?:[ ]+" + _NAME_WORD
+    + r"){1,3})(?![\w'’-])")
+
+
+def _from_to_name(text: str) -> bool:
+    """`text` starts with FROM / TO and 2-4 capitalised words, one of
+    them at least not statement vocabulary, a currency or a security's
+    word, two of 2+ letters (_FROM_TO_NAME)."""
+    m = _FROM_TO_NAME.match(text)
+    if not m:
+        return False
+    words = [w.strip(".,").lower() for w in m.group(1).split()]
+    if "redacted" in words or sum(len(w) >= 2 for w in words) < 2:
+        return False
+    return any(w not in _VOCAB and w not in _CCY and w not in _SECURITY_WORDS
+               for w in words)
+
+
 def _review(lineno: int, text: str, where: str, rep: Report) -> None:
     for ph in (*rep.accounts.values(), *rep.wallets.values(), *rep.txids.values()):
         if ph in text:
@@ -1120,6 +1144,8 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
                 w.strip(".,").lower() in _VOCAB | _CCY
                 for w in text.split())) or _caps_name(text):
             reasons.append("name-like words")
+        elif _from_to_name(text):
+            reasons.append("name-like words after FROM / TO")
     for m in _REVIEW_DIGITS.finditer(text):
         tok = m.group(0)
         if "9990" not in tok[:5] and not _DATE8.fullmatch(tok):
@@ -1241,9 +1267,30 @@ def _id_pattern(orig: str) -> re.Pattern:
                       + r"(?![A-Za-z0-9]|\.\d)", re.IGNORECASE)
 
 
-def _known_placeholder(table: Dict[str, str], orig: str) -> str:
+class IdTable(dict):
+    """An invocation's account ids, original -> placeholder, and
+    `reserved`: the ids (upper case) found anywhere in what it copies,
+    collected before any placeholder is handed out, so no id's
+    placeholder is another of them (a project copy's sweep then
+    rewrites no placeholder as an id; backlog TJ-0249)."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.reserved: set = set()
+
+
+def _known_placeholder(table: Dict[str, str], orig: str,
+                       reserved: Iterable[str] = ()) -> str:
     """The invocation-wide placeholder of an id, matched
-    case-insensitively (U1234567 and u1234567 are one account)."""
+    case-insensitively (U1234567 and u1234567 are one account). A new
+    one is never a placeholder already handed out nor ANOTHER id of the
+    input: an original id, `reserved` (the ids of the text being
+    redacted) or the table's own `reserved` (IdTable). Numbered from
+    the count handed out, it was: an export holding U1234567 and
+    U9990001 gave the first U9990001, and the second's replacement then
+    rewrote it, so two accounts became one (backlog TJ-0249). The id
+    itself may come out (a copy's U9990001 redacted again stays: the
+    generate-parser gate passes a redacted sample)."""
     if orig in table:
         return table[orig]
     up = orig.upper()
@@ -1251,8 +1298,49 @@ def _known_placeholder(table: Dict[str, str], orig: str) -> str:
         if k.upper() == up:
             table[orig] = v
             return v
-    table[orig] = _placeholder(orig, len(set(table.values())) + 1)
-    return table[orig]
+    taken = {v.upper() for v in table.values()} | (
+        ({k.upper() for k in table}
+         | {r.upper() for r in reserved}
+         | {r.upper() for r in getattr(table, "reserved", ())}) - {up})
+    n = len(set(table.values())) + 1
+    ph = _placeholder(orig, n)
+    for _ in range(100000):
+        if ph.upper() not in taken:
+            break
+        n += 1
+        nxt = _placeholder(orig, n)
+        if nxt == ph:
+            break           # a short id's one shape (all nines)
+        ph = nxt
+    table[orig] = ph
+    return ph
+
+
+def _id_subber(pairs: Iterable[Tuple[str, str]]
+               ) -> Optional[Callable[[str], Tuple[str, Dict[str, int]]]]:
+    """A function replacing every id of `pairs` (original, placeholder)
+    in a text in ONE pass, each where _id_pattern finds it (longest id
+    first at a position), returning the text and the count per id
+    (upper case); None with no pairs. One id after another rewrote a
+    placeholder that equals a later id (backlog TJ-0249)."""
+    by_up: Dict[str, str] = {}
+    for o, ph in pairs:
+        by_up.setdefault(o.upper(), ph)
+    if not by_up:
+        return None
+    rx = re.compile("|".join(
+        f"(?:{_id_pattern(o).pattern})"
+        for o in sorted(by_up, key=len, reverse=True)), re.IGNORECASE)
+
+    def sub(text: str) -> Tuple[str, Dict[str, int]]:
+        counts: Dict[str, int] = {}
+
+        def one(m: "re.Match") -> str:
+            k = m.group(0).upper()
+            counts[k] = counts.get(k, 0) + 1
+            return by_up[k]
+        return rx.sub(one, text), counts
+    return sub
 
 
 _BROKER_KEY_RE = re.compile(
@@ -1307,19 +1395,23 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     text = _redact_broker_keys(text, rep)
     lines = text.splitlines(keepends=True)
     kept = set()
-    for orig in _collect_ids(lines):
+    collected = _collect_ids(lines)
+    for orig in collected:
         if stand_ins and _is_placeholder_id(orig):
             # The copy's own placeholder: kept as it is (and never
             # given to another id of the run).
             kept.add(orig.upper())
             rep.known_ids.setdefault(orig, orig)
             continue
-        rep.accounts[orig] = _known_placeholder(rep.known_ids, orig)
+        # Never a placeholder that is another id of this text
+        # (backlog TJ-0249).
+        rep.accounts[orig] = _known_placeholder(rep.known_ids, orig,
+                                                collected)
     acct_upper = {a.upper() for a in rep.accounts} | kept
-    # Longest first so a shorter id that is a substring of a longer one
-    # cannot pre-empt it.
-    ordered = sorted(rep.accounts.items(), key=lambda kv: -len(kv[0]))
-    id_pats = {orig: _id_pattern(orig) for orig, _ in ordered}
+    ordered = list(rep.accounts.items())
+    # Every id at once (longest first at a position, so a shorter id
+    # that is a substring of a longer one cannot pre-empt it).
+    sub_ids = _id_subber(ordered)
     alias_cols: Dict[str, List[int]] = {}
     txid_cols: Dict[str, List[int]] = {}
     free_cols: Dict[str, List[Tuple[int, str]]] = {}
@@ -1472,9 +1564,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                 rep.review.append((lineno, "name-like words (one of them a "
                                            "statement word) in a preamble line"))
         lowline = line.lower()
-        for orig, ph in ordered:
-            if orig.lower() in lowline:
-                line = id_pats[orig].sub(ph, line)
+        if sub_ids and any(o.lower() in lowline for o, _ph in ordered):
+            line = sub_ids(line)[0]
         if _EMAIL.search(line):
             rep.emails += _emails_found(line)
             line = _EMAIL.sub("redacted@example.com", line)
@@ -2190,6 +2281,24 @@ def _tree_names(dirs: List[Path], files: List[_TreeFile],
     return out
 
 
+def _tree_ids(decoded, dirs: List[Path], files: List["_TreeFile"],
+              cfg: List[str]) -> set:
+    """The ids (upper case) a project copy holds: each text's (as
+    redact_text and redact_project_text collect them), each path
+    component's (name_only_ids) and the configuration's id-shaped
+    ones (IdTable.reserved)."""
+    out = {v.upper() for v in cfg}
+    for f, text, _enc in decoded:
+        lines = text.splitlines(keepends=True)
+        out.update(v.upper() for v in _collect_ids(lines))
+        out.update(v.upper() for v in _text_ids(text))
+    for rel in list(dirs) + [f.rel for f in files]:
+        for part in Path(rel).parts:
+            out.update(t.upper() for t in name_only_ids(
+                os.path.splitext(part)[0], {}))
+    return out
+
+
 def _sweep(files: List[_TreeFile], known_ids: Dict[str, str],
            pseudonyms: Pseudonyms) -> None:
     """Replace, in every copied text, any id the run collected anywhere
@@ -2202,8 +2311,8 @@ def _sweep(files: List[_TreeFile], known_ids: Dict[str, str],
         if o == ph:
             continue                # a copy's own placeholder (TJ-0097)
         ids.setdefault(o.upper(), (o, ph))
-    ordered = sorted(ids.values(), key=lambda kv: -len(kv[0]))
-    pats = [(_id_pattern(o), ph) for o, ph in ordered]
+    # Every id in one pass (backlog TJ-0249).
+    sub_ids = _id_subber(ids.values())
     tokens = {k.lower(): v for k, v in pseudonyms.wallets.items()}
     tokens.update({k.lower(): v for k, v in pseudonyms.txids.items()})
 
@@ -2217,9 +2326,9 @@ def _sweep(files: List[_TreeFile], known_ids: Dict[str, str],
         if f.text is None:
             continue
         text = f.text
-        for pat, ph in pats:
-            text, k = pat.subn(ph, text)
-            f.swept += k
+        if sub_ids:
+            text, counts = sub_ids(text)
+            f.swept += sum(counts.values())
         if tokens:
             text = _SWEEP_TOKEN.sub(tok, text)
         f.text = text
@@ -2624,13 +2733,16 @@ def redact_project_text(text: str, compiled: List[re.Pattern],
             found.append(v)
     subs: List[Tuple[str, str]] = []
     for v in found:
-        subs.append((v, _known_placeholder(known_ids, v)))
+        subs.append((v, _known_placeholder(known_ids, v, found)))
     for n, v in enumerate(local, start=1):
         subs.append((v, _placeholder(v, n)))
-    for orig, ph in sorted(subs, key=lambda kv: -len(kv[0])):
-        text, k = _id_pattern(orig).subn(ph, text)
-        if k:
-            rep.accounts[orig] = ph
+    sub_ids = _id_subber(subs)
+    if sub_ids:
+        # In one pass (backlog TJ-0249).
+        text, counts = sub_ids(text)
+        for orig, ph in subs:
+            if counts.get(orig.upper()):
+                rep.accounts.setdefault(orig, ph)
     out: List[str] = []
     for lineno, line in enumerate(text.split("\n"), start=1):
         rep.emails += _emails_found(line)
@@ -2715,7 +2827,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         dirs, files, hidden = _project_tree(root, inputs)
     else:
         dirs, files, hidden = _walk_inputs(inputs)
-    known_ids: Dict[str, str] = {}
+    known_ids = IdTable()
     pseudonyms = Pseudonyms()
     compiled, _ = compile_patterns(extra)
     # The configuration's broker ids (GitHub #22): replaced in its copy
@@ -2731,6 +2843,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         cfg_ids = ([v for v in cfg_ids[0] if not _is_placeholder_id(v)],
                    [v for v in cfg_ids[1]
                     if set(re.sub(r"\D", "", v)) - {"9"}])
+    decoded: List[Tuple[_TreeFile, str, str]] = []
     for f in files:
         if f.skip is not None:
             continue
@@ -2748,6 +2861,12 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         except UnicodeDecodeError:
             f.skip = "a UTF-16 byte-order mark on text that is not UTF-16"
             continue
+        decoded.append((f, text, enc))
+    # Every id the copy holds, in any file or name, before the first
+    # placeholder is handed out: none may be one of them, or the sweep
+    # below rewrites that placeholder as the id (backlog TJ-0249).
+    known_ids.reserved |= _tree_ids(decoded, dirs, files, cfg_ids[0])
+    for f, text, enc in decoded:
         if shared and f.rel == Path(_PL.CONFIG):
             # The redacted project reads its own inputs/ and holdings/.
             for _k in _PL.FOLDER_KEYS + (_PL.TOBASE_KEY,):

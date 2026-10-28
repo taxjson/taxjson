@@ -606,7 +606,9 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
              slow: Optional[List[SlowMove]] = None,
              no_slow: Optional[Callable[[Tuple[str, str, Dict[str, Any]]],
                                         bool]] = None,
-             not_own: Optional[Sequence[NotOwn]] = None) -> List[Arrival]:
+             not_own: Optional[Sequence[NotOwn]] = None,
+             paired: Optional[List[Tuple[str, str, str, float]]] = None
+             ) -> List[Arrival]:
     """The transfer-in quantities that came from outside the books.
 
     Per security (`key`: the symbol after ticker.map renames; default
@@ -636,7 +638,13 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     departure (never named on that Arrival's line). Every other leg
     pairs as without the line — the two legs keep out of the later
     steps as the pairing had kept them — so a line never makes a
-    pairing."""
+    pairing.
+
+    `paired`: given a list, the identity (leg_ident) of every in leg
+    the pairing cancelled, wholly or in part (a move of your own, a
+    journal inside one account, shares out and back): the positive
+    evidence `taxjson transfers` needs to call a transfer-in your own
+    move (backlog TJ-0308)."""
     keyf = key or (lambda s: str(s or "").upper())
     rows = list(rows)
     # A journal inside one account (its legs' pair id, a .tt JOURNAL
@@ -791,6 +799,12 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
                 found.append((o[0], str(o[2].get("date") or "")[:10],
                               round(o[4], 8)))
         return sorted(found, key=lambda x: (x[1], x[0]))
+    if paired is not None:
+        paired.extend(leg_ident(acct, t) for n, (acct, _b, t)
+                      in enumerate(rows) if n in settled
+                      and float(t.get("quantity") or 0.0) > _EPS)
+        paired.extend(leg_ident(g[0], g[2]) for g in ins
+                      if g[4] < float(g[2].get("quantity") or 0.0) - _EPS)
     out: List[Arrival] = []
     for g in ins:
         a, b, t, k, left, _j = g

@@ -21,7 +21,9 @@ sale. The denied total is reported separately, never subtracted.
 
 Shares, long options, futures and crypto come straight from the engine's
 gains rows (what `winners` / `leaps-sum` read). A partial close is one
-trade per closing disposition, as the engine books it.
+trade per closing disposition, as the engine books it; a US sale that
+consumes several FIFO lots (one gains row per lot, all with the sale's
+id) is one trade, its lots' P/L added.
 
 Written options are built from the account's base-currency book instead,
 because the gains rows of a written option depend on the project's
@@ -682,12 +684,31 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
             if ck in credit:
                 qty_by_id[ck] = qty_by_id.get(ck, 0.0) + abs(_f(t.get("qty")))
 
+    # One trade per closing DISPOSITION: the US engine books a sale
+    # that consumes several FIFO lots as one gains row per lot, all
+    # carrying the sale's id, and each lot counted as a trade of its
+    # own (a sale of a winning and a losing lot: 2 trades, 1 win, 1
+    # loss; backlog TJ-0327). The rows of one account, row account and
+    # id are one disposition; a row with no id is one of its own. The
+    # denied and unknown-cost tallies count dispositions too.
+    def disposition(acct: str, t: Dict[str, Any], n: int) -> Tuple:
+        row_acct = str(t.get("account") or acct)
+        tid = str(t.get("id") or "")
+        return (acct, row_acct, tid) if tid else (acct, row_acct, "", n)
+
+    tainted_disp: set = set()
+    denied_disp: set = set()
+    closes: Dict[Tuple, Dict[str, Any]] = {}
     for acct, doc in gains_docs.items():
-        for t in doc.get("manual_reporting_required") or []:
+        for n, t in enumerate(doc.get("manual_reporting_required") or []):
             if (isinstance(t, dict) and keep(date_of(t))
                     and symbol_ok(str(t.get("symbol") or ""))):
-                tainted += 1
-        for t in doc.get("transactions") or []:
+                # Its own count: a row with no id here is not the
+                # transactions' row of the same index.
+                tainted_disp.add(("manual",) + disposition(acct, t, n)
+                                 if not t.get("id") else
+                                 disposition(acct, t, n))
+        for n, t in enumerate(doc.get("transactions") or []):
             if not isinstance(t, dict) or "gain" not in t:
                 continue
             if t.get("action") in _INCOME or t.get("deemed"):
@@ -696,15 +717,16 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
                 continue
             if not symbol_ok(str(t.get("symbol") or "")):
                 continue
+            disp = disposition(acct, t, n)
             denied += _f(t.get("disallowed_amount"))
             if _f(t.get("disallowed_amount")) > 0.001:
-                denied_n += 1
-            row_acct = str(t.get("account") or acct)
+                denied_disp.add(disp)
+            row_acct = disp[1]
             cls = classify(t, row_acct in crypto or acct in crypto)
             if cls is None:
                 continue
             if t.get("tainted"):
-                tainted += 1
+                tainted_disp.add(disp)
                 continue
             pnl = economic_pnl(t)
             ck = (acct, str(t.get("id") or ""))
@@ -713,9 +735,18 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
                          if qty_by_id.get(ck) else 1.0)
                 pnl -= credit[ck] * share
             sym = str(t.get("symbol") or "")
-            out.append({"date": date_of(t), "symbol": sym,
-                        "underlying": _underlying(sym), "account": row_acct,
-                        "cls": cls, "pnl": pnl, "kind": ""})
+            # The class is part of the key: one disposition's rows are
+            # of one class; a row of another stays a trade of its own.
+            tr = closes.get(disp + (cls,))
+            if tr is None:
+                tr = closes[disp + (cls,)] = {
+                    "date": date_of(t), "symbol": sym,
+                    "underlying": _underlying(sym), "account": row_acct,
+                    "cls": cls, "pnl": 0.0, "kind": ""}
+            tr["pnl"] += pnl
+    out.extend(closes.values())
+    tainted += len(tainted_disp)
+    denied_n = len(denied_disp)
 
     for tr in written:
         if not tr["in_books"] or not keep(tr["date"]):

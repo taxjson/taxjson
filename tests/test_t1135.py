@@ -427,6 +427,10 @@ class TestRunWrapper(unittest.TestCase):
                 "transactions": [
                     tx(symbol="BTC", date="2025-02-01", qty=1,
                        net=60000.0)]}))
+            # Its gains file, as a run writes it (t1135 refuses a book
+            # read without one: backlog TJ-0306).
+            (work / "crypto_gains.json").write_text(
+                json.dumps({"transactions": []}))
             # A sheltered base file must NOT be read even if present.
             (work / "rrsp_base.json").write_text(json.dumps({
                 "transactions": [

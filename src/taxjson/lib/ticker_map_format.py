@@ -124,7 +124,8 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
          ("EXTRACT DESCRIPTION WORDS | CURRENCY | SYMBOL",
           "the symbol of a broker row with these words"),
          ("CRYPTO SYMBOL YAHOO_ID", "a coin's Yahoo id"),
-         ("T1135 SYMBOL COUNTRY", "the T1135 domicile of a symbol (Canada)"),
+         ("T1135 SYMBOL COUNTRY [CAT]",
+          "the T1135 domicile (and category) of a symbol (Canada)"),
          ("SIMILAR A B [C ...]", "look-alike funds, kept as separate "
           "securities: a loss on one with another bought in the window "
           "is flagged"),
@@ -642,6 +643,7 @@ def meaning(text: str) -> tuple:
             tuple((d.old, d.new, d.date, d.late) for d in tmap.dated),
             frozenset(tmap.undated_rename), frozenset(tmap.lookup_named),
             side.quote, side.crypto, tuple(side.extract), side.t1135,
+            side.t1135_category,
             tuple(s for s, _w, _l in side.similar),
             side.stable, side.splitshare, side.indexopt, side.evening,
             side.mult, side.venue, len(problems), len(notes),

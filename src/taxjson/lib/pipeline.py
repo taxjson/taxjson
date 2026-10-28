@@ -182,7 +182,8 @@ def _main_trade_dates(main_transactions):
 def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                                     base_currency=None,
                                     near_trade_guard=True,
-                                    netted_segments=None):
+                                    netted_segments=None,
+                                    trades_block=True):
     """Drop TRANSFER groups that net to zero WITHIN ONE TIME CLUSTER and
     have no intervening trade or split.
 
@@ -201,7 +202,17 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     in-kind contribution out — a CRA deemed disposition — cancelled by
     an unrelated transfer in months later): distant rows never share a
     segment, so neither nets to zero and both fall through to the
-    taxable hard-error / sheltered rewrite.
+    taxable hard-error / sheltered rewrite. A trade of the symbol in the
+    account, or a SPLIT of it, dated strictly between two consecutive
+    rows starts a new segment too (backlog TJ-0360): a listing journal
+    and a custody move a few weeks later, a sale between them, are two
+    moves, each judged on its own. As one segment the sale blocked both
+    and they were booked as sales and purchases at the rows' values.
+    The rows on either side of a trade net to zero only when the
+    position was not in transit during it, so nothing the in-span test
+    below refuses is dropped; a trade on a row's own date stays inside
+    that segment's span and still blocks it (a sheltered account's own
+    book: `trades_block` below).
 
     Safe-drop conditions (per segment):
       * segment qty sums to zero (within epsilon)
@@ -249,10 +260,24 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
     (a list per segment): the default policy's caller lists the ones
     inside a loss's window (transfers_in_loss_windows).
 
+    `trades_block=False` (a sheltered account's OWN book, the owner's
+    decision on TJ-0360): the account's trades neither end a segment
+    nor block one. A custody move whose two legs two brokers dated
+    around a trade (an ATON out dated after the arrival and a buy at
+    the new broker) nets: the shares never left your hands, and the
+    rewrite booked the legs as a sale at the out-row's value and a
+    purchase at the arrival's (often 0), restarting the pool. A
+    segment that does not net to zero is then judged by its runs: each
+    run of consecutive rows that nets to zero (from its first row, the
+    shortest) is a move of its own, the rows no run takes are kept. A
+    SPLIT still ends and blocks a segment. A taxable book keeps the
+    refusal (its surviving rows stop the run).
+
     Returns the filtered list plus a list of (symbol, account, count)
     tuples for the caller to log.
     """
     epsilon = 1e-9
+    from bisect import bisect_right
     from collections import defaultdict
     from datetime import datetime as _dt, timedelta as _td
     _guarded = main_transactions is not None and near_trade_guard
@@ -269,20 +294,60 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
         except (TypeError, ValueError):
             return None
 
-    def _segment(rows):
+    # The dates that end a segment (TJ-0360): per symbol, each trade's
+    # (date, account) and each SPLIT's (any account; a main-book one
+    # too, which the drop loop refuses inside a span).
+    cuts_by_symbol: Dict[str, list] = defaultdict(list)
+    for t in transactions:
+        if t.date and t.action in ('BUYSELL', 'ASSIGN', 'SPLIT'):
+            cuts_by_symbol[t.symbol].append(
+                (t.date, None if t.action == 'SPLIT' else t.account))
+    for t in main_transactions or ():
+        if t.date and t.action == 'SPLIT':
+            cuts_by_symbol[t.symbol].append((t.date, None))
+
+    def _segment(rows, symbol, account):
         rows = sorted(rows, key=lambda r: (r[1].date or '',
                                            r[1].time or ''))
+        cuts = sorted({d for d, a in cuts_by_symbol.get(symbol, ())
+                       if a is None or (trades_block and a == account)})
         segments: list = [[rows[0]]]
         for prev, cur in zip(rows, rows[1:]):
             pd, cd = _d(prev[1]), _d(cur[1])
+            k = bisect_right(cuts, prev[1].date or '')
             if pd is None or cd is None \
-                    or (cd - pd).days > _TRANSFER_PAIR_MAX_GAP_DAYS:
+                    or (cd - pd).days > _TRANSFER_PAIR_MAX_GAP_DAYS \
+                    or (k < len(cuts) and cuts[k] < cur[1].date):
                 segments.append([cur])
             else:
                 segments[-1].append(cur)
-        return segments
+        if trades_block:
+            return segments
+        return [run for seg in segments for run in _runs(seg)]
 
-    seg_by_key = {k: _segment(v) for k, v in groups.items()}
+    def _runs(seg):
+        # The zero-net runs of a segment, left to right, each the
+        # shortest from its first row; a row no run takes stands alone
+        # (a segment that cannot net).
+        if abs(sum(t.quantity for _, t in seg)) <= epsilon:
+            return [seg]
+        out, i = [], 0
+        while i < len(seg):
+            s, end = 0.0, None
+            for j in range(i, len(seg)):
+                s += seg[j][1].quantity
+                if abs(s) <= epsilon:
+                    end = j
+                    break
+            if end is None:
+                out.append([seg[i]])
+                i += 1
+            else:
+                out.append(seg[i:end + 1])
+                i = end + 1
+        return out
+
+    seg_by_key = {k: _segment(v, *k) for k, v in groups.items()}
 
     # PRE-PASS (sheltered invocation only): account-wide restatement
     # detection. Per account, chain zero-net qualified segments whose
@@ -417,7 +482,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                     > _TRANSFER_SEGMENT_MAX_SPAN_DAYS:
                 continue
             blocked = any(
-                (t.action in ('BUYSELL', 'ASSIGN')
+                (trades_block and t.action in ('BUYSELL', 'ASSIGN')
                  and t.symbol == symbol and t.account == account
                  and t.date and date_lo <= t.date <= date_hi)
                 or (t.action == 'SPLIT' and t.symbol == symbol
@@ -834,15 +899,18 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     #      sheltered side — rewritten to BUYSELL so the wash walk sees
     #      it (as trigger and in still-held balances).
     # Own-account custody moves `taxjson run` pairs into a US blended
-    # book (core.LOT_MOVE_TYPE, US-BASIS-05) are not transfers in or out
-    # of the taxpayer's hands: kept aside here, handed back unchanged.
-    from taxjson.lib.core import LOT_MOVE_TYPE
+    # book (core.LOT_MOVE_TYPE, US-BASIS-05), and the journals between
+    # two listings it writes into a native book (core.
+    # LISTING_JOURNAL_TYPE, backlog TJ-0361), are not transfers in or
+    # out of the taxpayer's hands: kept aside here, handed back unchanged.
+    from taxjson.lib.core import LISTING_JOURNAL_TYPE, LOT_MOVE_TYPE
+    _kept = (LOT_MOVE_TYPE, LISTING_JOURNAL_TYPE)
     _lot_moves = [t for t in transactions
-                  if t.action == 'TRANSFER' and t.type == LOT_MOVE_TYPE]
+                  if t.action == 'TRANSFER' and t.type in _kept]
     if _lot_moves:
         transactions = [t for t in transactions
                         if not (t.action == 'TRANSFER'
-                                and t.type == LOT_MOVE_TYPE)]
+                                and t.type in _kept)]
         transactions, sheltered_transactions = _handle_transfers(
             transactions, sheltered_transactions, taxable=taxable,
             base_currency=base_currency, country=country,
@@ -902,7 +970,10 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
 
     # Auto-drop self-cancelling pairs first — they're never tax events,
     # and dropping them avoids needlessly tripping the --taxable guard.
-    transactions, dropped_pairs = _drop_self_cancelling_transfers(transactions)
+    # A sheltered book nets a custody move whatever trades of its own
+    # sit between the legs' dates (TJ-0360); a taxable one refuses.
+    transactions, dropped_pairs = _drop_self_cancelling_transfers(
+        transactions, trades_block=taxable)
     if dropped_pairs:
         # Emit one note line per ticker so the silence is audible —
         # a user reading the log can see which TRANSFER rows their
@@ -910,10 +981,12 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
         summary = ", ".join(f"{sym} ({count} row{'s' if count != 1 else ''}, {acct})"
                             for sym, acct, count in dropped_pairs)
         _n_dropped = sum(c for _, _, c in dropped_pairs)
+        _why = ("net-zero, no intervening sell" if taxable
+                else "net-zero custody moves")
         say("note", f"auto-dropped {_n_dropped} self-cancelling TRANSFER "
-            f"row(s) (net-zero, no intervening sell)", [f"{summary}."],
+            f"row(s) ({_why})", [f"{summary}."],
             legacy=f"NOTE: auto-dropped {_n_dropped} self-cancelling "
-            f"TRANSFER row(s) (net-zero, no intervening sell): {summary}.")
+            f"TRANSFER row(s) ({_why}): {summary}.")
 
     n_main = sum(1 for t in transactions if t.action == 'TRANSFER')
 
@@ -1446,6 +1519,12 @@ def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
 ATTENTION_WASH_LOCKED = "ATTENTION: wash sale reaches a filed year: "
 
 
+# The id of the row place_retro_wash_adjustments books in the loss's
+# year: the loss sale's id with this suffix (taxjson-audit joins the
+# row back to the loss sale by it).
+RETRO_WASH_ID_SUFFIX = "-wash-basis"
+
+
 def place_retro_wash_adjustments(results, tax_date: str,
                                  locked_years=(), year=None) -> None:
     """USA (tax-logic US-WASH-22): the US engine adds a disallowed loss
@@ -1526,7 +1605,7 @@ def place_retro_wash_adjustments(results, tax_date: str,
                 'commission': 0.0, 'fee': 0.0,
                 'is_wash_sale': False,
                 'is_option': e.get('is_option', False),
-                'id': f"{a['loss_id']}-wash-basis", 'trace': [],
+                'id': f"{a['loss_id']}{RETRO_WASH_ID_SUFFIX}", 'trace': [],
                 'direction': 'LONG',
                 'term': a.get('term') or e.get('term'),
                 'wash_trigger': None, 'wash_window': None,
@@ -1577,10 +1656,10 @@ def engine_options(req: GainsRequest) -> Dict[str, Any]:
         extra['option_buyback_loss_superficial'] = \
             req.option_buyback_loss_superficial
         extra['option_grant_basis'] = req.effective_tax_date()
-        # The pools at the end of the year too (inventory_year_end:
-        # backlog TJ-0282).
-        if req.year:
-            extra['year_end'] = f"{req.year}-12-31"
+    # The pools (Canada) or lots (US) at the end of the year too
+    # (inventory_year_end: backlog TJ-0282, TJ-0284).
+    if req.year:
+        extra['year_end'] = f"{req.year}-12-31"
     return extra
 
 

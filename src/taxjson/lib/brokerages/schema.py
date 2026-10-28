@@ -45,7 +45,7 @@ Convention notes encoded here (the "why" behind the checks):
 import re
 from typing import Any, Dict, List, Tuple
 
-from taxjson.lib.core import is_option_symbol
+from taxjson.lib.core import is_option_symbol, validate_staking_reward
 
 # Actions a parser may emit. (DISALLOW is engine-internal and OPENING_BALANCE
 # comes from .tt starting-position files, but both are legal in a transaction
@@ -67,7 +67,8 @@ SCHEMA: Dict[str, Dict[str, Tuple[str, ...]]] = {
     'SPLIT':            {'required': ('date', 'symbol', 'quantity'),
                          'optional': ('symbol_new',)},
     'DIVIDEND':         {'required': ('date', 'symbol', 'currency', 'net_amount'),
-                         'optional': ('gross_amount', 'quantity', 'price', 'type')},
+                         'optional': ('gross_amount', 'quantity', 'price', 'type',
+                                      'staking_reward')},
     'DIVIDEND_IN_LIEU': {'required': ('date', 'symbol', 'currency', 'net_amount'),
                          'optional': ('gross_amount', 'quantity', 'price', 'type')},
     'TAX':              {'required': ('date', 'currency', 'net_amount'),
@@ -160,6 +161,13 @@ def validate_transactions(txs: List[Dict[str, Any]],
             errors.append(f"{_who(tx, i)}: unknown action {tx.get('action')!r}")
             continue
         spec = SCHEMA[action]
+        if tx.get('staking_reward') is not None:
+            try:
+                validate_staking_reward(tx['staking_reward'], _who(tx, i))
+                if action != 'DIVIDEND':
+                    raise ValueError(f"{_who(tx, i)}: staking_reward belongs on the DIVIDEND income leg only")
+            except ValueError as exc:
+                errors.append(str(exc))
 
         # Required fields: present and non-empty (strings) / provided
         # (numerics — 0 is a legal value only where it isn't the ratio

@@ -300,7 +300,6 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                 full_out = tdp / f"{g}_full_gains.json"
                 run_gains(tail + [str(full)], full_out)
                 fdoc = json.loads(full_out.read_text(encoding="utf-8"))
-            deferred: Dict[str, float] = {}
             adjust_rows = []
             for i, w in enumerate(fdoc.get("wash_sales") or []):
                 if w.get("trigger_lot_id") in sheltered_ids:
@@ -310,8 +309,12 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                          if basis == "settle" else _d(a.get("date")))
                     if d is None or d > cut:
                         continue        # lands after Dec 31 (A2-0669)
-                    deferred[a["symbol"]] = deferred.get(a["symbol"], 0.0) \
-                        + a["amount"]
+                    # A `WASH_` id: the engine books it as the s.53(1)(f)
+                    # addition it is — tallied in the pool's
+                    # deferred_wash and released pro rata by every later
+                    # sale, as in the full run. The per-symbol sum of
+                    # the landings kept a deferral the units sold before
+                    # Dec 31 had already recovered (backlog TJ-0285).
                     adjust_rows.append({
                         "action": "ADJUST", "date": a["date"],
                         "date_settle": a.get("date_settle") or a["date"],
@@ -320,7 +323,7 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                         "currency": a.get("currency") or "",
                         "net_amount": a["amount"], "quantity": 0.0,
                         "account": a.get("account") or names[0],
-                        "id": f"HANDOFF_WASH_{i}_{j}"})
+                        "id": f"WASH_HANDOFF_{i}_{j}"})
             # A trust ROC counts on its record date, as the engine books
             # it (CA-INC-DATE-ROC-TRUST; A2-0202).
             kept = [r for r in rows
@@ -329,7 +332,17 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                     and d <= cut]
             trunc = tdp / f"{g}_asof.json"
             trunc.write_text(json.dumps({"transactions": kept + adjust_rows}))
-            if us:
+            if us and g == "crypto":
+                # §1091 does not reach digital assets: the pipeline runs
+                # a US project's crypto books --no-wash (US-WASH-13), so
+                # the record does too — the wash rule here put a
+                # repurchase's basis at the loss lot's cost and recorded
+                # a deferral the return never had (backlog TJ-0297).
+                # The group keeps its accounts together (moves between
+                # them carry their lots) and FIFO per account
+                # (--per-account-basis in common_flags).
+                tail = ["--taxable", "--no-wash"] + common_flags
+            elif us:
                 # The US engine adds a disallowed loss to the
                 # replacement lot's basis itself (§1091(d)) and records
                 # no ADJUST landing: the Dec-31 rows are re-run WITH the
@@ -347,6 +360,9 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
             run_gains(tail + [str(trunc)], trunc_out)
             tdoc = json.loads(trunc_out.read_text(encoding="utf-8"))
             pos: Dict[str, Dict[str, float]] = {}
+            # The deferral still in each Dec 31 pool: the engine's own
+            # deferred_wash tally (US: the §1091(d) adds; Canada: the
+            # WASH_ landings above, less what later sales released).
             for h in tdoc.get("inventory") or []:
                 sym = h.get("symbol")
                 q = float(h.get("qty") or 0.0)
@@ -356,15 +372,11 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                                          "deferred": 0.0})
                 p["qty"] += q
                 p["acb"] += float(h.get("total_cost") or 0.0)
-                if us:
-                    deferred[sym] = deferred.get(sym, 0.0) + float(
-                        h.get("deferred_wash") or 0.0)
-            for sym, amt in deferred.items():
-                if sym in pos:
-                    pos[sym]["deferred"] = round(amt, 2)
+                p["deferred"] += float(h.get("deferred_wash") or 0.0)
             for p in pos.values():
                 p["qty"] = round(p["qty"], 8)
                 p["acb"] = round(p["acb"], 2)
+                p["deferred"] = round(p["deferred"], 2)
             out[g] = pos
     return out
 
@@ -420,11 +432,30 @@ def dispositions(gains_files: Dict[str, Path], year: int
 _FILED_COLS = ("symbol", "date", "qty", "proceeds", "cost", "gain")
 
 
-def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
+def filed_rows_outside(rows: List[Dict[str, Any]], year: int
+                       ) -> List[str]:
+    """`SYMBOL DATE` of each filed disposition whose date (the date the
+    return used) is not in `year`: a lock records ONE return, so another
+    year's row summed into its filed_totals and carried that year's gain
+    or loss into the next one (backlog TJ-0298). A row with no readable
+    date is named too."""
+    out = []
+    for r in rows or []:
+        r = r if isinstance(r, dict) else {}
+        d = _d(r.get("date"))
+        if d is None or d.year != int(year):
+            out.append(f"{r.get('symbol')} {r.get('date')}")
+    return out
+
+
+def load_filed_dispositions(path: Path, year: Optional[int] = None
+                            ) -> List[Dict[str, Any]]:
     """The dispositions a return actually reported, when it was prepared
     with another tool. CSV with a header: symbol,date,qty,proceeds,cost,
     gain (account optional; date = the date the return used; amounts in
-    the base currency; qty positive)."""
+    the base currency; qty positive). `year`: the year being closed — a
+    row dated in any other year is refused, naming each such line
+    (TJ-0298)."""
     import io
     from taxjson.lib.brokerages.base import (BrokerageParseError,
                                              decode_broker_text)
@@ -443,6 +474,7 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
     first = text.split("\n", 1)[0]
     delim = "\t" if ("\t" in first and "," not in first) else ","
     rows = []
+    other: List[str] = []
     fh = io.StringIO(text, newline="")
     rd = csv.DictReader(fh, delimiter=delim)
     missing = [c for c in _FILED_COLS
@@ -492,6 +524,18 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
                              f"finite number)")
         if not rows[-1]["date"]:
             raise ValueError(f"{path}:{i}: bad date {r['date']!r}")
+        if year is not None and not rows[-1]["date"].startswith(
+                f"{int(year)}-"):
+            other.append(f"line {i} ({rows[-1]['symbol']} "
+                         f"{rows[-1]['date']})")
+    if other:
+        raise ValueError(
+            f"{path}: {len(other)} row(s) dated outside {int(year)}, the "
+            f"year being closed: {', '.join(other[:5])}"
+            + (f" and {len(other) - 5} more" if len(other) > 5 else "")
+            + f" — the file holds the sales the {int(year)} return "
+            f"reported (each year's lock records its own return): remove "
+            f"the other years' rows, or fix their dates")
     return rows
 
 
@@ -577,7 +621,7 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
         "boundary_rows": boundary_rows(cache, cfg, year),
     }
     if filed_csv is not None:
-        fd = load_filed_dispositions(filed_csv)
+        fd = load_filed_dispositions(filed_csv, year)
         rec["filed_dispositions"] = fd
         rec["filed_totals"] = {
             "dispositions": len(fd),

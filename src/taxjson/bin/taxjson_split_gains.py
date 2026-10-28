@@ -25,8 +25,9 @@ Per-account content:
                   base book); last_acq_date stays the pool's (s.54
                   looks at any acquisition of the identical property)
   inventory_year_end
-                  the same, apportioned by the account's balance at
-                  the year end
+                  the same: US rows filtered by `account`, Canada's
+                  pools apportioned by the account's balance at the
+                  year end
 """
 
 import argparse
@@ -177,9 +178,10 @@ def split_for_account(combined: Dict[str, Any], account: str,
     book = (list(base_txs) + openings) if base_txs is not None else None
     inventory = _split_inventory(combined.get("inventory", []), account,
                                  book, starts, "9999-12-31")
-    # The pools at the year end (the Canadian engine's
-    # inventory_year_end), by the account's balance at that day
-    # (backlog TJ-0282).
+    # The pools or lots at the year end (the engine's
+    # inventory_year_end): the US engine's per-account lots are the
+    # account's own, Canada's pools go by the account's balance at that
+    # day (backlog TJ-0282, TJ-0284).
     _ye_year = str((combined.get("summary") or {}).get("year") or "")
     ye_inventory = (_split_inventory(combined["inventory_year_end"],
                                      account, book, {}, f"{_ye_year}-12-31")

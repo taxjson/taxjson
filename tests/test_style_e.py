@@ -6,6 +6,7 @@ checklist` reads from them (they must stay whole and unchanged when the
 output is captured, TAXJSON_WIDTH=0)."""
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -146,8 +147,11 @@ class TestRenderers(unittest.TestCase):
         text = render("canada", {"year": 2025}, ids=True)
         self.assertEqual(out.lint(text), [])
         self.assertGreater(max(map(len, text.splitlines())), 88)
-        # The rule text is unchanged: every statement, flattened.
-        flat = _flat(text)
+        # The rule text is unchanged: every statement, flattened, with
+        # the items' dashes set aside (a statement's later sentences are
+        # items under its first).
+        flat = _flat("\n".join(re.sub(r"^\s*- ", "", ln)
+                               for ln in text.splitlines()))
         for _t, rules in sections("canada", {"year": 2025}, ids=True):
             for r in rules:
                 self.assertIn(_flat(r), flat)

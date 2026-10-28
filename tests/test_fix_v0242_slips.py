@@ -579,10 +579,18 @@ class TestKeysAndRedact(unittest.TestCase):
             rep = json.loads(tj(root, home, "slip-audit", "--json").stdout)
             self.assertTrue(any("books' own hash" in p
                                 for p in rep["problems"]))
+            # A legacy key is a notice: its slip is still compared
+            # (backlog TJ-0305).
+            self.assertFalse([e for e in rep["not_compared"]
+                              if e["kind"] == "broker-key"])
             self._slips(root, "0a1b2c3d4e")
             rep = json.loads(tj(root, home, "slip-audit", "--json").stdout)
             self.assertTrue(any("is no broker account in the books" in p
                                 for p in rep["problems"]))
+            # A key no account matches leaves its slip uncompared.
+            self.assertIn("broker-key",
+                          [e["kind"] for e in rep["not_compared"]])
+            self.assertNotEqual(rep["status"], "ok")
 
     def test_redact_replaces_broker_key(self):
         from taxjson.bin.taxjson_redact import redact_text
@@ -655,6 +663,11 @@ class TestReportBesideTypedSlip(unittest.TestCase):
             self.assertEqual(ln["ca_div"]["slip"], 524.5)
             self.assertTrue(any("the same IB dividends report" in p
                                 for p in rep["problems"]))
+            # A second copy is read once: a notice, nothing left
+            # uncompared (backlog TJ-0305).
+            self.assertFalse([e for e in rep["not_compared"]
+                              if "the same IB dividends report"
+                              in e["text"]])
             (d / f"{IB_ACCT}.2025.dividends (1).csv").write_text(
                 _ib_report().replace("Holding Period,30,30,21.6,",
                                      "Holding Period,31,31,22.3,"))

@@ -37,7 +37,6 @@ from __future__ import annotations
 
 from taxjson.lib.stage_msg import emit_line
 
-import json
 import re
 import sys
 from dataclasses import dataclass
@@ -625,16 +624,21 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
 # ------------------------------------------------- reading a project
 
 def _load_rows(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
+    """The rows of a work/ book ([] when the file does not exist). Read
+    with the shared work/ reader (json_input.read_work_doc): a file that
+    is not JSON, a `transactions` that is not a list, a row that is not
+    an object is a ValueError naming the file (and the row) — such rows
+    were dropped and a non-list read as no rows, so the report said
+    clean (backlog TJ-0320). A valid empty list is no rows."""
+    from taxjson.lib.json_input import InputFileError, read_work_doc
+    if not path.exists() and not path.is_symlink():
         return []
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise ValueError(f"cannot read {path} ({e}) — re-run `taxjson "
-                         f"run` to rebuild it") from None
-    rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
-    return [r for r in rows if isinstance(r, dict)] \
-        if isinstance(rows, list) else []
+        doc = read_work_doc(path)
+    except InputFileError as e:
+        raise ValueError(f"{e} — re-run `taxjson run` to rebuild it") \
+            from None
+    return list(doc.get("transactions") or [])
 
 
 def _ticker_map(root: Path):
@@ -691,24 +695,33 @@ def _raw_rename_rows(root: Path, acct: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def _walk_states(rows: List[Dict[str, Any]]):
+def _walk_key(r: Dict[str, Any]) -> Tuple[str, int, str]:
+    a = str(r.get("action") or "")
+    return (str(r.get("date") or ""),
+            0 if a in ("OPENING_BALANCE",) else 1 if a == "SPLIT" else 2,
+            str(r.get("time") or ""))
+
+
+def _walk_states(rows: List[Dict[str, Any]], country: str = ""):
     """Replay one account's rows: {event row id: (qty, cost)} of the
     renamed symbol just before each rename row (book cost: buys at their
-    cost, sales at the average cost, ADJUST rows added; no superficial-
-    loss adjustments)."""
+    cost, ADJUST rows added; no superficial-loss or wash-sale
+    adjustments). A sale takes cost by the country's rule
+    (country.lot_rule): Canada's average cost (CA-ACB-01; also when the
+    country is unknown), the US's oldest lots first (US-BASIS-01,
+    _walk_fifo: backlog TJ-0309 — the average cost carried 150 where the
+    books carry the remaining lot's 200)."""
+    if country:
+        from taxjson.lib.country import lot_rule
+        if lot_rule(country) == "fifo":
+            return _walk_fifo(rows)
     state: Dict[str, List[float]] = {}
     snap: Dict[int, Tuple[float, float]] = {}
-
-    def key(r):
-        a = str(r.get("action") or "")
-        return (str(r.get("date") or ""),
-                0 if a in ("OPENING_BALANCE",) else 1 if a == "SPLIT" else 2,
-                str(r.get("time") or ""))
     from taxjson.lib.corporate_timeline import split_copies
     # One split reported twice is ONE event (CA-CORP-12): a later copy
     # sees the state the first left and changes nothing.
     dup = split_copies(rows, per_account=True)
-    for r in sorted(rows, key=key):
+    for r in sorted(rows, key=_walk_key):
         a = str(r.get("action") or "").upper()
         sym = str(r.get("symbol") or "")
         st = state.setdefault(sym, [0.0, 0.0])
@@ -736,6 +749,79 @@ def _walk_states(rows: List[Dict[str, Any]]):
                 st[1] = 0.0
         elif a == "ADJUST":
             st[1] += float(r.get("net_amount") or 0.0)
+    return snap
+
+
+def _walk_fifo(rows: List[Dict[str, Any]]):
+    """_walk_states for a US book (US-BASIS-01): each symbol's lots
+    [qty, cost, date, time], oldest first. A sale takes the oldest lots'
+    units and cost (more than held: a short lot of no cost), a purchase
+    covers a short position first, a split scales each lot, a rename
+    moves the lots to the new symbol in acquisition order (date, then
+    time, as the engine merges them), an ADJUST is spread over the long
+    lots by units (a lot's cost never below 0: §301(c)(3))."""
+    eps = 1e-9
+    lots: Dict[str, List[List[Any]]] = {}
+    snap: Dict[int, Tuple[float, float]] = {}
+
+    def _total(held: List[List[Any]]) -> Tuple[float, float]:
+        return (sum(lot[0] for lot in held), sum(lot[1] for lot in held))
+    from taxjson.lib.corporate_timeline import split_copies
+    dup = split_copies(rows, per_account=True)
+    for r in sorted(rows, key=_walk_key):
+        a = str(r.get("action") or "").upper()
+        sym = str(r.get("symbol") or "")
+        held = lots.setdefault(sym, [])
+        q = float(r.get("quantity") or 0.0)
+        if a == "SPLIT":
+            snap[id(r)] = _total(held)
+            if id(r) in dup:
+                continue
+            if q:
+                for lot in held:
+                    lot[0] *= q
+            new = rename_target(r)
+            if new and new != sym:
+                dst = lots.setdefault(new, [])
+                dst.extend(held)
+                dst.sort(key=lambda lot: (lot[2], lot[3]))
+                lots[sym] = []
+        elif a in _POSITION_ACTIONS:
+            net = abs(float(r.get("net_amount") or 0.0))
+            if q > 0:
+                left = q
+                for lot in held:
+                    if left <= eps:
+                        break
+                    if lot[0] < -eps:           # a short lot: covered
+                        take = min(left, -lot[0])
+                        lot[0] += take
+                        left -= take
+                held[:] = [lot for lot in held if abs(lot[0]) > eps]
+                if left > eps:
+                    held.append([left, net * left / q,
+                                 str(r.get("date") or ""),
+                                 str(r.get("time") or "")])
+            elif q < 0:
+                left = -q
+                while left > eps and held and held[0][0] > eps:
+                    lot = held[0]
+                    take = min(left, lot[0])
+                    lot[1] -= lot[1] * take / lot[0]
+                    lot[0] -= take
+                    left -= take
+                    if lot[0] <= eps:
+                        held.pop(0)
+                if left > eps:
+                    held.append([-left, 0.0, str(r.get("date") or ""),
+                                 str(r.get("time") or "")])
+        elif a == "ADJUST":
+            longs = [lot for lot in held if lot[0] > eps]
+            open_q = sum(lot[0] for lot in longs)
+            if open_q > eps:
+                delta = float(r.get("net_amount") or 0.0)
+                for lot in longs:
+                    lot[1] = max(0.0, lot[1] + delta * lot[0] / open_q)
     return snap
 
 
@@ -875,8 +961,9 @@ def report(root: Path, cfg: Dict[str, Any],
     for r in rows:
         by_acct.setdefault(r["_acct"], []).append(r)
     snaps: Dict[int, Tuple[float, float]] = {}
+    _country = _project_country(cfg)
     for acct, rs in by_acct.items():
-        snaps.update(_walk_states(rs))
+        snaps.update(_walk_states(rs, _country))
     accounts = cfg.get("accounts") or {}
     out_events = []
     for e in events:

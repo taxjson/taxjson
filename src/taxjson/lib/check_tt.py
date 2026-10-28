@@ -278,7 +278,7 @@ def _taxable_transfers(reports: List[FileReport], account: str,
         try:
             txs = apply_opening_cutoff(txs, report=buf)
         except OpeningError:
-            pass            # the run names it (two snapshot dates)
+            pass            # _opening_snapshots names it (two dates)
         txs, _dropped = _drop_self_cancelling_transfers(txs)
     in_book = bool(acfg.get("transfers"))
     for t in txs:
@@ -313,6 +313,40 @@ def _taxable_transfers(reports: List[FileReport], account: str,
             shown))
 
 
+def _opening_snapshots(reports: List[FileReport], account: str) -> None:
+    """The run's one snapshot date per symbol per account (lib/opening
+    .snapshots, which merge2's cut-off applies to the account's books),
+    read from the account's known-cost OPENING lines across all its
+    files: a symbol with OPENING lines of two dates is an ERROR of the
+    first line whose date differs, naming the line it disagrees with.
+    check-tt said "Every line parses." and the run stopped on it
+    (backlog TJ-0322). One error per symbol."""
+    from taxjson.lib.core import is_opening_row
+    from taxjson.lib.opening import OpeningError, snapshots
+    first: Dict[str, Tuple[FileReport, int, Dict[str, Any]]] = {}
+    said: set = set()
+    for r in reports:
+        for n, shown, tx in r.txs:
+            if not is_opening_row(tx):
+                continue
+            sym = str(tx.get("symbol") or "")
+            if sym in said:
+                continue
+            if sym not in first:
+                first[sym] = (r, n, tx)
+                continue
+            r0, n0, tx0 = first[sym]
+            try:
+                snapshots([dict(tx0, account=account),
+                           dict(tx, account=account)])
+            except OpeningError as e:
+                said.add(sym)
+                where = f"{r.file}:{n}"
+                r.problems.append(Problem(
+                    ERROR, where, r.file, n,
+                    f"{e} The other line: {r0.file}:{n0}.", shown))
+
+
 def _not_own_accounts(reports: List[FileReport], root: Path, acct: str,
                       acfg: Any, accounts: Dict[str, Any]) -> None:
     """A NOTOWN line the run reads and says undoes no pairing, known by
@@ -345,9 +379,10 @@ def check_project(root: Path, accounts: Dict[str, Any],
     folder with `inputs_dir`), then the checks across lines the run
     makes up front: two declarations of one ticker change that disagree
     (lib/dated_events.read_declarations), a symbol opened twice at an
-    unknown cost (lib/missing_history.read_tt_openings), a TRANSFER row
-    a taxable account's books cannot hold (_taxable_transfers), and a
-    file name the run refuses."""
+    unknown cost (lib/missing_history.read_tt_openings), a symbol with
+    known-cost OPENING snapshots of two dates (_opening_snapshots), a
+    TRANSFER row a taxable account's books cannot hold
+    (_taxable_transfers), and a file name the run refuses."""
     return _doc(*_project_reports(root, accounts, only))
 
 
@@ -400,6 +435,8 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
                     f"it, e.g. {tt.stem[:-len(clash)]}"
                     f"{clash.replace('_', '-')}.tt"))
         _taxable_transfers(mine, acct, acfg)
+        if not crypto:
+            _opening_snapshots(mine, acct)
         _not_own_accounts(mine, root, acct, acfg, accounts or {})
     # Across lines and files: the run's own up-front readers. A line
     # already refused above is not named twice.
@@ -521,6 +558,7 @@ def check_paths(paths: Iterable[Path], account: Optional[str] = None,
     kind is not known)."""
     reports: List[FileReport] = []
     extra: List[Problem] = []
+    loose: Dict[str, List[FileReport]] = {}
     paths = [Path(p) for p in paths]
     labels = list(shown) if shown is not None else [str(p) for p in paths]
     for p, label in zip(paths, labels):
@@ -543,8 +581,14 @@ def check_paths(paths: Iterable[Path], account: Optional[str] = None,
             reports.append(rep)
             extra.extend(x for x in more if x not in extra)
             continue
-        reports.append(check_file(p, file=label, account=acct,
-                                  crypto=is_crypto, equity=equity))
+        rep = check_file(p, file=label, account=acct, crypto=is_crypto,
+                         equity=equity)
+        reports.append(rep)
+        loose.setdefault(acct, []).append(rep)
+    # The files named outside their project's account: the snapshot
+    # dates across the files read as one account (backlog TJ-0322).
+    for acct, reps in loose.items():
+        _opening_snapshots(reps, acct)
     return _doc(reports, extra)
 
 

@@ -139,8 +139,9 @@ def _row(d, sym, q, amount, action="BUYSELL"):
 _PUT = "ZZQ250117P00010000.US"
 
 
-def _t1135_vs_engine(rows):
-    """(the T1135 property row, the engine's inventory) for `rows`."""
+def _t1135_vs_engine(rows, with_report=False):
+    """(the T1135 property row, the engine's inventory) for `rows`, and
+    the whole report `with_report`."""
     from taxjson.bin.taxjson_t1135 import build_report
     from taxjson.lib.core import CanadaTaxRules, TaxTransaction
     with contextlib.redirect_stderr(io.StringIO()):
@@ -155,12 +156,14 @@ def _t1135_vs_engine(rows):
         with contextlib.redirect_stderr(io.StringIO()):
             report = build_report([base], [gains], 2025, {}, "CAD")
     props = {p["symbol"]: p for p in report["properties"]}
+    if with_report:
+        return props, engine["inventory"], report
     return props, engine["inventory"]
 
 
 class TestD02AssignmentCoveringAShort(unittest.TestCase):
 
-    @rule("CA-RPT-12")
+    @rule("CA-RPT-12", "CA-RPT-19")
     def test_d02_premium_share_of_the_kept_shares_stays_in_their_cost(self):
         """D02: T1135 loses assignment premium allocated to shares
         remaining after covering a short. Short 50 shares for 500,
@@ -194,16 +197,17 @@ class TestD02AssignmentCoveringAShort(unittest.TestCase):
                                places=2)
         # The delivery only covers part of the short: no shares are
         # held, so no cost amount (a short is not property held; the
-        # premium's whole share went to the cover's gain).
+        # premium's whole share went to the cover's gain). Held only
+        # short in the year, it is named, not a row (CA-RPT-19).
         rows = [_row("2025-01-01", "ZZQ.US", -200, 2000),
                 _row("2025-01-02", _PUT, -1, 100),
                 _row("2025-01-03", _PUT, 1, 0, "ASSIGN"),
                 _row("2025-01-03", "ZZQ.US", 100, 1000)]
-        props, inventory = _t1135_vs_engine(rows)
+        props, inventory, report = _t1135_vs_engine(rows, with_report=True)
         self.assertEqual([i["qty"] for i in inventory
                           if i["symbol"] == "ZZQ.US"], [-100])
-        self.assertEqual(props["ZZQ.US"]["year_end_cost"], 0.0)
-        self.assertEqual(props["ZZQ.US"]["max_cost"], 0.0)
+        self.assertNotIn("ZZQ.US", props)
+        self.assertEqual(report["short_only_symbols"], ["ZZQ.US"])
 
 
 class TestD05DamagedJournalState(unittest.TestCase):

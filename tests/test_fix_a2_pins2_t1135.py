@@ -195,13 +195,17 @@ class TestWalkStepsOverNonCapitalRows(unittest.TestCase):
         self.assertEqual(w["futures_symbols"], ["F:ESZ5.US"])
 
     @rule("CA-RPT-12")
-    def test_zero_cost_shares_have_no_cost_amount(self):
+    def test_zero_cost_shares_and_a_sold_unknown_cost_stay_listed(self):
         w = _walk([_r("BUYSELL", "2025-03-03", "FREE.US", 10, 0.0),
                    _r("OPENING_BALANCE", "2024-01-02", "TNT.US", 5, 0.0),
                    _r("BUYSELL", "2025-04-03", "TNT.US", -5, 500.0)])
-        # Free shares untainted and costless: not a property row; the
-        # drained phantom pool is not listed either.
-        self.assertEqual(w["per_symbol"], {})
+        # Free shares held at a known zero cost are still property; the
+        # opening of unknown cost held until April leaves the year's
+        # maximum unknown after the sale (it once dropped out with it).
+        self.assertEqual(w["per_symbol"]["FREE.US"]["max_cost"], 0)
+        self.assertFalse(w["per_symbol"]["FREE.US"]["unknown_acb"])
+        self.assertTrue(w["per_symbol"]["TNT.US"]["unknown_acb"])
+        self.assertEqual(w["per_symbol"]["TNT.US"]["year_end_cost"], 0)
 
     def test_expired_options_list_names_only_long_options(self):
         call = "XYZ250620C00060000.US"

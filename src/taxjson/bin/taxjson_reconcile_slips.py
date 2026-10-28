@@ -38,7 +38,9 @@ slips are usually gross — the tool compares against gross first and falls
 back to net, telling you which one matched. Amounts must be in the same
 currency as the project's base currency; the tool cannot convert slips, so
 a slip whose currency column (T5008 Box 13) names another currency is
-refused (a USD Webull T5008: convert boxes 20/21 to CAD first).
+refused (a USD Webull T5008: convert boxes 20/21 to CAD first), and so is
+a gains file whose dispositions or metadata.target_currency name one (the
+native *_raw_gains.json).
 An unreadable proceeds, quantity or cost cell (a decimal comma '1234,56',
 'nan', '1 500.00 CAD') is reported and fails the check.
 
@@ -438,6 +440,51 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
         if dropped:
             out["__dropped_rows__"] = dropped   # consumed (popped) in main
         return out
+
+
+class ComputedCurrencyRefused(SystemExit):
+    """A gains file in another currency than the slips' (exit 2, one
+    line)."""
+
+
+def check_computed_currency(gains_paths: List[Path],
+                            base_currency: str) -> None:
+    """Refuse a gains file whose dispositions (transactions and the
+    unknown-cost manual_reporting_required rows) or whose
+    metadata.target_currency name another currency than
+    `base_currency`, the country's, which the slips are in: a USD book
+    (the native work/<acct>_raw_gains.json) compared 150 USD with a
+    150 CAD slip as equal (backlog TJ-0325), as form-export and t1135
+    refuse it. A row with no currency is the base currency's (the
+    pipeline's converted rows always carry it). Raises
+    ComputedCurrencyRefused, or InputFileError for a file that cannot
+    be read."""
+    base = (base_currency or "").upper()
+    for p in gains_paths:
+        data = load_json(p)
+        meta = data.get("metadata") if isinstance(data, dict) else None
+        tgt = (str(meta.get("target_currency") or "").upper()
+               if isinstance(meta, dict) else "")
+        other: Dict[str, int] = {}
+        for e in (list(data.get("transactions") or [])
+                  + list(data.get("manual_reporting_required") or [])):
+            if not isinstance(e, dict) or e.get("action") in (
+                    "DIVIDEND", "DIVIDEND_IN_LIEU"):
+                continue
+            c = str(e.get("currency") or "").strip().upper()
+            if c and c != base:
+                other[c] = other.get(c, 0) + 1
+        if tgt and tgt != base:
+            other.setdefault(tgt, 0)
+        if other:
+            got = ", ".join(f"{c} ({n} row(s))" if n else
+                            f"{c} (metadata.target_currency)"
+                            for c, n in sorted(other.items()))
+            raise ComputedCurrencyRefused(
+                f"{p}: computed dispositions in {got}, not {base}, the "
+                f"slips' currency — pass the converted "
+                f"<account>_gains(_wash).json, not the native "
+                f"*_raw_gains.json (`taxjson reconcile-slips` does)")
 
 
 def load_computed(gains_paths: List[Path],
@@ -1041,10 +1088,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     from taxjson.lib.json_input import InputFileError
     try:
+        # Every gains file in the slips' currency first: numbers in
+        # another currency are never compared (backlog TJ-0325).
+        check_computed_currency(args.gains, base_ccy)
         computed = load_computed(args.gains, args.year, args.date_basis)
     except InputFileError as e:
         # One line naming the gains file, not a traceback (S079-11).
         emit_line(f"taxjson-reconcile-slips: error: {e}", file=sys.stderr)
+        return 2
+    except ComputedCurrencyRefused as e:
+        emit_line(f"taxjson-reconcile-slips: error: {e.code}",
+                  file=sys.stderr)
         return 2
     rep = reconcile(slip, computed, args.tolerance, args.country)
     if dropped_rows:

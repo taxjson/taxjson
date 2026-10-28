@@ -1621,6 +1621,51 @@ def state_problem(path: Path) -> Optional[str]:
     if doc.get("format") != FORMAT:
         return (f"has format {doc.get('format')!r}, not {FORMAT!r} "
                 f"(another taxjson version wrote it, or it is damaged)")
+    return _records_problem(doc)
+
+
+# The record lists of pairs, and what each record must carry for a
+# reader to use it: its two listings (each leg's symbol, or a flat
+# record's `from` / `to`: another stage's form, read generically).
+_PAIR_KEYS = ("joined", "suggested", "refused")
+
+
+def _records_problem(doc: Dict[str, Any]) -> Optional[str]:
+    """Why a FORMAT state document's records cannot all be read: a list
+    that is not a list, a record that is not an object, a leg (`out`,
+    `in`) that is not an object, a pair that does not name both its
+    listings, a collision without its symbol. read_state skips such a
+    record, so a reader taking its lists as the verdict lost it — a
+    refused journal with a valid format tag read as nothing pending
+    (backlog TJ-0321). An absent list is an empty one (the run's own
+    record of nothing). None when every record reads."""
+    for k in STATE_KEYS:
+        if k not in doc:
+            continue
+        rows = doc[k]
+        if not isinstance(rows, list):
+            return (f"has {k!r} as {type(rows).__name__}, not a list "
+                    f"(it is damaged)")
+        for n, rec in enumerate(rows):
+            where = f"{k}[{n}]"
+            if not isinstance(rec, dict):
+                return (f"has a record that is not a JSON object "
+                        f"({where} is {json.dumps(rec)[:40]}; it is "
+                        f"damaged)")
+            if k not in _PAIR_KEYS:
+                if not str(rec.get("symbol") or "").strip():
+                    return (f"has a collision record without its symbol "
+                            f"({where}; it is damaged)")
+                continue
+            for leg, flat in (("out", "from"), ("in", "to")):
+                g = rec.get(leg)
+                if g is not None and not isinstance(g, dict):
+                    return (f"has a journal record whose {leg!r} leg is "
+                            f"not a JSON object ({where}; it is damaged)")
+                if not str((g or {}).get("symbol") or rec.get(flat)
+                           or "").strip():
+                    return (f"has a journal record without its {leg!r} "
+                            f"listing ({where}; it is damaged)")
     return None
 
 

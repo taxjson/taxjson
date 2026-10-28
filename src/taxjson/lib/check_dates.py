@@ -115,7 +115,9 @@ def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:
     brokers = []
     for ln in lines:
         kind, _, name = ln.partition("/")
-        if kind in ("setting", "map") or not name:
+        # `moves/`: the own-move legs file (no parsed source; it was read
+        # as a broker `moves` whose JSON never exists).
+        if kind in ("setting", "map", "moves") or not name:
             continue
         if kind == "tt":
             from taxjson.lib.pipeline import tt_json_path
@@ -281,6 +283,19 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
             continue
         crypto = bool((acfg or {}).get("crypto"))
         for kind, label, path in sources(cache, acct):
+            if (kind in ("tt", "broker") and not path.exists()
+                    and not path.is_symlink()):
+                # The sources list names it, so the run parsed it: a
+                # missing file is evidence not checked, never 0 rows
+                # checked clean (backlog TJ-0319).
+                per_source[f"{acct}: {label}"] = 0
+                what = label if kind == "tt" else f"the {label} exports"
+                add("ERROR", "missing",
+                    f"work/{path.name} is missing: the parsed rows of "
+                    f"{what} (work/{acct}_sources.list names them) were "
+                    f"not checked — re-run `taxjson run`", acct, label,
+                    {"symbol": "-", "action": "-", "date": "-"})
+                continue
             try:
                 rows = _rows(path)
             except ValueError as e:
@@ -513,14 +528,22 @@ def render(doc: Dict[str, Any], show_all: bool = False,
                + ", expected (checked like the others; a date after "
                "today is still an error).")
     d.blank()
+    # A source not read (missing, unreadable) is evidence not checked,
+    # not a wrong date (backlog TJ-0319).
+    unchecked = sum(n for c, n in doc["counts"].get("ERROR", {}).items()
+                    if c in ("missing", "unreadable"))
+    wrong = doc["errors"] - unchecked
+    if unchecked:
+        d.line(act(f"{unchecked} parsed source(s) not checked: re-run "
+                   f"`taxjson run`"))
     if not doc["issues"]:
         d.para("Every date lands where its market allows.")
-    elif doc["errors"] and not details:
-        d.line(act(f"{doc['errors']} date(s) cannot be right; fix the "
+    elif wrong and not details:
+        d.line(act(f"{wrong} date(s) cannot be right; fix the "
                    f"source file or the parser"))
-    elif doc["errors"]:
-        d.para(f"{doc['errors']} date(s) cannot be right; fix the "
+    elif wrong:
+        d.para(f"{wrong} date(s) cannot be right; fix the "
                f"source file or the parser.")
-    else:
+    elif not unchecked:
         d.para("No impossible dates.")
     return d.lines()

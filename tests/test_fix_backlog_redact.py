@@ -344,10 +344,14 @@ class TestTJ0126TJ0112AMapLineWarnedOnce(unittest.TestCase):
         r = tjs("-C", str(self.root), "checklist", "--run",
                 TAXJSON_WIDTH=120)
         both = r.stdout + r.stderr
-        self.assertEqual(both.count("ticker.map problem: ticker.map:"), 2,
+        # The format step names them (its count and the first line): the
+        # checks that read the map no longer repeat the loader's lines
+        # (backlog TJ-0112, finished with TJ-0250).
+        self.assertEqual(both.count("ticker.map problem: ticker.map:"), 0,
                          both)
         self.assertNotIn("more like", both)
         self.assertIn("2 ticker.map problem(s)", both)
+        self.assertIn("refuses — ticker.map:", both)
 
 
 class TestTJ0125TobaseMapProblemsNamed(unittest.TestCase):

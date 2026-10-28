@@ -119,6 +119,189 @@ def build_source_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
     return index
 
 
+def source_hits(rid: str, source_index: Dict[str, List[Dict[str, Any]]],
+                base_index: Dict[str, Dict[str, Any]]
+                ) -> List[Dict[str, Any]]:
+    """The parsed rows a book row came from, by its id. A row the dedup
+    kept as a separate record although another file holds the same
+    content (`<id>~<n>`, bin/taxjson_sort.plan_dedup) carries the plain
+    id in its source file: the file the book row came from is picked."""
+    hits = source_index.get(rid) or []
+    if not hits and "~" in str(rid or ""):
+        _b = base_index.get(rid) or {}
+        _src = _b.get("source")
+        # The source key keeps two files shown alike apart (A2-0159).
+        _key = _b.get("source_key") or ""
+        hits = [h for h in source_index.get(str(rid).split("~")[0]) or []
+                if not _src or (h["row"].get("source") == _src
+                                and (h["row"].get("source_key") or "")
+                                == _key)]
+    return hits
+
+
+def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
+                  *, base_currency: str,
+                  fx_history: Dict[str, Dict[str, Decimal]],
+                  default_rate: Optional[Decimal],
+                  futures_native: Optional[Dict[str, float]] = None,
+                  filled_index: Optional[Dict[str, Dict[str, Any]]] = None
+                  ) -> Tuple[Dict[str, Any], List[str], List[str]]:
+    """(fx, warnings, failures): a book row's net amount re-derived from
+    the row the conversion read — the parsed broker row, or for a crypto
+    book the fill stage's priced row (fill-crypto-prices values a swap
+    and prices a coin-denominated fee: R1-271), the settled P/L for a
+    futures fill (lib/futures.py) — times the rates file's rate when it
+    is in another currency (the converter's own lookup, on the
+    settlement date when there is one), and compared with the book's.
+
+    A row already in the base currency is compared too: it was marked
+    "native" with no amount compared, so a base book whose buy or sale
+    amount differed from the broker's passed (backlog TJ-0333)."""
+    warnings: List[str] = []
+    failures: List[str] = []
+    pre = (filled_index or {}).get(rid)
+    src = pre if pre is not None else raw
+    raw_cur = str(raw.get("currency") or "").strip().upper()
+    cur = str(src.get("currency") or "").strip().upper() or raw_cur
+    nominal = float(src.get("net_amount") or 0.0)
+    priced_by_fill = pre is not None and (
+        abs(nominal - float(raw.get("net_amount") or 0.0)) > TIE
+        or cur != raw_cur)
+    book = float(base_row.get("net_amount") or 0.0)
+    native = not cur or cur == base_currency
+    # The converter prices on the settlement date when there is one.
+    rate_date = str(src.get("date_settle") or src.get("date")
+                    or raw.get("date_settle") or raw.get("date") or "")
+    fx: Dict[str, Any] = {"from": cur or base_currency, "to": base_currency}
+    if native:
+        rate: Optional[Decimal] = Decimal(1)
+        fx["native"] = True
+    else:
+        rate, kind, src_date = rate_with_provenance(
+            cur, rate_date, fx_history,
+            # The converter's own fallback: an explicit --default-rate,
+            # else none (no built-in rate).
+            default_rate_for(cur, base_currency, default_rate))
+        if rate is None:
+            # No rate and no explicit --default-rate: the converter
+            # stops on such a row, so these books cannot hold it.
+            fx.update({"rate": None, "rate_kind": "missing",
+                       "rate_date": rate_date})
+            failures.append(
+                f"FX: no {cur}->{base_currency} rate for {rate_date} "
+                f"(nor in the {LOOKBACK_DAYS} days before) in the "
+                f"rates file — the conversion stops on this row; "
+                f"refresh the rates with `taxjson run`.")
+            return fx, warnings, failures
+        fx.update({"rate": float(rate), "rate_kind": kind,
+                   "rate_date": rate_date, "rate_source_date": src_date})
+        if kind == "default":
+            warnings.append(
+                f"FX fell back to the --default-rate {float(rate):g} "
+                f"— no {cur} rate within {LOOKBACK_DAYS} days of "
+                f"{rate_date} in the rates file.")
+    notional = nominal
+    settled = base_row.get("type") == "futures_settlement"
+    if settled:
+        # A futures fill converts its settled P/L, not the notional the
+        # broker row carries (lib/futures.py).
+        nominal = (futures_native or {}).get(rid, float("nan"))
+    computed = nominal * float(rate)
+    # Tolerance: the converter multiplied the same floats, so only
+    # re-derivation slack (repr round-trip) is allowed.
+    ties = abs(computed - book) <= max(TIE, abs(book) * 1e-9)
+    fx.update({"priced_by_fill": priced_by_fill, "nominal_net": nominal,
+               "computed_net": computed, "book_net": book, "ties": ties})
+    if settled:
+        fx["futures_settlement"] = True
+        fx["notional"] = notional
+    if not ties:
+        if native:
+            failures.append(
+                f"AMOUNT cross-check FAILED: the "
+                f"{'priced' if pre is not None else 'parsed'} row "
+                f"carries {_fmt(nominal)} {cur or base_currency} but the "
+                f"base book row carries {_fmt(book)} {base_currency} — "
+                f"no conversion applies to a {base_currency} row.")
+        else:
+            failures.append(
+                f"FX cross-check FAILED: {_fmt(nominal)} {cur} x "
+                f"{float(rate):g} = {_fmt(computed)} but the base "
+                f"book row carries {_fmt(book)} {base_currency}.")
+    return fx, warnings, failures
+
+
+# The trades a pool check reads (pool_trade_check): the purchases and
+# sales of a security, an option's assignment (CA-ACB-01 / US-BASIS-01).
+POOL_TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
+# The loss rules' window after a sale (30 days, both countries: s.54
+# "superficial loss", IRC §1091): a purchase in it shapes the sale's
+# denied loss. One day more for a settle-date book.
+_POOL_WINDOW_DAYS = 31
+
+
+def pool_trade_check(events: List[Dict[str, Any]],
+                     base_index: Dict[str, Dict[str, Any]],
+                     source_index: Dict[str, List[Dict[str, Any]]],
+                     **money: Any) -> Dict[str, Any]:
+    """The audited sales' cost side, traced like the sales themselves:
+    every trade of an audited security in the base book (its buys, its
+    earlier sales, an assignment) up to the loss rule's window after the
+    last audited sale, and each wash-sale / superficial-loss replacement
+    the events name, re-derived from its parsed row (money_lineage) and
+    compared with the book's amount. A buy whose amount or conversion
+    differed from the broker's changed the cost the audit re-ran and the
+    gain it tied, and passed: only the sales were traced (backlog
+    TJ-0333).
+
+    {"checked", "tied", "untraced" (a row with no parsed row: one the
+    run made), "mismatched": [{id, symbol, date, quantity, failure}]}."""
+    from datetime import date as _date, timedelta as _td
+    own = set()
+    syms = set()
+    reps = set()
+    last = ""
+    for e in events:
+        own.add(str(e.get("id") or ""))
+        syms.add(str(e.get("symbol") or ""))
+        for r in e.get("replacements") or []:
+            reps.add(str(r.get("id") or ""))
+        for k in ("date", "date_settle"):
+            last = max(last, str(e.get(k) or ""))
+    try:
+        until = (_date.fromisoformat(last[:10])
+                 + _td(days=_POOL_WINDOW_DAYS)).isoformat()
+    except ValueError:
+        until = last
+    out: Dict[str, Any] = {"checked": 0, "tied": 0, "untraced": 0,
+                           "mismatched": []}
+    for rid, row in base_index.items():
+        if rid in own:
+            continue
+        if rid not in reps:
+            if (row.get("action") not in POOL_TRADE_ACTIONS
+                    or str(row.get("symbol") or "") not in syms):
+                continue
+            d = min(str(row.get("date") or ""),
+                    str(row.get("date_settle") or row.get("date") or ""))
+            if d > until:
+                continue
+        hits = source_hits(rid, source_index, base_index)
+        if not hits:
+            out["untraced"] += 1
+            continue
+        _fx, _w, fails = money_lineage(rid, hits[0]["row"], row, **money)
+        out["checked"] += 1
+        if fails:
+            out["mismatched"].append({
+                "id": rid, "symbol": row.get("symbol"),
+                "date": row.get("date"),
+                "quantity": row.get("quantity"), "failure": fails[0]})
+        else:
+            out["tied"] += 1
+    return out
+
+
 def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
                         base_index: Dict[str, Dict[str, Any]],
                         country: str) -> Dict[str, float]:
@@ -126,7 +309,13 @@ def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
     carries on the settlement basis, RE-DERIVED from the parsed broker
     rows (lib/futures.settle_futures over them, under the book's own
     symbols) — so the FX cross-check of a futures close compares the
-    base row with the parsed rows, not with itself."""
+    base row with the parsed rows, not with itself.
+
+    Each account's fills are settled on their own, as the run settles
+    each account's book in its conversion (taxjson_convert_currency.
+    process_transactions): a blended audit's base file holds several
+    accounts, and settling them as one book matched one account's close
+    against another's opening (backlog TJ-0312)."""
     from taxjson.lib.futures import (FUTURES_SETTLEMENT, method_for,
                                      settle_futures_dicts)
     rows = []
@@ -136,7 +325,8 @@ def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
             continue
         r = dict(hits[0]["row"])
         r["symbol"] = b.get("symbol")          # after ticker.map
-        r["account"] = "book"                  # one book: this base file
+        # The book the row was settled in: its account's.
+        r["account"] = str(b.get("account") or r.get("account") or "")
         rows.append(r)
     try:
         settled = settle_futures_dicts(rows, method_for(country))
@@ -234,16 +424,44 @@ def _kind(g: Dict[str, Any]) -> Tuple[str, bool, bool]:
             bool(g.get("deemed")))
 
 
+def _join_lot_traces(lots: List[Dict[str, Any]]):
+    """One trace for a sale's lot records. Each lot's trace is the
+    pool's running trace as that lot was sold, so a later lot's starts
+    with the earlier one's: the last such trace is the whole history,
+    referenced, not copied — the lots' traces laid end to end repeated
+    the pool's history once per lot (backlog TJ-0334). Traces that do
+    not continue each other are laid end to end."""
+    traces = [l.get("trace") or [] for l in lots]
+    traces = [t for t in traces if len(t)]
+    if not traces:
+        return []
+    out = traces[0]
+    for t in traces[1:]:
+        n = len(out)
+        if len(t) >= n and t[0] == out[0] and t[n - 1] == out[n - 1]:
+            out = t                     # continues the one before
+        else:
+            out = list(out) + list(t)
+    return out
+
+
 def merge_lot_records(gains: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One event per (id, kind): US FIFO splits one sell into lot
     records, which are summed here. A sale whose lots differ in term is
     MIXED with the per-term gains in `term_split` (the first lot's term
     labelled the whole sale, S026-15); days_held is kept only when every
-    lot agrees (else `days_held_range`)."""
+    lot agrees (else `days_held_range`).
+
+    Unknown-cost lots (`tainted`: drawn from a missing-history or
+    transferred-in opening) and known-cost lots of one sale are two
+    events: the run files the known part's gain and lists the other
+    under MANUAL REPORTING REQUIRED. Summed into one, the first lot's
+    taint labelled the whole sale (backlog TJ-0310)."""
     by_key: Dict[Tuple, List[Dict[str, Any]]] = {}
     order: List[Tuple] = []
     for g in gains:
-        k = (g.get("id") or f"?{len(order)}",) + _kind(g)
+        k = ((g.get("id") or f"?{len(order)}",) + _kind(g)
+             + (bool(g.get("tainted")),))
         if k not in by_key:
             order.append(k)
         by_key.setdefault(k, []).append(g)
@@ -261,8 +479,11 @@ def merge_lot_records(gains: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         agg["is_wash_sale"] = any(l.get("is_wash_sale") for l in lots)
         agg["replacement_lot_ids"] = [
             r for l in lots for r in (l.get("replacement_lot_ids") or [])]
-        agg["trace"] = [ln for l in lots for ln in (l.get("trace") or [])]
+        agg["trace"] = _join_lot_traces(lots)
         agg["lots"] = len(lots)
+        # The lot records themselves, for the tie-out's per-lot
+        # comparison (tie_out_differences); never copied into an event.
+        agg["_lots"] = lots
         terms: Dict[str, float] = {}
         for l in lots:
             t = l.get("term")
@@ -279,6 +500,144 @@ def merge_lot_records(gains: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             agg["days_held_range"] = [min(_d), max(_d)] if _d else None
         merged.append(agg)
     return merged
+
+
+# What the tie-out compares between the engine re-run and the saved
+# gains file (backlog TJ-0332: only gain and disallowed were, so a saved
+# file with another term, or proceeds and cost moved alike, tied): the
+# amounts and the quantity summed over the sale's records, the fields
+# naming the sale, and per lot (US: acquired date and term) its share.
+TIE_MONEY_FIELDS = ("proceeds", "cost", "gain", "disallowed_amount",
+                    "permanently_disallowed")
+TIE_TEXT_FIELDS = ("symbol", "date", "date_settle", "account", "direction")
+TIE_LOT_FIELDS = ("qty", "proceeds", "cost", "gain")
+TIE_FIELDS = (TIE_MONEY_FIELDS + ("qty",) + TIE_TEXT_FIELDS
+              + ("term", "acquired_date", "lots", "replacement_lot_ids"))
+# An unknown-cost sale's MANUAL REPORTING REQUIRED row keeps no gain or
+# cost (lib/pipeline.run_gains): its quantity, proceeds and names.
+MANUAL_TIE_FIELDS = ("qty", "proceeds") + TIE_TEXT_FIELDS
+
+
+def _qty_differs(a: float, b: float) -> bool:
+    # Quantities are saved unrounded (lib/numeric._QTY_FIELDS): only
+    # float summation slack.
+    return abs(a - b) > 1e-9 * max(1.0, abs(a))
+
+
+def _sum(recs: List[Dict[str, Any]], f: str) -> float:
+    return sum(float(r.get(f) or 0.0) for r in recs)
+
+
+def _text_differences(g: Dict[str, Any], recs: List[Dict[str, Any]],
+                      fields) -> List[Dict[str, Any]]:
+    out = []
+    for f in fields:
+        saved = sorted({str(r.get(f) or "") for r in recs})
+        if saved != [str(g.get(f) or "")]:
+            out.append({"field": f, "engine": g.get(f),
+                        "saved": ", ".join(saved)})
+    return out
+
+
+def _lot_groups(recs: List[Dict[str, Any]]) -> Dict[Tuple[str, str],
+                                                   Dict[str, float]]:
+    groups: Dict[Tuple[str, str], Dict[str, float]] = {}
+    for r in recs:
+        k = (str(r.get("acquired_date") or ""), str(r.get("term") or ""))
+        a = groups.setdefault(k, {f: 0.0 for f in TIE_LOT_FIELDS + ("n",)})
+        for f in TIE_LOT_FIELDS:
+            a[f] += float(r.get(f) or 0.0)
+        a["n"] += 1
+    return groups
+
+
+def tie_out_differences(g: Dict[str, Any],
+                        checks: List[Dict[str, Any]]
+                        ) -> List[Dict[str, Any]]:
+    """[{field, engine, saved[, lot]}] where the engine's records of one
+    sale (`g`, its lots in `_lots`) and the saved gains file's differ
+    (TIE_FIELDS). The saved file rounds each amount to 4 dp: 0.00005 a
+    record is allowed beyond the half cent (S026-16)."""
+    out: List[Dict[str, Any]] = []
+    tol = TIE + 0.00005 * len(checks)
+    for f in TIE_MONEY_FIELDS:
+        e, s = float(g.get(f) or 0.0), _sum(checks, f)
+        if abs(e - s) > tol:
+            out.append({"field": f, "engine": e, "saved": s})
+    e, s = float(g.get("qty") or 0.0), _sum(checks, "qty")
+    if _qty_differs(e, s):
+        out.append({"field": "qty", "engine": e, "saved": s})
+    out += _text_differences(g, checks, TIE_TEXT_FIELDS)
+    lots = g.get("_lots") or [g]
+    eg, sg = _lot_groups(lots), _lot_groups(checks)
+    if set(eg) != set(sg):
+        for i, f in enumerate(("acquired_date", "term")):
+            ek = sorted({k[i] for k in eg})
+            sk = sorted({k[i] for k in sg})
+            if ek != sk:
+                out.append({"field": f, "engine": ", ".join(ek) or None,
+                            "saved": ", ".join(sk) or None})
+        if not any(d["field"] in ("acquired_date", "term") for d in out):
+            out.append({"field": "lots",
+                        "engine": "; ".join(" ".join(k).strip()
+                                            for k in sorted(eg)),
+                        "saved": "; ".join(" ".join(k).strip()
+                                           for k in sorted(sg))})
+    elif len(eg) > 1:
+        # Each lot's share: the totals tie while one lot's cost moved
+        # to another (Form 8949 reports each lot on its own row).
+        for k in sorted(eg):
+            _lt = TIE + 0.00005 * sg[k]["n"]
+            for f in TIE_LOT_FIELDS:
+                a, b = eg[k][f], sg[k][f]
+                if (_qty_differs(a, b) if f == "qty"
+                        else abs(a - b) > _lt):
+                    out.append({"field": f, "engine": a, "saved": b,
+                                "lot": {"acquired_date": k[0] or None,
+                                        "term": k[1] or None}})
+    er = sorted(str(x) for l in lots
+                for x in (l.get("replacement_lot_ids") or []))
+    sr = sorted(str(x) for c in checks
+                for x in (c.get("replacement_lot_ids") or []))
+    if er != sr:
+        out.append({"field": "replacement_lot_ids",
+                    "engine": ", ".join(x[:12] for x in er) or None,
+                    "saved": ", ".join(x[:12] for x in sr) or None})
+    return out
+
+
+def manual_differences(g: Dict[str, Any], recs: List[Dict[str, Any]]
+                       ) -> List[Dict[str, Any]]:
+    """tie_out_differences for an unknown-cost sale and its MANUAL
+    REPORTING REQUIRED rows (MANUAL_TIE_FIELDS)."""
+    out: List[Dict[str, Any]] = []
+    e, s = float(g.get("qty") or 0.0), _sum(recs, "qty")
+    if _qty_differs(e, s):
+        out.append({"field": "qty", "engine": e, "saved": s})
+    e, s = float(g.get("proceeds") or 0.0), _sum(recs, "proceeds")
+    if abs(e - s) > TIE + 0.00005 * len(recs):
+        out.append({"field": "proceeds", "engine": e, "saved": s})
+    return out + _text_differences(g, recs, TIE_TEXT_FIELDS)
+
+
+def differences_text(diffs: List[Dict[str, Any]], limit: int = 4) -> str:
+    """`proceeds 1,500.00 vs 1,520.00; term SHORT_TERM vs LONG_TERM`."""
+    parts = []
+    for d in diffs[:limit]:
+        name = d["field"]
+        if d.get("lot"):
+            name += (f" (lot {d['lot'].get('acquired_date') or '?'}"
+                     + (f" {d['lot']['term']}" if d["lot"].get("term")
+                        else "") + ")")
+
+        def v(x):
+            if isinstance(x, float):
+                return f"{x:g}" if d["field"] == "qty" else _fmt(x)
+            return "none" if x in (None, "") else str(x)
+        parts.append(f"{name} {v(d['engine'])} vs {v(d['saved'])}")
+    if len(diffs) > limit:
+        parts.append(f"+{len(diffs) - limit} more")
+    return "; ".join(parts)
 
 
 def rate_with_provenance(currency: str, date_str: str,
@@ -389,21 +748,16 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
         if g.get(_k):
             ev[_k] = g[_k]
 
+    # The book row the record stands on: its own id, but for a wash-sale
+    # basis add booked in the loss's year (US-WASH-22: a deemed row
+    # `<loss id>-wash-basis`, pipeline.place_retro_wash_adjustments),
+    # the loss sale's row (backlog TJ-0313).
+    from taxjson.lib.pipeline import RETRO_WASH_ID_SUFFIX
+    retro_add = bool(g.get("deemed")) and gid.endswith(RETRO_WASH_ID_SUFFIX)
+    rid = gid[:-len(RETRO_WASH_ID_SUFFIX)] if retro_add else gid
+
     # --- source rows (nominal) --------------------------------------
-    hits = source_index.get(gid) or []
-    if not hits and "~" in str(gid or ""):
-        # A row the dedup kept as a separate record although another
-        # file holds the same content (`<id>~<n>`, bin/taxjson_sort.
-        # plan_dedup): its source row carries the plain id — pick the
-        # file the book row came from.
-        _b = base_index.get(gid) or {}
-        _src = _b.get("source")
-        # The source key keeps two files shown alike apart (A2-0159).
-        _key = _b.get("source_key") or ""
-        hits = [h for h in source_index.get(str(gid).split("~")[0]) or []
-                if not _src or (h["row"].get("source") == _src
-                                and (h["row"].get("source_key") or "")
-                                == _key)]
+    hits = source_hits(rid, source_index, base_index)
     ev["sources"] = [{"file": h["label"], "row": h["row"]} for h in hits]
     if not hits:
         ev["warnings"].append(
@@ -414,7 +768,7 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
     raw = hits[0]["row"] if hits else None
 
     # --- ticker mapping ----------------------------------------------
-    base_row = base_index.get(gid)
+    base_row = base_index.get(rid)
     ev["base_row"] = base_row
     try:
         _mult = float((base_row or {}).get("multiplier") or 0.0)
@@ -433,85 +787,32 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
     else:
         ev["mapping"] = None
 
-    # --- FX conversion ------------------------------------------------
+    # --- FX conversion and the amount --------------------------------
+    # The book row's amount re-derived from the parsed row, converted or
+    # not (money_lineage; a base-currency row was marked "native" with
+    # no amount compared, backlog TJ-0333).
     fx: Optional[Dict[str, Any]] = None
-    if raw is not None and base_row is not None:
-        cur = str(raw.get("currency") or "").upper()
-        if cur and cur != base_currency:
-            # The converter prices on the settlement date when there is
-            # one — mirror it exactly.
-            rate_date = str(raw.get("date_settle") or raw.get("date") or "")
-            rate, kind, src_date = rate_with_provenance(
-                cur, rate_date, fx_history,
-                # The converter's own fallback: an explicit
-                # --default-rate, else none (no built-in rate).
-                default_rate_for(cur, base_currency, default_rate))
-            nominal = float(raw.get("net_amount") or 0.0)
-            priced_by_fill = False
-            _filled = (filled_index or {}).get(gid)
-            if abs(nominal) < 1e-12 and _filled is not None \
-                    and float(_filled.get("net_amount") or 0.0):
-                # A coin-denominated fee (or other zero-priced row) is
-                # priced by the fill-crypto-prices stage; the parsed
-                # row's 0.00 is not what the converter multiplied
-                # (R1-271).
-                nominal = float(_filled.get("net_amount") or 0.0)
-                priced_by_fill = True
-            book = float(base_row.get("net_amount") or 0.0)
-            if rate is None:
-                # No rate and no explicit --default-rate: the converter
-                # stops on such a row, so these books cannot hold it.
-                fx = {"from": cur, "to": base_currency, "rate": None,
-                      "rate_kind": "missing", "rate_date": rate_date}
-                ev["failures"].append(
-                    f"FX: no {cur}->{base_currency} rate for {rate_date} "
-                    f"(nor in the {LOOKBACK_DAYS} days before) in the "
-                    f"rates file — the conversion stops on this row; "
-                    f"refresh the rates with `taxjson run`.")
-        if cur and cur != base_currency and rate is not None:
-            settled = base_row.get("type") == "futures_settlement"
-            notional = nominal
-            if settled:
-                # A futures fill converts its settled P/L, not the
-                # notional the broker row carries (lib/futures.py).
-                nominal = (futures_native or {}).get(gid, float("nan"))
-            computed = nominal * float(rate)
-            # Tolerance: the converter multiplied the same floats, so
-            # only re-derivation slack (repr round-trip) is allowed.
-            ties = abs(computed - book) <= max(TIE, abs(book) * 1e-9)
-            fx = {"from": cur, "to": base_currency,
-                  "rate": float(rate), "rate_kind": kind,
-                  "rate_date": rate_date, "rate_source_date": src_date,
-                  "priced_by_fill": priced_by_fill,
-                  "nominal_net": nominal, "computed_net": computed,
-                  "book_net": book, "ties": ties}
-            if settled:
-                fx["futures_settlement"] = True
-                fx["notional"] = notional
-            if kind == "default":
-                ev["warnings"].append(
-                    f"FX fell back to the --default-rate {float(rate):g} "
-                    f"— no {cur} rate within {LOOKBACK_DAYS} days of "
-                    f"{rate_date} in the rates file.")
-            if not ties:
-                ev["failures"].append(
-                    f"FX cross-check FAILED: {_fmt(nominal)} {cur} x "
-                    f"{float(rate):g} = {_fmt(computed)} but the base "
-                    f"book row carries {_fmt(book)} {base_currency}.")
-        elif not (cur and cur != base_currency):
-            fx = {"from": cur or base_currency, "to": base_currency,
-                  "native": True}
+    if raw is not None and base_row is not None and not retro_add:
+        fx, _w, _f = money_lineage(
+            rid, raw, base_row, base_currency=base_currency,
+            fx_history=fx_history, default_rate=default_rate,
+            futures_native=futures_native, filled_index=filled_index)
+        ev["warnings"].extend(_w)
+        ev["failures"].extend(_f)
     ev["fx"] = fx
 
     # --- wash replacements resolved to rows ---------------------------
     reps = []
-    for rid in g.get("replacement_lot_ids") or []:
-        rrow = replacement_lookup.get(rid)
-        reps.append({"id": rid, "row": rrow})
+    for rep_id in g.get("replacement_lot_ids") or []:
+        rrow = replacement_lookup.get(rep_id)
+        reps.append({"id": rep_id, "row": rrow})
     ev["replacements"] = reps
 
     # --- pipeline tie-out ---------------------------------------------
-    checks = check_index.get(gid) or []
+    # An unknown-cost event ties to MANUAL REPORTING REQUIRED (main),
+    # never to the computed records its id shares when the sale also
+    # drew known-cost lots (backlog TJ-0310).
+    checks = [] if g.get("tainted") else (check_index.get(gid) or [])
     if len({_kind(c) for c in checks}) > 1:
         # One id, two kinds of record (a cross-zero fill's LONG close and
         # its grant WRITE): each event ties to its own kind (S026-19).
@@ -525,15 +826,16 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
         # The engine re-run also yields one record per lot; the caller
         # aggregates before calling for multi-record ids, so g here is
         # already the aggregate view.
-        eg = float(g.get("gain") or 0.0)
-        ed = float(g.get("disallowed_amount") or 0.0)
+        # Every filing field, not the gain and disallowed amount alone
+        # (TIE_FIELDS, backlog TJ-0332).
+        diffs = tie_out_differences(g, checks)
         tie.update({"pipeline_gain": cg, "pipeline_disallowed": cd,
-                    "ties": abs(cg - eg) <= TIE and abs(cd - ed) <= TIE})
-        if not tie["ties"]:
+                    "mismatched": diffs,
+                    "ties": not diffs})
+        if diffs:
             ev["failures"].append(
-                f"PIPELINE TIE-OUT FAILED: engine re-run gain "
-                f"{_fmt(eg)} / disallowed {_fmt(ed)} vs saved gains "
-                f"file {_fmt(cg)} / {_fmt(cd)} — the books changed "
+                f"PIPELINE TIE-OUT FAILED: engine re-run vs saved gains "
+                f"file: {differences_text(diffs)} — the books changed "
                 f"since the last `taxjson run`, or the audit was "
                 f"invoked with different inputs.")
     else:
@@ -544,7 +846,11 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 "cannot tie out (books changed since the last run?).")
     ev["tie_out"] = tie
 
-    ev["trace"] = list(g.get("trace") or [])
+    # The engine's trace as is (a view of the pool's running trace,
+    # trace_format.SharedTrace): a copy per event kept every sale's whole
+    # history, which grew with the square of the sales (TJ-0334). The
+    # JSON writer and the renderer read it as the list it stands for.
+    ev["trace"] = g.get("trace") or []
     return ev
 
 
@@ -670,6 +976,16 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
         if fx.get("native"):
             _sec(out, paint, "CURRENCY",
                  paint(f"native {fx['to']} — no conversion", "dim"))
+            if fx.get("futures_settlement"):
+                _cont(out, paint(
+                    f"futures: the settled P/L is booked; the notional "
+                    f"{_fmt(fx.get('notional') or 0.0)} {fx['from']} "
+                    f"never changes hands", "dim"))
+            if "nominal_net" in fx:
+                # The amount itself (backlog TJ-0333).
+                _cont(out, f"{_fmt(fx['nominal_net'])} {fx['from']}"
+                           f"  =  base book "
+                           + (OK if fx["ties"] else BAD))
         elif fx.get("rate_kind") == "missing":
             _sec(out, paint, "FX",
                  f"{fx['from']}\u2192{fx['to']}  " + paint(
@@ -706,6 +1022,10 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                  "are outside \u00a71091)" if no_wash
             else "FIFO lots — IRC, wash sale \u00a71091")
     _sec(out, paint, "DISPOSITION", paint(rule, "dim"))
+    if ev.get("deemed") and ev.get("note"):
+        # What a deemed row is (a wash-sale basis add booked in the
+        # loss's year, US-WASH-22): its source row is the loss sale.
+        _cont(out, paint(str(ev["note"]), "warn"))
 
     def money(label, v, mark=""):
         _cont(out, f"{label:<15}{_fmt(v):>16}{mark}")
@@ -811,7 +1131,7 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
     if tie.get("manual"):
         _sec(out, paint, "TIE-OUT",
              "saved gains file: listed under MANUAL REPORTING REQUIRED  "
-             + OK)
+             + (BAD if tie.get("ties") is False else OK))
     elif tie.get("ties") is not None:
         _sec(out, paint, "TIE-OUT",
              f"saved gains file: gain {_fmt(tie['pipeline_gain'])}, "
@@ -835,12 +1155,55 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
     return out
 
 
+# What the audit checks, and what it does not (backlog TJ-0332,
+# TJ-0333): the footer's `not traced` line, the --json `scope` and
+# docs/commands.md say it, so a clean audit is not read as proof of
+# more than it compared.
+SCOPE = {
+    "replayed": ("the engine re-run on the base books (work/"
+                 "<account>_base.json), already converted to the base "
+                 "currency"),
+    "tie_out": list(TIE_FIELDS),
+    "manual_tie_out": list(MANUAL_TIE_FIELDS),
+    "source_amounts": [
+        "each audited sale's net amount against its parsed broker row "
+        "(the fill stage's priced row for a crypto book, the settled "
+        "P/L for a futures fill), times the rates file's rate when "
+        "converted",
+        "the same for the audited securities' other trades (buys, "
+        "earlier sales, assignments) up to 31 days after the last "
+        "audited sale, and for the wash-sale / superficial-loss "
+        "replacements the sales name"],
+    "not_checked": [
+        "rows with no parsed broker row (counted as `no parsed row`): "
+        "re-run, not traced",
+        "the ACB / basis adjustments that are not trades: return of "
+        "capital, reinvested distributions, splits, corporate actions, "
+        "transfers in, openings",
+        "trades booked under an earlier ticker (before a rename) or "
+        "in a sheltered account",
+        "the parsed row's own reading of the broker's export (the "
+        "parsers' tests cover it)",
+        "a crypto row's price from the fill stage (its priced row is "
+        "the start)",
+        "days held and the descriptive fields (notes, wash windows)"],
+}
+NOT_TRACED_LINE = ("adjustments (ROC, distributions, splits, transfers in) "
+                   "and rows with no parsed row: re-run only")
+TIE_FIELDS_TEXT = ("each sale's quantity, proceeds, cost, gain, disallowed "
+                   "and permanently disallowed amounts, symbol, dates, "
+                   "account, direction and term, each lot's acquired date "
+                   "and share, and the replacement lots")
+
+
 def render_reconciliation(events: List[Dict[str, Any]],
                           check_labels: List[str],
                           checks_supplied: bool,
                           use_color: bool = False,
                           country: Optional[str] = None,
-                          brief: bool = False) -> List[str]:
+                          brief: bool = False,
+                          pool: Optional[Dict[str, Any]] = None
+                          ) -> List[str]:
     from taxjson.lib.out import wrap as _wrap
     W = 86
     paint = _mk_paint(use_color)
@@ -850,19 +1213,19 @@ def render_reconciliation(events: List[Dict[str, Any]],
     total_dis = sum(float(e.get("disallowed_amount") or 0) for e in events)
     tied = sum(1 for e in events if (e["tie_out"].get("ties") is True))
     untied = sum(1 for e in events if (e["tie_out"].get("ties") is False))
-    manual = sum(1 for e in events if e["tie_out"].get("manual"))
+    manual = sum(1 for e in events if e["tie_out"].get("manual")
+                 and e["tie_out"].get("ties") is not False)
     nocheck = sum(1 for e in events if e["tie_out"].get("ties") is None
                   and not e["tie_out"].get("out_of_scope")
                   and not e["tie_out"].get("manual"))
     outside = sum(1 for e in events if e["tie_out"].get("out_of_scope"))
-    fx_ok = sum(1 for e in events
-                if e.get("fx") and not e["fx"].get("native")
-                and e["fx"].get("ties"))
+    # A sale's amount against its parsed row: converted (FX) or not
+    # (native, compared since backlog TJ-0333).
+    fx_ok = sum(1 for e in events if e.get("fx") and e["fx"].get("ties"))
     fx_bad = sum(1 for e in events
-                 if e.get("fx") and not e["fx"].get("native")
-                 and not e["fx"].get("ties"))
-    native = sum(1 for e in events if e.get("fx")
-                 and e["fx"].get("native"))
+                 if e.get("fx") and not e["fx"].get("ties"))
+    conv = sum(1 for e in events if e.get("fx")
+               and not e["fx"].get("native"))
     sourced = sum(1 for e in events if e.get("sources"))
     n = len(events)
 
@@ -885,9 +1248,15 @@ def render_reconciliation(events: List[Dict[str, Any]],
            f"  total disallowed   {_fmt(total_dis):>14}",
            f"  source rows        {sourced:>7,}/{n:,} traced to a "
            f"parsed broker row  " + mark(n - sourced, sourced == n),
-           f"  fx cross-check     {fx_ok:>7,} tied, {fx_bad:,} "
-           f"mismatched, {native:,} native  "
+           f"  sale amounts       {fx_ok:>7,} tied, {fx_bad:,} "
+           f"mismatched ({conv:,} converted)  "
            + mark(fx_bad, fx_bad == 0)]
+    if pool is not None:
+        _bad = len(pool.get("mismatched") or [])
+        out.append(f"  pool trades        {pool.get('tied', 0):>7,} tied, "
+                   f"{_bad:,} mismatched, {pool.get('untraced', 0):,} "
+                   f"with no parsed row  "
+                   + mark(_bad, _bad == 0 and not pool.get("untraced")))
     if checks_supplied:
         out.append(f"  pipeline tie-out   {tied:>7,} tied, {untied:,} "
                    f"MISMATCHED, {nocheck:,} not found  "
@@ -909,12 +1278,45 @@ def render_reconciliation(events: List[Dict[str, Any]],
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
             "dim"))
+    # What is not checked, said where the ✓ marks are (TJ-0332/0333).
+    out.extend(paint(ln, "dim") for ln in _wrap(
+        f"not traced         {NOT_TRACED_LINE}", None, "  ", " " * 21))
     if not brief:
-        # The rounding note: --details (docs/output-style.md).
+        # The rest of the scope and the rounding note: --details
+        # (docs/output-style.md).
+        out.extend(paint(ln, "dim") for ln in _wrap(
+            f"The tie-out compares {TIE_FIELDS_TEXT} with the saved gains "
+            f"file. Not checked: " + "; ".join(SCOPE["not_checked"][2:])
+            + ".", None, "  ", "  "))
         out.extend(paint(ln, "dim")
                    for ln in _wrap(totals_note(country), None, "  ", "  "))
     out.append(paint("\u2550" * W, "dim"))
     return out
+
+
+def _finite(v):
+    """`v` with every non-finite float as None: --json is strict JSON (a
+    futures fill the parsed rows cannot re-derive carried NaN)."""
+    import math
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, dict):
+        return {k: _finite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_finite(x) for x in v]
+    return v
+
+
+def manual_reporting_totals(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The unknown-cost dispositions (`manual_reporting`), which no gain
+    total counts: how many, their quantity and their proceeds — what is
+    reported by hand (the --json `manual_reporting`; `taxjson audit`
+    merges its books' with the same function, backlog TJ-0302)."""
+    man = [e for e in events if e.get("manual_reporting")]
+    return {"events": len(man),
+            "qty": round(sum(float(e.get("qty") or 0.0) for e in man), 6),
+            "proceeds": round(sum(float(e.get("proceeds") or 0.0)
+                                  for e in man), 2)}
 
 
 # R1-267: the audit sums unrounded engine values; the return's form rows
@@ -983,6 +1385,13 @@ def parse_args(argv=None):
                         "acquisitions/disposals for the superficial-loss / wash-sale "
                         "window (strict; [settings] transfers_as_acquisitions = true). "
                         "Default: a custody move, held but never a purchase.")
+    p.add_argument("--locked-year", action="append", type=int,
+                   default=None, metavar="YEAR",
+                   help="USA: a filed (locked) tax year, repeatable, as "
+                        "in taxjson-gains (`taxjson audit` passes every "
+                        "filed/<year>.json): a wash-sale basis add to a "
+                        "replacement sold in such a year is booked in the "
+                        "loss's year (US-WASH-22).")
     p.add_argument("--no-wash", action="store_true",
                    help="Disable wash detection (US crypto: digital "
                         "assets are property, not securities — §1091 "
@@ -993,8 +1402,11 @@ def parse_args(argv=None):
                    help="Report currency (inferred from the base books "
                         "when omitted).")
     p.add_argument("--default-rate", type=positive_rate, default=None,
-                   help="The converter's FX fallback (default: 1.35 for "
-                        "USD->CAD, its inverse for CAD->USD)")
+                   help="A rate of your own for a row with no rate in "
+                        "--rates on its date or the days before it, as "
+                        "the converter's --default-rate. Default: none — "
+                        "there is no built-in rate, and such a row fails "
+                        "its FX cross-check as a missing rate.")
     p.add_argument("--map", dest="ticker_map", help="ticker.map for "
                                                     "naming rename rules.")
     p.add_argument("--source", action="append", default=[],
@@ -1143,10 +1555,13 @@ def main(argv=None) -> int:
         loss_overrides=loss_overrides_from_args(args))
     apply_roc_record_dates(transactions, req)
     rules = get_tax_rules(country)
+    # The engine traces only when something shows them: the blocks
+    # (without --no-trace) and --json. --summary and --no-trace kept
+    # every sale's whole pool history all the same (backlog TJ-0334).
     kwargs: Dict[str, Any] = dict(
         sheltered_transactions=sheltered,
         affiliated_transactions=affiliated,
-        trace=True,
+        trace=not args.no_trace and (args.json or not args.summary),
         detect_wash_sales=not args.no_wash)
     kwargs.update(engine_options(req))
     from taxjson.lib.core import AmbiguousTransferDateError
@@ -1154,6 +1569,20 @@ def main(argv=None) -> int:
         results = rules.compute_gains(transactions, **kwargs)
     except AmbiguousTransferDateError as e:
         sys.exit(exit_text(f"taxjson-audit: {e}"))
+    if country == "usa":
+        # run_gains' post-engine pass (US-WASH-22): a wash-sale basis add
+        # to a replacement sold in a filed (locked) year is booked as its
+        # own row in the loss's year. Without it the audit re-ran the
+        # engine's raw rows, called the saved add row fabricated and
+        # missed its loss (backlog TJ-0313). The run has said its notes
+        # and ATTENTION lines already: not repeated here.
+        from taxjson.lib.pipeline import place_retro_wash_adjustments
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()):
+            place_retro_wash_adjustments(
+                results, args.tax_date, tuple(args.locked_year or ()),
+                args.year)
 
     date_key = "date_settle" if args.tax_date == "settle" else "date"
 
@@ -1173,6 +1602,12 @@ def main(argv=None) -> int:
         if g.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU") \
                 or not _is_disposition_record(g):
             return False
+        return row_filter(g)
+
+    def row_filter(g) -> bool:
+        """The year and the row filters, on an engine record or a saved
+        one alike: the reconciliation sweep scopes the saved gains files
+        with the same test as the engine side (backlog TJ-0301)."""
         eff = g.get(date_key) or g.get("date") or ""
         if args.year and not eff.startswith(str(args.year)):
             return False
@@ -1210,21 +1645,33 @@ def main(argv=None) -> int:
         for row in (_load_doc(Path(fp)).get("transactions") or []):
             if row.get("id"):
                 filled_index[row["id"]] = row
+    _default_rate = (None if args.default_rate is None
+                     else Decimal(str(args.default_rate)))
     events = [build_event(g, base_index, source_index, check_index,
-                          fx_history, (None if args.default_rate is None
-                                       else Decimal(str(args.default_rate))),
+                          fx_history, _default_rate,
                           base_currency, tmap, replacement_lookup,
                           checks_supplied=bool(args.check),
                           futures_native=futures_native,
                           filled_index=filled_index)
               for g in merged]
+    # The sales' cost side traced like the sales: the audited
+    # securities' buys and earlier trades against their parsed rows
+    # (backlog TJ-0333).
+    pool = pool_trade_check(events, base_index, source_index,
+                            base_currency=base_currency,
+                            fx_history=fx_history,
+                            default_rate=_default_rate,
+                            futures_native=futures_native,
+                            filled_index=filled_index)
     # Unknown-cost dispositions: the books list them under MANUAL
     # REPORTING REQUIRED with no gain; the re-run's figure is fabricated
     # (cost 0 on the synthetic opening). Tie them to that list, never to
     # the gains total (A2-0640, A2-1098).
+    # Each event by its own lots' taint: a sale with known-cost and
+    # unknown-cost lots is two events under one id (TJ-0310).
     _tainted_ids = {g.get("id") for g in merged if g.get("tainted")}
-    for e in events:
-        if e["id"] not in _tainted_ids:
+    for g, e in zip(merged, events):
+        if not g.get("tainted"):
             continue
         e["manual_reporting"] = True
         e["warnings"] = [
@@ -1234,8 +1681,20 @@ def main(argv=None) -> int:
         if not args.check:
             continue
         if e["id"] in manual_index:
-            e["tie_out"] = {"records": len(manual_index[e["id"]]),
-                            "ties": None, "manual": True}
+            # Its quantity, proceeds and names, as a computed sale's
+            # fields are (MANUAL_TIE_FIELDS, backlog TJ-0332).
+            _recs = manual_index[e["id"]]
+            _diffs = manual_differences(g, _recs)
+            e["tie_out"] = {"records": len(_recs),
+                            "ties": False if _diffs else None,
+                            "manual": True,
+                            "mismatched": _diffs}
+            if _diffs:
+                e["failures"].append(
+                    f"MANUAL REPORTING TIE-OUT FAILED: engine re-run vs "
+                    f"the saved MANUAL REPORTING REQUIRED row: "
+                    f"{differences_text(_diffs)} — the books changed "
+                    f"since the last `taxjson run`.")
         else:
             e["tie_out"] = {"records": 0, "ties": None}
             e["warnings"].append(
@@ -1262,18 +1721,17 @@ def main(argv=None) -> int:
     # per-event drift (2026-09 audit: a check file missing a whole
     # disposition — or carrying an extra invented one — passed with
     # exit 0, which is exactly the stale/corrupted-book failure mode
-    # this tool exists to catch). Sweep both directions when the
-    # filters would not explain the difference: symbol/date/id/account
-    # filters legitimately scope the engine side down, so the sweep
-    # runs only when NO row filter is active.
+    # this tool exists to catch). Sweep both directions, the saved side
+    # scoped by the same year and row filters as the engine side
+    # (row_filter): a symbol/date/id/account filter used to switch the
+    # sweep off, so a saved sale missing from the books passed a
+    # filtered audit at exit 0 (backlog TJ-0301).
     reconciliation_failures: List[str] = []
-    if args.check and not (args.symbol or args.gain_id or args.date
-                           or args.account):
+    if args.check:
         engine_ids = {e["id"] for e in events}
 
         def _chk_in_scope(c) -> bool:
-            eff = (c.get(date_key) or c.get("date") or "")
-            return not args.year or eff.startswith(str(args.year))
+            return row_filter(c)
 
         for gid, recs in sorted(check_index.items()):
             if gid in engine_ids:
@@ -1331,15 +1789,29 @@ def main(argv=None) -> int:
                 f"in-scope totals do not tie: engine "
                 f"{eng_total:,.2f} vs check files {chk_total:,.2f}.")
 
+    # A pool trade whose book amount is not its parsed row's (TJ-0333):
+    # the first few named, the rest counted (--json lists each).
+    _pool_bad = pool.get("mismatched") or []
+    for m in _pool_bad[:5]:
+        reconciliation_failures.append(
+            f"pool trade {str(m['id'])[:12]} ({m.get('symbol')} "
+            f"{m.get('date')}, quantity {float(m.get('quantity') or 0):g})"
+            f": {m['failure']}")
+    if len(_pool_bad) > 5:
+        reconciliation_failures.append(
+            f"{len(_pool_bad) - 5:,} more pool trades differ from their "
+            f"parsed rows (--json lists each).")
+
     failed = any(e["failures"] for e in events) \
         or bool(reconciliation_failures)
 
     _filters = [f"{k} {v}" for k, v in (
         ("symbol", " ".join(args.symbol or [])), ("--id", args.gain_id),
         ("--date", args.date), ("--account", args.account)) if v]
-    if _filters and not events:
+    if _filters and not events and not reconciliation_failures:
         # An empty "0/0 ✓" reconciliation block read as a clean audit of
-        # a typo (2026-09 CLI audit B15).
+        # a typo (2026-09 CLI audit B15). A saved record the filter
+        # matches with no engine event is a finding, not "no match".
         if args.no_match_rc == 1:
             print(f"taxjson-audit: no disposition matches "
                   f"{', '.join(_filters)}"
@@ -1359,8 +1831,10 @@ def main(argv=None) -> int:
         for e in events:
             d = dict(e)
             d.pop("base_row", None)
+            d["trace"] = list(e.get("trace") or [])
             slim.append(d)
-        json.dump({"base_currency": base_currency, "country": country,
+        json.dump(_finite({"base_currency": base_currency,
+                   "country": country,
                    "events": slim,
                    "total_gain": round(sum(float(e.get("gain") or 0)
                                            for e in events
@@ -1369,10 +1843,13 @@ def main(argv=None) -> int:
                    "total_disallowed": round(
                        sum(float(e.get("disallowed_amount") or 0)
                            for e in events), 2),
+                   "manual_reporting": manual_reporting_totals(events),
                    "totals_note": totals_note(country),
+                   "pool_trades": pool,
+                   "scope": SCOPE,
                    "reconciliation_failures": reconciliation_failures,
-                   "failed": failed},
-                  sys.stdout, indent=2, default=str)
+                   "failed": failed}),
+                  sys.stdout, indent=2, default=str, allow_nan=False)
         print()
         return 1 if failed else 0
 
@@ -1405,21 +1882,21 @@ def main(argv=None) -> int:
                   f"{e['symbol']:<22} qty={float(e['qty'] or 0):>12,.4f} "
                   f"gain={float(e['gain'] or 0):>+14,.2f}{flags}")
     else:
-        lines: List[str] = []
+        # Each block printed as it is rendered: holding every block's
+        # pool history until the end grew with the square of the sales.
         for i, e in enumerate(events, 1):
-            lines += render_event(e, i, len(events), country,
-                                  show_trace=not args.no_trace,
-                                  use_color=use_color,
-                                  no_wash=args.no_wash)
-            lines.append("")
-        for ln in lines:
-            print(ln)
+            for ln in render_event(e, i, len(events), country,
+                                   show_trace=not args.no_trace,
+                                   use_color=use_color,
+                                   no_wash=args.no_wash):
+                print(ln)
+            print()
 
     for ln in render_reconciliation(events, check_labels,
                                     bool(args.check),
                                     use_color=use_color,
                                     country=country,
-                                    brief=args.brief):
+                                    brief=args.brief, pool=pool):
         print(ln)
     from taxjson.lib.out import wrap as _wrap
     for f in reconciliation_failures:
