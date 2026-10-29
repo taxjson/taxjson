@@ -87,8 +87,14 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
             done = [l for l in ls if l.get("cleared")]
             if live:
                 open_syms.add(sym)
+                # Canada: a loss denied for good whose own window has
+                # closed since, beside a newer loss still open — it fell
+                # out of the view without a word, the cleared tail
+                # leaving out an open ticker (backlog TJ-0247).
+                gone = [l for l in done if l.get("rescue_passed")
+                        and float(l.get("denied_qty") or 0.0) > 1e-9]
                 rows.append(_row(sym, live, r, cat, as_of, usa, canon,
-                                 underlying, members, similar))
+                                 underlying, members, similar, gone))
             for l in done:
                 ra = str(l.get("rebuy_at") or "")
                 if not ra or not (0 <= _days(as_of, ra) < cleared_days):
@@ -114,7 +120,7 @@ def build(radar: Dict[str, Dict[str, Any]], as_of: str, country: str, *,
 
 
 def _row(sym, live, r, cat, as_of, usa, canon, underlying, members,
-         similar=None):
+         similar=None, gone=()):
     from taxjson.lib.core import is_option_symbol
     last = max(live, key=lambda l: (l.get("trade_date") or "",
                                     l.get("window_date") or ""))
@@ -183,7 +189,12 @@ def _row(sym, live, r, cat, as_of, usa, canon, underlying, members,
                            if l.get("rescue_by")
                            and not l.get("rescue_passed")}),
         "final": sorted({str(l.get("trade_date") or "") for l in live
-                         if l.get("rescue_passed")}),
+                         if l.get("rescue_passed")}
+                        | {str(l.get("trade_date") or "") for l in gone}),
+        # Canada: those denied for good whose window has closed since
+        # (their re-entry date passed), the records as the radar gives
+        # them (backlog TJ-0247).
+        "denied_closed": list(gone),
         "also": others,
         # Look-alike funds (ticker.map SIMILAR): a buy of these is
         # flagged, not counted (CA-SL-20 / US-WASH-26).
@@ -371,8 +382,8 @@ def _details(d, doc: Dict[str, Any], currency: str) -> None:
             "already disallowed in full is not one.",
             "After a loss on covering a short only a new short sale "
             "replaces it (§1091(e)); a long call is a note only "
-            "(US-PLAN-02); futures and their options are outside §1091 "
-            "(US-WASH-18)."], "  ")
+            "(US-PLAN-02); futures, their options and broad-based index "
+            "options (§1256) are outside §1091 (US-WASH-18)."], "  ")
     else:
         d.items([
             "A loss is superficial when the same property is acquired "
@@ -383,8 +394,10 @@ def _details(d, doc: Dict[str, Any], currency: str) -> None:
             "the latest loss sale's window closes (30 days after its "
             "settlement): the window's last day when a trade then "
             "settles the next day, the Friday before when it closes on "
-            "a weekend (wash-radar's CLEARS, buy-check's safe-from "
-            "date).",
+            "a weekend (buy-check's safe-from date, and wash-radar's "
+            "CLEARS for a COOLING or BLOCKED row; a VIOLATION's CLEARS "
+            "is its last day to sell). When ticker.map or tobase.map "
+            "books two listings as one, it is the later of their dates.",
             "A long call on the shares is a replacement too "
             "(CA-PLAN-02); an option series is replaced only by the "
             "same series."], "  ")
@@ -403,6 +416,12 @@ def _row_detail(r: Dict[str, Any], usa: bool) -> str:
            else "")
         for l in r["losses"])
     text = f"{r['ticker']}: {sales}. Rebuy on {_when(r)}."
+    for l in r.get("denied_closed") or []:
+        text += (f" Also {l.get('trade_date')} "
+                 f"{l.get('account') or '?'} {_qty(l.get('qty'))} units, "
+                 f"loss {_money(float(l.get('loss') or 0))}"
+                 f"{_denied_txt(l)}; past its re-entry date, "
+                 f"{l.get('rebuy_at')}, nothing changes it.")
     if r["status"] == "rebought":
         what = (f"the {', '.join(r['rescues'])} loss"
                 if r.get("final") and r.get("rescues") else "the loss")

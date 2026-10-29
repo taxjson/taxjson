@@ -1,13 +1,9 @@
 import unittest
-import tempfile
 from _tmpfiles import private_tmpfile
 import os
-import sys
 from pathlib import Path
-import json
 
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
-from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
 
 
 def setUpModule():

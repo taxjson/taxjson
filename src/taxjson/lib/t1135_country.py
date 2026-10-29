@@ -53,6 +53,19 @@ def override_value(canonical: str) -> Optional[str]:
     return None if canonical == NOT_FOREIGN else canonical
 
 
+def parse_custodian_country(word: object) -> Optional[str]:
+    """The country of an account's custodian (taxjson.toml
+    `[accounts.NAME] custodian_country`, taxjson-t1135 --custodian): its
+    ISO 3166 alpha-3 code, None for Canada (CAN, CA or CANADA, the
+    default). Raises ValueError for anything else, EXCLUDE included (a
+    custodian is in some country) and a value that is not a string."""
+    if not isinstance(word, str) or not word.strip():
+        raise ValueError(f"{word!r} is not a quoted country code")
+    if word.strip().upper() == "EXCLUDE":
+        raise ValueError(f"{word!r} is not a country — Canada is CAN")
+    return override_value(parse_country(word.strip()))
+
+
 # ISO 3166-1 alpha-2 -> alpha-3 (the same 249 countries as ISO3): the
 # interlisted master records an issuer's country as its ISINs' two
 # letters (`domicile`); tobase.map and T1135 speak alpha-3.

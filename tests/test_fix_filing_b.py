@@ -722,8 +722,10 @@ class TestT1135Report(unittest.TestCase):
         self.assertEqual(ov.get("QRS.TO"), "USA")
 
     def test_unused_override_and_deferred_wash_are_named(self):
-        """S051-17 (unused key) and S009-01 / S051-21 / S008-07 (denied
-        superficial losses not in the cost columns)."""
+        """S051-17 (unused key). S009-01 / S051-21 / S008-07 (denied
+        superficial losses not in the cost columns) once named a gains
+        file's deferral in year-only mode; the cost amounts are the
+        engine's pools now (backlog TJ-0417), so none is left out."""
         from taxjson.bin.taxjson_t1135 import build_report, render_report
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / "margin_base.json"
@@ -737,18 +739,17 @@ class TestT1135Report(unittest.TestCase):
             gains.write_text(json.dumps(doc))
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                # The note is the year-only mode's (--year-wash-only);
-                # the default full-history pass carries every addition
-                # (S008-07, tests/test_fix_x_engine_t1135).
                 rep = build_report([base], [gains], 2025,
                                    {"NOPE.US": "USA"}, "CAD",
                                    full_history=False)
         self.assertEqual(rep["unused_overrides"], ["NOPE.US"])
         self.assertIn("NOPE.US", err.getvalue())
-        self.assertEqual(rep["deferred_wash_not_in_cost"],
-                         {"AAA.US": 30000.0})
+        # The gains file's inventory is not read for the cost: the
+        # engine's pool holds the 90000 paid.
+        self.assertEqual(rep["deferred_wash_not_in_cost"], {})
+        self.assertEqual(rep["properties"][0]["year_end_cost"], 90000.0)
         text = render_report(rep)
-        self.assertIn("NOT reliable", text)
+        self.assertNotIn("NOT reliable", text)
 
     def test_other_user_maps_read_a_bom(self):
         """S051-18: [[distributions]] (taxjson.toml) and the ticker.map

@@ -2,7 +2,6 @@ from taxjson.lib.stage_msg import emit_line
 import csv
 import io
 import re
-import sys
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -442,8 +441,52 @@ def _fee_ccy(row: Dict[str, Any], asset_name: str) -> str:
     return _normalize_asset(fc, fold_stable=False)
 
 
+class KrakenAccountContext:
+    """What taxjson-brokerage shares between the parses of one account's
+    Kraken exports (KrakenBrokerage.prepare_files): every instant-trade
+    refid's ledger legs across all the ledger exports given, as
+    (file as messages name it, resolved path, txid, row) in input
+    order."""
+
+    def __init__(self) -> None:
+        self.instant_legs: Dict[str, list] = {}
+
+
 class KrakenBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Kraken"
+    # Set by taxjson-brokerage (see `prepare_files`); None = this file
+    # alone.
+    account_context: Optional[KrakenAccountContext] = None
+
+    @classmethod
+    def prepare_files(cls, paths) -> KrakenAccountContext:
+        """Index the instant-trade legs (ledger `spend` / `receive` rows)
+        of every ledger export among `paths` by refid, so a trade whose
+        legs a year boundary split into two exports is booked once
+        (_join_instant_legs) instead of dropped from both as orphans
+        (backlog TJ-0525). A file that does not read is left out here;
+        its own parse reports it."""
+        ctx = KrakenAccountContext()
+        for p in map(Path, paths):
+            try:
+                text = read_broker_text(p)
+                with io.StringIO(text) as f:
+                    if _classify_header(f.readline()) != 'ledgers':
+                        continue
+                    f.seek(0)
+                    for raw, _line in _dict_rows(f, p, 'ledger',
+                                                 _LEDGER_REQUIRED):
+                        row = _lower_row(raw)
+                        ref = (row.get('refid') or '').strip()
+                        typ = (row.get('type') or '').strip().lower()
+                        if ref and typ in ('spend', 'receive'):
+                            ctx.instant_legs.setdefault(ref, []).append(
+                                (shown_name(p), str(p.resolve()),
+                                 (row.get('txid') or '').strip(), row))
+            except (BrokerageParseError, OSError, ValueError, csv.Error,
+                    UnicodeDecodeError):
+                continue
+        return ctx
     # USD stablecoins (USDC/USDT/DAI/PYUSD/GUSD): US-dollar CASH (True — the
     # default, Canada's stated approximation, tax-logic CA-CRYPTO-02) or
     # PROPERTY like any coin (False — a US project: the IRS treats them
@@ -512,7 +555,13 @@ class KrakenBrokerage(BaseBrokerage):
             raise ValueError(
                 f"Kraken {context}: empty {field!r} — refusing to read "
                 f"it as 0.")
-        return strict_money(raw, field, f"Kraken {context}")
+        try:
+            return strict_money(raw, field)
+        except ValueError as e:
+            # The row (and its file) first, as the other refusals: in
+            # brackets after the cell, the file was named again in
+            # front of it (backlog TJ-0236).
+            raise ValueError(f"Kraken {context}: {e}") from None
 
     def _local_dt(self, time_raw: str, what: str):
         """Kraken timestamps are UTC (`2025-06-01 12:00:00.1234`).
@@ -733,8 +782,12 @@ class KrakenBrokerage(BaseBrokerage):
         # S013-09).
         ids = RowIds(f"Kraken trades CSV {shown_name(path)}", "txid")
         with io.StringIO(read_broker_text(path)) as f:
-            for raw, line in _dict_rows(f, path, 'trades',
-                                        _TRADES_REQUIRED):
+            # Each transaction remembers its row's line (backlog
+            # TJ-0124).
+            for raw, line in self.rows_noting_lines(
+                    transactions, _dict_rows(f, path, 'trades',
+                                             _TRADES_REQUIRED),
+                    lambda x: x[1]):
                 row = _lower_row(raw)
                 ids.check(
                     row.get('txid') or '', line,
@@ -1061,8 +1114,13 @@ class KrakenBrokerage(BaseBrokerage):
         unbooked: List[tuple] = []
 
         with io.StringIO(read_broker_text(path)) as f:
-            for raw, line in _dict_rows(f, path, 'ledger',
-                                        _LEDGER_REQUIRED):
+            # Each transaction booked from a row remembers its line
+            # (backlog TJ-0124); an instant trade's legs are built after
+            # the loop and keep none.
+            for raw, line in self.rows_noting_lines(
+                    transactions, _dict_rows(f, path, 'ledger',
+                                             _LEDGER_REQUIRED),
+                    lambda x: x[1]):
                 row = _lower_row(raw)
                 txid = (row.get('txid') or '').strip()
                 if txid:
@@ -1219,76 +1277,10 @@ class KrakenBrokerage(BaseBrokerage):
                     transactions.extend(self._fee_coin_sale(
                         row, ctx, fee, fee_ccy, type_raw, date, time, txid))
                 elif type_raw in ('spend', 'receive') and refid:
-                    if fee and self._norm(fee_ccy) != asset:
-                        raise ValueError(
-                            f"Kraken {ctx}: instant-trade {type_raw} "
-                            f"leg in {asset_name} with its fee in "
-                            f"{fee_ccy} (feecurrency) — not supported; "
-                            f"enter this trade via a .tt file{_TT_REMOVE}.")
-                    if amount == 0:
-                        # A leg that moves nothing has no direction: a
-                        # 0-unit trade the books cannot hold, and never
-                        # a "dust" leg to leave out (pre-release review
-                        # H1; v0.20 refused it at the schema check).
-                        raise ValueError(
-                            f"Kraken {ctx}: a {type_raw} row of "
-                            f"{asset_name} on {date} with amount 0 — an "
-                            f"instant-trade leg that moves no coins has no "
-                            f"direction and cannot be booked, and leaving "
-                            f"it out could lose a real trade. This "
-                            f"account's files are not booked until it is "
-                            f"fixed: correct the row in the export, or "
-                            f"enter the trade via a .tt file{_TT_REMOVE}.")
-                    if ((type_raw == 'spend' and amount > 0)
-                            or (type_raw == 'receive' and amount < 0)):
-                        # The leg's sign contradicts its type: the amount
-                        # used to be taken as abs(), booking an inverted
-                        # trade as an ordinary buy (re-audit A2-1019).
-                        raise ValueError(
-                            f"Kraken {ctx}: a {type_raw} row with amount "
-                            f"{amount:+g} {asset_name} — the sign "
-                            f"contradicts the type (a spend is negative, "
-                            f"a receive positive). Refusing to guess the "
-                            f"direction; fix the row or re-export the "
-                            f"ledger.")
-                    sides = instant_trades.setdefault(
-                        refid, {'spend': {}, 'receive': {}})
-                    side = sides[type_raw]
-                    usd = row.get('amountusd')
-                    usd_v = (abs(strict_money(usd, 'amountusd', ctx))
-                             if usd not in (None, '') else None)
-                    if (self.stablecoins_as_cash and usd_v and amount
-                            and asset_name in _CASH_STABLECOINS):
-                        # The ledger's own USD value of a stablecoin leg
-                        # implies its price: a swap far off the peg is
-                        # said, as a stablecoin/USD fill is (CA-CRYPTO-02;
-                        # re-audit A2-1003).
-                        warn_depeg(asset_name, usd_v / abs(amount),
-                                   abs(amount), date,
-                                   f"Kraken ledger {shown_name(path)}")
-                    if asset in side:
-                        # Split settlement: a refid can carry two rows
-                        # of the same leg — assignment silently
-                        # discarded the earlier amount.
-                        leg = side[asset]
-                        leg['amount'] += abs(amount)
-                        leg['fee'] += abs(fee)
-                        if leg['usd'] is not None and usd_v is not None:
-                            leg['usd'] += usd_v
-                        else:
-                            leg['usd'] = None
-                    else:
-                        side[asset] = {
-                            'date': date, 'time': time, 'asset': asset,
-                            'amount': abs(amount), 'fee': abs(fee),
-                            'usd': usd_v,
-                            # The file as messages name it.
-                            'src': shown_name(path),
-                            # The unfolded name (USDC, not USD): the
-                            # fiat-for-fiat branch names the stablecoin
-                            # and checks its peg (re-audit A2-1284).
-                            'raw': asset_name,
-                        }
+                    self._add_instant_leg(
+                        instant_trades, row, shown_name(path), ctx, refid,
+                        type_raw, amount, fee, asset, asset_name, fee_ccy,
+                        date, time)
                 else:
                     if type_raw == 'trade':
                         trade_refids.setdefault(refid or f'?{txid}', date)
@@ -1366,7 +1358,26 @@ class KrakenBrokerage(BaseBrokerage):
                 self.zero_tx_reason = (
                     f"{sum(ignored_types.values())} fiat-cash or "
                     f"zero-amount row(s): not tax events")
+        legs_index = getattr(getattr(self, 'account_context', None),
+                             'instant_legs', None) or {}
         for refid, sides in instant_trades.items():
+            # Joined whether or not this export holds both sides: one
+            # holding the spend and the first of two receipts booked
+            # only those, and the later receipt in the next export was
+            # dropped as booked (backlog TJ-0661).
+            if refid in legs_index:
+                joined = self._join_instant_legs(refid, path,
+                                                 legs_index[refid])
+                if isinstance(joined, str):
+                    # Another export of the account books the trade.
+                    for _side in sides.values():
+                        for _leg in _side.values():
+                            self.count_nonevent(
+                                f"instant-trade leg booked with its "
+                                f"counter-leg in {joined}")
+                    continue
+                if joined:
+                    sides = joined
             transactions.extend(self._build_instant_trades(sides, refid))
         nonevents = sum(n for c, n in self._skip_counts.items()
                         if c.startswith(self.KNOWN_NONEVENT_PREFIX))
@@ -1385,6 +1396,166 @@ class KrakenBrokerage(BaseBrokerage):
         self._mark_idless_fills(transactions)
         self.emit_skip_summary(shown_name(path))
         return transactions
+
+    def _add_instant_leg(self, instant_trades, row, src, ctx, refid,
+                         type_raw, amount, fee, asset, asset_name, fee_ccy,
+                         date, time) -> None:
+        """Add one ledger spend/receive row (`src`: the file as messages
+        name it) to its refid's legs in `instant_trades`, refusing a leg
+        the books cannot hold."""
+        if fee and self._norm(fee_ccy) != asset:
+            raise ValueError(
+                f"Kraken {ctx}: instant-trade {type_raw} "
+                f"leg in {asset_name} with its fee in "
+                f"{fee_ccy} (feecurrency) — not supported; "
+                f"enter this trade via a .tt file{_TT_REMOVE}.")
+        if amount == 0:
+            # A leg that moves nothing has no direction: a
+            # 0-unit trade the books cannot hold, and never
+            # a "dust" leg to leave out (pre-release review
+            # H1; v0.20 refused it at the schema check).
+            raise ValueError(
+                f"Kraken {ctx}: a {type_raw} row of "
+                f"{asset_name} on {date} with amount 0 — an "
+                f"instant-trade leg that moves no coins has no "
+                f"direction and cannot be booked, and leaving "
+                f"it out could lose a real trade. This "
+                f"account's files are not booked until it is "
+                f"fixed: correct the row in the export, or "
+                f"enter the trade via a .tt file{_TT_REMOVE}.")
+        if ((type_raw == 'spend' and amount > 0)
+                or (type_raw == 'receive' and amount < 0)):
+            # The leg's sign contradicts its type: the amount
+            # used to be taken as abs(), booking an inverted
+            # trade as an ordinary buy (re-audit A2-1019).
+            raise ValueError(
+                f"Kraken {ctx}: a {type_raw} row with amount "
+                f"{amount:+g} {asset_name} — the sign "
+                f"contradicts the type (a spend is negative, "
+                f"a receive positive). Refusing to guess the "
+                f"direction; fix the row or re-export the "
+                f"ledger.")
+        sides = instant_trades.setdefault(
+            refid, {'spend': {}, 'receive': {}})
+        side = sides[type_raw]
+        usd = row.get('amountusd')
+        usd_v = (abs(strict_money(usd, 'amountusd', ctx))
+                 if usd not in (None, '') else None)
+        if (self.stablecoins_as_cash and usd_v and amount
+                and asset_name in _CASH_STABLECOINS):
+            # The ledger's own USD value of a stablecoin leg
+            # implies its price: a swap far off the peg is
+            # said, as a stablecoin/USD fill is (CA-CRYPTO-02;
+            # re-audit A2-1003).
+            warn_depeg(asset_name, usd_v / abs(amount),
+                       abs(amount), date,
+                       f"Kraken ledger {src}")
+        if asset in side:
+            # Split settlement: a refid can carry two rows
+            # of the same leg — assignment silently
+            # discarded the earlier amount.
+            leg = side[asset]
+            leg['amount'] += abs(amount)
+            leg['fee'] += abs(fee)
+            if leg['usd'] is not None and usd_v is not None:
+                leg['usd'] += usd_v
+            else:
+                leg['usd'] = None
+        else:
+            side[asset] = {
+                'date': date, 'time': time, 'asset': asset,
+                'amount': abs(amount), 'fee': abs(fee),
+                'usd': usd_v,
+                # The file as messages name it.
+                'src': src,
+                # The unfolded name (USDC, not USD): the
+                # fiat-for-fiat branch names the stablecoin
+                # and checks its peg (re-audit A2-1284).
+                'raw': asset_name,
+            }
+
+    def _instant_leg_from_row(self, instant_trades, row, src) -> None:
+        """_add_instant_leg for a raw ledger row of `src` (another export
+        of the account: _join_instant_legs)."""
+        txid = (row.get('txid') or '').strip()
+        refid = (row.get('refid') or '').strip()
+        type_raw = (row.get('type') or '').strip().lower()
+        asset_raw = row.get('asset') or ''
+        dt = self._local_dt(row.get('time') or '',
+                            f"ledger row (type={type_raw!r}, "
+                            f"asset={asset_raw!r})")
+        ctx = f"ledger {src} txid={_mask(txid)}"
+        asset_name = _normalize_asset(asset_raw, fold_stable=False)
+        self._add_instant_leg(
+            instant_trades, row, src, ctx, refid, type_raw,
+            self._num(row, 'amount', ctx, required=True),
+            self._num(row, 'fee', ctx), self._norm(asset_raw), asset_name,
+            _fee_ccy(row, asset_name), dt.strftime("%Y-%m-%d"),
+            dt.strftime("%H:%M:%S"))
+
+    def _join_instant_legs(self, refid, path, entries):
+        """The legs of instant trade `refid` across the account's ledger
+        exports (`entries`: prepare_files' (file, key, txid, row) for the
+        refid, in input order), when this file holds only some of them:
+        a trade whose spend is in the 2025 export and its receive in the
+        2026 one was dropped from both as two orphan legs (backlog
+        TJ-0525), and one whose 2025 export holds the spend and the
+        first of two receipts booked only those (TJ-0661). Each ledger
+        entry counts once (one txid in two overlapping exports is one
+        entry; with different content it is refused). The trade is
+        booked once: by the first export holding every leg, else by the
+        first export holding one. Returns the joined {'spend',
+        'receive'} sides when this file books the legs of others, the
+        name (as messages give it) of the export that books the trade
+        when that is another, None when this file books its own legs
+        (it holds them all, or the exports together do not complete
+        the trade: an orphan stays an orphan)."""
+        here = str(Path(path).resolve())
+        files: List[str] = []
+        names: Dict[str, str] = {}
+        held: Dict[str, set] = {}
+        for src, key, txid, _row in entries:
+            if key not in files:
+                files.append(key)
+                names[key] = src
+            held.setdefault(key, set()).add(txid)
+        if len(files) < 2 or here not in files:
+            return None
+        every = set().union(*held.values())
+        if '' in every:
+            return None     # nothing tells a repeat from a second leg
+        if held[here] == every:
+            return None     # this export holds every leg: its own
+        seen: Dict[str, tuple] = {}
+        rows = []
+        for src, _key, txid, row in entries:
+            prev = seen.get(txid)
+            if prev is not None:
+                if prev[1] != _ledger_identity(row):
+                    raise ValueError(
+                        f"Kraken ledger exports {prev[0]} and {src} both "
+                        f"carry ledger txid {txid[:2]}*** with DIFFERENT "
+                        f"content — two downloads disagree on one ledger "
+                        f"entry (a restated row). Keep the newer download "
+                        f"only, or correct the row, and run again.")
+                continue
+            seen[txid] = (src, _ledger_identity(row))
+            rows.append((src, row))
+        if {(r.get('type') or '').strip().lower()
+                for _s, r in rows} != {'spend', 'receive'}:
+            return None
+        owner = next((k for k in files if held[k] == every), files[0])
+        if owner != here:
+            return names[owner]
+        joined: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for src, row in rows:
+            self._instant_leg_from_row(joined, row, src)
+        others = sorted({src for src, _row in rows} - {shown_name(path)})
+        emit_line(f"note: Kraken ledger {shown_name(path)}: refid "
+                  f"{_mask(refid)}: an instant trade whose legs are in "
+                  f"{shown_name(path)} and {', '.join(others)} — booked "
+                  f"once, here.")
+        return joined[refid]
 
     def _fee_coin_sale(self, row, ctx, fee, fee_ccy, type_raw, date, time,
                        txid, fee_usd=None) -> List[Dict[str, Any]]:
@@ -1663,9 +1834,25 @@ class KrakenBrokerage(BaseBrokerage):
         # The commission reduces the income, and the fee COINS left the
         # account: a sale of them at that value (A2-0582) — they used to
         # stay in the book.
+        income = usd_value - fee_usd
+        if asset_name in _FIAT_CURRENCIES:
+            # A fiat reward's income row is in the reward's own currency:
+            # the USD net is converted back at the rate the export's
+            # amountusd implies (10 CAD at 7.50 USD, a 1 USD fee: 8.67
+            # CAD), never booked as that many units of it (backlog
+            # TJ-0378).
+            if not usd_value:
+                raise ValueError(
+                    f"Kraken {ctx}: a {asset_name} reward of "
+                    f"{gross_qty:g} with amountusd 0 and its {fee_qty:g} "
+                    f"fee charged in {fee_ccy} (feecurrency) — the fee "
+                    f"cannot be valued in {asset_name}; refusing to guess "
+                    f"the net income. Enter this reward via a .tt "
+                    f"file{_TT_REMOVE}.")
+            income = round(gross_qty * income / usd_value, 8)
         return self._build_staking_reward(
             asset_name, date, time, gross_qty, txid,
-            usd_value=usd_value, income_usd=usd_value - fee_usd,
+            usd_value=usd_value, income_usd=income,
             fee_note=f"{fee_qty:.10g} {fee_ccy}") + self._fee_coin_sale(
                 row, ctx, fee_qty, fee_ccy, 'reward', date, time, txid,
                 fee_usd=fee_usd)
@@ -1700,7 +1887,9 @@ class KrakenBrokerage(BaseBrokerage):
         # income and the acquisition cost are the same FMV — and the fill
         # step leaves a priced row alone. `income_usd` overrides the
         # income side only (a commission charged in another currency
-        # reduces the income, not the coins' cost).
+        # reduces the income, not the coins' cost — a stablecoin's too,
+        # backlog TJ-0379); for a fiat reward it is in the reward's own
+        # currency, the currency of its row.
         # `qty` is the NET coins credited (gross reward − Kraken's in-kind
         # commission); the commission is recorded in the description,
         # never in the USD `fee` field (it is coin-denominated and
@@ -1734,12 +1923,15 @@ class KrakenBrokerage(BaseBrokerage):
             buy['id'] = f'{txid}-buy'
         if asset in _STABLECOINS and not self.stablecoins_as_cash:
             # Property mode (a US project): income at 1.00 USD a coin,
-            # and the coins are acquired at that value.
+            # and the coins are acquired at that value. A commission
+            # paid in another currency reduces the income only: the
+            # coins credited in full cost their full par value (backlog
+            # TJ-0379; it was taken off their cost too).
             inc = qty if income_usd is None else income_usd
-            for leg in (div, buy):
-                leg['price'] = round(inc / qty, 8) if qty else 1.0
-                leg['net_amount'] = inc
-                leg['gross_amount'] = inc
+            for leg, amt in ((div, inc), (buy, qty)):
+                leg['price'] = round(amt / qty, 8) if qty else 1.0
+                leg['net_amount'] = amt
+                leg['gross_amount'] = amt
             return [div, buy]
         if ((self.stablecoins_as_cash and asset in _CASH_STABLECOINS)
                 or asset in _FIAT_CURRENCIES):
@@ -2343,10 +2535,10 @@ def kraken_cash_events(path, stable_cash: bool = True
     for ref, legs in groups.items():
         if any(a not in cashlike for a in all_assets_by_ref.get(ref, ())):
             continue        # a coin leg: the position book's fill
-        for lg in legs:
-            if abs(lg[3]) > 1e-9 and lg[6]:
-                out.append(CE.flow(lg[0], lg[6], -lg[3], where=lg[4],
-                                   desc="Kraken conversion fee"))
+        fees = [CE.flow(lg[0], lg[6], -lg[3], where=lg[4],
+                        desc="Kraken conversion fee")
+                for lg in legs if abs(lg[3]) > 1e-9 and lg[6]]
+        out.extend(fees)
         # The legs added up per (folded) currency: Kraken can write one
         # side of a trade as several ledger rows under one refid (two
         # receipt legs), which `one debit, one credit` used to skip
@@ -2397,6 +2589,11 @@ def kraken_cash_events(path, stable_cash: bool = True
                            where=a["where"],
                            desc=f"Kraken {'/'.join(a['bare'])}->"
                                 f"{'/'.join(b['bare'])}"))
+        for ev in fees:
+            # The conversion it was charged on: in the base currency it
+            # is part of the amount paid or received (lib/fx_cash_v2,
+            # backlog TJ-0456).
+            ev['_fee_of'] = a["where"]
     # Balances: per folded currency, at the end of each year spanned and
     # before the first row (the opening of the first year).
     if bal_rows:

@@ -11,7 +11,6 @@ Usage:
 
 from taxjson.lib.out import labelled
 import argparse
-import json
 import re
 import sys
 from pathlib import Path

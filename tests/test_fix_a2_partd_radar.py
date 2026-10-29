@@ -14,11 +14,9 @@ sell-check, buy-check, harvest).
 
 All data is synthetic.
 """
-import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 
 from tax_rules import rule, rule_absent

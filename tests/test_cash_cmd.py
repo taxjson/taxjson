@@ -125,7 +125,7 @@ class TestCommand(unittest.TestCase):
             _TOML.format(extra="") + '\n[accounts.rrsp]\ntype = "sheltered"\n')
         (cls.root / "inputs" / "margin" / "rows.tt").write_text(_ROWS_TT)
         (cls.root / "work").mkdir()
-        _rates(cls.root / "work" / "to_base.csv")
+        _rates(cls.root / "work" / "to_base.csv", cls.addClassCleanup)
         r = _cli(cls.root, "run", "--no-input")
         assert r.returncode == 0, r.stderr + r.stdout
 

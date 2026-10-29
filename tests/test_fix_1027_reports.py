@@ -217,10 +217,10 @@ class TestFifoLotsAreOneTrade(unittest.TestCase):
         self.assertEqual(res["denied_count"], 1)
         self.assertEqual(res["tainted_skipped"], 1)
         self.assertEqual([t["pnl"] for t in res["trades"]], [-10.0])
-        # An unknown-cost lot of a sale is still not counted; its known
-        # lot is the trade.
+        # A sale with an unknown-cost lot is left out whole, its known
+        # lot too: the unknown lot could turn its P/L (backlog TJ-0545).
         res = self._closed([_lot("s1", 7.0), _lot("s1", 0.0, tainted=True)])
-        self.assertEqual([t["pnl"] for t in res["trades"]], [7.0])
+        self.assertEqual(res["trades"], [])
         self.assertEqual(res["tainted_skipped"], 1)
 
     @rule("US-RPT-12")

@@ -4,7 +4,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from taxjson.bin.taxjson_run import cmd_elect
@@ -93,13 +93,17 @@ class TestElect(unittest.TestCase):
 
     def test_unknown_account_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as cm, \
+                    redirect_stderr(io.StringIO()):
                 _elect(_project(tmp), account="nope")
+            self.assertEqual(cm.exception.code, 2)   # usage (TJ-0539)
 
     def test_redo_without_account_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as cm, \
+                    redirect_stderr(io.StringIO()):
                 _elect(_project(tmp), redo=True)
+            self.assertEqual(cm.exception.code, 2)
 
 
 
@@ -137,14 +141,18 @@ class TestElectSet(unittest.TestCase):
     def test_set_rejects_unknown_election(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as cm, \
+                    redirect_stderr(io.StringIO()):
                 self._elect_set(root, "163ae89a851c=not_a_real_election")
+            self.assertEqual(cm.exception.code, 2)
 
     def test_set_rejects_malformed_argument(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as cm, \
+                    redirect_stderr(io.StringIO()):
                 self._elect_set(root, "163ae89a851c")
+            self.assertEqual(cm.exception.code, 2)
 
 
 # IB books a merger as paired Corporate Actions legs. The FMV is on the
@@ -183,12 +191,13 @@ class TestElectSetWithoutPendingDoc(unittest.TestCase):
         self.assertEqual(len(events), 1)
         return root, events[0].event_id
 
-    def _elect_set(self, root, setarg, hints=None):
+    def _elect_set(self, root, setarg, hints=None, err=None):
         import contextlib
         args = argparse.Namespace(dir=str(root), account="margin",
                                   redo=False, reset=False, event=None,
                                   set=setarg, hint=hints or [])
-        out, err = io.StringIO(), io.StringIO()
+        out, err = io.StringIO(), (err if err is not None
+                                   else io.StringIO())
         with redirect_stdout(out), contextlib.redirect_stderr(err):
             cmd_elect(args)
         return out.getvalue(), err.getvalue()
@@ -196,10 +205,13 @@ class TestElectSetWithoutPendingDoc(unittest.TestCase):
     def test_wrong_action_type_election_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, eid = self._project(tmp)
+            err = io.StringIO()
             with self.assertRaises(SystemExit) as cm:
                 self._elect_set(root, f"{eid}=rollover_s_86_1",
-                                hints=["allocated_acb=1"])
-            self.assertIn("not valid for event", str(cm.exception))
+                                hints=["allocated_acb=1"], err=err)
+            # A usage error: exit 2, the message printed (TJ-0539).
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn("not valid for event", err.getvalue())
             self.assertFalse(
                 (root / "inputs" / "margin" / "manifest.json").exists(),
                 "a refused election must not be saved")
@@ -210,10 +222,12 @@ class TestElectSetWithoutPendingDoc(unittest.TestCase):
         # (not the election's static hint list) can say so.
         with tempfile.TemporaryDirectory() as tmp:
             root, eid = self._project(tmp)
+            err = io.StringIO()
             with self.assertRaises(SystemExit) as cm:
                 self._elect_set(root, f"{eid}=taxable_disposition",
-                                hints=["fmv_per_share=12.5"])
-            self.assertIn("does not use hint", str(cm.exception))
+                                hints=["fmv_per_share=12.5"], err=err)
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn("does not use hint", err.getvalue())
 
     def test_valid_reelection_saves_without_bogus_id_warning(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -229,10 +229,10 @@ class TestCli(unittest.TestCase):
 class TestRunWrapper(unittest.TestCase):
     def test_form_defaults_from_country(self):
         try:
-            import tomllib  # noqa: F401
+            import tomllib  # noqa: F401  (availability check: TOML support)
         except ImportError:
             try:
-                import tomli  # noqa: F401
+                import tomli  # noqa: F401  (availability check: TOML support)
             except ImportError:
                 self.skipTest("no TOML support on this interpreter")
         from taxjson.bin.taxjson_run import cmd_form_export

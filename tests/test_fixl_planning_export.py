@@ -16,7 +16,6 @@
 All data is synthetic.
 """
 import json
-import os
 import subprocess
 import sys
 import tempfile

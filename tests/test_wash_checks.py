@@ -141,7 +141,7 @@ class TestRootMatcherClasses(unittest.TestCase):
         # OLD.TO loss (settled 2026-08-25) is always 11 days old and its
         # 30-day window still open. Hard-coded, the verdict flipped from
         # VIOLATION to EXITABLE the day the window closed (2026-09-25).
-        from datetime import date as _d, timedelta as _td
+        from datetime import date as _d
         _shift = _d.today() - _d(2026, 9, 5)
 
         def _mv(s):

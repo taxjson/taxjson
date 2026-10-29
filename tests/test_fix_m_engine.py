@@ -1125,7 +1125,6 @@ class TestPhantomWalks(unittest.TestCase):
 
     def test_phantom_symbol_case_and_unmatched_pair(self):
         # S075-24 / S076-00.
-        import json
         import tempfile
         from pathlib import Path
         from taxjson.lib.missing_history import (load_missing_history,

@@ -200,7 +200,13 @@ writes them with uv (`pipx install uv`): one resolution of every lock,
 universal over platforms and Python 3.10+, nothing published in the last
 7 days (`--cooldown-days`), then a wheel-coverage check for Linux
 x86_64 / aarch64 and macOS arm64 / x86_64 on Python 3.10–3.13 (it fails
-when `build`, `core` or `fx` lack one; other extras are reported).
+when `build`, `core` or `fx` lack one; other extras are reported, and
+install.sh installs the core package where an extra has no wheel). A
+known gap in an optional lock is listed as accepted instead
+(`ACCEPTED_GAPS` in the script, with the reason): today Intel macOS has
+no cryptography 50 wheel, which `all` and `generate-parser` pin for
+google-auth. `--coverage` says when an accepted gap is no longer seen;
+remove it then.
 Regenerate and commit them:
 
 - whenever `pyproject.toml`'s dependencies or extras (or taxjson-fetch's
@@ -301,7 +307,13 @@ runs the **full** local gate (or reuses a recorded PASS of the same tree:
 through `scripts/land.sh` (the pre-push PII gate, then a pull request
 rebase-merged once its checks pass). That push is the one in
 `publish_main`, the only place `release.sh` publishes `main`. GitHub CI
-then runs `tests.yml` on the version commit's push to `main`.
+then runs `tests.yml` on the version commit's push to `main`. That run
+exists only when the version commit is the head of its push, so it must
+land last: should a check fail on its pull request, a flaky one is landed
+again as it is (`scripts/land.sh`), but for one that needs a fix the
+version commit is taken back first (`git reset --keep HEAD~1`), the fix
+landed, and `--prepare` run again. `--prepare` refuses an earlier version
+commit, not yet landed, that has commits on top of it.
 
 **The cut tags that commit once CI has passed on it.** It refuses unless
 the local `main` is exactly `origin/main`; the version commit is on `main`
@@ -455,10 +467,16 @@ commits as a branch `land/<time>-<sha>`, opens the pull request (title:
 the commit subject; body: the subjects), waits for every check and
 rebase-merges it once all have passed — if `origin`'s `main` is still the
 commit it pushed on. (Were `main` given a ruleset that
-requires checks, and auto-merge allowed, it would hand the merge to
-GitHub's auto-merge instead, and the ruleset's "require branches to be up
-to date" would have to keep that base; the private dev repo, on GitHub's
-free plan, has neither.) It waits (`--timeout`, 60 minutes; `--no-wait` returns once
+requires checks and a branch up to date with `main` ("require branches to
+be up to date before merging"), and auto-merge allowed, it would hand the
+merge to GitHub's auto-merge instead, which then refuses to merge onto a
+`main` that moved. A ruleset that requires checks but not an up-to-date
+branch is not enough: auto-merge would replay the commits onto whatever
+`main` is when the checks pass, so `land.sh` merges itself then. The
+private dev repo, on GitHub's free plan, has no ruleset. Should `main`
+move in the moment between its last look and its own merge, it warns
+that the landed commits do not sit on the gated base: run the gate on
+`main`.) It waits (`--timeout`, 60 minutes; `--no-wait` returns once
 the pull request is open) and brings local `main` to what landed
 (`git pull --rebase --autostash`: the rebase merge gave the commits new
 ids, and the local copies drop out). A failed check (exit 1) closes the

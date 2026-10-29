@@ -6,7 +6,6 @@ Summarize gains from taxjson_gains.py output, formatted identically to tt_sum_ga
 """
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -219,8 +218,15 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         # section (R1-320: the .sum you file from dropped them without
         # a word while `taxjson sum` pointed at a section nobody wrote).
         'manual_rows': [
+            # `direction`: a short covered with its short sale before
+            # the data lists its cover cost, never as proceeds
+            # (form_export.manual_figures, backlog TJ-0497).
+            # `own_move_from`: units moved in from another of your
+            # accounts, their cost in the blended figures (TJ-0279).
             {k: r.get(k) for k in ('symbol', 'date', 'date_settle',
-                                   'qty', 'proceeds', 'account')}
+                                   'qty', 'proceeds', 'account',
+                                   'direction', 'own_move_from',
+                                   'currency')}
             for r in (data.get('manual_reporting_required') or [])],
         'total_fees': total_fees,
         'option_fees': option_fees,
@@ -446,7 +452,8 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         from taxjson.bin.taxjson_form_export import manual_section
         lines.append("")
         lines += manual_section(data['manual_rows'],
-                                ", ".join(sorted(all_currencies)) or "")
+                                ", ".join(sorted(all_currencies)) or "",
+                                country=country)
     return "\n".join(lines)
 
 def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], year: str, use_color: bool = True) -> str:

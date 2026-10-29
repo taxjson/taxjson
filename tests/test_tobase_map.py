@@ -8,7 +8,6 @@ Every fixture is SYNTHETIC: invented tickers (QZ*), invented FIGIs
 import importlib.util
 import json
 import os
-import sys
 import tempfile
 import unittest
 import zipfile

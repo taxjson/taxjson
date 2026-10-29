@@ -328,6 +328,10 @@ ACCOUNT_SPEC: Tuple[Key, ...] = (
     Key("year_end_posting", '"06-30"',
         "RBC: the day next year by which year-end book-cost rows are "
         "posted. Default 06-30."),
+    Key("custodian_country", '"USA"',
+        "A taxable account held with a custodian outside Canada: its "
+        "country (ISO alpha-3). The Canadian issuers' shares in it are "
+        "T1135 property, category 6. Default: Canada."),
     Key("brokerage", '"SOURCE"',
         "The `taxjson fetch` source of this account (a fetcher plugin's "
         "name; `taxjson fetch --list` names the installed ones). No "
@@ -824,6 +828,17 @@ f23db548a616307f f9e5646a07e6763c fc47e25e6fd818f4
 """.split()),
 }
 
+# The grouped layout's lines of two Canadian descriptions before their
+# text changed (option_grant_timing_since's "SET ONCE", and
+# corporate_distributions' "README" link): `taxjson format` kept them as
+# the user's notes, so the key's description showed twice
+# (tests/fixtures/style/canada/taxjson.toml carried them; backlog
+# TJ-0595).
+_LEGACY_TEMPLATE_HASHES_BY_COUNTRY[C.CANADA] |= frozenset("""
+47492e06f42cc8ab f582cd015e1fceba c5b861ab5c6e0d1c 04e0ac4ffd759a89
+ac9e4ce9427cde5c
+""".split())
+
 
 def _comment_suffixes(line: str) -> Iterable[str]:
     """_norm of the text from every '#' of a rendered template line (a
@@ -1193,7 +1208,8 @@ class _Renderer:
             _Entry(k.name, self.fill(_pick(k.value, c)),
                    self.fill(_pick(k.doc, c)), commented=True, slot=False,
                    inline=self.fill(_pick(k.inline, c)))
-            for k in _account_order(ACCOUNT_SPEC)])
+            for k in _account_order(ACCOUNT_SPEC)
+            if owned(c, "accounts", k.name)])
         if present and not accts:
             self.lines.append("")
             self.header(T0, "[accounts]")
@@ -1205,11 +1221,13 @@ class _Renderer:
             self.lines.append("")
             self.header(T, f"[accounts.{key_repr(name)}]")
             # Compact: the reference block above documents every key.
-            keys = _account_order(k for k in ACCOUNT_SPEC if k.name in acfg)
+            keys = _account_order(k for k in ACCOUNT_SPEC if k.name in acfg
+                                  and owned(c, "accounts", k.name))
             self.keys(T, [_Entry(k.name, toml_value(acfg[k.name], top=True))
                           for k in keys]
                       + self.unknown_entries(acfg, spec_keys()["accounts"],
-                                             f"accounts.{name}"))
+                                             f"accounts.{name}",
+                                             owner_table="accounts"))
             self.end(T)
         self.blank()
         for ln in textwrap.wrap(_MORE_ACCOUNTS_NOTE, 76):
@@ -1331,7 +1349,10 @@ _EQUITY_EXPORTS = (
     ("Interactive Brokers", "Activity Statement, CSV: the longest period "
                             "allowed (one file per year is fine)."),
     ("Questrade", "Transaction history: every year available. It "
-                  "downloads as Excel: convert it with taxjson-xlsx-to-csv."),
+                  "downloads as Excel: convert it with taxjson-xlsx-to-csv "
+                  "FILE.xlsx -o FILE.csv, which needs the optional xlsx "
+                  "extra: re-run the installer with TAXJSON_EXTRAS=fx,xlsx "
+                  "(docs/getting-started.md, step 1)."),
     ("RBC Direct Investing", "Transaction history, CSV: every year "
                              "available."),
     ("Webull", "Trading Summary, CSV: buys and sells only; enter "
@@ -1378,7 +1399,9 @@ def input_readme(country: str, name: str,
         "",
     ]
     for broker, what in rows:
-        wrapped = textwrap.wrap(what, 70 - w) or [""]
+        # (a command or path is never cut at its hyphen)
+        wrapped = textwrap.wrap(what, 70 - w,
+                                break_on_hyphens=False) or [""]
         lines.append(f"  {broker:<{w}}{wrapped[0]}")
         lines += [f"  {'':<{w}}{x}" for x in wrapped[1:]]
     lines += [

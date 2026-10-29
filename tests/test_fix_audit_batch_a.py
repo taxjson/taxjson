@@ -114,11 +114,12 @@ class TestCoinbaseBlankTotal(_UTC):
         self.assertIn("cb.csv:2", str(cm.exception))
 
     def test_pool_usd_buy_needs_no_total(self):
-        # A USD-priced buy has no CAD leg: its cost is the day's rate, so
-        # a blank Total there is not refused.
+        # A USDC bought for US dollars is one currency for itself
+        # (backlog TJ-0499): with no Total to derive the spread from it
+        # is taken at par — no flow, and not refused.
         self.assertEqual(self._pool(
             "SYN-1,2025-02-03 16:00:00 UTC,Buy,USDC,100,USD,,,,0,"
-            "Bought 100 USDC\n"), [(100.0, 0.0)])
+            "Bought 100 USDC\n"), [])
 
 
 # ------------------------------------- 79: overlapping exports, read once

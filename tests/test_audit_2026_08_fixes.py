@@ -2178,7 +2178,6 @@ class TestReAuditRegressions(unittest.TestCase):
         # A full run whose SHELTERED account defers on corp-action
         # elections must NOT destroy the taxable account's last-good
         # wash artifacts (the run exits 3; context is transient).
-        import shutil
         from test_pending_elections import _SSL_RGLD_CSV
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2296,19 +2295,27 @@ class TestParserAudit202609Fixes(unittest.TestCase):
         self.assertNotIn("trade x2", err)
 
     def test_coinbase_convert_without_subtotal_still_backfillable(self):
-        # A Convert row with no usable Subtotal ships price=0 AND
-        # net=0 on both legs so taxjson-fill-crypto backfills FMV —
-        # the fee must not leak into the buy leg's net there (fill
-        # derives price from any nonzero net_amount).
+        # A Convert row with no value at all ships price=0 AND net=0 on
+        # both legs so taxjson-fill-crypto backfills FMV (fill derives
+        # price from any nonzero net_amount).
         from test_parser_activity_coverage import _parse_csv
         from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
         txs = _parse_csv(CoinbaseBrokerage, _CB_HEADER + (
             'CB-C-3,2024-05-01 10:00:00 UTC,Convert,BTC,0.05000000,USD,'
-            ',,,10.00,Converted 0.05000000 BTC to 1.20000000 ETH\n'))
+            ',,,,Converted 0.05000000 BTC to 1.20000000 ETH\n'))
         self.assertEqual(len(txs), 2)
         for t in txs:
             self.assertEqual(t['price'], 0.0)
             self.assertEqual(t['net_amount'], 0.0)
+        # With a fee but no Subtotal, Total or Price, the fee (in the
+        # row's currency) could not be added to the value fill-crypto
+        # finds in US dollars: it was dropped, now the row is refused
+        # (backlog TJ-0512).
+        with self.assertRaises(ValueError) as cm:
+            _parse_csv(CoinbaseBrokerage, _CB_HEADER + (
+                'CB-C-3,2024-05-01 10:00:00 UTC,Convert,BTC,0.05000000,USD,'
+                ',,,10.00,Converted 0.05000000 BTC to 1.20000000 ETH\n'))
+        self.assertIn("fee of 10.00 USD", str(cm.exception))
 
     _RBC_HEADER = ('Date,Activity,Symbol,Description,Quantity,Price,'
                    'Settlement Date,Currency,Value,Amount\n')

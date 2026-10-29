@@ -5,6 +5,8 @@ it pins; every test was checked to fail with that code reverted.
 
 All data is synthetic (invented tickers, round amounts).
 """
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -310,10 +312,15 @@ class TestUnreadableBooksStopTheView(unittest.TestCase):
             root = self._proj(td)
             _doc(root / "work" / "margin_base.json", [])
             (root / "work" / "cash_base.json").write_text('{"transac')
-            with self.assertRaises(SystemExit) as cm:
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, \
+                    contextlib.redirect_stderr(err):
                 R._dist_adjust_rows(root / "work", ["margin", "cash"],
                                     lambda _d: True)
-        self.assertIn("cash_base.json", str(cm.exception.code))
+        # (exit 2, an input that cannot be read, its Error printed
+        # first: backlog TJ-0596)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("work/cash_base.json", err.getvalue())
 
     @rule("CA-INC-06")
     def test_box18_fractions_stops_on_a_truncated_native_book(self):
@@ -325,9 +332,13 @@ class TestUnreadableBooksStopTheView(unittest.TestCase):
                    gross_amount=60.0, id="d1")])
             (root / "work" / "cash_raw.json").write_text('{"transac')
             _cgd(root, ("ZZS.TO", "margin"))
-            with self.assertRaises(SystemExit) as cm:
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, \
+                    contextlib.redirect_stderr(err):
                 R._box18_fractions(root)
-        self.assertIn("cash_raw.json", str(cm.exception.code))
+        # (exit 2, an input that cannot be read: backlog TJ-0596)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("work/cash_raw.json", err.getvalue())
 
     def test_option_boundary_stops_on_a_truncated_base_book(self):
         with tempfile.TemporaryDirectory() as td:

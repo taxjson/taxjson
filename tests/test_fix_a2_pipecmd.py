@@ -12,6 +12,7 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
+from _planted_rates import plant
 from tax_rules import rule
 from _style import CapturedWidth
 
@@ -32,14 +33,15 @@ def tearDownModule():
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _rates(path: Path, src: str, dst: str, rate: str):
+def _rates(path: Path, src: str, dst: str, rate: str, home: Path):
+    """The rates file, and the same rates in `home`'s currency cache (a
+    run that rebuilds the file keeps them: backlog TJ-0635)."""
     d = date(2025, 1, 1)
     lines = []
     while d <= date.today():
         lines.append(f"{d.isoformat()} 12:00:00 {src} {dst} {rate} boc")
         d += timedelta(days=1)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", home)
 
 
 def _env(home, **kw):
@@ -73,10 +75,10 @@ def _tt_project(td, lines, *, country="canada", year=2026, accounts=None,
         (root / "inputs" / name).mkdir(parents=True)
         (root / "inputs" / name / "a.tt").write_text("\n".join(ls) + "\n")
     (root / "taxjson.toml").write_text(cfg)
-    _rates(root / "work" / "to_base.csv", src, base,
-           "1.3500" if country == "canada" else "0.7400")
     home = Path(td) / "home"
     home.mkdir(exist_ok=True)
+    _rates(root / "work" / "to_base.csv", src, base,
+           "1.3500" if country == "canada" else "0.7400", home)
     return root, home
 
 
@@ -666,7 +668,8 @@ class TestUnusableStatementFiles(unittest.TestCase):
             finally:
                 f.chmod(0o600)
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("permission denied", r.stderr)
+            self.assertIn("permission denied", r.stderr.lower())
+            self.assertIn("chmod u+r", r.stderr)
             self.assertNotIn("Rename to start", r.stderr)
 
     def test_numbers_export_is_refused(self):

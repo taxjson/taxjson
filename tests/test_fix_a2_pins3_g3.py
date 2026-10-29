@@ -7,8 +7,6 @@ Each test kills a mutant that survived the whole suite in the second
 audit (the docstrings name the A2 id and the line pinned). Every
 fixture is SYNTHETIC: invented tickers (QZ*, XYZ, GHI), fake accounts.
 """
-import contextlib
-import io
 import json
 import tempfile
 import unittest

@@ -105,11 +105,13 @@ class TestGateStage(unittest.TestCase):
 @unittest.skipUnless(sys.platform.startswith("linux"), "Linux only")
 class TestHiddenExtraStillAllowsATestsFake(unittest.TestCase):
     def test_fake_on_pythonpath_imports_installed_copy_does_not(self):
+        import importlib.util
         import subprocess
         import tempfile
-        sh = (REPO / "scripts" / "ci_no_extras.sh").read_text()
-        body = sh.split('cat > "$ROOT/hide/sitecustomize.py" <<EOF\n', 1)[1]
-        body = body.split("\nEOF\n", 1)[0]
+        spec = importlib.util.spec_from_file_location(
+            "hide_optional", REPO / "scripts" / "hide_optional.py")
+        hide_optional = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hide_optional)
         with tempfile.TemporaryDirectory() as td:
             hide, fake = Path(td, "hide"), Path(td, "fake", "json5x")
             hide.mkdir()
@@ -117,8 +119,8 @@ class TestHiddenExtraStillAllowsATestsFake(unittest.TestCase):
             (fake / "__init__.py").write_text("FAKE = True\n")
             # `json5x` stands in for an extra: hidden from site-packages,
             # served from the test's own folder.
-            (hide / "sitecustomize.py").write_text(
-                body.replace("$EXTRAS", "json5x unittest pip"))
+            (hide / "sitecustomize.py").write_text(hide_optional.render(
+                "json5x unittest pip", "taxjson_fetch"))
             env = dict(os.environ, PYTHONPATH=os.pathsep.join(
                 [str(hide), str(fake.parent)]))
             r = subprocess.run(
@@ -130,7 +132,6 @@ class TestHiddenExtraStillAllowsATestsFake(unittest.TestCase):
                                env=env, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             # An installed package (pip, in site-packages) is hidden.
-            import importlib.util
             import sysconfig
             spec = importlib.util.find_spec("pip")
             purelib = os.path.realpath(sysconfig.get_paths()["purelib"])

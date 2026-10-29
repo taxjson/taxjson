@@ -40,7 +40,6 @@ import json
 import statistics
 import sys
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 
 from taxjson.lib.report_model import fmt_money
@@ -145,11 +144,16 @@ def add_stat(s: Dict[str, Any], fee: float, qty: float,
 
 
 def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
-              deleted=frozenset(), until=None):
+              deleted=frozenset(), until=None, quiet=frozenset()):
     """Walk the parsed files, dedup by id, accumulate per-key buckets.
     Each bucket = {'base': stats, 'cur': {CUR: stats}}. `since` /
     `until`: the first and last trade date counted (inclusive; None:
-    no bound)."""
+    no bound). `quiet`: the files (resolved paths) a --cache folder
+    added: one with no brokerage tag is no broker's book, left out
+    without being listed as skipped — work/ holds every other file a
+    run or command writes (checklist_results.json, the bases), so the
+    count moved the report whenever one of them came or went (backlog
+    TJ-0434)."""
     buckets: Dict[str, Dict[str, Any]] = {}
     grand = {"base": new_stats(), "cur": {}}
     brokers_seen: set = set()
@@ -191,7 +195,8 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         data = load_json_doc_or_exit(PROG, fp)
         broker = (data.get("metadata") or {}).get("source_brokerage")
         if not broker:
-            skipped_no_broker.append(fp.name)
+            if str(Path(fp).resolve()) not in quiet:
+                skipped_no_broker.append(fp.name)
             continue
         files_read += 1
         brokers_seen.add(broker)
@@ -435,8 +440,9 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
             doc.para(f"Brokers with NO fees in this period: "
                      f"{', '.join(info['zero_fee'])}")
     if info["skipped"] and not brief:
-        # In --cache mode most files legitimately lack a brokerage tag, so a
-        # full dump is noise; name them only when the list is short.
+        # Files named on the command line with no brokerage tag (a
+        # --cache folder's are left out unlisted: aggregate's `quiet`);
+        # name them only when the list is short.
         if len(info["skipped"]) <= 6:
             doc.para(f"Skipped {len(info['skipped'])} non-broker file(s): "
                      f"{', '.join(info['skipped'])}")
@@ -522,7 +528,8 @@ def main():
                    help="Parsed per-broker JSONs (e.g. work/margin_ib.json). "
                         "Files without metadata.source_brokerage are skipped.")
     p.add_argument("--cache", metavar="DIR",
-                   help="Add every *.json in DIR (non-broker files are skipped).")
+                   help="Add every *.json in DIR (non-broker files are "
+                        "left out, unlisted).")
     p.add_argument("--year", type=tax_year, metavar="YYYY",
                    help="Only count fees whose TRADE date is in this year "
                         "(the settlement date only when a row has no trade "
@@ -592,10 +599,13 @@ def main():
         from taxjson.bin.taxjson_ticker_map import load_map_file
         deleted = frozenset(str(x).upper() for x in
                             load_map_file(Path(args.ticker_map)).delete)
+    named = {str(Path(p).resolve()) for p in args.files}
     buckets, grand, info = aggregate(
         files, year=year, since=args.since, to_curr=args.to_curr,
         history=history, default_rate=args.default_rate,
-        by_account=args.by_account, deleted=deleted, until=args.until)
+        by_account=args.by_account, deleted=deleted, until=args.until,
+        quiet=frozenset(str(p.resolve()) for p in files
+                        if str(p.resolve()) not in named))
     scope = (f"since {args.since}" if args.since else None)
     if args.until:
         scope = (f"{scope} through {args.until}" if scope

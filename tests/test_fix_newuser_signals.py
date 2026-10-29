@@ -30,7 +30,7 @@ from datetime import date
 from pathlib import Path
 from unittest import mock
 
-from _qa_project import ENV, console, tj  # noqa: F401
+from _qa_project import console, tj
 from tax_rules import rule, rule_absent
 
 from taxjson.lib import checklist as cl

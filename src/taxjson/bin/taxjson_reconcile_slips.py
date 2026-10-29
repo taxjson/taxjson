@@ -65,7 +65,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.bin.taxjson_form_export import grant_buyback_units, load_json
+from taxjson.bin.taxjson_form_export import (grant_buyback_units, load_json,
+                                              short_carried_loss)
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.country import CANADA, USA
 
@@ -566,6 +567,11 @@ def load_computed(gains_paths: List[Path],
                 # the COVER COST, a false MISMATCH equal to the gain
                 # (2026-09 audit).
                 proceeds, cost = abs(cost), abs(proceeds)
+                # A US re-short's carried wash-sale loss is basis on the
+                # 1099-B, not a cut of its proceeds (backlog TJ-0465;
+                # form-export's (d) and (e) the same).
+                _carried = short_carried_loss(e)
+                proceeds, cost = proceeds + _carried, cost + _carried
                 if e.get("grant") and -float(e.get("cost") or 0.0) \
                         + outlays >= 0:
                     # A grant-timing WRITE: the row's commission is the

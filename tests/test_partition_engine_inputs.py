@@ -129,17 +129,19 @@ class TestFuturesByCountry(unittest.TestCase):
 
 
 # ------------------------------------------------------------ INPUTS-01
-def _usd_rates(path, start="2023-01-01"):
+def _usd_rates(path, home, start="2023-01-01"):
     """A hand-written USD->CAD rates file reaching today (the run keeps
-    a fresh one offline)."""
+    a fresh one offline), and the same rates in the currency cache of
+    `home`, the HOME _run_offline runs under: a run that rebuilds the
+    file keeps them (backlog TJ-0635)."""
     from datetime import date, timedelta
+    from _planted_rates import plant
     d, stop = date.fromisoformat(start), date.today()
     lines = []
     while d <= stop:
         lines.append(f"{d.isoformat()} 12:00:00 USD CAD 1.3500 boc")
         d += timedelta(days=1)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", home)
 
 
 def _run_offline(root, home, *args):
@@ -302,7 +304,7 @@ class TestStockDividend(unittest.TestCase):
                                files={"inputs/ib/ib.csv": csv},
                                canada={"source_currencies": ["USD"],
                                        "option_grant_timing_since": 2025})
-            _usd_rates(ps["canada"] / "work" / "to_base.csv")
+            _usd_rates(ps["canada"] / "work" / "to_base.csv", td)
             rows = {}
             for c, root in ps.items():
                 r = _run_offline(root, td, "run", "--no-input")
@@ -383,7 +385,6 @@ class TestSavedCryptoGift(unittest.TestCase):
     def test_saved_gift_by_country(self):
         import json
         import tempfile
-        from pathlib import Path
         from test_fix_sends import (PAY_ID, _cad_usd_rates_file, _cli,
                                     _project)
         _, _, coin, qty = PAY_ID.split("-", 3)
@@ -695,7 +696,7 @@ class TestRecordDateHolder(unittest.TestCase):
                                     'per_share = 0.50\n',
                                canada={"source_currencies": ["USD"],
                                        "option_grant_timing_since": 2025})
-            _usd_rates(ps["canada"] / "work" / "to_base.csv")
+            _usd_rates(ps["canada"] / "work" / "to_base.csv", td)
             adj, err = {}, {}
             for c, root in ps.items():
                 r = _run_offline(root, td, "run", "--no-input")

@@ -114,7 +114,8 @@ def tt_files(acct_dir: Path) -> List[Path]:
         return []
     return [p for p in sorted(acct_dir.iterdir())
             if p.suffix.lower() == ".tt" and p.is_file()
-            and not p.name.startswith((".", "~$"))]
+            and not p.name.startswith((".", "~$"))
+            and not _PL.redacted_copy_beside_exports(p)]
 
 
 @dataclass

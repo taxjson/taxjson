@@ -312,12 +312,29 @@ class RenderTests(unittest.TestCase):
                 self.assertEqual(out.lint(text), [])
                 self.assertLessEqual(len(out.prose_lines(text)), 6)
                 self.assertIn("80.00", text)
-                self.assertIn("must not be deducted again", text)
+                # What the figure is, not an instruction about the return
+                # (backlog TJ-0288).
+                self.assertIn("NET INCOME is after the COMMISSION the "
+                              "exchange kept", text)
+                self.assertNotIn("deducted again", text)
                 detail = "\n".join(render(result, summary=summary, details=True))
                 self.assertEqual(out.lint(detail), [])
                 for needle in ("sample.csv", "line 7", "2025-03-04T15:15:00Z",
                                "America/Toronto", "Commission units", "FX to base", "CA-INC-STAKING"):
                     self.assertIn(needle, detail)
+
+    def test_tj0288_no_commission_line_without_a_commission(self):
+        # A view with no commission (none withheld, or no reward at all)
+        # says nothing about one.
+        for rows in (reward(metadata=metadata(fee_quantity=0, gross_quantity=4)),
+                     []):
+            result = report(rows)
+            for summary in (False, True):
+                with patch.dict(os.environ, {"TAXJSON_WIDTH": "0"}):
+                    text = "\n".join(render(result, summary=summary))
+                self.assertNotIn("COMMISSION the exchange kept", text)
+                self.assertNotIn("deducted again", text)
+        self.assertNotIn("deduct", " ".join(report([])["notes"]))
 
     def test_partial_subtotals_unknown_and_kind_are_visible(self):
         result = report(reward(metadata=metadata()) + reward("legacy"))

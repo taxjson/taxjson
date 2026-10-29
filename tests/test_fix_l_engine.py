@@ -5,10 +5,9 @@ Synthetic data only; account labels are fake.
 import contextlib
 import io
 import json
-import math
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -863,7 +862,6 @@ class TestMutationTargetsByName(unittest.TestCase):
     mutated."""
 
     def test_targets_cover_the_named_functions(self):
-        import ast
         import importlib.util
         root = Path(__file__).resolve().parent.parent
         spec = importlib.util.spec_from_file_location(

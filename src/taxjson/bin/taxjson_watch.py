@@ -63,6 +63,17 @@ def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                           # units (buy-check's per-unit denial).
                           "recent_loss": r.get("recent_loss"),
                           "recent_loss_qty": r.get("recent_loss_qty"),
+                          # One unit's share of them, and the units it
+                          # holds for (backlog TJ-0560).
+                          "recent_loss_per_unit": r.get(
+                              "recent_loss_per_unit"),
+                          "recent_loss_per_unit_qty": r.get(
+                              "recent_loss_per_unit_qty"),
+                          # A purchase of the class inside a sale
+                          # today's window, still held (sell-check's
+                          # SIMILAR caveat for a VIOLATION look-alike —
+                          # backlog TJ-0449).
+                          "recent_buy": r.get("recent_buy"),
                           # Warn-only flags (a warrant, an adjusted
                           # series, a long call in the US, a futures
                           # option): sell-check / buy-check relay them

@@ -416,6 +416,27 @@ def unchecked_accounts(cache: Path, accounts: Dict[str, Any],
     return out
 
 
+def in_kind_not_booked(cache: Path, year: Any) -> List[Dict[str, Any]]:
+    """The in-kind moves with a registered account the run did NOT book
+    (work/in_kind.json; on or before the year's end): {symbol, account
+    (the taxable one), kind, date}. Their sale or purchase is not in the
+    totals; `taxjson sum` says the same (taxjson_run.in_kind_unbooked)."""
+    try:
+        doc = json.loads((cache / "in_kind.json").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    moves = doc.get("moves") if isinstance(doc, dict) else None
+    end = f"{year}-12-31" if year else None
+    return [{"symbol": str(m.get("symbol") or ""),
+             "account": str(m.get("taxable") or ""),
+             "kind": str(m.get("kind") or ""),
+             "date": str(m.get("date") or "")[:10]}
+            for m in moves or [] if isinstance(m, dict)
+            and not m.get("booked")
+            and not (end and str(m.get("date") or "")[:10] > end)]
+
+
 def collect(root: Path, cfg: Dict[str, Any], *,
             missing_history: Optional[Path] = None,
             arrivals: Sequence[Any] = ()) -> Dict[str, Any]:
@@ -488,6 +509,10 @@ def collect(root: Path, cfg: Dict[str, Any], *,
         "transfer_in_no_cost": [{"symbol": a.symbol, "account": a.account,
                                  "date": a.date, "quantity": a.quantity}
                                 for a in no_cost],
+        # In-kind moves NOT booked: their deemed sale (a withdrawal's
+        # purchase) is missing from the totals, and the closing list
+        # named none (backlog TJ-0439).
+        "in_kind_not_booked": in_kind_not_booked(cache, year),
         "transfer_in_book_value": [{"symbol": a.symbol,
                                     "account": a.account, "date": a.date,
                                     "quantity": a.quantity}
@@ -497,7 +522,15 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                                    cache, accounts, root)],
         "income_not_held": income,
         "books_not_read": failed,
+        # One export (or broker account) in two accounts, as the run
+        # recorded it: every row booked in both (backlog TJ-0478).
+        "booked_twice": _booked_twice(root),
     }
+
+
+def _booked_twice(root: Path) -> List[str]:
+    from taxjson.lib.checklist import recorded_booked_twice
+    return recorded_booked_twice(root)
 
 
 def _names(items: Sequence[Dict[str, Any]], n: int = 3) -> str:
@@ -509,7 +542,8 @@ def is_clean(doc: Dict[str, Any]) -> bool:
     return not any(doc.get(k) for k in (
         "no_purchase", "no_purchase_in_sum", "zero_cost_sold",
         "zero_cost_held", "zero_cost_declared", "transfer_in_no_cost",
-        "unchecked_accounts", "income_not_held"))
+        "in_kind_not_booked", "unchecked_accounts", "income_not_held",
+        "booked_twice"))
 
 
 def _accounts_shown(items: Sequence[Dict[str, Any]], n: int = 6) -> str:
@@ -558,6 +592,11 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
     detail): the default view of the run's closing block. Every warning
     class render_blocks says is here; the explanation is in --details."""
     items: List[Tuple[str, str]] = []
+    tw = doc.get("booked_twice") or []
+    if tw:
+        items.append(("Warning", f"rows booked in two accounts "
+                      f"({'; '.join(tw)}) — keep each export in one "
+                      f"inputs/<account>/ folder, then `taxjson run`"))
     np_ = doc.get("no_purchase") or []
     if np_:
         items.append(("Warning", f"NOT in the totals: "
@@ -583,6 +622,13 @@ def concise_items(doc: Dict[str, Any]) -> List[Tuple[str, str]]:
         items.append(("Warning", f"{_n(len(tn), 'transfer-in', 'transfer-ins')}"
                       f" kept out with no cost ({_syms(tn)}) — "
                       f"`taxjson transfers`"))
+    ik = doc.get("in_kind_not_booked") or []
+    if ik:
+        items.append(("Warning", f"NOT in the totals: "
+                      f"{_n(len(ik), 'in-kind move', 'in-kind moves')} "
+                      f"with a registered account NOT booked "
+                      f"({_syms(_distinct(ik))}) — `taxjson run "
+                      f"--details`"))
     inc = doc.get("income_not_held") or []
     if inc:
         items.append(("Warning", f"{_n(len(inc), 'security', 'securities')}"
@@ -657,6 +703,11 @@ def render_blocks(doc: Dict[str, Any], *,
         return blocks
     yr = doc.get("year")
     items: List[Tuple[str, str]] = []
+    for tw in doc.get("booked_twice") or []:
+        items.append(("Warning", f"rows booked in two accounts ({tw}): "
+                      f"every total counts them twice; keep each broker "
+                      f"account's exports in one inputs/<account>/ folder "
+                      f"(delete the copy), then `taxjson run`."))
     np_ = doc.get("no_purchase") or []
     if np_:
         items.append(("Warning", f"{_n(len(np_), 'position', 'positions')} "
@@ -710,6 +761,14 @@ def render_blocks(doc: Dict[str, Any], *,
         items.append(("Warning", f"{_n(len(tn), 'transfer-in', 'transfer-ins')}"
                      f" from outside your books kept out with no cost: "
                      f"{_names(tn)}. Run `taxjson transfers`."))
+    ik = doc.get("in_kind_not_booked") or []
+    if ik:
+        items.append(("Warning", f"{_n(len(ik), 'in-kind move', 'in-kind moves')}"
+                     f" with a registered account NOT booked: "
+                     f"{_names(_distinct(ik))}. What each books (a "
+                     f"contribution's sale, a withdrawal's purchase) is "
+                     f"NOT in `taxjson sum`; the in-kind warning above "
+                     f"names the INKIND line for each."))
     un = doc.get("unchecked_accounts") or []
     if un:
         items.append(("Info", f"{_n(len(un), 'account', 'accounts')} with "

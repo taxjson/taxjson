@@ -7,12 +7,11 @@ can quietly return.
 import io
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr
 from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules

@@ -87,7 +87,7 @@ def _inproc(root, *args, fake=()):
 
     def spy(cmd, **kw):
         seen.append(list(cmd))
-        mod = cmd[2] if len(cmd) > 2 else ""
+        mod = (dispatch.tool_module(cmd) or ("",))[0]
         if any(mod.endswith(f) for f in fake):
             return _Res()
         return real(cmd, **kw)
@@ -107,7 +107,9 @@ def _inproc(root, *args, fake=()):
 
 
 def _calls(seen, module):
-    return [c for c in seen if len(c) > 2 and c[2].endswith(module)]
+    from taxjson.lib.dispatch import tool_module
+    return [c for c in seen
+            if (tool_module(c) or ("",))[0].endswith(module)]
 
 
 def _flag_values(cmd, flag):

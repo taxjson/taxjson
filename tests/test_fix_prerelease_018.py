@@ -18,7 +18,6 @@ account ids, no network.
 - I3: `init` never writes through a dangling symlink.
 """
 import json
-import os
 import tempfile
 import time
 import unittest

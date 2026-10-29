@@ -827,6 +827,34 @@ def slip_accounts(cfg: Dict[str, Any]) -> List[str]:
                   and not (a or {}).get("crypto"))
 
 
+def year_sales(root: Path, cfg: Dict[str, Any], year: int
+               ) -> Dict[str, List[Tuple[str, str, float]]]:
+    """{security root: [(trade date, account, units)]}: the year's sales
+    in every account that gets slips (one ACB pool across the taxable
+    accounts, s.47). A typed T3 dates no return of capital: placed
+    after a sale, it leaves the units sold at an ACB it should have
+    lowered (backlog TJ-0420)."""
+    out: Dict[str, List[Tuple[str, str, float]]] = {}
+    ystr = str(year)
+    for acct in slip_accounts(cfg):
+        doc = _load_doc(Path(root) / "work" / f"{acct}_base.json")
+        for t in (doc or {}).get("transactions") or []:
+            if not isinstance(t, dict) \
+                    or str(t.get("action") or "") != "BUYSELL":
+                continue
+            try:
+                q = float(t.get("quantity") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            d = str(t.get("date") or "")[:10]
+            sym = str(t.get("symbol") or "")
+            if q < 0 and d.startswith(ystr) and sym:
+                out.setdefault(_root(sym), []).append((d, acct, -q))
+    for v in out.values():
+        v.sort()
+    return out
+
+
 def _no_books_text(acct: str) -> str:
     return f"{acct}: no readable work/{acct}_base.json — run `taxjson run`"
 
@@ -1035,6 +1063,21 @@ def broker_account_files(root: Path, accounts: Iterable[str]
     return {h: tuple(sorted(v)) for h, v in out.items()}
 
 
+def suggest_tt_file(root: Path, acct: str) -> Dict[str, Any]:
+    """{"file", "shared"}: the .tt file the suggested lines of `acct` go
+    in, as a path from the project folder (where every command runs):
+    the folder the project reads its exports from, `inputs/<account>/`
+    of its own, or the shared `../inputs/<account>/` an open year of
+    the one-folder-of-exports layout reads (`[settings] inputs_dir`;
+    its own inputs/<account>/ is never read there: backlog TJ-0429).
+    `shared`: that folder is outside the project, so every year reading
+    it reads the line."""
+    root = Path(root).resolve()
+    folder = _PL.inputs_dir(root)
+    return {"file": _PL.shown(folder / acct / SUGGEST_TT, root)
+            .replace("\\", "/"), "shared": _PL.shared_inputs(root)}
+
+
 def _all_accounts(cache: Path) -> List[str]:
     names = set()
     for suf in _NATIVE_SUFFIXES:
@@ -1210,13 +1253,14 @@ def audit(root: Path, cfg: Dict[str, Any], *,
     notes: List[str] = []
     coverage_no_slip: List[Dict[str, Any]] = []
     slips_no_books: List[Dict[str, Any]] = []
+    sales = year_sales(root, cfg, year)
     for acct in accts:
         a_slips = [s for s in slips if s.account == acct]
         a_rows = [r for r in books if r.account == acct]
         acc = _audit_account(acct, a_slips, a_rows, year, tolerance, rate,
                              issues, sugg_cgd, sugg_tt, notes,
                              coverage_no_slip, slips_no_books,
-                             known_files=known_files)
+                             known_files=known_files, sales=sales)
         if acc is not None:
             res_accounts.append(acc)
     t5008 = _t5008(root, slips, year, tolerance, rate)
@@ -1241,9 +1285,8 @@ def audit(root: Path, cfg: Dict[str, Any], *,
         "t5008": t5008,
         "suggestions": {
             "capital_gains_dividends": sugg_cgd,
-            "tt_lines": [{"account": a, "file": f"inputs/{a}/{SUGGEST_TT}",
-                          "lines": ls} for a, ls in sorted(sugg_tt.items())
-                         if ls],
+            "tt_lines": [dict(suggest_tt_file(root, a), account=a, lines=ls)
+                         for a, ls in sorted(sugg_tt.items()) if ls],
             "notes": fx_notes + notes},
         "problems": problems,
         "not_compared": not_compared,
@@ -1335,7 +1378,7 @@ def _issue(issues: List[Dict[str, Any]], acct: str, kind: str,
 
 def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
                    sugg_cgd, sugg_tt, notes, coverage_no_slip,
-                   slips_no_books, known_files=None
+                   slips_no_books, known_files=None, sales=None
                    ) -> Optional[Dict[str, Any]]:
     ystr = str(year)
     in_year = [r for r in a_rows if r.tax_date.startswith(ystr)]
@@ -1519,6 +1562,7 @@ def _audit_account(acct, a_slips, a_rows, year, tol, rate, issues,
     for key in sorted(groups):
         g = groups[key]
         g["acct_rows"] = a_rows
+        g["sales"] = sales or {}
         out_groups.append(_audit_group(acct, key, g, year, tol, rate, issues,
                                        sugg_cgd, sugg_tt, notes,
                                        slips_no_books))
@@ -1759,7 +1803,8 @@ def _audit_group(acct, key, g, year, tol, rate, issues, sugg_cgd, sugg_tt,
     payments = _match_payments(acct, where, slips, rows, year, issues)
     securities = _securities(acct, where, slips, rows, year, tol,
                              sugg_cgd, sugg_tt, notes,
-                             g.get("acct_rows") or rows)
+                             g.get("acct_rows") or rows,
+                             sales=g.get("sales"))
     record_year = [{"symbol": r.symbol, "paid": r.pay_date,
                     "counted_in": r.tax_date[:4]}
                    for r in rows
@@ -1955,7 +2000,7 @@ def _match_payments(acct, where, slips, rows, year, issues
 
 
 def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
-                notes, acct_rows=()) -> List[Dict[str, Any]]:
+                notes, acct_rows=(), sales=None) -> List[Dict[str, Any]]:
     """Per-security figures where the slips have them: box 18 against
     [[capital_gains_dividends]], ROC against the books' ADJUST rows,
     and a T3's split. Suggestions are the lines that bring the books to
@@ -2034,7 +2079,8 @@ def _securities(acct, where, slips, rows, year, tol, sugg_cgd, sugg_tt,
         if s_roc - bk_roc > max(0.005, 0.0):
             _suggest_roc(acct, rt, sym, cur, s_roc - bk_roc, rrows,
                          dated_roc.get((rt, cur)), year, sugg_tt, notes,
-                         where, slips, acct_rows)
+                         where, slips, acct_rows,
+                         sales=(sales or {}).get(rt, ()))
         elif bk_roc - s_roc > tol and s_roc:
             notes.append(f"{where}: the books return {fmt_money(bk_roc)} "
                          f"{cur} of {sym}'s capital and the slip "
@@ -2125,7 +2171,7 @@ def _cgd_entry(symbol, when, amount, acct, date, year) -> Dict[str, Any]:
 
 
 def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
-                 notes, where, slips, acct_rows=()) -> None:
+                 notes, where, slips, acct_rows=(), sales=()) -> None:
     from taxjson.lib.report_model import fmt_money
     lines = sugg_tt.setdefault(acct, [])
     # Never a line the books already hold (in another broker account's
@@ -2251,8 +2297,46 @@ def _suggest_roc(acct, rt, sym, cur, missing, rrows, dated, year, sugg_tt,
     rec = (f" record={lr.tax_date}" if lr and lr.tax_date != lr.pay_date
            else "")
     s = lr.symbol if lr else sym
-    add(f"ADJUST {last} 16:00:00 {s} {cur} -{missing:.2f} type=roc{rec}",
-        "ADJUST", missing)
+    # Units sold between the year's first distribution and its last: the
+    # return of capital's dates decide the ACB of the units sold, and the
+    # slip gives none. All of it on the last distribution, after the
+    # sale, left the units sold at an ACB it should have lowered
+    # (backlog TJ-0420): it is spread over the year's distributions in
+    # proportion to each one's amount, the fund's own breakdown of its
+    # distributions asked for (CA-SLIP-03, CA-INC-DATE-ROC-TRUST).
+    dists: Dict[Tuple[str, str], List[Any]] = {}
+    for r in yrows:
+        e = dists.setdefault((r.tax_date, r.pay_date), [0.0, r.symbol])
+        e[0] += r.native
+    first = min(dists)[0] if dists else ""
+    sold = [x for x in sales or () if lr and first <= x[0] < lr.tax_date]
+    total = sum(v[0] for v in dists.values())
+    if sold and len(dists) > 1 and total > 0.005 \
+            and all(v[0] > 0 for v in dists.values()):
+        keys = sorted(dists)
+        parts = [round(missing * dists[k][0] / total, 2) for k in keys[:-1]]
+        parts.append(round(missing - sum(parts), 2))
+        for (td, pd), part in zip(keys, parts):
+            if part <= 0.005:
+                continue
+            r_ = f" record={td}" if td != pd else ""
+            add(f"ADJUST {pd} 16:00:00 {dists[(td, pd)][1]} {cur} "
+                f"-{part:.2f} type=roc{r_}", "ADJUST", part)
+        d0, a0, q0 = sold[0]
+        more = f" and {len(sold) - 1} more sale(s)" if len(sold) > 1 else ""
+        notes.append(
+            f"{where}: {sym}: {q0:g} unit(s) sold on {d0} ({a0}){more}, "
+            f"between the year's first distribution ({first}) and its "
+            f"last ({lr.tax_date}): the dates of the return of capital "
+            f"decide the ACB of the units sold, and the T3 gives none — "
+            f"the suggested lines spread its {fmt_money(missing)} {cur} "
+            f"over the year's {len(keys)} distributions in proportion to "
+            f"each one's amount; the fund's breakdown of each "
+            f"distribution (its tax breakdown notice) is authoritative: "
+            f"change the ADJUST amounts to it")
+    else:
+        add(f"ADJUST {last} 16:00:00 {s} {cur} -{missing:.2f} "
+            f"type=roc{rec}", "ADJUST", missing)
     div_line = (f"DIVIDEND {last} 16:00:00 {s} 0 {cur} 0 -{missing:.2f}"
                 + (f"{rec} label=distribution" if rec else ""))
     slip_income = sum(sl.amounts.get(c, 0.0) for sl in slips
@@ -2603,11 +2687,16 @@ def render(rep: Dict[str, Any], width_: Optional[int] = None,
                     d.line("  " + ln)
             d.blank()
         for e in sg["tt_lines"]:
+            # The folder the project reads (a shared ../inputs/: every
+            # year reading it reads the line; backlog TJ-0429).
+            where = ("; the exports folder every year shares: each year "
+                     "reading it reads the line" if e.get("shared") else "")
             d.para(f"Add to {e['file']} (return of capital lowers the "
                    f"ACB, T3 box 42; a DIVIDEND line with a negative "
                    f"amount takes it out of the dividend income; "
-                   f"`taxjson roc-sum` then shows it):" if details else
-                   f"Add to {e['file']} (T3 box 42, return of capital):")
+                   f"`taxjson roc-sum` then shows it{where}):" if details
+                   else f"Add to {e['file']} (T3 box 42, return of "
+                   f"capital{where}):")
             for ln in e["lines"]:
                 d.line("  " + ln)
             d.blank()

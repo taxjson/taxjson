@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from _planted_rates import plant
 from tax_rules import rule, rule_absent
 
 from taxjson.lib import cash_events as CE
@@ -736,14 +737,16 @@ CASHBAL 2025-12-31 USD 10000
 """
 
 
-def _rates(path):
+def _rates(path, cleanup):
+    """The rates file, and the same rates in the suite's HOME (put back
+    by `cleanup`): a run that rebuilds the file keeps them (TJ-0635)."""
     d, lines = _date(2025, 1, 1), []
     while d <= _date.today():
         r = ("1.3000" if d < _date(2025, 2, 10) else
              "1.3500" if d < _date(2025, 3, 10) else "1.4000")
         lines.append(f"{d.isoformat()} 12:00:00 USD CAD {r} boc")
         d += _td(days=1)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", cleanup=cleanup)
 
 
 def _cli(root, *args):
@@ -763,7 +766,7 @@ class TestCli(unittest.TestCase):
         (cls.root / "taxjson.toml").write_text(_TOML.format(extra=""))
         (cls.root / "inputs" / "margin" / "rows.tt").write_text(_ROWS_TT)
         (cls.root / "work").mkdir()
-        _rates(cls.root / "work" / "to_base.csv")
+        _rates(cls.root / "work" / "to_base.csv", cls.addClassCleanup)
         r = _cli(cls.root, "run", "--no-input")
         assert r.returncode == 0, r.stderr + r.stdout
 
@@ -928,7 +931,7 @@ class TestCloseYearCarry(unittest.TestCase):
                 _TOML.format(extra='fx_cash_ledger = "v2"'))
             (root / "inputs" / "margin" / "rows.tt").write_text(_ROWS_TT)
             (root / "work").mkdir()
-            _rates(root / "work" / "to_base.csv")
+            _rates(root / "work" / "to_base.csv", self.addCleanup)
             self.assertEqual(_cli(root, "run", "--no-input").returncode, 0)
             r = _cli(root, "close-year", "--yes")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

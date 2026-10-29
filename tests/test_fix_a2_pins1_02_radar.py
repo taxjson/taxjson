@@ -85,16 +85,18 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
     """A2-0181, A2-0187, A2-0188, A2-1580."""
 
     def test_locked_safe_date_follows_the_latest_sheltered_buy(self):
-        # rrsp bought 04-25, tfsa 05-15, both still held: safe after
-        # 05-15 + 31 days, not after the earlier buy.
+        # rrsp bought 04-25, tfsa 05-15, both still held: safe once a
+        # sale settles after 05-15 + 30 (Sun 06-14), not after the
+        # earlier buy: Friday 06-12's settles Monday (backlog TJ-0243;
+        # it was 05-15 + 31 on the calendar, 06-15).
         r = _rows("canada", [_row("2026-01-02", A, 100, 50)],
                   [_row("2026-04-25", A, 10, 45, "rrsp"),
                    _row("2026-05-15", A, 10, 45, "tfsa")])[A]
         self.assertEqual(r["category"], "LOCKED")
-        self.assertEqual(r["clears_at"], "2026-06-15")
-        self.assertEqual(r["clears_in_at_generation"], "2026-06-15 (26d)")
+        self.assertEqual(r["clears_at"], "2026-06-12")
+        self.assertEqual(r["clears_in_at_generation"], "2026-06-12 (23d)")
         self.assertEqual(r["at_risk_qty"], 20.0)
-        self.assertIn("before 2026-06-15 is a superficial loss for up to "
+        self.assertIn("before 2026-06-12 is a superficial loss for up to "
                       "20 of your 100 shares", r["advisory"])
 
     def test_rescue_deadline_follows_the_earliest_open_loss(self):
@@ -141,15 +143,23 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
         self.assertAlmostEqual(r["recent_loss_qty"], 130.0, places=4)
         # Window end Thu 06-04: a trade that day settles after it.
         self.assertEqual(r["clears_at"], "2026-06-04")
-        self.assertIn("7.92 CAD of it for each unit bought back",
-                      r["advisory"])
+        # One unit held at day 30 replaces a unit of each sale (CA-SL-08,
+        # per sale): 1000/100 + 30/30 for the first 30 units; the total
+        # over the units sold (1030/130, 7.92) understated it (backlog
+        # TJ-0560).
+        self.assertIn("11.00 CAD of it for each unit bought back (the "
+                      "first 30)", r["advisory"])
+        self.assertAlmostEqual(r["recent_loss_per_unit"], 11.0, places=4)
+        self.assertEqual(r["recent_loss_per_unit_qty"], 30.0)
 
     def test_exitable_safe_date_and_countdown(self):
+        # 05-15 + 30 is Sun 06-14: Friday 06-12's sale settles after it
+        # (backlog TJ-0243).
         r = _rows("canada", [_row("2026-05-15", A, 100, 50)])[A]
         self.assertEqual(r["category"], "EXITABLE")
-        self.assertEqual(r["clears_at"], "2026-06-15")
-        self.assertEqual(r["clears_in_at_generation"], "2026-06-15 (26d)")
-        self.assertIn("a PARTIAL loss sale before 2026-06-15 is "
+        self.assertEqual(r["clears_at"], "2026-06-12")
+        self.assertEqual(r["clears_in_at_generation"], "2026-06-12 (23d)")
+        self.assertIn("a PARTIAL loss sale before 2026-06-12 is "
                       "superficial", r["advisory"])
 
     def test_cooling_countdown(self):
@@ -163,13 +173,15 @@ class TestCaRadarDatesAndQuantities(unittest.TestCase):
                          (1000.0, 100.0))
 
     def test_sheltered_caveat_safe_date(self):
-        # rrsp bought 05-04 and sold out 05-08: CAUTION until 05-04 + 31.
+        # rrsp bought 05-04 and sold out 05-08: CAUTION until a sale
+        # settles after 05-04 + 30 (Wed 06-03): that day's trade
+        # settles Thursday (backlog TJ-0243; it was 06-04).
         r = _rows("canada", [_row("2026-01-02", A, 100, 50)],
                   [_row("2026-05-04", A, 10, 45, "rrsp"),
                    _row("2026-05-08", A, -10, 46, "rrsp")])[A]
         self.assertEqual(r["category"], "CAUTION")
-        self.assertEqual(r["clears_at"], "2026-06-04")
-        self.assertEqual(r["clears_in_at_generation"], "2026-06-04 (15d)")
+        self.assertEqual(r["clears_at"], "2026-06-03")
+        self.assertEqual(r["clears_in_at_generation"], "2026-06-03 (14d)")
 
     def test_two_lot_loss_sale_is_a_violation_in_canada(self):
         # The own-pool money sign (a BUY's cost as a magnitude, books
@@ -447,7 +459,11 @@ class TestRadarWordingByCountry(unittest.TestCase):
         ca, us = r["canada"]["advisory"], r["usa"]["advisory"]
         for row in r.values():
             self.assertEqual(row["category"], "LOCKED")
-            self.assertEqual(row["clears_at"], "2026-06-10")
+        # Canada: a sale settling after 05-10 + 30 (Tue 06-09) is
+        # Tuesday's; the US: the first trading day from 05-10 + 31
+        # (backlog TJ-0243).
+        self.assertEqual(r["canada"]["clears_at"], "2026-06-09")
+        self.assertEqual(r["usa"]["clears_at"], "2026-06-10")
         self.assertIn("Recent buy in SHELTERED account(s):", ca)
         self.assertIn("is a superficial loss for up to 10 of your 100", ca)
         self.assertIn("permanently denied unless the registered account "
@@ -464,7 +480,9 @@ class TestRadarWordingByCountry(unittest.TestCase):
     def test_exitable_pre_window_holding(self):
         r = self._both("EXIT")
         ca, us = r["canada"]["advisory"], r["usa"]["advisory"]
-        self.assertIn("a PARTIAL loss sale before 2026-06-15 is "
+        # Canada: Friday 06-12's sale settles after 05-15 + 30 (backlog
+        # TJ-0243); the US: 05-15 + 31 is Monday 06-15.
+        self.assertIn("a PARTIAL loss sale before 2026-06-12 is "
                       "superficial", ca)
         self.assertIn("Sheltered accounts hold 10 sh bought before the "
                       "window", ca)

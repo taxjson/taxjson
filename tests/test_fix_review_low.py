@@ -14,7 +14,6 @@ F9  — symbol_codes.rbc_name kept a transfer's account reference ("TO
       before it, so an account number reached a name, a suggestion or a
       warning. Synthetic 555-style account numbers only.
 """
-import os
 import subprocess
 import sys
 import tempfile
@@ -130,7 +129,7 @@ class TestListingSuffixLookupLinesWin(_RunBase, unittest.TestCase):
 # ------------------------------------------------ F8a: IB temporary symbol
 from taxjson.lib.brokerages import base as _base  # noqa: E402
 from taxjson.lib.brokerages.ib_extractor import IbBrokerage  # noqa: E402
-from test_fix_ibparse import _parse_account, _parse_ib  # noqa: E402
+from test_fix_ibparse import _parse_account  # noqa: E402
 import test_fix_suggest_quality as _sq  # noqa: E402
 
 TEMP = f"{_sq.STAMP}QZHN"

@@ -93,7 +93,8 @@ class TestElect(unittest.TestCase):
         # `elect --pending` (the old pointer) said "No pending elections".
         r = _tjs(self.year, "elect", "margin", "--set",
                  f"{SPIN}=rollover_s_86_1")
-        self.assertEqual(r.returncode, 1, r.stderr)
+        # A usage error: exit 2 (backlog TJ-0539).
+        self.assertEqual(r.returncode, 2, r.stderr)
         text = " ".join(r.stderr.split())
         self.assertIn("rollover_s_86_1 needs allocated_acb_cad", text)
         self.assertIn("allocated_acb_cad: Cost (in CAD) moved from the "
@@ -560,7 +561,7 @@ class TestWriteFailuresNameTheFile(unittest.TestCase):
             self.addCleanup(os.chdir, here)
             err = io.StringIO()
             with mock.patch.object(X, "read_sheet",
-                                   lambda pd, f, s: _Frame()), \
+                                   lambda f, s: _Frame()), \
                     mock.patch.object(X, "_apply_cells", lambda d, fn: d), \
                     mock.patch.dict(sys.modules,
                                     {"pandas": types.ModuleType("pandas")}), \

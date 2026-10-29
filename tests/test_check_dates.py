@@ -167,5 +167,33 @@ class TestAnalyze(unittest.TestCase):
         self.assertEqual(doc["issues"], [])
 
 
+class TestLostSourcesList(unittest.TestCase):
+    """Backlog TJ-0395: an account whose books the run built but whose
+    work/<account>_sources.list is gone is evidence not checked — an
+    ERROR, never an account left out of a clean check."""
+
+    def test_tj0395_books_without_their_sources_list(self):
+        td, root, cfg = _project({("ib", "a.csv"): [
+            _r("2025-04-19", "2025-04-21")]})       # a Saturday: an error
+        with td:
+            work = root / "work"
+            (work / "m_raw.json").write_text('{"transactions": []}')
+            self.assertEqual(analyze(root, cfg, today=date(2026, 1, 1))
+                             ["errors"], 1)
+            (work / "m_sources.list").unlink()
+            doc = analyze(root, cfg, today=date(2026, 1, 1))
+            self.assertEqual(doc["errors"], 1)
+            self.assertEqual([(i["code"], i["account"]) for i in
+                              doc["issues"]], [("missing", "m")])
+            self.assertIn("work/m_sources.list is missing",
+                          doc["issues"][0]["message"])
+            self.assertNotIn("Every date lands", "\n".join(render(doc)))
+            # No books at all: nothing to say here (the command's
+            # no-books warning names that account).
+            (work / "m_raw.json").unlink()
+            self.assertEqual(analyze(root, cfg, today=date(2026, 1, 1))
+                             ["issues"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,7 @@ import tempfile
 from pathlib import Path
 
 import _hermetic  # noqa: F401  (a synthetic HOME, offline: tests/_hermetic)
+from _qa_project import Text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src"
@@ -104,12 +105,18 @@ class Project:
     def run(self, *args, stdin=None, **env_extra):
         """`taxjson -C <project> <args>` run from the project folder
         (relative paths such as inputs/slips/t5008.csv work): a
-        CompletedProcess (text)."""
-        return subprocess.run(
+        CompletedProcess (text) whose stdout and stderr are
+        _qa_project.Text, as tj()'s: piped at width 120, a message naming
+        the project's temp path breaks where that path's length puts the
+        break, and `phrase in r.stdout` finds a phrase across it (backlog
+        TJ-0625)."""
+        r = subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
              str(self.root), *args], cwd=self.root, capture_output=True,
             text=True, env=env(**env_extra), timeout=900,
             stdin=subprocess.DEVNULL if stdin is None else stdin)
+        r.stdout, r.stderr = Text(r.stdout or ""), Text(r.stderr or "")
+        return r
 
 
 def _check(r, what):

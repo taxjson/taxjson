@@ -32,6 +32,9 @@ Ownership tables (who a setting, a CLI flag or a command belongs to):
   ``"[estimate] deductions"`` ...) that belong to one country.
 - ``PLAN_COUNTRY``: ``[accounts.X] plan`` kinds (tfsa ... Canada; ira,
   roth, 401k, hsa ... US; taxable / sheltered both); ``plan_kinds()``.
+- ``PLANS_TAXED_AS_ORDINARY``: the Canadian registered plans a country's
+  return taxes like an ordinary account (US: TFSA, RESP, RDSP, FHSA);
+  ``plans_taxed_as_ordinary(country)``.
 - ``FLAG_COUNTRY``: engine CLI flags that belong to one country
   (``--option-premium-timing`` ... Canada; ``--per-account-basis`` US).
 - ``COMMAND_COUNTRY``: ``taxjson`` subcommands, or ``command:variant``
@@ -344,7 +347,8 @@ SETTING_WHY: Dict[str, str] = {
                   "in Canadian projects only (CA-XLIST-06; US-XLIST-05)",
 }
 
-# Config paths outside [settings] owned by one country.
+# Config paths outside [settings] owned by one country. "[accounts] KEY"
+# is a key of any [accounts.NAME] table.
 CONFIG_COUNTRY: Dict[str, str] = {
     "[instalments]": CANADA,
     "[estimate] deductions": CANADA,
@@ -352,6 +356,7 @@ CONFIG_COUNTRY: Dict[str, str] = {
     "[estimate] amt_carryover": CANADA,
     "[estimate] long_term_losses": USA,
     "[capital_gains_dividends]": CANADA,
+    "[accounts] custodian_country": CANADA,
 }
 
 CONFIG_WHY: Dict[str, str] = {
@@ -369,6 +374,11 @@ CONFIG_WHY: Dict[str, str] = {
                                  "s.130.1(4)/s.131(1), line 17400); a US "
                                  "fund's capital-gain distributions "
                                  "(1099-DIV box 2a) are not modelled",
+    "[accounts] custodian_country": "Form T1135 (ITA s.233.3): a Canadian "
+                                    "issuer's shares held with a foreign "
+                                    "custodian are specified foreign "
+                                    "property (CA-RPT-02); a US project "
+                                    "files no T1135",
 }
 
 # [accounts.X] plan kinds: each registered plan belongs to one country
@@ -396,6 +406,29 @@ def plan_kinds(country: Optional[str] = None) -> List[str]:
             if country is None or o in (BOTH, country)]
 
 
+# Canadian registered plans that a country's return taxes like an
+# ordinary account (tax-logic US-BASIS-09): the Canada-US treaty (Art.
+# XVIII(7)) defers US tax only on a retirement plan, an RRSP or RRIF and
+# their locked-in forms (Rev. Proc. 2014-55); a TFSA, RESP, RDSP or FHSA
+# has no US deferral. taxjson-brokerage hands the set to the parsers
+# (`plans_taxed`), whose taxable-versus-registered check then reads a
+# broker's Account Type naming one of them as a taxable account
+# (backlog TJ-0613: a US project's TFSA beside its margin account).
+PLANS_TAXED_AS_ORDINARY: Dict[str, tuple] = {
+    CANADA: (),
+    USA: ("tfsa", "resp", "rdsp", "fhsa"),
+}
+
+
+def plans_taxed_as_ordinary(country: Optional[str]) -> frozenset:
+    """The Canadian registered plans (lower case) a project of `country`
+    taxes like an ordinary account; empty for Canada and when the
+    country is not given (every plan a shelter: the guard's safe side)."""
+    if country is None:
+        return frozenset()
+    return frozenset(PLANS_TAXED_AS_ORDINARY[canonical_country(country)])
+
+
 # CLI flags owned by one country: the engine CLIs' (taxjson-gains,
 # -explain, -audit, -carryover: refuse_foreign_flags) and `taxjson`'s
 # estimate flags (sum/estimate/instalments: checked at dispatch).
@@ -413,6 +446,8 @@ FLAG_COUNTRY: Dict[str, str] = {
     "--slip-gains": CANADA,
     "--return-row": CANADA,
     "--locked-year": USA,
+    "--lots-at": USA,
+    "--locked-record": USA,
 }
 
 FLAG_WHY: Dict[str, str] = {
@@ -424,6 +459,11 @@ FLAG_WHY: Dict[str, str] = {
     "--locked-year": "a §1091 basis add to a replacement sold in a filed "
                      "year (US-WASH-22); a Canadian denied loss is added "
                      "to the ACB of the shares still held (s.53(1)(f))",
+    "--lots-at": "US FIFO lots, each with its own basis; Canada pools "
+                 "identical property at one average cost (s.47)",
+    "--locked-record": "the filed year's own row of a §1091 basis add "
+                       "(US-WASH-22); a Canadian denied loss is added to "
+                       "the ACB of the shares still held (s.53(1)(f))",
     "--province": "provincial tax in the Canadian estimate",
     "--deductions": "lines 20700-23500 of the Canadian return",
     "--carrying-charges": "line 22100 of the Canadian return",
@@ -560,6 +600,15 @@ def config_country_problems(cfg: Mapping[str, Any]) -> List[str]:
         else:
             table, _, key = path.partition("] ")
             tbl = cfg.get(table.lstrip("["))
+            if table == "[accounts":
+                # A key of an [accounts.NAME] table: each one named.
+                for name, acfg in (tbl.items() if isinstance(tbl, Mapping)
+                                   else ()):
+                    if isinstance(acfg, Mapping) and key in acfg:
+                        out.append(_owner_problem(
+                            owner, country, f"[accounts.{name}] {key}",
+                            CONFIG_WHY.get(path, "")))
+                continue
             present = isinstance(tbl, dict) and key in tbl
         if present:
             out.append(_owner_problem(owner, country, path,
@@ -685,6 +734,8 @@ _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
                "--slip-gains": "slip_gains",
                "--return-row": "return_row",
                "--locked-year": "locked_year",
+               "--lots-at": "lots_at",
+               "--locked-record": "locked_record",
                "--foreign-roc": "foreign_roc"}
 
 

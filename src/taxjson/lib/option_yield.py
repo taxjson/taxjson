@@ -62,6 +62,9 @@ SOLD = "sold"
 EXERCISED = "exercised"
 # Either side: the contracts left the account (no money, no P/L).
 TRANSFERRED = "transferred"
+# A yield basis: shares are held, their cost in another currency than
+# the options' (never converted here): no yield (backlog TJ-0543).
+OTHER_CURRENCY = "other_currency"
 _EPS = 1e-9
 
 
@@ -229,6 +232,8 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
     series (FIFO), in the order they were opened. `rows` are
     (account, native row) pairs, any actions, any order; `through`
     stops the replay after that date."""
+    from types import SimpleNamespace
+    from taxjson.lib.missing_history import OrderStarts, unbacked_close
     size_of = size_of or default_size
     opts = [(a, t) for a, t in rows
             if _row(t, "action", "") in ("BUYSELL", "ASSIGN", "SPLIT",
@@ -254,6 +259,7 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
     pos: Dict[Tuple[str, str], float] = {}
     open_lots: Dict[Tuple[str, str], List[Lot]] = {}
     out: List[Lot] = []
+    orders = OrderStarts()
     for seq, (acct, t) in enumerate(opts):
         sym = str(_row(t, "symbol", "") or "").upper()
         key = (acct, sym)
@@ -327,6 +333,31 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
                     else EXPIRED if _is_flat(t) else BOUGHT_BACK)
             sign = -1.0
         aq = abs(q)
+        # The broker's own word that the trade CLOSES (IB code C) where
+        # the books hold nothing it can close: what it closed was opened
+        # before the data — a contract of unknown cost closed here, as a
+        # .tt OPENING cost=unknown line makes it (opened on no date of
+        # the data: `opened` ""), never a new write (a sale) or a new
+        # long (a buy), as option-boundary reads it (backlog TJ-0565).
+        ev = SimpleNamespace(quantity=q,
+                             open_close=str(_row(t, "open_close", "") or ""),
+                             date=d, time=str(_row(t, "time", "") or ""))
+        p_order = orders.prev(key, ev, p)
+        unbacked = 0.0
+        if (action == "BUYSELL" and opening > _EPS
+                and unbacked_close(ev, p, p_order)):
+            unbacked, opening = opening, 0.0
+            lot = Lot(account=acct, symbol=sym, underlying=und,
+                      right=parse_option_right(sym) or "",
+                      strike=strike, expiry=parse_option_expiry(sym) or "",
+                      currency=cur, side=(BOUGHT if q < 0 else WRITTEN),
+                      open_date="", units=unbacked, size=size, cash_open=0.0,
+                      unknown_cost=True, seq=seq, open_units=0.0,
+                      notional=strike * size * unbacked)
+            lot.closes.append(Close(date=d, kind=kind, units=unbacked,
+                                    cash=sign * money * (unbacked / aq),
+                                    pnl=0.0, splits_seen=0))
+            out.append(lot)
         if closing > _EPS:
             cash_close = sign * money * (closing / aq)
             per_close = cash_close / closing
@@ -368,7 +399,8 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
                       notional=strike * size * opening)
             open_lots.setdefault(key, []).append(lot)
             out.append(lot)
-        pos[key] = p + q
+        # (the contracts an unbacked close closed were held before it)
+        pos[key] = p + q + (unbacked if q < 0 else -unbacked)
     return out
 
 
@@ -501,17 +533,27 @@ def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
 
 def _finish(acc: Dict[str, Any], days: int,
             shares: Tuple[float, float] = (0.0, 0.0),
-            capital: Optional[Tuple[str, float]] = None) -> Dict[str, Any]:
+            capital: Optional[Tuple[str, float]] = None,
+            other: Optional[Dict[str, Tuple[float, float]]] = None
+            ) -> Dict[str, Any]:
     """The window's figures with the yield: on the cost of the shares
     held (`shares` = (quantity, cost)), else on the average strike
     notional open in the window; `capital` = (basis, amount) imposes
     the denominator (a total: the sum of its rows' own). A window with
     a close whose premium is unknown has no realized P/L, win rate or
-    yield (None)."""
+    yield (None). `other` = {currency: (quantity, cost)}: shares held
+    whose cost is in another currency than the options' — never
+    converted here, so there is no yield (basis OTHER_CURRENCY); they
+    were added to the capital as if in the options' currency (backlog
+    TJ-0543)."""
     avg = acc["notional_days"] / days if days > 0 else 0.0
     sq, sc = shares
+    other = {k: v for k, v in sorted((other or {}).items())
+             if v[0] > _EPS}
     if capital is not None:
         basis, cap = capital
+    elif other:
+        basis, cap = OTHER_CURRENCY, 0.0
     elif sq > _EPS and sc > 0.005:
         basis, cap = "shares", sc
     elif avg > 0.005:
@@ -523,6 +565,7 @@ def _finish(acc: Dict[str, Any], days: int,
     settled = acc["closed_contracts"] - acc["transferred_out"]
     y = ((acc["realized"] / cap)
          if cap > 0.005 and not unknown and settled > _EPS
+         and basis != OTHER_CURRENCY
          else None)
     out = {k: (round(v, 2) if isinstance(v, float) else v)
            for k, v in acc.items() if k != "notional_days"}
@@ -534,6 +577,9 @@ def _finish(acc: Dict[str, Any], days: int,
         out[k] = round(acc[k], 4)
     out["shares_held"] = round(sq, 4)
     out["shares_cost"] = round(sc, 2)
+    out["shares_other_currency"] = {
+        k: {"shares": round(q, 4), "cost": round(c, 2)}
+        for k, (q, c) in other.items()}
     known = settled - acc["unknown_closes"]
     # The win rate: the contracts closed at a profit over the contracts
     # closed in the window (a close at exactly zero is not a win).
@@ -555,18 +601,27 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
             underlyings: Iterable[str] = (),
             accounts: Optional[Iterable[str]] = None,
             groups: Optional[Dict[str, str]] = None,
-            shares: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None
+            shares: Optional[Dict[tuple, tuple]] = None
             ) -> Dict[str, Any]:
     """The window's figures per underlying and per account, side and
     right, the contracts closed in the window and those open at its
-    end, with totals per currency. `shares` = {(account, underlying):
-    (quantity, cost)} of the underlying's shares held now, the yield's
-    capital where there are any."""
+    end, with totals per currency. `shares` = {(account, underlying[,
+    currency]): (quantity, cost)} of the underlying's shares held now,
+    the yield's capital where there are any and their cost is in the
+    options' currency (no currency: taken as the options')."""
     wanted = [w for w in underlyings if str(w or "").strip()]
     accts = set(accounts) if accounts is not None else None
     groups = groups or {}
-    shares = {(a, u.upper()): v for (a, u), v in (shares or {}).items()
-              if accts is None or a in accts}
+    # (account, underlying, quantity, cost, currency): a key or value
+    # without the currency is taken as the options' currency.
+    held_rows = []
+    for key, v in (shares or {}).items():
+        a, u = key[0], key[1]
+        if accts is not None and a not in accts:
+            continue
+        scur = key[2] if len(key) > 2 else (v[2] if len(v) > 2 else "")
+        held_rows.append((a, str(u).upper(), float(v[0]), float(v[1]),
+                          str(scur or "").upper()))
     days = _days(start, _next_day(end))
     by_und: Dict[Tuple[str, str], Dict[str, Any]] = {}
     by_part: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
@@ -630,25 +685,36 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
                 "expired": bool(expiry and expiry < end)})
 
     def _shares_of(und: str, cur: str, acct: Optional[str] = None):
+        """(quantity, cost) of the underlying's shares whose cost is in
+        `cur`, and {currency: (quantity, cost)} of those in another
+        currency (a share value without one is taken as `cur`)."""
         q = c = 0.0
-        for (a, u), (sq, sc) in shares.items():
+        other: Dict[str, Tuple[float, float]] = {}
+        for a, u, sq, sc, scur in held_rows:
+            scur = scur or cur
             if u == und and (acct is None or a == acct) and (
                     acct is not None or any(
                         p[0] == und and p[1] == cur and p[2] == a
                         for p in by_part)):
-                q += sq
-                c += sc
-        return q, c
+                if scur == cur:
+                    q += sq
+                    c += sc
+                else:
+                    oq, oc = other.get(scur, (0.0, 0.0))
+                    other[scur] = (oq + sq, oc + sc)
+        return (q, c), other
     rows = []
     for (und, cur), acc in sorted(by_und.items()):
-        r = _finish(acc, days, _shares_of(und, cur))
+        held, other = _shares_of(und, cur)
+        r = _finish(acc, days, held, other=other)
         r.update({"underlying": und, "currency": cur,
                   "accounts": sorted({p[2] for p in by_part
                                       if p[0] == und and p[1] == cur})})
         rows.append(r)
     parts = []
     for (und, cur, acct, side, right), acc in sorted(by_part.items()):
-        r = _finish(acc, days, _shares_of(und, cur, acct))
+        held, other = _shares_of(und, cur, acct)
+        r = _finish(acc, days, held, other=other)
         r.update({"underlying": und, "currency": cur, "account": acct,
                   "group": groups.get(acct, ""), "side": side,
                   "right": right})
@@ -663,9 +729,15 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
         # 2026-10 audit R07).
         bases = {r["yield_basis"] for r in mine if r["yield_basis"]}
         cap = sum(r["_capital"] for r in mine)
-        basis = (next(iter(bases)) if len(bases) == 1
+        basis = (OTHER_CURRENCY if OTHER_CURRENCY in bases
+                 else next(iter(bases)) if len(bases) == 1
                  else "mixed" if bases else "")
-        t = _finish(acc, days, (sq, sc), capital=(basis, cap))
+        other: Dict[str, Tuple[float, float]] = {}
+        for r in mine:
+            for k, v in r["shares_other_currency"].items():
+                oq, oc = other.get(k, (0.0, 0.0))
+                other[k] = (oq + v["shares"], oc + v["cost"])
+        t = _finish(acc, days, (sq, sc), capital=(basis, cap), other=other)
         t["notional_capital"] = round(sum(
             r["_capital"] for r in mine if r["yield_basis"] == "notional"), 2)
         totals[cur] = t
@@ -822,6 +894,14 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
                    f" contract(s) closed ({_n(t['wins'])} at a profit: "
                    f"win rate {_rate(t['win_rate'])}); "
                    f"net cash {fmt_money(t['cash_flow'])}{moved}"))
+        if t["yield_basis"] == OTHER_CURRENCY:
+            held = "; ".join(
+                f"{_n(v['shares'])} share(s) held cost "
+                f"{fmt_money(v['cost'])} {k}"
+                for k, v in t["shares_other_currency"].items())
+            kv.append((f"Yield, {cur}",
+                       f"none: {held}, not {cur} (never converted here)"))
+            continue
         if t["yield_basis"] == "shares":
             on = (f"the {fmt_money(t['shares_cost'])} cost of "
                   f"{_n(t['shares_held'])} share(s) held")
@@ -864,6 +944,13 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
         acts.append(out.act_list(
             f"{len(mixed)} close(s) not in the open's currency: check "
             f"that row's currency", mixed))
+    xcur = [r["underlying"] for r in rows
+            if r["yield_basis"] == OTHER_CURRENCY]
+    if xcur:
+        acts.append(out.act(
+            f"{len(xcur)} underlying(s) whose shares cost another currency "
+            f"than its options (no yield): {', '.join(xcur[:3])}",
+            "tjs list"))
     for w in doc["unmatched_underlyings"]:
         acts.append(out.act(f"{w}: no option on it in the books",
                             "tjs events"))

@@ -4,7 +4,6 @@ Offline throughout: prices come from an injected fake fetcher (the
 price chain's `fetchers` test hook), never the network.
 """
 
-import os
 import io
 import json
 import tempfile

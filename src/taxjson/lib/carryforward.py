@@ -182,7 +182,8 @@ _BLOCK_CLOSING = {"net_capital_loss": ("closing",),
 # year read a negative closing as a loss that adds gains, and dropped a
 # negative minimum-tax amount in silence (2026-10-25 audit year-end#3).
 _BLOCK_BALANCES = {"net_capital_loss": ("closing", "carried_back"),
-                   "capital_loss": ("st_closing", "lt_closing"),
+                   "capital_loss": ("st_closing", "lt_closing",
+                                    "deduction_used"),
                    "minimum_tax": ("closing",)}
 _BY_YEAR_KEYS = ("opening_by_year", "closing_by_year",
                  "recovered_by_year", "expired_by_year")
@@ -230,7 +231,12 @@ def block_problem(block: Any) -> Optional[str]:
                                             "applied", "closing",
                                             "carried_back")),
                       ("capital_loss", ("st_opening", "lt_opening",
-                                        "st_closing", "lt_closing")),
+                                        "st_closing", "lt_closing",
+                                        "deduction_used",
+                                        "deduction_available",
+                                        "section_1256_gain",
+                                        "section_1256_short_term",
+                                        "section_1256_long_term")),
                       ("minimum_tax", ("created", "closing",
                                        "recovered_federal"))):
         s = block.get(sec)
@@ -270,19 +276,22 @@ def block_problem(block: Any) -> Optional[str]:
     return None
 
 
-def lock_block(path: Path, country: Optional[str] = None
-               ) -> Optional[Dict[str, Any]]:
+def lock_block(path: Path, country: Optional[str] = None,
+               loss: bool = False) -> Optional[Dict[str, Any]]:
     """The `carryforwards` block of the previous year's lock (None when
     the lock has none — written before close-year recorded them). The
     lock passes the one check every reader applies
     (taxjson_filed.read_lock: readable, not damaged — its block
     included — and, `country` given, closed under this project's
-    country); else CarryInputError naming the lock and the fix."""
+    country); else CarryInputError naming the lock and the fix. `loss`:
+    the loss the lock carried is read, so a lock whose filed
+    dispositions hold another year's rows is refused too (backlog
+    TJ-0347)."""
     from taxjson.bin import taxjson_filed
     try:
         doc = taxjson_filed.read_lock(
             Path(path), None if country is None else {"country": country},
-            prior=True)
+            prior=True, carried=loss)
     except taxjson_filed.LockProblem as e:
         raise CarryInputError(str(e)) from None
     return doc.get("carryforwards")
@@ -319,10 +328,25 @@ def _from_lock(root: Path, settings: Dict[str, Any], section: str,
     out: Dict[str, Any] = {"by_year": None, "source": None, "notes": [],
                            "block": None}
     pl = prior_lock(root, settings)
+    # The lock prior_year_record names, deleted after its year was
+    # closed, is a lock that cannot be read, never "no record" (backlog
+    # TJ-0272).
+    from taxjson.bin.taxjson_filed import missing_prior_lock
+    mp = missing_prior_lock(root, settings)
+    try:
+        _py = int(settings.get("year"))
+    except (TypeError, ValueError):
+        _py = None
+    if mp is not None and (_py is None or mp[0] < _py) \
+            and (pl is None or mp[0] > pl[0]):
+        raise CarryInputError(mp[2])
     if pl is None:
         return out
     ly, lp, label = pl
-    block = lock_block(lp, country)
+    # The loss it carried stops on a lock that counted another year's
+    # filed sales (backlog TJ-0347); its minimum tax carryover is the
+    # estimate's, not the filed dispositions'.
+    block = lock_block(lp, country, loss=section != "minimum_tax")
     sec = (block or {}).get(section)
     if not isinstance(sec, dict):
         return out
@@ -338,14 +362,29 @@ def _from_lock(root: Path, settings: Dict[str, Any], section: str,
     # every other lock consumer says it (issue #55).
     from taxjson.bin.taxjson_filed import partial_year_note
     try:
-        _pn = partial_year_note(
-            json.loads(Path(lp).read_text(encoding="utf-8-sig")), ly)
+        _doc = json.loads(Path(lp).read_text(encoding="utf-8-sig"))
+        _pn = partial_year_note(_doc, ly)
     except (OSError, ValueError):
-        _pn = None
+        _doc, _pn = None, None
     if _pn:
         out["partial_lock"] = ly
         out["notes"].append(
             f"The carried balances are provisional: {_pn} ({label}).")
+    if section == "capital_loss" and isinstance(_doc, dict):
+        # A US lock closed before the §1256 net was split 60/40 carries
+        # it all short-term (US-FUT-03; backlog TJ-0611).
+        from taxjson.bin.taxjson_carryover import us_lock_1256
+        try:
+            _s, _unsplit = us_lock_1256(_doc)
+        except (TypeError, ValueError, AttributeError):
+            _s, _unsplit = 0.0, False
+        if _unsplit:
+            out["notes"].append(
+                f"The {ly} record ({label}) was closed before taxjson "
+                f"split §1256 P/L as Form 6781 does: its carryover counts "
+                f"its {_s:,.2f} of §1256 P/L as short-term, where Form "
+                f"6781 makes 60% of it long-term. Close {ly} again with "
+                f"--force in its project.")
     if py is not None and ly < py - 1:
         out["notes"].append(
             f"The latest close-year record is {ly}'s ({label}); "
@@ -427,7 +466,33 @@ def record_block(country: str, r: Dict[str, Any],
             "lt_opening": float(r.get("carryover_long_term") or 0.0),
             "opening_source": sources.get("other_losses") or "none",
             "st_closing": float(r.get("st_carryover_after") or 0.0),
-            "lt_closing": float(r.get("lt_carryover_after") or 0.0)}
+            "lt_closing": float(r.get("lt_carryover_after") or 0.0),
+            # The Schedule D line 21 deduction counted as used (the next
+            # year's Capital Loss Carryover Worksheet line 4): the
+            # year's [carryover] claimed entry, else what the estimate's
+            # taxable income absorbs (backlog TJ-0464). handoff compares
+            # a later claimed entry with it.
+            "deduction_used": float(r.get("offset_used_for_carryover")
+                                    or 0.0),
+            "deduction_available": float(r.get("ordinary_offset") or 0.0),
+            "deduction_from": (CLAIMED_KEY
+                               if r.get("offset_used_from") == "claimed"
+                               else "the estimate's taxable income"),
+            "other_income": float(sources.get("other_income_value")
+                                  or 0.0),
+            "other_income_entered": bool(
+                sources.get("other_income_entered")),
+            # The year's §1256 P/L and the parts the balances above took
+            # it in, as Form 6781 lines 8 and 9 split it: 40% short-term,
+            # 60% long-term (US-FUT-03; backlog TJ-0466). A lock without
+            # the parts was closed before the split and carries the P/L
+            # as short-term (taxjson_carryover.lock_figure, TJ-0611).
+            "section_1256_gain": float(r.get("section_1256_gain")
+                                       or 0.0),
+            "section_1256_short_term": float(
+                r.get("section_1256_short_term") or 0.0),
+            "section_1256_long_term": float(
+                r.get("section_1256_long_term") or 0.0)}
     return out
 
 
@@ -537,4 +602,53 @@ def handoff_issues(root: Path, cfg: Dict[str, Any],
                      f"{word}-term capital loss into {ry + 1}; this "
                      f"project enters {float(v):,.2f} (Schedule D "
                      f"Capital Loss Carryover Worksheet decides).")
+        # The closed year's [carryover] claimed entry is the deduction
+        # its return took; the record counted another one as used, so
+        # the carryover it carried out is off by the difference (backlog
+        # TJ-0464: a record closed with no other income carried the
+        # whole loss).
+        from taxjson.lib.project_tables import claimed_losses
+        claimed = claimed_losses(cfg)[0]
+        used = us_deduction_used(record)
+        if ry in claimed and used is not None \
+                and not _close(min(claimed[ry], used[1]), used[0]):
+            item(f"{CLAIMED_KEY} {ry}", claimed[ry], used[0],
+                 f"{CLAIMED_KEY} records {claimed[ry]:,.2f} deducted "
+                 f"against ordinary income on the {ry} return (Schedule "
+                 f"D line 21); the {ry} record counted {used[0]:,.2f} "
+                 f"as used, so the {float(cl_.get('st_closing') or 0):,.2f}"
+                 f" short-term and "
+                 f"{float(cl_.get('lt_closing') or 0):,.2f} long-term "
+                 f"it carried into {ry + 1} are off by the difference. "
+                 f"Enter it in the {ry} project's {CLAIMED_KEY} and close "
+                 f"{ry} again there with --force, or fix the entry here "
+                 f"(the Capital Loss Carryover Worksheet decides).")
     return out
+
+
+def us_deduction_used(record: Dict[str, Any]
+                      ) -> Optional[Tuple[float, float]]:
+    """(the $3,000 deduction a US close-year record counted as used, the
+    most the year's net loss allowed): what it records
+    (`deduction_used`), or for a record written before it did, what its
+    balance implies — the year's net loss (its filed Form 8949 gains
+    less the carryover it took in) less the carryover it carried out.
+    None when the record has no capital_loss block or no usable
+    figures."""
+    from taxjson.lib.tax_estimate import US_ORDINARY_LOSS_CAP
+    cl_ = (record.get("carryforwards") or {}).get("capital_loss")
+    if not isinstance(cl_, dict):
+        return None
+    try:
+        from taxjson.bin.taxjson_carryover import us_lock_gains
+        st, lt, _src = us_lock_gains(record)
+        loss = max(0.0, -((st - float(cl_.get("st_opening") or 0.0))
+                          + (lt - float(cl_.get("lt_opening") or 0.0))))
+        cap = min(US_ORDINARY_LOSS_CAP, loss)
+        if _num(cl_.get("deduction_used")):
+            return float(cl_["deduction_used"]), cap
+        out = (float(cl_.get("st_closing") or 0.0)
+               + float(cl_.get("lt_closing") or 0.0))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return max(0.0, min(cap, loss - out)), cap

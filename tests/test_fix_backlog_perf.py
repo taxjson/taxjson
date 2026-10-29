@@ -176,10 +176,13 @@ def _digest(res):
 
 # Captured from the v0.35.0 engine (4ddfb03), before the change: 178
 # sales, 91 of them denied in part or whole (two backed by calls), the
-# replacements in all four accounts.
+# replacements in all four accounts. Re-captured when the window
+# listing moved to settlement dates (backlog TJ-0258): only the window
+# rows' (tx id, role) lists changed, every figure, denial and pool the
+# same.
 _PINNED = {
-    'digest': 'a87b81535902bc15403f5d85be18f01013deef7c'
-              '17c3d8ffa634b41a7957e5bc',
+    'digest': '80db3828f03fc9228ac50e4921c8028a8cf3d6fc'
+              'd13ad0a847bba8e1ebf4405b',
     'denied_sales': 91,
     'total_disallowed': 28546.909964,
     'total_permanent': 14631.49363,

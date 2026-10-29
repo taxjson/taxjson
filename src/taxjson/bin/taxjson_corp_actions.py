@@ -265,6 +265,17 @@ def _load_manifest_or_die(path: Path) -> Manifest:
         raise SystemExit(2)
 
 
+def _update_or_die(path: Path, change):
+    """Manifest.update (load, change, save as one locked step; backlog
+    TJ-0544), its refusals one error line, exit 2, as a load's."""
+    from taxjson.lib.safe_write import LockLinkError
+    try:
+        return Manifest.update(path, change)
+    except (ValueError, LockLinkError) as e:
+        emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
                    country: str, fx=None,
                    sheltered_default: frozenset = frozenset(),
@@ -418,6 +429,13 @@ def main():
         ),
     )
     parser.add_argument(
+        '--manifest-shown', metavar='TEXT', default=None,
+        help="How the messages name the manifest (`taxjson run` passes "
+             "it as `taxjson elect` shows it: relative to the project, "
+             "../inputs/<account>/manifest.json for shared exports); "
+             "default: --manifest as given.",
+    )
+    parser.add_argument(
         '--account-name',
         metavar='NAME',
         default=None,
@@ -501,6 +519,12 @@ def main():
              "as JSON to FILE for a GUI or `taxjson elect --set` to "
              "resolve.",
     )
+    parser.add_argument(
+        '--pending-json-shown', metavar='TEXT', default=None,
+        help="How the note names --pending-json (`taxjson run` passes it "
+             "relative to the project, work/<account>_pending_elections"
+             ".json); default: --pending-json as given.",
+    )
     args = parser.parse_args()
     if not args.base_currency:
         # Country-blind CAD used to be the default (re-audit A2-1363).
@@ -580,13 +604,20 @@ def main():
         return
 
     manifest = _load_manifest_or_die(manifest_path)
+    # The manifest as the messages name it: the run's own form, never
+    # the absolute path it passes (backlog TJ-0216).
+    shown = args.manifest_shown or str(manifest_path)
 
     # Rekey elections saved under the pre-2026-07 opaque hash ids to
     # the human-legible scheme — silently, before anything consults
     # the manifest, so an id-scheme change never re-prompts for (or
-    # orphans) decisions the user already made.
+    # orphans) decisions the user already made. Each save is a locked
+    # load-change-save of the file as it is then (Manifest.update): an
+    # election `taxjson elect --set` saved meanwhile is kept (backlog
+    # TJ-0544).
     if manifest.migrate_legacy(events) and not args.decisions_only:
-        manifest.save(manifest_path)
+        manifest, _n = _update_or_die(
+            manifest_path, lambda m: m.migrate_legacy(events))
     for _note in manifest.migration_notes:
         emit_line(f"note: {_note}.", file=sys.stderr)
 
@@ -596,7 +627,9 @@ def main():
     # --redo` can override like any hand-made election.
     auto_applied = apply_auto_defaults(events, manifest, args.country)
     if auto_applied and not args.decisions_only:
-        manifest.save(manifest_path)
+        manifest, auto_applied = _update_or_die(
+            manifest_path,
+            lambda m: apply_auto_defaults(events, m, args.country))
         for ev in auto_applied:
             emit_line(f"note: auto-elected {ev.event_id} ({ev.summary()}) — "
                       f"no decision required; `taxjson elect --redo` to "
@@ -625,7 +658,7 @@ def main():
                          for ev in missing]
                 + [f"Answer at a terminal (`taxjson run`), or set each "
                    f"with `taxjson elect ACCOUNT --set EVENT_ID=ELECTION`; "
-                   f"the elections are saved in {manifest_path}."])
+                   f"the elections are saved in {shown}."])
             if args.pending_json:
                 doc = _pending_doc(missing, manifest_path, args.country,
                                    sheltered=args.sheltered)
@@ -635,13 +668,17 @@ def main():
                     Path(args.pending_json),
                     json.dumps(doc, indent=2, sort_keys=True),
                     encoding="utf-8")
+                # Named as the run names its work/ files, never by the
+                # absolute path it passes (backlog TJ-0602).
                 emit_line(f"taxjson-corp-actions: note: pending elections "
-                          f"written to {args.pending_json}", file=sys.stderr)
+                          f"written to "
+                          f"{args.pending_json_shown or args.pending_json}",
+                          file=sys.stderr)
             raise SystemExit(EXIT_ELECTIONS_REQUIRED)
 
         print(
             f"\nFound {len(missing)} new corp-action event(s) needing an election.\n"
-            f"Decisions will be saved to {manifest_path} for future runs.\n",
+            f"Decisions will be saved to {shown} for future runs.\n",
             file=sys.stderr,
         )
         for ev in missing:
@@ -654,13 +691,14 @@ def main():
                 # event 7 defeated the whole atomic-manifest design,
                 # and EOF used to print two stacked tracebacks.
                 print(f"\ntaxjson-corp-actions: interrupted — "
-                      f"{manifest_path} keeps the elections answered "
+                      f"{shown} keeps the elections answered "
                       f"so far; rerun to continue with the rest.",
                       file=sys.stderr)
                 raise SystemExit(EXIT_ELECTIONS_REQUIRED)
-            manifest.set(rec)
-            manifest.save(manifest_path)   # atomic; never lose answers
-        print(f"\nManifest saved to {manifest_path}\n", file=sys.stderr)
+            # Saved at once (never lose answers), under the lock.
+            manifest, _ = _update_or_die(
+                manifest_path, lambda m, rec=rec: m.set(rec) or True)
+        print(f"\nManifest saved to {shown}\n", file=sys.stderr)
 
     fx = None
     if args.rates:
@@ -681,8 +719,14 @@ def main():
         # a traceback — or, worse, silently $0 rows (audit S072-07).
         msg = e.args[0] if e.args else str(e)
         emit_line(f"taxjson-corp-actions: error: {msg} (manifest "
-                  f"{manifest_path})", file=sys.stderr)
+                  f"{shown})", file=sys.stderr)
         raise SystemExit(2)
+    # The statements the events were read from, by their shown names:
+    # `taxjson audit` names them beside a corporate-action row, as a
+    # parsed row names its export (backlog TJ-0359). Not `input_files`,
+    # which the export checks read as broker exports of their own.
+    from taxjson.lib.brokerages.base import shown_name
+    out['metadata']['statements'] = [shown_name(p) for p in csv_paths]
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 

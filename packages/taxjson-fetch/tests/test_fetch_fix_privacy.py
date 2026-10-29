@@ -3,7 +3,7 @@ message unsanitised, so a server or proxy that echoed the request URL
 showed the refresh token, and an account id in a JSON message bypassed
 the masked request path. Every token, id and value below is synthetic;
 no request leaves the machine (http_get is injected)."""
-import _support  # noqa: F401
+import _support  # noqa: F401  (first: the plugin, the core and its test helpers on sys.path)
 import io
 import unittest
 import urllib.error

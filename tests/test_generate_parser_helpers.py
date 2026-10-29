@@ -5,7 +5,6 @@ this file pins the deterministic helpers only: code-fence stripping,
 class-name derivation, and sample-CSV reading.
 """
 import os
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

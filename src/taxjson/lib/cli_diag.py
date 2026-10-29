@@ -17,6 +17,7 @@ lib/brokerages/ keep their bare ``warning:`` shape — they feed the
 accepts both the bare and the prog-prefixed form.
 """
 
+import re
 import sys
 
 
@@ -384,7 +385,7 @@ def describe_input_error(exc: BaseException) -> str:
         h, fix = cannot_write(_shown_here(fn), exc)
         return f"{h} — {fix[:-1]}"
     if isinstance(exc, PermissionError):
-        return f"permission denied: {fn}"
+        return _permission_text(exc, fn)
     if isinstance(exc, UnicodeDecodeError):
         return (f"cannot read input: not UTF-8 text (byte "
                 f"0x{exc.object[exc.start]:02x} at offset {exc.start})")
@@ -398,6 +399,38 @@ def describe_input_error(exc: BaseException) -> str:
         # pathlib's resolve() on a symlink loop (Python < 3.13).
         return f"cannot read input: {exc}"
     return str(exc)
+
+
+# A temporary file safe_write writes beside the one asked for
+# (<name>.<8 random>[.<tag>].part): a message names the file asked for.
+_TEMP_PART_RE = re.compile(r"\.[A-Za-z0-9_]{8}(?:\.[A-Za-z0-9_]+)?\.part$")
+
+
+def _permission_text(exc: OSError, fn) -> str:
+    """A PermissionError a writer did not word itself: the file named
+    from where the command was run (never the temporary file beside
+    it), and the fix when it is clear — `chmod u+r` a file this user may
+    not read, `chmod u+w` a folder this user may not write. It was
+    "permission denied: /abs/path" (backlog TJ-0218)."""
+    import os
+    if not fn:
+        return f"permission denied: {exc.strerror or exc}"
+    fn = str(fn)
+    final = _TEMP_PART_RE.sub("", fn)
+    shown = _shown_here(final)
+    reason = exc.strerror or "Permission denied"
+    try:
+        if os.path.isfile(fn) and not os.access(fn, os.R_OK):
+            return (f"cannot read {shown}: {reason} — `chmod u+r {shown}` "
+                    f"lets taxjson read it")
+        folder = os.path.dirname(os.path.abspath(fn))
+        if (os.path.isdir(folder) and os.access(folder, os.X_OK)
+                and not os.access(folder, os.W_OK)):
+            h, fix = cannot_write(shown, exc, final)
+            return f"{h} — {fix[:-1]}" if fix else h
+    except (OSError, ValueError):
+        pass
+    return f"permission denied: {shown}"
 
 
 _INPUT_ERRORS = (InputReadError, OutputWriteError, FileNotFoundError, IsADirectoryError, NotADirectoryError,

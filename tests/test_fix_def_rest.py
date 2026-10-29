@@ -1,9 +1,6 @@
 """Second-audit DEFERRED findings, the rest (A2-0590, A2-1014, A2-1091,
 A2-1052/A2-1054, A2-1056). Every fixture is synthetic: invented tickers,
 fake account ids (55500001, U5550001) and made-up amounts."""  # pii-ok
-import contextlib
-import io
-import json
 import tempfile
 import unittest
 from pathlib import Path

@@ -1,7 +1,5 @@
 """Planning low round: the shared JSON input contract for bin tools
 (lib/json_input). All data is synthetic."""
-import os
-import subprocess
 import sys
 import tempfile
 import unittest

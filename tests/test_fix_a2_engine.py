@@ -456,26 +456,28 @@ class TestAsOfTrustRocRecordDate(unittest.TestCase):
 
     @rule("CA-INC-DATE-ROC-TRUST")
     def test_close_year_snapshot_keeps_a_january_paid_roc(self):
+        # The snapshot reads the engine's pools at Dec 31 from a
+        # full-history run (backlog TJ-0417): the ROC is in them on its
+        # record date.
+        import contextlib
+        import io
         import json
         import tempfile
         from pathlib import Path
+        from taxjson.bin import taxjson_run as R
         from taxjson.lib import handoff
-        seen = {}
-
-        def fake_run_gains(args, out):
-            src = Path(args[-1])
-            seen[src.name] = json.loads(src.read_text())['transactions']
-            out.write_text(json.dumps({'transactions': [], 'inventory': [],
-                                       'wash_sales': []}))
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)
             (cache / 'margin_base.json').write_text(
                 json.dumps({'transactions': _TRUST_ROWS}))
-            cfg = {'settings': {'country': 'canada', 'year': 2025},
+            cfg = {'settings': {'country': 'canada', 'year': 2025,
+                                'base_currency': 'CAD'},
                    'accounts': {'margin': {'type': 'taxable'}}}
-            handoff.snapshot(cache, cfg, '2025-12-31', fake_run_gains, [])
-        kept = seen['equity_asof.json']
-        self.assertIn('r1', [r.get('id') for r in kept])
+            with contextlib.redirect_stderr(io.StringIO()):
+                snap = handoff.snapshot(
+                    cache, cfg, '2025-12-31', R._filed_run_gains,
+                    R._handoff_gains_flags(cfg['settings']))
+        self.assertEqual(snap['equity']['XYZ.UN.TO']['acb'], 980.0)
 
 
 class TestSplitGainsSameStampSplitFirst(unittest.TestCase):

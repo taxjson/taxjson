@@ -4,9 +4,10 @@ or consolidation in the books, with how it was booked and what to check.
 Spin-offs (Canada): by default a spin-off is a dividend equal to the fair
 market value of the new shares, and that value is also the new shares'
 cost (`taxable_deemed_dividend`). The s.86.1 election (`rollover_s_86_1`)
-instead splits the parent's cost between the two with no income; it is
-only available for spin-offs on CRA's list and must be filed with the
-return. The command shows the election, the value per share used, what
+instead splits the parent's cost between the two with no income; for a
+foreign parent it is only available for spin-offs on CRA's list and must
+be filed with the return (a Canadian parent's butterfly booked the same
+way has nothing to file). The command shows the election, the value per share used, what
 was booked (income and the new shares' cost, in the base currency), the
 broker's own value when it reported one, and flags a zero value.
 
@@ -19,7 +20,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT, SHELTERED_DEFAULT,
                                       declares_zero_value)
@@ -132,8 +133,9 @@ _FMV_ELECTIONS = {
 _ALLOC_ELECTIONS = {
     "rollover_s_86_1": (
         "s.86.1 election: no income; the parent's cost is split between "
-        "the two. File the election with the return; the spin-off must "
-        "be on CRA's list"),
+        "the two. A foreign parent's: file the election with the return "
+        "(the spin-off must be on CRA's list); a Canadian parent's "
+        "butterfly or s.86 reorganization has nothing to file"),
     "tax_free_355": (
         "§355 tax-free spin-off: no income; the basis moved to the new "
         "shares is the amount from the company's Form 8937 (§358(b))"),
@@ -410,6 +412,37 @@ def wrong_country_elections(root: Path, cfg: Dict[str, Any]
     return out
 
 
+# How long after a split its fraction's cash in lieu may be paid (the
+# spin-off's own window, lib/corp_actions: from the event to 50 days
+# after the cash) — a sale of exactly the fraction in that time is it.
+CIL_DAYS = 60
+
+
+def _cil_booked(rows: List[Dict[str, Any]], symbols: Iterable[str],
+                day: str, fraction: float) -> Optional[Dict[str, Any]]:
+    """The booked sale of a split's fraction (cash in lieu): a BUYSELL of
+    one of `symbols` selling exactly `fraction` units, dated `day` to
+    CIL_DAYS after it; None when there is none (backlog TJ-0445)."""
+    try:
+        d0 = datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        return None
+    syms = {s for s in symbols if s}
+    for r in rows:
+        if r.get("action") != "BUYSELL" or r.get("symbol") not in syms:
+            continue
+        try:
+            q = float(r.get("quantity") or 0.0)
+            dd = datetime.strptime(str(r.get("date") or "")[:10],
+                                   "%Y-%m-%d")
+        except (TypeError, ValueError):
+            continue
+        if (q < 0 and abs(-q - fraction) < 1e-6
+                and timedelta(0) <= dd - d0 <= timedelta(days=CIL_DAYS)):
+            return r
+    return None
+
+
 def splits(root: Path, cfg: Dict[str, Any],
            account: Optional[str] = None,
            window_days: int = 10) -> List[Dict[str, Any]]:
@@ -446,9 +479,20 @@ def splits(root: Path, cfg: Dict[str, Any],
                 why.append("a zero ratio would erase the position")
             if abs(before) > 1e-9 and abs(after - round(after)) > 1e-6 \
                     and abs(before - round(before)) < 1e-9:
-                flags.append("FRACTION")
-                why.append(f"leaves {after:g} shares: expect cash in lieu "
-                           f"for the fraction (booked as a small sale)")
+                _frac = round(abs(after) - int(abs(after)), 9)
+                _cil = _cil_booked(rows, (after_sym, sym), d, _frac)
+                if _cil is not None:
+                    # Paid and booked: nothing to expect (backlog
+                    # TJ-0445: "need attention" for a booked one).
+                    flags.append("CIL")
+                    why.append(f"leaves {after:g} shares: the fraction's "
+                               f"cash in lieu is booked ({_frac:g} sold "
+                               f"on {str(_cil.get('date'))[:10]})")
+                else:
+                    flags.append("FRACTION")
+                    why.append(f"leaves {after:g} shares: expect cash in "
+                               f"lieu for the fraction (booked as a small "
+                               f"sale)")
             try:
                 dd = datetime.strptime(d, "%Y-%m-%d")
             except ValueError:
@@ -580,8 +624,11 @@ def render_splits(items: List[Dict[str, Any]],
                f"{kind} x{s['ratio']:g}  held {s['held_before']:g} -> "
                f"{s['held_after']:g}{tag}", "", "  ")
         d.items(s["why"], "  ")
-    n = sum(1 for s in items if set(s["flags"]) - {"TWO-SOURCES"})
+    n = sum(1 for s in items
+            if set(s["flags"]) - {"TWO-SOURCES", "CIL"})
     d.blank()
     d.para(f"{n} split(s) need attention." if n else
+           "No split is doubled or empty; each fraction's cash in lieu "
+           "is booked." if any("CIL" in s["flags"] for s in items) else
            "No split is doubled, empty or fractional.")
     return d.lines()

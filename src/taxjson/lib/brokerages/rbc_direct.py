@@ -20,7 +20,6 @@ from taxjson.lib.stage_msg import emit_line
 import csv
 import io
 import re
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_joins,
+                                         warrant_exercise_tt_hint,
                                          answered_rename_note,
                                          declared_rename_where,
                                          combined_accounts_note,
@@ -1332,14 +1332,18 @@ def _plan_reinvest_reversals(ctx: RbcAccountContext, chrono) -> None:
     before its date in ANY of the account's files (re-audit A2-1044 /
     A2-1048): the original in December's export and its CANCEL in
     January's was refused, and with an overlapping download the result
-    depended on file order (the full file's REI was the skipped copy)."""
+    depended on file order (the full file's REI was the skipped copy).
+    The original must be in the same broker account (the Account
+    column): one account's CANCEL consumed another account's REI
+    pooled under the same taxjson account, and both dropped out
+    (backlog TJ-0518)."""
     opened: Dict[tuple, List] = {}
     for _fi, r in chrono:
         if r.cls != 'reinvest' or abs(r.qty) < 1e-12 \
                 or abs(r.value) < 0.005 or (r.qty > 0) == (r.value > 0):
             continue
-        key = (r.symbol.strip().upper(), r.currency, round(abs(r.qty), 6),
-               round(abs(r.value), 2))
+        key = (_norm_account(r.account), r.symbol.strip().upper(),
+               r.currency, round(abs(r.qty), 6), round(abs(r.value), 2))
         if r.qty > 0:
             opened.setdefault(key, []).append(r)
             continue
@@ -1649,7 +1653,9 @@ class RbcBrokerage(BaseBrokerage):
         transactions: List[Dict[str, Any]] = []
         expiries: List[Dict[str, Any]] = []
         spinoffs = 0
-        for r in rows:
+        # Each transaction remembers its row's line (backlog TJ-0124).
+        for r in self.rows_noting_lines(transactions, rows,
+                                        lambda r: r.line):
             cls = r.cls
             if id(r) in leg_done:
                 self.note_row_consumed()
@@ -1780,7 +1786,8 @@ class RbcBrokerage(BaseBrokerage):
                         and _names_underlying(opt['base'], sym):
                     return None
                 return self.format_occ_symbol(opt['right'], opt['base'],
-                                              opt['expiry'], opt['strike'])
+                                              opt['expiry'], opt['strike'],
+                                              where=f"line {r.line}")
         return None
 
     def _resolve_temp(self, r) -> str:
@@ -1827,7 +1834,7 @@ class RbcBrokerage(BaseBrokerage):
             if self._extract_covers(r.desc, currency):
                 return out      # an EXTRACT line rewrites the row
             _company = rbc_row_company(r)
-            _words = _extract_words(_company, r.desc)
+            _words = self._usd_units_words(symbol, _company, r.desc)
             self._warn(f"{symbol} ({' '.join(_company.split())!r}) reads "
                        f"as the US-dollar class of a TSX-listed fund but is "
                        f"booked as {out}, a US listing (off the T1135, one "
@@ -1836,6 +1843,52 @@ class RbcBrokerage(BaseBrokerage):
                        f"  EXTRACT {_words} | USD | {_unit}",
                        attention=True)
         return out
+
+    def _usd_units_words(self, symbol: str, company: str, desc: str) -> str:
+        """The words of the EXTRACT line suggested for `symbol`'s
+        US-dollar rows: the longest start (up to six words) of one of
+        their company names that EVERY US-dollar row of the symbol in
+        the account's exports carries in its Description (what EXTRACT
+        matches) and no other symbol's US-dollar row does, so the one
+        line moves the fund's trades, transfers and income together.
+        Built from the first row alone, a transfer's 'TRANSFER' word
+        left the sale under the US listing: the line split the fund and
+        the sale lost its purchase (backlog TJ-0438). Else the shortest
+        run common to them (cross_listings.extract_words), else the
+        first row's words, as before."""
+        from taxjson.lib.brokerages.base import extract_words_match
+        from taxjson.lib.cross_listings import extract_words
+        sym = (symbol or '').strip().upper()
+        mine: List[str] = []
+        others: List[str] = []
+        names: List[str] = [company]
+        ctx = getattr(self, '_ctx', None)
+        for k in (ctx.files if ctx is not None else ()):
+            for o in ctx.rows(k):
+                if (o.currency or '').strip().upper() != 'USD' \
+                        or not (o.desc or '').strip():
+                    continue
+                if (o.symbol or '').strip().upper() == sym:
+                    mine.append(o.desc)
+                    names.append(rbc_row_company(o))
+                else:
+                    others.append(o.desc)
+        if not mine:
+            return _extract_words(company, desc)
+        seen = set()
+        for n in range(6, 0, -1):
+            for name in names:
+                words = name.split()
+                cand = ' '.join(words[:n])
+                if len(words) < n or cand in seen:
+                    continue
+                seen.add(cand)
+                if (all(extract_words_match(cand, d) for d in mine)
+                        and not any(extract_words_match(cand, d)
+                                    for d in others)):
+                    return cand
+        return (extract_words(mine, others, seeds=names)
+                or _extract_words(company, desc))
 
     def _income_currency(self, r) -> str:
         """The listing (by currency) an income/withholding/ROC/fee row
@@ -2127,9 +2180,10 @@ class RbcBrokerage(BaseBrokerage):
                                                         'Exercise')))
         # A blank settle cell falls back to the cycle of the LISTING's
         # market, not the row currency's (A2-1054): SAMPLF.U.TO bought in USD
-        # settles through CDS on the Canadian calendar.
-        from taxjson.lib.dates import market_of
-        _mkt = market_of(symbol, r.currency)
+        # settles through CDS on the Canadian calendar, skipping the US
+        # days CDS settles no US dollars on (TJ-0705).
+        from taxjson.lib.dates import settlement_calendar
+        _mkt = settlement_calendar(symbol, r.currency)
         if r.settle:
             date_settle = r.settle
         elif occ and not is_assign_leg:
@@ -2281,12 +2335,17 @@ class RbcBrokerage(BaseBrokerage):
                 cands = [t for t in cands if wr.replace('.', '').startswith(
                     strip_listing_suffix(t['symbol']).replace('.', ''))]
             if len(cands) != 1:
+                # The .tt form that books it (backlog TJ-0590).
+                hint = warrant_exercise_tt_hint(
+                    w, [t['symbol'] for t in cands])
                 raise _err(Path(self._fname), line,
                     f"an Exercise of {w['symbol']} (a warrant or right) "
                     f"with {'no' if not cands else 'more than one'} "
                     f"same-day Exercise share leg — refusing to book the "
                     f"warrants as a sale at 0 (their cost belongs in the "
-                    f"shares). Book the exercise in a .tt file.")
+                    f"shares). Book the exercise in a .tt file of this "
+                    f"account and remove the row from the export (the "
+                    f"file is refused until it is gone): {hint}.")
             st = cands[0]
             used.add(id(st))
             w['action'] = 'ASSIGN'

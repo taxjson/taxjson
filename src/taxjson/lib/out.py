@@ -1063,15 +1063,22 @@ def act_lines(text: str) -> List[str]:
 def act_list(text: str, names: Sequence[str], cmd: Optional[str] = None,
              width_: int = 100) -> str:
     """An act-on line naming items: `! <text> (A, B +3 more) — <cmd>`,
-    as many names as fit in `width_` columns (at least one)."""
+    as many names as fit in `width_` columns; none when not even one
+    fits (a 21-character option symbol: the command lists them; backlog
+    TJ-0229), unless the line is too long without them too."""
     names = [printable(n) for n in names]
     for k in range(len(names), 0, -1):
         more = len(names) - k
         inner = ", ".join(names[:k]) + (f" +{more} more" if more else "")
         line = act(f"{text} ({inner})", cmd)
-        if len(line) <= width_ or k == 1:
+        if len(line) <= width_:
             return line
-    return act(text, cmd)
+    bare = act(text, cmd)
+    if len(bare) <= width_ or not names:
+        return bare
+    return act(f"{text} ({names[0]}"
+               + (f" +{len(names) - 1} more" if len(names) > 1 else "")
+               + ")", cmd)
 
 
 # ---------------------------------------------- one-line messages, folded

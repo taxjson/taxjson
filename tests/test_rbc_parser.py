@@ -1,5 +1,4 @@
 import unittest
-import tempfile
 from _tmpfiles import private_tmpfile
 import os
 from pathlib import Path

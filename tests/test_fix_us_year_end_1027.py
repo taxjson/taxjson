@@ -208,17 +208,19 @@ class TestUSDeferredAtYearEnd(unittest.TestCase):
         self.assertEqual(_deferred(edge),
                          [("margin2", 10, 500.0, "2025-12-31")])
 
-    def test_settle_project_says_trade_date(self):
-        # The engine's walk runs on trade dates (US-WASH-01); a project
-        # on tax_date = "settle" is told which day the year end is read
-        # on.
-        _, edge, text = _edge({"margin": WASHED}, tax_date="settle")
+    def test_settle_project_reads_settlement_dates(self):
+        # The engine's walk runs on trade dates (US-WASH-01), but a
+        # project on tax_date = "settle" reads its year end on
+        # settlement dates (backlog TJ-0343; test_fix_1029_edgecases
+        # has the sale that settles in January): no note.
+        doc, edge, text = _edge({"margin": WASHED}, tax_date="settle")
+        self.assertEqual(doc["inventory_year_end_basis"], "settle")
         (r,) = edge["year_boundary"]["deferred_at_year_end"]
         self.assertEqual(r["as_of"], "2025-12-31")
-        self.assertIn("still held at the end of 2025 (by trade date);",
-                      r["why"])
+        self.assertIn("still held at the end of 2025;", r["why"])
         self.assertIn(r["why"], " ".join(text.split()))
-        _, trade, _ = _edge({"margin": WASHED})
+        tdoc, trade, _ = _edge({"margin": WASHED})
+        self.assertNotIn("inventory_year_end_basis", tdoc)
         self.assertNotIn("(by ", trade["year_boundary"]
                          ["deferred_at_year_end"][0]["why"])
 

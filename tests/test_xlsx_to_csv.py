@@ -2,7 +2,7 @@
 
 Round-trip: build a tiny xlsx with openpyxl, invoke the converter,
 inspect the CSV output. Skips when the optional `xlsx` extras aren't
-installed (pandas + openpyxl); they're optional because the tool is a
+installed (openpyxl); they're optional because the tool is a
 brokerage-CSV preprocessor for the small number of brokerages that
 export only Excel."""
 import csv
@@ -15,7 +15,6 @@ from pathlib import Path
 
 try:
     import openpyxl
-    import pandas as pd
     _XLSX_AVAILABLE = True
 except ImportError:
     _XLSX_AVAILABLE = False
@@ -32,7 +31,7 @@ def _write_xlsx(rows, path: Path, sheet_name='Sheet1'):
     wb.save(path)
 
 
-@unittest.skipUnless(_XLSX_AVAILABLE, "xlsx extras not installed (pandas + openpyxl)")
+@unittest.skipUnless(_XLSX_AVAILABLE, "xlsx extras not installed (openpyxl)")
 class TestXlsxToCsv(unittest.TestCase):
     def _run(self, xlsx_path, *extra):
         cmd = [sys.executable, '-m', 'taxjson.bin.xlsx_to_csv',
@@ -119,25 +118,28 @@ except ImportError:
     _PANDAS_AVAILABLE = False
 
 
-@unittest.skipUnless(_PANDAS_AVAILABLE, "pandas not installed")
 class TestXlsxCellsAsText(unittest.TestCase):
     """2026-09 parse hardening: every cell is read as text, NA sentinels
     stay literal, and only a VALID thousands grouping loses its commas."""
 
-    def test_read_sheet_asks_pandas_for_text_and_no_na(self):
+    @unittest.skipUnless(_XLSX_AVAILABLE, "openpyxl not installed")
+    def test_read_sheet_reads_text_and_no_na(self):
+        """Every cell as the text it shows, NA sentinels literal (the
+        sheet is read by openpyxl itself since backlog TJ-0534: pandas'
+        header inference renamed a label given twice)."""
         from taxjson.bin import xlsx_to_csv as mod
-        seen = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            xlsx = Path(tmp) / 'na.xlsx'
+            _write_xlsx([['Symbol', 'Quantity', 'Note'],
+                         ['NA', 10, 'N/A'], ['ZZQ', 1.5, 'null']], xlsx)
+            rows = mod.read_sheet(str(xlsx), 0).rows
+        self.assertEqual(rows, [['Symbol', 'Quantity', 'Note'],
+                                ['NA', '10', 'N/A'],
+                                ['ZZQ', '1.5', 'null']])
 
-        class _FakePd:
-            @staticmethod
-            def read_excel(path, **kw):
-                seen.update(kw)
-                return 'frame'
-
-        self.assertEqual(mod.read_sheet(_FakePd, 'x.xlsx', 0), 'frame')
-        self.assertIs(seen['dtype'], str)
-        self.assertIs(seen['keep_default_na'], False)
-
+    # (the sheet itself is read with openpyxl alone, the xlsx extra's
+    # one package since backlog TJ-0617; a pandas frame still converts)
+    @unittest.skipUnless(_PANDAS_AVAILABLE, "pandas not installed")
     def test_ticker_na_and_iso_dates_survive(self):
         import pandas as pd
         from taxjson.bin import xlsx_to_csv as mod

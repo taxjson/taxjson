@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.bin.taxjson_ticker_map import (
-    _parse_map_file, load_map_file, map_file_problems, map_symbol,
+    load_map_file, map_file_problems, map_symbol,
     merge_renames)
 from tax_rules import rule
 from _style import CapturedWidth

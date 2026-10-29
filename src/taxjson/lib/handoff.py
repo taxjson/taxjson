@@ -21,18 +21,17 @@ alongside (`filed_dispositions`). `taxjson handoff`, run in the next
 year's project, compares that record with the new project's own books
 (`check`).
 
-Positions at Dec 31 are the engine's pools rebuilt from the rows settled
-by Dec 31, with the superficial-loss deferrals the FULL history decided
-(a December loss whose window runs into January is judged with the
-January trades, exactly as the return was).
+Positions at Dec 31 are the engine's own pools on that day, read from
+the cost timeline of one run over the FULL history (lib/cost_timeline):
+a December loss whose window runs into January is judged with the
+January trades, exactly as the return was.
 """
 from __future__ import annotations
 
 import csv
 import json
-import re
 import tempfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -93,6 +92,9 @@ def record_problem(record: Any) -> Optional[str]:
                         and not _num(p.get("deferred")):
                     return (f'"year_end" {g}/{sym}: deferred is '
                             f'{p.get("deferred")!r}, not a number')
+    lp = _lots_problem(record.get("year_end_lots"))
+    if lp:
+        return lp
     lists = {"settle_next_year": (("symbol", "date", "date_settle"),
                                   ("qty",)),
              "dispositions": (("symbol",), ("qty", "proceeds", "gain")),
@@ -182,6 +184,35 @@ def _bdate(r: Dict[str, Any], basis: str) -> Optional[date]:
     return _d(r.get("date"))
 
 
+def _lots_problem(lots: Any) -> Optional[str]:
+    """Why a record's `year_end_lots` ({group: {symbol: [lot]}}, a US
+    record's lots at Dec 31) is not the shape close-year writes, or
+    None (absent: an older or a Canadian record)."""
+    if lots is None:
+        return None
+    if not isinstance(lots, dict):
+        return '"year_end_lots" must be an object of account groups'
+    for g, by_sym in lots.items():
+        if not isinstance(by_sym, dict):
+            return f'"year_end_lots" {g!r} must be an object of securities'
+        for sym, rows in by_sym.items():
+            if not isinstance(rows, list):
+                return f'"year_end_lots" {g}/{sym} must be a list of lots'
+            for i, r in enumerate(rows):
+                if not isinstance(r, dict):
+                    return (f'"year_end_lots" {g}/{sym} lot {i} must be '
+                            f'an object')
+                for k in ("qty", "basis"):
+                    if not _num(r.get(k)):
+                        return (f'"year_end_lots" {g}/{sym} lot {i}: {k} '
+                                f'is {r.get(k)!r}, not a number')
+                for k in ("date", "account"):
+                    if not isinstance(r.get(k), str):
+                        return (f'"year_end_lots" {g}/{sym} lot {i}: {k} '
+                                f'is {r.get(k)!r}, not text')
+    return None
+
+
 def groups(cfg: Dict[str, Any]) -> Dict[str, List[str]]:
     """Taxable accounts split into the pools the engine blends:
     equities together, crypto together — in taxjson.toml order, the
@@ -205,79 +236,37 @@ def _basis(settings: Dict[str, Any]) -> str:
 
 # ------------------------------------------------------------ snapshot
 
-def _parse_adjust(cmd: str) -> Optional[Dict[str, Any]]:
-    # "ADJUST 2025-01-02 10:00:00 SAMPLA.US CAD 12.3456"
-    f = (cmd or "").split()
-    if len(f) != 6 or f[0] != "ADJUST":
-        return None
-    try:
-        amt = float(f[5])
-    except ValueError:
-        return None
-    return {"date": f[1], "time": f[2], "symbol": f[3], "currency": f[4],
-            "amount": amt}
-
-
-def _landings(w: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Where a superficial-loss record's s.53(1)(f) additions land: the
-    engine's own `adjusts` (one per taxable replacement, each with its
-    pool symbol, trade and settle stamps), else — a gains file written
-    before `adjusts` existed — the single lump `adjust_cmd`. The lump
-    put a multi-symbol allocation on the first symbol (A2-0352), a
-    January landing at Dec 31 (A2-0669), and on settle basis a bump
-    dated the trade day before the losing sale settled (A2-1140)."""
-    out: List[Dict[str, Any]] = []
-    if isinstance(w.get("adjusts"), list):
-        for a in w["adjusts"]:
-            try:
-                amt = float(a.get("amount") or 0.0)
-            except (TypeError, ValueError):
-                continue
-            if not a.get("symbol") or not a.get("date") or abs(amt) < 1e-9:
-                continue
-            out.append({"symbol": a["symbol"], "date": a["date"],
-                        "date_settle": a.get("date_settle") or a["date"],
-                        "time": a.get("time") or "00:00:00",
-                        "currency": a.get("currency") or "",
-                        "account": a.get("account") or "",
-                        "amount": amt})
-        if out:
-            cur = _parse_adjust(w.get("adjust_cmd") or "")
-            for a in out:
-                a["currency"] = a["currency"] or (cur or {}).get(
-                    "currency", "")
-        return out
-    a = _parse_adjust(w.get("adjust_cmd") or "")
-    if a:
-        out.append(dict(a, date_settle=a["date"], account=""))
-    return out
-
-
 def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
              run_gains: RunGains, common_flags: List[str],
-             phantoms: Optional[Path] = None) -> Dict[str, Any]:
+             phantoms: Optional[Path] = None,
+             lots_out: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """{group: {symbol: {qty, acb, deferred}}} for the taxable pools as
     of the end of `as_of` (the engine's date basis). `phantoms`: the
     project's missing-history path (lib/missing_history.
     missing_history_arg: the project folder, for the accounts' .tt
     OPENING cost=unknown lines), None without either (the parameter
-    keeps its pre-rename name)."""
+    keeps its pre-rename name). `lots_out`: a US project's lots at
+    `as_of` are put in it, {group: {symbol: [lot]}} (the engine's
+    `lots_at`: each lot's account, acquisition and holding-period
+    dates, units, basis and deferral in FIFO order; a FIFO sale's
+    basis and term are a lot's, not the position's: backlog TJ-0554).
+
+    The pools are the engine's own: one run over each group's FULL
+    history, as the return was computed, with its cost timeline
+    (`--cost-timeline`, lib/cost_timeline; backlog TJ-0417), read at
+    `as_of`. Every superficial-loss addition is where the engine
+    applied it, in its order (a re-run of the rows to Dec 31 with the
+    additions as ADJUST rows put one ahead of a same-moment sale:
+    backlog TJ-0348, TJ-0371), a trust ROC on its record date, and a
+    December loss is judged with the January trades."""
+    from taxjson.lib import cost_timeline as CT
     settings = cfg.get("settings", {}) or {}
-    basis = _basis(settings)
-    cut = _d(as_of)
-    from taxjson.lib.income_dating import IncomeRules
-    try:
-        _ir = IncomeRules.from_settings(settings)
-    except ValueError:          # no country: no record-date rule to apply
-        _ir = IncomeRules(country="")
     from taxjson.lib.country import settings_country
     try:
         us = settings_country(settings) == "usa"
     except Exception:                               # noqa: BLE001
         us = False
     sheltered = cache / "sheltered_base.json"
-    sheltered_ids = {r.get("id") for r in _rows(sheltered)} \
-        if sheltered.exists() else set()
     out: Dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="taxjson-handoff-") as td:
         tdp = Path(td)
@@ -288,96 +277,87 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                 rows += _rows(cache / f"{n}_base.json")
             if not rows:
                 continue
-            fdoc: Dict[str, Any] = {}
-            if not us:          # §1091: the US engine re-runs below
-                full = tdp / f"{g}_full.json"
-                full.write_text(json.dumps({"transactions": rows}))
-                tail = ["--taxable"] + common_flags
-                if sheltered.exists() and g == "equity":
-                    tail += ["--sheltered", str(sheltered)]
-                if phantoms is not None:
-                    tail += ["--incomplete-history", str(phantoms)]
-                full_out = tdp / f"{g}_full_gains.json"
-                run_gains(tail + [str(full)], full_out)
-                fdoc = json.loads(full_out.read_text(encoding="utf-8"))
-            adjust_rows = []
-            for i, w in enumerate(fdoc.get("wash_sales") or []):
-                if w.get("trigger_lot_id") in sheltered_ids:
-                    continue            # permanent: lands in no taxable pool
-                for j, a in enumerate(_landings(w)):
-                    d = (_d(a.get("date_settle")) or _d(a.get("date"))
-                         if basis == "settle" else _d(a.get("date")))
-                    if d is None or d > cut:
-                        continue        # lands after Dec 31 (A2-0669)
-                    # A `WASH_` id: the engine books it as the s.53(1)(f)
-                    # addition it is — tallied in the pool's
-                    # deferred_wash and released pro rata by every later
-                    # sale, as in the full run. The per-symbol sum of
-                    # the landings kept a deferral the units sold before
-                    # Dec 31 had already recovered (backlog TJ-0285).
-                    adjust_rows.append({
-                        "action": "ADJUST", "date": a["date"],
-                        "date_settle": a.get("date_settle") or a["date"],
-                        "time": a.get("time") or "00:00:00",
-                        "symbol": a["symbol"],
-                        "currency": a.get("currency") or "",
-                        "net_amount": a["amount"], "quantity": 0.0,
-                        "account": a.get("account") or names[0],
-                        "id": f"WASH_HANDOFF_{i}_{j}"})
-            # A trust ROC counts on its record date, as the engine books
-            # it (CA-INC-DATE-ROC-TRUST; A2-0202).
-            kept = [r for r in rows
-                    if (d := (_d(_ir.roc_record_date(r))
-                              or _bdate(r, basis))) is not None
-                    and d <= cut]
-            trunc = tdp / f"{g}_asof.json"
-            trunc.write_text(json.dumps({"transactions": kept + adjust_rows}))
+            full = tdp / f"{g}_full.json"
+            full.write_text(json.dumps({"transactions": rows}))
             if us and g == "crypto":
                 # §1091 does not reach digital assets: the pipeline runs
                 # a US project's crypto books --no-wash (US-WASH-13), so
-                # the record does too — the wash rule here put a
-                # repurchase's basis at the loss lot's cost and recorded
-                # a deferral the return never had (backlog TJ-0297).
-                # The group keeps its accounts together (moves between
-                # them carry their lots) and FIFO per account
-                # (--per-account-basis in common_flags).
+                # the record does too (backlog TJ-0297). The group keeps
+                # its accounts together (moves between them carry their
+                # lots) and FIFO per account (--per-account-basis in
+                # common_flags).
                 tail = ["--taxable", "--no-wash"] + common_flags
-            elif us:
-                # The US engine adds a disallowed loss to the
-                # replacement lot's basis itself (§1091(d)) and records
-                # no ADJUST landing: the Dec-31 rows are re-run WITH the
-                # wash rule, so the year-end basis carries it, as `list`
-                # shows (A2-0353). A replacement after Dec 31 is not in
-                # a Dec-31 lot either way.
+            else:
+                # Canada: the s.53(1)(f) additions; US: the §1091(d)
+                # adds to the replacement lots (A2-0353).
                 tail = ["--taxable"] + common_flags
                 if sheltered.exists() and g == "equity":
                     tail += ["--sheltered", str(sheltered)]
-            else:
-                tail = ["--taxable", "--no-wash"] + common_flags
             if phantoms is not None:
                 tail += ["--incomplete-history", str(phantoms)]
-            trunc_out = tdp / f"{g}_asof_gains.json"
-            run_gains(tail + [str(trunc)], trunc_out)
-            tdoc = json.loads(trunc_out.read_text(encoding="utf-8"))
+            tl_path = tdp / f"{g}_cost_timeline.json"
+            want_lots = us and lots_out is not None
+            if want_lots:
+                tail += ["--lots-at", as_of]
+            run_gains(tail + ["--cost-timeline", str(tl_path), str(full)],
+                      tdp / f"{g}_full_gains.json")
+            if want_lots:
+                lots_out[g] = _lots_by_symbol(tdp / f"{g}_full_gains.json",
+                                              names)
+            try:
+                tl = json.loads(tl_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise BooksError(f"the gains engine wrote no readable cost "
+                                 f"timeline for {', '.join(names)} ({e})")
+            problem = CT.check(tl)
+            if problem:
+                raise BooksError(f"{problem} — the taxjson-gains on the "
+                                 f"PATH is not this taxjson's")
             pos: Dict[str, Dict[str, float]] = {}
-            # The deferral still in each Dec 31 pool: the engine's own
+            # The deferral still in each pool: the engine's own
             # deferred_wash tally (US: the §1091(d) adds; Canada: the
-            # WASH_ landings above, less what later sales released).
-            for h in tdoc.get("inventory") or []:
-                sym = h.get("symbol")
-                q = float(h.get("qty") or 0.0)
-                if not sym or abs(q) < 1e-12:
-                    continue
-                p = pos.setdefault(sym, {"qty": 0.0, "acb": 0.0,
-                                         "deferred": 0.0})
-                p["qty"] += q
-                p["acb"] += float(h.get("total_cost") or 0.0)
-                p["deferred"] += float(h.get("deferred_wash") or 0.0)
+            # s.53(1)(f) additions, less what later sales released —
+            # backlog TJ-0285).
+            for h in CT.inventory_on(tl, as_of,
+                                     eps=CT.us_eps if us else None):
+                p = pos.setdefault(h["symbol"], {"qty": 0.0, "acb": 0.0,
+                                                 "deferred": 0.0})
+                p["qty"] += float(h["qty"])
+                p["acb"] += float(h["total_cost"])
+                p["deferred"] += float(h["deferred_wash"])
             for p in pos.values():
                 p["qty"] = round(p["qty"], 8)
                 p["acb"] = round(p["acb"], 2)
                 p["deferred"] = round(p["deferred"], 2)
             out[g] = pos
+    return out
+
+
+def _lots_by_symbol(gains: Path, names: List[str]
+                    ) -> Dict[str, List[Dict[str, Any]]]:
+    """{symbol: [lot]} of a gains run's `lots_at` (taxjson-gains
+    --lots-at): each security's lots by account, in FIFO order within
+    each account."""
+    try:
+        doc = json.loads(gains.read_text(encoding="utf-8"))
+        rows = doc["lots_at"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise BooksError(f"the gains engine wrote no lots for "
+                         f"{', '.join(names)} ({e}): the taxjson-gains "
+                         f"on the PATH is not this taxjson's")
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        out.setdefault(str(r["symbol"]), []).append({
+            "account": str(r.get("account") or ""),
+            "date": str(r.get("date") or "")[:10],
+            "holding_start": str(r.get("holding_start")
+                                 or r.get("date") or "")[:10],
+            "qty": round(float(r["qty"]), 8),
+            "basis": round(float(r["basis"]), 2),
+            "deferred": round(float(r.get("deferred") or 0.0), 2)})
+    for sym in out:
+        # A stable sort: FIFO order kept within each account.
+        out[sym].sort(key=lambda x: x["account"])
     return out
 
 
@@ -611,15 +591,19 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
     cache = Path(root) / "work"
     from taxjson.lib.missing_history import missing_history_arg
     mh_file = missing_history_arg(root)
+    lots: Dict[str, Any] = {}
     rec = {
         "record_version": RECORD_VERSION,
         "date_basis": _basis(cfg.get("settings", {}) or {}),
         "dispositions": dispositions(gains_files, year),
         "year_end": snapshot(cache, cfg, f"{year}-12-31", run_gains,
-                             common_flags, mh_file),
+                             common_flags, mh_file, lots_out=lots),
         "settle_next_year": straddlers(cache, cfg, year),
         "boundary_rows": boundary_rows(cache, cfg, year),
     }
+    if lots:
+        # US: each lot held at Dec 31 (backlog TJ-0554).
+        rec["year_end_lots"] = lots
     if filed_csv is not None:
         fd = load_filed_dispositions(filed_csv, year)
         rec["filed_dispositions"] = fd
@@ -729,6 +713,11 @@ def validate_record(record: Any, path: Any = "the prior-year record"
                 for f in ("qty", "acb", "deferred"):
                     if f in p and not _num(p[f]):
                         raise bad(f"year_end.{g}.{sym}.{f}", "a number")
+    lp = _lots_problem(record.get("year_end_lots"))
+    if lp:
+        raise RecordError(f"{path}: {lp} (fix the lock or restore it "
+                          f"from git, or re-close that year with "
+                          f"`taxjson close-year --force` in its project)")
     ot = record.get("option_timing")
     if ot is not None and not isinstance(ot, dict):
         raise bad("option_timing", "an object")
@@ -737,12 +726,21 @@ def validate_record(record: Any, path: Any = "the prior-year record"
     # figures, and a year field naming another year than the file's —
     # the hand-off checked "2023 into 2024" from 2024.json and said
     # everything carried forward (2026-10-25 audit year-end#6).
-    from taxjson.bin.taxjson_filed import file_year, lock_damage
+    from taxjson.bin.taxjson_filed import (file_year, filed_rows_problem,
+                                           lock_damage)
     prob = lock_damage(record, file_year(Path(str(path))), str(path))
     if prob:
         raise RecordError(f"{prob} — fix the lock or restore it from git "
                           f"(or re-close that year with `taxjson "
                           f"close-year --force` in its project)")
+    # A record whose filed dispositions hold another year's sales (an
+    # older release wrote it): its filed totals and the loss it carried
+    # are not that year's return, so the hand-off stops until the year
+    # is re-closed with its own rows (backlog TJ-0347).
+    prob = filed_rows_problem(record, file_year(Path(str(path))),
+                              str(path))
+    if prob:
+        raise RecordError(prob)
     return record
 
 
@@ -828,6 +826,78 @@ def _qty_eq(a: float, b: float) -> bool:
     d = abs(float(a) - float(b))
     return (d <= QTY_TOL * max(1.0, abs(a), abs(b))
             and d <= QTY_TOL * max(abs(a), abs(b), 1e-12))
+
+
+def _lot_seqs(lots: List[Dict[str, Any]]
+              ) -> Dict[str, List[Dict[str, Any]]]:
+    """{account: its lots in FIFO order}."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for x in lots:
+        out.setdefault(str(x.get("account") or ""), []).append(x)
+    return out
+
+
+def _same_lots(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> bool:
+    """Whether two lists of a security's lots (the record's and the
+    opening's) are the same lot by lot: each account's lots in FIFO
+    order, each with the same acquisition and holding-period dates,
+    units and basis. Accounts named differently in the two projects
+    are paired by their lots (a renamed account holds the same lots)."""
+    sa, sb = _lot_seqs(a), _lot_seqs(b)
+    if len(sa) != len(sb):
+        return False
+    if set(sa) == set(sb):
+        pairs = [(sa[k], sb[k]) for k in sa]
+    else:
+        def key(seq):
+            return [(x.get("date") or "", float(x["qty"])) for x in seq]
+        pairs = list(zip(sorted(sa.values(), key=key),
+                         sorted(sb.values(), key=key)))
+    for xa, xb in pairs:
+        if len(xa) != len(xb):
+            return False
+        for x, y in zip(xa, xb):
+            if (x.get("date") != y.get("date")
+                    or (x.get("holding_start") or x.get("date"))
+                    != (y.get("holding_start") or y.get("date"))
+                    or not _qty_eq(float(x["qty"]), float(y["qty"]))
+                    or not _acb_close(float(x["basis"]),
+                                      float(y["basis"]))):
+                return False
+    return True
+
+
+def _lots_text(lots: List[Dict[str, Any]], limit: int = 6) -> str:
+    """'1 acquired 2024-03-01 at 10.00, ...' (the account named when
+    there is more than one; at most `limit` lots)."""
+    many = len({x.get("account") for x in lots}) > 1
+    parts = []
+    for x in lots[:limit]:
+        t = (f"{float(x['qty']):g} acquired {x.get('date')} at "
+             f"{float(x['basis']):,.2f}")
+        hs = x.get("holding_start")
+        if hs and hs != x.get("date"):
+            t += f" (held from {hs})"
+        if many:
+            t = f"{x.get('account') or '(no account)'}: {t}"
+        parts.append(t)
+    if len(lots) > limit:
+        parts.append(f"and {len(lots) - limit} more")
+    return ", ".join(parts)
+
+
+def _lots_why(ry: int, closed: List[Dict[str, Any]],
+              opening: List[Dict[str, Any]]) -> str:
+    """The why of a security whose units and total basis match the
+    record but whose lots do not (backlog TJ-0554)."""
+    return (f"the same units and total basis, but not lot by lot: the "
+            f"{ry} books hold {_lots_text(closed)}; this project opens "
+            f"with {_lots_text(opening)}. A FIFO sale here takes another "
+            f"basis or holding period than the {ry} books would give it, "
+            f"so its gain or term differs. Fix the opening's lots (their "
+            f"dates and costs: the older export, or a .tt line per lot) "
+            f"to the {ry} books', or re-close {ry} if its books are the "
+            f"wrong side.")
 
 
 def _acb_close(a: float, b: float) -> bool:
@@ -975,7 +1045,10 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
       (a) this project counts a row in the closed year that the closed
           books never had — income its trust record date (or a RIC entry)
           moves back, or a row local_timezone re-dates to Dec 31 — so it
-          is in neither return;
+          is in neither return; a row the closed books counted in the
+          closed year, of the same date and quantity at another amount
+          (the broker corrected the export), is that row: its
+          difference is reported, not the whole row (backlog TJ-0224);
       (b) the closed books counted an income row in the closed year and
           this project counts it again in the next;
       (c) the closed project's inputs held an early-January row (an
@@ -1007,6 +1080,19 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
                 return x
         return None
 
+    def _corrected(r):
+        # The record's row the closed books counted in the closed year,
+        # at another amount: the broker corrected the export after the
+        # close (backlog TJ-0224; case (c) does the same, TJ-0014).
+        for i, x in enumerate(rec_rows):
+            xd = _d(x.get("tax_date"))
+            if (i not in used and xd is not None and xd <= ye
+                    and _same_row(r, x, acct_of.get(id(r)),
+                                  amount=False)):
+                used.add(i)
+                return x
+        return None
+
     for r in here:
         if r.get("id") not in (None, "") and str(r["id"]) in section2:
             continue                    # section 2 already judges it
@@ -1024,6 +1110,25 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
             continue
         what = ("sale" if a in _TRADES else
                 "return of capital" if a == "ADJUST" else "income")
+        old = _corrected(r)
+        if old is not None:
+            n = round(float(r.get("net_amount") or 0.0), 2)
+            xn = round(float(old.get("net") or 0.0), 2)
+            diff = round(n - xn, 2)
+            out.append({
+                "symbol": r.get("symbol"), "action": a,
+                "date": str(raw), "tax_date": str(eff), "amount": n,
+                "recorded_amount": xn, "difference": diff,
+                "why": (f"the {ry} books counted this {what} in {ry} at "
+                        f"{xn:,.2f}; this project reads it at {n:,.2f} "
+                        f"(the export was corrected after the close), "
+                        f"so the {ry} return reported "
+                        f"{abs(diff):,.2f} "
+                        f"{'less' if diff > 0 else 'more'} than the row "
+                        f"now says. Compare it with the slip: if the "
+                        f"slip says {n:,.2f}, amend {ry} for the "
+                        f"difference.")})
+            continue
         out.append({"symbol": r.get("symbol"), "action": a,
                     "date": str(raw), "tax_date": str(eff),
                     "amount": round(float(r.get("net_amount") or 0.0), 2),
@@ -1100,12 +1205,15 @@ def _boundary_issues(cache: Path, cfg: Dict[str, Any],
 
 def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
           opening: Dict[str, Any],
-          carried_back_to: Optional[Dict[int, float]] = None
+          carried_back_to: Optional[Dict[int, float]] = None,
+          opening_lots: Optional[Dict[str, Any]] = None
           ) -> Dict[str, Any]:
     """Compare a closed year's record with this project's books.
     `opening` is `snapshot(...)` of THIS project at the record's Dec 31.
     `carried_back_to`: {year: the part of this project's net capital
-    loss carried back to it} (the carryover ledger's, Canada)."""
+    loss carried back to it} (the carryover ledger's, Canada).
+    `opening_lots`: a US project's lots then (snapshot's `lots_out`),
+    compared with the record's `year_end_lots` (backlog TJ-0554)."""
     cache = Path(root) / "work"
     settings = cfg.get("settings", {}) or {}
     ry = int(record["year"])
@@ -1123,6 +1231,25 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
         _usa = False
     _loss_words = ("wash-sale losses (§1091(d))" if _usa
                    else "superficial losses")
+    # A record that is not of the year before this project's: this
+    # project opens with the year-end in between, which the record does
+    # not cover. A note on stderr only, the JSON said 0 problems
+    # (backlog TJ-0555).
+    _py = settings.get("year")
+    if _year_like(_py) and int(_py) != ry + 1:
+        _gap = (f"{int(_py) - 1}" if int(_py) - 1 > ry
+                else f"{int(_py) - 1} (not a later one)")
+        issues["partial"].append({
+            "record_year": ry, "project_year": int(_py),
+            "what": (f"the record is for {ry}, this project's year is "
+                     f"{int(_py)}"),
+            "why": (f"this project opens with the {int(_py) - 1} "
+                    f"year-end: what changed after {ry} (sales, buys, "
+                    f"carry-forwards) is not checked against a return. "
+                    f"Check it against the {_gap} record: `close-year` "
+                    f"in that year's project, then `handoff --prior` "
+                    f"its filed/{int(_py) - 1}.json, or set [settings] "
+                    f"prior_year_record to it.")})
     # A record closed on or before Dec 31 of its year (close-year
     # --force during the year) is a partial-year snapshot, not the
     # year-end: its positions miss the rest of that year's trades, and
@@ -1153,6 +1280,19 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
 
     # 1. Opening positions and cost.
     book_by, filed_by = _filed_by_symbol(record)
+    # US: the lots too, where the record has them (TJ-0554).
+    rec_lots = record.get("year_end_lots")
+    lot_check = (_usa and isinstance(rec_lots, dict)
+                 and opening_lots is not None)
+    if _usa and rec_lots is None and any(
+            (record.get("year_end") or {}).values()):
+        issues["notes"].append(
+            f"The {ry} record records no lots (closed by an older "
+            f"taxjson): each security's units and total basis were "
+            f"checked, not each lot's acquisition date and basis, which "
+            f"decide a FIFO sale's gain and term here. Re-close {ry} "
+            f"with the current taxjson (`close-year --force` in its "
+            f"project) to check them.")
     for g in sorted(set(record.get("year_end") or {}) | set(opening)):
         prev = (record.get("year_end") or {}).get(g, {})
         now = opening.get(g, {})
@@ -1174,6 +1314,21 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             da = n["acb"] - p["acb"]
             if _qty_eq(n["qty"], p["qty"]) \
                     and _acb_close(n["acb"], p["acb"]):
+                if lot_check and sym in prev:
+                    pl = (rec_lots.get(g) or {}).get(sym) or []
+                    nl = (opening_lots.get(g) or {}).get(sym) or []
+                    if pl and nl and not _same_lots(pl, nl):
+                        issues["positions"].append({
+                            "group": g, "symbol": sym,
+                            "closed_qty": p["qty"], "closed_acb": p["acb"],
+                            "closed_deferred": p.get("deferred", 0.0),
+                            "opening_qty": n["qty"],
+                            "opening_acb": n["acb"],
+                            "qty_diff": round(dq, 8),
+                            "acb_diff": round(da, 2),
+                            "filed_gain_diff": None,
+                            "lots": {"closed": pl, "opening": nl},
+                            "why": _lots_why(ry, pl, nl)})
                 continue
             if sym in basis_dq and abs(basis_dq[sym]) > QTY_TOL \
                     and _qty_eq(dq, basis_dq[sym]):
@@ -1492,7 +1647,7 @@ def render(rep: Dict[str, Any], record_path: str,
 
     if rep.get("partial"):
         sec(f"The {y} record itself", rep["partial"],
-            lambda i: f"closed at {i['closed_at']}")
+            lambda i: i.get("what") or f"closed at {i['closed_at']}")
     sec(f"Opening positions vs the {y} year-end books",
         rep["positions"],
         lambda i: (f"{i['symbol']:<26} {y}: {i['closed_qty']:>12g} "

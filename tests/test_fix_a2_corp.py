@@ -12,6 +12,7 @@ from contextlib import redirect_stderr
 from datetime import date, timedelta
 from pathlib import Path
 
+from _planted_rates import plant
 from tax_rules import rule, rule_absent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -59,7 +60,8 @@ def _qt_project(td, csv_text, *, year=2026, rate=1.40):
     while d <= max(date.today(), date(year, 12, 31)):
         lines.append(f"{d.isoformat()} 12:00:00 USD CAD {rate:.2f} yahoo\n")
         d += timedelta(days=1)
-    (root / "work" / "to_base.csv").write_text("".join(lines))
+    # Also in the run's HOME (_cli): a run that rebuilds it keeps them.
+    plant(root / "work" / "to_base.csv", "".join(lines), Path(td) / "home")
     (root / "inputs" / "margin" / f"qt_{year}.csv").write_text(
         QT_HEADER + "\n" + csv_text.strip() + "\n")
     return root

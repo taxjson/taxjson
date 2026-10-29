@@ -470,6 +470,14 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
         read_tt_openings(root, names)
     except TtOpeningError as e:
         _add(str(e))
+    # The run's ALLOWLOSS check (lib/loss_overrides.read_project): two
+    # lines naming one sale, or a line in a sheltered account, passed
+    # here and stopped the run (backlog TJ-0566).
+    from taxjson.lib.loss_overrides import LossOverrideError, read_project
+    try:
+        read_project(root, sub)
+    except LossOverrideError as e:
+        _add(str(e))
     return reports, extra
 
 

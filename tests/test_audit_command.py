@@ -10,8 +10,6 @@ saved gains or the base books disagree with what it derives.
 """
 import io
 import json
-import subprocess
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
@@ -19,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from taxjson.bin.taxjson_audit import (
-    build_check_index, build_source_index, main as audit_main,
+    build_check_index, main as audit_main,
     rate_with_provenance, _map_note)
 
 

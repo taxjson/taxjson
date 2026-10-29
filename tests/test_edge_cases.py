@@ -2,11 +2,11 @@
 loss-window edge reporting, on a synthetic project's work files."""
 import json
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from taxjson.lib.dispatch import python_module_argv
 from taxjson.lib.edge_cases import analyze, render_text
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -149,8 +149,10 @@ class EdgeCaseProject(unittest.TestCase):
             'tax_date = "settle"\n\n[accounts.margin]\ntype = "taxable"\n\n'
             '[accounts.rrsp]\ntype = "sheltered"\n')
         env = {"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin"}
-        r = subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_run",
-                            "-C", str(self.root), "edge-cases", "--json"],
+        # A child Python without the cwd on sys.path (AGENTS.md).
+        r = subprocess.run(python_module_argv(
+                               "taxjson.bin.taxjson_run",
+                               ["-C", str(self.root), "edge-cases", "--json"]),
                            capture_output=True, text=True, env=env,
                            stdin=subprocess.DEVNULL, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)

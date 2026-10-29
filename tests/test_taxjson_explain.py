@@ -8,11 +8,9 @@ and the rendering hook so refactors don't quietly change output shape.
 
 import json
 import sys
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from io import StringIO
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 

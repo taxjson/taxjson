@@ -113,6 +113,33 @@ class TestDeveloperDocCounts(unittest.TestCase):
         self.assertGreaterEqual(seen, 3)
         self.assertEqual(bad, [], "update the figure the doc gives")
 
+    # `a`, `b` and `c` (about 4.4k to 5.2k each): one range for the files
+    # named since the paragraph's previous closing parenthesis.
+    _RANGE = re.compile(r"\((?:about )?(\d+(?:\.\d+)?)k? to (\d+(?:\.\d+)?)k"
+                        r" each\)")
+
+    def test_range_counts_cover_each_file(self):
+        """TJ-0228: the map's "about 4.4k to 5.2k each" was not checked."""
+        bad, seen = [], 0
+        for doc in ("AGENTS.md", "docs/architecture-map.md"):
+            for para in re.split(r"\n\s*\n", _read(doc)):
+                text = " ".join(para.split())
+                for m in self._RANGE.finditer(text):
+                    named = text[:m.start()]
+                    named = named[named.rfind(")") + 1:]
+                    paths = re.findall(r"`([\w/.-]+\.py)`", named)
+                    self.assertGreaterEqual(len(paths), 2, named)
+                    lo, hi = float(m.group(1)) * 1000, float(m.group(2)) * 1000
+                    for path in paths:
+                        seen += 1
+                        n = _read(path).count("\n")
+                        if not lo * 0.90 <= n <= hi * 1.10:
+                            bad.append(f"{doc}: {path} is {n} lines, not "
+                                       f"about {m.group(1)}k to "
+                                       f"{m.group(2)}k")
+        self.assertGreaterEqual(seen, 4)
+        self.assertEqual(bad, [], "update the range the doc gives")
+
     def test_ci_quick_usage_line(self):
         head = _read("scripts/ci.sh").split("\nset -u", 1)[0]
         line = next(ln for ln in head.splitlines() if "--quick" in ln)
@@ -216,20 +243,25 @@ class TestChangelogCitations(unittest.TestCase):
     """TJ-0172: GitHub links a bare '#81' in a release body to the public
     repository's issue or pull request 81. Audit findings are cited as
     'audit 81' / 'audit D02' / 'audit 2026-10-25 year-end#2' (a '#' after
-    a letter is not a link). From v0.31.0 on; the older sections' numbers
-    come from lists this repository's history does not hold."""
+    a letter is not a link). From v0.24.1 on (decided 2026-10-29: the
+    v0.24.1 to v0.30.1 sections' numbers, the earlier repository's, read
+    "audit N" too); docs/troubleshooting.md cites none as "(issue #N)"."""
 
     _LINK = re.compile(r"(?<![\w/&#`])#\d+\b")
 
     def test_no_issue_shaped_citation(self):
         bad = []
         for name, sec in _changelog_sections():
-            if name != "Unreleased" and _version(name[1:]) < (0, 31, 0):
+            if name != "Unreleased" and _version(name[1:]) < (0, 24, 1):
                 continue
             for n, line in enumerate(sec.splitlines(), 1):
                 if self._LINK.search(line):
                     bad.append(f"{name} +{n}: {line.strip()[:70]}")
         self.assertEqual(bad, [])
+
+    def test_no_issue_citation_in_troubleshooting(self):
+        text = _read("docs/troubleshooting.md")
+        self.assertEqual(re.findall(r"\(issue #\d+", text), [])
 
 
 class TestReadmeCommandLinks(unittest.TestCase):

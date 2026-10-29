@@ -508,6 +508,8 @@ class TestListDateIncomeFlags(unittest.TestCase):
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "work" / "margin_base.json").write_text(
                 json.dumps({"transactions": txs}))
+            from _runbooks import run_books
+            run_books(root)
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
                  str(root), "list", "--date", "2025-03-31"],

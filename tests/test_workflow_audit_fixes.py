@@ -4,7 +4,6 @@ price in a generic CSV, the audit over a pending election, the
 checklist's hints, init's timezone, the single-folder year hints,
 sanity with no holdings file, the headless election message, no empty
 manifest.json, compare's exit codes (tests/test_compare.py)."""
-import json
 import os
 import subprocess
 import sys

@@ -378,7 +378,6 @@ def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
     `currency`: a non-USD price is converted through the loaded rates
     first (re-audit A2-0590); with no rate the fill is said to be
     unchecked, never guessed. Returns whether it warned."""
-    import sys
     try:
         price = float(usd_price)
     except (TypeError, ValueError):

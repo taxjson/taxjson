@@ -44,11 +44,11 @@ def _registered() -> bool:
 
 def _setup() -> None:
     try:
-        import taxjson_fetch  # noqa: F401
+        import taxjson_fetch  # noqa: F401  (availability check: importable already?)
     except ImportError:
         _add_path(PLUGIN_ROOT / "src")
     try:
-        import taxjson  # noqa: F401
+        import taxjson  # noqa: F401  (availability check: importable already?)
     except ImportError:
         _add_path(REPO_ROOT / "src")
     if CORE_TESTS.is_dir():

@@ -1,7 +1,10 @@
 # Filing checklist
 
-The order to run things in before a return goes to the CRA (or, for a US
-project, the IRS — the same steps apply with the form names swapped).
+The order to run things in before a return goes to the CRA. A US
+project's return goes to the IRS in the same order, but its slips, forms
+and carryover differ, and the Canada-only commands (`taxjson t1135`,
+`instalments`, `amt`, `option-boundary`, `slip-audit`) refuse it: see
+[A US return](#a-us-return) at the end.
 Each step names the command that proves it; a step is done when the
 command is clean, not when it has been run. Amending a filed year
 (T1-ADJ) is the same list from step 2 with `close-year --force` at the
@@ -90,8 +93,11 @@ detectors.
       in the year's `work/crypto_sends/<account>/` when the year folder
       shares one folder of exports (a run never writes the shared
       folder); never edit it. Stablecoin gifts
-      show a currency gain instead of a sale — add it to the `fx-cash`
-      figure.
+      show a currency gain instead of a sale. With ledger v2
+      (`fx_cash_ledger = "v2"`) put each one's `fx-cash v2` line (a
+      `CASHMOVE … proceeds=` line) in a `.tt` file of the account and
+      `fx-cash` counts it; do not add it again. With the default ledger,
+      add it to the year's net FX gain by hand.
 - [ ] `taxjson audit` — every disposition traced and tied, zero mismatched.
 - [ ] `taxjson wash-sales` — read every denial. A **permanently** denied
       loss (repurchase in a registered account) is money gone; make sure
@@ -108,7 +114,7 @@ detectors.
       year, the options and income around Dec 31, and each loss with a
       purchase or sale within a few days of day 30 of its superficial-loss
       window. Read the items marked THE DATE BASIS DECIDES THIS ONE.
-- [ ] `taxjson option-boundary` — confirms whether a written option that
+- [ ] `taxjson option-boundary` (Canada) — confirms whether a written option that
       straddles the year end requires a prior-year amendment, and asks
       about a contract written before `option_grant_timing_since` and
       closed this year: did the year it was written report its premium?
@@ -117,6 +123,8 @@ detectors.
       into this year exactly once (needs last year's `close-year` record).
 
 ## 3. Reconcile to what the CRA already has
+
+Canada; a US return: [A US return](#a-us-return).
 
 - [ ] **T5008 slips** from every broker, as CSVs in the year's own
       `inputs/slips/` (in a year folder: `2025/inputs/slips/`, not the
@@ -149,6 +157,8 @@ detectors.
       the foreign tax credit, line 40500 / Form T2209.
 
 ## 4. Produce the filing numbers
+
+Canada; a US return: [A US return](#a-us-return).
 
 - [ ] `taxjson form-export` — Schedule 3 rows by property type: Part 3
       line 4 shares and fund units (13199/13200), line 6 options, futures
@@ -221,6 +231,8 @@ detectors.
 
 ## 6. After assessment
 
+Canada; a US return: [A US return](#a-us-return).
+
 - [ ] Compare the Notice of Assessment with what was filed; put its net
       tax owing into next year's `[instalments]` block
       (`prior_year_net_tax`, then `second_prior_net_tax` the year after).
@@ -232,7 +244,9 @@ detectors.
       assignment) saved in the shared `inputs/` does not reach the filed
       year: it reads its own frozen copy, so its figures stay OK. Its
       `taxjson check-filed` (and `taxjson run` there) names a shared
-      export that changed or lost a row of that year since the close.
+      export that gained, changed or lost a row of that year since the
+      close, a new file there holding a row of that year, and a
+      corrected generic mapping (`<csv>.toml`) that reads one.
       Next year's `taxjson handoff` (positions and cost at Dec 31
       against the filed books) and `taxjson option-boundary` show what
       moves the year-end; a corrected sale (its proceeds, or the cost of
@@ -240,5 +254,62 @@ detectors.
       year's own `inputs/<account>/` (or `taxjson elect` in its folder)
       and `taxjson run` there: it names the frozen input that changed
       and warns `DRIFTED` when the filed figures moved. Then file the
-      T1-ADJ and `taxjson close-year --force`. `taxjson check-filed`
+      T1-ADJ and `taxjson close-year --force`. When the amendment moves
+      the net capital loss the year carries forward and a later year
+      was already filed on the old balance, that close names the later
+      year's lock, and the later year's `taxjson check-filed` warns: if
+      its return applied more than the new balance, amend it too
+      (`taxjson run` there, a T1-ADJ, then `taxjson close-year --force`
+      there). `taxjson check-filed`
       also catches a taxjson upgrade that moves a filed year.
+
+## A US return
+
+A US project (`country = "usa"`) follows steps 1, 2 and 5 with the US
+terms: retirement accounts (IRA, 401(k)) in place of the registered ones,
+whose purchases decide the wash-sale rule; Form 1099-DIV box 3
+nondividend distributions entered as `ADJUST` lines in place of T3 box
+42; Form 1040-X in place of the T1-ADJ. `taxjson option-boundary` is
+Canada's only (a US premium is taxed at the close). Steps 3, 4 and 6
+are these instead (`taxjson checklist --run` in a US project names the
+US slips and skips the Canada-only steps):
+
+- [ ] **Form 1099-B** (and, for a crypto account's sales from tax year
+      2025, Form 1099-DA) as CSVs in the year's own `inputs/slips/`:
+      `taxjson reconcile-slips inputs/slips/*.csv` exits clean. The IRS
+      matches Form 8949 / Schedule D to them. Forms 1099-DIV and
+      1099-INT: by hand (`taxjson slip-audit` is Canada's only); the
+      foreign tax paid is the 1099-DIV's, not the broker rows'.
+- [ ] `taxjson form-export --form 8949` — Part I short-term, Part II
+      long-term, wash sales as code W, a crypto account's digital
+      assets on their own boxes from 2025 (`--form txf`: the securities
+      rows for TurboTax). The totals equal the matching rows of
+      `taxjson sum`'s FOR THE RETURN block. Not in them: §1256 contracts
+      (futures, broad-based index options), which `taxjson sum` lists
+      with their P/L for **Form 6781 by hand** (its 60/40 split is what
+      the estimate and `taxjson carryover` use; contracts open at year
+      end marked to market and a loss carryback election are not
+      modelled: take them from your 1099-B), and capital gain
+      distributions (1099-DIV box 2a, Schedule D line 13), from the
+      slips.
+- [ ] `taxjson carryover` — the short- and long-term capital loss
+      carryover into the year (Schedule D lines 6 and 14). Record in
+      taxjson.toml's `[carryover] claimed = { YEAR = AMOUNT }` the
+      deduction each return took against ordinary income (Schedule D
+      line 21, at most $3,000), not a loss applied against gains.
+- [ ] `taxjson fx-cash` — §988 gains on foreign-currency cash are
+      ordinary income; the default ledger says NOT RELIABLE, as above.
+- [ ] `taxjson estimate` with other income — a sanity check on the tax.
+      US estimated tax (Form 1040-ES) and the alternative minimum tax
+      (Form 6251) are not modelled: `taxjson instalments`, `taxjson amt`
+      and `taxjson t1135` refuse a US project.
+- [ ] Before `taxjson close-year`, set the year's `[carryover] claimed`
+      entry (the Schedule D line 21 deduction the return took) or
+      `[estimate] other_income`: the lock counts the deduction from it
+      when it carries the loss into next year, and close-year says when
+      neither was set.
+- [ ] After the return is processed: if the carryover the return
+      carried (its Capital Loss Carryover Worksheet) differs from the
+      lock's, enter it in next year's `[estimate] other_losses` /
+      `long_term_losses` (explicit input wins over the lock; `taxjson
+      handoff` names the difference).

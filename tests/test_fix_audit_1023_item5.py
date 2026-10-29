@@ -15,7 +15,6 @@ import json
 import re
 import tempfile
 import unittest
-from pathlib import Path
 
 from _qa_project import console, project, tj, toml
 from tax_rules import rule

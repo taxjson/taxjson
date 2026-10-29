@@ -560,10 +560,16 @@ def already(s: Suggestion, st: MapState) -> Optional[str]:
         return "already in ticker.map"
     kw, syms = s.keyword, s.symbols
     if kw == "EXTRACT":
-        cur, sym = s.extract_key
+        cur, _sym = s.extract_key
         words = s.line.split("|")[0][len("EXTRACT"):].strip().lower()
-        for d, c, v in st.extract:
-            if c in (cur, "*") and (d == words or v == sym):
+        from taxjson.lib.brokerages.base import extract_words_match
+        for d, c, _v in st.extract:
+            # Answered when the map's words are in the suggested ones:
+            # every row the suggestion moves, the map's line moves too.
+            # A line for the same symbol with other words is not: one
+            # that names a transfer's wording leaves the fund's sale
+            # where it was (backlog TJ-0438).
+            if c in (cur, "*") and extract_words_match(d, words):
                 return "ticker.map has an EXTRACT line for it"
         return None
     if kw == "CRYPTO":

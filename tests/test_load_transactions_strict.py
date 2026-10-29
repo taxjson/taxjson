@@ -7,7 +7,6 @@ ACB pool downstream — the user would see a wrong gain number with no
 trace back to a malformed-row warning. The current behavior raises so
 the failure is visible at ingest time, not at filing time."""
 import json
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

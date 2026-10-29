@@ -685,9 +685,12 @@ class TestMessages(unittest.TestCase):
                 "h.toml": '[[holding]]\nsymbol = "MIS.TO"\nquantity = 20\n'})
             r = cli(root, "sanity", f"margin={root / 'h.toml'}")
             self.assertEqual(r.returncode, 1, r.stderr)
-            self.assertIn("usually means missing history", r.stdout)
+            # Fewer shares in the books and none short: purchases from
+            # before the data, which find-missing-history cannot see —
+            # an opening balance (backlog TJ-0423).
+            self.assertIn("bought before your data", r.stdout)
             # (the `! ` line names the command: docs/output-style.md)
-            self.assertIn("tjs find-missing-history", r.stdout)
+            self.assertIn("— tjs opening margin FILE", r.stdout)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ import json
 import tempfile
 import os
 from pathlib import Path
-from datetime import datetime, timedelta
 
 from taxjson.lib.core import TaxTransaction, CanadaTaxRules
 

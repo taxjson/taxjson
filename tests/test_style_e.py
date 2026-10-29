@@ -7,7 +7,6 @@ output is captured, TAXJSON_WIDTH=0)."""
 import json
 import os
 import re
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock

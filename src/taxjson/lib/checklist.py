@@ -69,7 +69,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from taxjson.lib import project_layout as _PL
 
 STATE_FILE = "checklist.json"
@@ -369,6 +369,11 @@ class Result:
     # configure step: edit taxjson.toml, not `tjs migrate`); "-" names
     # none (the detail is the whole fix: an empty inputs folder).
     cmd: str = ""
+    # What the closing Next line tells the user to do for THIS finding,
+    # when the item's standing advice does not fix it (a tobase.map line
+    # the run refuses: fix the line, then `tjs run` — not `tjs format`,
+    # backlog TJ-0356). "" : `cmd`, else the item's advice (_do).
+    do: str = ""
     # The questions asked, one key each (export-coverage: account|broker|
     # end; option-boundary: account|contract|write date): a DONE mark
     # answers the keys it recorded (question_answers) and no others — a
@@ -502,7 +507,7 @@ def _data_files(folder: Path) -> List[Path]:
     if not folder.is_dir():
         return []
     return sorted(p for p in folder.iterdir()
-                  if p.is_file() and not _skipped_input_name(p.name)
+                  if p.is_file() and not _skipped_input(p)
                   and p.suffix.lower() in (".csv", ".tt"))
 
 
@@ -683,15 +688,21 @@ def _filed_after_year_end(ctx: Ctx) -> bool:
     counts: the year was closed; the lock steps say what is wrong; so
     does one deleted while taxjson.toml still carries the freeze note,
     backlog TJ-0263)."""
-    lock = ctx.root / "filed" / f"{ctx.year}.json"
+    return _year_filed(ctx.root, ctx.year)
+
+
+def _year_filed(root: Path, year: int) -> bool:
+    """_filed_after_year_end for the project at `root`, tax year
+    `year` (the list's view reads it too: TJ-0264)."""
+    lock = Path(root) / "filed" / f"{year}.json"
     if not lock.is_file():
-        return _PL.lock_missing_frozen(ctx.root, ctx.year)
+        return _PL.lock_missing_frozen(root, year)
     try:
         doc = json.loads(lock.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return True
     from taxjson.bin.taxjson_filed import partial_year_note
-    return not partial_year_note(doc, ctx.year)
+    return not partial_year_note(doc, year)
 
 
 def d_inputs_frozen(ctx: Ctx) -> Result:
@@ -880,11 +891,18 @@ def d_roc_entered(ctx: Ctx) -> Result:
     if dmap:
         # The same ROC in the books and in the map lowers the ACB twice
         # (A2-0361): roc-sum warned, this step said nothing.
+        import contextlib
+        import io
         try:
             from taxjson.bin.taxjson_run import (_double_roc_warnings,
                                                  _year_keep)
-            dbl = _double_roc_warnings(ctx.root, _accounts_of(ctx, "taxable"),
-                                       _year_keep(str(ctx.year)))
+            # (A work/ file it cannot read stops it with exit 2, its
+            # Error printed first: the step stays quiet, as it was when
+            # that refusal was exit 1's message; backlog TJ-0596.)
+            with contextlib.redirect_stderr(io.StringIO()):
+                dbl = _double_roc_warnings(
+                    ctx.root, _accounts_of(ctx, "taxable"),
+                    _year_keep(str(ctx.year)))
         except SystemExit:
             dbl = []
         if dbl:
@@ -1026,6 +1044,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     # (S067-07). Older projects without the record fall back to mtimes,
     # now including the project-root inputs `run` reads (R1-249).
     diff = inputs_changed(ctx.root, ctx.cfg)
+    stale = bool(diff)
     if diff:
         problems.append("inputs changed since the last full run ("
                         + diff + ")")
@@ -1037,7 +1056,31 @@ def d_run_clean(ctx: Ctx) -> Result:
             except OSError:
                 continue
         if newest_input > oldest_report + 1:
+            stale = True
             problems.append("inputs changed since the last run")
+    # One export (or broker account) in two accounts: every row of it is
+    # booked in both, and every figure counts it twice. The run warned
+    # and this step said done (backlog TJ-0478). First: it moves every
+    # total. The fix before the names, so the summary's `! ` line (cut
+    # at ACT_WIDTH) keeps it.
+    twice = recorded_booked_twice(ctx.root)
+    if twice:
+        problems.insert(0, "booked twice: keep each export in one "
+                        "inputs/<account>/ folder, then `tjs run` ("
+                        + "; ".join(twice) + ": every row in two "
+                        "accounts' books)")
+    # The run that would rebuild them stops on a .tt line: that line
+    # first, and the Next line on it — `tjs run` again only repeated the
+    # refusal (backlog TJ-0032). Read only when the inputs changed (every
+    # report command's banner reads this step).
+    refused = ""
+    if stale and _tt_files(ctx):
+        try:
+            refused = _tt_refusal(ctx)[0]
+        except Exception:                               # noqa: BLE001
+            refused = ""        # (the tt-lines step says what is wrong)
+    if refused:
+        problems.insert(0, refused)
     # Every configured account with inputs must have its report: a run
     # that died on one account, or a single `run --account X`, left the
     # others without books while this step said done (S018-02).
@@ -1074,7 +1117,9 @@ def d_run_clean(ctx: Ctx) -> Result:
                 f"stopped at pending elections, so the filing figures "
                 f"are {_books} (run `taxjson run` "
                 f"with no --account)")
+    empty_only = False
     if empty_parse:
+        empty_only = not problems
         problems.append(f"{', '.join(empty_parse)} parsed to 0 "
                         f"transactions (its rows are not in the books)")
     # An unconverted spreadsheet is never read; `taxjson run` refuses
@@ -1104,8 +1149,21 @@ def d_run_clean(ctx: Ctx) -> Result:
             + (f" +{len(tt_off) - 5} more" if len(tt_off) > 5 else "")
             + " — fix the total or put the difference in the fee column")
     if problems:
+        extra: Dict[str, str] = {}
+        if refused:
+            extra = {"cmd": "tjs check-tt", "do": TT_REFUSED_DO}
+        elif twice:
+            extra = {"cmd": "-", "do": BOOKED_TWICE_DO}
+        elif empty_only and len(problems) == 1:
+            # A re-run alone reads the same file the same way: the fix
+            # is the file (backlog TJ-0483). A header-only export is no
+            # longer a finding (taxjson_brokerage._header_only).
+            _in = (_PL.shown(_PL.inputs_dir(ctx.root), ctx.root)
+                   if _PL.shared_inputs(ctx.root) else "inputs")
+            extra = {"cmd": "-", "do": EMPTY_PARSE_DO.replace(
+                "inputs/", f"{_in}/")}
         return Result("run-clean", "attention", "; ".join(problems),
-                      problems=list(problems))
+                      problems=list(problems), **extra)
     stamp = datetime.fromtimestamp(oldest_report).strftime("%Y-%m-%d %H:%M")
     return Result("run-clean", "done", f"last run {stamp}, no validation errors")
 
@@ -1151,7 +1209,9 @@ _PLANNING_SETTINGS = ("province", "prior_year_record", "holdings_dir",
                       # (`taxjson migrate`) is not stale.
                       "tobase_map")
 _PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id",
-                          "broker_accounts")
+                          "broker_accounts",
+                          # Read by `tjs t1135` only, not by the run.
+                          "custodian_country")
 
 
 def _skipped_input_name(name: str) -> bool:
@@ -1159,6 +1219,14 @@ def _skipped_input_name(name: str) -> bool:
     file is open in Excel) are never inputs — `run` skips them too
     (A2-1145, A2-1166)."""
     return name.startswith((".", "~$"))
+
+
+def _skipped_input(p: Path) -> bool:
+    """A file `run` never reads: hidden, an Office lock file, or the
+    copy `taxjson redact FILE` wrote beside its export (backlog
+    TJ-0476)."""
+    return (_skipped_input_name(p.name)
+            or _PL.redacted_copy_beside_exports(p))
 
 
 def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
@@ -1174,7 +1242,7 @@ def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
         if not folder.is_dir():
             continue
         out += sorted(p for p in folder.iterdir()
-                      if p.is_file() and not _skipped_input_name(p.name)
+                      if p.is_file() and not _skipped_input(p)
                       and (p.suffix.lower() in (".csv", ".tt", ".toml")
                            or p.name in _ACCOUNT_SIDECARS))
     return out
@@ -1187,11 +1255,22 @@ def _run_config_digest(path: Path) -> str:
     not parse is hashed as bytes — it changed, whatever it says."""
     import hashlib
     raw = path.read_bytes()
+    doc = _run_config_part(raw)
+    if doc is None:
+        return hashlib.sha256(raw).hexdigest()
+    blob = json.dumps(doc, sort_keys=True, default=str).encode("utf-8")
+    return "run-settings:" + hashlib.sha256(blob).hexdigest()
+
+
+def _run_config_part(raw: bytes) -> Optional[Dict[str, Any]]:
+    """The parsed taxjson.toml without the planning-only tables and
+    keys (what _run_config_digest hashes); None when it does not
+    parse."""
     try:
         from taxjson.lib.tomlcompat import tomllib
         doc = tomllib.loads(raw.decode("utf-8-sig"))
     except Exception:                                   # noqa: BLE001
-        return hashlib.sha256(raw).hexdigest()
+        return None
     doc = {k: v for k, v in doc.items() if k not in _PLANNING_TABLES}
     if isinstance(doc.get("settings"), dict):
         doc["settings"] = {k: v for k, v in doc["settings"].items()
@@ -1202,8 +1281,38 @@ def _run_config_digest(path: Path) -> str:
                  if k not in _PLANNING_ACCOUNT_KEYS}
                 if isinstance(a, dict) else a)
             for n, a in doc["accounts"].items()}
-    blob = json.dumps(doc, sort_keys=True, default=str).encode("utf-8")
-    return "run-settings:" + hashlib.sha256(blob).hexdigest()
+    return doc
+
+
+def run_config_state(path: Path) -> Optional[Tuple[str, Any]]:
+    """(digest, the part a run reads) of a taxjson.toml — the digest
+    its fingerprint key holds (_run_config_digest) — or None when it
+    cannot be read."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return None
+    return _run_config_digest(Path(path)), _run_config_part(raw)
+
+
+def run_config_keys_changed(before: Any, after: Any) -> List[str]:
+    """The run-read keys of taxjson.toml that differ between two
+    parsed parts (run_config_state): `settings.<key>`, `accounts.<name>`
+    and other tables by name, sorted. ["taxjson.toml"] when either does
+    not parse."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return ["taxjson.toml"]
+    out: List[str] = []
+    for t in sorted(set(before) | set(after)):
+        a, b = before.get(t), after.get(t)
+        if a == b:
+            continue
+        if isinstance(a, dict) and isinstance(b, dict):
+            out += [f"{t}.{k}" for k in sorted(set(a) | set(b))
+                    if a.get(k) != b.get(k)]
+        else:
+            out.append(t)
+    return out
 
 
 def _empty_manifest(p: Path) -> bool:
@@ -1325,13 +1434,20 @@ def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
     return out
 
 
-def record_input_fingerprint(root: Path, cfg: Dict[str, Any]) -> None:
+def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
+                             booked_twice: Sequence[str] = ()) -> None:
     """Called by a successful FULL `taxjson run`: what the reports were
-    built from, for run-clean's staleness check."""
+    built from, for run-clean's staleness check. `booked_twice`: what
+    the run found booked in two accounts (one export file in two
+    folders, one broker account in two taxjson accounts), each in one
+    line; run-clean and the run's closing list read it back
+    (recorded_booked_twice, backlog TJ-0478)."""
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
     doc: Dict[str, Any] = {"version": FINGERPRINT_VERSION,
                            "files": input_fingerprint(root, cfg)}
+    if booked_twice:
+        doc["booked_twice"] = [str(x) for x in booked_twice]
     # The country the books were built under: a report command on books
     # of the other country refuses (audit A2-0147).
     try:
@@ -1342,6 +1458,24 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any]) -> None:
     from taxjson.lib.safe_write import write_atomic
     write_atomic(work / FINGERPRINT_FILE,
                  json.dumps(doc, indent=1, sort_keys=True) + "\n")
+
+
+def recorded_booked_twice(root: Path) -> List[str]:
+    """What the last full run found booked in two accounts
+    (record_input_fingerprint's `booked_twice`): [] when nothing, or
+    when there is no readable record."""
+    try:
+        doc = _load_fingerprint_doc(root)
+    except FingerprintUnreadable:
+        return []
+    got = (doc or {}).get("booked_twice")
+    return [str(x) for x in got if str(x).strip()] \
+        if isinstance(got, list) else []
+
+
+BOOKED_TWICE_DO = ("keep each broker account's exports in one "
+                   "inputs/<account>/ folder (delete the copy), then "
+                   "`tjs run`")
 
 
 def books_country(root: Path) -> Optional[str]:
@@ -1638,9 +1772,10 @@ def d_sanity(ctx: Ctx) -> Result:
 
 
 def _mh_name(ctx) -> str:
-    """What the missing-history step names the lines by."""
-    from taxjson.lib.missing_history import MISSING_HISTORY_TT
-    return MISSING_HISTORY_TT
+    """What the missing-history step names the lines by: OPENING
+    cost=unknown lines, in missing_history.tt or any .tt file of the
+    account (each item names its own file: backlog TJ-0165)."""
+    return "missing-history"
 
 
 def d_missing_history(ctx: Ctx) -> Result:
@@ -1655,6 +1790,11 @@ def d_missing_history(ctx: Ctx) -> Result:
     in_affects = False
     in_remove = False
     in_stale = False
+    # An AFFECTS row whose detail says what makes it short other than a
+    # missing purchase (find-missing-history --details): a trade after a
+    # rename (backlog TJ-0442), an in-kind withdrawal NOT booked
+    # (TJ-0439). The step names the fix with the row.
+    why: Dict[int, str] = {}
     # Every table row printed under an AFFECTS heading counts — a strict
     # symbol/currency pattern dropped 'SAMPLC/B', a '?' currency, 'USDT'
     # and lower-case coins, and the step said "nothing affects the
@@ -1684,13 +1824,29 @@ def d_missing_history(ctx: Ctx) -> Result:
             # to do (R1-339).
             in_affects = in_remove = in_stale = False
             continue
+        if (in_affects and syms and ln.startswith("  ")
+                and not ln.startswith("   ")):
+            _d = ln.strip()
+            if _d.startswith("a trade in ") and " after its rename" in _d:
+                why.setdefault(len(syms) - 1, "a trade after its rename: "
+                               "`tjs renames`")
+            elif _d.startswith("the in-kind withdrawal "):
+                why.setdefault(len(syms) - 1, "an in-kind withdrawal NOT "
+                               "booked: its INKIND line")
         if (not (in_affects or in_remove or in_stale) or ln[:1].isspace()
                 or ln.startswith("-") or ln.startswith("Symbol ")):
             continue
         parts = ln.split()
         if len(parts) >= 2:
+            # A REMOVE / STALE row names where its line is (a third
+            # word, `inputs/margin/hand.tt:1`): said with it.
+            where = (f", {parts[2]}" if (in_remove or in_stale)
+                     and len(parts) > 2 else "")
             (remove if in_remove else stale if in_stale else syms).append(
-                f"{parts[0]} ({parts[1]})")
+                f"{parts[0]} ({parts[1]}{where})")
+
+    for i, w in why.items():
+        syms[i] = syms[i][:-1] + f"; {w})"
 
     def _shown(items: List[str]) -> str:
         return ", ".join(items[:4]) + (" ..." if len(items) > 4 else "")
@@ -1992,6 +2148,15 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                     .startswith(str(ctx.year)):
                 flags.add(f"{w.get('loss_symbol')} {w.get('loss_date')} "
                           f"[{w.get('rule')}]")
+        # The engine's manual checks on unknown-cost dispositions
+        # (lib/missing_history.loss_warning_text): the books deny
+        # nothing for them either, and the step said "no wash sales"
+        # over the engine's "verify manually" (backlog TJ-0551).
+        for w in doc.get("superficial_loss_warnings") or []:
+            if isinstance(w, dict) and str(w.get("loss_date") or "") \
+                    .startswith(str(ctx.year)):
+                flags.add(f"{w.get('symbol')} {w.get('loss_date')} "
+                          f"[unknown cost in the window]")
     blockers = []
     if unreadable:
         blockers.append(f"cannot read {', '.join(unreadable)}")
@@ -2082,7 +2247,9 @@ def d_filing_positions(ctx: Ctx) -> Result:
                       f"{len(probs)} {LO.KEYWORD} line(s) name no single "
                       f"denied loss — {probs[0]}"
                       + (" ..." if len(probs) > 1 else "")
-                      + " (`taxjson run` stops on it)")
+                      + " (`taxjson run` stops on it)",
+                      do=f"fix or delete the {LO.KEYWORD} line(s) named, "
+                         f"then `tjs run`")
     verb = "disallow" if is_us(ctx.settings.get("country")) else "deny"
     shown = []
     for it in items:
@@ -2296,6 +2463,24 @@ def d_journals(ctx: Ctx) -> Result:
                      if c["decided"] else ""))
 
 
+def _missing_prior_lock(ctx: Ctx) -> Optional[Tuple[int, Path]]:
+    """(year, path) of the close-year lock [settings] prior_year_record
+    names when it is a closed year's deleted lock (backlog TJ-0272),
+    else None."""
+    try:
+        from taxjson.bin.taxjson_filed import missing_prior_lock
+        gone = missing_prior_lock(ctx.root, ctx.settings)
+    except Exception:                                   # noqa: BLE001
+        return None
+    return None if gone is None else (gone[0], gone[1])
+
+
+def _shell_arg(text: str) -> str:
+    """`text` as one shell word (quoted only when it needs it)."""
+    import shlex
+    return shlex.quote(text)
+
+
 def d_handoff(ctx: Ctx) -> Result:
     y = ctx.year
     configured = ctx.settings.get("prior_year_record")
@@ -2311,7 +2496,21 @@ def d_handoff(ctx: Ctx) -> Result:
     except ValueError:
         doc = None
     if not isinstance(doc, dict):
-        return Result("handoff", "blocked", _last_line(err) or f"exit {code}")
+        detail = _last_line(err) or f"exit {code}"
+        gone = _missing_prior_lock(ctx)
+        if gone is not None:
+            # The record prior_year_record names is a closed year's
+            # deleted lock (TJ-0272): restore it or close that year
+            # again, in ITS folder — `tjs close-year` here closes this
+            # year (backlog TJ-0605).
+            yr, lock = gone
+            prior = _shell_arg(_PL.shown(lock.parent.parent, ctx.root))
+            reclose = f"tjs -C {prior} close-year"
+            return Result("handoff", "blocked", detail, cmd=reclose,
+                          do=f"restore {_PL.shown(lock, ctx.root)} from git "
+                             f"or a backup, or close {yr} again: "
+                             f"`{reclose}`")
+        return Result("handoff", "blocked", detail)
     if doc.get("problems"):
         parts = []
         for k, label in (("positions", "opening position(s) differ"),
@@ -2327,6 +2526,17 @@ def d_handoff(ctx: Ctx) -> Result:
                          # listed the step with no reason (TJ-0117).
                          ("carry", f"carry-forward input(s) differ from "
                                    f"the {y - 1} record")):
+            if k == "partial" and doc.get(k):
+                # A record of another year than the one before (backlog
+                # TJ-0555) is not a partial-year snapshot.
+                gap = [i for i in doc[k] if isinstance(i, dict)
+                       and i.get("record_year") is not None]
+                if gap:
+                    parts.append(f"the record is for "
+                                 f"{gap[0]['record_year']}, not {y - 1}")
+                if len(doc[k]) > len(gap):
+                    parts.append(f"{len(doc[k]) - len(gap)} {label}")
+                continue
             if doc.get(k):
                 parts.append(f"{len(doc[k])} {label}")
         return Result("handoff", "attention",
@@ -2602,6 +2812,19 @@ def d_t1135(ctx: Ctx) -> Result:
         return Result("t1135", "manual",
                       "cost of foreign property exceeded the threshold — file "
                       "the T1135 (`taxjson t1135` for the tables)")
+    # The cash an account holds outside Canada (tax-logic CA-RPT-20): a
+    # cost the FX-on-cash ledger v2 could not give leaves the total
+    # open, so below the line is no verdict (backlog TJ-0454).
+    if rep.get("total_settled") is False:
+        unk = list(rep.get("cash_unknown_cost") or []) or [
+            n.get("account") for n in rep.get("cash_not_counted") or []
+            if n.get("unknown")]
+        return Result("t1135", "attention",
+                      f"the cost of the cash in {', '.join(map(str, unk[:2]))}"
+                      f"{' ...' if len(unk) > 2 else ''} is unknown (the "
+                      f"FX-on-cash ledger v2 refuses) — the T1135 total is "
+                      f"not settled",
+                      cmd="tjs fx-cash --ledger v2")
     if rep.get("year_complete") is False or ctx.today <= date(ctx.year, 12, 31):
         # ITA 233.3 counts cost at any time up to Dec 31: below the
         # threshold mid-year is not a verdict (S051-22, S052-15).
@@ -2611,6 +2834,16 @@ def d_t1135(ctx: Ctx) -> Result:
                       f"after Dec 31; foreign property outside them (a "
                       f"foreign bank account, cash) is not counted",
                       actionable=False)
+    # An account's Canadian dollars the books give no balance of (CA-RPT-
+    # 20): yours to add before the verdict stands.
+    nc = [str(n.get("account")) for n in rep.get("cash_not_counted") or []]
+    if nc:
+        return Result("t1135", "manual",
+                      f"below the CAD 100,000 threshold on these books, but "
+                      f"the cash of {', '.join(nc[:2])}"
+                      f"{' ...' if len(nc) > 2 else ''} is not counted (the "
+                      f"books give no balance) — add its cost by hand",
+                      cmd="tjs t1135 --details")
     # The books only (S052-13, A2-0682): a foreign bank account or cash
     # outside them adds to the same threshold.
     return Result("t1135", "done",
@@ -2677,7 +2910,9 @@ def d_fx_cash(ctx: Ctx) -> Result:
             return Result("fx-cash", "attention",
                           f"{head} — review `taxjson fx-cash` and mark it "
                           f"reviewed: `taxjson checklist --done fx-cash`",
-                          question=True, answers=[key] if key else [])
+                          question=True, answers=[key] if key else [],
+                          do="review `tjs fx-cash`, then `tjs checklist "
+                             "--done fx-cash`")
         return Result("fx-cash", "attention", head)
     if not doc.get("active", True) and not doc.get("overdrafts_in_year"):
         return Result("fx-cash", "manual", head)
@@ -2736,8 +2971,17 @@ def d_amt(ctx: Ctx) -> Result:
     c = a.get("carryover") or {}
     src = (doc.get("carry_sources") or {}).get("amt_carryover")
     if a.get("binding"):
-        first = (f"AMT binds: {a.get('excess_fed', 0.0):,.2f} federal "
-                 f"additional tax carries forward 7 years")
+        # What carries forward is s.120.2(3)'s additional tax, the excess
+        # only when the special foreign tax credit is the regular one
+        # (backlog TJ-0626).
+        _ex = float(a.get("excess_fed") or 0.0)
+        _cf = float(c.get("created", a.get("carryforward", _ex)) or 0.0)
+        if abs(_cf - _ex) <= 0.005:
+            first = (f"AMT binds: {_ex:,.2f} federal additional tax "
+                     f"carries forward 7 years")
+        else:
+            first = (f"AMT binds: {_ex:,.2f} federal additional tax; "
+                     f"{_cf:,.2f} carries forward 7 years (s.120.2(3))")
     else:
         first = (f"AMT does not bind (regular tax over the minimum by "
                  f"{a.get('headroom', 0.0):,.2f})")
@@ -2785,6 +3029,21 @@ def d_filed_lock(ctx: Ctx) -> Result:
     st = _lock_state(ctx, "filed-lock")
     if st is not None:
         return st
+    # A year closed with its inputs frozen whose taxjson.toml names the
+    # shared folders again: its books read them, not the frozen copy.
+    # check-filed warns and exits 0, so "no drift" would hide it
+    # (backlog TJ-0232).
+    back = [k for k, on in ((_PL.INPUTS_KEY, _PL.shared_inputs(ctx.root)),
+                            (_PL.TOBASE_KEY, _PL.shared_tobase(ctx.root)))
+            if on]
+    if back and _PL.frozen_year(ctx.root, ctx.year):
+        return Result("filed-lock", "attention",
+                      f"closed with its inputs frozen, but [settings] "
+                      f"names {' and '.join(back)} again: the books no "
+                      f"longer read the frozen copy — delete "
+                      f"{'those lines' if len(back) > 1 else 'that line'} "
+                      f"from taxjson.toml, then `taxjson run`",
+                      cmd="edit taxjson.toml")
     # check-filed recomputes from work/: books built before an input
     # changed (in a multi-year project, a shared input or ticker.map
     # edited while working on a later year) would say "no drift" about
@@ -2828,7 +3087,8 @@ def d_lock_committed(ctx: Ctx) -> Result:
         init = "git init" if top is None else "git -C .. init"
         return Result("lock-committed", "attention",
                       f"not a git repository — `{init}`, then commit "
-                      f"filed/{ctx.year}.json", cmd=init)
+                      f"filed/{ctx.year}.json", cmd=init,
+                      do=f"`{init}`, then commit filed/{ctx.year}.json")
     refused = _git_refusal(ctx.root)
     if refused:
         return Result("lock-committed", "blocked", refused)
@@ -2919,7 +3179,26 @@ SLOW = {"sanity", "missing-history", "elections", "audit", "option-boundary",
 # -------------------------------------------------------------------- state
 class StateFileError(ValueError):
     """checklist.json exists but cannot be read — never treated as empty
-    (the next mark would overwrite every recorded mark and note)."""
+    (the next mark would overwrite every recorded mark and note) — or
+    cannot be written. `fix`: what to do, a line of its own (empty when
+    the message says it)."""
+
+    def __init__(self, message: str = "", fix: str = "") -> None:
+        super().__init__(message)
+        self.fix = fix
+
+
+def _state_write_error(verb: str, path: Path, e: OSError,
+                       tail: str = "") -> StateFileError:
+    """`cannot <verb> checklist.json: <reason>` and the fix: the folder
+    named from where the command was run, with the `chmod u+w` that
+    makes it writable (lib/cli_diag.cannot_write). It was the reason
+    alone (backlog TJ-0218)."""
+    from taxjson.lib.cli_diag import _shown_here, cannot_write
+    shown = _shown_here(path)
+    head, fix = cannot_write(shown, e, path)
+    head = f"cannot {verb} " + head[len("cannot write "):]
+    return StateFileError(head + tail, fix=fix)
 
 
 def load_state(root: Path) -> Dict[str, Any]:
@@ -2981,9 +3260,8 @@ def save_state(root: Path, state: Dict[str, Any], year: int) -> None:
     try:
         write_atomic(path, text, suffix=f".{os.getpid()}.part")
     except OSError as e:
-        raise StateFileError(f"cannot write {STATE_FILE}: "
-                             f"{e.strerror or e} — nothing was "
-                             f"written") from None
+        raise _state_write_error("write", path, e,
+                                 " — nothing was written") from None
 
 
 def reset_state(root: Path) -> bool:
@@ -2999,8 +3277,7 @@ def reset_state(root: Path) -> bool:
     try:
         path.unlink()
     except OSError as e:
-        raise StateFileError(f"cannot remove {STATE_FILE}: "
-                             f"{e.strerror or e}") from None
+        raise _state_write_error("remove", path, e) from None
     return True
 
 
@@ -3481,8 +3758,8 @@ def _spec(year: int, country: Optional[str]) -> List[Item]:
                    "checklist --done option-boundary`.",
                us_how=""),
         _check("wash-reviewed",
-               "A loss denied by a registered-account (US: IRA) "
-               "repurchase is gone for good: make sure each is real.",
+               "A loss denied by a registered-account repurchase is "
+               "gone for good: make sure each is real.",
                (Cmd("tjs wash-sales", "each loss denied this year, and "
                     "why"),
                 Cmd("tjs wash-sales --explain", "with the matching "
@@ -3997,29 +4274,53 @@ def s_tt_lines(ctx: Ctx, f: _Facts) -> Result:
     the run's own readers, nothing written): a line the run refuses is
     attention, the first one named — the step stayed `review` while the
     last run stopped on one (backlog TJ-0032)."""
-    tts = sorted(p for n in ctx.accounts
-                 for p in _data_files(_PL.inputs_dir(ctx.root) / n)
-                 if p.suffix.lower() == ".tt")
+    tts = _tt_files(ctx)
     if not tts:
         return Result("tt-lines", "review", "")
-    from taxjson.lib import check_tt as CT
-    doc = CT.check_project(ctx.root, ctx.accounts)
-    errs = [p for p in doc["problems"] if p["severity"] == CT.ERROR]
-    if errs:
-        # The problem's first clause: its message goes on to the line
-        # as written and the fix (`tjs check-tt` shows them all).
-        msg = errs[0]["message"]
-        cut = min((i for i in (msg.find(s) for s in (". ", ": '", " — "))
-                   if i > 0), default=len(msg))
-        return Result("tt-lines", "attention",
-                      f"{len(errs)} .tt problem(s) `tjs run` refuses — "
-                      f"{errs[0]['where']}: {msg[:cut]}"
-                      + (" ..." if len(errs) > 1 else ""),
-                      cmd="tjs check-tt")
-    warns = doc["warnings"]
+    refused, warns = _tt_refusal(ctx)
+    if refused:
+        return Result("tt-lines", "attention", refused, cmd="tjs check-tt",
+                      do=TT_REFUSED_DO)
     return Result("tt-lines", "review",
                   f"{len(tts)} .tt file(s) in inputs/, every line parses"
                   + (f" ({warns} warning(s) to look at)" if warns else ""))
+
+
+# The Next line of a step that a .tt line the run refuses holds up
+# (tt-lines, run-clean: backlog TJ-0032).
+TT_REFUSED_DO = "fix each line `tjs check-tt` names, then `tjs run`"
+# run-clean when an export parsed to nothing is its only finding.
+EMPTY_PARSE_DO = ("check the file's header and date range against the "
+                  "broker's download (download it again), or move it out "
+                  "of inputs/<account>/; then `tjs run`")
+
+
+def _tt_files(ctx: Ctx) -> List[Path]:
+    """The project's .tt files, every account's."""
+    return sorted(p for n in ctx.accounts
+                  for p in _data_files(_PL.inputs_dir(ctx.root) / n)
+                  if p.suffix.lower() == ".tt")
+
+
+def _tt_refusal(ctx: Ctx) -> Tuple[str, int]:
+    """("N .tt problem(s) `tjs run` refuses — <file:line>: <what>", the
+    warnings) — the .tt lines read as `tjs check-tt` reads them
+    (lib/check_tt: the run's own readers, nothing written); "" when the
+    run refuses none."""
+    from taxjson.lib import check_tt as CT
+    doc = CT.check_project(ctx.root, ctx.accounts)
+    errs = [p for p in doc["problems"] if p["severity"] == CT.ERROR]
+    if not errs:
+        return "", int(doc["warnings"] or 0)
+    # The problem's first clause: its message goes on to the line as
+    # written and the fix (`tjs check-tt` shows them all).
+    msg = errs[0]["message"]
+    cut = min((i for i in (msg.find(s) for s in (". ", ": '", " — "))
+               if i > 0), default=len(msg))
+    return (f"{len(errs)} .tt problem(s) `tjs run` refuses — "
+            f"{errs[0]['where']}: {msg[:cut]}"
+            + (" ..." if len(errs) > 1 else ""),
+            int(doc["warnings"] or 0))
 
 
 def s_format(ctx: Ctx, f: _Facts) -> Result:
@@ -4042,7 +4343,10 @@ def s_format(ctx: Ctx, f: _Facts) -> Result:
             from taxjson.bin.taxjson_ticker_map import map_file_problems
             probs = list(map_file_problems(tm))
         except Exception as e:                          # noqa: BLE001
-            return Result("format", "attention", f"ticker.map: {e}")
+            return Result("format", "attention", f"ticker.map: {e}",
+                          cmd="tjs run",
+                          do="fix ticker.map, then `tjs run` (it names "
+                             "the problem)")
         probs += [p for p in res.problems if p not in probs]
         if probs:
             return _map_problems(ctx, probs, set(res.problems))
@@ -4081,12 +4385,20 @@ def _map_problems(ctx: Ctx, probs: List[str], own: set) -> Result:
         where = rel + where[len(m.group(2)):]
     cut = min((i for i in (msg.find(s) for s in (". ", ": '", " — "))
                if i > 0), default=len(msg))
+    cmd = ("tjs format-map" if all(p in own for p in probs)
+           else "tjs run")
+    # The Next line: fix the line, then rebuild — the step's own `tjs
+    # format` lays out taxjson.toml and fixes none of them (backlog
+    # TJ-0356).
+    do = (f"fix or delete the line {where}, then `tjs run`"
+          if len(probs) == 1 else
+          f"fix or delete the {len(probs)} lines `{cmd}` names (the "
+          f"first {where}), then `tjs run`")
     return Result("format", "attention",
                   f"{len(probs)} {' and '.join(files)} problem(s) `tjs run` "
                   f"refuses — {where}: {msg[:cut]}"
                   + (" ..." if len(probs) > 1 else ""),
-                  cmd=("tjs format-map" if all(p in own for p in probs)
-                       else "tjs run"))
+                  cmd=cmd, do=do)
 
 
 def _review(sid: str) -> Callable[[Ctx, _Facts], Result]:
@@ -4531,7 +4843,7 @@ def _save_results_locked(ctx: Ctx, results: List[Result],
             "detail": r.detail if r.own_detail is None else r.own_detail,
             "question": bool(r.question if r.own_question is None
                              else r.own_question),
-            "cmd": r.cmd,
+            "cmd": r.cmd, "do": r.do,
             "answers": list(r.answers), "actionable": bool(r.actionable),
             "checked": when, "basis": bid,
         }
@@ -4642,6 +4954,7 @@ def load_results(ctx: Ctx, only: Optional[List[str]] = None,
             r = Result(sid, e["status"], str(e.get("detail") or ""),
                        question=bool(e.get("question")),
                        cmd=str(e.get("cmd") or ""),
+                       do=str(e.get("do") or ""),
                        answers=[str(a) for a in (e.get("answers") or [])],
                        actionable=bool(e.get("actionable", True)))
             stored.append(sid)
@@ -4731,19 +5044,38 @@ def _do(it: Item, r: Optional[Result] = None,
     (2026-10 workflow audit: the first checklist said "download the
     exports" while its own detector asked for a run). `inputs_label`:
     the exports folder as the project sees it (`../inputs` when every
-    year shares one)."""
+    year shares one).
+
+    A finding needing attention (or blocked) names what fixes IT, as its
+    `! ` line does: the result's own `do`, else its own command, else
+    — an item with no standing advice — the command its detail names.
+    The item's first command was the Next line over a finding it does
+    not touch: `tjs format` for a tobase.map line the run refuses
+    (backlog TJ-0356)."""
     if r is not None and r.effective == "manual":
         return f"confirm it, then `tjs checklist --done {it.id}`"
+    finding = r is not None and r.effective in ("blocked", "attention")
+    if finding and r.do:
+        return r.do
     if r is not None and r.detail and (
             (r.effective == "blocked" and _detail_cmd(r.detail))
-            or (r.effective in ("blocked", "attention") and r.cmd == "-")):
+            or (finding and r.cmd == "-")):
         # (cmd "-": the detail is the whole fix, an attention's too —
         # inputs-committed outside any git repository)
         return " ".join(str(r.detail).split())
+    own = (r.cmd or ("" if it.do else _detail_cmd(r.detail))) \
+        if finding else ""
+    if own:
+        return f"`{own}`" if _RUNNABLE_RE.match(own) else own
     if it.do:
         return it.do.replace("inputs/<account>/",
                              f"{inputs_label}/<account>/")
     return f"`{it.cmds[0].command}`" if it.cmds else it.title
+
+
+# A result's `cmd` that is a command to type (quoted in the Next line),
+# not an instruction ("edit taxjson.toml").
+_RUNNABLE_RE = re.compile(r"(?:tjs|taxjson|git) ")
 
 
 def stderr_progress(sid: str, cmd: str) -> None:
@@ -4785,14 +5117,36 @@ def once_progress() -> Callable[[str, str], None]:
 
 # ------------------------------------------------------------------ output
 def _project_cmds(it: Item, root: Optional[Path], year: int) -> Item:
-    """The configure step's commands that apply in the project at
-    `root`: `tjs migrate` only beside its old map files, `tjs align
-    --from` only with another year's project beside it (from the latest
-    earlier one). A first project's step offered both, and each failed
-    (backlog TJ-0034). Another item, or no project: as it is."""
-    if it.id != "configure" or root is None:
-        return it
+    """Item `it` as it applies in the project at `root`. The configure
+    step's commands: `tjs migrate` only beside its old map files, `tjs
+    align --from` only with another year's project beside it (from the
+    latest earlier one) — a first project's step offered both, and each
+    failed (backlog TJ-0034). The explore step's `tjs staking` only with
+    a crypto account (TJ-0289). The inputs-frozen step of a filed year:
+    its exports are the ones filed, so no download and no `tjs fetch`
+    (TJ-0264, as its detector says since TJ-0143). The handoff step's
+    advice once [settings] prior_year_record is set: not to set it
+    (TJ-0605). Another item, or no project: as it is."""
     from dataclasses import replace
+    if root is None:
+        return it
+    if it.id == "handoff":
+        if it.how and _prior_record_set(root):
+            return replace(it, how=HANDOFF_SET_HOW)
+        return it
+    if it.id == "explore":
+        crypto = _crypto_configured(root)
+        if crypto is False:
+            return replace(it, cmds=tuple(
+                c for c in it.cmds if not c.command.startswith("tjs staking")))
+        return it
+    if it.id == "inputs-frozen":
+        if _year_filed(root, year):
+            return replace(it, how=FROZEN_INPUTS_HOW, cmds=FROZEN_INPUTS_CMDS,
+                           do=FROZEN_INPUTS_DO)
+        return it
+    if it.id != "configure":
+        return it
     from taxjson.lib.migrate import legacy_files
     top = _PL.multi_root(root)
     here = Path(root).resolve()
@@ -4810,6 +5164,52 @@ def _project_cmds(it: Item, root: Optional[Path], year: int) -> Item:
             c = replace(c, command=f"tjs align --from {src}")
         cmds.append(c)
     return replace(it, cmds=tuple(cmds))
+
+
+# The inputs-frozen step of a filed year (_project_cmds, backlog TJ-0264).
+FROZEN_INPUTS_HOW = ("Filed: the books are the exports as they were at "
+                     "close-year; an export added now is an amendment.")
+FROZEN_INPUTS_CMDS = (Cmd("tjs check-filed", "recomputes the filed year "
+                          "from its inputs and shows any drift"),)
+FROZEN_INPUTS_DO = "`tjs check-filed` (the year is filed)"
+
+
+# The handoff step's advice once [settings] prior_year_record is set
+# (_project_cmds): its standing advice says to set it (backlog TJ-0605).
+HANDOFF_SET_HOW = ("`tjs handoff` compares this year's opening with the "
+                   "close-year record [settings] prior_year_record names. "
+                   "If that record is gone, restore it from git or a "
+                   "backup, or run `tjs close-year` again in last year's "
+                   "project.")
+
+
+def _prior_record_set(root: Path) -> bool:
+    """taxjson.toml at `root` sets [settings] prior_year_record."""
+    try:
+        from taxjson.lib.tomlcompat import tomllib
+        doc = tomllib.loads((Path(root) / _PL.CONFIG).read_bytes()
+                            .decode("utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return False
+    settings = doc.get("settings") if isinstance(doc, dict) else None
+    return isinstance(settings, dict) \
+        and bool(settings.get("prior_year_record"))
+
+
+def _crypto_configured(root: Path) -> Optional[bool]:
+    """Whether taxjson.toml at `root` configures a crypto account (None:
+    it cannot be read)."""
+    try:
+        from taxjson.lib.tomlcompat import tomllib
+        doc = tomllib.loads((Path(root) / _PL.CONFIG).read_bytes()
+                            .decode("utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return None
+    accounts = doc.get("accounts") if isinstance(doc, dict) else None
+    if not isinstance(accounts, dict):
+        return None
+    return any(isinstance(a, dict) and a.get("crypto")
+               for a in accounts.values())
 
 
 def _cmd_lines(it: Item, w: int, lead: str, country: Optional[str]
@@ -4886,7 +5286,8 @@ def render(results: List[Result], year: int, country: str,
     item and what to do (`whole`: every item's result, for a scoped view
     with nothing left in it to name the next step elsewhere)."""
     from taxjson.lib.out import Doc, wrap
-    its = {it.id: it for it in items(year, country)}
+    its = {it.id: _project_cmds(it, root, year)
+           for it in items(year, country)}
     num = {sid: i + 1 for i, sid in enumerate(its)}
     c = counts(results)
     d = Doc(_title(year, country, quick, scope, results), width_=width_)
@@ -4932,8 +5333,8 @@ def render(results: List[Result], year: int, country: str,
             if full and it.how:
                 d.para(it.how, lead)
             if full or eff in ("todo", "blocked", "manual", "review"):
-                for ln in _cmd_lines(_project_cmds(it, root, year), d.w,
-                                     lead, country):
+                # (`its`: each item as it applies here, _project_cmds)
+                for ln in _cmd_lines(it, d.w, lead, country):
                     d.line(ln)
             if full and it.why:
                 d.para(f"Why: {it.why}", lead)
@@ -5023,7 +5424,8 @@ def render_summary(results: List[Result], year: int, country: str,
     pointer to the list, and the last line: the next item and what to
     do (as render())."""
     from taxjson.lib.out import Doc
-    its = {it.id: it for it in items(year, country)}
+    its = {it.id: _project_cmds(it, root, year)
+           for it in items(year, country)}
     num = {sid: i + 1 for i, sid in enumerate(its)}
     d = Doc(_title(year, country, quick, scope, results), width_=width_)
     _summary_block(d, results, its, num)
@@ -5170,9 +5572,13 @@ def _item_json(n: int, it: Item, r: Optional[Result], is_next: bool,
 
 
 def to_json(results: List[Result], year: int, country: str,
-            info: Optional[RunInfo] = None) -> Dict[str, Any]:
-    """The list as one document (SCHEMA_VERSION, docs/settings.md)."""
-    its = {it.id: it for it in items(year, country)}
+            info: Optional[RunInfo] = None,
+            root: Optional[Path] = None) -> Dict[str, Any]:
+    """The list as one document (SCHEMA_VERSION, docs/settings.md);
+    `root`: the project, whose items are as they apply there, as the
+    text view shows them (_project_cmds)."""
+    its = {it.id: _project_cmds(it, root, year)
+           for it in items(year, country)}
     num = {sid: i + 1 for i, sid in enumerate(its)}
     nxt = next_result(results)
     nit = its[nxt.id] if nxt is not None else None

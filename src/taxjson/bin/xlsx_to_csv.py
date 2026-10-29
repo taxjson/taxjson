@@ -3,15 +3,22 @@
 xlsx_to_csv.py — convert an XLSX brokerage export to CSV.
 
 Used as a preprocessor for brokerages that ship statements only as
-.xlsx (no CSV download option). Reads one sheet, strips thousands-
-separator commas from numeric-looking cells so the resulting CSV
-parses cleanly downstream, and writes the result to a file or stdout.
+.xlsx (no CSV download option). Reads one sheet, every cell as the
+text it shows (openpyxl, no header inference: a label given twice
+stays twice, an id cell formatted 00000000 keeps its leading zeros),
+strips thousands-separator commas from numeric-looking cells so the
+resulting CSV parses cleanly downstream, and writes the result to a
+file or stdout.
 
 Typical flow:
     taxjson-xlsx-to-csv broker_statement.xlsx -o broker_statement.csv
     taxjson-brokerage --brokerage <id> --account <name> broker_statement.csv > broker.json
 """
 import argparse
+import csv
+import datetime as _dt
+import io
+import math
 import os
 import re
 import sys
@@ -36,9 +43,16 @@ def _clean_numeric_commas(val):
     so a downstream CSV parser doesn't have to handle them. Non-numeric
     strings (descriptions, dates, etc.) are passed through unchanged.
     """
-    import pandas as pd
-    if val is None or (not isinstance(val, str) and pd.isna(val)):
+    if val is None or (isinstance(val, float) and math.isnan(val)):
         return ""
+    if not isinstance(val, (str, int, float)):
+        # A pandas frame's missing value (NaT, pd.NA).
+        try:
+            import pandas as pd
+            if pd.isna(val):
+                return ""
+        except (ImportError, TypeError, ValueError):
+            pass
     if isinstance(val, (int, float)):
         return val
     s_val = str(val).strip()
@@ -51,11 +65,30 @@ def _clean_numeric_commas(val):
     return s_val
 
 
+class Sheet:
+    """One worksheet's cells as text, row by row (read_sheet)."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def to_csv(self, path_or_buf=None, index=False, encoding=None):
+        """The rows as CSV text (minimal quoting, "\n" line ends, as
+        pandas wrote them); written to `path_or_buf` when given."""
+        buf = io.StringIO()
+        csv.writer(buf, lineterminator="\n").writerows(self.rows)
+        if path_or_buf is None:
+            return buf.getvalue()
+        path_or_buf.write(buf.getvalue())
+        return None
+
+
 def _apply_cells(df, fn):
     """Run `fn` over every cell. `DataFrame.map` is the modern API
     (pandas 2.1+); fall back to the older `applymap` on earlier
     versions so this tool installs cleanly on Python 3.10 environs
     that haven't bumped pandas yet."""
+    if isinstance(df, Sheet):
+        return Sheet([[fn(c) for c in row] for row in df.rows])
     if hasattr(df, 'map') and callable(getattr(df, 'map')):
         try:
             return df.map(fn)
@@ -64,21 +97,92 @@ def _apply_cells(df, fn):
     return df.applymap(fn)
 
 
-def read_sheet(pd, input_file, sheet_name=0):
-    """Read one sheet with EVERY cell as text, exactly as shown:
+# A number format of zeros alone ("00000000"): an id shown padded to
+# that many digits (backlog TJ-0535).
+_ZERO_PAD_FMT = re.compile(r'"?(0+)"?')
 
-      * dtype=str — no type inference: an integer-looking id keeps its
-        leading zeros, and a date cell comes through as ISO text
-        ("2025-12-31 00:00:00"), which the parsers accept (Questrade's
-        own CSV spells it "2025-12-31 12:00:00 AM").
-      * keep_default_na=False — pandas' NA sentinels ("NA", "N/A",
-        "null", "nan", ...) stay literal strings: the ticker NA
-        (National Bank) used to become an empty cell. Only a truly
-        empty cell is empty.
-    """
-    return pd.read_excel(input_file, sheet_name=sheet_name,
-                         engine='openpyxl', dtype=str,
-                         keep_default_na=False)
+
+def _cell_text(cell) -> str:
+    """A cell as the text the sheet shows, as pandas' text read gave it
+    (a whole number without ".0", a date as "2025-12-31 00:00:00", a
+    text cell as is — "NA" stays NA), and an id whose number format
+    pads it with zeros ("00000000") keeps them: the number alone lost
+    them (999001 for the 00999001 shown; backlog TJ-0535)."""
+    v = cell.value
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        if isinstance(v, float) and not math.isfinite(v):
+            return str(v)
+        whole = int(v)
+        if whole != v:
+            return str(float(v))
+        text = str(whole)
+        m = _ZERO_PAD_FMT.fullmatch(str(cell.number_format or ""))
+        if m and whole >= 0 and len(m.group(1)) > len(text):
+            text = text.zfill(len(m.group(1)))
+        return text
+    if isinstance(v, (_dt.datetime, _dt.date, _dt.time)):
+        return str(v)
+    return str(v)
+
+
+def pick_sheet(wb, sheet_name=0):
+    """The worksheet `sheet_name` names: a sheet of that exact name
+    first (a year tab "2025" is a name, not the index 2025: backlog
+    TJ-0536), else a zero-based index; anything else is refused,
+    naming the sheets the workbook has."""
+    names = list(wb.sheetnames)
+    if isinstance(sheet_name, str) and sheet_name in names:
+        return wb[sheet_name]
+    try:
+        idx = int(str(sheet_name).strip())
+    except ValueError:
+        idx = None
+    if idx is not None and 0 <= idx < len(names):
+        return wb.worksheets[idx]
+    shown = ", ".join(repr(n) for n in names)
+    raise ValueError(
+        f"no worksheet {sheet_name!r}: the workbook has {len(names)} "
+        f"sheet(s), {shown} — give --sheet one of those names, or its "
+        f"index from 0 to {len(names) - 1}")
+
+
+def read_sheet(input_file, sheet_name=0):
+    """Read one sheet with EVERY cell as the text it shows (_cell_text):
+
+      * no header inference: the first row is written as it is, so a
+        label given twice stays twice for the parser's own layout
+        check (pandas renamed the second Quantity to Quantity.1, and
+        the converted file read 10 units where the raw one refused the
+        mismatch; backlog TJ-0534), and an empty label stays empty;
+      * no type inference: an id keeps its leading zeros, a date cell
+        comes through as ISO text ("2025-12-31 00:00:00"), which the
+        parsers accept (Questrade's own CSV spells it "2025-12-31
+        12:00:00 AM"), and "NA", "N/A", "null" stay literal strings
+        (the ticker NA, National Bank). Only a truly empty cell is
+        empty.
+
+    Trailing empty cells and rows are dropped and every row padded to
+    the widest, as pandas wrote them."""
+    import openpyxl
+    wb = openpyxl.load_workbook(input_file, data_only=True)
+    try:
+        ws = pick_sheet(wb, sheet_name)
+        rows = []
+        for row in ws.iter_rows():
+            cells = [_cell_text(c) for c in row]
+            while cells and cells[-1] == "":
+                cells.pop()
+            rows.append(cells)
+    finally:
+        wb.close()
+    while rows and not rows[-1]:
+        rows.pop()
+    width = max((len(r) for r in rows), default=0)
+    return Sheet([r + [""] * (width - len(r)) for r in rows])
 
 
 def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None:
@@ -90,10 +194,8 @@ def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None
         cli_diag.error(PROG, f"no such file: {input_file}")
         sys.exit(2)
 
-    import pandas as pd
-
     print(f"Reading {input_file!r}...", file=sys.stderr)
-    df = read_sheet(pd, input_file, sheet_name)
+    df = read_sheet(input_file, sheet_name)
     df = _apply_cells(df, _clean_numeric_commas)
 
     if output_file:
@@ -131,27 +233,27 @@ def main():
     parser.add_argument("-o", "--output",
                         help="Output .csv file path (default: stdout).")
     parser.add_argument("-s", "--sheet", default=0,
-                        help="Sheet name or zero-based index "
-                             "(default: 0, the first sheet).")
+                        help="Sheet name, else zero-based index "
+                             "(default: 0, the first sheet). A sheet "
+                             "named 2025 is that sheet, not index 2025.")
     args = parser.parse_args()
 
-    # Allow `-s 0` / `-s 1` numeric arguments to pass through as int;
-    # leave string names ("Trades", "Activity") alone.
-    sheet = args.sheet
+    # A sheet's own name wins over an index (pick_sheet): `-s 2025`
+    # selects the year tab "2025"; `-s 1` the second sheet unless one
+    # is named "1".
     try:
-        sheet = int(sheet)
-    except (TypeError, ValueError):
-        pass
-
-    try:
-        convert_xlsx_to_csv(args.input, args.output, sheet)
+        convert_xlsx_to_csv(args.input, args.output, args.sheet)
     except ImportError as e:
         # Missing optional dependency = environment error → exit 2.
+        # taxjson's own fix first: the library's own text said "Use pip
+        # or conda", which installs outside taxjson's environment
+        # (backlog TJ-0425).
+        missing = getattr(e, "name", None) or "openpyxl"
         cli_diag.error(
             PROG,
-            f"{e}. taxjson-xlsx-to-csv requires the optional "
-            f"`xlsx` extras: {extra_hint('xlsx')} (or pip install "
-            f"pandas openpyxl into it).",
+            f"the optional `xlsx` extra this tool needs is not "
+            f"installed (no {missing} in taxjson's environment)",
+            [f"To add it: {extra_hint('xlsx')}."],
         )
         sys.exit(2)
     except Exception as e:

@@ -252,7 +252,8 @@ class _Run:
         cls.root = Path(cls._td.name) / cls.COUNTRY
         cls.root.mkdir()
         _project(cls.root, cls.COUNTRY, journal="2026-07-23",
-                 aton="2026-09-10", arrival="2026-09-11")
+                 aton="2026-09-10", arrival="2026-09-11",
+                 cleanup=cls.addClassCleanup)
         cls.edit(cls.root)
         cls.r = cli(cls.root, "run", "--no-input")
 

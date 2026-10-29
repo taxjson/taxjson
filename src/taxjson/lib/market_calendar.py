@@ -22,9 +22,20 @@ Deliberately NOT modelled:
   settlement days.
 - Currencies other than USD and CAD: weekends only.
 - The calendar is keyed on a market currency: every parser passes the
-  listing's market (lib/dates.market_of: a USD-quoted TSX listing ->
-  'CAD', a CAD-settled US stock -> 'USD'); a symbol with no known
-  listing suffix falls back to the row currency.
+  listing's settlement calendar (lib/dates.settlement_calendar: a
+  CAD-settled US stock -> 'USD'); a symbol with no known listing suffix
+  falls back to the row currency.
+- A key may join calendars with '+': the first names the market (its
+  trading days, and lib/dates' cycle), and a day settles only when
+  every calendar named settles. CA_USD ('CAD+USD') is a US-dollar trade
+  on a Canadian market (a TSX fund's US-dollar unit): CDS settles US
+  dollars only on a day US clearing settles too, so the US holidays the
+  TSX trades through (Martin Luther King Jr. Day, Memorial Day,
+  Juneteenth, Independence Day, US Thanksgiving) are not its settlement
+  days. Source: TMX's "Settlement Schedule for 2026 Holidays" and the
+  CSE's 2025 Holiday Settlement Schedule, which list those dates "for
+  U.S. Dollar Traded Securities only" (backlog TJ-0705); the US days
+  are this module's US calendar, none added by hand.
 """
 from datetime import date, datetime, timedelta
 from functools import lru_cache
@@ -167,8 +178,24 @@ def cds_holidays(year: int) -> FrozenSet[date]:
     return frozenset(tsx_holidays(year) | extra)
 
 
+# The calendar key of a US-dollar trade on a Canadian market (the
+# module docstring; lib/dates.settlement_calendar).
+CA_USD = 'CAD+USD'
+
+
+def _keys(currency: Optional[str]):
+    """The calendars a key names ('CAD+USD' -> ['CAD', 'USD'])."""
+    return [k.strip() for k in str(currency or '').upper().split('+')]
+
+
+def market_key(currency: Optional[str]) -> str:
+    """The market of a calendar key: its first calendar ('CAD+USD' ->
+    'CAD'), whose trading days and cycle the trade follows."""
+    return _keys(currency)[0]
+
+
 def market_for(currency: Optional[str]) -> Optional[str]:
-    cur = (currency or '').upper()
+    cur = market_key(currency)
     if cur == 'USD':
         return 'US'
     if cur == 'CAD':
@@ -185,19 +212,24 @@ def _as_date(d: DateLike) -> date:
 
 
 def is_settlement_day(d: DateLike, currency: Optional[str] = 'USD') -> bool:
+    """A weekday every calendar of `currency` settles on (a joined key,
+    CA_USD: both CDS and US clearing)."""
     d = _as_date(d)
     if d.weekday() >= 5:
         return False
-    mkt = market_for(currency)
-    if mkt == 'US':
-        return d not in nyse_holidays(d.year) and d not in fed_holidays(d.year)
-    if mkt == 'CA':
-        return d not in cds_holidays(d.year)
+    for key in _keys(currency):
+        mkt = market_for(key)
+        if mkt == 'US' and (d in nyse_holidays(d.year)
+                            or d in fed_holidays(d.year)):
+            return False
+        if mkt == 'CA' and d in cds_holidays(d.year):
+            return False
     return True
 
 
 def is_trading_day(d: DateLike, currency: Optional[str] = 'USD') -> bool:
-    """Exchange open (US: NYSE schedule; Columbus/Veterans Day trade)."""
+    """Exchange open (US: NYSE schedule; Columbus/Veterans Day trade).
+    A joined key trades on its market's days (CA_USD: the TSX's)."""
     d = _as_date(d)
     if d.weekday() >= 5:
         return False

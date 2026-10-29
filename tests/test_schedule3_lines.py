@@ -6,7 +6,6 @@ similar properties — options per T4037 — (15199/15300) and line 7
 crypto-assets (15200/15301; before 2025 crypto went on 15199/15300).
 Every exported row must foot: proceeds − ACB − outlays = allowed gain.
 """
-import os
 import csv
 import io
 import json

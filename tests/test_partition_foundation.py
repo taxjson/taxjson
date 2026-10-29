@@ -22,7 +22,7 @@ from taxjson.lib import country as C
 from taxjson.lib import tax_logic as TL
 from tax_rules import rule, rule_absent
 from tax_rules.dual import (SRC, cli, cli_both, gains_both, projects_both,
-                            settings_for, tx)
+                            tx)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -181,6 +181,9 @@ _CA_ONLY_TABLES = {
     "[capital_gains_dividends]": ('[[capital_gains_dividends]]\n'
                                   'symbol = "LFE.TO"\nyear = 2025\n'
                                   'amount = "all"\n'),
+    # T1135's custodian country (CA-RPT-02): a key of the
+    # [accounts.margin] table the projects open with, named as such.
+    "[accounts] custodian_country": 'custodian_country = "USA"\n',
 }
 
 
@@ -216,6 +219,7 @@ class TestSettingOwnership(unittest.TestCase):
                                   canada=extra, usa=extra)
                 r = cli_both(p, "sum", "--json")
                 self.assertNotEqual(r["usa"].returncode, 0)
+                key = key.replace("[accounts]", "[accounts.margin]")
                 self.assertIn(f"{key} is Canada-only", r["usa"].stderr)
                 self.assertIn('this project is country = "usa"',
                               " ".join(r["usa"].stderr.split()))
@@ -348,8 +352,11 @@ class TestCommandOwnership(unittest.TestCase):
         # Each project's converted books are in its own base currency
         # (taxjson-t1135 and form-export refuse other-currency rows,
         # S051-15 / S032-13).
+        # The Canadian engine's rows carry no short/long-term `term`
+        # (a US engine's file is refused: TJ-0503).
         gains = dict(_GAINS, transactions=[
-            dict(t, currency="CAD") for t in _GAINS["transactions"]])
+            {k: v for k, v in dict(t, currency="CAD").items()
+             if k != "term"} for t in _GAINS["transactions"]])
         (p["canada"] / "work" / "margin_gains.json").write_text(
             json.dumps(gains))
         return p

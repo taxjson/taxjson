@@ -17,7 +17,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+from taxjson.lib.core import TaxTransaction
 from taxjson.bin.taxjson_gains import TransferValidationError, _handle_transfers
 from tax_rules import rule
 

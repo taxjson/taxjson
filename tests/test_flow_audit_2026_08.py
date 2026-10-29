@@ -759,8 +759,10 @@ class TestBuyCheckShelteredSide(unittest.TestCase):
             r = _cli(root, "run", "--no-input", "--account", "margin")
             self.assertEqual(r.returncode, 0, r.stderr)
             r = _cli(root, "buy-check", "XEI")
-        self.assertIn("sheltered-account activity is invisible",
-                      r.stderr)
+        # Refused since backlog TJ-0350 (a note, then a SAFE verdict
+        # without the registered accounts' buys, before): exit 2.
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("no sheltered_base.json in work/", r.stderr)
 
 
 class TestSellCheck(unittest.TestCase):

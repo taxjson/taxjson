@@ -29,8 +29,8 @@ foreign cash (line 15300 / §988) — check-filed says so with every OK.
 
 from taxjson.lib.pipeline import income_dating_flags, option_timing_flags
 import json
+import os
 import math
-import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -505,9 +505,90 @@ def lock_damage(lock: Any, year: Any, label: str) -> Optional[str]:
     return None
 
 
+REFILE_DISPOSITIONS = ("taxjson close-year --force --filed-dispositions "
+                       "<CSV>")
+
+
+def filed_rows_problem(lock: Any, year: Any, label: str) -> Optional[str]:
+    """Why the loss a lock carried cannot be read, when its
+    `filed_dispositions` (the sales a return prepared with another tool
+    reported) hold a row dated outside the lock's year: a sentence
+    naming the lock, the rows and the re-close; else None. close-year
+    refuses to write such a lock since TJ-0298, but one an older
+    release wrote counted the other year's sales in its filed_totals
+    and, in Canada, in the net capital loss it carried forward: the
+    next year's estimate, carryover and handoff stop until that year is
+    re-closed (backlog TJ-0347). `year` None: the lock's own field."""
+    if not isinstance(lock, dict) or not isinstance(
+            lock.get("filed_dispositions"), list):
+        return None
+    if year is None:
+        year = lock.get("year")
+    try:
+        y = int(year)
+    except (TypeError, ValueError):
+        return None
+    from taxjson.lib.handoff import filed_rows_outside
+    other = filed_rows_outside(lock["filed_dispositions"], y)
+    if not other:
+        return None
+    shown = ", ".join(other[:5]) + (f" and {len(other) - 5} more"
+                                    if len(other) > 5 else "")
+    return (f"{label} records {len(other)} filed disposition(s) dated "
+            f"outside {y} ({shown}): its filed totals and the loss it "
+            f"carried forward count another year's sales (a lock an "
+            f"older taxjson wrote), so it is not read — re-close {y} in "
+            f"its project with `{REFILE_DISPOSITIONS}`, the CSV holding "
+            f"the sales the {y} return reported ({y}'s rows only)")
+
+
+def missing_lock_problem(path: Path, label: Optional[str] = None
+                         ) -> Optional[str]:
+    """When `path` is a year project's filed/<year>.json that is gone
+    while that project's taxjson.toml still carries close-year's freeze
+    note (project_layout.lock_missing_frozen: the year was closed and
+    its lock deleted): a sentence naming it (`label`, default the path)
+    and the fix; else None — a year never closed has no lock to miss.
+    The next year read such a lock as no record at all: no carried loss,
+    no foreign-cash pool (backlog TJ-0272)."""
+    import os
+    p = Path(path)
+    y = file_year(p)
+    if y is None or p.parent.name != "filed" or os.path.lexists(p):
+        return None
+    from taxjson.lib import project_layout as _PL
+    if not _PL.lock_missing_frozen(p.parent.parent, y):
+        return None
+    return (f"{label or p}: the {y} close-year lock is missing, while the "
+            f"{y} project's taxjson.toml still carries close-year's freeze "
+            f"note (the year was closed) — restore filed/{y}.json from git "
+            f"or a backup, or run `taxjson close-year` in the {y} project "
+            f"again; until then what {y} carried forward is unknown")
+
+
+def missing_prior_lock(root: Path, settings: Dict[str, Any]
+                       ) -> Optional[Tuple[int, Path, str]]:
+    """(year, path, text) of the lock [settings] prior_year_record
+    names when it is missing_lock_problem's case; else None (no
+    setting, a file there, a year never closed)."""
+    try:
+        p = prior_record_setting(root, settings)
+    except PriorRecordError:
+        return None
+    if p is None:
+        return None
+    text = missing_lock_problem(
+        p, f"[settings] prior_year_record "
+           f"({(settings or {}).get('prior_year_record')})")
+    if text is None:
+        return None
+    return int(Path(p).stem), Path(p), text
+
+
 def read_lock(path: Path, settings: Optional[Dict[str, Any]] = None, *,
               label: Optional[str] = None,
-              prior: bool = False) -> Dict[str, Any]:
+              prior: bool = False,
+              carried: bool = False) -> Dict[str, Any]:
     """Read a close-year lock and apply the one check every reader of a
     lock uses: readable JSON with no key written twice, lock_damage (the
     year field against the file's name), and — `settings` given — the
@@ -516,14 +597,20 @@ def read_lock(path: Path, settings: Optional[Dict[str, Any]] = None, *,
     path) and the fix. `prior`: the lock is read as the previous year's
     record (estimate, amt, carryover), so a country mismatch is advised
     as a prior_year_record naming the wrong project's lock
-    (lock_country_problem)."""
+    (lock_country_problem). `carried`: the lock is read for what it
+    carried into the next year (its filed totals, the loss it carried
+    forward): one whose filed dispositions hold another year's rows is
+    refused too (filed_rows_problem, backlog TJ-0347)."""
     p = Path(path)
     label = label or str(p)
     try:
         doc = load_lock_json(p)
     except OSError as e:
-        raise LockProblem(f"cannot read the close-year lock {label} "
-                          f"({e.strerror or e})") from None
+        # A filed year's deleted lock says so (backlog TJ-0272).
+        raise LockProblem(
+            missing_lock_problem(p, label)
+            or f"cannot read the close-year lock {label} "
+               f"({e.strerror or e})") from None
     except UnicodeDecodeError as e:
         raise LockProblem(f"{label}: not UTF-8 text ({e.reason} at byte "
                           f"{e.start}) — {LOCK_FIX}") from None
@@ -537,6 +624,10 @@ def read_lock(path: Path, settings: Optional[Dict[str, Any]] = None, *,
         cp = lock_country_problem(doc, settings, label, prior=prior)
         if cp:
             raise LockProblem(cp)
+    if carried:
+        fr = filed_rows_problem(doc, file_year(p), label)
+        if fr:
+            raise LockProblem(fr)
     return doc
 
 
@@ -995,10 +1086,11 @@ def project_locks(root: Path, settings: Dict[str, Any]
 
 
 def locked_year_flags(root: Path, settings: Dict[str, Any]) -> List[str]:
-    """`--locked-year Y` for every filed-year lock of a US project (the
-    gains engine then books a wash-sale basis add that reaches a sale
-    in a filed year in the loss's year instead, US-WASH-22). Canada
-    has no such flag ([] — lib/country.FLAG_COUNTRY)."""
+    """`--locked-year Y --locked-record PATH` for every filed-year lock
+    of a US project (the gains engine then books a wash-sale basis add
+    that reaches a sale in a filed year in the loss's year instead,
+    US-WASH-22, unless the lock's own row for that sale has it: backlog
+    TJ-0463). Canada has no such flag ([] — lib/country.FLAG_COUNTRY)."""
     if _canonical_country(settings) != "usa":
         return []
     try:
@@ -1006,8 +1098,9 @@ def locked_year_flags(root: Path, settings: Dict[str, Any]) -> List[str]:
     except ValueError:
         return []
     out: List[str] = []
-    for y, _p, _w in locks:
-        out += ["--locked-year", str(y)]
+    for y, p, _w in locks:
+        out += ["--locked-year", str(y), "--locked-record",
+                os.path.abspath(p)]
     return out
 
 

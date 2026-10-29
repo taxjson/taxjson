@@ -123,7 +123,8 @@ returns have them.
 
 **AMT (alternative minimum tax).** A second tax calculation with fewer
 deductions (Canada: form T691; capital gains counted at 100% since 2024).
-You pay the higher of the two; the excess carries forward seven years.
+You pay the higher of the two; the extra tax (Canada: the additional tax
+of s.120.2(3), T691 Part 7 line 14) carries forward seven years.
 `tjs amt`.
 [tax-rules.md](tax-rules.md#alternative-minimum-tax-and-the-minimum-tax-carryover)
 

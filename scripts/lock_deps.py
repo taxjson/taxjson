@@ -38,6 +38,8 @@ days.
                                     hand (tests/test_dependency_locks.py)
   scripts/lock_deps.py --coverage   network: a wheel exists for every
                                     target platform and Python version
+                                    (a known gap in an optional lock:
+                                    ACCEPTED_GAPS)
 
 Options: --cooldown-days N (default 7; 0 = up to now), --uv PATH,
 --security-update PKG (repeatable: PKG alone skips the cooldown, for a
@@ -80,6 +82,22 @@ PLATFORMS = (
 )
 PYTHONS = ("3.10", "3.11", "3.12", "3.13")
 REQUIRED = ("build", "core", "fx")
+
+# Known gaps in an optional lock, accepted: (lock, platform, package) ->
+# why. --coverage lists them as accepted instead of as GAPS, and says
+# when one is no longer seen (remove it). A gap of another package, or
+# on another platform, is still reported; a REQUIRED lock accepts none.
+# On an accepted platform install.sh installs the core package and says
+# which wheel was missing.
+ACCEPTED_GAPS = {
+    ("all", "x86_64-apple-darwin", "cryptography"):
+        "cryptography 50 ships no Intel-macOS wheel (google-auth needs it, "
+        "for google-generativeai: the maintainer's generate-parser extra)",
+    ("generate-parser", "x86_64-apple-darwin", "cryptography"):
+        "cryptography 50 ships no Intel-macOS wheel (google-auth needs it, "
+        "for google-generativeai)",
+}
+_NO_WHEEL = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9._-]*)==\S+ has no")
 
 HEADER_MARK = "# taxjson dependency lock"
 _NAME = re.compile(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
@@ -276,6 +294,50 @@ def compile_locks(uv, cooldown_days, security_updates=()):
           f"(uv {uv_version}, exclude-newer {cutoff or 'none'})")
 
 
+def gap_package(why):
+    """The package a uv 'no wheel' message names (normalized), or ''."""
+    m = _NO_WHEEL.search(why)
+    return norm(m.group(1)) if m else ""
+
+
+def report(name, gaps, accepted=None):
+    """The --coverage lines of one lock and whether it fails: `gaps` are
+    (platform, python, uv's message); a gap ACCEPTED_GAPS names (never in
+    a REQUIRED lock) is listed as accepted, one it names that did not
+    occur as no longer seen."""
+    accepted = ACCEPTED_GAPS if accepted is None else accepted
+    tag = "required" if name in REQUIRED else "optional"
+    ok_ = {} if name in REQUIRED else {
+        (plat, norm(pkg)): why for (lock, plat, pkg), why in accepted.items()
+        if lock == name}
+    open_, known, seen = [], [], set()
+    for plat, py, why in gaps:
+        key = (plat, gap_package(why))
+        if key in ok_:
+            known.append((plat, py, why))
+            seen.add(key)
+        else:
+            open_.append(f"{plat} / Python {py}: {why}")
+    total = len(PLATFORMS) * len(PYTHONS)
+    lines = []
+    if open_:
+        lines.append(f"GAPS  {name}.txt ({tag}): {len(open_)} of {total}")
+        lines += [f"        {g}" for g in open_]
+    elif known:
+        lines.append(f"ok    {name}.txt ({tag}): every platform and Python "
+                     f"but the accepted gaps below")
+    else:
+        lines.append(f"ok    {name}.txt ({tag}): every platform and Python")
+    for key in sorted(seen):
+        pys = [py for plat, py, _w in known if (plat, gap_package(_w)) == key]
+        lines.append(f"        accepted: {key[0]} / Python {', '.join(pys)}: "
+                     f"no {key[1]} wheel: {ok_[key]} (ACCEPTED_GAPS)")
+    for key in sorted(set(ok_) - seen):
+        lines.append(f"        note: the accepted gap {key[0]} / {key[1]} "
+                     f"is no longer seen: remove it from ACCEPTED_GAPS")
+    return lines, bool(open_) and name in REQUIRED
+
+
 def coverage(uv):
     """A wheel exists for every PLATFORMS x PYTHONS pair: 0 when every
     REQUIRED lock is covered."""
@@ -297,17 +359,11 @@ def coverage(uv):
                     if r.returncode != 0:
                         why = [ln.strip() for ln in r.stderr.splitlines()
                                if "has no" in ln or "no wheels" in ln]
-                        gaps.append(f"{plat} / Python {py}: "
-                                    f"{why[0] if why else r.stderr.strip()[-200:]}")
-            tag = "required" if name in REQUIRED else "optional"
-            if not gaps:
-                print(f"ok    {name}.txt ({tag}): every platform and Python")
-            else:
-                print(f"GAPS  {name}.txt ({tag}): {len(gaps)} of "
-                      f"{len(PLATFORMS) * len(PYTHONS)}")
-                for g in gaps:
-                    print(f"        {g}")
-                failed_required |= name in REQUIRED
+                        gaps.append((plat, py, why[0] if why
+                                     else r.stderr.strip()[-200:]))
+            lines, failed = report(name, gaps)
+            print("\n".join(lines))
+            failed_required |= failed
     return 1 if failed_required else 0
 
 

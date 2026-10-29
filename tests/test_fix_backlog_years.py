@@ -30,11 +30,11 @@ def _env():
     return dict(os.environ, TAXJSON_OFFLINE="1", TAXJSON_WIDTH="0")
 
 
-def _cli(root, *args):
+def _cli(root, *args, cwd=REPO_ROOT):
     return subprocess.run(
         python_module_argv("taxjson.bin.taxjson_run",
                            ["-C", str(root), *args]),
-        cwd=REPO_ROOT, capture_output=True, text=True, env=_env(),
+        cwd=cwd, capture_output=True, text=True, env=_env(),
         stdin=subprocess.DEVNULL, timeout=300)
 
 
@@ -232,7 +232,10 @@ class TestYearsView(unittest.TestCase):
             (y4 / "work").mkdir()
             PL.record_filed_check(y4, {2024: "drifted"})
             self.assertTrue(PL.filed_check(y4, 2024))
-            r = _cli(top, "years")
+            # Run from the folder holding the years: the `! ` line names
+            # the year folder from there (backlog TJ-0262), so the temp
+            # folder's length cannot crowd the line past its 100 columns.
+            r = _cli(top, "years", cwd=top)
             row = next(ln for ln in r.stdout.splitlines()
                        if ln.startswith("2024 "))
             self.assertIn("DRIFTED", row)

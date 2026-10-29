@@ -4,9 +4,10 @@ BUYSELL lines (`taxjson crypto-sends`, the `taxjson run` prompt, the
 checklist step). Stablecoin gifts/payments get the FX-gain calculation
 instead of a sale line.
 
-Synthetic ledgers only. Rates: a hand-written work/to_base.csv; coin
-prices: a fill-crypto cache under a temporary HOME with TAXJSON_OFFLINE
-set, so nothing here touches the network.
+Synthetic ledgers only. Rates: a hand-written work/to_base.csv, and the
+same rates in the temporary HOME's currency cache (_home_rates: a run
+may rebuild the file); coin prices: a fill-crypto cache under that HOME
+with TAXJSON_OFFLINE set, so nothing here touches the network.
 """
 import json
 import os
@@ -54,6 +55,9 @@ KR_LEDGER = (
     "LH1HHH,RH1,2026-06-01 12:00:00,hybridearnwithdrawal,,currency,USDC,"
     "spot,-5,0,905\n")
 
+# A Coinbase ID as long as a real one (24 hex digits): the listing shows
+# its first 2 characters, never the rest.
+C6_ID = "c6e0a1b2c3d4e5f6a7b8c9d0"
 CB_CSV = (
     "ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
     "Price Currency,Price at Transaction,Subtotal,"
@@ -68,7 +72,7 @@ CB_CSV = (
     "Sent 10 USDC to an address\n"
     "c5,2025-06-22 14:05:10 UTC,Send,ATOM,80.002,CAD,9.85,788.02,"
     "788.02,0,Sent ATOM to an address\n"
-    "c6,2025-08-01 12:00:00 UTC,Send,BTC,0.001,CAD,150000,150,150,0,"
+    f"{C6_ID},2025-08-01 12:00:00 UTC,Send,BTC,0.001,CAD,150000,150,150,0,"
     "Sent BTC to an address\n")
 
 PAY_ID = "kr-20260413T173000-QZL-2.5"
@@ -123,6 +127,9 @@ def _project(td, *, country="canada"):
     _rates_file(root / "work" / "to_base.csv")
     home = Path(td) / "home"
     home.mkdir()
+    # The planted rates in the HOME too, for the modules that run this
+    # project with a _cli of their own (backlog TJ-0635).
+    _home_rates(home)
     (home / ".crypto_price_cache.json").write_text(json.dumps({
         "QZL55501-2026-04-13": 1.84,
         "QZL55501-2026-01-12": 2.1,
@@ -130,7 +137,35 @@ def _project(td, *, country="canada"):
     return root, home
 
 
+def _home_rates(home: Path) -> None:
+    """The rates _rates_file and _cad_usd_rates_file plant, also in the
+    test HOME's currency cache (~/.currency_price_cache.json, read by an
+    offline rebuild of work/to_base.csv): a Bank of Canada USD->CAD
+    series with SPECIAL_RATES, a Yahoo CAD->USD one, every day from
+    2025-01-01 to a week past today (made-up rates). `taxjson run`
+    rebuilds to_base.csv when a taxjson source file is newer than it
+    (stage_currency_rates, needs_rebuild); a file edited while the suite
+    ran made the rebuild read an empty cache, replace the planted rates
+    with none, and stop the run on "no exchange rate" (backlog TJ-0606).
+    Written once; a cache the test wrote itself is kept."""
+    p = Path(home) / ".currency_price_cache.json"
+    if not Path(home).is_dir() or p.exists():
+        return
+    d, hi = date(2025, 1, 1), date.today() + timedelta(days=7)
+    boc, cache = {}, {}
+    while d <= hi:
+        iso = d.isoformat()
+        boc[iso] = float(SPECIAL_RATES.get(iso, "1.3500"))
+        cache[f"CADUSD-{iso}"] = 0.73
+        d += timedelta(days=1)
+    span = [["2025-01-01", hi.isoformat()]]
+    cache.update({"_boc": {"USDCAD": {"obs": boc}},
+                  "_coverage": {"boc:USDCAD": span, "yahoo:CADUSD": span}})
+    p.write_text(json.dumps(cache))
+
+
 def _env(home):
+    _home_rates(home)
     return {**os.environ, "HOME": str(home), "TAXJSON_OFFLINE": "1",
             "TAXJSON_LOCAL_TZ": "America/Toronto", "NO_COLOR": "1",
             "PYTHONPATH": str(REPO_ROOT / "src")}
@@ -243,7 +278,7 @@ class TestCryptoSendsProject(unittest.TestCase):
         # Nothing private in the listing: no txids, no refids. Checked
         # on the listing's own values — the project paths (`manifest`,
         # `tt_file`, the tmp dir in the text) are random and may
-        # contain any short string such as "c6".
+        # contain any short string.
         def leaves(node):
             if isinstance(node, dict):
                 for k, v in node.items():
@@ -261,7 +296,7 @@ class TestCryptoSendsProject(unittest.TestCase):
                          str(self.root.resolve()),
                          str(self.home.resolve())}, key=len, reverse=True):
             text = text.replace(p, "<tmp>")
-        for secret in ("LG1GGG", "RG1", "LC1CCC", "c6"):
+        for secret in ("LG1GGG", "RG1", "LC1CCC", C6_ID):
             for v in values:
                 self.assertNotIn(secret, v)
             self.assertNotIn(f" {secret}", text)

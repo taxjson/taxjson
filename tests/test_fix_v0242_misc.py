@@ -25,6 +25,7 @@ import unittest
 from datetime import date as _date, timedelta as _td
 from pathlib import Path
 
+from _planted_rates import plant
 from tax_rules import rule
 
 from taxjson.lib import cash_events as CE
@@ -80,14 +81,16 @@ type = "taxable"
 _CASH_TT = "CASHOPEN 2025-01-01 USD 0 0\nCASHBAL 2025-12-31 USD 0\n"
 
 
-def _rates(path):
+def _rates(path, cleanup):
+    """The rates file, and the same rates in the suite's HOME (put back
+    by `cleanup`): a run that rebuilds the file keeps them (TJ-0635)."""
     d, lines = _date(2025, 1, 1), []
     while d <= _date.today():
         r = ("1.3000" if d < _date(2025, 2, 10) else
              "1.3500" if d < _date(2025, 3, 10) else "1.4000")
         lines.append(f"{d.isoformat()} 12:00:00 USD CAD {r} boc")
         d += _td(days=1)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", cleanup=cleanup)
 
 
 def _cli(root, *args):
@@ -99,14 +102,14 @@ def _cli(root, *args):
         stdin=subprocess.DEVNULL, timeout=600)
 
 
-def _project(td, acct, files):
+def _project(td, acct, files, cleanup):
     root = Path(td) / "p"
     (root / "inputs" / acct).mkdir(parents=True)
     (root / "work").mkdir()
     (root / "taxjson.toml").write_text(_TOML.format(acct=acct))
     for name, text in files.items():
         (root / "inputs" / acct / name).write_text(text)
-    _rates(root / "work" / "to_base.csv")
+    _rates(root / "work" / "to_base.csv", cleanup)
     r = _cli(root, "run", "--no-input")
     assert r.returncode == 0, r.stdout + r.stderr
     return root
@@ -225,7 +228,7 @@ class TestQuestradeCashEvents(unittest.TestCase):
     def test_v2_reads_the_conversions(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, "qt", {"q.csv": _QT_CSV,
-                                       "cash.tt": _CASH_TT})
+                                       "cash.tt": _CASH_TT}, self.addCleanup)
             j = json.loads(_cli(root, "fx-cash", "--json").stdout)
         self.assertEqual(j["status"], "computed", j["problems"])
         self.assertAlmostEqual(j["net_gain"], 500.0, places=2)
@@ -251,7 +254,8 @@ class TestUnreadBroker(unittest.TestCase):
     @rule("CA-FX-07")
     def test_webull_refused_until_declared_complete(self):
         with tempfile.TemporaryDirectory() as td:
-            root = _project(td, "wb", {"wb.csv": _WB, "cash.tt": _CASH_TT})
+            root = _project(td, "wb", {"wb.csv": _WB, "cash.tt": _CASH_TT},
+                            self.addCleanup)
             j = json.loads(_cli(root, "fx-cash", "--json").stdout)
             self.assertEqual(j["status"], "not_computed")
             p, = j["problems"]

@@ -11,8 +11,10 @@
 # channels.json on main names and only scripts/promote.sh moves.
 #
 # --prepare makes the VERSION COMMIT and lands it on main, without a tag:
-#   1. refuses on a dirty tree, off main, behind origin/main, or when the
-#      tag exists;
+#   1. refuses on a dirty tree, off main, behind origin/main, when the
+#      tag exists, or when an earlier --prepare's version commit, not yet
+#      landed, has commits on top of it (it must land last: GitHub CI
+#      runs on the head of a push only);
 #   2. turns the CHANGELOG's "## Unreleased" into "## vX.Y.Z (date)" (or
 #      requires that heading to exist already), each "Fixed in:
 #      unreleased" in docs/troubleshooting.md into the tag, and
@@ -162,6 +164,19 @@ if [ -n "$PREPARE" ]; then
     echo "$TAG is already prepared: its version commit is on main. Once GitHub CI has passed on it: scripts/release.sh $TAG"
     drop_notes; exit 0
   fi
+  # The version commit lands LAST: GitHub runs tests.yml on the head of a
+  # push only, and the cut tags only a version commit whose own push to
+  # main passed. One an earlier --prepare made but could not land, with a
+  # commit on top of it now (a fix for the check that failed), would land
+  # in the middle of its push and never get a run of its own.
+  VC=""
+  for c in $(git log --format=%H -G"^version = \"$VRE\"\$" origin/main..HEAD -- pyproject.toml); do
+    if git show "$c:pyproject.toml" | grep -qx "version = \"$V\""; then VC="$c"; break; fi
+  done
+  if [ -n "$VC" ] && [ "$VC" != "$(git rev-parse HEAD)" ]; then
+    echo "the version commit of $TAG (${VC:0:9}) is not the last commit on local main: $(git rev-list --count "$VC..HEAD") commit(s) follow it, so it would land in the middle of a push, and GitHub CI runs on the head of a push only (the cut would find no run on it). Take it out and prepare again, which makes it anew on top: git rebase --onto ${VC:0:9}~1 ${VC:0:9}, then scripts/release.sh $TAG --prepare"
+    exit 1
+  fi
   # A PASS of the full gate on this exact tree (the clean tree being
   # released, before the release's own edits), recorded by scripts/ci.sh.
   PRE_TREE="$(git rev-parse 'HEAD^{tree}')"
@@ -235,6 +250,14 @@ if [ -n "$PREPARE" ]; then
   grep -q "^version = \"$V\"" "$FETCH_TOML" && grep -q "\"taxjson>=$V\"" "$FETCH_TOML" \
     || { echo "taxjson-fetch version bump failed"; exit 1; }
   "$PY" -m pip install -e . --quiet
+  # The plugin's version moved too: an editable install's metadata keeps
+  # the version it was installed at, so a venv that has the plugin (the
+  # dev venv) reinstalls it as well; the egg-info a build leaves beside
+  # the sources goes (scripts/editable_check.py, backlog TJ-0636).
+  if "$PY" -m pip show -q taxjson-fetch >/dev/null 2>&1; then
+    "$PY" -m pip install --no-deps -e packages/taxjson-fetch --quiet
+  fi
+  rm -rf src/*.egg-info packages/*/src/*.egg-info
   [ "$("$PY" -m taxjson.bin.taxjson_run --version)" = "taxjson $V" ] || { echo "taxjson --version disagrees with $V"; exit 1; }
 
   if [ -n "$REUSE" ] && ! release_edits_only; then
@@ -255,7 +278,7 @@ if [ -n "$PREPARE" ]; then
   # An earlier run may already have committed the bump: publish it then.
   git diff --cached --quiet || git commit -q -m "release $TAG"
   if ! publish_main; then
-    echo "the version commit of $TAG is made here but NOT on main (above). Land it (scripts/land.sh), then, once GitHub CI has passed on it: scripts/release.sh $TAG"
+    echo "the version commit of $TAG is made here but NOT on main (above). A flaky check: land it as it is (scripts/land.sh), then, once GitHub CI has passed on it: scripts/release.sh $TAG. A check that needs a fix: take the version commit back first (git reset --keep HEAD~1), commit the fix and land it, then scripts/release.sh $TAG --prepare again — the version commit must be the last commit of its push, the one GitHub CI runs on."
     exit 1
   fi
   echo "prepared $TAG: the version commit $(git rev-parse --short HEAD) is on main; GitHub CI runs on it now (https://github.com/${SLUG:-taxjson/taxjson}/actions/workflows/tests.yml)."

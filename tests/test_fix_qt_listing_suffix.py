@@ -25,6 +25,7 @@ from pathlib import Path
 
 from taxjson.lib import listing_suffix as LS
 from taxjson.lib.symbol_codes import exact_name
+from _planted_rates import plant
 from tax_rules import rule
 
 REPO = Path(__file__).resolve().parent.parent
@@ -271,13 +272,14 @@ def qt_export():
                  gross='288'))
 
 
-def _rates(path: Path, pair: str, rate: str):
+def _rates(path: Path, pair: str, rate: str, cleanup):
+    """The rates file, and the same rates in the suite's HOME (put back
+    by `cleanup`): a run that rebuilds the file keeps them (TJ-0635)."""
     d, lines = date(2025, 12, 1), []
     while d <= date(2026, 12, 31):
         lines.append(f"{d.isoformat()} 12:00:00 {pair} {rate} boc")
         d += timedelta(days=1)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", cleanup=cleanup)
 
 
 def _config(country):
@@ -301,7 +303,8 @@ def _run(root, *args):
         stdin=subprocess.DEVNULL)
 
 
-def _project(root: Path, country: str, ticker_map: str = "") -> None:
+def _project(root: Path, country: str, ticker_map: str = "", *,
+             cleanup) -> None:
     (root / "taxjson.toml").write_text(_config(country))
     if ticker_map:
         (root / "ticker.map").write_text(ticker_map)
@@ -312,9 +315,11 @@ def _project(root: Path, country: str, ticker_map: str = "") -> None:
     (root / "inputs" / "qt" / "55500001.csv").write_text(  # pii-ok
         qt_export())
     if country == "canada":
-        _rates(root / "work" / "to_base.csv", "USD CAD", "1.2500")
+        _rates(root / "work" / "to_base.csv", "USD CAD", "1.2500",
+               cleanup)
     else:
-        _rates(root / "work" / "to_base.csv", "CAD USD", "0.8000")
+        _rates(root / "work" / "to_base.csv", "CAD USD", "0.8000",
+               cleanup)
 
 
 class _RunBase:
@@ -325,7 +330,8 @@ class _RunBase:
     def setUpClass(cls):
         cls._td = tempfile.TemporaryDirectory()
         cls.root = Path(cls._td.name)
-        _project(cls.root, cls.COUNTRY, cls.MAP)
+        _project(cls.root, cls.COUNTRY, cls.MAP,
+                 cleanup=cls.addClassCleanup)
         cls.r = _run(cls.root, "run", "--no-input")
         cls.out = " ".join((cls.r.stdout + cls.r.stderr).split())
 
@@ -419,7 +425,7 @@ class TestRunAccountOrder(_RunBase, unittest.TestCase):
     def setUpClass(cls):
         cls._td = tempfile.TemporaryDirectory()
         cls.root = Path(cls._td.name)
-        _project(cls.root, "canada")
+        _project(cls.root, "canada", cleanup=cls.addClassCleanup)
         cfg = (cls.root / "taxjson.toml").read_text()
         head, accts = cfg.split("[accounts.ibm]")
         (cls.root / "taxjson.toml").write_text(
@@ -453,7 +459,7 @@ class TestRunProvedByTheSameBroker(_RunBase, unittest.TestCase):
     def setUpClass(cls):
         cls._td = tempfile.TemporaryDirectory()
         cls.root = Path(cls._td.name)
-        _project(cls.root, "canada")
+        _project(cls.root, "canada", cleanup=cls.addClassCleanup)
         # The second account comes FIRST: its evidence is parsed later.
         cfg = (cls.root / "taxjson.toml").read_text()
         head, accts = cfg.split("[accounts.ibm]")
@@ -517,7 +523,7 @@ class TestRunRbc(unittest.TestCase):
     def test_rbc_usd_row_of_the_tsx_ticker(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            _project(root, "canada")
+            _project(root, "canada", cleanup=self.addCleanup)
             (root / "inputs" / "qt" / "55500001.csv").unlink()  # pii-ok
             (root / "inputs" / "qt" / "rbc.csv").write_text(
                 RBC_H

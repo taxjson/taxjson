@@ -59,7 +59,7 @@ class TestDiagnostics(unittest.TestCase):
         self.assertIn("run `taxjson run` first, or check the name",
                       " ".join(r.stderr.split()))
         r = p.run("winners", "--top", "0")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 2)       # a usage error (TJ-0241)
         self.assertIn("Error: --top must be >= 1", r.stderr)
 
 

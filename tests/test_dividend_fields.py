@@ -17,7 +17,6 @@ Two pieces:
      dividend and a same-day Payment-in-Lieu separate.
 """
 import json
-import os
 import subprocess
 import sys
 import tempfile

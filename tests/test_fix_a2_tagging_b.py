@@ -86,7 +86,8 @@ class TestCanadaEstimatePaymentInLieu(unittest.TestCase):
             '[accounts.margin]\ntype = "taxable"\n')
         (root / "work" / "margin_gains.json").write_text(json.dumps({
             "summary": {"year": "2026"}, "transactions": [
-                {"action": "DIVIDEND_IN_LIEU", "symbol": "KO.US",
+                {"action": "DIVIDEND_IN_LIEU", "date": "2026-03-02",
+                 "symbol": "KO.US",
                  "pil": 4000.0, "currency": "CAD"}]}))
         return root
 
@@ -232,8 +233,13 @@ class TestEdgeCasesCountryGates(unittest.TestCase):
         # TJ-0283: never claimed unchecked).
         self.assertIn("allowed: no units were held at the end of day 30 "
                       "(2026-01-21)", ca)
-        self.assertIn("matched none of those purchases", us)
-        self.assertNotIn("matched none of those purchases", ca)
+        # GHI's January purchase is neither the lot sold nor in another
+        # loss's wash-sale record: no reason is claimed (backlog TJ-0286).
+        self.assertIn("no disallowance applied by the engine (the books do "
+                      "not record why margin 2026-01-06 +10 is not its "
+                      "replacement)", " ".join(us.split()))
+        self.assertNotIn("matched none of those purchases", us)
+        self.assertNotIn("no disallowance applied", ca)
         self.assertIn("(settlement date, CRA)", ca)
         self.assertIn("(settlement date)", us)
         self.assertNotIn("CRA", us)

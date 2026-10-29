@@ -23,7 +23,6 @@ Every fixture is SYNTHETIC: invented QZ* tickers, fake account names.
 """
 import json
 import os
-import re
 import tempfile
 import time
 import unittest

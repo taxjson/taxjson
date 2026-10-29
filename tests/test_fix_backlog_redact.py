@@ -225,7 +225,8 @@ class TestTJ0100TJ0110TheCopysPath(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("==> Done. Review inputs_redact/ before sharing it. "
                       "It is a single-folder project of 2024: ", r.stdout)
-        self.assertIn("`taxjson -C inputs_redact/ run` runs it.", r.stdout)
+        self.assertIn("`taxjson -C inputs_redact/ run` runs it (and writes "
+                      "work/", r.stdout)
 
     def test_dash_C_from_the_parent(self):
         r = tjs("-C", "2024", "redact", "--no-denylist", "--force",
@@ -234,7 +235,8 @@ class TestTJ0100TJ0110TheCopysPath(unittest.TestCase):
         dst = os.path.abspath(self.top / "2024" / "inputs_redact")
         self.assertIn(f"==> Done. Review {dst}/ before sharing it.",
                       r.stdout)
-        self.assertIn(f"`taxjson -C {dst}/ run` runs it.", r.stdout)
+        self.assertIn(f"`taxjson -C {dst}/ run` runs it (and writes work/",
+                      r.stdout)
         self.assertTrue(Path(dst, "taxjson.toml").is_file())
 
     def test_out_relative_to_the_shell(self):

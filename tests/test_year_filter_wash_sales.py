@@ -11,7 +11,6 @@ stayed correct.
 
 The fix uses `w.get('loss_tx', w)` so the fallback to `w` itself
 exposes the flat `'date'` field. These tests pin both engine shapes."""
-import io
 import json
 import subprocess
 import sys

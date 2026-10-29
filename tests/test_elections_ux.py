@@ -2,7 +2,6 @@
 warnings, pending-status annotation, filing reminder, GUI guardrails."""
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -85,7 +84,8 @@ class TestElectSetHints(unittest.TestCase):
             root = _proj(tmp)
             r = _run(root, "elect", "margin", "--set",
                      "deadbeef=taxable_disposition")
-            self.assertEqual(r.returncode, 1)
+            # A usage error: exit 2 (backlog TJ-0539).
+            self.assertEqual(r.returncode, 2)
             self.assertIn("matches no pending event", r.stderr)
             self.assertIn("nothing was saved", r.stderr)
             self.assertFalse(

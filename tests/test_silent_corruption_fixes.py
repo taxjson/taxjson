@@ -91,7 +91,6 @@ class TestIbCurrencyExt(unittest.TestCase):
         self.assertEqual(_ib_currency_ext("GBP"), "L")
 
     def test_unknown_currency_warns_and_echoes(self):
-        import taxjson.bin  # noqa
         from taxjson.lib.brokerages import ib_extractor as ib
         ib._IB_WARNED_CURRENCIES.discard("EUR")
         buf = io.StringIO()

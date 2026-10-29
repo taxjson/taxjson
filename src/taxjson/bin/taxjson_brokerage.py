@@ -237,6 +237,23 @@ def _only_nonevents(extractor) -> int:
     return sum(counts.values())
 
 
+def _header_only(extractor, path) -> bool:
+    """The export holds no row after its header: an export of a period
+    with no activity, which leaves nothing out of the books. The
+    parser's own row count when it keeps one (`_rows_seen`, nothing
+    skipped), else the file's lines: its header alone. A file with rows
+    that book nothing stays the warning (backlog TJ-0483)."""
+    seen = getattr(extractor, '_rows_seen', None)
+    if seen is not None:
+        return (seen == 0 and not getattr(extractor, '_skip_counts', None)
+                and not getattr(extractor, 'lint_findings', None))
+    try:
+        text = decode_broker_text(Path(path).read_bytes(), shown_name(path))
+    except (OSError, BrokerageParseError):
+        return False
+    return sum(1 for ln in text.splitlines() if ln.strip(' ,\t')) <= 1
+
+
 def _refusal(e: Exception) -> str:
     """The one-line text of a parser's refusal (a legacy-encoded file
     included — a codec traceback named no file, audit S059-17)."""
@@ -251,7 +268,11 @@ def _names_its_file(msg: str, path) -> bool:
     """The refusal already starts with the file it is about: the parsed
     file, or another file of its folder the parser read alongside it
     (the Kraken ledger beside a trades export). Prefixing the parsed
-    file's name then named the wrong file first (backlog TJ-0164)."""
+    file's name then named the wrong file first (backlog TJ-0164).
+    The name may follow the parser's label of a word or three
+    ("generic importer: ws.csv line 2: …", "Kraken trades kr.csv
+    txid=…: …"): prefixed again, the file was named twice (backlog
+    TJ-0234, TJ-0236)."""
     shown = shown_name(path)
     if msg.startswith(shown):
         return True
@@ -259,16 +280,40 @@ def _names_its_file(msg: str, path) -> bool:
         names = {shown_name(q) for q in Path(path).parent.iterdir()
                  if q.is_file()}
     except OSError:
-        return False
-    return any(msg.startswith((f"{n}:", f"{n} line")) for n in names)
+        names = set()
+    names.add(shown)
+    return any(re.match(_LABELLED_NAME.format(re.escape(n)), msg)
+               for n in names)
+
+
+# A file name at the start of a refusal, after a parser's label of up to
+# three words ("generic importer: ", "Kraken trades "), followed by the
+# end of the name (":", " line 2", " txid=…").
+_LABELLED_NAME = r"(?:[A-Za-z][A-Za-z-]*:? ){{0,3}}{}(?=$|[:\s,(])"
 
 
 # The fields two files' rows of one broker id must agree on.
 _RESTATED_FIELDS = ('date', 'time', 'action', 'symbol', 'quantity',
                     'price', 'net_amount', 'currency', 'fee')
+# A reward's source evidence (staking_reward) is compared too, all but
+# where the row was read: two exports' rows of one reward with the same
+# net but a different gross and commission are two versions of it
+# (backlog TJ-0524).
+_REWARD_PROVENANCE = frozenset({'source_file', 'source_line', 'source_id',
+                                'source_timestamp', 'valuation',
+                                'schema_version', 'broker'})
 
 
-def _restated_id(rows, given) -> str:
+def _reward_facts(ev) -> tuple:
+    """The comparable part of a row's staking_reward evidence."""
+    if not isinstance(ev, dict):
+        return ()
+    return tuple(sorted(
+        (k, round(v, 8) if isinstance(v, float) else v)
+        for k, v in ev.items() if k not in _REWARD_PROVENANCE))
+
+
+def _restated_id(rows, given, kept='the books keep one row per id') -> str:
     """The refusal for one broker row id (a Coinbase ID, a Kraken txid:
     `given[i]`, the parser kept it as the row's id) carried by rows of
     two DIFFERENT files with different content, or ''. The dedup reads
@@ -276,7 +321,8 @@ def _restated_id(rows, given) -> str:
     keeps one version by file name, so a row one download restated (a
     corrected price, amount or quantity) lost the other version with no
     message; one file's twin is refused already (_crypto_common.RowIds;
-    backlog TJ-0071)."""
+    backlog TJ-0071). `kept` says what keeps one row per id (the custody
+    evidence's rows are checked too, backlog TJ-0523)."""
     seen: dict = {}
     for t, g in zip(rows, given):
         if not g:
@@ -284,22 +330,55 @@ def _restated_id(rows, given) -> str:
         src = (t.source, getattr(t, 'source_key', '') or '')
         content = tuple(round(v, 8) if isinstance(v, float) else v
                         for v in (getattr(t, f) for f in _RESTATED_FIELDS))
+        content += _reward_facts(getattr(t, 'staking_reward', None))
         prev = seen.setdefault(t.id, (src, content, t))
         if prev[0] == src or prev[1] == content:
             continue
 
         def brief(x):
+            ev = getattr(x, 'staking_reward', None)
+            extra = ''
+            if isinstance(ev, dict):
+                def _v(k):
+                    v = ev.get(k)
+                    return 'unknown' if v is None else f"{v:.2f}"
+                extra = (f", reward gross {_v('gross_value')} commission "
+                         f"{_v('fee_value')}")
             return (f"{x.date} {x.action} {x.symbol or '-'} "
-                    f"{x.quantity:g} {x.currency} {x.net_amount:.2f}")
+                    f"{x.quantity:g} {x.currency} {x.net_amount:.2f}{extra}")
         a, b = prev[2], t
         return (f"{a.source} and {b.source}: row id {str(t.id)[:2]}*** is "
                 f"in both with DIFFERENT content ({a.source}: {brief(a)}; "
                 f"{b.source}: {brief(b)}) — two downloads disagree on one "
-                f"transaction (a restated row), and the books keep one row "
-                f"per id, so one version would be dropped with no message. "
-                f"Keep the newer download only, or correct the row, and "
-                f"run again.")
+                f"transaction (a restated row), and {kept}, so one "
+                f"version would be dropped with no message. Keep the newer "
+                f"download only, or correct the row, and run again.")
     return ''
+
+
+def _restated_evidence(per_file, sources) -> str:
+    """_restated_id over the TRANSFER evidence rows set aside per file
+    (`sources[i]`: (source, source_key) of `per_file[i]`). They leave the
+    book before its check, and the evidence dedup keeps one row per id by
+    file order, so a custody row two downloads disagree on (a withdrawal
+    of 2 coins restated as 3) lost one version with no message (backlog
+    TJ-0523)."""
+    valid = set(inspect.signature(TaxTransaction).parameters.keys())
+    rows, given = [], []
+    for ts, (src, skey) in zip(per_file, sources):
+        for t in ts:
+            try:
+                tx = TaxTransaction(**{k: v for k, v in t.items()
+                                       if k in valid})
+            except (TypeError, ValueError):
+                continue
+            tx.source = src
+            if skey:
+                tx.source_key = skey
+            rows.append(tx)
+            given.append(bool(str(t.get('id') or '').strip()))
+    return _restated_id(rows, given,
+                        kept='the custody evidence keeps one row per id')
 
 
 def _dedup_evidence(per_file) -> list:
@@ -692,6 +771,8 @@ Examples:
     dropped_keys = {}
     lint_problems = 0
     kept_aside_per_file: list = []
+    # (source, source_key) of each kept_aside_per_file entry.
+    kept_aside_sources: list = []
 
     # Account-wide context: a parser that learns identities (a symbol's
     # listing, an option code's contract, a temporary code's company)
@@ -797,6 +878,11 @@ Examples:
             extractor.stablecoins_as_cash = args.country == "canada"
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
+        # The registered plans the country taxes like an ordinary account
+        # (a US project's TFSA: US-BASIS-09, backlog TJ-0613); none
+        # without a country, so every plan stays a shelter.
+        from taxjson.lib.country import plans_taxed_as_ordinary
+        extractor.plans_taxed = plans_taxed_as_ordinary(args.country)
         extractor.combined_broker_accounts = args.combined_broker_accounts
         # The sidecar's reader (`taxjson run`) says what a transfer-in
         # costs, once it knows which ones a .tt line covers.
@@ -994,6 +1080,7 @@ Examples:
             _kept_this_file = len(_tr)
             if _tr:
                 kept_aside_per_file.append(_tr)
+                kept_aside_sources.append((_source, _source_key))
                 print(f"  {shown_name(input_path)}: {len(_tr)} TRANSFER "
                       f"row(s) kept aside (custody evidence, not tax "
                       f"events — view with `taxjson transfers`)",
@@ -1068,6 +1155,15 @@ Examples:
             print(f"  {shown_name(input_path)}: 0 tax objects "
                   f"({_only_nonevents(extractor)} recognized non-event "
                   f"row(s))", file=sys.stderr)
+        elif (not transactions and file_size > 0
+              and _header_only(extractor, input_path)):
+            # Its header alone (a year with no activity): nothing is
+            # missing, so no warning the run, `sum` and the checklist
+            # would keep repeating however often it is re-run (backlog
+            # TJ-0483) — IB's empty statement is the Info above.
+            print(f"  {shown_name(input_path)}: 0 tax objects (no row "
+                  f"after its header: an export of a period with no "
+                  f"activity)", file=sys.stderr)
         elif not transactions and file_size > 0:
             emit_line(f"warning: {shown_name(input_path)} parsed to 0 transactions "
                 f"({file_size} bytes input, brokerage={brokerage_id}): "
@@ -1137,7 +1233,9 @@ Examples:
             row_lines.append(_row_line)
             given_ids.append(bool(str(t.get('id') or '').strip()))
 
-    _restated = _restated_id(normalized, given_ids)
+    _restated = (_restated_id(normalized, given_ids)
+                 or _restated_evidence(kept_aside_per_file,
+                                       kept_aside_sources))
     if _restated:
         emit_line(f"taxjson-brokerage: error: {_restated}")
         sys.exit(1)

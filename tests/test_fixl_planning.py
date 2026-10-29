@@ -265,8 +265,9 @@ class TestScopeDisclosure(unittest.TestCase):
         self.assertEqual(b.returncode, 1, b.stdout + b.stderr)
         self.assertIn("UNSAFE", b.stdout)
         # S054-07: per-unit, not "the loss"
-        self.assertIn("on as many units as you buy (about $2.00 of it "
-                      "per unit)", b.stdout)
+        # Money as the advisories print it (backlog TJ-0244).
+        self.assertIn("on as many units as you buy (about 2.00 CAD of "
+                      "it per unit)", " ".join(b.stdout.split()))
         self.assertIn("s.251.1", b.stdout.splitlines()[-1])
         self.assertIn("s.251.1", json.loads(s.stdout)["scope_note"])
 
@@ -286,22 +287,30 @@ class TestWindowEdges(unittest.TestCase):
         self.assertEqual(off["EDG.TO"]["category"], "BLOCKED")
 
     def test_sheltered_buy_ages_out_after_day_30(self):
+        # A loss sale is measured from its own settlement (backlog
+        # TJ-0243): Thursday 09-24's settles Friday 09-25, 30 days after
+        # 08-26; Friday 09-25's settles Monday 09-28.
         tax = [_row("2026-01-05", "SHL.TO", 100, 2000.0)]
         rrsp30 = [_row("2026-08-26", "SHL.TO", 10, 200.0, account="rrsp")]
         rrsp31 = [_row("2026-08-25", "SHL.TO", 10, 200.0, account="rrsp")]
-        self.assertEqual(_rows(tax, "2026-09-25", rrsp30)["SHL.TO"]
+        self.assertEqual(_rows(tax, "2026-09-24", rrsp30)["SHL.TO"]
                          ["category"], "LOCKED")
-        self.assertEqual(_rows(tax, "2026-09-25", rrsp31)["SHL.TO"]
+        self.assertEqual(_rows(tax, "2026-09-24", rrsp31)["SHL.TO"]
+                         ["category"], "RISK")
+        self.assertEqual(_rows(tax, "2026-09-25", rrsp30)["SHL.TO"]
                          ["category"], "RISK")
 
     def test_window_runs_on_the_settle_date(self):
-        # Traded Fri 03-06, settled Mon 03-09: day 30 counts from 03-09.
+        # Traded Fri 03-06, settled Mon 03-09: day 30 counts from 03-09,
+        # and a loss sale from its own settlement (backlog TJ-0243):
+        # Tuesday 04-07's settles 04-08, Wednesday 04-08's 04-09.
         book = [_row("2026-01-05", "STL.TO", 100, 2000.0),
                 _row("2026-03-06", "STL.TO", 10, 200.0,
                      settle="2026-03-09")]
+        row = _rows(book, "2026-04-07")["STL.TO"]
+        self.assertEqual((row["category"], row["clears_at"]),
+                         ("EXITABLE", "2026-04-08"))
         self.assertEqual(_rows(book, "2026-04-08")["STL.TO"]["category"],
-                         "EXITABLE")
-        self.assertEqual(_rows(book, "2026-04-09")["STL.TO"]["category"],
                          "CLEAR")
 
     def test_last_loss_line_uses_the_country_window_date(self):
@@ -566,12 +575,14 @@ class TestSafeToSellAlreadyFixed(unittest.TestCase):
 
     @rule("CA-PLAN-01")
     def test_day_31_edges(self):   # S050-02
+        # A loss sale is measured from its settlement (T+1, backlog
+        # TJ-0243): Tuesday 04-01's settles 04-02, day 30 after 03-03.
         book = [_row("2025-03-03", "EDG.TO", 100, 2000.0)]
         self.assertEqual(_sts(book, "2025-03-03")[0]["EDG.TO"][1],
                          "FULL-EXIT-ONLY")
-        self.assertEqual(_sts(book, "2025-04-02")[0]["EDG.TO"][1],
+        self.assertEqual(_sts(book, "2025-04-01")[0]["EDG.TO"][1],
                          "FULL-EXIT-ONLY")
-        self.assertEqual(_sts(book, "2025-04-03")[0]["EDG.TO"][1], "SAFE")
+        self.assertEqual(_sts(book, "2025-04-02")[0]["EDG.TO"][1], "SAFE")
 
     @rule("CA-PLAN-01")
     def test_split_applies_once_per_account(self):   # S050-04

@@ -13,7 +13,6 @@ Cases pinned here (synthetic tickers of the shapes IB produces):
     withholding tax stamped .L — must be corrected to STX.US.
 """
 import os
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

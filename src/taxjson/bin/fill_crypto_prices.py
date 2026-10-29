@@ -12,7 +12,7 @@ import time
 import os
 
 from taxjson.lib.cli_diag import guard_main
-from taxjson.lib.core import TaxTransaction, load_transactions
+from taxjson.lib.core import load_transactions
 from taxjson.lib import cli_diag
 from taxjson.lib.offline import offline_enabled
 

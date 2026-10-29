@@ -16,7 +16,6 @@ mutation_report.txt next to this script.
 """
 import ast
 import os
-import shutil
 import signal
 import subprocess
 import sys

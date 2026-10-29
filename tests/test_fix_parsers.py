@@ -4,7 +4,6 @@ parses. Every fixture is synthetic: invented tickers, fake account ids
 marked pii-ok, invented prices."""
 import contextlib
 import io
-import os
 import tempfile
 import unittest
 from pathlib import Path

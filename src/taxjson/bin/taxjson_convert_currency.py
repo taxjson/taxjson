@@ -102,6 +102,17 @@ def resolve_default_rate(value):
     return None if value is None else Decimal(str(value))
 
 
+class RateHistory(dict):
+    """load_exchange_rates' {currency: {date: rate}}, with `published`:
+    {currency: {date: the date the rate was published}} for a date the
+    rates file filled from an earlier day (its seventh column; backlog
+    TJ-0462) — the evidence names that day, not the filled one."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.published: Dict[str, Dict[str, str]] = {}
+
+
 def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, Dict[str, Decimal]]:
     """
     Load historical exchange rates.
@@ -124,7 +135,7 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
     negative) raises ValueError: multiplying money by it corrupts every
     downstream figure, so a corrupted rates file is a hard stop.
     """
-    history = {}
+    history = RateHistory()
     skipped_to_mismatches = 0
     skipped_malformed = 0
     malformed_samples = []
@@ -204,7 +215,12 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
             # Last-wins keying made today's conversions drift
             # with the market between runs; first-wins pins the
             # noon rate deterministically.
-            history[from_curr].setdefault(date_str, rate)
+            if date_str not in history[from_curr]:
+                history[from_curr][date_str] = rate
+                if len(parts) > 6 and _RATE_DATE_RE.match(parts[6]) \
+                        and parts[6] < date_str:
+                    history.published.setdefault(
+                        from_curr, {})[date_str] = parts[6]
     if skipped_to_mismatches > 0:
         emit_line(
             f"warning: skipped {skipped_to_mismatches} FX rate row(s) where the TO "
@@ -299,8 +315,13 @@ def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str,
         if test_date in curr_history:
             _RATES_USED.add((currency, test_date))
             if rate_evidence is not None:
-                rate_evidence.update(fx_date=test_date, fx_source=(
-                    'history exact date' if i == 0 else 'history prior date'))
+                # A day the rates file filled names the day the rate
+                # was published (backlog TJ-0462).
+                pub = ((getattr(history, "published", None) or {})
+                       .get(currency) or {}).get(test_date)
+                rate_evidence.update(fx_date=pub or test_date, fx_source=(
+                    'history exact date' if i == 0 and not pub
+                    else 'history prior date'))
             return curr_history[test_date]
 
     # Distinguish "before the rates file even starts" from an interior gap:

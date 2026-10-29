@@ -27,6 +27,13 @@ asks for the pair to be WATCHED:
 Groups: the map's SIMILAR lines, lines sharing a symbol merged
 (lib/ticker_map.similar_groups). A member the map renames (GLOBAL,
 TOBASE) is read under its booked symbol.
+
+The map is read leniently here (a line that cannot be parsed is
+skipped), so a reader that decides on the groups refuses a map with
+a problem line first, as `taxjson run` does (taxjson_run
+`_strict_ticker_map`: buy-check, sell-check, rebuy, wash-radar,
+harvest); `open_findings` keeps the run's findings while the map has
+one (`map_problems`), backlog TJ-0352.
 """
 from __future__ import annotations
 
@@ -263,10 +270,28 @@ def read_state(cache: Path) -> List[Dict[str, Any]]:
             and f.get("loss_symbol") and f.get("other_symbol")]
 
 
+def map_problems(root: Path) -> List[str]:
+    """The project's ticker.map lines that cannot be parsed (or why the
+    map cannot be read), [] for none or no map: a group read past such
+    a line may have lost a member (backlog TJ-0352)."""
+    p = _PL.ticker_map_path(Path(root))
+    if not p.is_file():
+        return []
+    try:
+        from taxjson.bin.taxjson_ticker_map import map_file_problems
+        return list(map_file_problems(p))
+    except Exception as e:                          # noqa: BLE001
+        return [f"{p.name} cannot be read ({e})"]
+
+
 def open_findings(root: Path) -> List[Dict[str, Any]]:
     """The last run's findings whose pair ticker.map still declares
-    similar (a line deleted since the run drops its findings)."""
+    similar (a line deleted since the run drops its findings). While
+    the map has a problem line, every finding the run made: the groups
+    cannot be read from it (backlog TJ-0352)."""
     root = Path(root)
+    if map_problems(root):
+        return read_state(root / "work")
     idx = index(booked_groups(root))
     return [f for f in read_state(root / "work")
             if str(f.get("other_symbol")) in idx.get(
@@ -321,11 +346,15 @@ def checklist_note(findings: List[Dict[str, Any]]) -> str:
 
 
 def caveat(t: str, cat: str, q: str, mode: str, country: str,
-           sheltered_buy: Optional[Dict[str, Any]] = None) -> str:
+           sheltered_buy: Optional[Dict[str, Any]] = None,
+           bought: Optional[Dict[str, Any]] = None) -> str:
     """buy-check's / sell-check's caveat line for a radar row `t` (a
     member similar to the queried `q`) in category `cat`.
     `sheltered_buy` ({account, date}, sell only): `t` is held only in a
-    registered account / IRA that bought it inside the window."""
+    registered account / IRA that bought it inside the window.
+    `bought` ({account, date}, sell only): the purchase inside the
+    window, named when the category does not say it (a VIOLATION's
+    replacement — backlog TJ-0449)."""
     if mode == "buy":
         return (f"{t}: {cat} — a loss sold within the past 30 days; "
                 f"ticker.map calls it similar to {q} (SIMILAR). The books "
@@ -341,10 +370,12 @@ def caveat(t: str, cat: str, q: str, mode: str, country: str,
                 f"securities, so a loss on {q} stays allowed; treated as "
                 f"{_test(country)}, it would be denied for good (bought in "
                 f"{kind}).")
-    return (f"{t}: {cat} — bought within the past 30 days; ticker.map "
-            f"calls it similar to {q} (SIMILAR). The books keep them two "
-            f"securities, so a loss on {q} stays allowed; it would not if "
-            f"you treat them as {_test(country)}.")
+    when = (f" ('{bought.get('account') or 'unknown'}', "
+            f"{bought.get('date') or '?'})" if bought else "")
+    return (f"{t}: {cat} — bought within the past 30 days{when}; "
+            f"ticker.map calls it similar to {q} (SIMILAR). The books keep "
+            f"them two securities, so a loss on {q} stays allowed; it "
+            f"would not if you treat them as {_test(country)}.")
 
 
 # The radar categories that say a loss was sold in the window, and the

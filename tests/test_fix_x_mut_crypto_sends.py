@@ -8,7 +8,6 @@ US-CRYPTO-05), the decisions manifest, rates and fair values
 all), network fees, the duplicate-line check and the prompt. Synthetic
 data only; no network (the price source is stubbed).
 """
-import io
 import json
 import os
 import tempfile
@@ -308,14 +307,19 @@ class TestRates(unittest.TestCase):
         # m1149/m1251/m1344 (a positive finite rate below 1 is kept).
         t = self._load("\n".join([
             "2025-01-02 12:00:00 USD CAD 1.35 BoC",
-            "2025-01-03 12:00:00 usd CAD 1.36",
-            "2025-01-04 12:00:00 CAD USD 0.73 yahoo",
+            "2025-01-03 12:00:00 usd cad 1.36",
+            "2025-01-04 12:00:00 EUR CAD 1.49 yahoo",
             "2025-01-05 USD",
             "Jan-06 12:00:00 USD CAD 1.37",
             "2025-01-07 12:00:00 USD CAD abc"]))
         self.assertEqual(t, {"USD": {"2025-01-02": (1.35, "boc"),
                                      "2025-01-03": (1.36, "")},
-                             "CAD": {"2025-01-04": (0.73, "yahoo")}})
+                             "EUR": {"2025-01-04": (1.49, "yahoo")}})
+        self.assertEqual(t.target, "CAD")
+        # A rate to another currency is refused (backlog TJ-0502).
+        with self.assertRaisesRegex(ValueError, "line 2.*to USD"):
+            self._load("2025-01-02 12:00:00 USD CAD 1.35 BoC\n"
+                       "2025-01-04 12:00:00 CAD USD 0.73 yahoo")
         # A rate that parses but is not a positive finite number is
         # refused, as convert-currency refuses it (re-audit A2-0999).
         for bad in ("-1.0", "0", "inf", "nan"):
@@ -521,9 +525,11 @@ class TestCoinbasePoolFlows(_UTC):
                 + CB_HEADER +
                 "c1,2025-05-01 12:00:00 UTC,Buy,USDC,20,CAD,1.38,27.60,"
                 "27.60,0,Bought 20 USDC\n"
-                "c2,2025-05-02T12:00:00Z,Buy,USDC,10,USD,1,10,10,0,"
+                # US dollars for USDC: one currency, only the fee or
+                # spread moves the pool (backlog TJ-0499).
+                "c2,2025-05-02T12:00:00Z,Buy,USDC,10,USD,1,10,10.5,0.5,"
                 "Bought 10 USDC\n"             # ISO stamp (m1181)
-                "c3,2025-05-03 12:00:00 UTC,Sell,USDC,-5,USD,1,5,5,0,"
+                "c3,2025-05-03 12:00:00 UTC,Sell,USDC,-5,USD,1,5,4.5,0.5,"
                 "Sold 5 USDC\n"                # signed quantity (m1182)
                 "c4,2025-05-04 12:00:00 UTC,Staking Income,USDC,0.5,USD,1,"
                 "0.5,0.5,0,\n"
@@ -550,13 +556,14 @@ class TestCoinbasePoolFlows(_UTC):
                 ",,\n")
         self.assertEqual(self._flows(text), [
             ("05-01 12:00", 20.0, -27.6),     # m1417, m1460, m1461
-            ("05-02 12:00", 10.0, 0.0),       # m1462
-            ("05-03 12:00", -5.0, 0.0),
+            ("05-02 12:00", -0.5, 0.0),       # m1462
+            ("05-03 12:00", -0.5, 0.0),
             ("05-04 12:00", 0.5, 0.0),
             ("05-06 12:00", -100.0, 0.0),
             ("05-08 12:00", 99.0, 0.0),
             ("05-09 12:00", -50.25, 0.0),
             ("05-10 12:00", 299.0, 0.0),
+            ("05-11 12:00", -300.0, 0.0),     # US dollars paid (TJ-0499)
             # A blank Total is Subtotal + fee, as the parser derives
             # it; read as 0 it was a zero-cost buy (audit finding 74).
             ("05-12 12:00", 4.0, -5.6)])
@@ -571,8 +578,9 @@ class TestCoinbasePoolFlows(_UTC):
                 "2025-05-01 12:00:00 UTC,Buy,USDC,20,CAD,Bought 20 USDC\n")
         with self.assertRaisesRegex(ValueError, r"cb\.csv:2: .*blank"):
             self._flows(text)
-        self.assertEqual(self._flows(text.replace(",CAD,", ",USD,")),
-                         [("05-01 12:00", 20.0, 0.0)])
+        self.assertEqual(self._flows(text.replace(
+            "Buy,USDC,20,CAD", "Staking Income,USDC,20,USD")),
+            [("05-01 12:00", 20.0, 0.0)])
 
     def test_convert_with_unreadable_notes_is_no_flow(self):
         # m1186: a Convert row whose notes do not parse adds nothing.

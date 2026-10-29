@@ -16,8 +16,6 @@ E5. OPENING_BALANCE counts in the ±30-day "still held" balance walks, so a
     clean loss after a phantom drain can't dodge a real wash sale.
 """
 import json
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path

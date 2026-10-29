@@ -137,7 +137,6 @@ from taxjson.lib.stage_msg import emit_line
 import csv
 import difflib
 import re
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -251,6 +250,12 @@ def mapping_path(csv_path: Path) -> Path:
     return sidecar if sidecar.exists() else csv_path.parent / "generic.toml"
 
 
+def action_key(label) -> str:
+    """An action label as rows and [actions] keys are matched: case and
+    surrounding spaces ignored (backlog TJ-0382)."""
+    return str(label).strip().upper()
+
+
 def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     sidecar = csv_path.with_name(csv_path.name + ".toml")
     path = mapping_path(csv_path)
@@ -291,12 +296,15 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 f"generic importer: {shown_name(path)}: {sec} must be a "
                 f"[{sec}] table, got {val!r}")
     cols = mapping.get("columns") or {}
-    _check_keys(path.name, "columns", cols, _COLUMN_KEYS)
-    _check_keys(path.name, "formats", mapping.get("formats") or {},
+    # Every message names the mapping as shown_name does: a sidecar
+    # named for the account (99900001.csv.toml) printed the id
+    # unmasked (backlog TJ-0235).
+    _check_keys(shown_name(path), "columns", cols, _COLUMN_KEYS)
+    _check_keys(shown_name(path), "formats", mapping.get("formats") or {},
                 _FORMAT_KEYS)
-    _check_keys(path.name, "defaults", mapping.get("defaults") or {},
+    _check_keys(shown_name(path), "defaults", mapping.get("defaults") or {},
                 _DEFAULT_KEYS)
-    _check_keys(path.name, "broker", mapping.get("broker") or {},
+    _check_keys(shown_name(path), "broker", mapping.get("broker") or {},
                 _BROKER_KEYS)
     if "name" in (mapping.get("broker") or {}):
         raw_name = mapping["broker"]["name"]
@@ -377,6 +385,20 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 f"generic importer: {shown_name(path)}: [actions] {raw!r} maps "
                 f"to unknown target {target!r} (valid: "
                 f"{', '.join(_VALID_TARGETS)})")
+    # A row's action is matched ignoring case and surrounding spaces:
+    # two keys alike that way are one label, and two meanings for it
+    # left the last one silently (backlog TJ-0382).
+    seen_keys: Dict[str, Any] = {}
+    for raw, target in (mapping.get("actions") or {}).items():
+        norm = action_key(raw)
+        prev = seen_keys.setdefault(norm, (raw, target))
+        if prev[1] != target:
+            raise ValueError(
+                f"generic importer: {shown_name(path)}: [actions] "
+                f"{prev[0]!r} = {prev[1]!r} and {raw!r} = {target!r} name "
+                f"one action (rows are matched ignoring case and "
+                f"surrounding spaces) with two meanings — keep the line "
+                f"that is right and delete the other.")
     # Required fields per target actually used.
     targets = set((mapping.get("actions") or {}).values())
     income = sorted(targets & set(_INCOME_TARGETS))
@@ -396,7 +418,7 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 f"generic importer: {shown_name(path)}: [actions] map to buy/"
                 f"sell but neither [columns].price nor [columns].amount "
                 f"is mapped — the cost/proceeds would be the fee alone.")
-    mapping["_path"] = path.name
+    mapping["_path"] = shown_name(path)
     return mapping
 
 
@@ -627,7 +649,7 @@ class GenericBrokerage(BaseBrokerage):
         cols: Dict[str, str] = {k: v for k, v in
                                 (mapping.get("columns") or {}).items()}
         actions: Dict[str, str] = {
-            str(k).upper(): v for k, v in
+            action_key(k): v for k, v in
             (mapping.get("actions") or {}).items()}
         defaults = mapping.get("defaults") or {}
         options = mapping.get("options") or {}
@@ -816,9 +838,8 @@ class GenericBrokerage(BaseBrokerage):
                         + " — an unescaped quote in a text cell usually "
                         "swallows the next row(s) this way. Fix the quoting "
                         "(double an inner quote: \"\") and re-run.")
-                raw_action = (str(cell(row, "action")
-                                  or defaults.get("action", ""))
-                              .strip().upper())
+                raw_action = action_key(cell(row, "action")
+                                        or defaults.get("action", ""))
                 target = actions.get(raw_action)
                 if target is None:
                     self.count_skip(f"action {raw_action or '?'!s}")
@@ -859,7 +880,7 @@ class GenericBrokerage(BaseBrokerage):
                         f"generic importer: {where}: unparseable date "
                         f"{date_raw!r}: it does not match [formats].date = "
                         f"{date_fmt!r} "
-                        f"({shown_name(mapping['_path'])}) — fix the "
+                        f"({mapping['_path']}) — fix the "
                         f"format in the mapping or the cell.")
                 date = dt.strftime("%Y-%m-%d")
                 row_dates.append(date)
@@ -1078,14 +1099,15 @@ class GenericBrokerage(BaseBrokerage):
                   f"{_SETTLE_LATE_DAYS} days after the trade date: "
                   f"{'; '.join(late_settles[:5])}. The tax year follows "
                   f"the settle date — check the settle cells.")
-        self._warn_assignment_shapes(path.name, zero_closes, transactions)
+        self._warn_assignment_shapes(shown_name(path), zero_closes,
+                                     transactions)
         if settle_on_trade_date and any(
                 t.get("action") == "BUYSELL" for t in transactions):
             # The README used to route a crypto-only export through here
             # with this option: the coins became SAMPMA.US / SAMPLT.TO shares
             # (Schedule 3 line 4, no pooling with the crypto accounts,
             # and §1091 in a US project) — re-audit A2-0152 / A2-0425.
-            emit_line(f"note: generic importer: {path.name}: "
+            emit_line(f"note: generic importer: {shown_name(path)}: "
                   f"settle_on_trade_date = true settles each trade on its "
                   f"trade date; the rows are still booked as SECURITIES "
                   f"(a listing suffix is added). The generic importer is "
@@ -1249,8 +1271,9 @@ class GenericBrokerage(BaseBrokerage):
         when the cell is filled, else the standard cycle from the
         shared holiday-aware helper (T+1 since the 2024 cutover, T+2
         before, T+3 before 2017-09-05; options T+1), on the listing's
-        market (lib/dates.market_of: a Canadian suffix settles on the
-        Canadian calendar, .US on the US one, .L/.AX on the UK/ASX cycle,
+        market (lib/dates.settlement_calendar: a Canadian suffix settles
+        on the Canadian calendar, in US dollars on the days both Canada
+        and the US settle, .US on the US one, .L/.AX on the UK/ASX cycle,
         otherwise the row currency). Booking the
         trade date put a Dec-31 sale in the wrong Canadian tax year
         (audits R1-123/R1-185). `[options] settle_on_trade_date = true`
@@ -1288,5 +1311,6 @@ class GenericBrokerage(BaseBrokerage):
             return date
         if settle_on_trade_date:
             return date
-        from taxjson.lib.dates import market_of
-        return settlement_date(date, market_of(symbol, currency), is_option)
+        from taxjson.lib.dates import settlement_calendar
+        return settlement_date(date, settlement_calendar(symbol, currency),
+                               is_option)

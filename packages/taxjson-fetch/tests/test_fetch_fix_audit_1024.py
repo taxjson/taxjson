@@ -222,11 +222,14 @@ class TestB27ConcurrentFetches(unittest.TestCase):
 
 
 def _qt_csv(rows):
-    """A Questrade export of (trade day, account number) rows; "" is a
-    blank Account # cell."""
+    """A MANUAL Questrade export of (trade day, account number) rows; ""
+    is a blank Account # cell. Its Account Type is a plan's (Margin),
+    not the fetch's `API`: rows the fetch wrote are never an overlap
+    (backlog TJ-0516)."""
     parts = [api.qt_to_csv([_activity(day)], number) for day, number in rows]
     head = parts[0].splitlines(keepends=True)[0]
-    return head + "".join(p.splitlines(keepends=True)[1] for p in parts)
+    return head + "".join(p.splitlines(keepends=True)[1]
+                          .replace(",API\n", ",Margin\n") for p in parts)
 
 
 class TestB28TrimScopedToAccount(unittest.TestCase):

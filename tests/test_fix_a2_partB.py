@@ -3,7 +3,6 @@ Canada/USA wording and country gates in `taxjson run`'s commands,
 edge-cases, currency conversion and the country ownership tables."""
 from __future__ import annotations
 
-import os
 import json
 import tempfile
 import unittest
@@ -125,7 +124,9 @@ def _two_account_projects(td, a_rows, b_rows):
 class TestListDateBasisWording(unittest.TestCase):
     """A2-0154, A2-0410, A2-0720, A2-0734, A2-1244, A2-1266, A2-1318,
     A2-1330: `list --date` told a US project its per-account cost was an
-    ACB and that the return blends it (s.47)."""
+    ACB and that the return blends it (s.47). It reads the run's own pass
+    now (backlog TJ-0417): Canada's figures are each account's share of
+    the s.47 ACB, the US ones each account's FIFO basis, with no note."""
 
     @rule("CA-ACB-01")
     @rule_absent("CA-ACB-01", country="usa")
@@ -142,12 +143,17 @@ class TestListDateBasisWording(unittest.TestCase):
             j = cli_both(p, "list", "--date", "2025-06-30", "--json")
         for c in p:
             self.assertEqual(t[c].returncode, 0, (c, t[c].stderr))
-        self.assertIn("s.47", t["canada"].stderr)
-        self.assertIn("per-account ACB", json.loads(j["canada"].stdout)["basis"])
-        self.assertNotIn("s.47", t["usa"].stderr)
+            self.assertNotIn("s.47", t[c].stderr)
+            self.assertNotIn("per-account", json.loads(j[c].stdout)["basis"])
         self.assertNotIn("ACB", t["usa"].stderr + t["usa"].stdout)
-        self.assertIn("per-account FIFO basis",
-                      json.loads(j["usa"].stdout)["basis"])
+        cost = {c: {r["account"]: r["cost"]
+                    for r in json.loads(j[c].stdout)["rows"]} for c in p}
+        # Canada: one s.47 pool for the 200 shares, half each (in CAD);
+        # the US: FIFO basis per account.
+        self.assertEqual(set(cost["canada"]), {"acctA", "acctB"})
+        self.assertAlmostEqual(cost["canada"]["acctA"],
+                               cost["canada"]["acctB"], places=2)
+        self.assertEqual(cost["usa"], {"acctA": 3000.0, "acctB": 1000.0})
 
 
 
@@ -275,8 +281,11 @@ class TestBuySellCheck(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             b = cli(root, "buy-check", "XYZ261218C00040000.TO")
         self.assertEqual(b.returncode, 1, b.stdout + b.stderr)
-        self.assertIn("$10.00 of it per share", b.stdout)
-        self.assertIn("$1,000.00 per standard 100-share contract", b.stdout)
+        # fmt_money and the base currency, never '$' (backlog TJ-0244).
+        out = " ".join(b.stdout.split())
+        self.assertIn("about 10.00 CAD of it per share", out)
+        self.assertIn("1,000.00 CAD per standard 100-share contract", out)
+        self.assertNotIn("$", out)
 
     @rule("CA-PLAN-01")
     @rule("US-PLAN-01")

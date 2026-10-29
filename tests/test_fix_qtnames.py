@@ -31,7 +31,7 @@ from pathlib import Path
 
 from taxjson.lib import symbol_codes as SC
 from taxjson.lib.brokerages.questrade import (QuestradeBrokerage,
-                                              _get_desc_key, scan_code_uses)
+                                              scan_code_uses)
 from tax_rules import rule
 from test_fix_qtcodes import QH, q
 

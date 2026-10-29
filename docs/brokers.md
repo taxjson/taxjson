@@ -58,9 +58,11 @@ project per tax year beside it:
   the superficial-loss (US: wash-sale) rule on your taxable accounts.
 - **Year-end positions** go in the year's `holdings/` as a
   `[[holding]]` TOML (found by its `[meta] account` or a name like
-  `margin_holdings.toml`). A broker's own report can go anywhere: name
-  it in the account's `holdings = [...]` setting or pass it to
-  `tjs sanity` (`tjs sanity margin=FILE`). `tjs run` skips a positions
+  `margin_holdings.toml`), or as the broker's own report (an RBC
+  Holdings Export or an IB statement, named like `margin_holdings.csv`).
+  A report can also go anywhere: name it in the account's
+  `holdings = [...]` setting or pass it to `tjs sanity`
+  (`tjs sanity margin=FILE`). `tjs run` skips a positions
   report left in an inputs folder.
 - **Tax slips** go in the year's own `inputs/slips/` ([Tax
   slips](#tax-slips)).
@@ -134,7 +136,13 @@ activity), every year available.
 **Where:** sign in, **Reports** in the top navigation, **Go to
 transaction history**, pick the date range and export. The help page
 says the export is an **Excel spreadsheet**: convert it with
-`taxjson-xlsx-to-csv` (the parser reads the converted dates).
+`taxjson-xlsx-to-csv` (the parser reads the converted dates). The
+converter needs the optional `xlsx` extra, which the plain installer
+line leaves out: `TAXJSON_EXTRAS=fx,xlsx bash -c "$(curl -fsSL
+https://taxjson.com/install.sh)"`. It writes each cell as the sheet
+shows it (a label given twice stays twice, an account number formatted
+with leading zeros keeps them); `--sheet NAME` picks a sheet by its
+name first (a year tab `2025`), else by its index from 0.
 
 **How far back:** the help page does not say. Set the start before
 your first deposit; download one file per year if a long range is
@@ -149,7 +157,9 @@ refused.
 - **One account per file, or one tax entity.** An export that holds
   rows of two Questrade accounts gets a warning. One that mixes a
   registered plan with a taxable account is refused: export each
-  account on its own.
+  account on its own. In a US project a TFSA, RESP, RDSP or FHSA is a
+  taxable account (no treaty deferral), so only an RRSP, RRIF or
+  locked-in plan is refused there.
 - **Coverage.** Questrade's export does not state its end date, so the
   last row is taken as the end. If an account still holds positions and
   has no row for more than 30 days of the year, the run warns that the
@@ -207,7 +217,10 @@ as of <date>`), with book cost, read as is by `tjs sanity` and
 `tjs opening` (columns matched by label: Symbol, Quantity, Currency,
 book cost or book value as the position's total; a per-share label
 such as Average Cost or Book Cost Per Share is multiplied by the
-quantity; any other cost label is refused, naming it).
+quantity; any other cost label is refused, naming it; a currency the
+cost label names, `Book Value (USD)` or `(usd)`, is the cost's). A
+label it reads given twice, or a row with a quantity and no symbol
+(not cash, not a total), is refused, naming it.
 
 Parser: `src/taxjson/lib/brokerages/rbc_direct.py` — `REQUIRED_COLUMNS`, `rbc_coverage_messages`, `DEFAULT_YEAR_END_POSTING`; positions: `src/taxjson/lib/positions_reports.py` — `rbc_holdings`.
 

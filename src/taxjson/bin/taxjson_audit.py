@@ -85,16 +85,35 @@ def _load_doc(path: Path) -> Dict[str, Any]:
         sys.exit(exit_text(f"taxjson-audit: cannot read {path}: {e}"))
 
 
+# The source files the run writes itself rather than parses, by what
+# their metadata says made them: named beside the rows traced to them
+# (backlog TJ-0359).
+_MADE_BY_SOURCE = {"taxjson-corp-actions": "corporate actions"}
+_MADE_BY_KIND = {
+    "transfer_book_value": "transfers in and in-kind moves, booked by "
+                           "the run",
+    "own_account_moves": "moves between your own accounts, booked by "
+                         "the run",
+}
+
+
 def _source_label(path: Path, meta: Dict[str, Any]) -> str:
     """Human name for a parsed-source file: the original input files
-    when the parser recorded them, else the work-file name."""
+    when the parser recorded them, else the work-file name; a file the
+    run wrote (corporate actions, transfers in) says so."""
     # convert-tt records its .tt as `source_file` (S029-09: a
-    # hand-entered row was labelled with the work file only).
+    # hand-entered row was labelled with the work file only); the
+    # corp-actions stage its statements' shown names (TJ-0359).
     files = meta.get("input_files") or (
-        [meta["source_file"]] if meta.get("source_file") else [])
-    names = ", ".join(Path(f).name for f in files[:4])
+        [meta["source_file"]] if meta.get("source_file") else []) \
+        or list(meta.get("statements") or [])
+    names = ", ".join(Path(str(f)).name for f in files[:4])
     if len(files) > 4:
         names += f", +{len(files) - 4} more"
+    what = (_MADE_BY_SOURCE.get(str(meta.get("source") or ""))
+            or _MADE_BY_KIND.get(str(meta.get("kind") or "")) or "")
+    if what:
+        names = what + (f" from {names}" if names else "")
     return f"{path.name}" + (f" ({names})" if names else "")
 
 
@@ -106,14 +125,34 @@ OPTION_MULTIPLIER = 100
 def build_source_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
     """id -> [{label, row}] over every parsed-source file. A row
     deduplicated out of the books can legitimately appear in several
-    files; all appearances are kept so the block can say so."""
+    files; all appearances are kept so the block can say so.
+
+    A row its file gives no id (a corporate action's rows, a transfer
+    in the run booked) is indexed under the id the books gave it: the
+    merge computes it from the row's content (core.TaxTransaction.
+    compute_id). It was skipped, so every such row read as one with no
+    parsed row (backlog TJ-0359)."""
+    from taxjson.lib.core import coerce_transaction_row
     index: Dict[str, List[Dict[str, Any]]] = {}
     for p in paths:
         doc = _load_doc(p)
-        label = _source_label(p, doc.get("metadata") or {})
-        for row in doc.get("transactions") or []:
+        meta = doc.get("metadata") or {}
+        label = _source_label(p, meta)
+        # A converted .tt file's {id: line} (taxjson-convert-tt): the
+        # line rides on the audit's copy of the row as `source_line`.
+        lines = meta.get("source_lines")
+        lines = lines if isinstance(lines, dict) else {}
+        for i, row in enumerate(doc.get("transactions") or []):
             rid = row.get("id")
+            if not rid:
+                try:
+                    rid = coerce_transaction_row(dict(row), i,
+                                                 str(p.name)).id
+                except Exception:                   # noqa: BLE001
+                    rid = None      # a row the books could not load
             if rid:
+                if lines.get(rid) is not None:
+                    row = dict(row, source_line=lines[rid])
                 index.setdefault(rid, []).append(
                     {"label": label, "row": row})
     return index
@@ -144,7 +183,8 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
                   fx_history: Dict[str, Dict[str, Decimal]],
                   default_rate: Optional[Decimal],
                   futures_native: Optional[Dict[str, float]] = None,
-                  filled_index: Optional[Dict[str, Dict[str, Any]]] = None
+                  filled_index: Optional[Dict[str, Dict[str, Any]]] = None,
+                  field: str = "net_amount"
                   ) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """(fx, warnings, failures): a book row's net amount re-derived from
     the row the conversion read — the parsed broker row, or for a crypto
@@ -156,18 +196,22 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
 
     A row already in the base currency is compared too: it was marked
     "native" with no amount compared, so a base book whose buy or sale
-    amount differed from the broker's passed (backlog TJ-0333)."""
+    amount differed from the broker's passed (backlog TJ-0333).
+
+    `field`: the amount compared — the net amount, or a dividend's gross
+    amount (row_money_field: the merge nets the withholding into a
+    dividend's net amount, backlog TJ-0359)."""
     warnings: List[str] = []
     failures: List[str] = []
     pre = (filled_index or {}).get(rid)
     src = pre if pre is not None else raw
     raw_cur = str(raw.get("currency") or "").strip().upper()
     cur = str(src.get("currency") or "").strip().upper() or raw_cur
-    nominal = float(src.get("net_amount") or 0.0)
+    nominal = float(src.get(field) or 0.0)
     priced_by_fill = pre is not None and (
-        abs(nominal - float(raw.get("net_amount") or 0.0)) > TIE
+        abs(nominal - float(raw.get(field) or 0.0)) > TIE
         or cur != raw_cur)
-    book = float(base_row.get("net_amount") or 0.0)
+    book = float(base_row.get(field) or 0.0)
     native = not cur or cur == base_currency
     # The converter prices on the settlement date when there is one.
     rate_date = str(src.get("date_settle") or src.get("date")
@@ -216,16 +260,18 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
         fx["futures_settlement"] = True
         fx["notional"] = notional
     if not ties:
+        _what = "" if field == "net_amount" else \
+            f" ({field.replace('_', ' ')})"
         if native:
             failures.append(
-                f"AMOUNT cross-check FAILED: the "
+                f"AMOUNT cross-check FAILED{_what}: the "
                 f"{'priced' if pre is not None else 'parsed'} row "
                 f"carries {_fmt(nominal)} {cur or base_currency} but the "
                 f"base book row carries {_fmt(book)} {base_currency} — "
                 f"no conversion applies to a {base_currency} row.")
         else:
             failures.append(
-                f"FX cross-check FAILED: {_fmt(nominal)} {cur} x "
+                f"FX cross-check FAILED{_what}: {_fmt(nominal)} {cur} x "
                 f"{float(rate):g} = {_fmt(computed)} but the base "
                 f"book row carries {_fmt(book)} {base_currency}.")
     return fx, warnings, failures
@@ -240,22 +286,45 @@ POOL_TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 _POOL_WINDOW_DAYS = 31
 
 
-def pool_trade_check(events: List[Dict[str, Any]],
-                     base_index: Dict[str, Dict[str, Any]],
-                     source_index: Dict[str, List[Dict[str, Any]]],
-                     **money: Any) -> Dict[str, Any]:
-    """The audited sales' cost side, traced like the sales themselves:
-    every trade of an audited security in the base book (its buys, its
-    earlier sales, an assignment) up to the loss rule's window after the
-    last audited sale, and each wash-sale / superficial-loss replacement
-    the events name, re-derived from its parsed row (money_lineage) and
-    compared with the book's amount. A buy whose amount or conversion
-    differed from the broker's changed the cost the audit re-ran and the
-    gain it tied, and passed: only the sales were traced (backlog
-    TJ-0333).
+# A dividend's amount is its gross: the merge nets the withholding (its
+# TAX row) into the dividend's net amount (taxjson_merge2.
+# reconcile_dividend_tax), so the book's net is not the broker's.
+_GROSS_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU")
+# A symbol no pool is kept for: cash rows (interest, fees, a corporate
+# action's cash) on it never widen the pool checks' scope.
+_NO_POOL_SYMBOLS = ("", "CASH")
 
-    {"checked", "tied", "untraced" (a row with no parsed row: one the
-    run made), "mismatched": [{id, symbol, date, quantity, failure}]}."""
+
+def row_money_field(raw: Dict[str, Any]) -> str:
+    """The amount of a row the audit compares with its parsed row: the
+    net amount; a dividend's gross amount when its parsed row has one
+    (_GROSS_ACTIONS; backlog TJ-0359)."""
+    if str(raw.get("action") or "") in _GROSS_ACTIONS:
+        try:
+            if float(raw.get("gross_amount") or 0.0):
+                return "gross_amount"
+        except (TypeError, ValueError):
+            pass
+    return "net_amount"
+
+
+def _row_day(row: Dict[str, Any]) -> str:
+    return min(str(row.get("date") or ""),
+               str(row.get("date_settle") or row.get("date") or ""))
+
+
+def pool_scope(events: List[Dict[str, Any]],
+               base_index: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """What the pool checks read (pool_trade_check, pool_other_rows_
+    check): the audited sales' ids (`own`), the wash-sale /
+    superficial-loss replacements they name (`replacements`), the last
+    day read (`until`: the loss rule's window after the last audited
+    sale), and the securities (`symbols`): the audited ones, each under
+    its earlier tickers (a rename's SPLIT row carries the pool to the
+    new symbol) and with the other securities of a corporate action of
+    theirs (rows sharing its corp_event_id: a spin-off's parent, a
+    merger's old shares). The trades booked under an earlier ticker
+    were not traced (backlog TJ-0359)."""
     from datetime import date as _date, timedelta as _td
     own = set()
     syms = set()
@@ -273,8 +342,157 @@ def pool_trade_check(events: List[Dict[str, Any]],
                  + _td(days=_POOL_WINDOW_DAYS)).isoformat()
     except ValueError:
         until = last
+    changed = True
+    while changed:
+        changed = False
+        corp = {str(r.get("corp_event_id")) for r in base_index.values()
+                if r.get("corp_event_id")
+                and str(r.get("symbol") or "") in syms}
+        for row in base_index.values():
+            sym = str(row.get("symbol") or "")
+            if sym in syms or sym.upper() in _NO_POOL_SYMBOLS:
+                continue
+            new = str(row.get("symbol_new") or "")
+            if ((row.get("action") == "SPLIT" and new in syms)
+                    or (row.get("corp_event_id")
+                        and str(row.get("corp_event_id")) in corp)):
+                syms.add(sym)
+                changed = True
+    return {"own": own, "symbols": syms, "replacements": reps,
+            "until": until}
+
+
+def load_dated_renames(path: Optional[Path]
+                       ) -> Dict[Tuple[str, str, str], List[str]]:
+    """{(old, new, date): [where, ...]} of the ticker changes the run
+    booked from a `.tt` RENAME line or a dated ticker.map line
+    (work/dated_events.state, lib/dated_events): the declaration a
+    rename's SPLIT row came from. Empty when the file is missing or
+    unreadable (the row is still named, without its line)."""
+    out: Dict[Tuple[str, str, str], List[str]] = {}
+    if path is None:
+        return out
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return out
+    for ev in (doc.get("renames") if isinstance(doc, dict) else None) or []:
+        if not isinstance(ev, dict):
+            continue
+        where = ev.get("where") or []
+        if isinstance(where, str):
+            where = [where]
+        out[(str(ev.get("old") or "").upper(),
+             str(ev.get("new") or "").upper(),
+             str(ev.get("date") or ""))] = [str(w) for w in where]
+    return out
+
+
+def row_origin(row: Dict[str, Any], *,
+               renames: Optional[Dict[Tuple[str, str, str],
+                                      List[str]]] = None,
+               filled_index: Optional[Dict[str, Dict[str, Any]]] = None
+               ) -> str:
+    """What made a book row that no parsed broker row (or `.tt` line)
+    holds, in a few words: the declaration it came from where the row
+    says (a [[distributions]] table, a dated RENAME line, an OPENING
+    ... cost=unknown line, a corporate action), else the stage. Rows
+    with no parsed row were counted with no word on what they were
+    (backlog TJ-0359)."""
+    from taxjson.lib import core as _core
+    rid = str(row.get("id") or "")
+    desc = str(row.get("description") or "").strip()
+    typ = str(row.get("type") or "")
+    sym = str(row.get("symbol") or "")
+    if rid.startswith("DIST-"):
+        what = desc.replace(" per [[distributions]]", "").strip()
+        return ("a [[distributions]] table in taxjson.toml"
+                + (f" ({what})" if what else ""))
+    if row.get("corp_event_id"):
+        el = str(row.get("corp_election") or "")
+        return (f"corporate action {row['corp_event_id']}"
+                + (f" ({el})" if el else "")
+                + ": no row of the corp-actions file has its id — re-run "
+                  "`taxjson run`")
+    ev = str(row.get("event_source") or "")
+    if ev:
+        new = str(row.get("symbol_new") or "")
+        where = (renames or {}).get((sym.upper(), new.upper(),
+                                     str(row.get("date") or "")[:10]))
+        if ev == "tt":
+            w = ", ".join(where or []) or str(row.get("source") or "")
+            return ("a .tt RENAME line" + (f" ({w})" if w else "")
+                    + ": a ticker change, booked by the run")
+        if ev == "map":
+            w = ", ".join(where or [])
+            return ("a dated RENAME line of ticker.map"
+                    + (f" ({w})" if w else "")
+                    + ": a ticker change, booked by the run")
+        if ev == "ib-conid":
+            return ("IB shows one contract id under two symbols: a "
+                    "ticker change, booked by the run")
+        return f"a dated event ({ev}), booked by the run"
+    if row.get("action") == "OPENING_BALANCE" \
+            and desc.startswith("MISSING-HISTORY"):
+        m = re.match(r"MISSING-HISTORY opening \(([^)]*)\)", desc)
+        return ("an OPENING ... cost=unknown line"
+                + (f" ({m.group(1)})" if m else "")
+                + ": units held before the data, cost unknown (missing "
+                  "history)")
+    if typ == _core.TRANSFER_BOOK_VALUE_TYPE:
+        return ("a transfer in, booked by the run at the book value the "
+                "broker states" + (f" ({row['source']})"
+                                   if row.get("source") else ""))
+    if typ in _core.IN_KIND_TYPES:
+        return ("an in-kind move between a taxable and a registered "
+                "account, booked by the run")
+    if typ == _core.LOT_MOVE_TYPE:
+        return "a move between your own accounts, booked by the run"
+    if typ == _core.LISTING_JOURNAL_TYPE:
+        return "a journal between two listings, booked by the run"
+    if rid and rid in (filled_index or {}):
+        return "a row of the crypto price stage (fill-crypto-prices)"
+    if row.get("source"):
+        return (f"a row of {row['source']} that no parsed file holds now "
+                f"— stale work/ files: re-run `taxjson run`")
+    return "made by the run (the row names no stage)"
+
+
+def _pool_entry(rid: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    e = {"id": rid, "action": row.get("action"),
+         "type": row.get("type") or "", "symbol": row.get("symbol"),
+         "date": row.get("date"), "quantity": row.get("quantity")}
+    new = str(row.get("symbol_new") or "")
+    if new and new != str(row.get("symbol") or ""):
+        e["symbol_new"] = new
+    return e
+
+
+def pool_trade_check(events: List[Dict[str, Any]],
+                     base_index: Dict[str, Dict[str, Any]],
+                     source_index: Dict[str, List[Dict[str, Any]]],
+                     *, origin=None, **money: Any) -> Dict[str, Any]:
+    """The audited sales' cost side, traced like the sales themselves:
+    every trade of an audited security in the base book (its buys, its
+    earlier sales, an assignment; under an earlier ticker too:
+    pool_scope) up to the loss rule's window after the last audited
+    sale, and each wash-sale / superficial-loss replacement the events
+    name, re-derived from its parsed row (money_lineage) and compared
+    with the book's amount. A buy whose amount or conversion differed
+    from the broker's changed the cost the audit re-ran and the gain it
+    tied, and passed: only the sales were traced (backlog TJ-0333).
+
+    {"checked", "tied", "untraced" (a row with no parsed row: one the
+    run made), "mismatched": [{id, symbol, date, quantity, failure}],
+    "untraced_rows": [{id, action, type, symbol, date, quantity,
+    origin}]: what made each row with no parsed row (`origin`, a
+    callable row -> text, default row_origin; backlog TJ-0359)}."""
+    origin = origin or row_origin
+    scope = pool_scope(events, base_index)
+    own, syms = scope["own"], scope["symbols"]
+    reps, until = scope["replacements"], scope["until"]
     out: Dict[str, Any] = {"checked": 0, "tied": 0, "untraced": 0,
-                           "mismatched": []}
+                           "mismatched": [], "untraced_rows": []}
     for rid, row in base_index.items():
         if rid in own:
             continue
@@ -282,13 +500,13 @@ def pool_trade_check(events: List[Dict[str, Any]],
             if (row.get("action") not in POOL_TRADE_ACTIONS
                     or str(row.get("symbol") or "") not in syms):
                 continue
-            d = min(str(row.get("date") or ""),
-                    str(row.get("date_settle") or row.get("date") or ""))
-            if d > until:
+            if _row_day(row) > until:
                 continue
         hits = source_hits(rid, source_index, base_index)
         if not hits:
             out["untraced"] += 1
+            out["untraced_rows"].append(
+                {**_pool_entry(rid, row), "origin": origin(row)})
             continue
         _fx, _w, fails = money_lineage(rid, hits[0]["row"], row, **money)
         out["checked"] += 1
@@ -299,6 +517,78 @@ def pool_trade_check(events: List[Dict[str, Any]],
                 "quantity": row.get("quantity"), "failure": fails[0]})
         else:
             out["tied"] += 1
+    return out
+
+
+def pool_other_rows_check(events: List[Dict[str, Any]],
+                          base_index: Dict[str, Dict[str, Any]],
+                          source_index: Dict[str, List[Dict[str, Any]]],
+                          *, engine_rows=(), origin=None,
+                          **money: Any) -> Dict[str, Any]:
+    """The audited securities' rows that are not trades — return of
+    capital and the other cost adjustments, reinvested distributions,
+    splits and ticker changes, corporate-action rows, transfers,
+    openings, and the securities' dividends, withholding and fees —
+    traced as their trades are (pool_trade_check, the same securities
+    and window: pool_scope): each to its parsed broker row or `.tt`
+    line, its amount re-derived (money_lineage on row_money_field) and
+    compared with the book's; a row with no parsed row is named with
+    what made it (`origin`, default row_origin). `engine_rows`: rows
+    the computation adds to the books (an OPENING ... cost=unknown
+    line's units, pipeline.prepare_books) — none has a parsed row. Only
+    the trades were traced (backlog TJ-0359).
+
+    {"checked", "tied", "untraced", "mismatched": [{id, action, symbol,
+    date, quantity, failure}], "rows": [{id, action, type, symbol,
+    date, quantity, [symbol_new], field, amount, ties (true / false /
+    null: no parsed row), source (the parsed file) and line (a `.tt`
+    line) | origin, [failure]}]}."""
+    origin = origin or row_origin
+    scope = pool_scope(events, base_index)
+    own, syms = scope["own"], scope["symbols"]
+    reps, until = scope["replacements"], scope["until"]
+    out: Dict[str, Any] = {"checked": 0, "tied": 0, "untraced": 0,
+                           "mismatched": [], "rows": []}
+    rows = [(rid, row) for rid, row in base_index.items()
+            if row.get("action") not in POOL_TRADE_ACTIONS]
+    rows += [(str(r.get("id") or ""), r) for r in engine_rows
+             if str(r.get("id") or "") not in base_index]
+    for rid, row in rows:
+        if rid in own or rid in reps:
+            continue
+        if str(row.get("symbol") or "") not in syms \
+                or _row_day(row) > until:
+            continue
+        entry = _pool_entry(rid, row)
+        hits = (source_hits(rid, source_index, base_index)
+                if rid in base_index else [])
+        if not hits:
+            field = row_money_field(row)
+            entry.update(field=field, amount=row.get(field), ties=None,
+                         origin=origin(row))
+            out["untraced"] += 1
+            out["rows"].append(entry)
+            continue
+        raw = hits[0]["row"]
+        field = row_money_field(raw)
+        _fx, _w, fails = money_lineage(rid, raw, row, field=field, **money)
+        entry.update(field=field, amount=row.get(field),
+                     source=hits[0]["label"])
+        if raw.get("source_line"):
+            entry["line"] = raw.get("source_line")
+        out["checked"] += 1
+        if fails:
+            entry.update(ties=False, failure=fails[0])
+            out["mismatched"].append({
+                "id": rid, "action": row.get("action"),
+                "symbol": row.get("symbol"), "date": row.get("date"),
+                "quantity": row.get("quantity"), "failure": fails[0]})
+        else:
+            entry["ties"] = True
+            out["tied"] += 1
+        out["rows"].append(entry)
+    out["rows"].sort(key=lambda e: (str(e.get("date") or ""),
+                                    str(e.get("symbol") or "")))
     return out
 
 
@@ -692,6 +982,9 @@ def _row_line(row: Dict[str, Any]) -> str:
         line += f", fee {fee:,.2f}"
     if row.get("corp_event_id"):
         line += f"  [corp event {row['corp_event_id']}]"
+    if row.get("source_line"):
+        # A .tt row's line (taxjson-convert-tt; backlog TJ-0359).
+        line += f"  [line {row['source_line']}]"
     return line
 
 
@@ -1173,27 +1466,74 @@ SCOPE = {
         "the same for the audited securities' other trades (buys, "
         "earlier sales, assignments) up to 31 days after the last "
         "audited sale, and for the wash-sale / superficial-loss "
-        "replacements the sales name"],
+        "replacements the sales name",
+        "the same for those securities' rows that are not trades "
+        "(return of capital and the other cost adjustments, reinvested "
+        "distributions, splits and ticker changes, corporate-action "
+        "rows, transfers, openings, their dividends, withholding and "
+        "fees): a dividend's gross amount, any other row's net amount, "
+        "each row with its parsed file and its .tt line",
+        "the securities read: the audited ones, under their earlier "
+        "tickers too (a rename), and the other securities of a "
+        "corporate action of theirs"],
     "not_checked": [
-        "rows with no parsed broker row (counted as `no parsed row`): "
-        "re-run, not traced",
-        "the ACB / basis adjustments that are not trades: return of "
-        "capital, reinvested distributions, splits, corporate actions, "
-        "transfers in, openings",
-        "trades booked under an earlier ticker (before a rename) or "
-        "in a sheltered account",
+        "rows with no parsed broker row (counted as `no parsed row`; "
+        "what made each is said: a [[distributions]] table, a dated "
+        "RENAME line, an OPENING ... cost=unknown line, a stage of the "
+        "run): re-run, not traced",
+        "a sheltered account's rows",
+        "rows of the securities not audited, and rows on no security "
+        "(interest, account fees)",
         "the parsed row's own reading of the broker's export (the "
         "parsers' tests cover it)",
         "a crypto row's price from the fill stage (its priced row is "
         "the start)",
         "days held and the descriptive fields (notes, wash windows)"],
 }
-NOT_TRACED_LINE = ("adjustments (ROC, distributions, splits, transfers in) "
-                   "and rows with no parsed row: re-run only")
+NOT_TRACED_LINE = ("rows with no parsed row (what made each: --details) and "
+                   "a sheltered account's rows: re-run only")
+# How many rows with no parsed row --details names (--json lists each).
+UNTRACED_SHOWN = 12
 TIE_FIELDS_TEXT = ("each sale's quantity, proceeds, cost, gain, disallowed "
                    "and permanently disallowed amounts, symbol, dates, "
                    "account, direction and term, each lot's acquired date "
                    "and share, and the replacement lots")
+
+
+def _untraced_text(e: Dict[str, Any]) -> str:
+    """One row with no parsed row, for --details: its date, action,
+    security and amount, and what made it (row_origin)."""
+    action = str(e.get("action") or "?")
+    try:
+        qty = float(e.get("quantity") or 0.0)
+    except (TypeError, ValueError):
+        qty = 0.0
+    if action in POOL_TRADE_ACTIONS:
+        action = ("SELL" if qty < 0 else "BUY") + (
+            "" if e.get("action") == "BUYSELL" else f" ({e['action']})")
+    sym = str(e.get("symbol") or "?")
+    if e.get("symbol_new"):
+        sym += f" -> {e['symbol_new']}"
+    bits = [str(e.get("date") or "?"), action]
+    if qty and action not in ("SPLIT",):
+        bits.append(f"{abs(qty):g}")
+    bits.append(sym)
+    try:
+        amt = float(e.get("amount") or 0.0)
+    except (TypeError, ValueError):
+        amt = 0.0
+    if amt:
+        bits.append(_fmt(amt))
+    return " ".join(bits) + f" — {e.get('origin') or row_origin({})}"
+
+
+def untraced_rows(pool: Optional[Dict[str, Any]],
+                  other: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The pool checks' rows with no parsed row, by date (--details)."""
+    rows = list((pool or {}).get("untraced_rows") or []) + [
+        r for r in (other or {}).get("rows") or [] if r.get("origin")]
+    return sorted(rows, key=lambda r: (str(r.get("date") or ""),
+                                       str(r.get("symbol") or "")))
 
 
 def render_reconciliation(events: List[Dict[str, Any]],
@@ -1202,7 +1542,8 @@ def render_reconciliation(events: List[Dict[str, Any]],
                           use_color: bool = False,
                           country: Optional[str] = None,
                           brief: bool = False,
-                          pool: Optional[Dict[str, Any]] = None
+                          pool: Optional[Dict[str, Any]] = None,
+                          other: Optional[Dict[str, Any]] = None
                           ) -> List[str]:
     from taxjson.lib.out import wrap as _wrap
     W = 86
@@ -1257,6 +1598,13 @@ def render_reconciliation(events: List[Dict[str, Any]],
                    f"{_bad:,} mismatched, {pool.get('untraced', 0):,} "
                    f"with no parsed row  "
                    + mark(_bad, _bad == 0 and not pool.get("untraced")))
+    if other is not None:
+        # The rows that are not trades, traced the same way (TJ-0359).
+        _bad = len(other.get("mismatched") or [])
+        out.append(f"  other pool rows    {other.get('tied', 0):>7,} tied, "
+                   f"{_bad:,} mismatched, {other.get('untraced', 0):,} "
+                   f"with no parsed row  "
+                   + mark(_bad, _bad == 0 and not other.get("untraced")))
     if checks_supplied:
         out.append(f"  pipeline tie-out   {tied:>7,} tied, {untied:,} "
                    f"MISMATCHED, {nocheck:,} not found  "
@@ -1290,6 +1638,18 @@ def render_reconciliation(events: List[Dict[str, Any]],
             + ".", None, "  ", "  "))
         out.extend(paint(ln, "dim")
                    for ln in _wrap(totals_note(country), None, "  ", "  "))
+        # Each pool row with no parsed row, with what made it (backlog
+        # TJ-0359): they were counted with no word on what they were.
+        _un = untraced_rows(pool, other)
+        if _un:
+            out.append("  With no parsed row (re-run, not traced):")
+            for r in _un[:UNTRACED_SHOWN]:
+                out.extend(_wrap(_untraced_text(r), None, "    ",
+                                 "      "))
+            if len(_un) > UNTRACED_SHOWN:
+                out.append(f"    ... {len(_un) - UNTRACED_SHOWN:,} more "
+                           f"(--json: pool_trades.untraced_rows, "
+                           f"pool_other_rows.rows)")
     out.append(paint("\u2550" * W, "dim"))
     return out
 
@@ -1385,6 +1745,11 @@ def parse_args(argv=None):
                         "acquisitions/disposals for the superficial-loss / wash-sale "
                         "window (strict; [settings] transfers_as_acquisitions = true). "
                         "Default: a custody move, held but never a purchase.")
+    p.add_argument("--locked-record", action="append", default=None,
+                   metavar="PATH",
+                   help="USA: a filed year's lock file, repeatable, as in "
+                        "taxjson-gains: a basis add its own row for that "
+                        "sale already has stays in that sale (US-WASH-22).")
     p.add_argument("--locked-year", action="append", type=int,
                    default=None, metavar="YEAR",
                    help="USA: a filed (locked) tax year, repeatable, as "
@@ -1424,6 +1789,10 @@ def parse_args(argv=None):
                    help="Price-filled stage JSON (<acct>_filled.json, "
                         "repeatable): the nominal for rows the parse "
                         "left at 0 and the fill stage priced.")
+    p.add_argument("--dated-events", metavar="PATH", default=None,
+                   help="The run's work/dated_events.state: the .tt "
+                        "RENAME line a ticker change's row came from "
+                        "is named with it.")
     p.add_argument("--symbol", action="append", default=[],
                    help="Filter: symbol prefix (repeatable).")
     p.add_argument("--id", dest="gain_id", help="Filter: tx id prefix.")
@@ -1582,7 +1951,7 @@ def main(argv=None) -> int:
         with contextlib.redirect_stderr(io.StringIO()):
             place_retro_wash_adjustments(
                 results, args.tax_date, tuple(args.locked_year or ()),
-                args.year)
+                args.year, tuple(args.locked_record or ()))
 
     date_key = "date_settle" if args.tax_date == "settle" else "date"
 
@@ -1657,12 +2026,24 @@ def main(argv=None) -> int:
     # The sales' cost side traced like the sales: the audited
     # securities' buys and earlier trades against their parsed rows
     # (backlog TJ-0333).
+    _renames = load_dated_renames(Path(args.dated_events)
+                                  if args.dated_events else None)
+
+    def _origin(row):
+        return row_origin(row, renames=_renames, filled_index=filled_index)
+    _money = dict(base_currency=base_currency, fx_history=fx_history,
+                  default_rate=_default_rate, futures_native=futures_native,
+                  filled_index=filled_index)
     pool = pool_trade_check(events, base_index, source_index,
-                            base_currency=base_currency,
-                            fx_history=fx_history,
-                            default_rate=_default_rate,
-                            futures_native=futures_native,
-                            filled_index=filled_index)
+                            origin=_origin, **_money)
+    # ...and the rows that are not trades (ROC, splits, corporate
+    # actions, transfers, openings, the securities' income), with the
+    # rows the computation adds (missing history's openings): backlog
+    # TJ-0359.
+    other = pool_other_rows_check(
+        events, base_index, source_index, origin=_origin,
+        engine_rows=[t.to_dict() for t in transactions
+                     if t.id not in base_index], **_money)
     # Unknown-cost dispositions: the books list them under MANUAL
     # REPORTING REQUIRED with no gain; the re-run's figure is fabricated
     # (cost 0 on the synthetic opening). Tie them to that list, never to
@@ -1801,6 +2182,16 @@ def main(argv=None) -> int:
         reconciliation_failures.append(
             f"{len(_pool_bad) - 5:,} more pool trades differ from their "
             f"parsed rows (--json lists each).")
+    # ...and a row that is not a trade (TJ-0359), the same way.
+    _other_bad = other.get("mismatched") or []
+    for m in _other_bad[:5]:
+        reconciliation_failures.append(
+            f"pool row {str(m['id'])[:12]} ({m.get('action')} "
+            f"{m.get('symbol')} {m.get('date')}): {m['failure']}")
+    if len(_other_bad) > 5:
+        reconciliation_failures.append(
+            f"{len(_other_bad) - 5:,} more pool rows differ from their "
+            f"parsed rows (--json lists each).")
 
     failed = any(e["failures"] for e in events) \
         or bool(reconciliation_failures)
@@ -1846,6 +2237,7 @@ def main(argv=None) -> int:
                    "manual_reporting": manual_reporting_totals(events),
                    "totals_note": totals_note(country),
                    "pool_trades": pool,
+                   "pool_other_rows": other,
                    "scope": SCOPE,
                    "reconciliation_failures": reconciliation_failures,
                    "failed": failed}),
@@ -1896,7 +2288,8 @@ def main(argv=None) -> int:
                                     bool(args.check),
                                     use_color=use_color,
                                     country=country,
-                                    brief=args.brief, pool=pool):
+                                    brief=args.brief, pool=pool,
+                                    other=other):
         print(ln)
     from taxjson.lib.out import wrap as _wrap
     for f in reconciliation_failures:

@@ -21,13 +21,21 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 def save_json_cache(path, data: Dict[str, Any], *, merge: bool = False,
+                    update: Optional[Callable[[Any], Dict[str, Any]]] = None,
                     prog: str = "taxjson", label: str = "",
                     **dump_kw) -> bool:
     """Write `data` (a dict) to `path` atomically; True when saved. A
-    failure is a stderr warning (a cache write never stops a run)."""
+    failure is a stderr warning (a cache write never stops a run).
+
+    `update(current)`: called under the lock with what the file holds
+    now (the parsed JSON; None when it is missing or unreadable), it
+    returns the dict to write — a read-modify-write no other saver can
+    interleave with (backlog TJ-0583: the FX cache wrote back the whole
+    copy it had loaded, dropping another run's new series). `data` is
+    then unused."""
     path = Path(path)
     tmp = None
     try:
@@ -38,12 +46,16 @@ def save_json_cache(path, data: Dict[str, Any], *, merge: bool = False,
         # security review, LOW b's sibling).
         from taxjson.lib.safe_write import file_lock
         with file_lock(str(path) + ".lock"):
-            if merge:
+            if merge or update is not None:
                 try:
-                    cur = json.loads(path.read_text(encoding="utf-8"))
+                    # utf-8-sig: the loaders accept a BOM; a file they
+                    # read must not read as unreadable here.
+                    cur = json.loads(path.read_text(encoding="utf-8-sig"))
                 except (OSError, ValueError):
                     cur = None
-                if isinstance(cur, dict):
+                if update is not None:
+                    data = update(cur)
+                elif isinstance(cur, dict):
                     cur.update(data)
                     data = cur
             fd, tmp = tempfile.mkstemp(prefix=path.name + ".",

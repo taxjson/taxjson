@@ -37,6 +37,7 @@ run offline.
 import csv
 import io
 import json
+import math
 import sys
 import time
 import urllib.error
@@ -515,11 +516,192 @@ def qt_positions(session: Dict[str, str], number: str,
     path = f"/v1/accounts/{seg}/positions"
     doc = _qt_get(session["api_server"], session["access_token"],
                   path, http_get)
-    return _qt_response_list(doc, "positions", path, session, seg,
-                             "no live-holdings snapshot was written")
+    items = _qt_response_list(doc, "positions", path, session, seg,
+                              "no live-holdings snapshot was written")
+    qt_check_positions(items)
+    return items
 
 
-_QT_OPT_RE = None  # compiled lazily below
+def _symbol_id(position: Dict[str, Any]) -> Optional[int]:
+    """A position's Questrade `symbolId` (a positive integer), else None."""
+    sid = position.get("symbolId")
+    if isinstance(sid, bool):
+        return None
+    if isinstance(sid, str) and sid.strip().isdigit():
+        sid = int(sid.strip())
+    return sid if isinstance(sid, int) and sid > 0 else None
+
+
+def qt_unbooked_option_ids(positions: List[Dict[str, Any]],
+                           book_symbols=frozenset()) -> List[int]:
+    """The symbolIds of the open option positions whose contract the
+    books (`book_symbols`, upper case) do not hold under any suffix:
+    the ones whose contract size only Questrade's symbol lookup can
+    give (qt_contract_sizes; backlog TJ-0614)."""
+    from taxjson.lib.core import is_option_symbol
+    book = frozenset(str(b).upper() for b in book_symbols)
+    out: List[int] = []
+    for p in positions:
+        if not isinstance(p, dict) or not _open_qty(p):
+            continue
+        sym = qt_position_symbol(str(p.get("symbol") or ""), frozenset(),
+                                 book)
+        sid = _symbol_id(p)
+        if is_option_symbol(sym) and sym.upper() not in book \
+                and sid is not None:
+            out.append(sid)
+    return out
+
+
+def qt_contract_sizes(session: Dict[str, str], symbol_ids,
+                      http_get: Callable[[str], bytes]
+                      ) -> Dict[int, Optional[float]]:
+    """The contract size Questrade's symbol lookup (GET
+    /v1/symbols?ids=...) states for each option `symbol_ids` names:
+    {symbolId: its one underlying's `multiplier`
+    (optionContractDeliverables), or None when the deliverable is not
+    one underlying's shares alone (cash in lieu, a second underlying:
+    an adjusted contract, no size in shares)}. An id the response does
+    not answer is left out (its size is not known). The positions
+    payload carries no contract size, so a mini contract the books did
+    not hold yet was costed at 100 shares (backlog TJ-0614). A
+    malformed response is a RuntimeError.
+
+    `multiplier` is the number of shares delivered, which is the
+    contract size only for a contract no corporate action adjusted: a
+    contract adjusted for a 1-for-10 reverse split delivers 10 shares
+    but its premium is still paid on 100 (backlog TJ-0670). So a
+    deliverable other than the standard 100 is the size only when the
+    contract's root (`optionRoot`, else read from its `symbol`) is its
+    underlying's symbol; an adjusted root (SYN1 on SYN), or none to
+    compare, leaves it None: not known."""
+    ids = sorted({int(i) for i in symbol_ids
+                  if isinstance(i, int) and not isinstance(i, bool)
+                  and i > 0})
+    out: Dict[int, Optional[float]] = {}
+    for k in range(0, len(ids), 100):
+        chunk = ids[k:k + 100]
+        path = "/v1/symbols?" + urllib.parse.urlencode(
+            {"ids": ",".join(str(i) for i in chunk)})
+        doc = _qt_get(session["api_server"], session["access_token"],
+                      path, http_get)
+        items = _qt_response_list(doc, "symbols", path, session, "",
+                                  "no contract size was read")
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            sid = _symbol_id(it)
+            if sid not in chunk:
+                continue
+            dlv = it.get("optionContractDeliverables")
+            und = dlv.get("underlyings") if isinstance(dlv, dict) else None
+            if not isinstance(und, list) or not und:
+                continue                # not stated: not known
+            cil = _finite(dlv.get("cashInLieu")) or 0.0
+            mult = (_finite(und[0].get("multiplier"))
+                    if isinstance(und[0], dict) else None)
+            if (len(und) != 1 or cil or mult is None or mult <= 0
+                    or (mult != 100
+                        and not _qt_unadjusted(it, und[0]))):
+                mult = None
+            out[sid] = mult
+    return out
+
+
+def _qt_unadjusted(item: Dict[str, Any], underlying: Dict[str, Any]) -> bool:
+    """True when symbol-lookup `item` (an option) is a contract no
+    corporate action adjusted: its root (`optionRoot`, else the root of
+    its Questrade `symbol`) is its one `underlying`'s symbol, a listing
+    suffix aside. An adjusted contract takes a root of its own (SYN1 on
+    SYN). False when either is not stated (qt_contract_sizes)."""
+    from taxjson.lib.markets import canadian_suffixes
+    root = item.get("optionRoot")
+    if not isinstance(root, str) or not root.strip():
+        m = _qt_opt_re().match(str(item.get("symbol") or "").strip())
+        root = m.group(1) if m else ""
+    name = underlying.get("underlyingSymbol")
+    if not isinstance(name, str):
+        return False
+    name = name.strip().upper()
+    base, dot, ext = name.rpartition(".")
+    if dot and (ext in canadian_suffixes() or ext == "US"):
+        name = base
+    root = root.strip().upper()
+    return bool(root) and root == name
+
+
+def _finite(value: Any) -> Optional[float]:
+    """`value` as a finite float, else None (a bool, None, text that is
+    no number, NaN, an infinity)."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _open_qty(position: Dict[str, Any]) -> float:
+    """A checked position's openQuantity; 0.0 for a closed one."""
+    qty = _finite(position.get("openQuantity")) or 0.0
+    return qty if abs(qty) >= 1e-12 else 0.0
+
+
+def qt_check_positions(positions: Any) -> None:
+    """Every item of a Questrade positions response is a position with a
+    symbol and a finite openQuantity (an explicit 0 is a closed
+    position), and its averageEntryPrice / currentMarketValue, when
+    given, are finite numbers. Else a RuntimeError: an item without
+    openQuantity was read as 0 and skipped, and the live-holdings
+    snapshot of an account holding 10 shares was replaced by an EMPTY
+    one at exit 0 (backlog TJ-0513)."""
+    if not isinstance(positions, list):
+        raise RuntimeError("the positions response is not a list — no "
+                           "live-holdings snapshot was written")
+    for i, p in enumerate(positions, 1):
+        if not isinstance(p, dict):
+            bad = f"is a JSON {type(p).__name__}, not a position"
+        else:
+            sym = p.get("symbol")
+            bad = ""
+            if not isinstance(sym, str) or not sym.strip():
+                bad = f"has no symbol ({sym!r})"
+            elif "openQuantity" not in p:
+                bad = f"({sym}) has no openQuantity"
+            elif _finite(p.get("openQuantity")) is None:
+                bad = (f"({sym}) openQuantity {p.get('openQuantity')!r} "
+                       f"is not a finite number")
+            else:
+                for key in ("averageEntryPrice", "currentMarketValue"):
+                    if p.get(key) is not None \
+                            and _finite(p.get(key)) is None:
+                        bad = (f"({sym}) {key} {p.get(key)!r} is not a "
+                               f"finite number")
+                        break
+        if bad:
+            raise RuntimeError(
+                f"Questrade positions item {i} {bad} — a malformed "
+                f"response; no live-holdings snapshot was written (the "
+                f"previous one is kept). Retry later.")
+
+
+_QT_OPT_RE = None  # compiled lazily (_qt_opt_re)
+
+
+def _qt_opt_re():
+    """A Questrade option symbol (SYN20Jan26C88.00): root, day, month,
+    year, right, strike."""
+    global _QT_OPT_RE
+    if _QT_OPT_RE is None:
+        import re as _re
+        # The root may carry a class share's letter(s) (SYN.B, REI.UN),
+        # as the broker parsers' option roots do (backlog TJ-0515).
+        _QT_OPT_RE = _re.compile(
+            r"^([A-Z][A-Z0-9]*(?:\.[A-Z]{1,2})?)(\d{2})([A-Z][a-z]{2})"
+            r"(\d{2})([CP])(\d+(?:\.\d+)?)$")
+    return _QT_OPT_RE
+
 
 _MONTHS = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04",
            "May": "05", "Jun": "06", "Jul": "07", "Aug": "08",
@@ -542,21 +724,23 @@ def qt_position_symbol(sym: str, to_roots=frozenset(),
     SAMPLB.TO) must not turn a US option Montreal-listed (S031-12).
     Unrecognized shapes pass through untouched so a mismatch stays
     VISIBLE in the sanity diff instead of being mangled."""
-    import re as _re
     from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
-    global _QT_OPT_RE
-    if _QT_OPT_RE is None:
-        _QT_OPT_RE = _re.compile(
-            r"^([A-Z][A-Z0-9]*)(\d{2})([A-Z][a-z]{2})(\d{2})"
-            r"([CP])(\d+(?:\.\d+)?)$")
     sym = (sym or "").strip()
-    m = _QT_OPT_RE.match(sym)
+    m = _qt_opt_re().match(sym)
     if m:
         root, dd, mon, yy, right, strike = m.groups()
         mm = _MONTHS.get(mon)
         if mm:
-            occ = (f"{root}{yy}{mm}{dd}{right}"
-                   f"{int(round(float(strike) * 1000)):08d}")
+            from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                                     encode_occ_strike)
+            try:
+                date(2000 + int(yy), int(mm), int(dd))
+                occ_strike = encode_occ_strike(strike)
+            except (ValueError, BrokerageParseError):
+                # No real contract (February 30, a strike finer than
+                # 0.001): kept as sent, a VISIBLE mismatch.
+                return sym
+            occ = f"{root}{yy}{mm}{dd}{right}{occ_strike}"
             if f"{occ}.TO" in book_symbols:
                 return f"{occ}.TO"
             if f"{occ}.US" in book_symbols:
@@ -586,10 +770,29 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                                account: str, number: str,
                                generated_at: str,
                                extra_to_roots=frozenset(),
-                               book_symbols=frozenset()) -> str:
+                               book_symbols=frozenset(),
+                               book_multipliers=None,
+                               live_sizes=None,
+                               assumed: Optional[List[str]] = None) -> str:
     """Render live positions as the holdings TOML that
     `taxjson sanity` reads ([[holding]] symbol/quantity; extra fields
-    are informational)."""
+    are informational). The positions are checked first
+    (qt_check_positions: a RuntimeError, nothing rendered).
+    `book_multipliers` ({book symbol: contract size, or None when the
+    books disagree}): an option the books hold under that exact symbol
+    gets its contract size (`multiplier`), or
+    `contract_multiplier_unknown = true` — the average price is per
+    share, and a mini contract's cost was read at the standard 100
+    (backlog TJ-0514). An option the books do not hold (opened since
+    the last run) takes the size Questrade's symbol lookup states
+    (`live_sizes`, qt_contract_sizes: {symbolId: size, or None for a
+    deliverable that is not shares alone: unknown}); with none, the
+    standard 100 is ASSUMED, said in a comment of the holding and
+    listed in `assumed` for the caller to say (backlog TJ-0614)."""
+    qt_check_positions(positions)
+    live_sizes = dict(live_sizes or {})
+    book_multipliers = {str(k).upper(): v
+                        for k, v in (book_multipliers or {}).items()}
     # Roots whose options list in Canada (Montreal): learned from .TO
     # EQUITY positions in this payload, and from Questrade's own option
     # symbols when the option's underlying root also appears as a .TO
@@ -626,17 +829,37 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
              'source = "questrade-api"',
              f"generated_at = {q(generated_at)}",
              f"holdings_count = "
-             f"{sum(1 for p in positions if p.get('openQuantity'))}"]
+             f"{sum(1 for p in positions if _open_qty(p))}"]
     for p2 in sorted(positions,
                      key=lambda x: str(x.get("symbol") or "")):
-        qty = float(p2.get("openQuantity") or 0.0)
-        if abs(qty) < 1e-12:
+        qty = _open_qty(p2)
+        if not qty:
             continue
         sym = qt_position_symbol(str(p2.get("symbol") or ""), to_roots,
                                  book_symbols)
         lines += ["", "[[holding]]",
                   f"symbol = {q(sym)}",
                   f"quantity = {qty!r}"]
+        if is_option_symbol(sym) and sym.upper() in book_multipliers:
+            mult = book_multipliers[sym.upper()]
+            lines.append("contract_multiplier_unknown = true"
+                         if mult is None else
+                         f"multiplier = {float(mult)!r}")
+        elif is_option_symbol(sym) and sym.upper() not in book_symbols:
+            # Not in the books yet: Questrade's own size, else the
+            # standard one ASSUMED and said (backlog TJ-0614).
+            sid = _symbol_id(p2)
+            if sid is not None and sid in live_sizes:
+                mult = live_sizes[sid]
+                lines.append("contract_multiplier_unknown = true"
+                             if mult is None else
+                             f"multiplier = {float(mult)!r}")
+            else:
+                lines.append("# contract size ASSUMED: 100 shares (not in "
+                             "the books yet, and Questrade's symbol "
+                             "lookup gave none)")
+                if assumed is not None:
+                    assumed.append(sym)
         # The currency of the average price, from the listing's suffix
         # (Questrade's payload carries none): without it `taxjson
         # opening` skipped every holding ("no currency for its cost")

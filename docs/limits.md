@@ -335,7 +335,7 @@ the payments listed in `[settings] ric_january_dividends` to Dec 31 (tax-logic U
 By default a spin-off is booked as a dividend at fair market value; the estimate then classifies it by the
 new company's listing. A Canadian parent's tax-deferred spin-off (a butterfly or s.86 reorganization) has
 no election of its own.
-**Instead:** elect `rollover_s_86_1` with the allocated ACB, which moves cost the same way.
+**Instead:** elect `rollover_s_86_1` with the allocated ACB, which moves cost the same way. The s.86.1 election to file is a foreign parent's only: the run's "FILING REQUIRED … when the parent is a foreign corporation" reminder does not apply to a Canadian parent's spin-off booked this way.
 **Code:** `src/taxjson/lib/corp_actions.py` — `CANADA_SPINOFF`
 
 #### IB stock-plus-cash mergers are not booked
@@ -437,15 +437,22 @@ other default (such as highest cost) are not modelled, so a 1099-B computed unde
 match per lot; year totals agree only once every lot is sold.
 **Instead:** set the broker's lot method to FIFO, or reconcile by hand.
 
-#### §1256 (60/40 mark-to-market) is not implemented
+#### §1256: year-end marking to market and the loss carryback are not implemented
 
-Futures and broad-based index options run through the ordinary FIFO engine: no year-end marking, no 60/40
-split. The US filing outputs (`tjs form-export --form 8949` / `txf`, `tjs sum`'s FOR THE RETURN block, the
-close-year lock) recognise them (plain futures, options on futures, a list of index-option roots) and keep
-them off Form 8949, listing each with its P/L for Form 6781.
-**Instead:** report them on Form 6781 from your 1099-B. An index option whose root is not in the list is
-filed as an ordinary option: add it with a ticker.map `INDEXOPT ROOT` line.
-**Code:** `src/taxjson/lib/futures.py` — `section_1256_kind`
+Futures and broad-based index options run through the ordinary FIFO engine: a contract still open on
+Dec 31 is not marked to market, and the §1212(c) election to carry a net §1256 loss back three years is
+not modelled. The US filing outputs (`tjs form-export --form 8949` / `txf`, `tjs sum`'s FOR THE RETURN
+block, the close-year lock) recognise them (plain futures, options on futures, a list of index-option
+roots) and keep them off Form 8949, listing each with its P/L for Form 6781. The same list keeps their
+losses outside the wash-sale rule (US-WASH-18): a re-purchase is flagged, never a disallowance. Form
+6781's 60/40 split is modelled: the estimate, `tjs carryover` and the close-year lock take the year's
+§1256 net as 40% short-term and 60% long-term (US-FUT-03). A lock closed before that split carries the
+net all short-term; `tjs carryover` and the estimate say so.
+**Instead:** fill in Form 6781 from your 1099-B (its marked-to-market figures for contracts open at year
+end), and make the carryback election there yourself; the carryover then differs from taxjson's. An
+index option whose root is not in the list is filed as an ordinary option: add it with a ticker.map
+`INDEXOPT ROOT` line. A lock closed before the split: close that year again with `--force`.
+**Code:** `src/taxjson/lib/futures.py` — `section_1256_kind`; `src/taxjson/lib/tax_estimate.py` — `section_1256_split`
 
 #### US estimated taxes (1040-ES) are not modeled
 
@@ -515,8 +522,9 @@ The issuer's country comes from its ISIN when the books carry one (IB rows); oth
 the dividend is booked under (`.TO` Canadian, `.US` foreign). In a Canada project tobase.map books a
 known interlisted share under its home listing, so those are right; a pair the shipped list lacks, a
 ticker.map line that keeps the two lines apart, or a depositary receipt is still classified by its
-listing. The foreign tax credit uses the books' TAX rows (15% assumed only when there are none) and is
-capped at 15% of the foreign dividends, not at the Canadian tax on them.
+listing. The foreign tax credit uses the books' TAX rows (15% assumed only when there are none, and never on a spin-off's deemed dividend), capped
+at 15% of each security's foreign dividends and at the Canadian tax on them (forms T2209 and T2036), all foreign
+dividends taken as one country's: a dividend classified on the wrong side moves both.
 **Instead:** `tjs tips` flags a Canadian payer held on its US line when it sees the `.TO` line.
 **Code:** `src/taxjson/bin/taxjson_run.py` — `_issuer_is_canadian_by_symbol`
 
@@ -601,7 +609,18 @@ has ended. Its cost amounts are the books' ACB: a transferred-in position with n
 The category (CAT) is taken from the instrument: 2 for a listed security is right for a corporation's shares,
 not always for a fund's or a trust's units, and only the units and funds the interlisted master knows are named.
 A position held only short in the year (a written option, a short sale) is named, not listed: taxjson reads it as an
-obligation, not property held (tax-logic CA-RPT-19).
+obligation, not property held (tax-logic CA-RPT-19). A Canadian issuer's shares held with a custodian outside Canada
+(`custodian_country`) are counted at that account's share of the ACB pooled over every taxable account, by its units at
+the end of each day: inside one day, the order of its trades and another account's is not followed.
+The cash an account in the books holds outside Canada (a crypto account's, or one whose `custodian_country` is
+outside Canada) is counted at its cost (tax-logic CA-RPT-20) only as far as the books give it: a foreign currency's
+cost is the FX-on-cash ledger v2's, so where that ledger refuses the row's cost is unknown and the verdict is
+NOT SETTLED until `tjs fx-cash --ledger v2` computes; Canadian dollars need an opening (a `CASHOPEN` line or a
+statement balance) and the year's statement balances, else the account's cash is named as not counted, to add
+by hand. The cash is read at the end of each day, a fall before the day's trades and a rise after them: money
+that left and came back within one day is not seen. Interest credited on the cash is its row's income; a negative
+INTEREST row is read as interest charged on a debit balance (margin interest, no row's income), so a reversal of
+credited interest booked that way is not taken off the income.
 **Instead:** add the property held elsewhere yourself; declare the real history of transferred-in shares;
 check each property's category and set another with `T1135 SYMBOL COUNTRY CATEGORY` in ticker.map.
 **Code:** `src/taxjson/bin/taxjson_t1135.py` — `build_report`, `property_category`
@@ -641,7 +660,7 @@ The figures go on real returns, so correctness is checked in layers, not by test
   ACB or FIFO and the superficial-loss / wash-sale decision, and ties each figure to the pipeline's
   saved gains; any disagreement exits 1. The other filing commands (`sum`, `carryover`, `form-export`,
   `t1135`) are checked against it.
-- **9,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
+- **10,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
   failed before it. This figure is the one the deck and the website quote (`tests/test_deck.py`).
 - **Property fuzzers.** Seeded generators build thousands of random books per run and check
   conservation, determinism and ordering laws (the engine, custody transfers, settlement-lag and split

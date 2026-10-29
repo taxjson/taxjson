@@ -16,7 +16,6 @@ filing.
 import io
 import os
 import sys
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

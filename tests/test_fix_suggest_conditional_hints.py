@@ -239,8 +239,12 @@ class TestCoveredHeading(unittest.TestCase):
                                 "--json").stdout)
             self.assertEqual([k["by"] for k in js["skipped"]],
                              ["suggestion"])
+            # A map line answers a suggestion whose words carry its own
+            # (it moves every row the suggestion would): "DLR FUND" is
+            # in both. "QZ DLR FUND" alone is not in "QZ US DLR FUND
+            # UNITS", so it would leave those rows (backlog TJ-0438).
             (root / "ticker.map").write_text(
-                "EXTRACT QZ DLR FUND | USD | QZD.U.TO\n")
+                "EXTRACT DLR FUND | USD | QZD.U.TO\n")
             r = cli(root, "ticker-map", "--suggest")
             self.assertIn("Already answered by ticker.map (2)", r.stdout)
             self.assertNotIn("Covered by another suggestion", r.stdout)

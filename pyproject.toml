@@ -1,6 +1,6 @@
 [project]
 name = "taxjson"
-version = "0.37.0"
+version = "0.38.0"
 description = "Capital gains, dividend income, and wash-sale / superficial-loss computation from brokerage CSVs (Canada + US)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -52,9 +52,9 @@ fx = [
 ]
 # XLSX → CSV preprocessor (taxjson-xlsx-to-csv). Some brokerages ship
 # statements only as Excel; convert with this tool before
-# taxjson-brokerage.
+# taxjson-brokerage. It reads the sheet with openpyxl alone (backlog
+# TJ-0534, TJ-0617).
 xlsx = [
-    "pandas>=1.5",
     "openpyxl>=3.0",
 ]
 # Maintainer tool: AI-aided parser scaffolding (taxjson-generate-parser).
@@ -72,7 +72,7 @@ ibkr = [
 # Test/CI dependencies beyond the runtime extras.
 # Full suite: pip install -e ".[all,dev]".
 dev = [
-    # The ci.sh / workflow lint stage (critical tier); a missing linter
+    # The ci.sh / workflow lint stage (critical tier, unused imports); a missing linter
     # fails the gate.
     "ruff>=0.4",
 ]

@@ -366,7 +366,7 @@ class TestWebullThroughRun(unittest.TestCase):
                     canada={"source_currencies": ["USD"],
                             "option_premium_timing": "grant",
                             "option_grant_timing_since": 2025})
-                _usd_rates(ps[C.CANADA] / "work" / "to_base.csv")
+                _usd_rates(ps[C.CANADA] / "work" / "to_base.csv", td)
                 for c, root in ps.items():
                     r = _run_offline(root, td, "run", "--no-input")
                     self.assertEqual(r.returncode, 0, r.stderr[-2000:])

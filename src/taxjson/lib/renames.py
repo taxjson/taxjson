@@ -940,6 +940,45 @@ def _project_country(cfg: Dict[str, Any]) -> str:
         return ""
 
 
+def _denied_into_cost(root: Path, cfg: Dict[str, Any]
+                      ) -> Dict[str, List[Tuple[str, float]]]:
+    """{symbol: [(loss date, amount)]}: the denied losses (superficial
+    in Canada, wash sales in the US) the taxable gains files add to a
+    replacement's cost — the part not denied for good. The rename's
+    book cost is a replay of the trades without them (`_walk_states`),
+    so the view says so when there is one (backlog TJ-0357). A gains
+    file that cannot be read adds nothing: this is a note, not a
+    figure."""
+    import json as _json
+    from taxjson.lib.report_model import resolve_gains_files
+    accounts = cfg.get("accounts") or {}
+    out: Dict[str, List[Tuple[str, float]]] = {}
+    try:
+        files = resolve_gains_files(Path(root) / "work", None) or {}
+    except Exception:                                   # noqa: BLE001
+        return out
+    for acct, f in files.items():
+        if (accounts.get(acct) or {}).get("type") != "taxable":
+            continue
+        try:
+            doc = _json.loads(Path(f).read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        rows = doc.get("transactions") if isinstance(doc, dict) else None
+        for g in rows if isinstance(rows, list) else []:
+            if not isinstance(g, dict):
+                continue
+            try:
+                kept = (float(g.get("disallowed_amount") or 0)
+                        - float(g.get("permanently_disallowed") or 0))
+            except (TypeError, ValueError):
+                continue
+            if kept > 0.005 and g.get("symbol"):
+                out.setdefault(str(g["symbol"]), []).append(
+                    (str(g.get("date") or "")[:10], kept))
+    return out
+
+
 def report(root: Path, cfg: Dict[str, Any],
            account: Optional[str] = None, *,
            undated: bool = True, hints: bool = True) -> Dict[str, Any]:
@@ -965,6 +1004,10 @@ def report(root: Path, cfg: Dict[str, Any],
     for acct, rs in by_acct.items():
         snaps.update(_walk_states(rs, _country))
     accounts = cfg.get("accounts") or {}
+    # The view's note only: the late-trade checks (hints=False: the
+    # run's, edge-cases') read the gains files mid-run, before the
+    # blended pass rebuilds them, and warned they were stale.
+    denied = _denied_into_cost(root, cfg) if hints else {}
     out_events = []
     for e in events:
         if account and account not in e["accounts"]:
@@ -991,6 +1034,11 @@ def report(root: Path, cfg: Dict[str, Any],
                             if x in ids), "broker"),
             "ticker_map_lines": lines, "accounts": e["accounts"],
             "carried": carried, "currency": base_cur,
+            # Denied losses on the old symbol by the rename date that
+            # the books add to a replacement's cost: not in book_cost.
+            "denied_not_in_cost": round(sum(
+                a for d, a in denied.get(e["old"], [])
+                if d and d <= e["date"]), 2),
             "late": declared_late(dated, e, ren)})
     late = []
     for r, e in late_rows(rows, events, _project_country(cfg)):
@@ -1123,6 +1171,15 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                     f"carried")
             d.item(f"{c['account']}: held {c['qty']:g} {e['old']} "
                    f"-> {c['qty_after']:g} {e['new']}{cost}", "  ")
+        _dn = float(e.get("denied_not_in_cost") or 0)
+        if _dn > 0.005 and any(not c["sheltered"] for c in e["carried"]):
+            # The book cost is the trades' replay: a denied loss the
+            # books add to the replacement's cost is not in it (backlog
+            # TJ-0357), so it can differ from `tjs list`.
+            _hang(d, f"Book cost is as bought: the {_dn:,.2f} of denied "
+                     f"losses on {e['old']} by {e['date']} is in the "
+                     f"replacement shares' cost in the books, not here "
+                     f"(`tjs list` shows the adjusted cost).", "  ", "  ")
         mine = [x for x in late if x["symbol"] and x["rename_date"]
                 == e["date"] and x["renamed_to"] == e["new"]]
         if mine:

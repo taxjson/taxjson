@@ -316,7 +316,7 @@ class TestQuarterlyRateResets(unittest.TestCase):
         self.assertEqual(len(stepped["rate_schedule"]), 2)
 
     def test_report_names_every_rate_it_used(self):
-        from taxjson.bin.taxjson_instalments import build, render
+        from taxjson.bin.taxjson_instalments import build
         doc = build(year=2026, basis="current_year",
                     current_net_tax=80000.0, payments=[],
                     annual_rate=[{"from": "2026-01-01", "rate": 0.08},
@@ -363,7 +363,6 @@ class TestInterestUsesTheCheapestBasis(unittest.TestCase):
         self.assertGreater(doc["net_interest"], 0.0)
 
     def test_report_explains_the_governing_basis(self):
-        from taxjson.bin.taxjson_instalments import render
         paid = [{"date": "2026-03-16", "amount": 10000.0,
                  "note": "2025 refund transferred"}]
         doc = build(year=2026, basis="current_year",
@@ -409,7 +408,6 @@ class TestRequirementTest(unittest.TestCase):
         self.assertEqual(doc["prior_year_test"], "unknown")
 
     def test_report_names_the_failing_limb_and_the_placeholder_risk(self):
-        from taxjson.bin.taxjson_instalments import render
         doc = build(year=2026, basis="current_year",
                     current_net_tax=81000.0, prior_net_tax=0.0,
                     second_prior_net_tax=0.0, payments=[],
@@ -661,7 +659,6 @@ class TestRenderBranches(unittest.TestCase):
     """Four render paths no test had ever executed."""
 
     def _r(self, **kw):
-        from taxjson.bin.taxjson_instalments import render
         base = dict(year=2026, basis="current_year", payments=[],
                     annual_rate=0.08, as_of=date(2026, 8, 27))
         base.update(kw)

@@ -32,10 +32,10 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, time as dtime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib import market_calendar as mc
-from taxjson.lib.dates import settlement_date
+from taxjson.lib.dates import settlement_calendar, settlement_date
 
 TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 
@@ -132,6 +132,30 @@ def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:
     return out
 
 
+# The source label of an account whose sources list is lost (TJ-0395).
+SOURCES_LIST_LABEL = "sources list"
+# The files a run writes for an account it read (taxjson_run's
+# _NATIVE_TX_SUFFIXES, and the base-currency books).
+_BOOK_SUFFIXES = ("_raw.json", "_filled.json", "_sorted.json", "_base.json")
+
+
+def _lost_sources_list(cache: Path, account: str) -> str:
+    """Why work/<account>_sources.list cannot name the account's parsed
+    sources although the run built its books ("is missing", "cannot be
+    read"); "" when it can, or when the account has no books (the
+    command's no-books warning names that one)."""
+    lst = cache / f"{account}_sources.list"
+    if not any((cache / f"{account}{s}").is_file() for s in _BOOK_SUFFIXES):
+        return ""
+    if not lst.exists() and not lst.is_symlink():
+        return "is missing"
+    try:
+        lst.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "cannot be read"
+    return ""
+
+
 def asset_class(symbol: str, crypto_account: bool) -> str:
     from taxjson.lib.core import is_option_symbol
     from taxjson.lib.futures import _FUTURES_PREFIXES
@@ -160,6 +184,14 @@ def _market(cls: str, symbol: str, currency: str) -> Optional[str]:
         return "CAD" if (symbol or "").upper().endswith(CA_SUFFIXES) \
             else "USD"
     return (currency or "").upper() or None
+
+
+def _calendar(cls: str, symbol: str, currency: str) -> Optional[str]:
+    """The settlement calendar of a row: its market's, and a US-dollar
+    trade on a Canadian market's the days both Canada and the US settle
+    (lib/dates.settlement_calendar, the parsers' rule; TJ-0705)."""
+    mkt = _market(cls, symbol, currency)
+    return settlement_calendar(symbol, currency, market=mkt) if mkt else mkt
 
 
 def check_trade_time(cls: str, d: date, t: Optional[dtime], symbol: str,
@@ -236,7 +268,7 @@ def _tt_settle_horizon(today: date, cls: str, symbol: str,
     settlement date of a trade made today (crypto and futures: today)."""
     if cls in ("crypto", "futures"):
         return today
-    mkt = _market(cls, symbol, currency) or "USD"
+    mkt = _calendar(cls, symbol, currency) or "USD"
     return _d(settlement_date(today.isoformat(), mkt,
                               cls == "option")) or today
 
@@ -282,6 +314,19 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
         if account and acct != account:
             continue
         crypto = bool((acfg or {}).get("crypto"))
+        lost = _lost_sources_list(cache, acct)
+        if lost:
+            # The run built the account's books, but the list naming its
+            # parsed sources is gone: the account is evidence not
+            # checked, never left out with "every date lands where its
+            # market allows" (backlog TJ-0395).
+            per_source[f"{acct}: {SOURCES_LIST_LABEL}"] = 0
+            add("ERROR", "missing",
+                f"work/{acct}_sources.list {lost}: the parsed sources of "
+                f"{acct} cannot be found, so none of its dates were "
+                f"checked — re-run `taxjson run`", acct, SOURCES_LIST_LABEL,
+                {"symbol": "-", "action": "-", "date": "-"})
+            continue
         for kind, label, path in sources(cache, acct):
             if (kind in ("tt", "broker") and not path.exists()
                     and not path.is_symlink()):
@@ -421,7 +466,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                             if kind == "tt" else ""), acct, label, r)
                     continue
                 if not _settle_day_anywhere(sd):
-                    _mk = _market(cls, sym, cur) or "USD"
+                    _mk = _calendar(cls, sym, cur) or "USD"
                     _nx = settlement_date(sd.isoformat(), _mk,
                                           cls == "option")
                     add("WARN", "settle-holiday",
@@ -441,15 +486,17 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                     from taxjson.lib.core import parse_option_expiry
                     if (parse_option_expiry(sym) or "") == sd.isoformat():
                         continue   # settlement capped at expiry
-                mkt = _market(cls, sym, cur) or "USD"
+                mkt = _calendar(cls, sym, cur) or "USD"
                 expect = _d(settlement_date(td.isoformat(), mkt,
                                             cls == "option"))
                 # A Canadian dealer (RBC) dates US trades on the Canadian
-                # calendar: the standard cycle on either calendar is fine.
-                other = _d(settlement_date(td.isoformat(),
-                                           "CAD" if mkt == "USD" else "USD",
-                                           cls == "option"))
-                if expect and sd not in (expect, other):
+                # calendar, and a TSX US-dollar trade may be dated on
+                # either calendar alone: the standard cycle on any of
+                # them is fine.
+                others = {_d(settlement_date(td.isoformat(), k,
+                                             cls == "option"))
+                          for k in ("CAD", "USD") if k != mkt}
+                if expect and sd != expect and sd not in others:
                     lag_days = (sd - td).days
                     if lag_days > 7:
                         add("WARN", "settle-late",

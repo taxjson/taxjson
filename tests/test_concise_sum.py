@@ -3,7 +3,6 @@ before the tables, at most six non-table lines, one `! ` line per
 warning, and --details printing every note the default leaves out."""
 import unittest
 
-import _style
 from _style import assert_concise, project
 
 

@@ -11,7 +11,6 @@ from taxjson.lib.corporate_timeline import (
     SplitTimeline,
     cumulative_factor,
     normalize_symbol_new,
-    split_event_key,
 )
 
 

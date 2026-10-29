@@ -5,7 +5,6 @@ all) and then sent the ORIGINAL sample. The provider call is mocked:
 no network. Every name and id below is synthetic."""
 import contextlib
 import io
-import os
 import sys
 import tempfile
 import unittest

@@ -20,11 +20,7 @@
 """
 import contextlib
 import io
-import json
 import os
-import subprocess
-import sys
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

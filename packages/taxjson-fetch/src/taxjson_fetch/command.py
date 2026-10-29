@@ -174,7 +174,12 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
         # EQUITY in the books no longer does: a CDR (SAMPLB.TO) made the
         # account's US SAMPLB option .TO live vs .US in the books, a
         # false verify mismatch every run (S031-12).
+        # The books' contract size of each option (backlog TJ-0514): a
+        # mini or adjusted contract's live cost is its per-share average
+        # times that size, not the standard 100; sizes that disagree
+        # leave the cost unknown (None).
         _book_syms = set()
+        _sizes: Dict[str, set] = {}
         try:
             import json as _json
             _bp = cache / f"{a}_base.json"
@@ -184,18 +189,54 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                     _sym = str(_r.get("symbol") or "").upper()
                     if _sym:
                         _book_syms.add(_sym)
+                        _m = F._finite(_r.get("multiplier"))
+                        if _m is not None and _m > 0:
+                            _sizes.setdefault(_sym, set()).add(_m)
         except Exception:
             pass
-        text = F.positions_to_holdings_toml(
-            positions, a, number,
-            _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-            book_symbols=_book_syms)
+        _book_mult = {s: (next(iter(v)) if len(v) == 1 else None)
+                      for s, v in _sizes.items()}
+        # An option the books do not hold yet: the contract size
+        # Questrade's symbol lookup states (the positions carry none; a
+        # mini contract was costed at 100 shares, backlog TJ-0614). A
+        # lookup that fails leaves the standard size assumed, and said.
+        _live_sizes: Dict[int, Optional[float]] = {}
+        _lookup_err = ""
+        _opt_ids = F.qt_unbooked_option_ids(positions, _book_syms)
+        if _opt_ids:
+            try:
+                _live_sizes = F.qt_contract_sizes(qt_session, _opt_ids,
+                                                  http)
+            except RuntimeError as e:
+                _lookup_err = str(e)
+        _assumed: List[str] = []
+        try:
+            text = F.positions_to_holdings_toml(
+                positions, a, number,
+                _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                book_symbols=_book_syms, book_multipliers=_book_mult,
+                live_sizes=_live_sizes, assumed=_assumed)
+        except RuntimeError as e:
+            _die(f"{a}: {e}")
         out_dir.mkdir(parents=True, exist_ok=True)
         toml_path = out_dir / f"{a}_live_holdings.toml"
         F.write_private(toml_path, text)
-        n = sum(1 for pz in positions if pz.get("openQuantity"))
+        n = sum(1 for pz in positions if F._open_qty(pz))
         say(f"  {a}: {n} live position(s) -> "
             f"{_shown(toml_path, root)}")
+        if _assumed:
+            # backlog TJ-0614: the size the snapshot's cost uses, said.
+            say(f"  note: {a}: {len(_assumed)} option(s) not in the books "
+                f"yet ({', '.join(_assumed[:4])}"
+                f"{', ...' if len(_assumed) > 4 else ''}): the contract "
+                f"size is ASSUMED to be 100 shares, as Questrade's symbol "
+                f"lookup "
+                + (f"failed ({_lookup_err})" if _lookup_err else
+                   "gave none")
+                + "; a mini or an adjusted contract's cost is wrong "
+                  "until then. Once `taxjson run` has its trade in the "
+                  "books, `taxjson fetch --positions` takes the books' "
+                  "size.")
         out[a] = toml_path
     _year = (cfg.get("settings") or {}).get("year")
     if out and isinstance(_year, int) and _year < _dt.now().year:
@@ -370,7 +411,14 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
     ids and never dedup — coexisting coverage double-counts the books.
     Another Questrade account's rows in the folder (its manual export)
     are not this fetch's: counted by date alone, --trim-overlap deleted
-    them from the active books (audit 2026-10-24 B28)."""
+    them from the active books (audit 2026-10-24 B28).
+
+    A row the fetch itself wrote (Account Type `API`, qt_to_csv) is not
+    counted: API-written rows are formatted identically, hash to the
+    same ids, and DO dedup. That is decided by the row, not by the
+    file's name: every questrade_YYYY.csv was skipped as a fetch file,
+    so a manual export saved under that name was never checked
+    (backlog TJ-0516)."""
     hits: List[Tuple[Path, int]] = []
     import csv as _csv
     import io as _io
@@ -380,13 +428,6 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
     # the books with no warning (S046-14).
     for sib in input_files(acct_dir, ".csv"):
         if sib == out:
-            continue
-        if re.fullmatch(r"questrade_\d{4}\.csv", sib.name):
-            # A prior tax year's OWN fetch file: API-written rows are
-            # formatted identically, hash to the same ids, and DO
-            # dedup — warning about it (every fetch, after a year
-            # rollover) was a false alarm whose advice would trim an
-            # API file needlessly.
             continue
         try:
             if detect_broker(sib) != "questrade":
@@ -399,13 +440,31 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
             continue
         col = _qt_date_col(rows[0] if rows else [])
         acol = _qt_account_col(rows[0] if rows else [])
+        tcol = _qt_type_col(rows[0] if rows else [])
         n = sum(1 for r in rows[1:]
                 if len(r) > col
                 and _row_date_in_window(r[col], start_iso, end_iso)
-                and _row_of_account(r, acol, number))
+                and _row_of_account(r, acol, number)
+                and not _row_from_api(r, tcol))
         if n:
             hits.append((sib, n))
     return hits
+
+
+def _qt_type_col(header: List[str]) -> Optional[int]:
+    """Index of Questrade's "Account Type" column, by header name."""
+    for i, h in enumerate(header):
+        if h.strip().lstrip("﻿").lower() == "account type":
+            return i
+    return None
+
+
+def _row_from_api(row: List[str], tcol: Optional[int]) -> bool:
+    """Whether a Questrade row is one `taxjson fetch` wrote: its Account
+    Type cell is `API` (qt_to_csv). A manual export names the plan
+    (Margin, TFSA ...)."""
+    return (tcol is not None and len(row) > tcol
+            and row[tcol].strip() == "API")
 
 
 def _qt_sibling_text(path: Path) -> str:
@@ -501,11 +560,15 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str, number: str, *,
             f"rows are account #{F.mask_account_number(number)}'s; not "
             f"trimmed. Remove its rows dated {start_iso}..{end_iso} by "
             f"hand (the fetched file holds them)")
+    # The fetch's own rows (Account Type API) dedup: kept, as
+    # _qt_window_overlap does not count them (backlog TJ-0516).
+    tcol = _qt_type_col(rows[0] if rows else [])
     keep = [rows[0]] + [r for r in rows[1:]
                         if not (len(r) > col
                                 and _row_date_in_window(r[col], start_iso,
                                                         end_iso)
-                                and _row_of_account(r, acol, number))]
+                                and _row_of_account(r, acol, number)
+                                and not _row_from_api(r, tcol))]
     removed = len(rows) - len(keep)
     if removed:
         # Never clobber an existing backup: a second --trim-overlap

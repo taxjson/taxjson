@@ -155,8 +155,11 @@ class TestCaTradeBasisConsumers(unittest.TestCase):
     @rule("CA-RPT-01")
     def test_t1135_trade_order_needs_no_split_re_denomination(self):
         # A split (dated Jun 2, settling Jun 3) and a buy of 10 made later
-        # that day (settling Jun 4): on trade dates the buy is after the
-        # split, already in post-split units — never scaled again.
+        # that day (settling Jun 4). The walk once replayed trade order
+        # (the buy after the split: 210 units, 5761.90 left); it reads the
+        # engine's pools now (backlog TJ-0417), and the engine books the
+        # buy through the split inside its settlement lag on either basis
+        # (20 post-split shares): 220 units, 120 left at 6000.
         from taxjson.bin import taxjson_t1135 as T1
 
         def t(a, d, s, q, net, time="10:00:00"):
@@ -168,10 +171,10 @@ class TestCaTradeBasisConsumers(unittest.TestCase):
                   time="00:00:00"),
                 t("BUYSELL", "2025-06-02", "2025-06-04", 10, -1000.0),
                 t("BUYSELL", "2025-08-01", "2025-08-04", -100, 6000.0)]
-        w = T1.walk_costs(rows, 2025, {}, "trade")
-        # 210 units at 11,000; 100 sold -> 110/210 of the cost remains.
+        with contextlib.redirect_stderr(io.StringIO()):
+            w = T1.walk_costs(rows, 2025, {}, "trade")
         self.assertAlmostEqual(w["per_symbol"]["ZZ.US"]["year_end_cost"],
-                               5761.90, places=2)
+                               6000.0, places=2)
 
     def test_checklist_wash_step(self):
         from taxjson.lib import checklist as cl

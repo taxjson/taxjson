@@ -244,9 +244,11 @@ class TestReinvestmentKeepsTheNativeBooksSingleCurrency(unittest.TestCase):
                 canada={'source_currencies': ['USD']},
                 usa={'source_currencies': ['CAD']})[country]
             if country == 'canada':
-                _rates(root / 'work' / 'to_base.csv', 'USD CAD', '1.2500')
+                _rates(root / 'work' / 'to_base.csv', 'USD CAD', '1.2500',
+                       self.addCleanup)
             else:
-                _rates(root / 'work' / 'to_base.csv', 'CAD USD', '0.8000')
+                _rates(root / 'work' / 'to_base.csv', 'CAD USD', '0.8000',
+                       self.addCleanup)
             r = cli(root, 'run', '--no-input')
             out = _flat(r.stdout + r.stderr)
             self.assertEqual(r.returncode, 0, out[-3000:])

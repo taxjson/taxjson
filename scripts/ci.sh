@@ -3,10 +3,13 @@
 # same lint, consistency, PII (generic patterns: no private denylist on a
 # hosted runner) and suite stages for pull requests on the public repo.
 #
-#   scripts/ci.sh            lint + full suite (core and the packages/
-#                            fetch plugin; an empty HOME, offline) + the
-#                            extras-sensitive tests with no extras
-#                            + fuzzers at CI depth
+#   scripts/ci.sh            every stage: lint, consistency (release
+#                            files), tax-rules (the spec gate), pii (the
+#                            tree scan), the full suite (an empty HOME,
+#                            offline), no-extras (the extras- and
+#                            plugin-sensitive tests as a core install),
+#                            fetch-plugin (the packages/ plugin's own
+#                            tests) and the fuzzers at CI depth
 #   scripts/ci.sh --nightly  ...fuzzers at nightly depth (minutes)
 #   scripts/ci.sh --mutation ...plus the mutation harness (an hour+;
 #                            mutates engine files in place — run it
@@ -109,6 +112,16 @@ finish() {  # the history log, the PASS record, the result line; exits
 mkdir -p "$CI_TMP/home/.cache"
 SUITE_ENV=(env HOME="$CI_TMP/home" XDG_CACHE_HOME="$CI_TMP/home/.cache"
            XDG_CONFIG_HOME="$CI_TMP/home/.config" TAXJSON_OFFLINE=1)
+# The suite without the broker-fetch plugin, as every GitHub job runs it
+# (they install taxjson-fetch only after the suite), though the dev venv
+# has it (scripts/dev-setup.sh: its dist-info, and the egg-info an
+# editable build leaves in packages/taxjson-fetch/src): a sitecustomize
+# first on PYTHONPATH hides its distribution and its module
+# (scripts/hide_optional.py; backlog TJ-0594). The extras stay: the
+# all-extras job has them, the no-extras stage hides them. Only the
+# fetch-plugin stage sees the plugin.
+"$PY" -I scripts/hide_optional.py "$CI_TMP/hide" --plugin taxjson_fetch || exit 2
+NO_PLUGIN=(PYTHONPATH="$CI_TMP/hide${PYTHONPATH:+:$PYTHONPATH}")
 
 # release.sh, reusing a PASS of the tree before its edits: the edits
 # are only version, tag and date lines (release.sh proves it), so what
@@ -118,20 +131,24 @@ SUITE_ENV=(env HOME="$CI_TMP/home" XDG_CACHE_HOME="$CI_TMP/home/.cache"
 if [ "$MODE" = release-edits ]; then
   stage consistency bash scripts/check-consistency.sh
   # shellcheck disable=SC2046
-  stage release-edit-tests "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
+  stage release-edit-tests "${SUITE_ENV[@]}" "${NO_PLUGIN[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
     $(grep -lE 'CHANGELOG|troubleshooting\.md|upgrading\.md|pyproject|__version__|--version|importlib\.metadata|_version\(' tests/test_*.py \
       | sed 's#^tests/##; s#\.py$##')
   finish
 fi
 
-# 1. Lint, critical tier only (syntax errors, undefined names,
-#    misused comparisons) — the class of defect audits kept finding.
+# 1. Lint, the critical tier (syntax errors, undefined names, misused
+#    comparisons) — the class of defect audits kept finding — and unused
+#    imports (F401: 199 had piled up unseen, TJ-0593). An import kept for
+#    a re-export, a side effect or an availability check carries
+#    `# noqa: F401  (why)`. tests.yml's lint job runs the same line
+#    (tests/test_fix_1029_r5_imports.py holds them equal).
 #    A missing linter FAILS the stage (it used to print 'skipped' and
 #    the gate stayed green; release.sh tags on that). scripts/dev-setup.sh
 #    installs the dev lock's ruff (requirements/dev.txt), the one CI's lint
 #    job installs; another version here is named (S024-23).
 if "$PY" -m ruff --version >/dev/null 2>&1; then
-  stage lint "$PY" -m ruff check --select E9,F63,F7,F82 src/ tests/ packages/
+  stage lint "$PY" -m ruff check --select E9,F63,F7,F82,F401 src/ tests/ scripts/ packages/
   RUFF_HERE="$("$PY" -m ruff --version 2>/dev/null | sed -n 's/^ruff //p')"
   RUFF_LOCK="$(sed -n 's/^ruff==\([^ ;\\]*\).*/\1/p' requirements/dev.txt 2>/dev/null | head -1)"
   if [ -n "$RUFF_LOCK" ] && [ "$RUFF_HERE" != "$RUFF_LOCK" ]; then
@@ -161,10 +178,12 @@ stage pii bash scripts/check-pii.sh
 SUITE_ARGS=()
 if [ -n "$SERIAL" ]; then SUITE_ARGS=(--serial)
 elif [ -n "${TAXJSON_TEST_JOBS:-}" ]; then SUITE_ARGS=(--jobs "$TAXJSON_TEST_JOBS"); fi
-stage suite "${SUITE_ENV[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
+stage suite "${SUITE_ENV[@]}" "${NO_PLUGIN[@]}" TAXJSON_WIDTH=0 "$PY" scripts/run_tests_parallel.py \
   ${SUITE_ARGS[@]+"${SUITE_ARGS[@]}"}
-# The tests that touch an optional extra, with every extra hidden, as
-# GitHub's matrix jobs install taxjson (seconds; scripts/ci_no_extras.sh).
+# The tests that touch an optional extra or the broker-fetch plugin, with
+# every extra and the plugin hidden, as GitHub's matrix jobs run the suite
+# (a core install; taxjson-fetch is installed only after the suite) —
+# seconds, in parallel (scripts/ci_no_extras.sh).
 stage no-extras bash scripts/ci_no_extras.sh "$PY"
 # The broker-fetch plugin (packages/taxjson-fetch): its own tests, run
 # from the checkout whether or not it is pip-installed here (its

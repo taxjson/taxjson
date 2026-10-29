@@ -164,9 +164,9 @@ class TestSumEstimateCli(unittest.TestCase):
                 {"symbol": "AAA.TO", "qty": -1, "date": "2026-05-02",
                  "gain": 30000.0, "cost": 1.0,
                  "proceeds": 2.0, "currency": "CAD", "days_held": 400},
-                {"action": "DIVIDEND", "symbol": "AAA.TO",
+                {"action": "DIVIDEND", "date": "2026-03-02", "symbol": "AAA.TO",
                  "dividend": 1000.0, "currency": "CAD"},
-                {"action": "DIVIDEND", "symbol": "KO.US",
+                {"action": "DIVIDEND", "date": "2026-03-02", "symbol": "KO.US",
                  "dividend": 500.0, "currency": "CAD"}]}))
         # Sheltered gains must NOT leak into the estimate.
         (root / "work" / "rrsp_gains.json").write_text(json.dumps({
@@ -564,7 +564,6 @@ class TestAmtLossCapAndWidth(unittest.TestCase):
             - half["amt"]["adjusted_income"], 100000.0, places=2)
 
     def test_binding_amt_block_fits_the_house_width(self):
-        import io
         import subprocess
         import sys
         import tempfile

@@ -249,6 +249,31 @@ def project_of_input(path) -> Optional[Path]:
     return None
 
 
+# The stem ending of the copy `taxjson redact FILE` writes (NAME.redacted.EXT).
+REDACTED_STEM = ".redacted"
+_INPUT_SUFFIXES = (".csv", ".tt")
+
+
+def redacted_copy_beside_exports(path) -> bool:
+    """`path` is a NAME.redacted.EXT copy `taxjson redact FILE` wrote
+    beside the exports it was made from: its folder also holds an
+    activity file (.csv / .tt) that is no redacted copy. Never an
+    input: its rows are the export's again under placeholder ids, so
+    the run booked them twice (backlog TJ-0476). A folder holding only
+    redacted copies (a sample project) is read as it is."""
+    p = Path(path)
+    if not p.stem.lower().endswith(REDACTED_STEM):
+        return False
+    try:
+        kids = list(p.parent.iterdir())
+    except OSError:
+        return False
+    return any(q.suffix.lower() in _INPUT_SUFFIXES
+               and not q.stem.lower().endswith(REDACTED_STEM)
+               and not q.name.startswith((".", "~$")) and q.is_file()
+               for q in kids)
+
+
 def is_account_folder(folder) -> bool:
     """`folder` is an inputs/<account>/ folder: of a folder named
     inputs, or of the shared inputs folder of the project
@@ -763,10 +788,18 @@ def account_order(here: Dict[str, Any], there: Dict[str, Any]
     return None if a == b else {"here": a, "there": b}
 
 
+def _account_names(doc: Dict[str, Any]) -> List[str]:
+    """The [accounts.NAME] names of a parsed taxjson.toml, in order."""
+    a = doc.get("accounts")
+    return [str(n) for n in a] if isinstance(a, dict) else []
+
+
 def compare(here: Path, other: Path) -> Dict[str, Any]:
     """What differs between two projects' ticker.map rules and
     taxjson.toml keys (`taxjson align`, `taxjson years --diff`): rules
-    only in one, keys set differently (`year`, prior_year_record, the
+    only in one, the accounts only one has (`accounts_only_here`,
+    `accounts_only_there`: listed whole, their keys never compared),
+    keys set differently (`year`, prior_year_record, the
     year's own tables and the accounts' holdings and broker ids left
     out: _compared; a frozen filed year's inputs_dir and tobase_map
     too: _FROZEN_KEYS; arrays of tables compared whole), and the order of
@@ -795,8 +828,15 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     apart = _FROZEN_KEYS if (frozen_project(here, da.get("settings"))
                              or frozen_project(other, db.get("settings"))
                              ) else ()
+    # An account only one year has is listed whole, never its keys: a
+    # key brought over to "(not set)" commented out its required `type`
+    # and the next run stopped (backlog TJ-0349).
+    na, nb = _account_names(da), _account_names(db)
+    lone = set(na) ^ set(nb)
     keys = sorted((k for k in set(fa) | set(fb)
                    if _compared(k) and k not in apart
+                   and not (k[0] == "accounts" and len(k) > 1
+                            and k[1] in lone)
                    and fa.get(k) != fb.get(k)),
                   key=lambda p: (key_text(p), p))
     return {
@@ -804,6 +844,8 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
         "map_only_there": [r for r in b if r not in a],
         "tobase_only_here": [r for r in ta if r not in set(tb)],
         "tobase_only_there": [r for r in tb if r not in set(ta)],
+        "accounts_only_here": [n for n in na if n not in nb],
+        "accounts_only_there": [n for n in nb if n not in na],
         "keys": [{"key": key_text(k), "path": list(k),
                   "here": fa.get(k), "there": fb.get(k)} for k in keys]
         + ([{"key": ACCOUNT_ORDER_KEY, "path": ["accounts"], "order": True,
@@ -1320,7 +1362,11 @@ def frozen_from_shared(d, year) -> bool:
     """frozen_year, with the exports copied from a folder shared by
     every year (the lock's `frozen` record names the `inputs_dir` it
     stopped reading): the year's own inputs/ is that folder's copy,
-    later years' rows and all (backlog TJ-0013)."""
+    later years' rows and all (backlog TJ-0013). So is a year frozen
+    as a single-folder project and then moved into its year folder by
+    `migrate --to-years` (its lock names no shared folder): its inputs/
+    is a copy of the inputs/ beside the year folders, which the years
+    after it read (new-year reads it so; backlog TJ-0435)."""
     import json
     try:
         doc = json.loads((Path(d) / "filed" / f"{year}.json").read_text(
@@ -1328,9 +1374,36 @@ def frozen_from_shared(d, year) -> bool:
     except (OSError, ValueError):
         return False
     fz = doc.get("frozen") if isinstance(doc, dict) else None
-    return (isinstance(fz, dict) and not fz.get("partial")
-            and isinstance(fz.get("inputs_dir"), str)
-            and bool(fz["inputs_dir"].strip()))
+    if not isinstance(fz, dict) or fz.get("partial"):
+        return False
+    v = fz.get("inputs_dir")
+    if isinstance(v, str) and v.strip():
+        return True
+    return migrated_shared_inputs(d, fz) is not None
+
+
+def migrated_shared_inputs(d, fz: Any) -> Optional[Path]:
+    """The inputs/ beside the year folders, for the year folder `d`
+    whose lock's `frozen` record `fz` froze its inputs as a single-
+    folder project and names no shared folder (`inputs_dir` null): the
+    year was then moved into its year folder by `migrate --to-years`,
+    and its inputs/ is a copy of that folder, which the years after it
+    read (new-year reads it so; backlog TJ-0435). check-filed and
+    `years` compare the year's frozen copy with it (backlog TJ-0610).
+    None otherwise (a lock that names its folder, a partial one, a
+    folder that is not a year folder beside a shared inputs/)."""
+    if not isinstance(fz, dict) or fz.get("partial") \
+            or fz.get("inputs_dir") is not None \
+            or not isinstance(fz.get("inputs"), dict):
+        return None
+    here = _resolved(d)
+    shared = here.parent / INPUTS
+    if (YEAR_DIR_RE.match(here.name) and not has_config(here.parent)
+            and shared.is_dir() and not shared.is_symlink()):
+        # (named from `d` as given: shown relative to it, ../inputs)
+        return Path(os.path.normpath(Path(d).absolute() / os.pardir
+                                     / INPUTS))
+    return None
 
 
 def frozen_project(d, settings: Optional[Dict[str, Any]] = None) -> bool:
@@ -1512,6 +1585,18 @@ def years_report(folder: Path) -> Dict[str, Any]:
                     rec["drifted"] = filed_check(d, y)
             except (OSError, ValueError):
                 rec["problem"] = f"filed/{y}.json cannot be read"
+        elif os.path.lexists(lock):
+            # Something other than a file at the lock's path (a folder,
+            # a link to nothing): a damaged lock, never an open year
+            # (backlog TJ-0271), as the checklist's _lock_state says.
+            rec["filed"] = True
+            rec["problem"] = (f"filed/{y}.json cannot be read ("
+                              + ("a directory" if lock.is_dir() else
+                                 "a link to nothing" if lock.is_symlink()
+                                 and not lock.exists() else "not a file")
+                              + ") — restore the lock from git, or "
+                              "remove it and `taxjson close-year` after "
+                              "filing")
         elif lock_missing_frozen(d, y):
             # A frozen year whose lock was deleted: filed, its lock to
             # restore, as a damaged one (backlog TJ-0263).
@@ -1583,6 +1668,8 @@ def years_report(folder: Path) -> Dict[str, Any]:
                     + len(c["map_only_there"]),
                     "tobase_rules": len(c["tobase_only_here"])
                     + len(c["tobase_only_there"]),
+                    "accounts": len(c["accounts_only_here"])
+                    + len(c["accounts_only_there"]),
                     "keys": len(c["keys"])}
         try:
             st = CL.load_state(d)

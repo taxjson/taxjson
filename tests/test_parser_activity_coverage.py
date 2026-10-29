@@ -22,7 +22,6 @@ Activity matrix (where applicable per broker):
   - transfer               position move in/out (broker-specific)
 """
 import os
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
@@ -443,7 +442,7 @@ class TestIbActivities(unittest.TestCase):
             'Dividends,Data,USD,2025-03-15,"AAPL (US0378331005) Cash Dividend USD 0.24 per Share (Ordinary Dividend)",24.00\n'
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-        import os, tempfile
+        import os
         f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
@@ -471,7 +470,7 @@ class TestIbActivities(unittest.TestCase):
             'Dividends,Data,USD,2025-03-15,"BNS (CA0641491075) Cash Dividend USD 1.00 per Share (Ordinary Dividend)",100.00\n'
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-        import os, tempfile
+        import os
         f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
@@ -500,7 +499,7 @@ class TestIbActivities(unittest.TestCase):
             'Withholding Tax,Data,USD,2025-03-15,"BNS (CA0641491075) Cash Dividend USD 1.00 per Share - US Tax",-15.00\n'
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-        import os, tempfile
+        import os
         f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
@@ -532,7 +531,7 @@ class TestIbActivities(unittest.TestCase):
             '50,0,0,0,0,0,0,0,A\n'
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
-        import os, tempfile
+        import os
         f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv); f.close()
         try:
@@ -564,7 +563,7 @@ class TestIbActivities(unittest.TestCase):
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         from taxjson.lib.brokerages.base import BrokerageParseError
-        import os, tempfile, io, sys as _sys
+        import os, io, sys as _sys
         from unittest.mock import patch
         f = private_tmpfile(mode='w', suffix='.csv', delete=False)
         f.write(csv_content); f.close()
@@ -868,7 +867,7 @@ class TestKrakenActivities(unittest.TestCase):
             "L3,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,earn / bonded,-9.08,0,0,-20577.75,0,0,USD\n"
             "L4,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,spot / main,9.08,0,9.08,20577.75,0,20577.75,USD\n")
         parser = KrakenBrokerage()
-        import io, contextlib, tempfile, os
+        import io, contextlib, os
         from pathlib import Path as _P
         err = io.StringIO()
         with private_tmpfile("w", suffix=".csv", delete=False, prefix="kr_ledgers_") as f:

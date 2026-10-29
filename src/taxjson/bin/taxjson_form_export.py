@@ -172,26 +172,130 @@ def load_dispositions(paths: List[Path], year: Optional[int],
     return entries, tainted_skipped
 
 
-def manual_section(rows: List[Dict[str, Any]], cur: str) -> List[str]:
+def is_short_cover(r: Dict[str, Any]) -> bool:
+    """An unknown-cost row that covers a short sale made before the
+    data (the engine's direction SHORT): what covering cost is known,
+    what the short sale brought in is not."""
+    return str(r.get("direction") or "").upper() == "SHORT"
+
+
+def manual_figures(r: Dict[str, Any]) -> Tuple[Optional[float],
+                                                Optional[float]]:
+    """(proceeds, cover_cost) of an unknown-cost row as the filer
+    reports it: a sale's proceeds (cover_cost None); for a short cover
+    (is_short_cover), the cost to cover and proceeds None — the short
+    sale's proceeds are the unknown figure. The engine's signed short
+    convention keeps the cover cost, negated, in `proceeds` (build_8949
+    swaps the two for a computed short); read as proceeds it put the
+    cover cost in the field the filer is told to report (backlog
+    TJ-0497)."""
+    amt = abs(float(r.get("proceeds") or 0.0))
+    return (None, amt) if is_short_cover(r) else (amt, None)
+
+
+def manual_totals(rows: List[Dict[str, Any]]) -> Tuple[float, float]:
+    """(proceeds, cover cost) over unknown-cost rows (manual_figures)."""
+    proceeds = cover = 0.0
+    for r in rows:
+        p, c = manual_figures(r)
+        proceeds += p or 0.0
+        cover += c or 0.0
+    return proceeds, cover
+
+
+def _manual_counts(rows: List[Dict[str, Any]], cur: str) -> str:
+    """What the unknown-cost rows are, with their known totals: `N
+    sale(s) with no purchase in your files ..., proceeds X CUR` and,
+    for short covers, `M short sale(s) covered with no short sale in
+    your files, cover cost Y CUR, their proceeds unknown`."""
+    longs = [r for r in rows if not is_short_cover(r)]
+    shorts = [r for r in rows if is_short_cover(r)]
+    proceeds, cover = manual_totals(rows)
+    parts = []
+    if longs:
+        parts.append(f"{len(longs)} sale(s) with no purchase in your "
+                     f"files (unknown cost, .tt OPENING cost=unknown), "
+                     f"proceeds {proceeds:,.2f} {cur}")
+    if shorts:
+        parts.append(f"{len(shorts)} short sale(s) covered with no short "
+                     f"sale in your files, cover cost {cover:,.2f} {cur}, "
+                     f"their proceeds unknown")
+    return "; ".join(parts)
+
+
+def _manual_table(rows: List[Dict[str, Any]]) -> List[str]:
+    """The MANUAL REPORTING table: a COVER COST column, and `unknown`
+    proceeds, once a short cover is among the rows."""
+    shorts = any(is_short_cover(r) for r in rows)
+    table = []
+    for r in rows:
+        p, c = manual_figures(r)
+        cells = [str(r.get("symbol") or ""), str(r.get("date") or ""),
+                 _qty_str(abs(float(r.get("qty") or 0.0))),
+                 "unknown" if p is None else f"{p:,.2f}"]
+        if shorts:
+            cells.append("" if c is None else f"{c:,.2f}")
+        cells.append(str(r.get("account") or ""))
+        table.append(tuple(cells))
+    if shorts:
+        return _table(("SYMBOL", "DATE", "UNITS", "PROCEEDS", "COVER COST",
+                       "ACCOUNT"), table, right={2, 3, 4})
+    return _table(("SYMBOL", "DATE", "UNITS", "PROCEEDS", "ACCOUNT"),
+                  table, right={2, 3})
+
+
+def manual_section(rows: List[Dict[str, Any]], cur: str,
+                   country: Optional[str] = None) -> List[str]:
     """The MANUAL REPORTING block every text report ends with when
     unknown-cost dispositions (no purchase in the files) exist in the
-    year."""
+    year. A sale of units moved in from another of your accounts
+    (`own_move_from`: one account's own books, its `<account>.sum`) has
+    no purchase missing: its cost is in the blended figures you file,
+    said in a block of its own (own_move_section, backlog TJ-0279)."""
+    # A report of no other row in the year: its rows' own currency.
+    cur = cur or ", ".join(sorted({str(r.get("currency") or "")
+                                   for r in rows} - {""}))
+    moved = [r for r in rows if r.get("own_move_from")]
+    rows = [r for r in rows if not r.get("own_move_from")]
+    lines: List[str] = []
+    if rows:
+        lines = [f"MANUAL REPORTING REQUIRED — "
+                 f"{_manual_counts(rows, cur)}: "
+                 f"NOT in the rows or totals above. "
+                 f"Report each by hand once its cost is known "
+                 f"(`taxjson find-missing-history`)."]
+        lines += _manual_table(rows)
+        lines.append("")
+    return lines + own_move_section(moved, cur, country)
+
+
+def own_move_section(rows: List[Dict[str, Any]], cur: str,
+                     country: Optional[str] = None) -> List[str]:
+    """The sales of units moved in from another of your taxable
+    accounts that one account's own books hold at no cost (backlog
+    TJ-0279): not in its rows or totals, and nothing to report by hand
+    from it: the blended pass, the figures you file
+    (`<account>_wash.sum`, `taxjson sum`), has their cost."""
     if not rows:
         return []
-    total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
-    lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} sale(s) with no "
-             f"purchase in your files (unknown cost, .tt OPENING cost=unknown), "
-             f"proceeds "
-             f"{total:,.2f} {cur}: NOT in the rows or totals above. "
-             f"Report each by hand once its cost is known "
-             f"(`taxjson find-missing-history`)."]
-    table = [(str(r.get("symbol") or ""), str(r.get("date") or ""),
-              _qty_str(abs(float(r.get("qty") or 0.0))),
-              f"{abs(float(r.get('proceeds') or 0.0)):,.2f}",
-              str(r.get("account") or ""))
-             for r in rows]
-    lines += _table(("SYMBOL", "DATE", "UNITS", "PROCEEDS", "ACCOUNT"),
-                    table, right={2, 3})
+    proceeds, _cover = manual_totals(rows)
+    froms = sorted({a or "another of your accounts"
+                    for r in rows for a in r.get("own_move_from") or []})
+    accts = sorted({str(r.get("account") or "") for r in rows} - {""})
+    wash = (", ".join(f"{a}_wash.sum" for a in accts)
+            or "<account>_wash.sum")
+    from taxjson.lib.country import basis_pooled_across_accounts
+    why = ("" if not country else
+           " (one ACB across your taxable accounts, CA-ACB-OWN-MOVE)"
+           if basis_pooled_across_accounts(country) else
+           " (the lots' basis carried by the move, US-BASIS-05)")
+    lines = [f"MOVED IN FROM YOUR OWN ACCOUNT — {len(rows)} sale(s) of "
+             f"units moved in from {', '.join(froms)}, proceeds "
+             f"{proceeds:,.2f} {cur}: NOT in the rows or totals above, "
+             f"and nothing to report by hand from here. This account's "
+             f"own books have no cost for them; the figures you file "
+             f"have it: {wash} and `taxjson sum`{why}."]
+    lines += _manual_table(rows)
     lines.append("")
     return lines
 
@@ -296,6 +400,21 @@ def _merge_positions(rows_fp: List[Dict[str, Any]], country: str
     return out
 
 
+def short_carried_loss(e: Dict[str, Any]) -> float:
+    """The earlier washed losses a US short sale's row carries off its
+    opening proceeds (the engine's `deferred_loss_recovered` on a SHORT
+    row with a term): Form 8949 and the 1099-B have them in (e) cost,
+    never out of (d) proceeds. 0.0 for a long row or a Canadian one."""
+    if (e.get("direction") or "LONG") != "SHORT" \
+            or e.get("term") not in ("SHORT_TERM", "LONG_TERM"):
+        return 0.0
+    try:
+        v = float(e.get("deferred_loss_recovered") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if v > 0.0 else 0.0
+
+
 def build_8949(entries: List[Dict[str, Any]],
                year: Optional[int] = None) -> Dict[str, Any]:
     """Form 8949 rows by part. `year` (default: the latest year among
@@ -319,8 +438,9 @@ def build_8949(entries: List[Dict[str, Any]],
         if _kind:
             # A §1256 contract (a future, an option on one, a broad-
             # based index option) is reported on Form 6781 — 60/40,
-            # marked to market at year end — never on Form 8949, and
-            # neither is modelled (tax-logic US-FUT-02 / US-OPT-04). It
+            # marked to market at year end — never on Form 8949; Form
+            # 6781 is by hand (tax-logic US-FUT-02 / US-OPT-04; the
+            # estimate and carryover split its net, US-FUT-03). It
             # went on Part I as a covered short-term sale, a futures
             # loss as NEGATIVE proceeds (A2-0118, A2-0322, A2-0323): a
             # user following tax-logic reported it twice. Kept off the
@@ -351,6 +471,14 @@ def build_8949(entries: List[Dict[str, Any]],
             # leaves the difference unchanged (which is also why the
             # drift check below never caught the raw rendering).
             proceeds, cost = -cost + 0.0, -proceeds + 0.0   # +0.0 kills -0.00 rendering
+            # A re-short that replaced an earlier short's washed loss
+            # carries that loss off its opening proceeds in the engine
+            # (`deferred_loss_recovered`). The 1099-B reports what the
+            # short sale brought in, and a §1091(d) add is basis: (d)
+            # gets the carried amount back and (e) takes it, (h)
+            # unchanged (backlog TJ-0465: (d) was below the slip by it).
+            _carried = short_carried_loss(e)
+            proceeds, cost = proceeds + _carried, cost + _carried
         adj = float(e.get("disallowed_amount") or 0.0)
         gain = float(e.get("gain") or 0.0)
         code = "W" if adj > _EPS else ""
@@ -972,9 +1100,10 @@ def filing_6781(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
 SEC1256_NOTE = ("§1256 contracts (futures, options on futures, broad-"
                 "based index options such as SPX) are NOT on Form 8949: "
                 "report them on Form 6781 by hand — the net is split 60% "
-                "long-term / 40% short-term, and contracts still open on "
-                "Dec 31 are marked to market (neither is modelled; tax-"
-                "logic US-FUT-02, US-OPT-04).")
+                "long-term / 40% short-term (as taxjson's estimate and "
+                "carryover split it), and contracts still open on Dec 31 "
+                "are marked to market (not modelled; tax-logic US-FUT-02, "
+                "US-FUT-03, US-OPT-04).")
 
 
 def section_1256_lines(rep: Dict[str, Any], cur: str) -> List[str]:
@@ -1078,25 +1207,32 @@ def _manual_console(rows: List[Dict[str, Any]], cur: str,
     """manual_section() in the console layout."""
     if not rows:
         return []
-    total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
-    lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} sale(s) with no "
-             f"purchase in your files"]
+    shorts = sum(1 for r in rows if is_short_cover(r))
+    longs = len(rows) - shorts
+    head = []
+    if longs:
+        head.append(f"{longs} sale(s) with no purchase in your files")
+    if shorts:
+        head.append(f"{shorts} short sale(s) covered with no short sale "
+                    f"in your files")
+    lines = [f"MANUAL REPORTING REQUIRED — {'; '.join(head)}"]
     if details:
-        lines += _para(f"Unknown cost (.tt OPENING cost=unknown), proceeds "
-                       f"{total:,.2f} {cur}: NOT in the rows or totals "
+        proceeds, cover = manual_totals(rows)
+        known = []
+        if longs:
+            known.append(f"Unknown cost (.tt OPENING cost=unknown), "
+                         f"proceeds {proceeds:,.2f} {cur}")
+        if shorts:
+            known.append(f"{'short' if longs else 'Short'} sales covered "
+                         f"for {cover:,.2f} {cur}, their proceeds unknown")
+        lines += _para(f"{'; '.join(known)}: NOT in the rows or totals "
                        f"above. Report each by hand once its cost is known "
                        f"(`taxjson find-missing-history`).")
     else:
         from taxjson.lib.out import act
         lines.append(act("Not in the rows or totals above: report each "
                          "by hand", "tjs find-missing-history"))
-    table = [(str(r.get("symbol") or ""), str(r.get("date") or ""),
-              _qty_str(abs(float(r.get("qty") or 0.0))),
-              f"{abs(float(r.get('proceeds') or 0.0)):,.2f}",
-              str(r.get("account") or ""))
-             for r in rows]
-    lines += _table(("SYMBOL", "DATE", "UNITS", "PROCEEDS", "ACCOUNT"),
-                    table, right={2, 3})
+    lines += _manual_table(rows)
     lines.append("")
     return lines
 
@@ -1138,6 +1274,27 @@ def _year_note(rep: Dict[str, Any]) -> List[str]:
     if t.startswith("NOTE: t"):
         t = "T" + t[len("NOTE: t"):]
     return _para(t) if t else []
+
+
+def _not_in_rows(rep: Dict[str, Any]) -> List[str]:
+    """One `! ` line each for what the books leave out of these rows and
+    the gains files cannot tell (the wrapper counts them, as `taxjson
+    sum` does): an in-kind move with a registered account the run could
+    not value, a sale with no purchase in the files (backlog TJ-0251)."""
+    from taxjson.lib.out import act
+    miss = rep.get("not_in_rows") or {}
+    out: List[str] = []
+    n = int(miss.get("in_kind_unbooked") or 0)
+    if n:
+        out.append(act(f"{n} in-kind move{'s' if n != 1 else ''} with a "
+                       f"registered account NOT booked: NOT in these rows",
+                       "tjs transfers"))
+    n = int(miss.get("no_purchase") or 0)
+    if n:
+        out.append(act(f"{n} sale{'s' if n != 1 else ''} with no purchase "
+                       f"in your files NOT in these rows",
+                       "tjs find-missing-history"))
+    return out
 
 
 def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str,
@@ -1217,8 +1374,12 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str,
     lines += section_1256_lines(rep, cur)
     lines += _manual_console(rep.get("manual_reporting_required") or [],
                              cur, details)
+    _miss = _not_in_rows(rep)
+    if _miss and details:
+        lines += _miss + [""]
     if not details:
         from taxjson.lib.out import act
+        lines += _miss
         _cmd = "tjs form-export --details"
         _fp = sum(1 for p in ("I", "II") for r in rep[f"part_{p}"]
                   if r.get("filing_position"))
@@ -1301,20 +1462,32 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
         lines.append("")
     lines += _manual_console(rep.get("manual_reporting_required") or [],
                              cur, details)
+    _miss = _not_in_rows(rep)
+    if _miss and details:
+        lines += _miss + [""]
     if not details:
         from taxjson.lib.out import act
+        lines += _miss
         _cmd = "tjs form-export --details"
         _rows = rep.get("rows") or []
         _fp = sum(1 for r in _rows if r.get("filing_positions"))
         if _fp:
             lines.append(act(f"{_fp} row(s) carry a filing position "
                              f"(.tt ALLOWLOSS)", _cmd))
-        _den = [r for r in _rows if (r.get("denied") or 0) > 0.005
-                or (r.get("denied_contribution") or 0) > 0.005]
+        _den = [r for r in _rows if (r.get("denied") or 0) > 0.005]
         if _den:
             lines.append(f"{len(_den)} row(s) with a denied superficial "
                          f"loss: the ACB shown is reduced by it — "
                          f"tjs wash-sales")
+        # An in-kind contribution's loss is nil for good (s.40(2)(g)
+        # (iv), CA-INKIND-03), never a superficial loss: `tjs
+        # wash-sales` lists none of it (backlog TJ-0443).
+        _ikd = [r for r in _rows
+                if (r.get("denied_contribution") or 0) > 0.005]
+        if _ikd:
+            lines.append(f"{len(_ikd)} row(s) with a loss denied for good "
+                         f"on an in-kind contribution (s.40(2)(g)(iv)) — "
+                         f"{_cmd}")
         lines.append("Not in the rows: FX on cash (15300), slip capital "
                      "gains (17400, 17600) — " + _cmd)
         return "\n".join(lines).rstrip("\n")
@@ -1440,11 +1613,22 @@ def _rows_csv(rep: Dict[str, Any], f) -> None:
         # Unknown-cost dispositions: flagged rows,
         # blank cost/gain, never mistaken for a computed row.
         for m in rep.get("manual_reporting_required") or []:
-            w.writerow(["MANUAL",
-                        f"{_qty_str(abs(float(m.get('qty') or 0.0)))}"
-                        f" {m.get('symbol') or ''}", "",
+            _p, _c = manual_figures(m)
+            _desc = (f"{_qty_str(abs(float(m.get('qty') or 0.0)))}"
+                     f" {m.get('symbol') or ''}")
+            if _c is not None:
+                # A short covered with its short sale before the data:
+                # (e) what covering cost; (d) the short sale's proceeds
+                # unknown, left blank (backlog TJ-0497).
+                w.writerow(["MANUAL", f"{_desc} (short sale)", "",
+                            m.get("date") or "", "", round(_c, 2), "",
+                            "", "", m.get("account") or "", "",
+                            "short sale before your files: its proceeds "
+                            "unknown - report by hand"])
+                continue
+            w.writerow(["MANUAL", _desc, "",
                         m.get("date") or "",
-                        round(abs(float(m.get("proceeds") or 0.0)), 2),
+                        round(_p, 2),
                         "", "", "", "", m.get("account") or ""])
     else:
         w.writerow(["line", "proceeds_line", "gain_line", "property",
@@ -1457,10 +1641,23 @@ def _rows_csv(rep: Dict[str, Any], f) -> None:
                         r["outlays"], r["gain"], r["denied"],
                         r["notes"]])
         for m in rep.get("manual_reporting_required") or []:
+            _p, _c = manual_figures(m)
+            if _c is not None:
+                # A short covered with its short sale before the data:
+                # the cover cost is the ACB, the proceeds (what the
+                # short sale brought in) unknown (backlog TJ-0497).
+                w.writerow(["MANUAL", "", "", "",
+                            abs(float(m.get("qty") or 0.0)),
+                            m.get("symbol") or "", "", "", round(_c, 2),
+                            "", "", "",
+                            "short sale before your files, its proceeds "
+                            "unknown; acb is the cover cost - report by "
+                            "hand"])
+                continue
             w.writerow(["MANUAL", "", "", "",
                         abs(float(m.get("qty") or 0.0)),
                         m.get("symbol") or "", "",
-                        round(abs(float(m.get("proceeds") or 0.0)), 2),
+                        round(_p, 2),
                         "", "", "", "",
                         "no purchase in your files, cost unknown "
                         "(.tt OPENING cost=unknown) - report by hand"])
@@ -1518,6 +1715,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # carried into --json's readiness record.
     parser.add_argument("--run-state-problem", action="append",
                         default=[], help=argparse.SUPPRESS)
+    # ...and what the books leave out of the rows that the gains files
+    # cannot tell, counted as `taxjson sum` counts them (backlog TJ-0251).
+    parser.add_argument("--in-kind-unbooked", type=int, default=0,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--no-purchase", type=int, default=0,
+                        help=argparse.SUPPRESS)
     parser.add_argument("--date-basis", choices=("settle", "trade"),
                         default=None,
                         help="Date the gains files were year-scoped on "
@@ -1589,13 +1792,21 @@ def _check_currency(paths: List[Path], base: str) -> None:
     for p in paths:
         other: Dict[str, int] = {}
         blank = 0
-        for e in load_json(p).get("transactions") or []:
-            if e.get("action") in _INCOME_ACTIONS:
+        doc = load_json(p)
+        # The unknown-cost rows too: they are listed with the return's
+        # currency, so a USD row in a CAD return showed its proceeds as
+        # CAD (backlog TJ-0496).
+        for e, manual in ([(e, False) for e in doc.get("transactions")
+                           or []]
+                          + [(e, True) for e in
+                             doc.get("manual_reporting_required") or []]):
+            if not isinstance(e, dict) or (
+                    e.get("action") in _INCOME_ACTIONS):
                 continue
             c = str(e.get("currency") or "").upper()
             if c and c != base:
                 other[c] = other.get(c, 0) + 1
-            elif not c and "gain" in e and "qty" in e:
+            elif not c and "qty" in e and (manual or "gain" in e):
                 blank += 1
         if blank:
             # A disposition with no currency cannot be verified as in
@@ -1669,20 +1880,38 @@ def _main(args) -> int:
         if _p.resolve() not in _seen_manual:
             _seen_manual.add(_p.resolve())
             _manual_paths.append(_p)
-    manual = load_manual_rows(_manual_paths, args.year, date_key)
-    manual_proceeds = round(sum(abs(float(m.get("proceeds") or 0.0))
-                                for m in manual), 2)
+    # A short covered with its short sale before the data carries the
+    # cover cost (negated) in the engine's `proceeds`: it is named as
+    # the cover cost, its proceeds unknown, never summed into the
+    # proceeds (backlog TJ-0497).
+    manual = [dict(m, cover_cost=round(manual_figures(m)[1], 2),
+                   short_sale_proceeds=None) if is_short_cover(m) else m
+              for m in load_manual_rows(_manual_paths, args.year,
+                                        date_key)]
+    _mp, _mc = manual_totals(manual)
+    manual_proceeds = round(_mp, 2)
+    manual_cover_cost = round(_mc, 2)
     if tainted or manual:
-        _names = ", ".join(
-            f"{m.get('symbol')} {m.get('date')} "
-            f"({abs(float(m.get('proceeds') or 0.0)):,.2f})"
-            for m in manual[:8])
+        def _named(m):
+            _p, _c = manual_figures(m)
+            return (f"{m.get('symbol')} {m.get('date')} "
+                    + (f"({_p:,.2f})" if _c is None
+                       else f"(short covered for {_c:,.2f}, its proceeds "
+                            f"unknown)"))
+        _names = ", ".join(_named(m) for m in manual[:8])
         _more = f" (+{len(manual) - 8} more)" if len(manual) > 8 else ""
+        _shorts = sum(1 for m in manual if is_short_cover(m))
+        _known = ([f"proceeds {manual_proceeds:,.2f}"]
+                  if len(manual) > _shorts or not manual else [])
+        if _shorts:
+            _known.append(f"cover cost {manual_cover_cost:,.2f} of "
+                          f"{_shorts} short sale(s) whose proceeds are "
+                          f"unknown")
         from taxjson.lib.out import warn as _warn
         _warn(f"{max(tainted, len(manual))} disposition(s) with an "
               f"unknown cost (no purchase in your files) are NOT in the "
               f"{'TXF' if args.form == 'txf' else 'form'} rows or totals "
-              f"— proceeds {manual_proceeds:,.2f}",
+              f"— {'; '.join(_known)}",
               details=[f"{_names}{_more}.",
                        "Report them by hand once their cost is known "
                        "(`taxjson find-missing-history`); they are listed "
@@ -1757,10 +1986,15 @@ def _main(args) -> int:
         rep["currency"] = _home
     rep["manual_reporting_required"] = manual
     rep["manual_proceeds"] = manual_proceeds
+    rep["manual_cover_cost"] = manual_cover_cost
     _ynote = year_not_ended_note(args.year or rep.get("year")
                                  or _infer_year(entries))
     if _ynote:
         rep["year_not_ended"] = _ynote
+    if not args.json and (args.in_kind_unbooked or args.no_purchase):
+        # The text view's `! ` lines (--json: the readiness record).
+        rep["not_in_rows"] = {"in_kind_unbooked": args.in_kind_unbooked,
+                              "no_purchase": args.no_purchase}
     if args.form == "8949":
         text = render_8949(rep, args.year, rep["currency"],
                            not args.brief)
@@ -1790,8 +2024,10 @@ def _main(args) -> int:
             rep["readiness"] = _RD.build(
                 run_state=args.run_state_problem,
                 unknown_cost=max(tainted, len(manual)),
+                no_purchase=args.no_purchase,
                 conservation=_RD.conservation_lines(
-                    list(args.files) + list(args.crypto)))
+                    list(args.files) + list(args.crypto)),
+                in_kind_unbooked=args.in_kind_unbooked)
         # A NaN figure is refused, never written (issue #8).
         from taxjson.lib.json_input import dump_filing_json
         dump_filing_json(rep, sys.stdout)

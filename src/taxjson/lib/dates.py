@@ -100,7 +100,8 @@ def noon_utc(dt: datetime) -> datetime:
 # (lib/market_calendar: US = NYSE + Federal Reserve holidays, Canada =
 # TSX + Remembrance Day + Truth and Reconciliation; elsewhere weekends
 # only), so a holiday inside the lag moves the settle date later, as the
-# clearing houses do.
+# clearing houses do. A US-dollar trade on a Canadian market counts the
+# days both Canada and the US settle (settlement_calendar, CA_USD).
 
 T3_TO_T2 = '2017-09-05'
 
@@ -133,7 +134,8 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
     `trade_iso` (YYYY-MM-DD) in the given market."""
     if is_option:
         return 1
-    cur = (currency or '').upper() or 'USD'
+    from taxjson.lib.market_calendar import market_key
+    cur = market_key(currency) or 'USD'      # 'CAD+USD': Canada's cycle
     if trade_iso < _T2_CUTOVER.get(cur, T3_TO_T2):
         return 3
     cutover = _T1_CUTOVER.get(cur)
@@ -159,9 +161,11 @@ def market_of(symbol: str, row_currency=None):
     included), 'USD' for a US one (and an F:/'/' futures contract),
     'GBP' for an LSE line (.L), 'AUD' for an ASX one (.AX) -- whatever
     currency the trade is priced or settled in. A TSX USD-class unit
-    such as SAMPLF.U.TO settles through CDS on the Canadian calendar, and
-    an SAMPLM.US trade settled in CAD on the US one (audits A2-0375,
-    A2-1183, A2-1052, A2-1054). Any other symbol: `row_currency`."""
+    such as SAMPLF.U.TO settles through CDS on the Canadian market's
+    cycle and days (settlement_calendar adds the US days on which CDS
+    does not settle US dollars), and an SAMPLM.US trade settled in CAD
+    on the US calendar (audits A2-0375, A2-1183, A2-1052, A2-1054). Any
+    other symbol: `row_currency`."""
     s = str(symbol or "").strip().upper()
     if s.endswith(CA_LISTING_SUFFIXES):
         return 'CAD'
@@ -169,6 +173,23 @@ def market_of(symbol: str, row_currency=None):
         return 'USD'
     from taxjson.lib.markets import suffix_currency, suffix_of
     return suffix_currency(suffix_of(s)) or row_currency
+
+
+def settlement_calendar(symbol: str, row_currency=None, market=None):
+    """THE settlement calendar of a trade with no printed settle date
+    (CA-DATE-05 / US-DATE-05), as the key the calendar helpers take: the
+    listing's market (market_of; `market` when the caller has it), and,
+    for a trade in US dollars on a Canadian market, the US clearing days
+    too (lib/market_calendar.CA_USD, 'CAD+USD'): CDS settles US dollars
+    only when US clearing settles, so a TSX US-dollar unit bought the
+    day before Juneteenth settles the day after it (TMX's and the CSE's
+    holiday settlement schedules; backlog TJ-0705). The trade currency
+    is the row's, the one the books carry, never read from the ticker."""
+    from taxjson.lib.market_calendar import CA_USD
+    mkt = market if market is not None else market_of(symbol, row_currency)
+    if mkt == 'CAD' and str(row_currency or '').strip().upper() == 'USD':
+        return CA_USD
+    return mkt
 
 
 def listing_market_currency(symbol: str, fallback=None):

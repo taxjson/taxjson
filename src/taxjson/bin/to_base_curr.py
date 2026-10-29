@@ -22,8 +22,11 @@ SOURCES (per date, recorded in the output):
     before.
 
 OUTPUT: one row per calendar date,
-    YYYY-MM-DD 12:00:00 FROM TO RATE SOURCE
-SOURCE is `boc`, `boc-noon` or `yahoo`. The sixth column is additive: every loader
+    YYYY-MM-DD 12:00:00 FROM TO RATE SOURCE [PUBLISHED]
+SOURCE is `boc`, `boc-noon` or `yahoo`. PUBLISHED, on a weekend or
+holiday a Bank of Canada rate fills, is the date the Bank published that
+rate (the evidence views show it; a filled day used to look like the
+Bank's own). The sixth and seventh columns are additive: every loader
 reads the first five (load_exchange_rates ignores extra columns).
 
 WEEKENDS / HOLIDAYS: a date with no published rate takes the rate of the
@@ -121,6 +124,22 @@ _CCY_RE = re.compile(r"^[A-Z]{3}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def _is_date(s) -> bool:
+    """`s` is a real calendar date written YYYY-MM-DD. The shape alone
+    is not enough: '2025-02-30' matched _DATE_RE, and the date arithmetic
+    below then raised ValueError ("day is out of range for month") out
+    of the cache repair and the command (backlog TJ-0584). THE check for
+    every date this module reads from outside: the cache, an answer,
+    --start/--end."""
+    if not (isinstance(s, str) and _DATE_RE.match(s)):
+        return False
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
 class CacheProblem(str):
     """An entry of build_rates' `errors` that is a damaged cache value,
     not a failed download (printed with its own wording)."""
@@ -157,27 +176,218 @@ def _valet_not_found(exc: "urllib.error.HTTPError", series: str) -> bool:
 
 # ------------------------------------------------------------ cache I/O
 
+class LoadedCache(dict):
+    """The rate cache as load_cache read it. `loaded_text` keeps what
+    the file held then, so save_cache can write back only what this run
+    changed (TJ-0583)."""
+    loaded_text = "{}"
+
+
 def load_cache():
     # OSError too: an unreadable cache degrades to a refetch.
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8-sig') as f:
-                data = json.load(f)
+                text = f.read()
+            data = json.loads(text)
             if isinstance(data, dict):
-                return data
+                out = LoadedCache(data)
+                out.loaded_text = text
+                return out
         except (ValueError, OSError):   # JSON or UTF-8 damage (S055-04)
             pass
-    return {}
+    return LoadedCache()
 
 
 def save_cache(cache_data):
-    # tmp + os.replace (repo standard): a kill mid-dump must not leave
-    # a truncated cache that the next run silently discards.
-    # A unique temp file renamed into place under a lock: two projects'
-    # runs no longer share one `.part` name (re-audit A2-0233). Not
-    # merged: this run may have dropped a damaged entry on purpose.
+    """Write the rate cache: a unique temp file renamed into place under
+    the cache's lock (re-audit A2-0233), never a truncated file.
+
+    A cache from load_cache is written as this run's CHANGES to the file
+    as it is now, read again under the lock (`_cache_delta`,
+    `_apply_delta`): the values this run set, the entries it dropped as
+    damaged (a deletion, applied while the file still holds that value)
+    and the coverage it added or removed, a day's with its rate
+    (`_coverage_op`, backlog TJ-0706). Two runs that loaded one cache
+    and fetched USD and EUR at once used to write back their whole
+    copies, the later one without the other's new series (backlog
+    TJ-0583). Any other dict replaces the file."""
     from taxjson.lib.json_cache import save_json_cache
-    save_json_cache(CACHE_FILE, cache_data, prog=PROG, indent=2)
+    base_text = getattr(cache_data, "loaded_text", None)
+    if base_text is None:
+        save_json_cache(CACHE_FILE, cache_data, prog=PROG, indent=2)
+        return
+    try:
+        base = json.loads(base_text)
+    except ValueError:
+        base = {}
+    ops = _cache_delta(base if isinstance(base, dict) else {},
+                       dict(cache_data))
+
+    def _update(cur):
+        if not isinstance(cur, dict):
+            return dict(cache_data)    # nothing readable to merge into
+        return _apply_delta(cur, ops)
+
+    if save_json_cache(CACHE_FILE, {}, update=_update, prog=PROG, indent=2):
+        cache_data.loaded_text = json.dumps(cache_data)
+
+
+_MISSING = object()
+
+
+def _cache_delta(old: dict, new: dict, path: Tuple = (),
+                 roots: Optional[Tuple[dict, dict]] = None) -> List[tuple]:
+    """What changed from `old` (the cache as loaded) to `new`, as
+    operations save_cache replays on the file as it is now:
+      ('set', path, value)       this run's value for a leaf;
+      ('del', path, old_value)   a key this run removed (damage
+                                 dropped, a marker cleared);
+      ('cov', path, added, removed, guards)  a `_coverage` entry's dates
+                                 added and removed, as [lo, hi]
+                                 intervals (`_coverage_op`).
+    Nested objects (`_boc` -> pair -> `obs` -> date) are compared key by
+    key, so two runs' series never overwrite each other; coverage is
+    merged as date sets, so two runs' ranges of one series both stay.
+    `roots`: the whole caches (old, new), for the observations a
+    coverage entry covers."""
+    roots = roots or (old, new)
+    ops: List[tuple] = []
+    for k in old:
+        if k not in new:
+            ops.append(("del", path + (k,), old[k]))
+    for k, v in new.items():
+        o = old.get(k, _MISSING)
+        if path == ("_coverage",) and _valid_coverage(v) \
+                and (o is _MISSING or _valid_coverage(o)):
+            op = _coverage_op(path + (k,), o, v, roots)
+            if op:
+                ops.append(op)
+            continue
+        # An unchanged `_coverage` may still assert a day (_coverage_op).
+        if o is not _MISSING and o == v and not (
+                (path, k) == ((), "_coverage") and isinstance(v, dict)):
+            continue
+        if isinstance(v, dict):
+            if o is not _MISSING and not isinstance(o, dict):
+                ops.append(("del", path + (k,), o))
+            ops += _cache_delta(o if isinstance(o, dict) else {}, v,
+                                path + (k,), roots)
+        else:
+            ops.append(("set", path + (k,), v))
+    return ops
+
+
+def _series_obs(cache: dict, key: str) -> Optional[Dict[str, tuple]]:
+    """{date: (path, value)} of the cached observations a `_coverage`
+    key covers (`boc:`, `boc_noon:`, `yahoo:` + pair), read as stored,
+    damaged values included; None for a key of no known series."""
+    src, _, pair = key.partition(":")
+    top = {"boc": "_boc", "boc_noon": "_boc_noon"}.get(src)
+    if top:
+        blocks = cache.get(top)
+        blk = blocks.get(pair) if isinstance(blocks, dict) else None
+        obs = blk.get("obs") if isinstance(blk, dict) else None
+        return {d: ((top, pair, "obs", d), v)
+                for d, v in (obs.items() if isinstance(obs, dict) else ())}
+    if src == "yahoo":
+        pre = f"{pair}-"
+        return {k[len(pre):]: ((k,), v) for k, v in cache.items()
+                if isinstance(k, str) and k.startswith(pre)
+                and _DATE_RE.match(k[len(pre):])}
+    return None
+
+
+def _covers(cov: List[List[str]], d: str) -> bool:
+    return any(lo <= d <= hi for lo, hi in cov)
+
+
+def _coverage_op(path: Tuple, o, v, roots: Tuple[dict, dict]
+                 ) -> Optional[tuple]:
+    """The ('cov', path, added, removed, guards) operation for one
+    `_coverage` entry, `o` as loaded (or _MISSING), `v` as this run
+    leaves it; None when it changes nothing.
+
+    The coverage of a day moves with its observation, as one change
+    (backlog TJ-0706): a day this run uncovered because it dropped the
+    damaged rate there is a guard [day, path, value], uncovered only
+    while the file still holds that value; and a day this run covers
+    whose rate it wrote or dropped (it asked the source again) is added
+    even when it was covered when loaded. Two runs that loaded one
+    damaged rate, an online one that repaired it and an offline one
+    that only dropped it, used to leave the repaired rate uncovered
+    whichever saved second, so offline runs had no row for it."""
+    was = _merge([list(iv) for iv in o]) if o is not _MISSING else []
+    now = _merge([list(iv) for iv in v])
+    added = [list(iv) for lo, hi in now
+             for iv in _missing_ranges(was, lo, hi)]
+    removed = [list(iv) for lo, hi in was
+               for iv in _missing_ranges(now, lo, hi)]
+    guards: List[list] = []
+    old_obs = _series_obs(roots[0], path[-1])
+    new_obs = _series_obs(roots[1], path[-1])
+    if old_obs is not None and new_obs is not None:
+        # Real days only: '2025-02-30' sorts inside a range (TJ-0584).
+        for d, (opath, ov) in sorted(old_obs.items()):
+            if d not in new_obs and _is_date(d) and _covers(removed, d):
+                guards.append([d, opath, ov])
+        asked = [[d, d] for d in sorted(set(old_obs) | set(new_obs))
+                 if (d not in old_obs or d not in new_obs
+                     or old_obs[d][1] != new_obs[d][1])
+                 and _is_date(d) and _covers(now, d)]
+        added = _merge(added + asked)
+    if added or removed:
+        return ("cov", path, added, removed, guards)
+    return None
+
+
+def _lookup(cache: dict, path: Tuple):
+    """The value at `path` in `cache`, or _MISSING."""
+    cur = cache
+    for k in path:
+        if not isinstance(cur, dict) or k not in cur:
+            return _MISSING
+        cur = cur[k]
+    return cur
+
+
+def _apply_delta(cur: dict, ops: List[tuple]) -> dict:
+    """Replay `_cache_delta`'s operations on `cur` (the file as it is
+    now). A deletion applies only while the file still holds the value
+    this run removed: another run's newer value there is kept. So does
+    a day's uncovering that came with it (a coverage guard), judged on
+    the file as found, before this run's own deletion there (TJ-0706)."""
+    kept = {i: _merge([[d, d] for d, opath, ov in op[4]
+                       if _lookup(cur, tuple(opath)) != ov])
+            for i, op in enumerate(ops) if op[0] == "cov"}
+    for i, op in enumerate(ops):
+        kind, path = op[0], op[1]
+        parent = cur
+        for k in path[:-1]:
+            nxt = parent.get(k)
+            if not isinstance(nxt, dict):
+                if kind == "del":
+                    parent = None
+                    break
+                nxt = parent[k] = {}
+            parent = nxt
+        if parent is None:
+            continue
+        key = path[-1]
+        if kind == "set":
+            parent[key] = op[2]
+        elif kind == "del":
+            if key in parent and parent[key] == op[2]:
+                del parent[key]
+        else:
+            disk = parent.get(key)
+            have = (_merge([list(iv) for iv in disk])
+                    if _valid_coverage(disk) else [])
+            gone = [list(iv) for lo, hi in _merge(op[3])
+                    for iv in _missing_ranges(kept[i], lo, hi)]
+            parent[key] = [list(iv) for lo, hi in _merge(have + op[2])
+                           for iv in _missing_ranges(gone, lo, hi)]
+    return cur
 
 
 # ------------------------------------------------------------ date helpers
@@ -223,7 +433,7 @@ def fetch_boc(currency: str, start: str, end: str) -> Dict[str, str]:
     for ob in doc.get("observations") or []:
         d = ob.get("d")
         v = (ob.get(series) or {}).get("v")
-        if not (isinstance(d, str) and _DATE_RE.match(d)):
+        if not _is_date(d):
             continue
         try:
             if v is None or not float(v) > 0:
@@ -249,7 +459,7 @@ def fetch_boc_noon(currency: str, start: str, end: str) -> Dict[str, str]:
     for ob in doc.get("observations") or []:
         d = ob.get("d")
         v = (ob.get(series) or {}).get("v")
-        if not (isinstance(d, str) and _DATE_RE.match(d)):
+        if not _is_date(d):
             continue
         try:
             if v is None or not float(v) > 0:
@@ -264,8 +474,13 @@ def fetch_yahoo(ticker: str, start: str, end: str) -> Dict[str, float]:
     """Yahoo Finance daily closes for `ticker`, start..end inclusive."""
     if yf is None:
         raise RuntimeError(f"yfinance is not installed ({extra_hint('fx')})")
-    data = yf.download(ticker, start=start, end=_shift(end, 1),
-                       progress=False)
+    # yfinance's own lines (a failed download, 'possibly delisted') are
+    # silenced as in the price chain: unlabelled, and on stdout they
+    # would land in the rates this program prints (backlog TJ-0242).
+    from taxjson.lib.price_chain import _quiet_yfinance
+    with _quiet_yfinance():
+        data = yf.download(ticker, start=start, end=_shift(end, 1),
+                           progress=False)
     out: Dict[str, float] = {}
     if data is None or getattr(data, "empty", True) \
             or "Close" not in data.columns:
@@ -306,8 +521,8 @@ def _coverage(cache: dict, key: str) -> List[List[str]]:
         return []
     return _merge([list(iv) for iv in cov
                    if isinstance(iv, list) and len(iv) == 2
-                   and all(isinstance(x, str) and _DATE_RE.match(x)
-                           for x in iv) and iv[0] <= iv[1]])
+                   and all(_is_date(x) for x in iv)
+                   and iv[0] <= iv[1]])
 
 
 def _add_coverage(cache: dict, key: str, lo: str, hi: str) -> None:
@@ -363,7 +578,7 @@ def _yahoo_obs(cache: dict, pair: str) -> Dict[str, float]:
     pre = f"{pair}-"
     out = {}
     for k, v in cache.items():
-        if k.startswith(pre) and _DATE_RE.match(k[len(pre):]):
+        if k.startswith(pre) and _is_date(k[len(pre):]):
             try:
                 out[k[len(pre):]] = float(v)
             except (TypeError, ValueError):
@@ -397,7 +612,7 @@ def _not_published_fresh(blk: dict, today: str) -> bool:
     if not blk.get("not_published"):
         return False
     checked = blk.get("not_published_checked")
-    if not (isinstance(checked, str) and _DATE_RE.match(checked)):
+    if not _is_date(checked):
         return False
     return 0 <= _days(checked, today) < NOT_PUBLISHED_RECHECK_DAYS
 
@@ -452,6 +667,8 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
             sa, sb, seen = (str(x) for x in ent)
         except (TypeError, ValueError):
             continue
+        if not (_is_date(sa) and _is_date(sb) and _is_date(seen)):
+            continue                    # a damaged marker: dropped
         if _days(seen, today) > SUSPECT_RECHECK_DAYS:
             continue
         suspect_seen[(sa, sb)] = seen
@@ -684,13 +901,17 @@ def _prior(sorted_dates: List[str], d: str) -> Optional[str]:
 
 
 def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
-                 end: str, today: str) -> List[Tuple[str, str, str]]:
+                 end: str, today: str, with_obs: bool = False
+                 ) -> List[Tuple[str, ...]]:
     """[(date, rate_text, source)] for every calendar date in
     [start, end] that has a rate under the source rules (module
     docstring). A date gets the most recent prior observation within
     MAX_FILL_DAYS, and only when the source's requested range covers
     it (today: covers yesterday) — an offline cache that ends a month
-    ago does not smear its last rate over the month."""
+    ago does not smear its last rate over the month. `with_obs`: a
+    fourth item, the date the rate was published (the Bank's; Yahoo's
+    cache keeps no publication date: the date itself) — backlog
+    TJ-0462."""
     pair = f"{from_curr}{to_curr}"
     use_boc = to_curr == "CAD" and from_curr in BOC_CURRENCIES
     boc_obs: Dict[str, str] = {}
@@ -722,13 +943,15 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
     last = min(end, today)
     while d <= last:
         val = src = None
+        obs = d
         # Before March 2017 the CRA names the Bank's NOON rate (Folio
         # S5-F4-C1 para 1.4): it wins over the daily average (Jan-Feb
         # 2017) and over Yahoo wherever the cached noon series reaches.
         if d < NOON_BEFORE and noon_dates and _reaches(noon_cov, d, today):
             p = _prior(noon_dates, d)
             if p and _days(p, d) <= MAX_FILL_DAYS:
-                rows.append((d, noon_obs[p], "boc-noon"))
+                rows.append((d, noon_obs[p], "boc-noon")
+                            + ((p,) if with_obs else ()))
                 d = _shift(d, 1)
                 continue
         boc_era = use_boc and d >= BOC_START
@@ -736,7 +959,7 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
         if boc_reach:
             p = _prior(boc_dates, d)
             if p and _days(p, d) <= MAX_FILL_DAYS:
-                val, src = boc_obs[p], "boc"
+                val, src, obs = boc_obs[p], "boc", p
         # Yahoo inside the BoC era only where the Bank's REQUESTED range
         # has no recent observation (a stopped series) — never as a
         # stand-in for a Bank fetch that did not happen.
@@ -748,7 +971,7 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
                 # rates (JPY→CAD ~0.00947 printed %.4f lost 0.5%).
                 val, src = f"{y_obs[p]:.6g}", "yahoo"
         if val is not None:
-            rows.append((d, val, src))
+            rows.append((d, val, src) + ((obs,) if with_obs else ()))
         d = _shift(d, 1)
     return rows
 
@@ -832,10 +1055,11 @@ def _good_rate(v) -> bool:
 
 
 def _valid_coverage(v) -> bool:
-    """A `_coverage` entry is a list of [lo, hi] YYYY-MM-DD pairs."""
+    """A `_coverage` entry is a list of [lo, hi] pairs of real dates
+    (`_is_date`: '2025-02-30' is damage, not a date — TJ-0584)."""
     return isinstance(v, list) and all(
         isinstance(iv, list) and len(iv) == 2
-        and all(isinstance(x, str) and _DATE_RE.match(x) for x in iv)
+        and all(_is_date(x) for x in iv)
         and iv[0] <= iv[1] for iv in v)
 
 
@@ -892,10 +1116,12 @@ def _drop_bad_shapes(cache: dict, offline: bool) -> List[str]:
 def _drop_bad_obs(cache: dict, pair: str, offline: bool) -> List[str]:
     """Remove cached observations for `pair` that are not a positive
     finite number, and the coverage of their dates (an online run asks
-    the source again). One CacheProblem per bad value, naming the cache
-    file and the date (re-audit A2-1212 — a value such as "abc" was
-    copied verbatim into the rates file, and the run then blamed the
-    config: "no rates at all for USD")."""
+    the source again), and those filed under a day that is not a real
+    date ('2025-02-30': TJ-0584, a ValueError traceback before). One
+    CacheProblem per bad value, naming the cache file and the date
+    (re-audit A2-1212 — a value such as "abc" was copied verbatim into
+    the rates file, and the run then blamed the config: "no rates at all
+    for USD")."""
     out: List[str] = []
     then = ("that date has no row this run (TAXJSON_OFFLINE) and is asked "
             "for again online" if offline else "that date is asked for again")
@@ -907,6 +1133,14 @@ def _drop_bad_obs(cache: dict, pair: str, offline: bool) -> List[str]:
         if not isinstance(obs, dict):
             continue
         for d in sorted(obs):
+            if not _is_date(d):
+                # An observation under a day no calendar has
+                # ('2025-02-30'): damage, never a rate (TJ-0584).
+                out.append(CacheProblem(
+                    f"{CACHE_FILE} holds a {label} {pair} rate under "
+                    f"{d!r}, which is not a date — dropped."))
+                del obs[d]
+                continue
             if _good_rate(obs[d]):
                 continue
             out.append(CacheProblem(
@@ -914,14 +1148,19 @@ def _drop_bad_obs(cache: dict, pair: str, offline: bool) -> List[str]:
                 f"is not a positive number ({obs[d]!r}) — dropped; "
                 f"{then}."))
             del obs[d]
-            if _DATE_RE.match(str(d)):
-                _uncover(cache, key, d)
+            _uncover(cache, key, d)
     pre = f"{pair}-"
     for k in sorted(k for k in cache if isinstance(k, str)
                     and k.startswith(pre) and _DATE_RE.match(k[len(pre):])):
+        d = k[len(pre):]
+        if not _is_date(d):
+            out.append(CacheProblem(
+                f"{CACHE_FILE} holds a Yahoo {pair} rate under {k!r}, "
+                f"which is not a date — dropped."))
+            del cache[k]
+            continue
         if _good_rate(cache[k]):
             continue
-        d = k[len(pre):]
         out.append(CacheProblem(
             f"{CACHE_FILE} holds a Yahoo {pair} rate for {d} that is not "
             f"a positive number ({cache[k]!r}) — dropped; {then}."))
@@ -938,9 +1177,10 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
                 fetch_boc_fn: Optional[Callable] = None,
                 fetch_yahoo_fn: Optional[Callable] = None,
                 fetch_noon_fn: Optional[Callable] = None,
-                ) -> Tuple[List[Tuple[str, str, str]], List[str], List[str]]:
+                with_obs: bool = False,
+                ) -> Tuple[List[Tuple[str, ...]], List[str], List[str]]:
     """Refresh the cache as needed and resolve the rows. Returns
-    (rows, errors, notes)."""
+    (rows, errors, notes); `with_obs` as resolve_rows."""
     today = today or _s(date.today())
     cache = load_cache()
     before = json.dumps(cache, sort_keys=True)
@@ -986,8 +1226,8 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
                                 fetch_yahoo_fn)
     if json.dumps(cache, sort_keys=True) != before:
         save_cache(cache)
-    return resolve_rows(cache, from_curr, to_curr, start, end, today), \
-        errors, notes
+    return resolve_rows(cache, from_curr, to_curr, start, end, today,
+                        with_obs=with_obs), errors, notes
 
 
 def _spot_row(from_curr: str, to_curr: str) -> Optional[str]:
@@ -996,9 +1236,11 @@ def _spot_row(from_curr: str, to_curr: str) -> Optional[str]:
     date, so it only matters when today has no daily row."""
     if yf is None:
         return None
+    from taxjson.lib.price_chain import _quiet_yfinance
     try:
-        recent = yf.Ticker(f"{from_curr}{to_curr}=X").history(
-            period="1d", interval="1m")
+        with _quiet_yfinance():                 # backlog TJ-0242
+            recent = yf.Ticker(f"{from_curr}{to_curr}=X").history(
+                period="1d", interval="1m")
         if not recent.empty:
             now = datetime.now()
             return (f"{now:%Y-%m-%d} {now:%H:%M:%S} {from_curr} {to_curr} "
@@ -1042,8 +1284,9 @@ def main(argv=None):
     today = _s(date.today())
     end = args.end or today
     for label, val in (("--start", args.start), ("--end", end)):
-        if not _DATE_RE.match(val):
-            parser.error(f"{label} must be YYYY-MM-DD, got {val!r}")
+        if not _is_date(val):
+            parser.error(f"{label} must be a date written YYYY-MM-DD, "
+                         f"got {val!r}")
     from taxjson.lib.offline import offline_enabled
     offline = offline_enabled()
     # Offline the rows come from the cache only, so the missing Yahoo
@@ -1057,9 +1300,12 @@ def main(argv=None):
         return 0
 
     rows, errors, notes = build_rates(from_curr, to_curr, args.start, end,
-                                      today=today, offline=offline)
-    for d, val, src in rows:
-        print(f"{d} 12:00:00 {from_curr} {to_curr} {val} {src}")
+                                      today=today, offline=offline,
+                                      with_obs=True)
+    for d, val, src, obs in rows:
+        # A filled day names the day the rate was published.
+        print(f"{d} 12:00:00 {from_curr} {to_curr} {val} {src}"
+              + (f" {obs}" if obs != d else ""))
     if to_curr != "CAD" and not offline:
         spot = _spot_row(from_curr, to_curr)
         if spot:
@@ -1072,7 +1318,8 @@ def main(argv=None):
             continue
         emit_line(f"{PROG}: warning: download failed — {e}; dates it would "
               f"have covered have no rate this run.")
-    emit_line(f"{PROG}: note: FX {from_curr}→{to_curr}: {summarize(rows)}")
+    emit_line(f"{PROG}: note: FX {from_curr}→{to_curr}: "
+              f"{summarize([r[:3] for r in rows])}")
     return 0
 
 

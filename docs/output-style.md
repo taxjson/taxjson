@@ -334,7 +334,7 @@ whose stage is cached under `--fast` is not shown):
 | `==> Sorting, de-duplicating, mapping tickers, converting currency` | the books (equity) |
 | `==> Applying [[distributions]] from taxjson.toml` | taxable books with distributions |
 | `==> Merging the exports`, `==> Sorting, de-duplicating`, `==> Mapping tickers`, `==> Looking up crypto prices`, `==> Converting currency to CAD` | the books (crypto) |
-| `==> Writing crypto sends inputs/crypto/crypto_sends.tt` | decided sends booked |
+| `==> Writing crypto sends work/crypto_sends/crypto/crypto_sends.tt` | decided sends booked (`inputs/crypto/` in a single-folder project) |
 | `==> Calculating capital gains` | the gains |
 | `==> Writing holdings reports/tfsa_holdings.toml` | every account (a securities account's native-currency holdings stages are not shown) |
 | `==> Writing summary reports/tfsa.sum` | every account |

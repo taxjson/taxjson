@@ -73,8 +73,9 @@ and exits 1 when it finds anything to redact.
 With no FILE (`taxjson redact`, in a project or with -C DIR) the whole
 inputs/ folder is copied to inputs_redact/ (or --out DIR) and the COPY
 is redacted, every text file of it, ids consistent across the tree;
-file and folder names holding an id are renamed, the old -> new map
-printed on the console only. Binary files are not copied (each is
+file and folder names holding an id (or an e-mail address) are
+renamed, the old -> new map printed on the console only; a name-like
+file or folder name is listed to rename by hand. Binary files are not copied (each is
 named in a warning). inputs/ is never written; an existing copy is
 replaced only with --force. See the "project mode" section below.
 """
@@ -87,6 +88,7 @@ import functools
 import io
 import os
 import re
+import shlex
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -532,6 +534,7 @@ class Report:
         ("sins", "SIN(s)"),
         ("wallets", "wallet(s)"),
         ("broker_keys", "broker key(s)"),
+        ("paths", "folder path(s) of this computer"),
         ("patterns", "private-denylist match(es)"),
         ("review", "line(s) the redactor could not classify"),
     )
@@ -554,6 +557,9 @@ class Report:
         self.txids: Dict[str, str] = {}
         self.patterns = 0
         self.broker_keys = 0
+        # The line of each folder path of this computer replaced in a
+        # project copy's prior-year record (redact_record_paths).
+        self.paths: List[int] = []
         self.description_columns: List[str] = []
         self.review: List[Tuple[int, str]] = []  # (line number, reason)
         self.encoding = "utf-8"
@@ -579,7 +585,7 @@ class Report:
                     or self.names or self.phones or self.postal_codes
                     or self.addresses or self.sins or self.wallets
                     or self.txids or self.patterns or self.name_ids
-                    or self.broker_keys)
+                    or self.broker_keys or self.paths)
 
     def identity_counts(self, placeholder: Callable[[str], bool] = lambda v: False
                         ) -> List[Tuple[int, str]]:
@@ -738,6 +744,77 @@ def _split(line: str) -> Optional[List[str]]:
             return _split(line)
         rows = [[_unquote(line[s:e]) for s, e in _field_spans(line)]]
     return rows[0] if rows else []
+
+
+# The rest of a quoted cell up to its closing quote (a line break in
+# it included), else up to the line's end.
+_IN_QUOTED_CELL = r'^(?:[^"]*(?=")|[^"\r\n]*)'
+# A quoted cell open over more lines than this is read as a stray quote.
+_RECORD_SPAN = 50
+_PHYSICAL_LINE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z")
+UNBALANCED_REASON = ("a quote opened and never closed: read line by line, "
+                     "so a cell that spans lines may keep part of a name "
+                     "or id")
+
+
+def _open_quote_after(line: str, in_q: bool) -> bool:
+    """Whether a quoted cell is still open at the end of `line`, by the
+    csv module's rule: a quote opens a cell only at its start, and ""
+    inside one is a quote."""
+    start = not in_q
+    i, n = 0, len(line)
+    while i < n:
+        ch = line[i]
+        if in_q:
+            if ch == '"':
+                if i + 1 < n and line[i + 1] == '"':
+                    i += 2
+                    continue
+                in_q = False
+        elif ch == '"' and start:
+            in_q = True
+        start = ch == "," and not in_q
+        i += 1
+    return in_q
+
+
+def _csv_records(text: str) -> Tuple[List[Tuple[int, str]], List[int]]:
+    """(the records of `text`, each with the line it starts on; the
+    lines whose quote never closes). A quoted cell that spans lines (a
+    Description or an alias with a line break) is one record, as the
+    csv module and the parsers read it: a line at a time, its account
+    cell was never looked at, and a blanked alias left its second line
+    and broke the row (backlog TJ-0414). A quote that never closes (or
+    stays open over _RECORD_SPAN lines) cannot be told from a stray
+    one: those lines are read one by one, and listed for review."""
+    lines = _PHYSICAL_LINE.findall(text)
+    records: List[Tuple[int, str]] = []
+    unbalanced: List[int] = []
+    cur: List[str] = []
+    start, in_q = 1, False
+    for no, ln in enumerate(lines, start=1):
+        if not cur:
+            start = no
+        cur.append(ln)
+        in_q = _open_quote_after(ln, in_q)
+        if in_q and len(cur) < _RECORD_SPAN:
+            continue
+        if in_q:
+            records += [(start + k, x) for k, x in enumerate(cur)]
+            unbalanced.append(start)
+            in_q = False
+        else:
+            records.append((start, "".join(cur)))
+        cur = []
+    if cur:
+        records += [(start + k, x) for k, x in enumerate(cur)]
+        unbalanced.append(start)
+    return records, unbalanced
+
+
+def _line_breaks(text: str) -> int:
+    """The physical line breaks in `text` (\\r\\n, \\r or \\n)."""
+    return len(re.findall(r"\r\n|\r|\n", text))
 
 
 def _unquote(field: str) -> str:
@@ -988,6 +1065,11 @@ def _sub_address(rx: re.Pattern, line: str) -> Tuple[str, int]:
     return rx.sub(sub, line), n
 
 
+# The words of _NAME_AFTER's party triggers: never a name themselves.
+_NAME_TRIGGERS = frozenset(("beneficiary", "payee", "remitter", "ordering",
+                            "customer"))
+
+
 def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     """Phones, postal codes, street addresses, SIN/SSN, honorific /
     initiated-by names — anywhere on the line. A candidate name that
@@ -1039,8 +1121,12 @@ def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     mixed = []
 
     def decide(m: re.Match) -> str:
-        if all(w.strip(".,") == "REDACTED" for w in m.group(2).split()):
-            return m.group(0)           # a copy's own stand-in
+        if all(w.strip(".,") == "REDACTED"
+               or w.strip(".,").lower() in _NAME_TRIGGERS
+               for w in m.group(2).split()):
+            # A copy's own stand-in, or a name replaced after its
+            # trigger word ('WIRE TO BENEFICIARY REDACTED').
+            return m.group(0)
         v, n = _vocab_split([w.strip(".") for w in m.group(2).split()])
         if v == 0:
             rep.names += 1
@@ -1128,6 +1214,30 @@ def _from_to_name(text: str) -> bool:
                for w in words)
 
 
+# "TRANSFER IN FROM PLAN HOLDER JORDAN SAMPLEPERSON": a registered
+# plan's party word, then 2-4 capitalised words. Listed for review, not
+# replaced: a plan description can go on the same way (backlog TJ-0479).
+_PARTY_NAME = re.compile(
+    r"(?i:\b(?:annuitant|subscriber|beneficiar(?:y|ies)|holder|owner"
+    r"|contributor|spouse|successor|titulaire|b[ée]n[ée]ficiaire"
+    r"|souscripteur|rentier|cotisant))[ \t]*[:-]?[ \t]+("
+    + _NAME_WORD + r"(?:[ ]+" + _NAME_WORD + r"){1,3})(?![\w'’-])")
+
+
+def _party_name(text: str) -> bool:
+    """`text` has a plan party's word followed by 2-4 capitalised
+    words, one at least no statement vocabulary, currency or security
+    word (_PARTY_NAME)."""
+    for m in _PARTY_NAME.finditer(text):
+        words = [w.strip(".,").lower() for w in m.group(1).split()]
+        if "redacted" in words or sum(len(w) >= 2 for w in words) < 2:
+            continue
+        if any(w not in _VOCAB and w not in _CCY
+               and w not in _SECURITY_WORDS for w in words):
+            return True
+    return False
+
+
 def _review(lineno: int, text: str, where: str, rep: Report) -> None:
     for ph in (*rep.accounts.values(), *rep.wallets.values(), *rep.txids.values()):
         if ph in text:
@@ -1146,6 +1256,8 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
             reasons.append("name-like words")
         elif _from_to_name(text):
             reasons.append("name-like words after FROM / TO")
+        elif _party_name(text):
+            reasons.append("name-like words after a plan holder's word")
     for m in _REVIEW_DIGITS.finditer(text):
         tok = m.group(0)
         if "9990" not in tok[:5] and not _DATE8.fullmatch(tok):
@@ -1194,6 +1306,99 @@ def _identity_cols(low: List[str]) -> List[int]:
         if any(c in _ADDRESS_ANCHORS for c in low):
             cols += [i for i, c in enumerate(low) if c in _ADDRESS_COLS]
     return sorted(set(cols))
+
+
+# Column names of the exports taxjson reads (and their usual spellings):
+# with the id, alias, holder, address, free-text and transaction-id
+# columns above, what makes a row a flat CSV's header.
+_COLUMN_WORDS = frozenset("""
+date time datetime timestamp symbol ticker security instrument asset
+quantity qty units shares amount price currency action type side total
+value cost proceeds commission commissions fee fees net gross balance
+status exchange market pair rate fx subtotal tax
+""".split()) | frozenset((
+    "trade date", "settlement date", "settle date", "transaction date",
+    "process date", "activity date", "run date", "date/time",
+    "net amount", "gross amount", "activity type", "account type",
+    "transaction type", "security type", "asset type", "unit price",
+    "price per share", "book value", "market value", "trade id",
+    "order id", "exchange rate", "fx rate", "spot price", "realized",
+    "withholding tax", "accrued interest", "cusip", "isin"))
+# A cell that is data, not a column name: a number (an amount, a
+# quantity, an id) or a date.
+_DATA_CELL = re.compile(
+    r"[-+(]?[$€£¥]?[ \t]*\d[\d,]*(?:\.\d*)?\)?%?"
+    r"|\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}(?:[ T].*)?")
+
+
+def _names_column(cell: str) -> bool:
+    """`cell`, whole, names a column: a known export column, or an
+    account-id / holder / party label. A holder word inside longer
+    text ('WIRE TO BENEFICIARY JORDAN SAMPLEPERSON') is not one
+    (backlog TJ-0479)."""
+    c = cell.strip().strip('"').strip().lower()
+    if not c or len(c) > 40 or len(c.split()) > 4:
+        return False
+    return (c in _COLUMN_WORDS or c in _HOLDER_NAME_COLS
+            or c in _ADDRESS_COLS or _is_person_col(c) or _strong_column(c))
+
+
+def _strong_column(cell: str) -> bool:
+    """`cell`, whole and short, names a column one cell of which makes
+    a row a header (an id, alias, holder, free-text or transaction-id
+    column); a label such as `User` or `Name` does not (it starts an
+    identity line: `User,<name>,<id>`)."""
+    c = cell.strip().strip('"').strip().lower()
+    if not c or len(c) > 40 or len(c.split()) > 4:
+        return False
+    return (c in _TXID_COLS or c in _FREE_TEXT_COLS or _is_holder_col(c)
+            or _is_account_col(c))
+
+
+def _is_identity_line(nonempty: List[str]) -> bool:
+    """A line of an identity label word ('Name', 'Client', 'Account
+    Holder' ...: `_HEADER_LINE`'s words) followed by cells that make up
+    a person's name and name no column: 'Name,Jane,Sample'. Its
+    digit-free cells passed `_is_flat_header`'s fallback, so the name
+    was read as column names and kept (backlog TJ-0608)."""
+    if len(nonempty) < 3:
+        return False      # 'Name,Jane Sample': the two-cell rule's
+    first = nonempty[0].strip().strip('"').strip()
+    if not _HEADER_LINE.fullmatch(first + ","):
+        return False
+    rest = [c.strip().strip('"').strip() for c in nonempty[1:]]
+    return (not any(_names_column(c) for c in rest)
+            and _name_line_kind(" ".join(rest)) == "name")
+
+
+def _is_flat_header(cells: List[str], nonempty: List[str],
+                    width: Optional[int]) -> bool:
+    """Whether a row (not IB's) is a flat CSV's column header. `width`:
+    the cell count of the header in effect (None before the first).
+
+    Never a row holding a number or a date, nor a row of `Label:`
+    cells. Two cells: both must name columns ('AccountAlias,Symbol';
+    'Name,Jane Sample' is an identity line). A row as wide as the
+    header in effect is one of its data rows unless most of its cells
+    name columns: a digit-free data row ('Sample Person,SYN.TO,
+    Dividend') was read as a new header, and its alias kept (backlog
+    TJ-0569). Otherwise, as before: three or more cells, one naming an
+    id / alias / holder / free-text / transaction-id column (or two any
+    column), or none holding a digit."""
+    if len(nonempty) < 2 or any(_is_label_cell(c) for c in nonempty):
+        return False
+    if any(_DATA_CELL.fullmatch(c.strip().strip('"').strip())
+           for c in nonempty):
+        return False
+    if _is_identity_line(nonempty):
+        return False
+    named = sum(_names_column(c) for c in nonempty)
+    if len(nonempty) == 2:
+        return named == 2
+    if width is not None and len(cells) == width:
+        return named >= 2 and 2 * named >= len(nonempty)
+    return (named >= 2 or any(_strong_column(c) for c in nonempty)
+            or all(not any(ch.isdigit() for ch in c) for c in nonempty))
 
 
 # HTML statements (IB's .html reports): a label cell naming an identity
@@ -1393,7 +1598,9 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
         rep.notes.append(f"pattern skipped (not a valid regex): {b}")
     text = _redact_html_identity(text, rep)
     text = _redact_broker_keys(text, rep)
-    lines = text.splitlines(keepends=True)
+    # One CSV record at a time: a quoted cell may span lines (TJ-0414).
+    records, unbalanced = _csv_records(text)
+    lines = [r for _n, r in records]
     kept = set()
     collected = _collect_ids(lines)
     for orig in collected:
@@ -1416,13 +1623,22 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     txid_cols: Dict[str, List[int]] = {}
     free_cols: Dict[str, List[Tuple[int, str]]] = {}
     in_preamble = True
+    # The cell count of the flat header in effect (_is_flat_header).
+    flat_width: Optional[int] = None
     wallet_repl = _mapper(rep.pseudonyms.wallets, rep.wallets,
                           lambda v: _plausible_wallet(v) and not (
                               stand_ins and _is_pseudonym(v)))
     txid_repl = _mapper(rep.pseudonyms.txids, rep.txids,
                         lambda v: not (stand_ins and _is_pseudonym(v)))
     out: List[str] = []
-    for lineno, line in enumerate(lines, start=1):
+    # The copy's line numbers (a blanked cell that spanned lines is one
+    # line there): what the review list names.
+    copy_line = 1
+    unbalanced_at = set(unbalanced)
+    for (src_line, line) in records:
+        lineno = copy_line
+        if src_line in unbalanced_at:
+            rep.review.append((lineno, UNBALANCED_REASON))
         body = line.rstrip("\r\n")
         cells = _split(body)
         low = [c.strip().lower() for c in cells] if cells else []
@@ -1438,16 +1654,15 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             free_cols[low[0]] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                  if c in _FREE_TEXT_COLS]
             free_cols[low[0]] += _name_review_cols(cells, low, alias_cols[low[0]])
-        elif low and len(nonempty) >= 3 and not is_ib_row and not any(
-                _is_label_cell(c) for c in nonempty) and (
-                any(c in _TXID_COLS + _FREE_TEXT_COLS or _is_holder_col(c)
-                    or _is_account_col(c) for c in low)
-                or all(not any(ch.isdigit() for ch in c) for c in nonempty)):
+        elif low and not is_ib_row and _is_flat_header(cells, nonempty,
+                                                       flat_width):
             # (A row of `Label:,value` pairs is never a header: four
             # digit-free cells were read as one, and the label pass
             # skipped them, A2-0765.)
-            # A flat CSV's column header row.
+            # A flat CSV's column header row: the table starts here.
             header_row = True
+            flat_width = len(cells)
+            in_preamble = False
             alias_cols["__flat__"] = _identity_cols(low)
             txid_cols["__flat__"] = [i for i, c in enumerate(low) if c in _TXID_COLS]
             free_cols["__flat__"] = [(i, cells[i].strip()) for i, c in enumerate(low)
@@ -1457,7 +1672,11 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                     rep.description_columns.append(_name)
             free_cols["__flat__"] += _name_review_cols(cells, low,
                                                        alias_cols["__flat__"])
-        if len(nonempty) >= 3:
+        # 'Name,Jane,Sample' (backlog TJ-0608): identity, and still the
+        # preamble (an address line may follow it).
+        identity_line = (not is_ib_row and not header_row
+                         and _is_identity_line(nonempty))
+        if len(nonempty) >= 3 and not identity_line:
             in_preamble = False
         sect = low[0] if is_ib_row else "__flat__"
         # Identity rows (IB Account Information) and alias columns.
@@ -1494,7 +1713,22 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                     line = _replace_field(line, cells, i, ph)
                     cells = _split(line.rstrip("\r\n")) or []
         label_done = False
-        if cells and not is_ib_row and not header_row:
+        if identity_line:
+            # Every cell after the label word is the name (only the
+            # first was replaced by the `_HEADER_LINE` pass); the label
+            # stays.
+            first = next(i for i, c in enumerate(cells) if c.strip())
+            hit = False
+            for j in range(first + 1, len(cells)):
+                v = cells[j].strip()
+                if v and v.upper() not in acct_upper:
+                    new = _replace_field(line, cells, j, "REDACTED")
+                    hit = hit or new != line
+                    line = new
+                    cells = _split(line.rstrip("\r\n")) or []
+            rep.identity_rows += hit
+            label_done = True
+        elif cells and not is_ib_row and not header_row:
             # Every `Label:` cell of the row, wherever it sits: only the
             # first non-empty cell was looked at, so 'Account Number:,X,
             # Name:,Y' kept the name and 'Contact,Phone:,416…' the phone
@@ -1526,9 +1760,13 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             rest = line[m.end():]
             if rest.startswith('"'):
                 # A quoted CSV field (`"User","Jane Sample",...`).
-                new_rest = re.sub(r'^"[^"\r\n]*"', '"REDACTED"', rest, count=1)
+                # (the whole cell, a line break in it included:
+                # TJ-0414)
+                new_rest = re.sub(r'^"(?:[^"]|"")*"', '"REDACTED"', rest,
+                                  count=1)
             elif m.group(1).strip().endswith('"') and '"' not in m.group(2):
-                new_rest = re.sub(r'^[^"\r\n]*', "REDACTED", rest, count=1)
+                new_rest = re.sub(_IN_QUOTED_CELL, "REDACTED", rest,
+                                  count=1)
             else:
                 new_rest = re.sub(r'^[^,\r\n]*', "REDACTED", rest, count=1)
             rep.identity_rows += new_rest != rest
@@ -1536,7 +1774,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
         m = _ACCOUNT_HEADER_NAME.match(line)
         if m and not is_ib_row and len(nonempty) <= 2:
             rest = line[m.end():]
-            pat = r'^[^"\r\n]*' if m.group(1).lstrip().startswith('"') else r'^[^,\r\n]*'
+            pat = (_IN_QUOTED_CELL if m.group(1).lstrip().startswith('"')
+                   else r'^[^,\r\n]*')
             tail = re.match(pat, rest).group(0)
             if re.search(r"[A-Za-z]", tail) and tail.strip() != "REDACTED":
                 line = line[:m.end()] + "REDACTED" + rest[len(tail):]
@@ -1550,7 +1789,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             new = _blank_cells(line)
             rep.postal_codes += new != line
             line = new
-        elif in_preamble and not is_ib_row and nonempty:
+        elif in_preamble and not is_ib_row and nonempty and not identity_line:
             joined = " ".join(c.strip() for c in nonempty)
             kind = _name_line_kind(joined)
             if (kind == "name" or _STREET.search(joined)
@@ -1589,17 +1828,21 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                     if i < len(new_cells):
                         _review(lineno, new_cells[i], f"column {name!r}", rep)
         out.append(line)
+        copy_line += _line_breaks(line)
     # Verify, never assume: any collected id still in the copy is
     # counted (and its lines listed for review) so the report cannot
     # claim a replacement it did not make.
+    copy = "".join(out)
+    low_copy = copy.lower()
     for orig in rep.accounts:
         o = orig.lower()
-        hits = [n for n, ln in enumerate(out, start=1) if o in ln.lower()]
+        hits = sorted({1 + _line_breaks(low_copy[:m.start()])
+                       for m in re.finditer(re.escape(o), low_copy)})
         if hits:
-            rep.unreplaced[orig] = sum(ln.lower().count(o) for ln in out)
+            rep.unreplaced[orig] = low_copy.count(o)
             for n in hits:
                 rep.review.append((n, UNREPLACED_REASON))
-    return "".join(out), rep
+    return copy, rep
 
 
 _BINARY_MAGIC = (
@@ -1773,7 +2016,7 @@ def redacted_name(src: Path, accounts: Dict[str, str],
     are found on the ORIGINAL stem and every id is substituted in one
     pass — scanning after the substitution re-numbered the digits of
     the placeholder itself (U99900001 -> U99900002, R1-352)."""
-    stem = src.stem
+    stem = _EMAIL.sub("redacted@example.com", src.stem)
     for pat in patterns or []:
         stem = pat.sub("REDACTED", stem)
     table = known_ids if known_ids is not None else dict(accounts)
@@ -1842,6 +2085,12 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     # renamed the copy (A2-0459).
     rep.name_ids = [Report.masked(t) for t in name_only_ids(src.stem, rep.accounts)
                     if not (stand_ins and _is_placeholder_id(t))]
+    # An e-mail address in the NAME gets the content's stand-in; name-
+    # like words there are said, never guessed at (backlog TJ-0481).
+    rep.emails += _emails_found(src.stem)
+    if _name_like_name(src.stem):
+        rep.notes.append("the file name holds name-like words: rename "
+                         "the copy by hand before sharing it")
     rep.encoding = enc
     if enc != "utf-8":
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
@@ -2100,6 +2349,11 @@ def _diag(kind: str, text: str, details=(), file=None) -> None:
 #     contact details of their comments, never reading a rule line as
 #     a row; the copied taxjson.toml must read as TOML, or nothing is
 #     written (GitHub #22, #26).
+#   * The close-year record a year folder's estimate carries from is
+#     copied to prior/<name> (backlog TJ-0581), redacted as the settings
+#     files are and each string of it naming a folder of this computer
+#     (the home folder, a person's name in a path) replaced:
+#     redact_record_paths (backlog TJ-0700). It must read as JSON.
 #   * File and folder NAMES that carry an account id (IB names
 #     downloads after the account) get the same placeholder as the
 #     content; names stay unique (`-2` ...). The old -> new map is
@@ -2220,6 +2474,8 @@ def _component_name(name: str, is_file: bool, known_ids: Dict[str, str],
     8+ digit run that is not a date — an id only the name carries) its
     placeholder. The extension is kept."""
     stem, suffix = os.path.splitext(name) if is_file else (name, "")
+    # An e-mail address gets the content's stand-in (backlog TJ-0481).
+    stem = _EMAIL.sub("redacted@example.com", stem)
     for pat in patterns:
         stem = pat.sub("REDACTED", stem)
     subs: Dict[str, str] = {o: ph for o, ph in list(known_ids.items())
@@ -2235,6 +2491,33 @@ def _component_name(name: str, is_file: bool, known_ids: Dict[str, str],
             subs, key=len, reverse=True)), re.IGNORECASE)
         stem = alt.sub(lambda m: bykey[m.group(0).upper()], stem)
     return stem + suffix
+
+
+def _name_like_name(stem: str) -> bool:
+    """A file or folder name (without its extension) that holds
+    name-like words, read as the review pass reads free text (`_`, `.`,
+    `+` and `-` as spaces): 'Jordan Sampleperson - Questrade 2024'.
+    Listed, never renamed: a guess would rename an account's folder
+    (backlog TJ-0481)."""
+    rep = Report()
+    _review(1, re.sub(r"[_.+-]+", " ", stem), "a name", rep)
+    return any("name-like" in why for _n, why in rep.review)
+
+
+def _name_like_paths(names: Dict[Path, Path], dirs: List[Path]
+                     ) -> List[Tuple[str, str]]:
+    """(original, copy) relative paths, a folder's ending in `/`, of
+    every entry whose own name in the copy holds name-like words
+    (_name_like_name): each folder once, not each file in it."""
+    folders = set(dirs)
+    out = []
+    for rel, new in names.items():
+        part = new.name
+        stem = part if rel in folders else os.path.splitext(part)[0]
+        if _name_like_name(stem):
+            end = "/" if rel in folders else ""
+            out.append((rel.as_posix() + end, new.as_posix() + end))
+    return sorted(out)
 
 
 def _unique(name: str, is_file: bool, used: set) -> str:
@@ -2289,7 +2572,7 @@ def _tree_ids(decoded, dirs: List[Path], files: List["_TreeFile"],
     ones (IdTable.reserved)."""
     out = {v.upper() for v in cfg}
     for f, text, _enc in decoded:
-        lines = text.splitlines(keepends=True)
+        lines = [r for _n, r in _csv_records(text)[0]]
         out.update(v.upper() for v in _collect_ids(lines))
         out.update(v.upper() for v in _text_ids(text))
     for rel in list(dirs) + [f.rel for f in files]:
@@ -2363,6 +2646,8 @@ def _count_items(f: _TreeFile) -> List[Tuple[int, str, str]]:
             (len(rep.txids), "transaction id", ""),
             (rep.patterns, "denylist / --also match", "denylist / --also matches"),
             (rep.broker_keys, "slips.toml broker_key", ""),
+            (len(rep.paths), "folder path of this computer",
+             "folder paths of this computer"),
             (f.swept, "id found in another file", "ids found in other files")):
         if n:
             out.append((n, one, many))
@@ -2515,12 +2800,20 @@ def _project_tree(root: Path, inputs: Path
     files: List[_TreeFile] = []
     hidden = 0
     seen: set = set()
+    walked: set = set()
     for src, prefix, inside in (
             (inputs, Path(_PL.INPUTS), bound),
             (root / _PL.INPUTS, Path(_PL.INPUTS), root / _PL.INPUTS),
             (_PL.holdings_folder(root), Path(_PL.HOLDINGS), bound)):
         if not src.is_dir():
             continue
+        try:
+            here = src.resolve()
+        except (OSError, RuntimeError):
+            here = src
+        if here in walked:
+            continue                # a project copy: inputs/ is its own
+        walked.add(here)
         if prefix not in dirs:
             dirs.append(prefix)
         d, f, h = _walk_inputs(src, prefix, inside)
@@ -2539,9 +2832,180 @@ def _project_tree(root: Path, inputs: Path
             if q.is_file():
                 files.append(_TreeFile(Path(name), q))
             continue
-        if q.is_file() and not q.is_symlink():
+        if q.is_symlink():
+            # A link to a file in the folder holding the project (a
+            # taxjson.toml kept as config-real.toml) is followed, the
+            # copy holding the file itself: it was left out without a
+            # word, and the copy said to be runnable had no taxjson.toml
+            # (backlog TJ-0580). One pointing elsewhere is named.
+            tf = _TreeFile(Path(name), q)
+            if not q.exists():
+                tf.skip = "a symlink to a file that does not exist"
+            elif not _inside(q, bound):
+                tf.skip = ("a symlink to a file outside the folder holding "
+                           "the project (not followed)")
+            elif not q.is_file():
+                tf.skip = "not a regular file"
+            files.append(tf)
+        elif q.is_file():
             files.append(_TreeFile(Path(name), q))
+    rec = _prior_record(root)
+    if rec is not None:
+        dirs.append(Path(PRIOR_DIR))
+        files.append(_TreeFile(Path(PRIOR_DIR) / rec.name, rec))
     return dirs, files, hidden
+
+
+# Where a project copy carries the close-year record of the year before
+# (the copy's `prior_year_record` names it).
+PRIOR_DIR = "prior"
+
+
+def _prior_record(root: Path) -> Optional[Path]:
+    """The close-year lock the project's estimate reads its carry-
+    forwards from (the latest before the project year: filed/<year>.json
+    or the one [settings] prior_year_record names), or None. Its
+    relative path, kept in the copy, named a file the copy does not
+    hold, and the copy's estimate dropped the loss carried in (backlog
+    TJ-0581)."""
+    from taxjson.lib.carryforward import prior_lock
+    settings = _PL.read_config_soft(root).get("settings")
+    try:
+        lock = prior_lock(root, settings if isinstance(settings, dict)
+                          else {})
+    except Exception:                                   # noqa: BLE001
+        return None
+    if lock is None or not Path(lock[1]).is_file():
+        return None
+    return Path(lock[1])
+
+
+def _copy_prior_record_setting(files: List[_TreeFile],
+                               names: Dict[Path, Path]) -> None:
+    """The copied taxjson.toml's `prior_year_record`: the record copied
+    into prior/ (by its name in the copy), or, with none copied, the
+    key commented out (its path named a file outside the copy)."""
+    cfg_tf = next((f for f in files if f.rel == Path(_PL.CONFIG)
+                   and f.text is not None), None)
+    if cfg_tf is None:
+        return
+    rec = next((f for f in files if f.rel.parts[:1] == (PRIOR_DIR,)
+                and f.text is not None), None)
+    key = ("settings", "prior_year_record")
+    try:
+        doc = _PL.parse_toml(cfg_tf.text)
+    except _PL.LayoutError:
+        return                      # (refused by _valid_copy_config)
+    if rec is None and not (doc.get("settings") or {}).get(
+            "prior_year_record"):
+        return
+    try:
+        cfg_tf.text = _PL.set_key_text(
+            cfg_tf.text, key,
+            names[rec.rel].as_posix() if rec is not None else None)
+    except _PL.LayoutError:
+        pass                        # (refused by _valid_copy_config)
+
+
+def _valid_copy_record(files: List[_TreeFile]) -> Optional[str]:
+    """Why the copied prior-year record would not read as JSON, or
+    None."""
+    import json
+    for f in files:
+        if f.rel.parts[:1] == (PRIOR_DIR,) and f.text is not None:
+            try:
+                json.loads(f.text)
+            except ValueError as e:
+                return f"{f.rel.as_posix()}: {e}"
+    return None
+
+
+# What a folder path of this computer in a copy's prior-year record
+# becomes (redact_record_paths); a key's is numbered (a lock's keys are
+# unique).
+PATH_PLACEHOLDER = "<redacted path>"
+# Where an absolute path starts in a string: at its start or after a
+# space or `(` — a home folder (`~`, `~user/`), a drive (`C:\`, `C:/`),
+# a network share (`\\server`), or `/a/...` (a one-folder `/ES`, a
+# futures root, is no path).
+_ABS_PATH = re.compile(r"(?<![^\s(])(?:~[A-Za-z0-9._-]*[/\\]|~\Z"
+                       r"|[A-Za-z]:[/\\]|[/\\]{2}[^/\\\s]|/[^/\n]+/)")
+# A relative path, from the folder of the project that wrote the record.
+_UP_PATH = re.compile(r"\.\.(?:[/\\]|\Z)")
+# The end of a carry-forward's opening_source naming the record it came
+# from (carryforward._from_lock): kept, as later checks read it.
+_RECORD_LABEL_END = re.compile(r" \(the \d{4} close-year record\)\Z")
+_JSON_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+_JSON_KEY_END = re.compile(r"\s*:")
+
+
+def _record_path(value: str) -> Optional[int]:
+    """Where the path in a string of a close-year record that names a
+    folder of this computer starts, or None: an absolute or home path,
+    or a relative one (`../`) that leaves the folder holding the years
+    or passes through a folder with name-like words (_name_like_name).
+    `../inputs`, a project's own `inputs/<account>/<file>` and a value
+    such as `/ESZ4` are kept."""
+    m = _ABS_PATH.search(value)
+    if m is not None:
+        return m.start()
+    if not _UP_PATH.match(value):
+        return None
+    end = _RECORD_LABEL_END.search(value)
+    parts = [p for p in re.split(r"[/\\]+", value[:end.start() if end
+                                                    else len(value)])
+             if p not in ("", ".")]
+    ups = 0
+    while ups < len(parts) and parts[ups] == "..":
+        ups += 1
+    if ups > 1 or any(_name_like_name(os.path.splitext(p)[0])
+                      for p in parts[ups:]):
+        return 0
+    return None
+
+
+def redact_record_paths(text: str, rep: Report) -> str:
+    """The close-year record a project copy carries (prior/<name>,
+    backlog TJ-0581) with each string that names a folder of this
+    computer (_record_path) replaced by PATH_PLACEHOLDER, its line in
+    `rep.paths`. The record's `frozen` folders, a carry-forward's
+    opening_source and the --filed-dispositions file held the home
+    folder or a person's name, and redact said there was nothing to
+    redact (backlog TJ-0700). The path runs to the end of the string
+    (a `(the <year> close-year record)` after it is kept); a key's
+    placeholder is numbered. Nothing the next year reads from the
+    record (its figures, its year, its dates) is a path; the rest of
+    the text is kept byte for byte."""
+    import json
+    out: List[str] = []
+    last = 0
+    line, at = 1, 0
+    keys = 0
+    for m in _JSON_STRING.finditer(text):
+        lit = m.group(0)
+        if not any(c in lit for c in "/\\~"):
+            continue
+        try:
+            value = json.loads(lit)
+        except ValueError:
+            continue
+        start = _record_path(value) if isinstance(value, str) else None
+        if start is None:
+            continue
+        if _JSON_KEY_END.match(text, m.end()):
+            keys += 1
+            new = f"{PATH_PLACEHOLDER[:-1]} {keys}>"
+        else:
+            end = _RECORD_LABEL_END.search(value, start)
+            new = (value[:start] + PATH_PLACEHOLDER
+                   + value[end.start() if end else len(value):])
+        line += text.count("\n", at, m.start())
+        at = m.start()
+        rep.paths.append(line)
+        out += [text[last:m.start()], json.dumps(new)]
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 def _copy_holdings_lists(root: Path, inputs: Path, files: List[_TreeFile],
@@ -2649,6 +3113,52 @@ def config_ids(root: Path) -> Tuple[List[str], List[str]]:
     return ids, local
 
 
+# An account id key inside an inline table (`margin = { query_id =
+# "2025" }`) and its value.
+_INLINE_ID_VALUE = re.compile(
+    r"((?<![A-Za-z0-9_-])[\"']?(?:" + "|".join(_CONFIG_ID_KEYS)
+    + r")[\"']?[ \t]*=[ \t]*)"
+    r"(\"(?:[^\"\\\n]|\\.)*\"|'[^'\n]*'|\[[^\]\n]*\]?|[^,}\s#]+)")
+
+
+def _sub_id_fields(text: str, sub: Callable[[str], Tuple[str, Dict[str, int]]]
+                   ) -> Tuple[str, Dict[str, int]]:
+    """`sub` (an _id_subber) applied to the values of an account's id
+    keys only (config_ids' explicit `account`, `broker_accounts`,
+    `query_id` of an [accounts.NAME] table, or inside its inline
+    table), every line of a value over several; the rest of the text,
+    the comments after a value included, as it was. The text and the
+    count per id (upper case)."""
+    try:
+        statements = _PL.toml_statements(text)
+    except Exception:                                   # noqa: BLE001
+        statements = []
+    lines = text.split("\n")
+    counts: Dict[str, int] = {}
+
+    def apply(s: str) -> str:
+        new, c = sub(s)
+        for k, v in c.items():
+            counts[k] = counts.get(k, 0) + v
+        return new
+    for st in statements:
+        path = tuple(st.table) + tuple(st.key)
+        if st.kind != "kv" or not path or path[0] != "accounts":
+            continue
+        for i in range(st.first, min(st.last, len(lines) - 1) + 1):
+            ln = lines[i]
+            if len(path) == 3 and path[2] in _CONFIG_ID_KEYS:
+                start = ln.find("=") + 1 if i == st.first else 0
+                end = max(_comment_at(ln), start)
+                lines[i] = ln[:start] + apply(ln[start:end]) + ln[end:]
+            elif len(path) <= 2:
+                end = _comment_at(ln)
+                lines[i] = _INLINE_ID_VALUE.sub(
+                    lambda m: m.group(1) + apply(m.group(2)),
+                    ln[:end]) + ln[end:]
+    return "\n".join(lines), counts
+
+
 def _text_ids(text: str) -> List[str]:
     """The ids the free-text detectors find in a settings file: IB ids,
     `account <id>` / `transfer from <id>` phrases, `account = "<id>"`
@@ -2710,7 +3220,8 @@ def _generated_comments() -> frozenset:
 
 def redact_project_text(text: str, compiled: List[re.Pattern],
                         known_ids: Dict[str, str],
-                        cfg_ids: Tuple[List[str], List[str]] = ([], [])
+                        cfg_ids: Tuple[List[str], List[str]] = ([], []),
+                        stand_ins: bool = False
                         ) -> Tuple[str, Report]:
     """A year's own settings file (taxjson.toml, ticker.map, tobase.map)
     as copied by `taxjson redact` (GitHub #22): the configuration's ids
@@ -2726,21 +3237,32 @@ def redact_project_text(text: str, compiled: List[re.Pattern],
     rep = Report()
     rep.known_ids = known_ids
     rep.name_patterns = compiled
+    rep.stand_ins = stand_ins
     glob, local = cfg_ids
     found = list(glob)
     for v in _text_ids(text):
+        if stand_ins and _is_placeholder_id(v):
+            continue        # a redacted copy's own (backlog TJ-0097)
         if v.upper() not in {x.upper() for x in found}:
             found.append(v)
     subs: List[Tuple[str, str]] = []
     for v in found:
         subs.append((v, _known_placeholder(known_ids, v, found)))
-    for n, v in enumerate(local, start=1):
-        subs.append((v, _placeholder(v, n)))
     sub_ids = _id_subber(subs)
     if sub_ids:
         # In one pass (backlog TJ-0249).
         text, counts = sub_ids(text)
         for orig, ph in subs:
+            if counts.get(orig.upper()):
+                rep.accounts.setdefault(orig, ph)
+    # A short id (a 4-digit query id) only in the value of the key it
+    # came from: replaced through the whole file, `query_id = "2025"`
+    # turned `year = 2025` into 9999 (backlog TJ-0579).
+    lsubs = [(v, _placeholder(v, n)) for n, v in enumerate(local, start=1)]
+    sub_local = _id_subber(lsubs)
+    if sub_local:
+        text, counts = _sub_id_fields(text, sub_local)
+        for orig, ph in lsubs:
             if counts.get(orig.upper()):
                 rep.accounts.setdefault(orig, ph)
     out: List[str] = []
@@ -2774,6 +3296,29 @@ def _valid_copy_config(files: List["_TreeFile"]) -> Optional[str]:
     except Exception as e:                              # noqa: BLE001
         return str(e)
     return None
+
+
+def _run_output(root: Path, files: List[_TreeFile]) -> List[str]:
+    """The top-level entries of a project copy that are not part of it
+    (its inputs/, holdings/, prior/, settings files and marker): what a
+    run of the copy wrote — work/, reports/, filed/, checklist.json —
+    whose files hold this computer's folder paths (backlog TJ-0484)."""
+    own = {TREE_MARKER, PRIOR_DIR, _PL.INPUTS, _PL.HOLDINGS,
+           _PL.holdings_folder(root).name, *_PROJECT_FILES}
+    own |= {f.rel.parts[0] for f in files if f.rel.parts}
+    try:
+        kids = sorted(root.iterdir())
+    except OSError:
+        return []
+    return [k.name + ("/" if k.is_dir() and not k.is_symlink() else "")
+            for k in kids
+            if k.name not in own and not k.name.startswith(".")]
+
+
+def _listing(names: List[str]) -> str:
+    """`a`, `a and b`, `a, b and c`."""
+    return (names[0] if len(names) == 1
+            else ", ".join(names[:-1]) + " and " + names[-1])
 
 
 def redact_tree(root: Path, out: Optional[Path], extra: List[str],
@@ -2814,11 +3359,20 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
         from taxjson.lib.out import show, wrap
         show(wrap("==> " + text, None, "", "", stream=sys.stdout),
              sys.stdout)
+    # `-C inputs_redact redact --check`: a copy laid out as a project
+    # (its marker and taxjson.toml at the top) is checked whole — its
+    # settings files, holdings/ and prior/ too, as the redact that wrote
+    # them reads them; only inputs/ was (backlog TJ-0480).
+    copy_project = (check_only and not shared
+                    and (root / TREE_MARKER).is_file()
+                    and os.path.lexists(root / _PL.CONFIG))
+    as_project = shared or copy_project
     if check_only:
-        step("Checking inputs/ (nothing is written)")
+        step("Checking the redacted copy (nothing is written)"
+             if copy_project else "Checking inputs/ (nothing is written)")
     else:
         step(f"Copying inputs/ to {shown_dst}")
-    if shared:
+    if as_project:
         # One folder of exports for every year (lib/project_layout): the
         # copy is a single-folder project of this year — the shared
         # exports and the year's own inputs/ (its slips) under inputs/,
@@ -2874,15 +3428,21 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                     text = _PL.set_key_text(text, f"settings.{_k}", None)
                 except _PL.LayoutError:
                     break           # (refused by _valid_copy_config)
-        if shared and str(f.rel) in _PROJECT_FILES:
-            # Settings and symbol rules, not an export: the export
-            # heuristics read a rule line such as `GLOBAL OLD NEW` as a
-            # name. Their ids, comments and denylist / --also matches
-            # are redacted (redact_project_text; they were copied as
-            # they were, GitHub #22), and the exports' ids by the sweep.
+        if as_project and (str(f.rel) in _PROJECT_FILES
+                           or f.rel.parts[:1] == (PRIOR_DIR,)):
+            # Settings and symbol rules (and the prior-year record), not
+            # an export: the export heuristics read a rule line such as
+            # `GLOBAL OLD NEW` as a name. Their ids, comments and
+            # denylist / --also matches are redacted
+            # (redact_project_text; they were copied as they were,
+            # GitHub #22), and the exports' ids by the sweep.
             f.text, f.rep = redact_project_text(
                 text, compiled, known_ids,
-                cfg_ids if f.rel == Path(_PL.CONFIG) else ([], []))
+                cfg_ids if f.rel == Path(_PL.CONFIG) else ([], []),
+                stand_ins)
+            if f.rel.parts[:1] == (PRIOR_DIR,):
+                # The record's folder paths too (backlog TJ-0700).
+                f.text = redact_record_paths(f.text, f.rep)
             continue
         f.orig = text
         f.text, f.rep = redact_text(text, extra, known_ids, pseudonyms,
@@ -2898,6 +3458,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     _sweep(files, known_ids, pseudonyms)
     if shared:
         _copy_holdings_lists(root, inputs, files, names)
+        _copy_prior_record_setting(files, names)
         why = _valid_copy_config(files)
         if why:
             _diag("error", f"the redacted taxjson.toml would not read as "
@@ -2906,6 +3467,13 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
                    "setting breaks it: narrow the pattern. Else check "
                    "that the project's own taxjson.toml reads (`taxjson "
                    "run` says where it does not)."])
+            return 2
+        why = _valid_copy_record(files)
+        if why:
+            _diag("error", f"the redacted prior-year record would not "
+                           f"read as JSON ({why}) — nothing written",
+                  ["A denylist / --also pattern that matches part of it "
+                   "breaks it: narrow the pattern."])
             return 2
     # Every redacted export must book as the original does: the parser
     # reads both and every number is compared; any difference refuses
@@ -2921,7 +3489,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
             changed.append((f, why))
     sys.stdout.flush()          # the step lines above the errors
     for f, why in changed:
-        _diag("error", f"{'' if shared else 'inputs/'}{f.rel.as_posix()}: "
+        _diag("error", f"{'' if as_project else 'inputs/'}{f.rel.as_posix()}: "
                        f"a number would change in the redacted copy — "
                        f"{why}; nothing written", [_NUMBERS_HINT])
     if changed:
@@ -2952,7 +3520,7 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     sys.stdout.flush()          # the warnings (stderr) after the lines above
     for f in files:
         if f.skip is not None:
-            _diag("warning", f"{'' if shared else 'inputs/'}"
+            _diag("warning", f"{'' if as_project else 'inputs/'}"
                   f"{f.rel.as_posix()} not copied: {f.skip}",
                   ["Review it by hand and add it to the copy yourself if it "
                    "belongs in the sample."])
@@ -2965,15 +3533,49 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     if renamed:
         found = True
         verb = "would be renamed" if check_only else "renamed"
-        _diag("note", f"{_plural(len(renamed), 'name')} held an account id or "
-                      f"a denylisted word; {verb} in the copy",
-              [f"{'' if shared else 'inputs/'}{r.as_posix()} → "
+        _diag("note", f"{_plural(len(renamed), 'name')} held an account id, "
+                      f"an e-mail address or a denylisted word; {verb} in "
+                      f"the copy",
+              [f"{'' if as_project else 'inputs/'}{r.as_posix()} → "
                f"{shown_dst}{n.as_posix()}"
                for r, n in renamed]
               + ["This map is shown here only, never written into the copy."
                  + (" Rename a renamed account folder in the taxjson.toml you "
                     "share too." if any(r in dirs for r, _ in renamed) else "")],
               file=sys.stdout)
+    named = _name_like_paths(names, dirs)
+    if named:
+        _diag("warning", f"name-like words in "
+                         f"{_plural(len(named), 'file or folder name')} of "
+                         f"the copy: rename {'it' if len(named) == 1 else 'them'} "
+                         f"by hand before sharing it",
+              [(f"{'' if as_project else 'inputs/'}{r}" if check_only
+                else f"{shown_dst}{n}") for r, n in named],
+              file=sys.stdout)
+    if copy_project:
+        # A folder path of this computer the copy's prior-year record
+        # still holds (a copy an older taxjson wrote): named with its
+        # line, as the copy is what gets shared (backlog TJ-0700).
+        held = [f"{names[f.rel].as_posix()} {_line_list(f.rep.paths, 3)}"
+                for f in text_files if f.rep.paths]
+        if held:
+            n = sum(len(f.rep.paths) for f in text_files)
+            sys.stdout.flush()
+            _diag("warning", f"{'a folder path' if n == 1 else 'folder paths'}"
+                             f" of this computer in the copy: "
+                             f"{_listing(held)}")
+        ran = _run_output(root, files)
+        if ran:
+            found = True
+            _diag("warning", f"{_listing(ran)} in the copy: not part of "
+                             f"it — what a run of the copy wrote (work/ "
+                             f"holds this computer's folder paths)",
+                  ["Delete them before sharing the copy."])
+        step("Done. Nothing to redact; read every file of the copy before "
+             "sharing it." if not found else
+             "Done. Nothing written; fix what is listed above in the copy "
+             "(or redact again with --force) before sharing it.")
+        return 1 if found else 0
     if check_only:
         step(f"Done. Nothing written; run taxjson redact to write "
              f"{shown_dst}" if found else "Done. Nothing to redact.")
@@ -2983,12 +3585,24 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     except OSError as e:
         _diag("error", f"{dst}: {e.strerror or e} — nothing written")
         return 2
+    has_cfg = any(f.rel == Path(_PL.CONFIG) and f.text is not None
+                  for f in files)
+    prior = next((names[f.rel].as_posix() for f in files
+                  if f.rel.parts[:1] == (PRIOR_DIR,) and f.text is not None),
+                 None)
     step(f"Done. Review {shown_dst} before sharing it."
          + (f" It is a single-folder project of "
             f"{Path(os.path.abspath(root)).name}: inputs/ "
             f"(the shared exports and the year's own), holdings/, "
-            f"taxjson.toml and ticker.map; `taxjson -C {shown_dst} run` "
-            f"runs it." if shared else ""))
+            f"taxjson.toml and ticker.map"
+            + (f", and {prior} (the close-year record its estimate "
+               f"carries from)" if prior else "")
+            + (f"; `taxjson -C {shlex.quote(shown_dst)} run` runs it (and "
+               f"writes work/ and reports/ there, holding this computer's "
+               f"folder paths: delete them before sharing the copy)."
+               if has_cfg else
+               f"; its taxjson.toml was not copied (the warning above): "
+               f"add one before running it.") if shared else ""))
     return 0
 
 

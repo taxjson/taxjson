@@ -32,7 +32,7 @@ ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                 "brokerage", "account", "query_id", "holdings",
                 "broker_accounts",
                 "combined_broker_accounts", "exercise_fee",
-                "year_end_posting")
+                "year_end_posting", "custodian_country")
 ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
                  "carrying_charges", "long_term_losses", "amt_carryover")
 INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
@@ -62,6 +62,32 @@ RESERVED_NAMES = ("sheltered",)
 # "../x" name reads or writes outside the project, a "-x" name parses
 # as a flag. Every config reader refuses them (R1-349).
 ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+# How the rule reads in a message: 'é' is a letter, and 'céli' (French
+# for TFSA) was refused by "use letters, digits ..." (backlog TJ-0487).
+ACCOUNT_NAME_RULE = ("a-z or A-Z letters (no accents), digits, '_', '-' "
+                     "or '.'")
+
+
+def ascii_account_name(name: str) -> str:
+    """`name` with its accents dropped ('céli' -> 'celi') when that is
+    a valid account name (and not a reserved one), else ''."""
+    import unicodedata
+    folded = "".join(c for c in unicodedata.normalize("NFKD", str(name))
+                     if not unicodedata.combining(c))
+    return (folded if ACCOUNT_NAME_RE.fullmatch(folded)
+            and not account_name_problem(folded) else "")
+
+
+def invalid_account_name(name: str) -> str:
+    """The message for a name ACCOUNT_NAME_RE refuses: the rule, and
+    the accent-free spelling when that one would do."""
+    n = str(name)
+    alt = ascii_account_name(n)
+    return (f"[accounts.{n!r}] is not a valid account name — use "
+            f"{ACCOUNT_NAME_RULE} (starting with a letter, digit or "
+            f"'_'); it becomes file and directory names."
+            + (f" {alt!r} would do: rename the table [accounts.{alt}] "
+               f"and the inputs/{n}/ folder." if alt else ""))
 
 
 def account_name_problem(name: str) -> str:
@@ -70,10 +96,7 @@ def account_name_problem(name: str) -> str:
     n = str(name)
     low = n.lower()
     if not ACCOUNT_NAME_RE.fullmatch(n):
-        return (f"[accounts.{n!r}] is not a valid account name — use "
-                f"letters, digits, '_', '-' or '.' (must start with a "
-                f"letter, digit or '_'); it becomes file and directory "
-                f"names.")
+        return invalid_account_name(n)
     if n.upper() == "COMBINED":
         return (f"[accounts.{n}]: the name COMBINED is reserved for the "
                 f"cross-account wash radar — rename the account (and its "
@@ -221,6 +244,19 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
             except ValueError as e:
                 out.append(f"[accounts.{name}] year_end_posting must be a "
                            f"day such as \"06-30\" (MM-DD): {e}")
+        if "custodian_country" in acfg:
+            # Where a custodian outside Canada holds the account's
+            # shares: a Canadian issuer's shares there are T1135 property
+            # (tax-logic CA-RPT-02; backlog TJ-0369). A typo must not
+            # read as Canada and drop them from the threshold test.
+            from taxjson.lib.t1135_country import parse_custodian_country
+            try:
+                parse_custodian_country(acfg["custodian_country"])
+            except ValueError as e:
+                out.append(f"[accounts.{name}] custodian_country must be "
+                           f"the ISO 3166 alpha-3 code of the custodian's "
+                           f"country, such as \"USA\" (\"CAN\" for "
+                           f"Canada, the default): {e}")
     return (out + account_pair_problems(accounts.keys())
             + bool_setting_problems(cfg))
 

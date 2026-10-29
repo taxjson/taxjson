@@ -41,11 +41,15 @@ year           = 2024
 """,
 }
 
-# A file the IB detector routes to the IB parser that holds no rows.
+# A file the IB detector routes to the IB parser whose one row books
+# nothing (a section no parser branch reads). A file with no row at all
+# is an Info, not this warning (backlog TJ-0483).
 _EMPTY_IB = ("Statement,Header,Field Name,Field Value\n"
              "Trades,Header,DataDiscriminator,Asset Category,Currency,"
              "Symbol,Date/Time,Quantity,T. Price,Proceeds,Comm/Fee,Basis,"
-             "Realized P/L,Code\n")
+             "Realized P/L,Code\n"
+             "Zzz Section,Header,Field Name,Field Value\n"
+             "Zzz Section,Data,Note,x\n")
 
 
 def _env():

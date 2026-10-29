@@ -17,8 +17,6 @@ project written in the old files and migrated build identical books and
 views. Synthetic data only.
 """
 import json
-import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path

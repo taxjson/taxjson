@@ -1,6 +1,5 @@
 """Tests for taxjson-reconcile-slips (T5008 / 1099-B slip reconciliation)."""
 
-import os
 import io
 import json
 import tempfile

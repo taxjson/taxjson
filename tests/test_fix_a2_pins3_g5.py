@@ -66,7 +66,11 @@ def _sends_project(tmp, country, base):
     (root / "work" / "a_kraken_transfers.json").write_text(json.dumps({
         "metadata": {"kind": "transfer_sidecar", "brokerage": "kraken"},
         "transactions": _USDC_SIDE}))
+    # The run's rates are to the base: a US project's (base USD, no
+    # source currency) is empty — USD-to-CAD rows there are refused
+    # (backlog TJ-0502).
     (root / "work" / "to_base.csv").write_text(
+        "" if country == "usa" else
         "2025-01-01 12:00:00 USD CAD 1.40 boc\n"
         "2025-02-01 12:00:00 USD CAD 1.40 boc\n")
     (root / "inputs" / "a" / "sends.json").write_text(json.dumps(

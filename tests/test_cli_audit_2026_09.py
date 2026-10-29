@@ -1,7 +1,6 @@
 """2026-09 CLI usability audit: wrong-year close-year lock, untyped
 accounts, false "run first" warnings, exit codes, and argument hygiene."""
 
-import os
 import argparse
 import io
 import json
@@ -269,7 +268,8 @@ class TestElect(unittest.TestCase):                  # B12 + polish
     def test_hint_without_set_is_an_error(self):
         with tempfile.TemporaryDirectory() as td:
             r = _tj(self._root(td), "elect", "margin", "--hint", "a=1")
-        self.assertEqual(r.returncode, 1)
+        # A usage error: exit 2 (backlog TJ-0539).
+        self.assertEqual(r.returncode, 2)
         self.assertIn("--hint only applies with --set", r.stderr)
 
 

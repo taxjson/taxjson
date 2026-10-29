@@ -3,7 +3,6 @@ parsers-rbc and parsers-questrade). Every fixture is synthetic (fake
 account ids 55500001 / 55500002, made-up option codes)."""  # pii-ok
 import contextlib
 import io
-import json
 import os
 import subprocess
 import sys
@@ -930,7 +929,6 @@ class TestPaymentsInLieuFromCanadianDealers(unittest.TestCase):
     by a Canadian dealer, not dividends."""
 
     def _books(self):
-        from taxjson.lib.core import TaxTransaction
         qt_txs, _e, _ = qt_parse(
             qdiv("XLV", "HEALTH CARE SELECT SUBST PAY ON 100 SHS IN LIEU OF "
                  "DIVIDEND", "26.33")

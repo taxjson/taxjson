@@ -6,10 +6,8 @@ phantom openings, shorts, ADJUST), the income/gain join, report assembly,
 and the CLI end-to-end (text + JSON) including the `taxjson t1135` wrapper.
 """
 
-import os
 import io
 import json
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
@@ -397,10 +395,10 @@ class TestCli(unittest.TestCase):
 class TestRunWrapper(unittest.TestCase):
     def test_taxjson_t1135_subcommand(self):
         try:
-            import tomllib  # noqa: F401
+            import tomllib  # noqa: F401  (availability check: TOML support)
         except ImportError:
             try:
-                import tomli  # noqa: F401
+                import tomli  # noqa: F401  (availability check: TOML support)
             except ImportError:
                 self.skipTest("no TOML support on this interpreter")
         import argparse

@@ -18,7 +18,6 @@ smaller findings (synthetic projects only).
 """
 import contextlib
 import io
-import json
 import types
 import unittest
 from pathlib import Path

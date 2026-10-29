@@ -44,6 +44,15 @@ tjs --version
 This also installs the taxjson-fetch plugin (`taxjson fetch`: Questrade /
 IBKR Flex auto-fetch, a separate package that does nothing until you run
 it); add `_ --without-fetch` to the installer line to leave it out.
+
+**A Questrade account?** Its transaction history downloads as Excel, and
+`taxjson-xlsx-to-csv` (step 3) converts it only with the optional `xlsx`
+extra, which the plain line above leaves out. Install with it instead
+(or re-run this line later to add it):
+
+```bash
+TAXJSON_EXTRAS=fx,xlsx bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
+```
 Re-run the same line to upgrade; release channels and what changed
 between releases are in [upgrading.md](upgrading.md); installing from a
 checkout is in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
@@ -144,7 +153,7 @@ it, which may be years back.
 | Broker | Download | Notes |
 | --- | --- | --- |
 | Interactive Brokers | Activity Statement, CSV | Longest period allowed; one file per year is fine. |
-| Questrade | Transaction history (account activity) | Every year available. It downloads as Excel: convert it with `taxjson-xlsx-to-csv FILE.xlsx -o FILE.csv`. |
+| Questrade | Transaction history (account activity) | Every year available. It downloads as Excel: convert it with `taxjson-xlsx-to-csv FILE.xlsx -o FILE.csv` (installed with the `xlsx` extra: step 1, "A Questrade account?"). |
 | RBC Direct Investing | Transaction history, CSV | Every year available. |
 | Webull | Trading Summary, CSV | Buys and sells only: enter dividends and interest from the slips ([brokers.md](brokers.md#webull)). |
 | Kraken | Trades **and** Ledgers, CSV | Both, into the same folder. |
@@ -176,15 +185,20 @@ report): never share a raw export. First choice: a made-up file in the
 same shape (copy the broker's `examples/*_demo.csv` and edit its rows;
 made-up amounts are fine). Otherwise run `tjs redact` in the project. It
 copies `inputs/` to `inputs_redact/` and replaces account numbers, names
-and contact details in the copy, file names included; `inputs/` is not
-changed, and the run never reads `inputs_redact/`. It keeps amounts,
+and contact details in the copy (in file and folder names: account
+numbers and e-mail addresses; a name that reads like a person's is
+listed for you to rename); `inputs/` is not changed, and the run never
+reads `inputs_redact/`. It keeps amounts,
 prices, dates and symbols, and works from patterns, so it can miss
 something: read all of the copy, and share it only after that review. With one folder
 of exports for every year, run it in the year's folder: `2025/inputs_redact/`
 is then that year as a single-folder project (the shared exports and the
 year's slips under `inputs/`, its `holdings/`, `taxjson.toml` and
 `ticker.map`), runnable where it is; nothing outside the year folder is
-written.
+written. A run of the copy writes `work/` and `reports/` into it, which
+hold this computer's folder paths: delete them before sharing it (`tjs
+-C 2025/inputs_redact redact --check` reads all of the copy and names
+them).
 
 ## 4. Run
 
@@ -226,7 +240,9 @@ with its explanation, and which broker each file was read as
 (`Info: File inputs/margin/activity.csv → identified as Questrade`).
 
 The list can also name positions at a $0 cost (sold this year or still
-held) and stocks that paid you income the books do not hold. A run with
+held), stocks that paid you income the books do not hold, and rows
+booked in two accounts (one export saved in two `inputs/<account>/`
+folders: keep it in one, then run again). A run with
 nothing to report has no list after `Done.` (at most the line naming
 `tjs checklist --run`); the same counts are always written to
 `reports/run_summary.json`.
@@ -372,10 +388,17 @@ margin    SAMPC.TO  QTY_MISMATCH               5        15   -10
 margin    SAMPD.TO  MISSING_IN_TAXJSON         0        10   -10
 margin    SAMPK.TO  QTY_MISMATCH             -10        30   -40
 
-! 5 differ; fewer shares in the books usually means missing history — tjs find-missing-history
+! 1 transferred in with no cost (SAMPK.TO), kept out of the books — tjs transfers
+! 1 short in the books (SAMPA.TO): a sale with no purchase in your files — tjs find-missing-history
+! 3 with fewer shares: bought before your data, step 5b — tjs opening margin FILE
 ```
 
-(`tjs sanity --details` adds what each kind of difference usually means.)
+Each `! ` line names the fix for its kind of difference:
+`find-missing-history` sees a position the books hold short, never one
+bought entirely before your data, and a holding typed under another
+spelling than the books' (`SAMPB` for `SAMPB.TO`, the same quantity) is
+named as a symbol spelling. (`tjs sanity --details` adds what each kind
+of difference usually means.)
 
 `SAMPA.TO` is the sale with no purchase from check 1, and `SAMPK.TO`
 arrived by transfer with no cost (check 3). The others are new:
@@ -691,19 +714,22 @@ Wrote 1 draft purchase line(s) for margin to inputs/margin/purchases_draft.tt.tx
 ```
 # IB sale 2025-03-18 of 20 SAMPG.US (code C, row 3f***, ib_2025.csv)
 # IB Basis 301.00 USD for the 20 sold (no lot detail in the export)
-# fill in: the purchase date (the broker does not say when these units were bought).
+# fill in: the purchase date (the broker does not say when these units were bought); its settlement date (tax_date settle).
 # check: IB's Basis is the cost of the lots IB closed (FIFO), not your ACB: ...
 BUYSELL  YYYY-MM-DD  09:30:00  SAMPG.US  20  USD  15.050000  301.00  0
 ```
 
 taxjson does not read this file: its name ends in `.txt`. Check each
 line against your records, replace every `YYYY-MM-DD` with the real
-purchase date (and any `COST` with the real cost), delete what you cannot
+purchase date, its settlement date under `tax_date` settle (and any
+`COST` with the real cost), delete what you cannot
 vouch for, then rename the file to end in `.tt` (e.g. `purchases.tt`) and
 `tjs run`. A line still holding a placeholder stops the run. The date
 matters: it is the Bank of Canada rate's date for a US-dollar cost, and
 the superficial-loss window's. If the statement lists Closed Lots, IB's
-own purchase dates are filled in for you, one line per lot. The broker's
+own purchase dates are filled in for you, one line per lot (on each
+lot's settlement date under `tax_date` settle: IB's lot date is the
+trade date, and a comment names both). The broker's
 figure is only a start: once you keep a line, the cost is yours. A
 transfer whose row states a book value of 0 (a placeholder, not your
 cost), or one your `.tt` purchases already cover in part (`PARTLY_covered`:
@@ -975,8 +1001,10 @@ download tool writes it; `tjs sanity` finds each file's account by its
 date of one broker account, give each of its files `[meta]
 broker_account`, the broker's account number, or sanity refuses the
 pair rather than add them up), or update the
-positions file from step 5 (or give `sanity` the year-end IB statement or
-RBC Holdings Export itself), and run `tjs sanity` again. A report dated
+positions file from step 5. The year-end IB statement or RBC Holdings
+Export itself works too: save it there named for its account
+(`margin_holdings.csv`), or give it to `sanity` (`tjs sanity
+margin=FILE`). Then run `tjs sanity` again. A report dated
 before the books' last row is compared with the books' positions on its
 own date. Every difference is either a trade after your last export or
 something still missing. Once `holdings/` holds a snapshot or
@@ -1139,8 +1167,9 @@ and a complete project per tax year beside them.
   or corrected export, a late election or an `OPENING` line saved in the
   shared `inputs/` never reaches it: its `tjs run`, `tjs sum`,
   `tjs check-filed` and its row in `tjs years` stay OK, and its
-  `tjs check-filed` (and `tjs run`) names a shared export that changed
-  or lost a row of that year since the close. The next year shows what
+  `tjs check-filed` (and `tjs run`) names a shared export that gained,
+  changed or lost a row of that year since the close (a new file there
+  with a row of that year too). The next year shows what
   moves the year-end: `tjs handoff` there compares the opening positions
   and cost with the filed year's year-end books, and `tjs option-boundary`
   the options open across Dec 31; a corrected sale of the filed year

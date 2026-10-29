@@ -67,6 +67,9 @@ class TestCryptoHoldingsToml(unittest.TestCase):
             path.unlink()
             tips_without = _cli(root, "tips")
         held = {h["symbol"]: h for h in doc["holding"]}
+        # Kraken coins carry its venue suffix (backlog TJ-0418).
+        held = {s[:-len(".KR")]: h for s, h in held.items()
+                if s.endswith(".KR")}
         self.assertEqual(sorted(held), ["BTC", "ZZC"])
         self.assertTrue(all(h["asset_type"] == "crypto"
                             for h in held.values()))

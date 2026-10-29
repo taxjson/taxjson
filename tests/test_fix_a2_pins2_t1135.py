@@ -73,36 +73,25 @@ def _engine_gains(base: Path, year: int, out: Path, *extra) -> dict:
 
 # ============================================== --year-wash-only deferral
 class TestYearOnlyDeferralSumsAccounts(unittest.TestCase):
-    """A2-1552: each account's split gains file carries its share of a
-    blended pool's deferral, so the excluded amount is their sum."""
+    """A2-1552 once summed each account's share of a blended pool's
+    deferral for --year-wash-only. The cost amounts are now the engine's
+    own pools (backlog TJ-0417): a loss denied before the year is in two
+    accounts' shared pool, and nothing is named as left out."""
 
     @rule("CA-RPT-12")
     def test_two_accounts_shares_are_summed(self):
         base = [_r("BUYSELL", "2024-03-11", "XYZ.US", 900, -63000.0,
-                   account="b"),
-                _r("BUYSELL", "2024-03-12", "XYZ.US", 100, -7000.0,
-                   account="a")]
-        inv = lambda acct, q, c, d: {"inventory": [
-            {"account": acct, "symbol": "XYZ.US", "qty": q,
-             "total_cost": c, "deferred_wash": d}], "transactions": []}
-        rep = _report(base, {"a_gains_wash.json": inv("a", 100, 12000, 5000),
-                             "b_gains_wash.json": inv("b", 900, 108000,
-                                                      45000)},
-                      full_history=False)
-        self.assertEqual(rep["deferred_wash_not_in_cost"],
-                         {"XYZ.US": 50000.0})
-
-    def test_same_account_twice_counts_once(self):
-        from taxjson.bin.taxjson_t1135 import _deferred_wash
-        with tempfile.TemporaryDirectory() as td:
-            doc = {"inventory": [{"account": "a", "symbol": "XYZ.US",
-                                  "deferred_wash": 5000.0}]}
-            ps = []
-            for n in ("a_gains.json", "a_gains_wash.json"):
-                p = Path(td) / n
-                p.write_text(json.dumps(doc))
-                ps.append(p)
-            self.assertEqual(_deferred_wash(ps, {}), {"XYZ.US": 5000.0})
+                   account="b", id="b1"),
+                _r("BUYSELL", "2024-11-08", "XYZ.US", -900, 18000.0,
+                   account="b", id="s1"),
+                _r("BUYSELL", "2024-11-15", "XYZ.US", 900, -18000.0,
+                   account="a", id="b2")]
+        for full in (True, False):
+            rep = _report(base, {"a_gains_wash.json": {"transactions": []}},
+                          full_history=full)
+            self.assertEqual(rep["deferred_wash_not_in_cost"], {})
+            (p,) = rep["properties"]
+            self.assertEqual(p["year_end_cost"], 63000.0)
 
 
 
@@ -364,9 +353,11 @@ class TestWashAdditionPlacement(unittest.TestCase):
 
 
 class TestWashAdjustmentRows(unittest.TestCase):
-    """A2-0916, A2-0923, A2-1553: wash_adjustments' landings, their
-    de-dup, and the legacy fallback for gains records written before
-    `adjusts` existed."""
+    """A2-0916, A2-0923, A2-1553 pinned the replay's wash landings (the
+    ADJUST rows it rebuilt from gains records). The walk now reads the
+    engine's pools (backlog TJ-0417): a loss's addition is where the
+    engine applied it — on a replacement bought before the loss (AAA)
+    or after it (BBB)."""
     BASE = [_r("BUYSELL", "2025-01-02", "AAA.US", 100, -10000.0, id="b1"),
             _r("BUYSELL", "2025-01-20", "AAA.US", 100, -9000.0, id="b2"),
             _r("BUYSELL", "2025-02-03", "AAA.US", -100, 8000.0, id="s1"),
@@ -374,62 +365,14 @@ class TestWashAdjustmentRows(unittest.TestCase):
             _r("BUYSELL", "2025-03-10", "BBB.US", -10, 800.0, id="s2"),
             _r("BUYSELL", "2025-03-20", "BBB.US", 10, -700.0, id="b4")]
 
-    def _rows(self, wash):
-        from taxjson.bin.taxjson_t1135 import wash_adjustments
-        return wash_adjustments(wash, self.BASE)
-
-    def _landing(self, aid, sym, amt, date, after=None):
-        return {"id": aid, "symbol": sym, "amount": amt, "date": date,
-                "date_settle": date, "time": "10:00:00",
-                "account": "margin", "after": after}
-
-    def test_every_record_and_its_wash_after(self):
-        w1 = {"loss_tx_id": "s1", "adjusts": [
-            self._landing("a1", "AAA.US", 1500.0, "2025-02-03", "s1"),
-            self._landing("a1", "AAA.US", 1500.0, "2025-02-03", "s1")]}
-        w2 = {"loss_tx_id": "s2", "adjusts": [
-            self._landing("a2", "BBB.US", 200.0, "2025-03-20")]}
-        rows = self._rows([w1, w2])
-        got = [(r["id"], r["symbol"], r["net_amount"], r.get("wash_after"))
-               for r in rows]
-        # One row per landing id (the duplicate is dropped), both
-        # records read, the pre-loss landing placed after its sale.
-        self.assertEqual(got, [("a1", "AAA.US", 1500.0, "s1"),
-                               ("a2", "BBB.US", 200.0, None)])
-
-    def test_place_after_moves_the_row_behind_its_sale(self):
-        from taxjson.bin.taxjson_t1135 import _place_after
-        rows = [dict(r) for r in self.BASE[:3]]
-        rows.insert(0, {"id": "a1", "action": "ADJUST", "symbol": "AAA.US",
-                        "wash_after": "s1"})
-        out = [r["id"] for r in _place_after(rows)]
-        self.assertEqual(out, ["b1", "b2", "s1", "a1"])
-        plain = [dict(r) for r in self.BASE[:3]]
-        self.assertEqual([r["id"] for r in _place_after(plain)],
-                         ["b1", "b2", "s1"])
-
-    def test_legacy_record_is_stamped_at_the_later_of_sale_and_lot(self):
-        # The trigger lot (b2) was bought before the loss (s1): the
-        # addition lands at the sale.
-        w = {"loss_tx_id": "s1", "trigger_lot_id": "b2",
-             "adjust_cmd": "ADJUST 2025-02-03 10:00:00 AAA.US CAD 1500"}
-        (row,) = self._rows([w, dict(w)])
-        self.assertEqual((row["symbol"], row["net_amount"], row["date"]),
-                         ("AAA.US", 1500.0, "2025-02-03"))
-        self.assertEqual(row["id"], "wash:s1:b2")
-        # Replacement after the loss (b4 after s2): stamped at the lot.
-        w = {"loss_tx_id": "s2", "trigger_lot_id": "b4", "amount": 200.0}
-        (row,) = self._rows([w])
-        self.assertEqual((row["symbol"], row["net_amount"], row["date"]),
-                         ("BBB.US", 200.0, "2025-03-20"))
-
     @rule("CA-RPT-12")
-    def test_legacy_record_reaches_the_cost(self):
-        from taxjson.bin.taxjson_t1135 import walk_costs
-        w = {"loss_tx_id": "s2", "trigger_lot_id": "b4", "amount": 200.0}
-        txs = list(self.BASE) + self._rows([w])
-        with contextlib.redirect_stderr(io.StringIO()):
-            walk = walk_costs(txs, 2025, {}, today="2026-06-01")
+    def test_every_addition_is_where_the_engine_put_it(self):
+        walk = _walk(list(self.BASE))
+        # AAA: 200 shares for 19000, 100 sold for 8000 (a 1500 loss,
+        # denied: the 100 left are its replacement) — 9500 + 1500.
+        self.assertEqual(walk["per_symbol"]["AAA.US"]["year_end_cost"],
+                         11000.0)
+        # BBB: the 200 loss is in the 700 replacement.
         self.assertEqual(walk["per_symbol"]["BBB.US"]["year_end_cost"],
                          900.0)
 
@@ -488,28 +431,32 @@ class TestReportColumns(unittest.TestCase):
 
 
 class TestYearOnlyDeferralNetOfTheYearsAdditions(unittest.TestCase):
-    """A2-0916: --year-wash-only names the deferral beyond the year's
-    own additions (which the walk already carries)."""
+    """A2-0916: --year-wash-only once left an earlier year's denial out
+    of the cost and named it. The cost amounts are the engine's pools
+    now (backlog TJ-0417), the gains files' records unread: a denial
+    from the year before and one inside the year are both in it."""
 
     @rule("CA-RPT-12")
     def test_deferral_beyond_the_years_own(self):
         base = [_r("BUYSELL", "2024-01-10", "XYZ.US", 100, -10000.0,
                    id="b1"),
-                _r("BUYSELL", "2025-02-03", "XYZ.US", 100, -9000.0,
-                   id="b2")]
-        gains = {"transactions": [],
-                 "wash_sales": [{"loss_tx_id": "s0", "adjusts": [
-                     {"id": "a1", "symbol": "XYZ.US", "amount": 1000.0,
-                      "date": "2025-02-03", "date_settle": "2025-02-03",
-                      "time": "10:00:00", "account": "margin"}]}],
+                _r("BUYSELL", "2024-12-02", "XYZ.US", -100, 8000.0,
+                   id="s0"),
+                _r("BUYSELL", "2024-12-09", "XYZ.US", 100, -8000.0,
+                   id="b2"),
+                _r("BUYSELL", "2025-02-03", "XYZ.US", -100, 7000.0,
+                   id="s1"),
+                _r("BUYSELL", "2025-02-10", "XYZ.US", 100, -7000.0,
+                   id="b3")]
+        gains = {"transactions": [], "wash_sales": [],
                  "inventory": [{"account": "margin", "symbol": "XYZ.US",
                                 "deferred_wash": 3000.0}]}
         rep = _report(base, {"margin_gains_wash.json": gains},
                       full_history=False)
-        self.assertEqual(rep["deferred_wash_not_in_cost"],
-                         {"XYZ.US": 2000.0})
+        self.assertEqual(rep["deferred_wash_not_in_cost"], {})
         (p,) = rep["properties"]
-        self.assertEqual(p["year_end_cost"], 20000.0)
+        # 7000 paid, the 2000 denied in 2024 and the 3000 denied in 2025.
+        self.assertEqual(p["year_end_cost"], 10000.0)
 
 
 

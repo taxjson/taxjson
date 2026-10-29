@@ -3,7 +3,6 @@
 Detection must work off generic, brokerage-distinctive markers — never
 a hardcoded account number (that would only match one user's files and
 leak personal data into the repo)."""
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

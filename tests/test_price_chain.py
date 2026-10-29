@@ -2,7 +2,6 @@
 write-back and age labeling
 (yf_ticker.map ratio column, Src column, no hardcoded personal ratios)."""
 
-import argparse
 import io
 import json
 import tempfile
@@ -11,7 +10,7 @@ from contextlib import redirect_stderr
 from datetime import date, timedelta
 from pathlib import Path
 
-from taxjson.lib.price_chain import PriceQuote, fetch_prices
+from taxjson.lib.price_chain import fetch_prices
 
 
 def tier(results):

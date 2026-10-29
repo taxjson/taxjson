@@ -145,7 +145,8 @@ class TestEstimatePrintsTheTrustAssumption(unittest.TestCase):
                 '[accounts.margin]\ntype = "taxable"\n')
             (root / "work" / "margin_gains.json").write_text(json.dumps({
                 "summary": {"year": "2025"}, "transactions": [
-                    {"action": "DIVIDEND", "symbol": "ZQU.TO",
+                    {"action": "DIVIDEND", "date": "2025-03-03",
+                     "symbol": "ZQU.TO",
                      "dividend": 1000.0, "currency": "CAD"}]}))
             env = dict(os.environ, HOME=tmp)
             r = subprocess.run(

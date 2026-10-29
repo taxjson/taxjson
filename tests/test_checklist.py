@@ -1,6 +1,5 @@
 """`taxjson checklist` — the filing checklist with auto-detected steps and
 manual marks (lib/checklist.py + the CLI wrapper)."""
-import os
 import json
 import subprocess
 import sys

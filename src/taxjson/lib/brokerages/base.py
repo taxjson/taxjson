@@ -27,8 +27,26 @@ def encode_occ_strike(strike) -> str:
     roughly half of all sub-$200 cent-precision strikes and fragmenting an
     option's identity / cost basis across two symbols. `ticker_map.py`
     already fixed this on the ticker.map side; this is the same fix for the
-    broker parsers. `strike` may be a float-as-string or a number."""
-    return f"{int(Decimal(str(strike).strip()) * 1000):08d}"
+    broker parsers. `strike` may be a float-as-string or a number.
+
+    The field holds 0.001 to 99999.999 in steps of 0.001. A strike it
+    cannot hold is refused (BrokerageParseError): int() truncated
+    10.0009 to 10.000, the identity of another contract, and a strike
+    of 0 or a negative one became an OCC symbol too (backlog TJ-0520)."""
+    raw = str(strike).strip()
+    try:
+        thousandths = Decimal(raw) * 1000
+    except ArithmeticError:
+        thousandths = None
+    if (thousandths is None or not thousandths.is_finite()
+            or thousandths != thousandths.to_integral_value()
+            or not 0 < thousandths < 10 ** 8):
+        raise BrokerageParseError(
+            f"option strike {raw!r} has no OCC spelling (a strike of "
+            f"0.001 to 99999.999, to the 0.001) — refusing to round it "
+            f"onto another contract's symbol. Book the contract in a .tt "
+            f"file under the symbol of your choice.")
+    return f"{int(thousandths):08d}"
 
 
 # An option strike in a broker description. A strike of 1,000 or more
@@ -413,6 +431,35 @@ def combined_accounts_note(where: str, broker: str, masked) -> str:
             f"label (combined_broker_accounts = true).")
 
 
+def warrant_exercise_tt_hint(leg: Dict[str, Any], candidates=()) -> str:
+    """The `.tt` lines that book a warrant's or a right's exercise leg
+    the parser could not pair with one share leg (docs/settings.md, .tt
+    ASSIGN; backlog TJ-0590): the leg as an ASSIGN with `exercise_of=`
+    the share listing it delivers (no disposition: the warrants' cost
+    goes into the shares), and, when no row of the export books the
+    shares, their BUYSELL at the exercise price. `candidates`: the share
+    listings of the export's same-day exercise rows (several: the leg
+    names one of them, whose row stays)."""
+    d = leg.get('date') or 'DATE'
+    t = leg.get('time') or '16:00:00'
+    sym = leg.get('symbol') or 'WARRANT'
+    cur = leg.get('currency') or 'CUR'
+    try:
+        qty = f"{float(leg.get('quantity')):g}"
+    except (TypeError, ValueError):
+        qty = '-QTY'
+    cands = sorted({str(c) for c in candidates if c})
+    line = f"ASSIGN {d} {t} {sym} {qty} {cur} 0 0 exercise_of=SHARES"
+    if cands:
+        return (f"`{line}`, SHARES being the one of {', '.join(cands)} "
+                f"the warrants deliver (its exercise row stays in the "
+                f"export; docs/settings.md, .tt ASSIGN)")
+    return (f"`{line}` (SHARES: the listing the warrants deliver), then, "
+            f"unless a row of the export books the shares, `BUYSELL {d} "
+            f"{t} SHARES N {cur} PRICE TOTAL` at the exercise price "
+            f"(docs/settings.md, .tt ASSIGN)")
+
+
 def combined_accounts_refusal(where: str, broker: str, masked,
                               why: str) -> 'BrokerageParseError':
     """combined_broker_accounts = true on a SHELTERED label whose
@@ -789,6 +836,13 @@ class BaseBrokerage:
     # Whether the label is a taxable account (taxjson-brokerage
     # --account-type); None when the caller did not say.
     account_taxable: Optional[bool] = None
+    # Registered plans (lower case: 'tfsa' ...) the project's country
+    # taxes like an ordinary account, set by taxjson-brokerage from
+    # lib/country `plans_taxed_as_ordinary` (a US project: TFSA, RESP,
+    # RDSP, FHSA; tax-logic US-BASIS-09). A broker's account type naming
+    # one is a TAXABLE account to the taxable-versus-registered check
+    # (backlog TJ-0613). Empty: every plan the broker names is a shelter.
+    plans_taxed: frozenset = frozenset()
     # The caller keeps the TRANSFER rows aside and decides what an
     # incoming one costs (`taxjson run`, lib/transfer_in: covered by a
     # .tt line, the broker's stated book value, or no cost — one
@@ -838,6 +892,26 @@ class BaseBrokerage:
         hit = self.__dict__.get('_row_lines', {}).get(id(tx))
         return hit[1] if hit is not None and hit[0] is tx else None
 
+    def rows_noting_lines(self, transactions: List[Dict[str, Any]],
+                          items, line_of):
+        """Iterate a parser's rows (`items`), noting every transaction
+        appended to `transactions` while an item is handled as made from
+        that item's export line (`line_of(item)`; note_row_line) — a
+        `continue` or `break` in the loop included. Rows the parser
+        builds after the loop (pairing, grouping) keep no line. The
+        IB, RBC, Webull, Coinbase and Kraken loops gave none, so the
+        schema check named a masked row id (backlog TJ-0124)."""
+        start, line = len(transactions), None
+        try:
+            for item in items:
+                for t in transactions[start:]:
+                    self.note_row_line(t, line)
+                start, line = len(transactions), line_of(item)
+                yield item
+        finally:
+            for t in transactions[start:]:
+                self.note_row_line(t, line)
+
     # Skip-category prefix for rows the parser RECOGNIZES as non-events
     # (a fiat deposit, an FX conversion, a statement-metadata section).
     # They still count toward the lint reconciliation, but the summary
@@ -858,7 +932,6 @@ class BaseBrokerage:
         KNOWN_NONEVENT_PREFIX) get a separate, calmer line."""
         if not self._skip_counts:
             return
-        import sys
         pfx = self.KNOWN_NONEVENT_PREFIX
         known = {c: n for c, n in self._skip_counts.items()
                  if c.startswith(pfx)}
@@ -929,14 +1002,33 @@ class BaseBrokerage:
                 }
         return None
 
-    def format_occ_symbol(self, right: str, base: str, expiry: str, strike: str) -> str:
+    def format_occ_symbol(self, right: str, base: str, expiry: str,
+                          strike: str, where: Optional[str] = None) -> str:
         """Build an OCC-style option symbol: BASE{YYMMDD}{C/P}{strike*1000:08d}.
 
         Accepts the expiry as "MM/DD/YY" (two-digit year). Strike may be a
-        float-as-string."""
-        m, d, y = expiry.split('/')
+        float-as-string. An expiry that is no calendar date (02/30/25
+        became SYN250230C...) or a strike the OCC field cannot hold is
+        refused, naming `where` (the row) when given (backlog TJ-0519,
+        TJ-0520)."""
+        at = f"{where}: " if where else ""
+        what = (f"option {'CALL' if right == 'C' else 'PUT'} {base} "
+                f"{expiry} {strike}")
+        try:
+            m, d, y = expiry.split('/')
+            datetime(2000 + int(y), int(m), int(d))
+        except ValueError:
+            raise BrokerageParseError(
+                f"{at}{what}: the expiry {expiry} is not a calendar date "
+                f"(MM/DD/YY) — refusing to book a contract that cannot "
+                f"exist. Correct the row from the broker's statement, or "
+                f"book it in a .tt file.") from None
         expiry_date = f"{y}{int(m):02d}{int(d):02d}"
-        return f"{base}{expiry_date}{right}{encode_occ_strike(strike)}"
+        try:
+            occ_strike = encode_occ_strike(strike)
+        except BrokerageParseError as e:
+            raise BrokerageParseError(f"{at}{what}: {e}") from None
+        return f"{base}{expiry_date}{right}{occ_strike}"
 
     # ----------------------------------------------------------- currency ext
 
@@ -1045,7 +1137,6 @@ class BaseBrokerage:
         try:
             v = float(s)
         except ValueError:
-            import sys
             emit_line(f"warning: numeric cell {raw!r} is not a number — read "
                   f"as {default!r}")
             return default
@@ -1353,7 +1444,6 @@ class BaseBrokerage:
             except ValueError:
                 return
             if lag > SETTLE_LAG_FLAG_DAYS:
-                import sys
                 loc = f"{where}: " if where else ''
                 emit_line(f"warning: ATTENTION: {loc}Settlement Date "
                       f"{settle_iso} is {lag} days after the trade date "
@@ -1371,7 +1461,6 @@ class BaseBrokerage:
         (audit A2-0619)."""
         if (qty or 0) > 0 and abs(price or 0) < 1e-9 \
                 and abs(net or 0) < 0.005:
-            import sys
             emit_line(f"warning: ATTENTION: {where}: a buy of {qty:g} "
                   f"{symbol} at ZERO cost (price and cash both 0) — "
                   f"booked with no cost basis. If it is a transfer or a "

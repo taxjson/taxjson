@@ -80,8 +80,8 @@ from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
 from taxjson.lib.core import TRANSFER_BOOK_VALUE_TYPE  # noqa: E402
 # The most days between the two legs of one move of your own: the window
 # the in-kind pairing allows a transfer between two brokers
-# (lib/in_kind.PAIR_DAYS; the US custody pairing's _OWN_MOVE_DAYS in
-# bin/taxjson_run is the same 10). An out leg further from an in leg
+# (lib/in_kind.PAIR_DAYS; the US lot carry reads this pairing, backlog
+# TJ-0269). An out leg further from an in leg
 # than this is a departure (or an arrival) of its own, never the other's
 # source (audit 2026-10-24 B50: a 2026 departure cancelled a 2020
 # arrival).
@@ -158,8 +158,10 @@ class OwnMove:
     within the window or as a slower move. A Canadian project's books
     carry each as a lot move in both accounts' books, so every
     per-account view sees the receiving account hold the shares; the
-    ACB stays one pool (CA-ACB-OWN-MOVE, backlog TJ-0093). A leg the
-    pairing leaves stays the transfer in or out it is."""
+    ACB stays one pool (CA-ACB-OWN-MOVE, backlog TJ-0093). A US
+    project's books carry the sender's lots along the same pairs
+    (US-BASIS-05): one pairing decides both (backlog TJ-0269). A leg
+    the pairing leaves stays the transfer in or out it is."""
     key: str                    # the security after ticker.map renames
     quantity: float             # the units cancelled
     out_account: str
@@ -170,6 +172,15 @@ class OwnMove:
     in_symbol: str = ""
     out_currency: str = ""
     in_currency: str = ""
+    # The days between the legs when the pairing took them as a slower
+    # move (slow_pairs); 0 within the window.
+    slow: int = 0
+    # The units of the out row and of the in row no pairing took, once
+    # the pairing is done: a move whose rows' quantities differ (the
+    # rest of the out row a transfer-out of its own, of the in row an
+    # arrival from outside the books).
+    out_left: float = 0.0
+    in_left: float = 0.0
 
 
 @dataclass
@@ -606,6 +617,8 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
              slow: Optional[List[SlowMove]] = None,
              no_slow: Optional[Callable[[Tuple[str, str, Dict[str, Any]]],
                                         bool]] = None,
+             no_move: Optional[Callable[[Tuple[str, str, Dict[str, Any]]],
+                                        bool]] = None,
              not_own: Optional[Sequence[NotOwn]] = None,
              paired: Optional[List[Tuple[str, str, str, float]]] = None
              ) -> List[Arrival]:
@@ -630,6 +643,13 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     pairs so, though it counts as a candidate. What is left of each in
     leg is an Arrival, carrying the earlier transfer-outs of its
     security nothing paired (Arrival.departures).
+
+    `no_move`: a row it marks (the taxable leg of an in-kind move to or
+    from a registered account, booked or not) went to or came from that
+    account: it never pairs with another account's leg as a move of
+    your own, in any step (backlog TJ-0230: within the window it took
+    part of another quantity's transfer-in), nor is it a departure; it
+    still cancels within its own account.
 
     `not_own`: the project's .tt NOTOWN lines (backlog TJ-0075). A line
     naming an exact pairing (step 1: its two legs of the same units,
@@ -662,6 +682,10 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     outs = [g for g in legs if g[4] < 0]
     for g in outs:
         g[4] = -g[4]
+    # An in-kind move's taxable leg (`no_move`): never another
+    # account's partner (backlog TJ-0230).
+    stay = ({id(g) for g in legs if no_move((g[0], g[1], g[2]))}
+            if no_move else set())
     # The NOTOWN lines (backlog TJ-0075), each matched afresh: the legs
     # a line took out of the pairing (`held`, by id) and each undone
     # pair's in leg -> its out leg.
@@ -704,17 +728,24 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
             outs[j][4] -= take
             _moved(outs[j], ins[i], take)
 
-    def _moved(o, g, take):
+    # Each move of your own with its two legs: what the pairing leaves
+    # of them is set once it is done (OwnMove.out_left / in_left).
+    made: List[Tuple[OwnMove, List[Any], List[Any]]] = []
+
+    def _moved(o, g, take, slow_days: int = 0):
         # Units cancelled between two accounts: a move of your own.
         if moves is not None and o[0] != g[0]:
-            moves.append(OwnMove(
+            m = OwnMove(
                 key=g[3], quantity=round(take, 8), out_account=o[0],
                 out_date=str(o[2].get("date") or "")[:10],
                 in_account=g[0], in_date=str(g[2].get("date") or "")[:10],
                 out_symbol=str(o[2].get("symbol") or ""),
                 in_symbol=str(g[2].get("symbol") or ""),
                 out_currency=str(o[2].get("currency") or ""),
-                in_currency=str(g[2].get("currency") or "")))
+                in_currency=str(g[2].get("currency") or ""),
+                slow=slow_days)
+            moves.append(m)
+            made.append((m, o, g))
 
     def _gap(a, b):
         da, db = _d(a[2].get("date")), _d(b[2].get("date"))
@@ -728,7 +759,8 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
               str(inn[2].get("date")), i, j)
              for i, inn in enumerate(ins) for j, o in enumerate(outs)
              if inn[3] == o[3]
-             and (inn[0] == o[0] or not (inn[5] or o[5]))
+             and (inn[0] == o[0] or not (inn[5] or o[5] or id(inn) in stay
+                                         or id(o) in stay))
              and _gap(inn, o) <= OWN_MOVE_DAYS], exact=True)
     # 2. A listing journal (the same units moved between two listings of
     #    one security, e.g. a US-dollar and a Canadian-dollar line, with
@@ -760,6 +792,7 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     def _whole(g) -> bool:
         return (not g[5] and abs(g[4] - abs(float(g[2].get("quantity")
                                                   or 0.0))) <= _EPS
+                and id(g) not in stay
                 and not (no_slow and no_slow((g[0], g[1], g[2]))))
     lo = [j for j, o in enumerate(outs) if o[4] > _EPS and id(o) not in held]
     li = [i for i, g in enumerate(ins) if g[4] > _EPS and id(g) not in held]
@@ -771,14 +804,17 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
         o, g = outs[lo[pj]], ins[li[pi]]
         if lines and _undo(o, g, "slow"):
             continue            # a NOTOWN line undoes it (TJ-0075)
+        sm = SlowMove(
+            key=g[3], symbol=str(g[2].get("symbol") or ""),
+            quantity=round(g[4], 8), out_account=o[0],
+            out_date=str(o[2].get("date") or "")[:10],
+            in_account=g[0], in_date=str(g[2].get("date") or "")[:10])
         if slow is not None:
-            slow.append(SlowMove(
-                key=g[3], symbol=str(g[2].get("symbol") or ""),
-                quantity=round(g[4], 8), out_account=o[0],
-                out_date=str(o[2].get("date") or "")[:10],
-                in_account=g[0], in_date=str(g[2].get("date") or "")[:10]))
-        _moved(o, g, g[4])
+            slow.append(sm)
+        _moved(o, g, g[4], sm.days)
         o[4] = g[4] = 0.0
+    for m, o, g in made:
+        m.out_left, m.in_left = round(o[4], 8), round(g[4], 8)
 
     def _departures(g) -> List[Tuple[str, str, float]]:
         # The out legs of the security nothing paired, in any of the
@@ -792,7 +828,7 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
         for o in outs:
             do = _d(o[2].get("date"))
             if (o[4] > _EPS and not o[5] and o[3] == g[3]
-                    and undone.get(id(g)) != id(o)
+                    and undone.get(id(g)) != id(o) and id(o) not in stay
                     and not (no_slow and no_slow((o[0], o[1], o[2])))
                     and dg is not None and do is not None
                     and 0 <= (dg - do).days <= SLOW_MOVE_DAYS):

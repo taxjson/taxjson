@@ -3,7 +3,6 @@ import contextlib
 import csv
 import io
 import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -29,6 +28,12 @@ _WEBULL_OPTION_RE = re.compile(
 
 # First cells a cut-short data row can start with ('C' .. 'USD').
 _CURRENCY_PREFIXES = frozenset({'U', 'US', 'USD', 'C', 'CA', 'CAD'})
+
+
+def _mask(acct: str) -> str:
+    """A broker account id as a message prints it: its first 2
+    characters + *** (the parsers' rule)."""
+    return (acct[:2] + '***') if acct else ''
 
 
 def _deliverable_size(opt, rows) -> float:
@@ -159,6 +164,9 @@ class WebullBrokerage(BaseBrokerage):
             return None
         account = self._preamble_account(lines[:header_index])
         self._last_accounts = {account} if account else set()
+        # The account the file's preambles name so far: a later preamble
+        # naming another stops the parse (backlog TJ-0237).
+        named = account
 
         reader = csv.reader(io.StringIO("\n".join(lines[header_index:])))
         # Resolve columns by their HEADER LABELS, never by position. The
@@ -195,6 +203,9 @@ class WebullBrokerage(BaseBrokerage):
         # One segment per download: a second statement preamble (its
         # 'Account Number' line) starts another (backlog TJ-0099).
         segs: List[tuple] = [(header_index + 1, [])]
+        # The segment (download) of each transaction: each is read in
+        # its own direction (backlog TJ-0376).
+        seg_of: List[int] = []
         for row in reader:
             # File line of this record (the header record is the first
             # one the reader returns; line_num counts physical lines
@@ -202,6 +213,19 @@ class WebullBrokerage(BaseBrokerage):
             where = f"{shown_name(path)} line {header_index + reader.line_num}"
             if row and row[0].strip().lower().startswith('account number'):
                 segs.append((header_index + reader.line_num, []))
+                other = self._account_in_cells(row)
+                if named and other and other.upper() != named.upper():
+                    # Two accounts' downloads pasted into one file: every
+                    # row was booked under the first preamble's account
+                    # (backlog TJ-0237).
+                    raise BrokerageParseError(
+                        f"{where}: this statement preamble names account "
+                        f"{_mask(other)}, a different account from the "
+                        f"{_mask(named)} named above — two accounts' "
+                        f"downloads pasted into one file, and every row "
+                        f"would be booked under the first one. Save each "
+                        f"account's download as its own file.")
+                named = named or other
             if (row and len(row) < width and any(c.strip() for c in row)
                     and row[0].strip().upper() in _CURRENCY_PREFIXES):
                 # A data row cut short — the last line of a download
@@ -384,7 +408,9 @@ class WebullBrokerage(BaseBrokerage):
                     f"contract — refusing to guess which it is.")
             under_sym = ''
             if opt:
-                symbol = self.format_occ_symbol(opt['right'], opt['base'], opt['expiry'], opt['strike'])
+                symbol = self.format_occ_symbol(
+                    opt['right'], opt['base'], opt['expiry'], opt['strike'],
+                    where=where)
                 is_option = True
                 # The row's own Symbol column (`@ZZS`) names the
                 # underlying; the description root can differ (an
@@ -473,7 +499,10 @@ class WebullBrokerage(BaseBrokerage):
                 _tx['broker_account'] = account
             if under_sym:
                 _tx['_under'] = under_sym
+            # The row's line, for the schema check (backlog TJ-0124).
+            self.note_row_line(_tx, header_index + reader.line_num)
             transactions.append(_tx)
+            seg_of.append(len(segs) - 1)
             if is_expiry:
                 expiries.append(_tx)
         refuse_pasted_overlap(shown_name(path), segs,
@@ -484,47 +513,63 @@ class WebullBrokerage(BaseBrokerage):
             raise BrokerageParseError(
                 f"{path}: Webull row accounting failed — {data_rows} "
                 f"BUY/SELL rows but {len(transactions)} transactions")
-        transactions = self._oldest_first(transactions)
+        transactions = self._oldest_first(transactions, seg_of)
         return transactions, expiries, skipped_actions
 
-    def _oldest_first(self, transactions):
+    def _oldest_first(self, transactions, segments=None):
         """The rows in replay order. Webull groups its rows by security
         and prints no clock time, so rows at one date keep the order the
         parser emits them (tax-logic CA-DATE-14 / US-DATE-13). A
         newest-first export is read bottom-up: each security group whose
         dates never increase is reversed, and a group with one date
-        follows the file's other groups when they all agree (audit
-        A2-1068)."""
-        groups: Dict[str, List[int]] = {}
+        follows its download's other groups when they all agree (audit
+        A2-1068). `segments` gives each row's download (statement
+        preamble) when one account's downloads are pasted into one file:
+        each is read in its own direction, a download whose groups show
+        none following the file's other downloads (backlog TJ-0376)."""
+        segs = list(segments) if segments else [0] * len(transactions)
+        groups: Dict[tuple, List[int]] = {}
         for i, t in enumerate(transactions):
-            groups.setdefault(t['symbol'], []).append(i)
-        verdict: Dict[str, bool] = {}
-        for sym, idx in groups.items():
+            groups.setdefault((segs[i], t['symbol']), []).append(i)
+        verdict: Dict[tuple, bool] = {}
+        for key, idx in groups.items():
             ds = [transactions[i]['date_settle'] for i in idx]
             if len(set(ds)) > 1:
-                verdict[sym] = self.newest_first(ds)
-        default = set(verdict.values()) == {True}
+                verdict[key] = self.newest_first(ds)
+        seen: Dict[int, set] = {}
+        for (seg, _sym), v in verdict.items():
+            seen.setdefault(seg, set()).add(v)
+        file_default = set(verdict.values()) == {True}
         out = list(transactions)
-        for sym, idx in groups.items():
-            if verdict.get(sym, default):
+        for key, idx in groups.items():
+            default = (seen[key[0]] == {True} if key[0] in seen
+                       else file_default)
+            if verdict.get(key, default):
                 for i, t in zip(idx, [transactions[i] for i in idx][::-1]):
                     out[i] = t
         return out
 
     @staticmethod
-    def _preamble_account(lines) -> str:
-        """The broker account id the preamble names ('Account Number /
-        Numéro de compte:,,,,,,,<id>,' or 'Account Number: <id>'), or ''."""
+    def _account_in_cells(cells) -> str:
+        """The account id an 'Account Number / Numéro de compte:,,,<id>,'
+        or 'Account Number: <id>' row names, or ''."""
+        if not cells or not cells[0].strip().lower().startswith(
+                'account number'):
+            return ''
+        head, _, rest = cells[0].partition(':')
+        for c in [rest] + list(cells[1:]):
+            c = c.strip()
+            if c:
+                return c
+        return ''
+
+    @classmethod
+    def _preamble_account(cls, lines) -> str:
+        """The broker account id the preamble names, or ''."""
         for line in lines:
-            cells = next(csv.reader([line]), [])
-            if not cells or not cells[0].strip().lower().startswith(
-                    'account number'):
-                continue
-            head, _, rest = cells[0].partition(':')
-            for c in [rest] + cells[1:]:
-                c = c.strip()
-                if c:
-                    return c
+            acct = cls._account_in_cells(next(csv.reader([line]), []))
+            if acct:
+                return acct
         return ''
 
     def _check_trade_money(self, where, action, qty, price, net,

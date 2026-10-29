@@ -172,7 +172,8 @@ class TestTobaseTransferPair(unittest.TestCase):
     def test_no_questrade_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            TB._project(root, "canada", "taxable", TB._Run.MAP, True)
+            TB._project(root, "canada", "taxable", TB._Run.MAP, True,
+                        cleanup=self.addCleanup)
             r = TB._run(root, "run", "--no-input", "--details")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             self.assertNotIn("Questrade exports for",

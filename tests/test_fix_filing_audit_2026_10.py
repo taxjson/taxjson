@@ -266,7 +266,8 @@ class TestF4T1135MergerRatios(unittest.TestCase):
     its symbol-global pool: the first renamed the whole pool at 1, the
     second found the source empty — 52 shares for the 54 delivered, a
     sale of 27 released 270 of the 520 cost, and the year-end cost
-    amount was 250 for the engine's 260."""
+    amount was 250 for the engine's 260. The walk reads the engine's
+    pools now (backlog TJ-0417)."""
 
     @rule("CA-CORP-13", "CA-RPT-12")
     def test_cost_walk_folds_the_ratios_as_the_engine_does(self):
@@ -277,18 +278,11 @@ class TestF4T1135MergerRatios(unittest.TestCase):
         self.assertEqual(f['per_symbol']['QZNEW.US']['year_end_cost'], 260.0)
         self.assertEqual(f['per_symbol']['QZNEW.US']['max_cost'], 260.0)
         self.assertEqual(f['max_total_cost'], 260.0)
-        self.assertIn('holdings-weighted ratio', err.getvalue())
 
     @rule("CA-CORP-13")
     def test_control_engine_keeps_the_same_basis(self):
         r, _ = compute(merger_book('canada', 27), 'canada')
         self.assertAlmostEqual(r['inventory'][0]['total_cost'], 260)
-
-    def test_rows_without_a_multi_ratio_event_are_returned_as_given(self):
-        from taxjson.bin.taxjson_t1135 import _fold_merger_ratios
-        rows = [t.to_dict() for t in merger_book('canada', 27)
-                if t.action != 'SPLIT']
-        self.assertIs(_fold_merger_ratios(rows), rows)
 
 
 class TestF5T1135MicroCrypto(unittest.TestCase):

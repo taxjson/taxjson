@@ -770,10 +770,13 @@ class TestWashClassContextInputs(unittest.TestCase):
             root = _project(tmp, [_row("2026-06-01", "MSFT.US", 10,
                                        4000.0, currency="USD")],
                             ticker_map=b"TOBASE AAPL.NE \xff\xfe AAPL.US\n")
-            with contextlib.redirect_stderr(io.StringIO()):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
                 with self.assertRaises(SystemExit) as cm:
                     R._wash_class_context(root, root / "work", "t")
-        self.assertIn("ticker.map", str(cm.exception.code))
+        # Exit 2, an input to fix, never UNSAFE's 1 (backlog TJ-0351).
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("ticker.map cannot be read", err.getvalue())
 
 
 if __name__ == "__main__":

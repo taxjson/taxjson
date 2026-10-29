@@ -24,6 +24,7 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
+from _planted_rates import plant
 from tax_rules import rule
 
 
@@ -75,7 +76,9 @@ def _run_cli(root, *args, cwd=None, env=None):
 
 def _project(td, name="crypto", source_currencies=("USD",)):
     """A 2026 crypto-only CA project. With USD configured, a fresh
-    to_base.csv is pre-seeded (flat 1.40) so no FX download happens."""
+    to_base.csv is pre-seeded (flat 1.40) so no FX download happens,
+    and the same rates are in the currency cache of the HOME the tests
+    run it under (`td`): a run that rebuilds the file keeps them."""
     root = Path(td) / "proj"
     (root / "inputs" / name).mkdir(parents=True)
     (root / "work").mkdir()
@@ -89,7 +92,7 @@ def _project(td, name="crypto", source_currencies=("USD",)):
         while d <= date.today():
             lines.append(f"{d.isoformat()} 12:00:00 USD CAD 1.40 yahoo\n")
             d += timedelta(days=1)
-        (root / "work" / "to_base.csv").write_text("".join(lines))
+        plant(root / "work" / "to_base.csv", "".join(lines), Path(td))
     return root
 
 

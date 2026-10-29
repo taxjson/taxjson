@@ -237,7 +237,9 @@ class TestSanity(unittest.TestCase):
         self.assertIn("ACCOUNTS", text.stdout)
         # The count is the `! ` line (docs/output-style.md, Essentials
         # first).
-        self.assertIn("! 2 differ;", text.stdout)
+        # (one position booked in the other account: backlog TJ-0423)
+        self.assertIn("! 1 booked in another account (QNET.US): check "
+                      "the export's folder", text.stdout)
 
     def test_many_accounts_to_one_file(self):
         # One broker export covering two taxjson accounts: `a+b=FILE`.

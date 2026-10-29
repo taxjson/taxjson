@@ -5,7 +5,6 @@ mutant named in its finding is applied. All data is synthetic: fake
 tickers, fake ISINs, fake broker account ids."""
 import io
 import json
-import os
 import subprocess
 import sys
 import tempfile

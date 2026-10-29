@@ -27,6 +27,7 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
+from _planted_rates import plant
 from _style import CapturedWidth
 from tax_rules import rule
 from taxjson.lib import cross_listings as XL
@@ -101,13 +102,14 @@ def qt_export(sale=True):
                   gross='450') if sale else ''))
 
 
-def _rates(path: Path, pair: str, rate: str):
+def _rates(path: Path, pair: str, rate: str, cleanup):
+    """The rates file, and the same rates in the suite's HOME (put back
+    by `cleanup`): a run that rebuilds the file keeps them (TJ-0635)."""
     d, lines = date(2025, 12, 1), []
     while d <= date(2026, 12, 31):
         lines.append(f"{d.isoformat()} 12:00:00 {pair} {rate} boc")
         d += timedelta(days=1)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", cleanup=cleanup)
 
 
 def _config(country, kind):
@@ -131,7 +133,7 @@ def _run(root, *args):
 
 
 def _project(root: Path, country: str, kind: str, ticker_map: str,
-             sale: bool = True) -> None:
+             sale: bool = True, *, cleanup) -> None:
     (root / "taxjson.toml").write_text(_config(country, kind))
     if ticker_map:
         (root / "ticker.map").write_text(ticker_map)
@@ -140,9 +142,11 @@ def _project(root: Path, country: str, kind: str, ticker_map: str,
     (acct / "U5550001_2026.csv").write_text(ib_statement())  # pii-ok
     (acct / "55500001.csv").write_text(qt_export(sale))  # pii-ok
     if country == "canada":
-        _rates(root / "work" / "to_base.csv", "USD CAD", "1.2500")
+        _rates(root / "work" / "to_base.csv", "USD CAD", "1.2500",
+               cleanup)
     else:
-        _rates(root / "work" / "to_base.csv", "CAD USD", "0.8000")
+        _rates(root / "work" / "to_base.csv", "CAD USD", "0.8000",
+               cleanup)
 
 
 # ------------------------------------------------------------ unit level
@@ -298,7 +302,8 @@ class _Run:
     def setUpClass(cls):
         cls._td = tempfile.TemporaryDirectory()
         cls.root = Path(cls._td.name)
-        _project(cls.root, cls.COUNTRY, cls.KIND, cls.MAP, cls.SALE)
+        _project(cls.root, cls.COUNTRY, cls.KIND, cls.MAP, cls.SALE,
+                 cleanup=cls.addClassCleanup)
         cls.r = _run(cls.root, "run", "--no-input")
         cls.out = " ".join((cls.r.stdout + cls.r.stderr).split())
 
@@ -482,7 +487,8 @@ class TestIbNamesFollowTheListing(unittest.TestCase):
             (root / "inputs" / "acct").mkdir(parents=True)
             (root / "inputs" / "acct" / "U5550001_2026.csv").write_text(  # pii-ok
                 ib_two_companies(False))
-            _rates(root / "work" / "to_base.csv", "USD CAD", "1.2500")
+            _rates(root / "work" / "to_base.csv", "USD CAD", "1.2500",
+                   self.addCleanup)
             r = _run(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-3000:])
             _legs, names, _shown = XL.gather(root / "work", ["acct"])

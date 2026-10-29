@@ -16,7 +16,6 @@ If no files provided, reads from stdin.
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import List, Dict, Any

@@ -410,7 +410,7 @@ class TestFxRateLoaderHonorsToColumn(unittest.TestCase):
     USD→EUR rates would silently apply when the user asked for --to CAD."""
 
     def test_skips_rows_with_wrong_to_currency(self):
-        import tempfile, os
+        import os
         from pathlib import Path
         from taxjson.bin.taxjson_convert_currency import load_exchange_rates
 
@@ -435,7 +435,7 @@ class TestFxRateLoaderHonorsToColumn(unittest.TestCase):
     def test_accepts_all_when_target_curr_none(self):
         """Backward-compat: omitting target_curr keeps old accept-all
         behavior (used by tests that build rate dicts directly)."""
-        import tempfile, os
+        import os
         from pathlib import Path
         from taxjson.bin.taxjson_convert_currency import load_exchange_rates
 

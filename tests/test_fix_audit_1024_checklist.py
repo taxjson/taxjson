@@ -7,7 +7,6 @@ config loader (A16, A17), the walk's exit (A18) and the store's lock
 import contextlib
 import io
 import json
-import os
 import subprocess
 import tempfile
 import threading

@@ -484,10 +484,18 @@ class TestElectStyle(_NoWidthEnv):
     def test_set_errors_are_headline_and_detail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _elect_project(tmp, pending=_pending_doc())
-            with self.assertRaises(SystemExit) as cm:
-                _elect(root, account="margin",
-                       set=[f"{_EV}=rollover_s_86_1"])
-        msg = str(cm.exception)
+            from taxjson.bin.taxjson_run import cmd_elect
+            ns = dict(dir=str(root), account="margin", redo=False,
+                      reset=False, event=None, hint=None, pending=False,
+                      json=False, set=[f"{_EV}=rollover_s_86_1"])
+            e = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(e):
+                cmd_elect(argparse.Namespace(**ns))
+        # A usage error: exit 2, the message printed (backlog TJ-0539).
+        self.assertEqual(cm.exception.code, 2)
+        msg = e.getvalue().rstrip("\n")
         # The headline, what the hint is (backlog TJ-0037), the fix.
         self.assertTrue(msg.startswith("Error: "
                                        "rollover_s_86_1 needs "

@@ -61,7 +61,8 @@ def _project(tmp):
              "currency": "CAD", "days_held": 31,
              "raw_gain": -100.0, "is_wash_sale": True,
              "disallowed_amount": 100.0},
-            {"action": "DIVIDEND", "symbol": "AAA.TO", "dividend": 30.0,
+            {"action": "DIVIDEND", "date": "2026-04-15", "symbol": "AAA.TO",
+             "dividend": 30.0,
              "currency": "CAD"}],
          "inventory": [
             {"symbol": "AAA.TO", "qty": 60, "total_cost": 600.0,

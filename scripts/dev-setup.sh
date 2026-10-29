@@ -66,6 +66,13 @@ venv/bin/pip install -e ".[fx,dev]"
 # distribution in packages/, installed beside the core. --no-deps: its only
 # dependency is the core installed just above from this checkout.
 venv/bin/pip install --no-deps -e packages/taxjson-fetch
+# Both installs' metadata now carries the code's versions (a venv set up
+# before a version bump kept the old one: re-run this after a pull).
+# setuptools leaves a <name>.egg-info beside the sources it built, which a
+# run with that folder on PYTHONPATH reads before the venv's (the plugin's
+# entry point in a run meant to have none): removed, and the versions
+# checked (backlog TJ-0636).
+venv/bin/python -I scripts/editable_check.py --clean
 
 install_hook
 DENY="$HOME/.config/taxjson/pii-denylist"

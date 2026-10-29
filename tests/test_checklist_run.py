@@ -13,7 +13,7 @@ from pathlib import Path
 from taxjson.lib import checklist as cl
 from taxjson.lib.dispatch import python_module_argv
 
-from test_checklist import FakeSub, _ctx, _project
+from test_checklist import _ctx, _project
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

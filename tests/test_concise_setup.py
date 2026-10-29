@@ -127,13 +127,28 @@ class TestElect(unittest.TestCase):
 class TestFormatMigrateRedact(unittest.TestCase):
 
     def test_format_note_is_one_line(self):
+        # A copy of the style project with one line out of the layout
+        # (the fixture itself is formatted: backlog TJ-0595).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "p"
+            shutil.copytree(project("canada").root, root)
+            toml = root / "taxjson.toml"
+            text = toml.read_text(encoding="utf-8")
+            self.assertIn("\nyear                              = 2024\n", text)
+            toml.write_text(text.replace(
+                "\nyear                              = 2024\n",
+                "\nyear = 2024\n"), encoding="utf-8")
+            p = _style.Project(root, "canada")
+            r = p.run("format", **W)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            # The diff is the data; the closing note is one line.
+            assert_concise(self, r.stderr, budget=1)
+            self.assertIn("+++ taxjson.toml (formatted)", r.stdout)
+            d = p.run("format", "--details", **W)
+            self.assertIn("loads the same either way", _flat(d.stderr))
         r = project("canada").run("format", **W)
         self.assertEqual(r.returncode, 0, r.stderr)
-        # The diff is the data; the closing note is one line.
-        assert_concise(self, r.stderr, budget=1)
-        self.assertIn("+++ taxjson.toml (formatted)", r.stdout)
-        d = project("canada").run("format", "--details", **W)
-        self.assertIn("loads the same either way", _flat(d.stderr))
+        self.assertIn("already formatted", r.stdout + r.stderr)
 
     def test_migrate_nothing(self):
         r = project("canada").run("migrate", "--dry-run", **W)

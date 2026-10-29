@@ -5,7 +5,6 @@ showed up at the start of a physical line inside a JSON value would
 have corrupted the document. The new pass walks string literals first
 so `#`-as-data is preserved while `#`-as-comment is dropped."""
 import json
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

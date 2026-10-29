@@ -21,7 +21,6 @@ suite. All data is synthetic.
   A2-1551  recompute_year's `crypto=crypto` on a one-crypto-account
       project (close-year then check-filed is OK).
 """
-import os
 import io
 import json
 import math

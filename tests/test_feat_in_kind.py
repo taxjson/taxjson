@@ -435,8 +435,14 @@ class TestPairing(unittest.TestCase):
                 self._leg("rrsp", -40, "2025-04-01", "rrsp"),
                 self._leg("margin", 40, "2025-04-20")]      # 19 days
         moves = IK.pair(legs)
-        self.assertEqual([(m.kind, m.registered.account) for m in moves],
+        self.assertEqual([(m.kind, m.registered.account) for m in moves
+                          if not m.problem],
                          [("contribution", "rrsp")])
+        # The 19-day pair is past the window: named, NOT booked, until a
+        # line says it was one move (backlog TJ-0437).
+        self.assertEqual([(m.kind, m.slow, m.problem) for m in moves
+                          if m.problem],
+                         [("withdrawal", 19, "slow")])
 
     @rule("CA-INKIND-01")
     def test_a_journal_inside_each_account_is_not_a_move(self):

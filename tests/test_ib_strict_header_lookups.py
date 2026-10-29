@@ -14,8 +14,6 @@ FAILS the parse with a BrokerageParseError naming the section and the
 column.
 """
 import io
-import sys
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from contextlib import redirect_stderr

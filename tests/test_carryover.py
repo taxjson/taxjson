@@ -17,7 +17,6 @@ from taxjson.bin.taxjson_carryover import (
     build_usa_ledger,
     load_claimed,
     main,
-    render,
     yearly_nets,
 )
 from taxjson.lib.core import TaxTransaction
@@ -241,10 +240,10 @@ class TestCliAndRender(unittest.TestCase):
 class TestRunWrapper(unittest.TestCase):
     def test_taxjson_carryover_subcommand(self):
         try:
-            import tomllib  # noqa: F401
+            import tomllib  # noqa: F401  (availability check: TOML support)
         except ImportError:
             try:
-                import tomli  # noqa: F401
+                import tomli  # noqa: F401  (availability check: TOML support)
             except ImportError:
                 self.skipTest("no TOML support on this interpreter")
         from taxjson.bin.taxjson_run import cmd_carryover

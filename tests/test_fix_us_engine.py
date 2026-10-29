@@ -155,8 +155,11 @@ class TestReplacementSoldBeforeTheLoss(unittest.TestCase):
             root = Path(td)
             (root / "filed").mkdir()
             (root / "filed" / "2025.json").write_text('{"year": 2025}')
+            # Each lock's file too: its own row of a sale says whether
+            # the filed return had a basis add (backlog TJ-0463).
             self.assertEqual(locked_year_flags(root, {"country": "usa"}),
-                             ["--locked-year", "2025"])
+                             ["--locked-year", "2025", "--locked-record",
+                              str(root / "filed" / "2025.json")])
             self.assertEqual(locked_year_flags(root,
                                                {"country": "canada"}), [])
         self.assertTrue(flag_country_problems(
@@ -428,8 +431,14 @@ class TestOwnAccountMoveCarriesLots(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()):
                 moves = taxjson_run.stage_own_account_moves(
                     cache, cfg, {"country": "usa"}, cache)
-            self.assertEqual(moves, [])
+            # The 90 pair, as the arrival stage reads them (one pairing,
+            # backlog TJ-0269: qb's 90 are no arrival from outside, so
+            # their lots come from qa); the 10 stay with qa.
+            self.assertEqual([(m["from"], m["to"], m["qty"])
+                              for m in moves], [("qa", "qb", 90.0)])
             self.assertIn("quantities do not pair", err.getvalue())
+            self.assertIn("The other 10 of the transfer-out stay with qa",
+                          err.getvalue())
             with contextlib.redirect_stderr(io.StringIO()), \
                     contextlib.redirect_stdout(io.StringIO()), \
                     self.assertRaises(SystemExit):

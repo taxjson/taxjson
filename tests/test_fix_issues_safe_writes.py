@@ -199,9 +199,6 @@ _ALLOWED = {
     ("lib/handoff.py",
      'full.write_text(json.dumps({"transactions": rows}))'):
         "scratch copy in a TemporaryDirectory",
-    ("lib/handoff.py",
-     'trunc.write_text(json.dumps({"transactions": kept + adjust_rows}))'):
-        "scratch copy in a TemporaryDirectory",
     ("lib/migrate.py",
      "tp.write_text(_joined(before, pl.map_append),"):
         "scratch copy in a TemporaryDirectory",

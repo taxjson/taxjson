@@ -179,13 +179,17 @@ class TestDeferredAtYearEnd(unittest.TestCase):
         self.assertEqual(_deferred(edge, coin),
                          [("coins", 2, 100.0, "2025-12-31")])
 
-    def test_trade_date_project_says_settlement_date(self):
-        # The engine's pools run on settlement dates (CA-SL-01); a
-        # trade-date project is told which day the year end is read on.
-        _, edge, _ = _edge({"margin": DENIED}, tax_date="trade")
+    def test_trade_date_project_reads_trade_dates(self):
+        # The engine's pools run on settlement dates (CA-SL-01), but a
+        # trade-date project reads its year end on trade dates (backlog
+        # TJ-0343; test_fix_1029_edgecases has the sale that settles in
+        # January): no note.
+        doc, edge, _ = _edge({"margin": DENIED}, tax_date="trade")
+        self.assertEqual(doc["inventory_year_end_basis"], "trade")
         (r,) = edge["year_boundary"]["deferred_at_year_end"]
-        self.assertIn("still held at the end of 2025 (by settlement date)",
-                      r["why"])
+        self.assertIn("still held at the end of 2025;", r["why"])
+        sdoc, _settle, _ = _edge({"margin": DENIED})
+        self.assertNotIn("inventory_year_end_basis", sdoc)
 
     def test_books_without_the_year_end_say_so(self):
         # A gains file written before inventory_year_end: its final

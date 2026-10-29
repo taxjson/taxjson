@@ -2,7 +2,6 @@
 and the crypto map, the de-peg ATTENTION echo, `elect --set` repeated,
 the same exchange export in two crypto accounts and the shared price
 caches' save. Synthetic data only; no network."""
-import os
 import contextlib
 import io
 import json

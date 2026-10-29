@@ -130,10 +130,27 @@ def refuse_read_only(path: Union[str, Path]) -> None:
     except OSError:
         return
     if stat.S_ISREG(st.st_mode) and not os.access(p, os.W_OK):
+        # The chmod names the file from where the command was run: the
+        # bare file name was wrong with -C from elsewhere (backlog
+        # TJ-0219).
         raise ReadOnlyFileError(
             errno.EACCES,
-            f"{READ_ONLY} ({READ_ONLY_FIX.format(shown=Path(p).name)})",
+            f"{READ_ONLY} ({READ_ONLY_FIX.format(shown=_shown_here(p))})",
             p)
+
+
+def _shown_here(path: Union[str, Path]) -> str:
+    """`path` relative to the folder the command was run in when it is
+    inside it, else absolute."""
+    try:
+        p = Path(path).resolve()
+        here = Path.cwd().resolve()
+    except (OSError, RuntimeError):
+        return str(path)
+    try:
+        return str(p.relative_to(here))
+    except ValueError:
+        return str(p)
 
 
 def temp_name(final: Union[str, Path], suffix: str = ".part") -> Path:

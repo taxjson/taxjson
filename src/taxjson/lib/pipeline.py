@@ -721,6 +721,13 @@ def _net_cross_account_transfers(transactions, main_transactions=(),
     Segments whose lo..hi span exceeds _TRANSFER_SEGMENT_MAX_SPAN_DAYS
     are never netted (chained-gap residue — see that constant).
 
+    A segment that does not net to zero (another transfer of the symbol
+    within the gap: a contribution in kind, a withdrawal) is judged by
+    its moves: each out leg of one account and in leg of the same units
+    in another (either order, the closest dates first) nets on its own
+    under the same refusals, the rest stays (backlog TJ-0362: such a
+    segment left every leg of the move un-netted).
+
     `near_trade_guard=False` (the default transfer policy, CA-SL-16 /
     US-WASH-23) drops the near-trade refusal only: the SPLIT guard reads
     `main_transactions` whatever the policy (a main-book split changes
@@ -769,26 +776,28 @@ def _net_cross_account_transfers(transactions, main_transactions=(),
                 segments.append([cur])
             else:
                 segments[-1].append(cur)
-        for seg in segments:
+        def _nets(seg) -> bool:
+            # A zero-net run of legs that may be netted: both signs,
+            # the span, no SPLIT inside it, not near a taxable trade.
             if abs(sum(t.quantity for _, t in seg)) > epsilon:
-                continue
+                return False
             # A one-sided segment (all same sign) can't be a move.
             if not (any(t.quantity > 0 for _, t in seg)
                     and any(t.quantity < 0 for _, t in seg)):
-                continue
+                return False
             dates = [_d(t) for _, t in seg if _d(t) is not None]
             if not dates:
-                continue
+                return False
             lo, hi = min(dates), max(dates)
             # Chained-gap residue: refuse oversized spans outright.
             if (hi - lo).days > _TRANSFER_SEGMENT_MAX_SPAN_DAYS:
-                continue
+                return False
             # SPLIT inside the span: legs are in different share terms.
             if any(t.action == 'SPLIT' and t.symbol == symbol
                    and _d(t) is not None and lo <= _d(t) <= hi
                    for t in list(transactions)
                    + list(main_transactions)):
-                continue
+                return False
             # Near a taxable trade (either sign, trade or settle
             # date): don't guess — let the rewrite + engine guard
             # force a declaration if it matters.
@@ -796,11 +805,48 @@ def _net_cross_account_transfers(transactions, main_transactions=(),
             if near_trade_guard and any(
                     lo - _pad <= sd <= hi + _pad
                     for sd in main_trades.get(symbol, ())):
-                continue
-            for idx, _ in seg:
-                drop_idx.add(idx)
-            if netted_segments is not None:
-                netted_segments.append([t for _, t in seg])
+                return False
+            return True
+
+        def _moves(seg) -> list:
+            # A cluster that does not net whole (another transfer of the
+            # symbol within the gap: a contribution, a withdrawal):
+            # each move between two of your accounts in it is judged on
+            # its own (backlog TJ-0362), as the per-account dropper
+            # judges each move: a leg out of one account and a leg of
+            # the same units into another, either order, the closest
+            # dates first.
+            cands = []
+            for x in range(len(seg)):
+                for y in range(x + 1, len(seg)):
+                    a, b = seg[x][1], seg[y][1]
+                    if (a.account != b.account
+                            and a.quantity * b.quantity < 0
+                            and abs(a.quantity + b.quantity) <= epsilon):
+                        da, db = _d(a), _d(b)
+                        gap = (abs((db - da).days)
+                               if da is not None and db is not None
+                               else 10 ** 6)
+                        cands.append((gap, x, y))
+            used: set = set()
+            out = []
+            for _gap, x, y in sorted(cands):
+                if x in used or y in used:
+                    continue
+                used.update((x, y))
+                out.append([seg[x], seg[y]])
+            return out
+
+        for seg in segments:
+            runs = ([seg] if abs(sum(t.quantity for _, t in seg))
+                    <= epsilon else _moves(seg))
+            for run in runs:
+                if not _nets(run):
+                    continue
+                for idx, _ in run:
+                    drop_idx.add(idx)
+                if netted_segments is not None:
+                    netted_segments.append([t for _, t in run])
     if not drop_idx:
         return transactions
     if netted_out is not None:
@@ -1342,6 +1388,10 @@ class GainsRequest:
     # that sale: the basis add is booked in the loss's year instead,
     # said as ATTENTION (tax-logic US-WASH-22).
     locked_years: Tuple[int, ...] = ()
+    # Their lock files (filed/<year>.json): a lock's own row for that
+    # sale says whether the filed return already took the add (backlog
+    # TJ-0463: a year closed with the next January's rows had it).
+    locked_records: Tuple[str, ...] = ()
     # A sheltered account's unmatched TRANSFER row: a custody move by
     # default (held, never an acquisition for the loss rule — CA-SL-16 /
     # US-WASH-23); True ([settings] transfers_as_acquisitions = true)
@@ -1351,6 +1401,15 @@ class GainsRequest:
     # lines, lib/loss_overrides; CA-SL-18 / US-WASH-25): each names one
     # sale whose denial is not applied (recorded in `loss_overrides`).
     loss_overrides: Tuple[Dict[str, Any], ...] = ()
+    # The engine's cost timeline too (`cost_timeline` in the result:
+    # each pool's quantity and cost after every row that changed it,
+    # lib/cost_timeline; backlog TJ-0417).
+    cost_timeline: bool = False
+    # US: every FIFO lot held at the end of this day (YYYY-MM-DD, on the
+    # project's date basis), one by one (`lots_at` in the result): the
+    # year-end record keeps each lot's acquisition date and basis
+    # (lib/handoff; backlog TJ-0554). A Canadian pool has no lots.
+    lots_at: Optional[str] = None
 
     def __post_init__(self):
         from taxjson.lib.country import canonical_country
@@ -1525,8 +1584,53 @@ ATTENTION_WASH_LOCKED = "ATTENTION: wash sale reaches a filed year: "
 RETRO_WASH_ID_SUFFIX = "-wash-basis"
 
 
+def _locked_dispositions(locked_records) -> Dict[int, List[Dict[str, Any]]]:
+    """year -> the disposition rows its lock recorded (handoff.
+    dispositions: account, symbol, dates, qty, cost as filed). A lock
+    that does not read, or has no such rows, gives none: its adds are
+    then moved as before (check-filed reports a damaged lock)."""
+    out: Dict[int, List[Dict[str, Any]]] = {}
+    for p in locked_records or ():
+        try:
+            doc = json.loads(Path(p).read_text(encoding='utf-8-sig'))
+            y = int(doc.get('year'))
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        rows = doc.get('dispositions')
+        if isinstance(rows, list):
+            out.setdefault(y, []).extend(r for r in rows
+                                         if isinstance(r, dict))
+    return out
+
+
+def _filed_with(e: Dict[str, Any], cands: list, key: str,
+                filed: List[Dict[str, Any]]) -> int:
+    """How many of `cands` (a sale row's basis adds from losses of later
+    years, in order) the filed return already had: the lock's row for
+    that sale (account, symbol, date, units) at the cost with the first
+    k of them. 0 when no row of the lock is that sale at such a cost."""
+    rows = [d for d in filed
+            if d.get('account') == e.get('account')
+            and d.get('symbol') == e.get('symbol')
+            and str(d.get(key) or d.get('date') or '')
+            == str(e.get(key) or e.get('date') or '')
+            and abs(float(d.get('qty') or 0.0)
+                    - float(e.get('qty') or 0.0)) <= 1e-6]
+    if not rows:
+        return 0
+    amts = [float(a.get('amount') or 0.0) for a in cands]
+    base = float(e.get('cost') or 0.0) - sum(amts)
+    for k in range(len(amts), 0, -1):
+        want = base + sum(amts[:k])
+        if any(abs(float(d.get('cost') or 0.0) - want) <= 0.011
+               for d in rows):
+            return k
+    return 0
+
+
 def place_retro_wash_adjustments(results, tax_date: str,
-                                 locked_years=(), year=None) -> None:
+                                 locked_years=(), year=None,
+                                 locked_records=()) -> None:
     """USA (tax-logic US-WASH-22): the US engine adds a disallowed loss
     to the basis of a replacement another taxable account bought AND
     sold before the loss (`wash_basis_added` on that sale's gain row).
@@ -1535,8 +1639,14 @@ def place_retro_wash_adjustments(results, tax_date: str,
     (a loss of the same amount and term), and an ATTENTION line names
     the earlier sale — that return may need an amendment. When the
     earlier year is not locked, the sale's row carries the add and a
-    note says the earlier year changed. In place."""
+    note says the earlier year changed. An add the filed return already
+    had (the lock's own row for that sale has it in its cost: a year
+    closed with the next January's rows, as the docs ask) stays in the
+    sale's row, as filed (backlog TJ-0463: it was booked again in the
+    loss's year and the filed year drifted from its own lock). In
+    place."""
     locked = {int(y) for y in (locked_years or ())}
+    filed = _locked_dispositions(locked_records)
     key = 'date_settle' if tax_date == 'settle' else 'date'
     rows = results.get('transactions') or []
     added: list = []
@@ -1564,6 +1674,9 @@ def place_retro_wash_adjustments(results, tax_date: str,
                           f"without it, amend that return, or lock the year "
                           f"(`taxjson close-year`) to book the add in "
                           f"{l_year} instead.")
+        if moved and filed.get(int(e_year)):
+            moved = moved[_filed_with(e, moved, key,
+                                      filed[int(e_year)]):]
         if not moved:
             continue
         amt = sum(float(a['amount']) for a in moved)
@@ -1660,6 +1773,18 @@ def engine_options(req: GainsRequest) -> Dict[str, Any]:
     # (inventory_year_end: backlog TJ-0282, TJ-0284).
     if req.year:
         extra['year_end'] = f"{req.year}-12-31"
+        # A project whose tax_date is not its engine's walk date reads
+        # its year end on its own dates (US-RPT-13, CA-RPT-07; TJ-0343).
+        if req.country == 'usa' and req.effective_tax_date() == 'settle':
+            extra['year_end_basis'] = 'settle'
+        elif req.country == 'canada' and req.effective_tax_date() == 'trade':
+            extra['year_end_basis'] = 'trade'
+    if req.cost_timeline:
+        # Its rows dated on the project's date basis.
+        extra['cost_timeline'] = req.effective_tax_date()
+    if req.lots_at and req.country == 'usa':
+        extra['lots_at'] = str(req.lots_at)
+        extra['lots_at_basis'] = req.effective_tax_date()
     return extra
 
 
@@ -1773,7 +1898,8 @@ def run_gains(transactions, sheltered_transactions=(),
                                     _warn_year)
     if req.country == 'usa':
         place_retro_wash_adjustments(results, tax_date,
-                                     req.locked_years, _warn_year)
+                                     req.locked_years, _warn_year,
+                                     req.locked_records)
 
     # Capture tainted dispositions across ALL years before the year filter
     # strips them. The superficial-loss warning below pairs in-year clean
@@ -2055,6 +2181,13 @@ def run_gains(transactions, sheltered_transactions=(),
             raw = float(t.get('raw_gain') or 0.0)
             if raw >= -0.001:
                 continue
+            # A short cover's unknown figure is the short sale's
+            # proceeds: its raw figure is the cover cost, negated, not
+            # a loss, and the cover is its own purchase (backlog
+            # TJ-0620). A long's unknown cost counts as 0, so a raw
+            # loss there is a loss.
+            if str(t.get('direction') or '').upper() == 'SHORT':
+                continue
             try:
                 d0 = _dt.strptime(loss_window_date(t, req.country),
                                   '%Y-%m-%d')
@@ -2066,7 +2199,8 @@ def run_gains(transactions, sheltered_transactions=(),
                 # US-OPEN-01).
                 if (a.symbol != t.get('symbol')
                         or a.action not in ('BUYSELL', 'ASSIGN')
-                        or a.quantity <= 0 or _is_open(a)):
+                        or a.quantity <= 0 or _is_open(a)
+                        or (a.id and a.id == t.get('id'))):
                     continue
                 try:
                     da = _dt.strptime(loss_window_date(
@@ -2108,20 +2242,11 @@ def run_gains(transactions, sheltered_transactions=(),
     # Say it where the user reads it (audit R1-325): the warnings only
     # lived in the gains JSON, and the per-account split dropped them.
     # A `warning:` line reaches the .diag and the DIAGNOSTICS banner.
-    from taxjson.lib.missing_history import LOSS_CHECK_LABEL, LOSS_RULE
+    from taxjson.lib.missing_history import (LOSS_CHECK_LABEL,
+                                             loss_warning_text)
     for w in results.get('superficial_loss_warnings') or []:
-        if w.get('message'):
-            emit_line(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
-                      f"{w['message']}")
-        else:
-            emit_line(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
-                  f"{w.get('symbol')} loss with unknown cost (no purchase "
-                  f"in your files) of "
-                  f"{abs(float(w.get('raw_loss') or 0.0)):.2f} on "
-                  f"{w.get('loss_date')} with a buy on "
-                  f"{w.get('acquisition_date')} inside the window — if "
-                  f"you report this loss by hand, apply "
-                  f"{LOSS_RULE[req.country][0]} to that rebuy.")
+        emit_line(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
+                  f"{loss_warning_text(w, req.country)}")
 
     # Traces are emitted in the sidecar text file (when requested) — drop
     # them from the JSON unconditionally so stdout stays clean and
@@ -2134,7 +2259,13 @@ def run_gains(transactions, sheltered_transactions=(),
     for w in results.get('wash_sales', []):
         w.pop('trace', None)
 
-    return round_floats(results)
+    # The cost timeline's rows are lists: round_floats would round their
+    # quantities as money (a coin's dust to 0). It rounds its own.
+    timeline = results.pop('cost_timeline', None)
+    results = round_floats(results)
+    if timeline is not None:
+        results['cost_timeline'] = timeline
+    return results
 
 
 # The captured head of the run's one transfer-window warning (the run

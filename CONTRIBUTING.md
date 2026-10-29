@@ -22,9 +22,12 @@ the dev lock (`requirements/dev.txt`, hash-pinned: the ruff CI lints with),
 the core with `pip install -e ".[fx,dev]"`, then the broker-fetch plugin
 with `pip install --no-deps -e packages/taxjson-fetch` (`--no-deps`: its
 only dependency is the core you just installed — taxjson is not published
-on PyPI, and a `taxjson` package there is not ours), installs the pre-push
-hook (tag guard and personal-data scan, below) and scaffolds your private
-denylist. `scripts/dev-setup.sh --hook-only` (re)installs just the hook.
+on PyPI, and a `taxjson` package there is not ours), removes the
+`*.egg-info` folders those builds leave beside the sources and checks that
+the venv's versions of both match the code (`scripts/editable_check.py`;
+an install keeps the version it was made at, so re-run setup after a
+version bump), installs the pre-push hook (tag guard and personal-data
+scan, below) and scaffolds your private denylist. `scripts/dev-setup.sh --hook-only` (re)installs just the hook.
 End users install with the one-line installer instead (README, "Install").
 
 ## Help wanted: broker exports
@@ -209,7 +212,7 @@ the lint stage, and one of another version than the dev lock's
 `scripts/dev-setup.sh` installs the lock's:
 
 ```bash
-scripts/ci.sh            # lint (ruff, critical tier) + suite + fuzzers at CI depth
+scripts/ci.sh            # every stage: lint (ruff: critical tier, unused imports), consistency, tax-rules, pii, suite, no-extras, fetch-plugin, fuzzers at CI depth
 scripts/ci.sh --nightly  # fuzzers at 5000/3000/1600 books
 scripts/ci.sh --quick    # every stage but the fuzzers
 scripts/ci.sh --serial   # ...with the suite in one process (the old way; a fallback)
@@ -232,11 +235,28 @@ test process gets a synthetic HOME with made-up exchange rates and
 `TAXJSON_OFFLINE=1` (`tests/_hermetic`), so a test never reads your rate
 cache or the network. A test of an online path injects its fetcher, or
 clears `TAXJSON_OFFLINE` itself. GitHub's matrix jobs install no optional
-extras: a test that needs one skips without it, and the gate's
-`no-extras` stage (`scripts/ci_no_extras.sh`, seconds) runs the tests
-that touch an extra with every extra hidden. Add a new such test module
-to its `EXTRAS_TESTS`; `scripts/ci_no_extras.sh venv/bin/python3 test_x`
-runs any module that way.
+extras, and run the suite before they install the broker-fetch plugin
+(taxjson-fetch): a test that needs an extra skips without it, a test of
+`fetch` holds with no fetcher installed ("no fetcher is installed"), and
+the gate's `no-extras` stage (`scripts/ci_no_extras.sh`, seconds) runs
+the tests that touch an extra or the plugin with every extra and the
+plugin hidden. Add a new extras test module to its `EXTRAS_TESTS`; a
+module that runs `fetch`, reads `lib/fetchers.py` or names
+`taxjson_fetch` is found by its text. `scripts/ci_no_extras.sh
+venv/bin/python3 test_x` runs any module that way. The gate's whole
+suite runs with the plugin hidden too (`scripts/hide_optional.py`); only
+its `fetch-plugin` stage sees it.
+
+The gate runs the suite on the dev venv's Python; CI's matrix also runs
+Python 3.10, the floor. What 3.10 refuses that the code shows is checked
+on any Python: ruff reads the floor from `pyproject.toml` (newer syntax),
+and the suite refuses a child Python started with an option newer than
+3.10 (`-P`: use `taxjson.lib.dispatch.python_module_argv`) and an
+`import tomllib` without its fallback (`taxjson.lib.tomlcompat`). For the
+rest (a 3.11+ library call), run the suite on 3.10 before landing a
+change that might use one: `python3.10 -m venv ../venv310 &&
+../venv310/bin/pip install -e .`, then `PYTHONPATH=$PWD/src
+../venv310/bin/python scripts/run_tests_parallel.py`.
 
 ### Property fuzzers
 

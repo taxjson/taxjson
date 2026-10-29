@@ -271,13 +271,15 @@ class TestMigrateWriter(_Victims):
         self.assertIn("QUOTE ZZS.TO ZZS-A.TO", real.read_text())
 
 
-def _rates(path: Path):
+def _rates(path: Path, home: Path):
+    """The rates file, and the same rates in `home`'s currency cache: a
+    run that rebuilds the file keeps them (backlog TJ-0635)."""
+    from _planted_rates import plant
     d, lines = date(2024, 1, 1), []
     while d <= date(2026, 12, 31):
         lines.append(f"{d.isoformat()} 12:00:00 USD CAD 1.3500 boc")
         d += timedelta(days=1)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", home)
 
 
 class TestRunInAPlantedProject(_Victims):
@@ -306,7 +308,7 @@ class TestRunInAPlantedProject(_Victims):
             'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
             'option_grant_timing_since = 2025\n\n'
             '[accounts.m]\ntype = "taxable"\n')
-        _rates(root / "work" / "to_base.csv")
+        _rates(root / "work" / "to_base.csv", self.tmp / "home")
         r = self._cli(root, "run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr[-3000:])
         built = sorted(p for d in ("work", "reports")

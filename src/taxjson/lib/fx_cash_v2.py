@@ -38,7 +38,11 @@ Even a clean result is labelled "v2 (opt-in, under audit)".
 Dates: every event is walked on its SETTLEMENT date (the rate and the
 tax year, as the default ledger); statement balances are trade-date
 balances, so a check adds back what was traded but not yet settled.
-CASHOPEN is the SETTLED balance at the start of Jan 1.
+CASHOPEN is the SETTLED balance at the start of Jan 1. The cash each
+book holds day by day (`holdings`, for `taxjson t1135`) is given on the
+project's tax_date basis: on trade dates (`holdings_basis="trade"`)
+each leg traded and not yet settled has moved (_on_trade_dates), as the
+securities it bought or sold have.
 """
 from __future__ import annotations
 
@@ -321,10 +325,253 @@ def _reward_cash(row: Dict[str, Any], stable_cash: bool
     return cur, units
 
 
+def _in_lag(legs: List[Tuple[Any, ...]], dates: List[str]):
+    """For each date of `dates` (ascending): (date, the legs of `legs`
+    — (trade date, settle date, ...) — traded and not yet settled at
+    its end, or settled and not yet traded). A sweep: the lags are a
+    few days, so few legs are open at once."""
+    order = sorted((leg for leg in legs if leg[0] != leg[1]),
+                   key=lambda leg: min(leg[0], leg[1]))
+    i, act = 0, []
+    for d in dates:
+        while i < len(order) and min(order[i][0], order[i][1]) <= d:
+            act.append(order[i])
+            i += 1
+        act = [leg for leg in act if d < max(leg[0], leg[1])]
+        yield d, act
+
+
+def _on_trade_dates(points: List[List[Any]], net: List[List[Any]],
+                    avgs: List[List[Any]],
+                    legs: List[Tuple[str, str, float, Optional[float]]],
+                    prev_end: str, y1: str) -> List[List[Any]]:
+    """A book's [[date, units, cost]] of a foreign currency (the walk's,
+    at the end of each SETTLEMENT day) on the TRADE-date basis, for a
+    project whose tax_date is trade (tax-logic CA-RPT-20; backlog
+    TJ-0627): at the end of each day, what had settled plus each leg
+    traded and not yet settled (less one settled before its trade
+    date). The walk of `taxjson t1135` dates the securities on that
+    basis: on settlement dates the cash that paid for shares was
+    counted with them until it settled, and a sale's proceeds were in
+    no row until then.
+
+    A leg moves on its trade date: money coming in at its own cost (the
+    cost per unit the walk gave it when it settled, else the pool's
+    average), first repaying a debt (`net`: the settled units less a
+    debt, the units held when positive); money going out at the average
+    cost of what is then held. `avgs`: the pool's average cost per unit
+    at the end of each day it changed; `legs`: (trade date, settle
+    date, units signed, cost per unit or None)."""
+    dates = {p[0] for p in points if prev_end <= p[0] <= y1}
+    for td, sd, _a, _c in legs:
+        if td == sd:
+            continue
+        dates.update(x for x in (td, sd) if prev_end < x <= y1)
+        if min(td, sd) <= prev_end < max(td, sd):
+            dates.add(prev_end)
+    out: List[List[Any]] = []
+    ip = in_ = ia = 0
+    sp: Optional[List[Any]] = None
+    sn: Optional[List[Any]] = None
+    avg = 0.0
+    for d, act in _in_lag(legs, sorted(dates)):
+        while ip < len(points) and points[ip][0] <= d:
+            sp = points[ip]
+            ip += 1
+        while in_ < len(net) and net[in_][0] <= d:
+            sn = net[in_]
+            in_ += 1
+        while ia < len(avgs) and avgs[ia][0] <= d:
+            avg = float(avgs[ia][1])
+            ia += 1
+        u = float(sn[1]) if sn else (float(sp[1]) if sp else 0.0)
+        c = float(sp[2]) if sp and u > _EPS else 0.0
+        outs: List[Tuple[float, Optional[float]]] = []
+        for td, sd, amt, per in act:
+            x = amt if td < sd else -amt
+            own = per if amt > 0 else None
+            if x > 0:
+                rep = min(x, max(-u, 0.0))
+                u += x
+                c += (x - rep) * (own if own is not None else avg)
+            else:
+                outs.append((-x, own))
+        for x, own in outs:
+            take = min(x, max(u, 0.0))
+            if own is None:
+                own = c / u if u > _EPS else 0.0
+            c -= take * own
+            u -= x
+        held = u if u > _EPS else 0.0
+        pt = [d, round(held, 6), round(max(c, 0.0), 2) if held else 0.0]
+        if not out or out[-1][1:] != pt[1:]:
+            out.append(pt)
+    return out
+
+
+def _unwalked_cost(o: Dict[str, Any], cur: str, amt: float, base: str,
+                   rate_of: RateOf) -> Optional[float]:
+    """The cost per unit of `amt` units of `cur` coming in by `o`, an
+    event the year's walk does not reach (traded in the year, settled
+    after it): what it gives (a declared cost, the base amount a
+    conversion paid, its value=), else the day's rate; None for a move
+    between your own accounts (the pool's average) or no rate."""
+    if amt <= _EPS:
+        return None
+    fee = float(o.get("fee") or 0.0)
+    if o["kind"] == "flow" and o.get("cost") is not None:
+        return float(o["cost"]) / amt
+    if o["kind"] == "conv" and o.get("to_ccy") == cur:
+        if o.get("from_ccy") == base:
+            return (float(o["from_amt"]) + fee) / amt
+        if o.get("value"):
+            return (float(o["value"]) + fee) / amt
+    if o["kind"] == "move":
+        decl = o.get("decl") or {}
+        if decl.get("how") == "own":
+            return None
+        if decl.get("how") == "cost" and decl.get("value") is not None:
+            return float(decl["value"]) / amt
+    for d in (o["sd"], o["td"]):
+        r = rate_of(cur, d)
+        if r is not None:
+            return float(r)
+    return None
+
+
+def _base_holdings(ops: List[Dict[str, Any]], checks: List[Dict[str, Any]],
+                   opening: Dict[str, Dict[str, Any]], lost: set,
+                   year: int, basis: str = "settle"
+                   ) -> List[Dict[str, Any]]:
+    """Each book's balance of the base currency through `year`, for
+    `taxjson t1135` (tax-logic CA-RPT-20): [{"book", "ok", "why",
+    "points": [[date, balance], ...]}] — the balance at the end of each
+    day it changed, the first point the year's opening (dated the day
+    before the year). A balance is given (`ok`) only where the books
+    give it: an opening (a `CASHOPEN <Jan 1> <base>` line, else the
+    statement's balance on or before the day before the year, the
+    flows after it added) and every statement balance of the year
+    reconciled within TOL, one on or after the year's last flow.
+    `ops`: the base-currency flows ({"sd", "td", "time", "book",
+    "amount"}), `checks` the statement balances (CASHBAL), `opening`
+    {book: CASHOPEN line}, `lost` the account labels with flows no book
+    could be told for. Else `why` says what is missing. `basis` "trade"
+    gives the points on trade dates (a flow traded and not yet settled
+    has moved: the trade-date balance, backlog TJ-0627); the checks are
+    the same."""
+    y0, y1 = f"{year}-01-01", f"{year}-12-31"
+    prev_end = f"{year - 1}-12-31"
+    books = sorted({o["book"] for o in ops} | {c["book"] for c in checks}
+                   | set(opening))
+    out: List[Dict[str, Any]] = []
+    for book in books:
+        mine = sorted((o for o in ops if o["book"] == book),
+                      key=lambda o: (o["sd"], o["td"], o.get("time") or ""))
+        stmts = sorted((c for c in checks if c["book"] == book),
+                       key=lambda c: c["date"])
+
+        def adj(d: str) -> float:
+            # What a trade-date statement shows at the end of `d` beyond
+            # the settled balance (as the foreign ledger's adj).
+            a = 0.0
+            for o in mine:
+                if o["td"] <= d < o["sd"]:
+                    a += o["amount"]
+                elif o["sd"] <= d < o["td"]:
+                    a -= o["amount"]
+            return a
+
+        row: Dict[str, Any] = {"book": book, "ok": False, "why": "",
+                               "points": []}
+        out.append(row)
+        if book.split("/", 1)[0] in lost:
+            row["why"] = ("rows in this currency of a .tt file whose book "
+                          "cannot be told (add a CASHBOOK line)")
+            continue
+        if book in opening:
+            bal = float(opening[book]["units"])
+        else:
+            before = [c for c in stmts if c["date"] <= prev_end]
+            if not before:
+                row["why"] = (f"no balance at the start of {year}: no "
+                              f"statement balance on or before "
+                              f"{prev_end} and no `CASHOPEN {y0}` line")
+                continue
+            last = before[-1]
+            bal = float(last["balance"]) - adj(last["date"]) + sum(
+                o["amount"] for o in mine
+                if last["date"] < o["sd"] <= prev_end)
+        pts: List[List[Any]] = [[prev_end, round(bal, 2)]]
+        for o in mine:
+            if not y0 <= o["sd"] <= y1:
+                continue
+            bal += o["amount"]
+            if pts[-1][0] == o["sd"]:
+                pts[-1][1] = round(bal, 2)
+            else:
+                pts.append([o["sd"], round(bal, 2)])
+        row["points"] = pts
+
+        def bal_on(d: str) -> float:
+            v = pts[0][1]
+            for pd, pv in pts:
+                if pd <= d:
+                    v = pv
+            return v
+        bad = ""
+        for c in stmts:
+            if not prev_end <= c["date"] <= y1:
+                continue
+            led = bal_on(c["date"]) + adj(c["date"])
+            if abs(float(c["balance"]) - led) > TOL:
+                bad = (f"the statement balance at the end of {c['date']} "
+                       f"is {float(c['balance']):,.2f}, the books' "
+                       f"{led:,.2f} ({c.get('where') or 'CASHBAL'})")
+                break
+        active = [o["td"] for o in mine if y0 <= o["sd"] <= y1]
+        if not bad and active:
+            last_td = min(max(active), y1)
+            if not any(last_td <= c["date"] <= y1 for c in stmts):
+                bad = (f"no statement balance on or after its last {year} "
+                       f"flow ({last_td}) to reconcile it against (a "
+                       f"CASHBAL line)")
+        row["ok"] = not bad
+        row["why"] = bad
+        if basis == "trade":
+            row["points"] = _base_on_trade_dates(pts, mine, prev_end, y1)
+    return out
+
+
+def _base_on_trade_dates(pts: List[List[Any]], mine: List[Dict[str, Any]],
+                         prev_end: str, y1: str) -> List[List[Any]]:
+    """_base_holdings' settled [[date, balance]] on trade dates: the
+    balance a trade-date statement shows at the end of each day (each
+    flow traded and not yet settled added, one settled before its trade
+    date taken back)."""
+    legs = [(o["td"], o["sd"], float(o["amount"])) for o in mine]
+    dates = {p[0] for p in pts}
+    for td, sd, _a in legs:
+        if td == sd:
+            continue
+        dates.update(x for x in (td, sd) if prev_end < x <= y1)
+    out: List[List[Any]] = []
+    ip, v = 0, 0.0
+    for d, act in _in_lag(legs, sorted(dates)):
+        while ip < len(pts) and pts[ip][0] <= d:
+            v = float(pts[ip][1])
+            ip += 1
+        t = round(v + sum(a if td < sd else -a for td, sd, a in act), 2)
+        if not out or out[-1][1] != t:
+            out.append([d, t])
+    return out
+
+
 def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
           year: int, rate_of: RateOf, *, country: str,
           carry: Optional[Dict[str, Any]] = None,
-          inflow_spot: bool = False) -> Dict[str, Any]:
+          inflow_spot: bool = False,
+          holdings: bool = False,
+          holdings_basis: str = "settle") -> Dict[str, Any]:
     """The v2 ledger of `year`. `native`: the taxable accounts' native
     rows, each with `_book` (lib/cash_events.Books.for_file; None when
     no book can be told). `cash`: lib/cash_events.collect's result.
@@ -333,14 +580,42 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     "problem" text when the record exists but could not be read:
     bin/taxjson_run._fx_cash_carry) — checked, never trusted
     (_carry_openings). `inflow_spot`: [settings] fx_cash_inflow_cost
-    = "spot" (an undeclared inflow costs the day's rate)."""
+    = "spot" (an undeclared inflow costs the day's rate).
+
+    `holdings` (`taxjson t1135`, tax-logic CA-RPT-20) adds the doc's
+    `holdings`: {"foreign": [{"book", "currency", "points": [[date,
+    units, cost], ...]}] — each book's units of each foreign currency
+    at the end of each day they or the pool's average cost changed,
+    their cost the units times the pool's average cost per unit (one
+    pool per currency, s.47), the first point the year's opening dated
+    the day before it; "base": _base_holdings' balances of the base
+    currency; "interest": the year's INTEREST rows naming no symbol,
+    [{"id", "date", "account", "currency"}] — the currency it was paid
+    in (a USD stablecoin's as USD where they are cash), which the base
+    books do not keep: the income of that cash row (backlog TJ-0628)}.
+    `holdings_basis` is the project's tax_date: "settle" (the
+    walk's own dates) or "trade" (each leg traded and not yet settled
+    has moved: _on_trade_dates; backlog TJ-0627) — the dates `taxjson
+    t1135` walks the securities on, so the cash that paid for shares is
+    never counted with them, nor a sale's proceeds left out."""
     from taxjson.bin.taxjson_fx_cash import _cash_legs
+    if holdings_basis not in ("settle", "trade"):
+        raise ValueError(f"holdings_basis {holdings_basis!r}: settle or "
+                         f"trade")
+    trade_basis = holdings and holdings_basis == "trade"
     base = base.upper()
     y0, y1 = f"{year}-01-01", f"{year}-12-31"
     prev_end = f"{year - 1}-12-31"
     problems: List[Dict[str, Any]] = [
         _p("input", t) for t in cash.get("problems") or []]
     notes: List[str] = []
+    # The base currency's flows, statement balances and openings, for
+    # `holdings` (_base_holdings); the labels with flows of it no book
+    # could be told for.
+    base_ops: List[Dict[str, Any]] = []
+    base_checks: List[Dict[str, Any]] = []
+    base_open: Dict[str, Dict[str, Any]] = {}
+    base_lost: set = set()
 
     def in_year(d: str) -> bool:
         return y0 <= d <= y1
@@ -371,16 +646,41 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             period_start[(ev.get("label", ""), ev.get("file", ""))] = \
                 ev["start"]
     redated = 0
+    # The stablecoin policy of the project (lib/cash_events.collect): a
+    # US project's stablecoin is property, so a reward in one priced in
+    # a foreign currency moves none of it (backlog TJ-0493).
+    stable_cash = cash.get("stablecoins_as_cash")
+    if stable_cash is None:
+        from taxjson.lib.country import is_usa
+        stable_cash = not is_usa(country)
+    stable_cash = bool(stable_cash)
+    # `holdings`: the year's interest rows naming no symbol (interest an
+    # account pays on its cash), each with the currency it was paid in:
+    # the base books carry it in the base currency only, and `taxjson
+    # t1135` makes it the income of that currency's cash row (tax-logic
+    # CA-RPT-14; backlog TJ-0628).
+    interest: List[Dict[str, Any]] = []
     for row in native:
         sd = str(row.get("date_settle") or row.get("date") or "")[:10]
         td = str(row.get("date") or sd)[:10]
+        if holdings and str(row.get("action") or "").upper() == "INTEREST" \
+                and str(row.get("symbol") or "").upper() in ("", "CASH") \
+                and row.get("id") and td[:4] == str(year):
+            from taxjson.lib.brokerages._crypto_common import \
+                USD_STABLECOINS
+            icur = str(row.get("currency") or "").upper()
+            if stable_cash and icur in USD_STABLECOINS:
+                icur = "USD"
+            interest.append({"id": str(row["id"]), "date": td,
+                             "account": str(row.get("account") or ""),
+                             "currency": icur})
         ps = period_start.get((str(row.get("account") or ""), _re.sub(
             r"#\d+$", "", str(row.get("source") or ""))))
         if ps and td < ps:
             td, sd = ps, max(sd, ps)
             redated += 1
-        legs = [(c, a, None) for c, a in _cash_legs(row)]
-        rw = _reward_cash(row, bool(cash.get("stablecoins_as_cash")))
+        legs = [(c, a, None) for c, a in _cash_legs(row, stable_cash)]
+        rw = _reward_cash(row, stable_cash)
         if rw is not None:
             # The reward's own currency comes in, at the value the
             # income is booked at when that is in the base currency
@@ -392,9 +692,20 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                      else None)]
         for cur, amt, cost in legs:
             cur = (cur or "").upper()
-            if not cur or cur == base or abs(amt) < _EPS:
+            if not cur or abs(amt) < _EPS:
                 continue
             book = row.get("_book")
+            if cur == base:
+                if not holdings:
+                    continue
+                if book is None:
+                    if in_year(sd) or (td < y0 <= sd):
+                        base_lost.add(str(row.get("account") or ""))
+                    continue
+                base_ops.append({"sd": sd, "td": td, "book": book,
+                                 "time": str(row.get("time") or ""),
+                                 "amount": float(amt)})
+                continue
             if book is None:
                 if in_year(sd) or (td < y0 <= sd):
                     src = str(row.get("source") or "?")
@@ -432,7 +743,42 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     # cash` lists the same).
     from taxjson.lib.cash_events import apply_declarations
     apply_declarations(events, lines)
+    # A conversion's commission in the base currency (IB's "Comm in
+    # CAD", a Kraken conversion fee in CAD): part of the base amount
+    # actually paid or received (CA-FX-07; a purchase commission adds
+    # to the cost, CA-ACB-02), never a cash flow of its own — dropped
+    # with the base currency's other flows, it left the currency bought
+    # that much too cheap (backlog TJ-0456). Keyed by the conversion's
+    # book and row (`_fee_of`, the broker's cash reader).
+    conv_fee: Dict[Tuple[str, str], float] = {}
+    # A commission in the currency the conversion sells or buys (a
+    # Kraken fee of 10 USD on USD sold for CAD): the units it took are
+    # part of what was disposed of for the amount received, or come off
+    # the units the amount paid bought (CA-FX-07). Walked as a spend of
+    # its own at the day's rate, it made a gain of its own and left the
+    # conversion's short by its units (backlog TJ-0621). Keyed as
+    # conv_fee; {currency: units}.
+    conv_ccys: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for ev in events:
+        if ev["kind"] == "FXCONV" and ev.get("book") \
+                and ev.get("origin") != "tt":
+            conv_ccys[(ev["book"], str(ev.get("where") or ""))] = (
+                str(ev["from_ccy"]).upper(), str(ev["to_ccy"]).upper())
+    side_fee: Dict[Tuple[str, str], Dict[str, float]] = {}
+    folded: set = set()
+    for ev in events:
+        if ev["kind"] == "FLOW" and ev.get("_fee_of") and ev.get("book"):
+            k = (ev["book"], str(ev["_fee_of"]))
+            cur = ev["currency"].upper()
+            if cur == base:
+                conv_fee[k] = conv_fee.get(k, 0.0) - float(ev["amount"])
+            elif cur in conv_ccys.get(k, ()):
+                fees = side_fee.setdefault(k, {})
+                fees[cur] = fees.get(cur, 0.0) - float(ev["amount"])
+                folded.add(id(ev))
     for ev in events + [x for x in lines if not x.get("matched")]:
+        if id(ev) in folded:
+            continue            # in its conversion (side_fee)
         kind = ev["kind"]
         book = ev.get("book")
         if kind in ("FXCONV", "CASHMOVE", "CASHBAL", "FLOW",
@@ -446,18 +792,40 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 problems.append(_p("book", f"{ev.get('where')}: "
                                    f"{ev.get('book_problem') or 'no book'}",
                                    ev["date"], "", ev.get("currency", "")))
+            if holdings and kind != "CASHOPEN" and base in (
+                    str(ev.get(k) or "").upper()
+                    for k in ("currency", "from_ccy", "to_ccy")) \
+                    and (kind == "CASHBAL" or in_year(ev["date"])):
+                base_lost.add(str(ev.get("label") or ""))
             continue
         if kind == "FXCONV":
+            ck = (book, str(ev.get("where") or ""))
+            broker = ev.get("origin") != "tt"
+            fee = conv_fee.pop(ck, 0.0) if broker else 0.0
+            sides = side_fee.pop(ck, {}) if broker else {}
+            fc_, tc_ = ev["from_ccy"].upper(), ev["to_ccy"].upper()
             op(kind="conv", sd=ev["settle"], td=ev["date"], book=book,
-               from_ccy=ev["from_ccy"].upper(), from_amt=ev["from_amt"],
-               to_ccy=ev["to_ccy"].upper(), to_amt=ev["to_amt"],
+               from_ccy=fc_,
+               from_amt=float(ev["from_amt"]) + sides.get(fc_, 0.0),
+               to_ccy=tc_,
+               to_amt=float(ev["to_amt"]) - sides.get(tc_, 0.0),
                value=ev.get("value"), desc=ev.get("desc") or "FXCONV",
-               where=ev.get("line_where") or ev.get("where", ""))
+               where=ev.get("line_where") or ev.get("where", ""),
+               fee=fee)
+            if holdings and base in (fc_, tc_):
+                base_ops.append({
+                    "sd": ev["settle"], "td": ev["date"], "book": book,
+                    "amount": (float(ev["to_amt"]) if tc_ == base
+                               else -float(ev["from_amt"]))})
         elif kind == "FLOW":
             if ev["currency"].upper() != base:
                 op(kind="flow", sd=ev["settle"], td=ev["date"], book=book,
                    currency=ev["currency"].upper(), amount=ev["amount"],
                    desc=ev.get("desc", ""), where=ev.get("where", ""))
+            elif holdings:
+                base_ops.append({"sd": ev["settle"], "td": ev["date"],
+                                 "book": book,
+                                 "amount": float(ev["amount"])})
         elif kind == "CASHMOVE":
             if ev["currency"].upper() != base:
                 op(kind="move", sd=ev["settle"], td=ev["date"], book=book,
@@ -467,15 +835,26 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                    decl_where=ev.get("decl_where") or (
                        ev.get("where") if ev.get("origin") == "tt"
                        else ""))
+            elif holdings:
+                base_ops.append({"sd": ev["settle"], "td": ev["date"],
+                                 "book": book,
+                                 "amount": float(ev["amount"])})
         elif kind == "CASHBAL":
             if ev["currency"].upper() != base:
                 checks.append(dict(ev, currency=ev["currency"].upper()))
+            elif holdings:
+                base_checks.append(ev)
 
     # ------------------------------------------------ openings
     opening: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for ln in [x for x in lines if x["kind"] == "CASHOPEN"]:
         cur = ln["currency"].upper()
         if cur == base:
+            # The base currency's balance at the start of the year
+            # (_base_holdings): no cost of its own to carry.
+            if holdings and ln["date"] == y0 and ln.get("book") \
+                    and ln["book"] not in base_open:
+                base_open[ln["book"]] = ln
             continue
         if ln["date"] != y0:
             if in_year(ln["date"]):
@@ -622,6 +1001,48 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     declared: List[Dict[str, Any]] = []
     recon: List[Dict[str, Any]] = []
     unrated: List[Tuple[str, str]] = []
+    # `holdings`: (book, cur) -> [[date, units held, their cost]], the
+    # state at the end of each day it changed (a debt holds none).
+    fser: Dict[Tuple[str, str], List[List[Any]]] = {}
+    # On trade dates (_on_trade_dates): each book's settled units less
+    # its debt, the pool's average cost per unit, and the cost per unit
+    # the walk gave each inflow ({(op seq, currency): cost per unit}).
+    fnet: Dict[Tuple[str, str], List[List[Any]]] = {}
+    favg: Dict[str, List[List[Any]]] = {}
+    in_cost: Dict[Tuple[int, str], float] = {}
+
+    def _put(series: List[List[Any]], pt: List[Any]) -> None:
+        if series and series[-1][0] == pt[0]:
+            series[-1] = pt
+        elif not series or series[-1][1:] != pt[1:]:
+            series.append(pt)
+
+    def record(cur: str, d: str) -> None:
+        """Every book's units of `cur` and their cost (the pool's
+        average cost per unit, s.47) after an event of `d`."""
+        p = pool.get(cur) or [0.0, 0.0]
+        avg = p[1] / p[0] if p[0] > _EPS else 0.0
+        for k in sorted({k for k in held if k[1] == cur}
+                        | {k for k in fser if k[1] == cur}):
+            u = max(held.get(k, 0.0), 0.0)
+            _put(fser.setdefault(k, []), [d, round(u, 6), round(u * avg, 2)])
+        if trade_basis:
+            _put(favg.setdefault(cur, []), [d, avg])
+            for k in sorted({k for k in held if k[1] == cur}
+                            | {k for k in owed if k[1] == cur}
+                            | {k for k in fnet if k[1] == cur}):
+                _put(fnet.setdefault(k, []), [d, round(
+                    held.get(k, 0.0) - (owed.get(k) or [0.0])[0], 6)])
+
+    def record_op(o: Dict[str, Any]) -> None:
+        if holdings and o["kind"] != "check":
+            for cur in sorted({c for c, _a in _legs(o) if c != base}):
+                record(cur, o["sd"])
+    if holdings:
+        for cur in sorted({c for (_b, c) in held}
+                          | ({c for (_b, c) in owed} if trade_basis
+                             else set())):
+            record(cur, prev_end)
 
     def stat(cur: str) -> Dict[str, float]:
         return per.setdefault(cur, {"acquired": 0.0, "disposed": 0.0,
@@ -690,6 +1111,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
 
     def inflow(o, cur: str, x: float, cost: float) -> None:
         k = (o["book"], cur)
+        if trade_basis and x > _EPS:
+            in_cost[(o.get("seq"), cur)] = cost / x
         s = stat(cur)
         s["acquired"] += x
         d = owed.get(k)
@@ -746,6 +1169,22 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     def bal(book: str, cur: str) -> float:
         return held.get((book, cur), 0.0) - (owed.get((book, cur))
                                              or [0.0])[0]
+
+    def _stable_bal_note(c: Dict[str, Any]) -> str:
+        """A CASHBAL line of US dollars in a crypto exchange's book, with
+        stablecoins counted as cash: the statement shows the US dollars
+        and the USDC apart, and the line must give both together — the
+        gap was blamed on a conversion that does not exist (backlog
+        TJ-0460)."""
+        broker = c["book"].split("/", 1)[-1].split(":", 1)[0]
+        if not (stable_cash and c["currency"] == "USD"
+                and c.get("origin") == "tt"
+                and broker in ("coinbase", "kraken")):
+            return ""
+        return ("; or the line gives the US dollars alone: USD "
+                "stablecoins are US-dollar cash here (CA-CRYPTO-02), so a "
+                "crypto account's CASHBAL USD is its US dollars and its "
+                "USDC (and other USD stablecoins) together")
 
     walk = [o for o in ops if in_year(o["sd"])]
     for c in checks:
@@ -901,10 +1340,13 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         return out_
 
     i = 0
+    walked: Optional[Dict[str, Any]] = None
     while i < len(walk):
         if _waits(i):
             continue
-        o = walk[i]
+        if walked is not None:
+            record_op(walked)       # its state, before the next event
+        o = walked = walk[i]
         i += 1
         if o["kind"] == "check":
             c = o["check"]
@@ -925,8 +1367,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                     f"the end of {c['date']} is {c['balance']:,.2f}, the "
                     f"ledger's {led:,.2f} (gap {gap:+,.2f}, over the "
                     f"{TOL:.2f} tolerance) — a conversion, deposit or "
-                    f"withdrawal the ledger does not see ({row['source']})",
-                    c["date"], book, cur, gap))
+                    f"withdrawal the ledger does not see ({row['source']})"
+                    + _stable_bal_note(c), c["date"], book, cur, gap))
             continue
         if o["kind"] == "flow":
             cur = o["currency"]
@@ -943,11 +1385,15 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             continue
         if o["kind"] == "conv":
             fc, tc = o["from_ccy"], o["to_ccy"]
+            # Its commission in the base currency (conv_fee): added to
+            # what the currency bought cost, taken from what the
+            # currency sold fetched.
+            fee = float(o.get("fee") or 0.0)
             if fc == base:
-                inflow(o, tc, o["to_amt"], o["from_amt"])
+                inflow(o, tc, o["to_amt"], o["from_amt"] + fee)
             elif tc == base:
                 outflow(o, fc, o["from_amt"], None, "spend",
-                        proceeds=o["to_amt"])
+                        proceeds=o["to_amt"] - fee)
             else:
                 # An explicit value= prices the conversion: a missing
                 # rate is no problem (outflow asks for one only for an
@@ -961,7 +1407,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                         continue
                     v = o["from_amt"] * rf
                 outflow(o, fc, o["from_amt"], rf, "spend", proceeds=v)
-                inflow(o, tc, o["to_amt"], v)
+                inflow(o, tc, o["to_amt"], v + fee)
             continue
         # a move
         cur, amt = o["currency"], o["amount"]
@@ -1037,6 +1483,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         r = rate(cur, o["sd"])                       # spot
         if r is not None:
             inflow(o, cur, amt, amt * r)
+    if walked is not None:
+        record_op(walked)
 
     for cur, d in sorted({(c, d) for c, d in unrated}):
         problems.append(_p("rate", f"no {cur} rate on file for {d} (or "
@@ -1115,7 +1563,38 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             close_accounts[book] = a
     net = sum(s["gain"] + s["debt_gain"] for s in per.values())
     status = "not_computed" if problems else "computed"
+    extra: Dict[str, Any] = {}
+    if holdings:
+        series = fser
+        if trade_basis:
+            series = {}
+            legs: Dict[Tuple[str, str], List[Tuple[str, str, float,
+                                                   Optional[float]]]] = {}
+            for o in ops:
+                for cur, amt in _legs(o):
+                    if cur == base or o["td"] == o["sd"]:
+                        continue
+                    unit = in_cost.get((o.get("seq"), cur))
+                    if unit is None and amt > 0 and not in_year(o["sd"]):
+                        unit = _unwalked_cost(o, cur, amt, base, rate_of)
+                    legs.setdefault((o["book"], cur), []).append(
+                        (o["td"], o["sd"], float(amt), unit))
+            for k in sorted(set(fser) | set(legs)):
+                pts = _on_trade_dates(fser.get(k, []), fnet.get(k, []),
+                                      favg.get(k[1], []), legs.get(k, []),
+                                      prev_end, y1)
+                if pts or k in fser:
+                    series[k] = pts
+        extra["holdings"] = {
+            "basis": holdings_basis,
+            "foreign": [{"book": b, "currency": c, "points": pts}
+                        for (b, c), pts in sorted(series.items())],
+            "base": _base_holdings(base_ops, base_checks, base_open,
+                                   base_lost, year, holdings_basis),
+            "interest": sorted(interest, key=lambda r: (r["date"],
+                                                        r["id"]))}
     return {
+        **extra,
         "ledger": "v2", "label": LABEL, "status": status,
         "reliable": status == "computed", "under_audit": True,
         "year": year, "currency": base,
@@ -1215,13 +1694,17 @@ def render(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]],
         if verdict is not None:
             foot.append(["REPORTABLE", "", "", "",
                          fmt_money(verdict["reportable"])])
-        lines += out.fit_table(["CUR", "ACQUIRED", "DISPOSED", "GAIN(LOSS)",
-                                "ON DEBT"], body,
-                               aligns=["<", ">", ">", ">", ">"], foot=foot,
-                               width_=w)
+        # UNITS IN / OUT are the currency's own units, the gains the
+        # base currency's: one "All amounts CAD" over both read 10,000
+        # US dollars as 10,000 CAD (backlog TJ-0458).
+        lines += out.fit_table(["CUR", "UNITS IN", "UNITS OUT",
+                                f"GAIN(LOSS) {base}", f"ON DEBT {base}"],
+                               body, aligns=["<", ">", ">", ">", ">"],
+                               foot=foot, width_=w)
         if verdict is not None:
             lines.append("")
-            lines += out.wrap(f"All amounts {base}. {verdict['note']}", w)
+            lines += out.wrap(f"UNITS IN / OUT: units of each currency; "
+                              f"the gains in {base}. {verdict['note']}", w)
     if doc.get("opening"):
         lines.append("")
         lines.append("OPENING")

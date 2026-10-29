@@ -25,6 +25,7 @@ from taxjson.lib.pipeline import (TransferValidationError,
                                   _drop_self_cancelling_transfers,
                                   _handle_transfers)
 from taxjson.lib.core import TaxTransaction
+from _planted_rates import plant
 from tax_rules import rule
 from tax_rules.dual import cli
 
@@ -253,7 +254,9 @@ COUNTRY = {
 
 
 def _project(root: Path, country: str, *, journal: str, aton: str,
-             arrival: str) -> None:
+             arrival: str, cleanup) -> None:
+    """The project; its rates also in the suite's HOME (put back by
+    `cleanup`): a run that rebuilds them keeps them (TJ-0635)."""
     settings, tobase, pair = COUNTRY[country]
     (root / "taxjson.toml").write_text(
         f'[settings]\nyear = 2026\ncountry = "{country}"\n' + settings
@@ -269,8 +272,8 @@ def _project(root: Path, country: str, *, journal: str, aton: str,
     while d <= date(2026, 12, 31):
         lines.append(f"{d.isoformat()} 12:00:00 {pair} boc")
         d += timedelta(days=1)
-    (root / "work").mkdir()
-    (root / "work" / "to_base.csv").write_text("\n".join(lines) + "\n")
+    plant(root / "work" / "to_base.csv", "\n".join(lines) + "\n",
+          cleanup=cleanup)
 
 
 class _Run:
@@ -285,7 +288,8 @@ class _Run:
         cls._td = tempfile.TemporaryDirectory()
         cls.root = Path(cls._td.name) / cls.COUNTRY
         cls.root.mkdir()
-        _project(cls.root, cls.COUNTRY, **cls.DATES)
+        _project(cls.root, cls.COUNTRY, **cls.DATES,
+                 cleanup=cls.addClassCleanup)
         cls.r = cli(cls.root, "run", "--no-input")
         cls.gains = json.loads(
             (cls.root / "work" / "qzplan_gains.json").read_text())

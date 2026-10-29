@@ -108,6 +108,77 @@ _P = _Printer()
 # the fix steps and the walk-through; the default view says each in a line.
 DETAILS = False
 
+# (symbol, taxable account) -> the in-kind withdrawals the run did NOT
+# book (--in-kind: work/in_kind.json): a short they explain is not a
+# purchase missing from the files (backlog TJ-0439).
+_IK_W: dict = {}
+
+
+# (SYMBOL, account) -> [(rename date, new symbol)]: the trades in an old
+# ticker after its dated rename that no declaration resolves
+# (--late-rename, lib/renames.unresolved_late): the short they make is
+# not a purchase missing from the files (backlog TJ-0442).
+_LATE: dict = {}
+
+
+def _late_of(c):
+    """The undeclared rename whose late trades make a short candidate
+    go short (renamed on or before it first does): (date, new) or None."""
+    ms = [x for x in _LATE.get((str(c.symbol).upper(), c.account)) or []
+          if x[0] <= str(c.first_negative_date or "")[:10]]
+    return ms[-1] if ms else None
+
+
+def _late_line(c, late) -> str:
+    d, new = late
+    return (f"a trade in {c.symbol} after its rename to {new} on {d}: the "
+            f"broker booked the renamed shares under the old ticker, so "
+            f"the purchase is in your files. Declare it with a .tt line "
+            f"(`RENAME {d} {c.symbol} {new} late=fold`; `late=separate` "
+            f"when it is another security) — `taxjson renames` prints "
+            f"it; an older export or a BUYSELL would enter the purchase "
+            f"twice.")
+
+
+def _in_kind_withdrawals(path) -> dict:
+    """(books' symbol, taxable account) -> [move dicts] of the in-kind
+    withdrawals `path` (the run's work/in_kind.json) lists NOT booked."""
+    import json as _json
+    try:
+        doc = _json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    out: dict = {}
+    for m in (doc.get("moves") if isinstance(doc, dict) else None) or []:
+        if (isinstance(m, dict) and m.get("kind") == "withdrawal"
+                and not m.get("booked")):
+            k = (str(m.get("key") or m.get("symbol") or ""),
+                 str(m.get("taxable") or ""))
+            out.setdefault(k, []).append(m)
+    return out
+
+
+def _in_kind_of(c):
+    """The unbooked in-kind withdrawal that brought a short candidate's
+    shares (dated on or before it first goes short), or None."""
+    ms = [m for m in _IK_W.get((c.symbol, c.account)) or []
+          if str(m.get("date") or "")[:10]
+          <= str(c.first_negative_date or "")[:10]]
+    return ms[-1] if ms else None
+
+
+def _in_kind_line(m) -> str:
+    q = m.get("quantity")
+    try:
+        q = f"{abs(float(q)):g} "
+    except (TypeError, ValueError):
+        q = ""
+    return (f"the in-kind withdrawal {m.get('registered') or 'a plan'} → "
+            f"{m.get('taxable')} of {q}on {m.get('date')} brought these "
+            f"shares and is NOT booked: their cost is its fair market "
+            f"value, not a purchase in the plan. Add the INKIND line "
+            f"`taxjson run --details` names for it.")
+
 
 def _table(headers, rows, details=()):
     """A report table that fits the width (lib/out.fit_table): header,
@@ -123,6 +194,35 @@ def _table(headers, rows, details=()):
         _P.line(ln)
         for d in (details[i] if i < len(details) else None) or ():
             _P.para(d, "  ", "  ")
+
+
+def _entry_file(e) -> str:
+    """The file a missing-history entry's line is in (its `file_name`,
+    `inputs/margin/hand.tt:1`, without the line number)."""
+    import re as _re
+    return _re.sub(r":\d+$", "", str(e.file_name))
+
+
+def _entries_file(entries, mh_name: str) -> str:
+    """What a REMOVE / STALE heading names: `mh_name` when every line
+    is in a file of that name, the one file they are all in, else "the
+    .tt file each line names" (backlog TJ-0165: a hand.tt line was
+    "REMOVE from missing_history.tt")."""
+    files = {_entry_file(e) for e in entries}
+    if all(Path(f).name == mh_name for f in files):
+        return mh_name
+    if len(files) == 1:
+        return next(iter(files))
+    return "the .tt file each line names"
+
+
+def _entry_row(e, mh_name: str) -> str:
+    """A REMOVE / STALE row: SYMBOL ACCOUNT, then where its line is
+    (`inputs/margin/hand.tt:1`) when known. The checklist reads the
+    first two words."""
+    where = str(e.file_name)
+    return (f"{e.symbol} {e.account}"
+            + (f"  {where}" if where and where != mh_name else ""))
 
 
 def _act(text, cmd):
@@ -203,6 +303,11 @@ def _print_section(title, rows, *, show_year_cols, year=None, sizes=None):
             d.append(f"short at the start of {year} and covered by a "
                      f"{year} purchase: the cover's gain or loss is in "
                      f"{year}.")
+        _ikm = _in_kind_of(c)
+        if _ikm is not None:
+            d.append(_in_kind_line(_ikm))
+        elif _late_of(c) is not None:
+            d.append(_late_line(c, _late_of(c)))
         _sz = (sizes or {}).get((c.symbol, c.account))
         if _sz is not None:
             d.append(_opening_size_line(_sz))
@@ -411,54 +516,93 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     accounts = sorted({t.account for t in txs if t.account})
     if args.account:
         accounts = [args.account]
-    transfers = [r for r in _transfer_sidecar_rows(args.files)
-                 if float(r.get("quantity") or 0) < 0
-                 or r.get("account") in accounts]
+    # Every account's transfer rows: the pairing reads them all, and
+    # the drafts are for `accounts` only (backlog TJ-0599: --account
+    # dropped the other accounts' transfer-ins before pairing).
+    transfers = _transfer_sidecar_rows(args.files)
     renamed = _rename_sources(args.ticker_map,
                               {t.symbol for t in txs if t.symbol})
     # The transfer sidecars keep the broker's spelling; the books are
-    # mapped by ticker.map (the merge stage's renames, to base).
+    # mapped by ticker.map (the merge stage's renames, to base) — the
+    # map they were merged with: the run's effective map beside the
+    # books (ticker.map plus the listings the run joined by their
+    # transfer journal) when it wrote one, as the run's arrivals read
+    # them (backlog TJ-0440).
     key = None
-    if args.ticker_map:
+    from taxjson.lib.cross_listings import EFFECTIVE_MAP as _EFF
+    _eff = Path(args.files[0]).resolve().parent / _EFF
+    _kmap = str(_eff) if _eff.is_file() else args.ticker_map
+    if _kmap:
         try:
             from taxjson.bin.taxjson_ticker_map import (load_map_file,
                                                         map_symbol,
                                                         merge_renames)
-            _ren = merge_renames(load_map_file(Path(args.ticker_map)),
+            _ren = merge_renames(load_map_file(Path(_kmap)),
                                  to_base=True)
 
             def key(sym, _ren=_ren):
                 return map_symbol(str(sym or "").strip().upper(), _ren)
         except (OSError, ValueError) as e:
             _diag(f"taxjson-missing-history: warning: could not read "
-                  f"{args.ticker_map} ({e}) — transfer-ins are matched "
+                  f"{_kmap} ({e}) — transfer-ins are matched "
                   f"to the books by their own spelling.", file=sys.stderr)
     # The transfer rows an in-kind move to or from a registered account
     # names (the last run's work/in_kind.json): never a slower move of
     # your own (backlog TJ-0074).
+    # The moves' own legs: never a move of your own at all (backlog
+    # TJ-0230).
     try:
         from taxjson.bin.taxjson_run import in_kind_taxable_legs
-        in_kind = in_kind_taxable_legs(Path(args.files[0]).resolve().parent,
-                                       every=True)
+        _wd = Path(args.files[0]).resolve().parent
+        in_kind = in_kind_taxable_legs(_wd, every=True)
+        in_kind_moves = in_kind_taxable_legs(_wd, every=True,
+                                             legs_only=True)
     except Exception:                                   # noqa: BLE001
-        in_kind = set()
+        in_kind, in_kind_moves = set(), set()
     # The project's .tt NOTOWN lines: a transfer-in whose pairing one
     # undoes came from outside the books (backlog TJ-0075).
     not_own = []
+    # The run's own pairing of the transfer rows (taxjson_run.
+    # own_move_plan: the rows of the taxable share accounts, crypto and
+    # `transfers = true` accounts left out, the in-kind moves' legs as
+    # the run reads them), not a copy of it on other rows (backlog
+    # TJ-0599). Without a project around the books, the drafts pair the
+    # sidecars' rows themselves.
+    own_moves = None
     _root = _project_root(args.files[0])
     if _root is not None:
+        _accts = (_PL.read_config_soft(_root) or {}).get("accounts") or {}
         try:
-            from taxjson.lib.transfer_in import read_not_own
-            not_own = read_not_own(_root, list(
-                (_PL.read_config_soft(_root) or {}).get("accounts") or {}))
-        except Exception:                               # noqa: BLE001
-            not_own = []
+            from taxjson.bin.taxjson_run import own_move_plan
+            own_moves = own_move_plan(
+                _root, Path(args.files[0]).resolve().parent,
+                not_own=not_own)
+        except Exception as e:                          # noqa: BLE001
+            _diag(f"taxjson-missing-history: warning: the run's pairing "
+                  f"of your transfer rows could not be read "
+                  f"({type(e).__name__}: {e}) — the drafts pair them "
+                  f"themselves.", file=sys.stderr)
+            own_moves = None
+            try:
+                from taxjson.lib.transfer_in import read_not_own
+                not_own = read_not_own(_root, list(_accts))
+            except Exception:                           # noqa: BLE001
+                not_own = []
+        # A transfer-in of a crypto or `transfers = true` account is no
+        # arrival the run books (its pairing leaves them out): not
+        # drafted.
+        transfers = [r for r in transfers
+                     if not ((_accts.get(r.get("account")) or {})
+                             .get("crypto")
+                             or (_accts.get(r.get("account")) or {})
+                             .get("transfers"))]
     drafts, gaps = draft_purchases(
         txs, accounts=set(accounts), country=country, symbol_key=key,
         year=None if args.all_history else args.year, date_basis=basis,
         transfer_rows=transfers, registered_accounts=types or None,
         journal_symbols=journal, listed_pairs=mh_pairs,
-        rename_sources=renamed, in_kind_legs=in_kind, not_own=not_own)
+        rename_sources=renamed, in_kind_legs=in_kind, not_own=not_own,
+        in_kind_moves=in_kind_moves, own_moves=own_moves)
     by_acct = {}
     for d in drafts:
         by_acct.setdefault(d.account, [[], []])[0].append(d)
@@ -529,7 +673,8 @@ def _write_purchases(args, txs, *, country, basis, types, journal,
     for a in drafting:
         ds, gs = by_acct[a]
         out = targets[a]
-        text = format_purchase_drafts(ds, gs, country=country, account=a)
+        text = format_purchase_drafts(ds, gs, country=country, account=a,
+                                      date_basis=basis)
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             if out.is_file() and not out.is_symlink():
@@ -646,14 +791,32 @@ def main(argv=None):
     ap.add_argument("--details", action="store_true",
                     help="also print each row's reasoning, the fix steps "
                          "and the walk-through (docs/output-style.md)")
+    ap.add_argument("--late-rename", nargs=4, action="append", default=[],
+                    metavar=("ACCOUNT", "SYMBOL", "DATE", "NEW"),
+                    help="a trade in SYMBOL after its rename to NEW on "
+                         "DATE that no declaration resolves (repeatable): "
+                         "the short it makes is said so, its fix the "
+                         ".tt RENAME line, not a purchase")
+    ap.add_argument("--in-kind", metavar="FILE",
+                    help="the run's work/in_kind.json: a short an in-kind "
+                         "withdrawal NOT booked explains is said so, its "
+                         "fix the move's INKIND line, not a purchase")
     ap.add_argument("--country", choices=("canada", "usa"),
                     help="with --write-purchases outside a project: the "
-                         "country whose rules the draft's notes follow "
-                         "(a project's taxjson.toml decides otherwise)")
+                         "country whose rules the draft's notes follow, "
+                         "and whose default tax_date dates its lines and "
+                         "its --year (a project's taxjson.toml decides "
+                         "otherwise)")
     args = ap.parse_args(argv)
-    global _P, DETAILS
+    global _P, DETAILS, _IK_W, _LATE
     _P = _Printer()
     DETAILS = bool(args.details)
+    _IK_W = _in_kind_withdrawals(args.in_kind) if args.in_kind else {}
+    _LATE = {}
+    for _a, _s, _d, _n in args.late_rename:
+        _LATE.setdefault((_s.upper(), _a), []).append((_d[:10], _n))
+    for _v in _LATE.values():
+        _v.sort()
     if args.phantoms_old and not args.missing_history:
         args.missing_history = args.phantoms_old
     # What the report names the lines by.
@@ -723,10 +886,20 @@ def main(argv=None):
     from taxjson.lib.country import COST_TERM
     _cost = COST_TERM[country]
     if basis is None:
-        basis = "settle"
+        # No project: the drafts' --country sets the basis, as a
+        # project's country would — a US lot keeps IB's trade date, the
+        # start of its holding period, and the year scope is the trade
+        # date's (backlog TJ-0711); the report's, settle.
+        from taxjson.lib.country import default_tax_date
+        drafts_for = (args.country if args.write_purchases is not None
+                      else None)
+        basis = default_tax_date(drafts_for) if drafts_for else "settle"
         _diag("taxjson-missing-history: note: no taxjson.toml beside the "
-              "input — a row's tax year is taken from its SETTLEMENT date "
-              "(run it on a project's work/ files to use the project's "
+              "input — a row's tax year is taken from its "
+              f"{'TRADE' if basis == 'trade' else 'SETTLEMENT'} date"
+              + (f", the default tax_date of --country {drafts_for}"
+                 if drafts_for else "")
+              + " (run it on a project's work/ files to use the project's "
               "country and tax_date)", file=sys.stderr)
     # Journal days: a same-day Norbert's-gambit pair is not a one-day
     # short with a missing purchase (audit A2-0636 / A2-0309) — on the
@@ -819,7 +992,8 @@ def main(argv=None):
     # (audit 2026-10-23 #1).
     complete = [e for e in stale if e.reason == 'complete']
     stale = [e for e in stale if e.reason != 'complete']
-    stale_pairs = {(e.symbol.upper(), e.account) for e in stale}
+    stale_pairs = {(e.symbol.upper(), e.account): e.file_name
+                   for e in stale}
 
     # --- 2. $0-cost corp-action acquisitions later sold (and, apart,
     #        those still held: their cost is understated now) ---
@@ -864,37 +1038,41 @@ def main(argv=None):
                     else "marks the sales SHORT." if c.short_marker
                     in ('', 'SHORT.')
                     else f"marks the sales short ({c.short_marker})")
-            _listed = (str(c.symbol).upper(), c.account) in stale_pairs
+            _listed = stale_pairs.get((str(c.symbol).upper(), c.account))
             _P.para(f"- {c.symbol} [{c.account}] went short on "
                     f"{c.first_negative_date} (peak {c.peak_short:g}); the "
                     f"broker {_how}"
-                    + (f" — but {mh_name} LISTS it: remove that entry."
+                    + (f" — but {_listed} LISTS it: remove that entry."
                        if _listed else ""), "", "  ")
         _P.line(f"Nothing to fix for a real short: do not add it to "
                 f"{mh_name}.")
 
     if stale:
         # Heading starts with REMOVE: the checklist counts these rows.
-        _P.heading(f"NOT MISSING HISTORY — {mh_name} entries the run "
-                   f"applies to a real short or a written option: "
+        # Each row names the line's own file and line: a hand-written
+        # .tt OPENING line is not in missing_history.tt (backlog
+        # TJ-0165, TJ-0401).
+        _P.heading(f"NOT MISSING HISTORY — OPENING cost=unknown entries "
+                   f"the run applies to a real short or a written option: "
                    f"{len(stale)}")
-        _P.line(f"REMOVE from {mh_name} - the run applies them and they "
-                "move a real gain or loss off the totals:")
+        _P.line(f"REMOVE from {_entries_file(stale, mh_name)} - the run "
+                f"applies them and they move a real gain or loss off the "
+                f"totals:")
         for e in stale:
-            _P.line(f"{e.symbol} {e.account}")
+            _P.line(_entry_row(e, mh_name))
             if DETAILS:
                 _P.para(stale_entry_message(e), "    ", "    ")
 
     if complete:
         # The STALE line heads the rows the checklist counts.
-        _P.heading(f"PURCHASE NOW IN THE BOOKS — {mh_name} entries the run "
-                   f"still applies: {len(complete)}")
-        _P.line(f"STALE in {mh_name} - the position never goes short "
-                f"without it, yet the run still opens its units at an "
-                f"unknown cost (their sales stay out of the totals); "
-                f"delete it:")
+        _P.heading(f"PURCHASE NOW IN THE BOOKS — OPENING cost=unknown "
+                   f"entries the run still applies: {len(complete)}")
+        _P.line(f"STALE in {_entries_file(complete, mh_name)} - the "
+                f"position never goes short without it, yet the run still "
+                f"opens its units at an unknown cost (their sales stay out "
+                f"of the totals); delete it:")
         for e in complete:
-            _P.line(f"{e.symbol} {e.account}")
+            _P.line(_entry_row(e, mh_name))
             if DETAILS:
                 _P.para(stale_entry_message(e), "    ", "    ")
 
@@ -1152,8 +1330,20 @@ def main(argv=None):
                 or any(r.affects_year for r in zero_rows) or zero_held)):
         # (registered rows included: their openings still feed the
         # cross-account loss walk)
-        _short_open = any((r.affects_year or r.pooled_with)
-                          and not _covered(r) for r in short_rows)
+        _open_rows = [r for r in short_rows
+                      if (r.affects_year or r.pooled_with)
+                      and not _covered(r)]
+        # A short an in-kind withdrawal NOT booked explains: its fix is
+        # the move's INKIND line, never the plan's purchase (backlog
+        # TJ-0439).
+        _ik_rows = [r for r in _open_rows
+                    if _in_kind_of(r.candidate) is not None]
+        # A short an undeclared late trade in a renamed ticker makes:
+        # its fix is the .tt RENAME line, never a purchase (TJ-0442).
+        _late_rows = [r for r in _open_rows if r not in _ik_rows
+                      and _late_of(r.candidate) is not None]
+        _short_open = (len(_ik_rows) + len(_late_rows)
+                       < len(_open_rows))
         _zero_open = (any(r.affects_year for r in zero_rows)
                       or bool(zero_held))
         if not DETAILS:
@@ -1167,14 +1357,48 @@ def main(argv=None):
                 _P.line(_act(f"IB states the cost of {len(_ib)} sale(s): "
                              f"draft the purchase",
                              "tjs find-missing-history --write-purchases"))
+            if _ik_rows:
+                from taxjson.lib.out import act_list as _act_list
+                _P.line(_act_list(
+                    "In-kind withdrawal NOT booked: add its INKIND "
+                    "line, not a purchase",
+                    sorted({r.candidate.symbol for r in _ik_rows}),
+                    "tjs run --details"))
+            if _late_rows:
+                from taxjson.lib.out import act_list as _act_list
+                _P.line(_act_list(
+                    "Trades after a rename: declare them, not a purchase",
+                    sorted({r.candidate.symbol for r in _late_rows}),
+                    "tjs renames"))
             if _short_open:
                 _P.line(_act("Add each AFFECTS row's purchase before "
-                             "filing",
+                             "filing" if not (_ik_rows or _late_rows) else
+                             "Add each other AFFECTS row's purchase "
+                             "before filing",
                              "tjs find-missing-history --details"))
             if _zero_open:
                 _P.line(_act(f"Give the $0-cost shares their {_cost}",
                              "tjs find-missing-history --details"))
             return _incomplete(0)
+        if _ik_rows:
+            _P.gap()
+            _P.para(f"{len(_ik_rows)} row(s) an in-kind withdrawal NOT "
+                    f"booked explains ("
+                    + ", ".join(sorted({r.candidate.symbol
+                                        for r in _ik_rows}))
+                    + "): add the INKIND line the in-kind warning of "
+                    "`taxjson run --details` names, with the fair market "
+                    "value on the withdrawal date; then `taxjson run`.")
+        if _late_rows:
+            _P.gap()
+            _P.para(f"{len(_late_rows)} row(s) a trade after a rename "
+                    f"makes ("
+                    + ", ".join(sorted({r.candidate.symbol
+                                        for r in _late_rows}))
+                    + "): the purchase is in your files under the old "
+                    "ticker. Add the .tt RENAME line `taxjson renames` "
+                    "prints (`late=fold`, or `late=separate` for another "
+                    "security); then `taxjson run`.")
         if _short_open:
             _P.gap()
             _P.line("To fix a sale with no purchase in your files, in this "

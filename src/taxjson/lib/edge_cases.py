@@ -244,12 +244,19 @@ class Book:
                 h["_acct"] = h.get("account") or acct
                 self.inventory.append(h)
             _ye = doc.get("inventory_year_end")
+            # The date basis the engine read the year end on: its walk's
+            # (Canada settlement, US trade), or the one the gains file
+            # names (a US settle or Canadian trade project, backlog
+            # TJ-0343).
+            _yeb = doc.get("inventory_year_end_basis")
             for h in (_ye if isinstance(_ye, list)
                       else doc.get("inventory") or []):
                 if isinstance(h, dict):
                     self.year_end_pools.append(dict(
                         h, _acct=h.get("account") or acct,
-                        _year_end=isinstance(_ye, list)))
+                        _year_end=isinstance(_ye, list),
+                        _ye_basis=(_yeb if _yeb in ("settle", "trade")
+                                   else self.window_basis)))
 
     def _missing_history(self):
         """The (symbol, account) pairs the accounts' .tt OPENING
@@ -458,74 +465,130 @@ def last_days_dispositions(book: Book, days: int = 3) -> List[Dict[str, Any]]:
 
 def option_expiries(book: Book) -> List[Dict[str, Any]]:
     """Option contracts expiring in the last week of December or the first
-    week of January that were open at the year end before expiry."""
+    week of January that were open before their expiry day, and what
+    that day did with them.
+
+    The position is replayed with the series' splits and renames (the
+    shared `_walk`): a series a SPLIT retired holds nothing, its
+    successor what the split gave it (backlog TJ-0564). On the expiry
+    day an assignment or exercise is not an expiry (A2-0700) and a
+    priced close is a trade, listed with the trades; only the rest
+    expires (a sale of part of the position that day was counted as
+    expiring: backlog TJ-0563). One row per outcome: `held` the
+    position at the start of the expiry day (a split or rename dated
+    that day applied: the day's rows are the successor's, backlog
+    TJ-0623), `units` the contracts of the row's
+    outcome (signed as held), `traded` those closed by a priced trade
+    that day; an assigned or exercised part is a row of its own
+    (`assigned`), landing where its share leg does."""
     y = book.year
-    pos: Dict[Tuple[str, str], float] = {}
-    for r in sorted(book.txs, key=lambda r: (r.get("date") or "",
-                                             r.get("time") or "")):
-        sym = r.get("symbol") or ""
-        if not _is_option(sym) or r.get("action") not in ACQ_ACTIONS:
-            continue
-        exp = _expiry(sym)
-        if not exp:
-            continue
-        pos.setdefault((r["_acct"], sym), 0.0)
+
+    def in_window(exp: date) -> bool:
+        return any(date(yy, 12, 31) - timedelta(days=6) <= exp
+                   <= date(yy, 12, 31) + timedelta(days=7)
+                   for yy in (y - 1, y))
+
+    opt_rows = [r for r in book.txs
+                if _is_option(str(r.get("symbol") or ""))
+                and r.get("action") in ACQ_ACTIONS + ("SPLIT",)]
+    series = set()
+    for r in opt_rows:
+        names = [str(r.get("symbol") or "")]
+        if r.get("action") == "SPLIT":
+            names.append(str(r.get("symbol_new") or "").strip())
+        for sym in names:
+            exp = _expiry(sym)
+            if sym and exp and in_window(exp):
+                series.add((r["_acct"], sym))
+    before: Dict[date, Dict[Tuple[str, str], float]] = {}
     out = []
-    for (acct, sym) in sorted(pos):
+    for (acct, sym) in sorted(series):
         if not book.wanted(acct) or book.kind.get(acct) != "taxable":
             continue
         exp = _expiry(sym)
-        for yy in (y - 1, y):
-            ye = date(yy, 12, 31)
-            if not (ye - timedelta(days=6) <= exp <= ye + timedelta(days=7)):
-                continue
-            mine = [r for r in book.txs
-                    if r["_acct"] == acct and r.get("symbol") == sym
-                    and r.get("action") in ACQ_ACTIONS]
-            held = sum(float(r.get("quantity") or 0) for r in mine
-                       if (_d(r.get("date")) or exp) < exp)
-            if abs(held) < 1e-9:
-                continue
-            side = "long" if held > 0 else "written"
-            # What happened ON the expiry day (A2-0700): an assignment or
-            # exercise is not an expiry — the premium (or cost) folds
-            # into the share leg, which lands where that leg settles; a
-            # priced close that day is a trade, listed with the trades.
-            on_day = [r for r in mine if _d(r.get("date")) == exp]
-            if any(r.get("action") == "ASSIGN" for r in on_day):
-                und = _underlying(sym) or ""
-                legs = [r for r in book.txs
-                        if r["_acct"] == acct and r.get("action") == "ASSIGN"
-                        and r.get("symbol") == und
-                        and _d(r.get("date")) == exp]
-                ld = book.bdate(legs[0]) if legs else None
-                lands = ld.year if ld else exp.year
-                what = "assigned" if side == "written" else "exercised"
-                why = (f"{side} {abs(held):g} {what} on its expiry date "
-                       f"{exp}: not an expiry — the "
-                       f"{'premium' if side == 'written' else 'cost'} "
-                       f"folds into the {und or 'share'} leg"
-                       + (f" (settles {legs[0].get('date_settle')})"
-                          if legs and legs[0].get("date_settle") else "")
-                       + f", which lands in {lands}")
-                out.append({"account": acct, "symbol": sym, "held": held,
-                            "expiry": str(exp), "lands_in": lands,
-                            "assigned": True, "why": why})
-                continue
-            closed_by_trade = sum(
-                float(r.get("quantity") or 0) for r in on_day
-                if r.get("action") == "BUYSELL"
-                and abs(float(r.get("price") or 0)) > 1e-9)
-            if abs(held + closed_by_trade) < 1e-9:
-                continue
-            why = (f"{side} {abs(held):g} expiring {exp}: an expiry is a "
-                   f"disposition on the expiry date itself, so it lands in "
-                   f"{exp.year}")
-            if side == "written" and not book.usa:
-                why += (" (under grant timing the premium was already a gain"
-                        " in the year written; see `taxjson option-boundary`)")
-            out.append({"account": acct, "symbol": sym, "held": held,
-                        "expiry": str(exp), "lands_in": exp.year, "why": why})
+        if exp not in before:
+            # The position at the start of the expiry day: the rows
+            # before it, and a split or rename dated that day (it applies
+            # before the day's trades, which then read the successor:
+            # backlog TJ-0623).
+            before[exp] = _walk(
+                [r for r in opt_rows
+                 if r.get("action") == "SPLIT"
+                 or (_d(r.get("date")) or exp) < exp],
+                lambda r: _d(r.get("date")), until=exp)
+        held = before[exp].get((acct, sym), 0.0)
+        if abs(held) < 1e-9:
+            continue
+        side = "long" if held > 0 else "written"
+        sign = 1.0 if held > 0 else -1.0
+        on_day = [r for r in opt_rows
+                  if r["_acct"] == acct and r.get("symbol") == sym
+                  and r.get("action") != "SPLIT"
+                  and _d(r.get("date")) == exp]
+        left = abs(held)
+        # The contracts assigned or exercised that day, then those a
+        # priced trade closed (a close is the other way round from the
+        # position); the rest expire.
+        assigned = min(left, sum((abs(float(r.get("quantity") or 0))
+                                  for r in on_day
+                                  if r.get("action") == "ASSIGN"), 0.0))
+        left -= assigned
+        traded = min(left, sum(
+            (abs(float(r.get("quantity") or 0)) for r in on_day
+            if r.get("action") == "BUYSELL"
+            and abs(float(r.get("price") or 0)) > 1e-9
+            and float(r.get("quantity") or 0) * sign < 0), 0.0))
+        left -= traded
+        expiring = left if left > 1e-9 else 0.0
+        closed = "sold" if side == "long" else "bought back"
+        what = "assigned" if side == "written" else "exercised"
+        traded_note = (f"{traded:g} {closed} that day, a trade listed with "
+                       f"the trades" if traded > 1e-9 else "")
+        base = {"account": acct, "symbol": sym, "held": held,
+                "expiry": str(exp), "traded": traded}
+        if assigned > 1e-9:
+            und = _underlying(sym) or ""
+            legs = [r for r in book.txs
+                    if r["_acct"] == acct and r.get("action") == "ASSIGN"
+                    and r.get("symbol") == und
+                    and _d(r.get("date")) == exp]
+            ld = book.bdate(legs[0]) if legs else None
+            lands = ld.year if ld else exp.year
+            why = (f"{side} {assigned:g} {what} on its expiry date "
+                   f"{exp}: not an expiry — the "
+                   f"{'premium' if side == 'written' else 'cost'} "
+                   f"folds into the {und or 'share'} leg"
+                   + (f" (settles {legs[0].get('date_settle')})"
+                      if legs and legs[0].get("date_settle") else "")
+                   + f", which lands in {lands}")
+            if abs(held) - assigned > 1e-9:
+                why += (f" ({abs(held):g} held"
+                        + (f"; {traded_note}" if traded_note else "")
+                        + (f"; {expiring:g} expiring" if expiring else "")
+                        + ")")
+            out.append(dict(base, units=sign * assigned, lands_in=lands,
+                            assigned=True, outcome=f"{assigned:g} {what}"
+                            + (f", {traded:g} {closed}"
+                               if traded > 1e-9 and not expiring else ""),
+                            why=why))
+        if not expiring:
+            continue
+        why = (f"{side} {expiring:g} expiring {exp}: an expiry is a "
+               f"disposition on the expiry date itself, so it lands in "
+               f"{exp.year}")
+        if abs(held) - expiring > 1e-9:
+            why += (f" ({abs(held):g} held"
+                    + (f"; {traded_note}" if traded_note else "")
+                    + (f"; {assigned:g} {what}" if assigned > 1e-9
+                       else "")
+                    + ")")
+        if side == "written" and not book.usa:
+            why += (" (under grant timing the premium was already a gain"
+                    " in the year written; see `taxjson option-boundary`)")
+        out.append(dict(base, units=sign * expiring, lands_in=exp.year,
+                        outcome=(f"{traded:g} {closed}, " if traded > 1e-9
+                                 else "") + f"{expiring:g} expire",
+                        why=why))
     return out
 
 
@@ -719,7 +782,7 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
                               f"; added to the replacement's cost, so it "
                               f"comes back when that lot is sold"))
             else:
-                allowed_by, verdict = _allowed_why(book, g, hi)
+                allowed_by, verdict = _allowed_why(book, g, hi, other_side)
             out.append({"account": g["_acct"], "symbol": g.get("symbol"),
                         "loss_date": str(ld),
                         "raw_loss": round(float(g.get("raw_gain") or 0), 2),
@@ -734,22 +797,23 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
     return out
 
 
-def _allowed_why(book: Book, g: Dict[str, Any], day30: date
+def _allowed_why(book: Book, g: Dict[str, Any], day30: date,
+                 acqs: Iterable[Dict[str, Any]] = ()
                  ) -> Tuple[str, str]:
     """(allowed_by, verdict) for a loss the engine denied nothing of,
     from what the books show, never a guess (backlog TJ-0283): a .tt
     ALLOWLOSS position, a written option's exempt loss (Canada,
     CA-SL-11), an in-kind contribution's loss denied by s.40(2)(g)(iv)
     instead (CA-INKIND-03), nothing held at the end of day 30 (Canada,
-    CA-SL-02); otherwise no reason is claimed."""
+    CA-SL-02), each purchase in the window (`acqs`) the lot sold or
+    another loss's replacement (US, _us_allowed_why); otherwise no
+    reason is claimed."""
     from taxjson.lib.trace_format import filing_position_text
     fp = filing_position_text(g, book.country)
     if fp:
         return "filing_position", f"allowed by your {fp}"
     if book.usa:
-        return "unknown", ("allowed (the engine matched none of those "
-                           "purchases as a replacement: it was the lot "
-                           "sold, or an earlier loss used it)")
+        return _us_allowed_why(book, g, list(acqs))
     sym = g.get("symbol") or ""
     if (_is_option(sym) and g.get("direction") == "SHORT"
             and not book.buyback_superficial):
@@ -772,40 +836,119 @@ def _allowed_why(book: Book, g: Dict[str, Any], day30: date
                        f"do not record why)")
 
 
+def _us_allowed_why(book: Book, g: Dict[str, Any],
+                    acqs: List[Dict[str, Any]]) -> Tuple[str, str]:
+    """(allowed_by, verdict) for a US loss with nothing disallowed whose
+    window holds the purchases `acqs`: each one is, as the books show
+    it, part of the lot this sale sold (the sale's rows name each lot
+    sold by its acquisition date) or a replacement another loss used
+    (that loss's `wash_replacements` names the purchase). A purchase
+    neither accounts for is said to be unexplained, never assumed
+    (backlog TJ-0286)."""
+    used: Dict[str, List[Tuple[Dict[str, Any], float]]] = {}
+    sold: Dict[Tuple[str, str], float] = {}
+    sid = g.get("id")
+    for o in book.gains:
+        if o is g:
+            continue
+        for w in o.get("wash_replacements") or []:
+            if isinstance(w, dict) and w.get("tx_id"):
+                used.setdefault(str(w["tx_id"]), []).append(
+                    (o, float(w.get("match_qty") or 0)))
+    for o in book.gains:
+        # One sale is a row per lot sold, all with the sale's id.
+        if (sid and o.get("id") == sid and o["_acct"] == g["_acct"]
+                and o.get("symbol") == g.get("symbol")):
+            k = (o["_acct"], str(o.get("acquired_date") or "")[:10])
+            sold[k] = sold.get(k, 0.0) + abs(float(o.get("qty") or 0))
+    reasons: List[str] = []
+    unexplained: List[str] = []
+    kinds = set()
+    for r in acqs:
+        q = float(r.get("quantity") or 0)
+        d = str(book.wdate(r))
+        label = f"{r['_acct']} {d} +{q:g}"
+        k = (r["_acct"], d)
+        s = min(q, sold.get(k, 0.0))
+        sold[k] = sold.get(k, 0.0) - s
+        uses = used.get(str(r.get("id") or ""), [])
+        u = min(q - s, sum(m for _o, m in uses))
+        if s + u < q - 1e-6:
+            unexplained.append(label)
+            continue
+        parts = []
+        if s > 1e-9:
+            kinds.add("lot_sold")
+            parts.append("is the lot sold" if s >= q - 1e-6 else
+                         f"is the lot sold ({s:g} units)")
+        if u > 1e-9:
+            kinds.add("replacement_used")
+            losses = sorted({
+                "another lot of this sale's loss" if o.get("id") == sid
+                else (f"the {str(o.get('date') or '')[:10]} loss"
+                      + ("" if o["_acct"] == g["_acct"]
+                         else f" in {o['_acct']}"))
+                for o, _m in uses})
+            parts.append("replaced " + " and ".join(losses))
+        reasons.append(f"{label} " + " and ".join(parts))
+    if unexplained or not acqs:
+        what = ", ".join(unexplained) or "the purchases in the window"
+        return "unknown", (
+            f"no disallowance applied by the engine (the books do not "
+            f"record why {what} "
+            f"{'is' if len(unexplained) == 1 else 'are'} not its "
+            f"replacement" + (f"; {'; '.join(reasons)}" if reasons else "")
+            + ")")
+    return ("replacement_used" if "replacement_used" in kinds
+            else "lot_sold"), (
+        f"allowed: none of those purchases is its replacement "
+        f"({'; '.join(reasons)})")
+
+
 def deferred_into_next_year(book: Book) -> List[Dict[str, Any]]:
     """The denied losses in the cost of units held at the end of the
     project year (`as_of` that day): the engine's year-end pools (Canada)
     or lots (US-RPT-13), so a later sale or purchase does not change
     them. The engine reads the day on its own dates (Canada settlement,
-    the US trade dates: the loss window's); a project whose tax_date is
-    the other is told which. A gains file without them gives its final
+    the US trade dates: the loss window's), or on the project's
+    tax_date when it is the other (the gains file's
+    `inventory_year_end_basis`, TJ-0343); a project whose tax_date is
+    not the date read (an older gains file) is told which. A gains file
+    without them gives its final
     inventory, `as_of` "end_of_data", and the text says so (backlog
     TJ-0282, TJ-0284)."""
-    # The engine's walk runs on its loss-window dates (CA-SL-01 settle,
-    # US-WASH-01 trade).
-    walk = book.window_basis
-    on = ("" if book.basis == walk else
-          " (by settlement date)" if walk == "settle" else
-          " (by trade date)")
     out = []
     for h in book.year_end_pools:
         dw = float(h.get("deferred_wash") or 0)
         if dw > 0.005 and book.wanted(h["_acct"]):
+            # The day is read on the engine's walk dates (CA-SL-01
+            # settle, US-WASH-01 trade) unless the file names another.
+            read_on = h.get("_ye_basis") or book.window_basis
+            on = ("" if book.basis == read_on else
+                  " (by settlement date)" if read_on == "settle" else
+                  " (by trade date)")
             qty = float(h.get("qty") or 0)
+            # A short position (negative units) carries the denial in
+            # the proceeds of its open short sales, and it lands when
+            # they are covered (US Reg. §1.1091-1(g); backlog TJ-0342).
+            short = qty < 0
+            state = "still short" if short else "still held"
             if h["_year_end"]:
-                held = f"still held at the end of {book.year}{on}"
+                held = f"{state} at the end of {book.year}{on}"
             else:
-                held = (f"held at the end of the books, which may be after "
-                        f"{book.year} (re-run `tjs run` for the year-end "
-                        f"figure)")
+                held = (f"{'short' if short else 'held'} at the end of the "
+                        f"books, which may be after {book.year} (re-run "
+                        f"`tjs run` for the year-end figure)")
+            where = (f"the proceeds of the {abs(qty):g} units" if short
+                     else f"the cost of the {qty:g} units")
             out.append({"account": h["_acct"], "symbol": h.get("symbol"),
                         "qty": qty, "deferred": round(dw, 2),
                         "as_of": (f"{book.year}-12-31" if h["_year_end"]
                                   else "end_of_data"),
-                        "why": (f"{dw:,.2f} of denied losses sits in the cost "
-                                f"of the {qty:g} units {held}; it reduces "
-                                f"the gain (or grows the loss) of the year "
-                                f"they are sold")})
+                        "why": (f"{dw:,.2f} of denied losses sits in {where} "
+                                f"{held}; it reduces the gain (or grows the "
+                                f"loss) of the year they are "
+                                f"{'covered' if short else 'sold'}")})
     out.sort(key=lambda x: -x["deferred"])
     return out
 
@@ -946,12 +1089,24 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
     for g, ld, lo_ in _losses(book):
         sym = g.get("symbol") or ""
         items = []
+        sold_by_loss = _sold_by_loss(book, g, ld) if book.usa else {}
         for r in by_sym.get(sym, []):
             d, od = book.wdate(r), book.wother(r)
             if not d:
                 continue
             off = (d - ld).days
             q = float(r.get("quantity") or 0)
+            if book.usa and q > 0 and off < 0 and r["_acct"] == g["_acct"]:
+                # US: shares closed by the loss's own sale (or sold
+                # before it) never replace it — a purchase in the
+                # selling account replaces only with shares still
+                # unsold at the loss (backlog TJ-0471: the lot sold
+                # was listed as the day-30 acquisition).
+                gone = min(q, sold_by_loss.get(str(d), 0.0))
+                sold_by_loss[str(d)] = sold_by_loss.get(str(d), 0.0) - gone
+                q -= gone
+                if q <= 1e-9:
+                    continue
             alt = (od - lo_).days if od and lo_ else None
             base = {"account": r["_acct"], "date": str(d), "qty": q,
                     "day": off, "other_basis_day": alt,
@@ -998,6 +1153,29 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
                     "held_at_day30": round(held_end, 6),
                     "verdict": _verdict(g), "items": items})
     out.sort(key=lambda x: (x["loss_date"], x["symbol"]))
+    return out
+
+
+def _sold_by_loss(book: Book, g: Dict[str, Any], ld) -> Dict[str, float]:
+    """US: {purchase date: units} of the loss's account and security that
+    were sold by the time of the loss — by its own sale (every gain row
+    of that sale) or an earlier one — read from the gain rows' lot
+    dates (`acquired_date`, on the window basis's trade date). A row
+    with no lot date counts for nothing."""
+    out: Dict[str, float] = {}
+    sym, acct, gid = g.get("symbol"), g["_acct"], g.get("id")
+    for r in book.gains:
+        if r["_acct"] != acct or r.get("symbol") != sym:
+            continue
+        acq = str(r.get("acquired_date") or "")[:10]
+        d = book.wdate(r)
+        if not acq or not d:
+            continue
+        if not (d < ld or (gid and r.get("id") == gid and d == ld)):
+            continue
+        if (r.get("direction") or "LONG") == "SHORT":
+            continue
+        out[acq] = out.get(acq, 0.0) + abs(float(r.get("qty") or 0.0))
     return out
 
 
@@ -1064,6 +1242,9 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
     filed: set = set()
     filed_timing: Dict[int, Dict[str, Any]] = {}
     filed_premiums: Dict[int, Any] = {}
+    # Each lock's name in the advice: a prior_year_record lock by its
+    # path, as option-boundary names it (backlog TJ-0225).
+    filed_labels: Dict[int, str] = {}
     if not book.usa:
         import sys as _sys
         from taxjson.lib.option_boundary import filed_locks
@@ -1071,7 +1252,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
             root, settings,
             warn=lambda m: emit_line(f"taxjson edge-cases: warning: {m}",
                                      file=_sys.stderr),
-            premiums=filed_premiums)
+            premiums=filed_premiums, labels=filed_labels)
     # Written options across a year end are an s.49(1) grant-timing
     # boundary (option-boundary is Canada-only); a US premium is taxed
     # at the close (§1234), so there is nothing to place.
@@ -1090,6 +1271,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
         for r in straddling(txs, book.year, timing, since, filed,
                             filed_timing=filed_timing,
                             tax_date=book.basis,
+                            filed_labels=filed_labels,
                             filed_premiums=filed_premiums):
             r["account"] = r.get("account") or name
             written.append(r)
@@ -1201,30 +1383,51 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
                        r["trade_date"], r["settle_date"], _money(r["gain"]),
                        r["lands_in"]))
     if not usa:
+        def _to_do(r):
+            """A row that asks for something (ATTENTION, a T1-ADJ): the
+            default view says so under it, as option-boundary's does;
+            the JSON's `attention` alone was easy to miss (backlog
+            TJ-0396)."""
+            a = str(r.get("action") or "")
+            if r.get("attention"):
+                return ["needs attention: tjs option-boundary --details"]
+            if a.startswith("T1-ADJ"):
+                return ["an amended return (T1-ADJ): tjs option-boundary "
+                        "--details"]
+            return []
         section("Written options across a year end", yb["written_options"],
                 ["ACCOUNT", "SYMBOL", "WRITTEN", "PREMIUM", "CLOSED"],
                 lambda r: (r["account"], r["symbol"], r["written"],
                            _money(r["premium"]), r["closed"] or "open"),
                 empty="None open across Dec 31.",
-                details=lambda r: [r["where"]] if r.get("where") else [])
+                details=lambda r: ([r["where"]] if r.get("where") else [])
+                + ([f"=> {r['action']}"] if r.get("action") else []),
+                essential=_to_do)
     section("Options expiring at a year end", yb["option_expiries"],
-            ["ACCOUNT", "SYMBOL", "HELD", "EXPIRES", "LANDS IN"],
+            ["ACCOUNT", "SYMBOL", "HELD", "ON EXPIRY DAY", "EXPIRES",
+             "LANDS IN"],
             lambda r: (r["account"], r["symbol"], f"{r['held']:+g}",
-                       r["expiry"], r["lands_in"]))
+                       r.get("outcome") or "", r["expiry"], r["lands_in"]))
     section(f"{rule} windows that span Dec 31", yb["loss_windows"],
             ["ACCOUNT", "SYMBOL", "LOSS", "ON", "DENIED"],
             lambda r: (r["account"], r["symbol"], _money(r["raw_loss"]),
                        r["loss_date"], _money(r["denied"])))
     _eod = any(r.get("as_of") == "end_of_data"
                for r in yb["deferred_at_year_end"])
+    _short = any(float(r.get("qty") or 0) < 0
+                 for r in yb["deferred_at_year_end"])
     section("Denied losses carried in positions held at the end of "
             + ("the books" if _eod else str(y)),
             yb["deferred_at_year_end"],
             ["ACCOUNT", "SYMBOL", "UNITS", "DEFERRED"],
             lambda r: (r["account"], r["symbol"], f"{r['qty']:g}",
                        _money(r["deferred"])),
-            legend="DEFERRED: denied losses in the cost of units still "
-                   "held; they lower the gain when sold.")
+            legend=("DEFERRED: denied losses in the cost of units still "
+                    "held (negative UNITS: the proceeds of units still "
+                    "short); they lower the gain when sold (or covered)."
+                    if _short else
+                    "DEFERRED: denied losses in the cost of units still "
+                    "held; they lower the gain when sold."))
     section("Income paid around New Year", yb["income"],
             ["ACCOUNT", "SYMBOL", "ACTION", "DATE", "AMOUNT", "LANDS IN"],
             lambda r: (r["account"], str(r["symbol"]), r["action"],

@@ -120,7 +120,9 @@ class TestBaseBookShape(unittest.TestCase):
                     base.write_text(text)
                     for argv in (("sanity",), ("sanity", "--json")):
                         r = _tjs(root, *argv)
-                        self.assertEqual(r.returncode, 1,
+                        # (exit 2, an input that cannot be read:
+                        # backlog TJ-0353)
+                        self.assertEqual(r.returncode, 2,
                                          r.stdout + r.stderr)
                         self.assertNotIn("OK", r.stdout)
                         self.assertNotIn('"clean"', r.stdout)

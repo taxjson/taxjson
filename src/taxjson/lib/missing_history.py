@@ -3139,6 +3139,24 @@ LOSS_CHECK_LABEL = {"canada": "superficial-loss check (manual)",
                     "usa": "wash-sale check (manual)"}
 
 
+def loss_warning_text(w: Dict[str, Any], country: str) -> str:
+    """One gains-file `superficial_loss_warnings` entry as the sentence
+    the run prints after its LOSS_CHECK_LABEL: a clean loss with an
+    unknown-cost disposition in its window (its `message`), or an
+    unknown-cost loss with a purchase in its window. The run, `taxjson
+    wash-sales` and the checklist's wash-reviewed step read the same
+    words (backlog TJ-0551)."""
+    from taxjson.lib.country import canonical_country
+    if w.get('message'):
+        return str(w['message'])
+    return (f"{w.get('symbol')} loss with unknown cost (no purchase in "
+            f"your files) of {abs(float(w.get('raw_loss') or 0.0)):.2f} "
+            f"on {w.get('loss_date')} with a buy on "
+            f"{w.get('acquisition_date')} inside the window — if you "
+            f"report this loss by hand, apply "
+            f"{LOSS_RULE[canonical_country(country)][0]} to that rebuy.")
+
+
 def loss_window_date(row: Dict[str, Any], country: str) -> str:
     """The date a row's ±30-day loss window is measured on for
     `country` (settle date in Canada, trade date in the US)."""
@@ -3873,9 +3891,6 @@ _DRAFT_TIME = "09:30:00"
 # "... ACCOUNT TRANSFER BOOK VALUE <amount> FROM ACCOUNT ...".
 _TRANSFER_BOOK_VALUE_RE = re.compile(
     r'TRANSFER\s+BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE)
-# A move between two of the user's own accounts posts its two legs a few
-# days apart at most (taxjson_run._OWN_MOVE_DAYS).
-_OWN_MOVE_DAYS = 10
 # The `type` of a books row that acquires transferred-in shares at the
 # broker's stated book value on their arrival date: such a transfer is
 # already costed by the run, so it is not drafted again.
@@ -3971,7 +3986,8 @@ def parse_broker_lots(text: str) -> Optional[List[Tuple[str, float, float]]]:
 
 
 def _drafting_caveats(country: str, currency: str, *, lots: bool,
-                      is_transfer: bool = False) -> List[str]:
+                      is_transfer: bool = False,
+                      date_basis: str = 'settle') -> List[str]:
     """The per-line notes that differ by country (CA-ACB-15 /
     US-BASIS-08)."""
     from taxjson.lib.country import home_currency, is_canada
@@ -3990,10 +4006,14 @@ def _drafting_caveats(country: str, currency: str, *, lots: bool,
                        "before the data (still held, or at another "
                        "broker), add those purchases too.")
         if currency and currency != home_currency(country):
+            # A .tt line's one date is its settlement date under
+            # tax_date settle (settings.md, .tt files; backlog TJ-0419).
             out.append(f"check: the run converts this {currency} cost "
                        f"to CAD at the Bank of Canada rate of the line's "
                        f"date, so the date must be the real purchase "
-                       f"date.")
+                       f"date" + (", its settlement date (tax_date "
+                                  "settle: a .tt line's one date)."
+                                  if date_basis == 'settle' else "."))
         out.append("check: a purchase within 30 days (settlement dates) "
                    "of a loss sale of the same stock is a replacement "
                    "for the superficial-loss rule.")
@@ -4012,6 +4032,24 @@ def _drafting_caveats(country: str, currency: str, *, lots: bool,
                        "write one line per lot with its own purchase date "
                        "and cost — the date decides short- or long-term.")
     return out
+
+
+def _lot_line_date(trade_day: str, symbol: str, currency: str,
+                   date_basis: str) -> str:
+    """The .tt date of a lot IB lists: its Closed Lots date is the lot's
+    TRADE date, and a .tt line has one date, its settlement date under
+    tax_date settle (settings.md, .tt files) — the day the run converts
+    the cost on and dates the superficial-loss window from, as it does
+    for IB's own trade row (the listing market's cycle and calendar,
+    lib/dates.settlement_date; backlog TJ-0419). Under trade: the lot's
+    date as IB gives it."""
+    if date_basis != 'settle':
+        return trade_day
+    from taxjson.lib.dates import settlement_calendar, settlement_date
+    return settlement_date(trade_day,
+                           settlement_calendar(symbol, currency)
+                           or currency or 'USD',
+                           is_option_symbol(symbol))
 
 
 def _splits_after(events: List[Tuple[str, float, str]],
@@ -4037,7 +4075,7 @@ def draft_purchases(
     *,
     country: str,
     year: Any = None,
-    date_basis: str = 'settle',
+    date_basis: Optional[str] = None,
     transfer_rows: Iterable[Dict[str, Any]] = (),
     registered_accounts=None,
     journal_symbols: Optional[Set[str]] = None,
@@ -4047,6 +4085,8 @@ def draft_purchases(
     symbol_key=None,
     in_kind_legs: Optional[Set[Tuple[str, str, str, float]]] = None,
     not_own: Optional[Sequence[Any]] = None,
+    in_kind_moves: Optional[Set[Tuple[str, str, str, float]]] = None,
+    own_moves: Optional[Sequence[Any]] = None,
 ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
     """Draft `.tt` purchase lines from the broker's own cost evidence.
 
@@ -4079,11 +4119,23 @@ def draft_purchases(
     date, quantity) of the transfer rows an in-kind move to or from a
     registered account names, booked or not (taxjson_run.
     in_kind_taxable_legs every=True): never a slower move of your own,
-    as the run's arrivals read them. `not_own`: the project's .tt NOTOWN
+    as the run's arrivals read them; `in_kind_moves`: the moves' own
+    legs (every=True, legs_only=True): never a move of your own at all
+    (backlog TJ-0230). `not_own`: the project's .tt NOTOWN
     lines (lib/transfer_in.read_not_own): a transfer-in whose pairing one
-    undoes is drafted as one from outside the books (backlog TJ-0075)."""
-    from taxjson.lib.country import canonical_country, is_canada
+    undoes is drafted as one from outside the books (backlog TJ-0075).
+    `own_moves`: the run's own pairing of the project's transfer rows
+    (taxjson_run.own_move_plan, [transfer_in.OwnMove]); given, a
+    transfer-in it pairs is a move of your own and `transfer_rows` are
+    not paired again — pairing them here took another set of rows than
+    the run (backlog TJ-0599). Without it (no project around the
+    books) every row of `transfer_rows` is paired, whatever `accounts`
+    drafts."""
+    from taxjson.lib.country import (canonical_country, default_tax_date,
+                                     is_canada)
     country = canonical_country(country)
+    # The project's tax_date (the caller's); else the country's default.
+    date_basis = date_basis or default_tax_date(country)
     year_str = str(year) if year is not None else None
     listed = {(str(s).upper(), str(a)) for s, a in (listed_pairs or ())}
     txs = list(transactions)
@@ -4214,7 +4266,7 @@ def draft_purchases(
         for sale in s['sales']:
             d, g = _draft_sale(sale, symbol, account, country,
                                first_day.get(account, ''),
-                               rename_sources or {})
+                               rename_sources or {}, date_basis)
             pair_drafts += d
             pair_gaps += g
         if pair_drafts and pair_gaps:
@@ -4247,11 +4299,9 @@ def draft_purchases(
         gaps += pair_gaps
 
     t_drafts, t_gaps = _draft_transfers(
-        [r for r in transfer_rows
-         if accounts is None or float(r.get('quantity') or 0) < 0
-         or r.get('account') in accounts],
-        state, country, registered_accounts, symbol_key or (lambda x: x),
-        in_kind_legs or set(), not_own)
+        list(transfer_rows), state, country, registered_accounts,
+        symbol_key or (lambda x: x), in_kind_legs or set(), not_own,
+        in_kind_moves or set(), moves=own_moves, accounts=accounts)
     # A sale whose units a drafted transfer-in delivered is fixed by
     # that line: not listed as undrafted.
     delivered: Dict[Tuple[str, str], float] = {}
@@ -4279,7 +4329,8 @@ def draft_purchases(
 
 def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
                 country: str, first_day: str,
-                rename_sources: Dict[str, List[str]]
+                rename_sources: Dict[str, List[str]],
+                date_basis: str = 'settle'
                 ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
     """The draft lines (or the gap) for one sale with unbacked units."""
     tx = sale['tx']
@@ -4342,22 +4393,30 @@ def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
     out: List[PurchaseDraft] = []
     if lots is not None:
         for lot_date, lq, lc in lots:
-            factor, old = _splits_after(sale['events'], lot_date)
+            line_date = _lot_line_date(lot_date, symbol, cur, date_basis)
+            factor, old = _splits_after(sale['events'], line_date)
             comments = [src, f"{ev}; this lot: opened {lot_date}, "
                              f"{lq:g} units, cost {lc:,.2f} {cur} "
                              f"(IB Closed Lots)"]
+            if line_date != lot_date:
+                comments.append(
+                    f"dated {line_date}, the lot's settlement date: IB's "
+                    f"lot date is the trade date, and under tax_date "
+                    f"settle a .tt line's one date is its settlement "
+                    f"date.")
             if abs(factor - 1.0) > 1e-12 or old:
                 comments.append(
-                    f"quantity in the units of {lot_date}: a split or "
+                    f"quantity in the units of {line_date}: a split or "
                     f"rename in your data after it turns {lq / factor:g} "
                     f"{old or symbol} into {lq:g} {symbol}.")
-            comments += _drafting_caveats(country, cur, lots=True)
+            comments += _drafting_caveats(country, cur, lots=True,
+                                          date_basis=date_basis)
             if rename_note:
                 comments.append(rename_note)
             out.append(PurchaseDraft(
                 account=account, symbol=old or line_symbol,
                 quantity=lq / factor, currency=cur, cost=lc,
-                date=lot_date, multiplier=mult, source='ib-lot',
+                date=line_date, multiplier=mult, source='ib-lot',
                 sale_date=sale_date, comments=tuple(comments)))
         return out, []
     factor, old = _splits_after(sale['events'], None)
@@ -4379,13 +4438,16 @@ def _draft_sale(sale: Dict[str, Any], symbol: str, account: str,
     else:
         cost = amount
     comments.append("fill in: the purchase date (the broker does not say "
-                    "when these units were bought).")
+                    "when these units were bought)"
+                    + ("; its settlement date (tax_date settle)."
+                       if date_basis == 'settle' else "."))
     if abs(factor - 1.0) > 1e-12 or old:
         comments.append(
             f"quantity in the units before your data: a split or rename "
             f"in your data turns {u / factor:g} {old or symbol} into "
             f"{u:g} {symbol}.")
-    comments += _drafting_caveats(country, cur, lots=False)
+    comments += _drafting_caveats(country, cur, lots=False,
+                                  date_basis=date_basis)
     if rename_note:
         comments.append(rename_note)
     out.append(PurchaseDraft(
@@ -4400,44 +4462,61 @@ def _draft_transfers(rows: List[Dict[str, Any]],
                      state: Dict[Tuple[str, str], Dict[str, Any]],
                      country: str, registered_accounts, key,
                      in_kind: Set[Tuple[str, str, str, float]] = frozenset(),
-                     not_own: Optional[Sequence[Any]] = None
+                     not_own: Optional[Sequence[Any]] = None,
+                     in_kind_moves: Set[Tuple[str, str, str, float]]
+                     = frozenset(), *,
+                     moves: Optional[Sequence[Any]] = None,
+                     accounts: Optional[Set[str]] = None
                      ) -> Tuple[List[PurchaseDraft], List[DraftGap]]:
     """Drafts from transfer-ins that state the delivering broker's book
-    value (rows of the transfer sidecars)."""
+    value (rows of the transfer sidecars), for the transfer-ins of
+    `accounts` (None: every account). A transfer-in the run's pairing
+    (`moves`: taxjson_run.own_move_plan, the arrival stage's call)
+    takes as a move of your own is not drafted, and names the account
+    it came from as the run paired it. Without `moves`, every row of
+    `rows` is paired here (lib/transfer_in.arrivals, as the run calls
+    it), whichever accounts are drafted (backlog TJ-0599)."""
     drafts: List[PurchaseDraft] = []
     gaps: List[DraftGap] = []
-    outs = [r for r in rows if float(r.get('quantity') or 0) < 0]
     tt_left: Dict[Tuple[str, str], float] = {
         k: s.get('tt_qty', 0.0) for k, s in state.items()}
     bv_left: Dict[Tuple[str, str], float] = {
         k: s.get('booked_bv', 0.0) for k, s in state.items()}
-    # The moves of your own slower than the window that the run's
-    # arrivals pair (lib/transfer_in.slow_pairs: the in leg up to
-    # SLOW_MOVE_DAYS days after an out leg of the same security and
-    # quantity, neither with another candidate): not booked, so not
-    # drafted either (audit 2026-10-25 diff-engine#4). A leg an in-kind
-    # move names (to or from a registered account, booked or not) never
-    # pairs so, as the run reads it (backlog TJ-0074).
+    # The moves of your own the run's arrivals pair (lib/transfer_in.
+    # arrivals: within OWN_MOVE_DAYS the same quantity first, then the
+    # closest date; a slower one when neither leg has another candidate,
+    # audit 2026-10-25 diff-engine#4): not booked, so not drafted either.
+    # The drafts read that pairing rather than one of their own, which
+    # named another source than the run's (backlog TJ-0230). A leg an
+    # in-kind move names (to or from a registered account, booked or
+    # not) never pairs slowly (`in_kind`, backlog TJ-0074), the move's
+    # own leg never at all (`in_kind_moves`), as the run reads them.
     from taxjson.lib import transfer_in as TI
 
-    def _in_kind(leg) -> bool:
-        acct, _b, t = leg
-        try:
-            q = round(float(t.get('quantity') or 0.0), 8)
-        except (TypeError, ValueError):
-            q = 0.0
-        return (acct, str(t.get('symbol') or ''),
-                str(t.get('date') or '')[:10], q) in in_kind
-    slow: List[Any] = []
-    TI.arrivals([(str(r.get('account') or ''), '', r) for r in rows
-                 if r.get('action', 'TRANSFER') == 'TRANSFER'
-                 and not is_registered_account(str(r.get('account') or ''),
-                                               registered_accounts, country)],
-                key=lambda s: str(key(s) or '').upper(), slow=slow,
-                no_slow=_in_kind if in_kind else None,
-                not_own=list(not_own or ()))
-    slow_in = {(m.in_account, m.symbol, m.in_date, round(m.quantity, 8)): m
-               for m in slow}
+    def _in(idents):
+        if not idents:
+            return None
+
+        def _f(leg) -> bool:
+            acct, _b, t = leg
+            return TI.leg_ident(acct, t) in idents
+        return _f
+    moved: List[Any] = list(moves or ())
+    if moves is None:
+        TI.arrivals([(str(r.get('account') or ''), '', r) for r in rows
+                     if r.get('action', 'TRANSFER') == 'TRANSFER'
+                     and not is_registered_account(
+                         str(r.get('account') or ''), registered_accounts,
+                         country)],
+                    key=lambda s: str(key(s) or '').upper(), moves=moved,
+                    no_slow=_in(in_kind), no_move=_in(in_kind_moves),
+                    not_own=list(not_own or ()))
+    # Each transfer-in's moves of your own: (account, symbol, date) ->
+    # [OwnMove] (the pairing names the in leg so).
+    own_in: Dict[Tuple[str, str, str], List[Any]] = {}
+    for m in moved:
+        own_in.setdefault((m.in_account, m.in_symbol, m.in_date),
+                          []).append(m)
     # The transfer-ins whose pairing a .tt NOTOWN line undoes (backlog
     # TJ-0075): from outside the books, never "a move from your account".
     not_own_in = {n.legs[1] for n in not_own or () if n.matched}
@@ -4446,6 +4525,8 @@ def _draft_transfers(rows: List[Dict[str, Any]],
         q = float(r.get('quantity') or 0)
         if q <= 1e-12 or r.get('action', 'TRANSFER') != 'TRANSFER':
             continue
+        if accounts is not None and r.get('account') not in accounts:
+            continue        # paired above, drafted for its own account
         m = _TRANSFER_BOOK_VALUE_RE.search(str(r.get('description') or ''))
         if not m:
             continue
@@ -4457,16 +4538,16 @@ def _draft_transfers(rows: List[Dict[str, Any]],
             gap.reason = 'sheltered account (no gain is computed there)'
             gaps.append(gap)
             continue
-        own = next((o for o in outs
-                    if o.get('account') != account
-                    and o.get('symbol') == symbol
-                    and abs(abs(float(o.get('quantity') or 0)) - q) < 1e-9
-                    and _day_gap(o.get('date') or '', d) <= _OWN_MOVE_DAYS),
-                   None)
+        own = own_in.get((account, symbol, d)) or []
         if (account, symbol, d, round(q, 8)) in not_own_in:
-            own = None      # a NOTOWN line undoes the pairing (TJ-0075)
-        if own is not None:
-            gap.reason = (f"a move from your account {own.get('account')}"
+            own = []        # a NOTOWN line undoes the pairing (TJ-0075)
+        took = sum(m.quantity for m in own)
+        if own and not any(m.slow for m in own):
+            src = ", ".join(sorted({m.out_account for m in own}))
+            part = (f" for {took:g} of the {q:g} units (the other "
+                    f"{q - took:g} are a transfer-in from outside, as the "
+                    f"run books it)" if took < q - 1e-9 else "")
+            gap.reason = (f"a move from your account {src}{part}"
                           f" — its cost carries over, it is not a "
                           f"purchase")
             gaps.append(gap)
@@ -4483,10 +4564,10 @@ def _draft_transfers(rows: List[Dict[str, Any]],
                           "value")
             gaps.append(gap)
             continue
-        sm = slow_in.get((account, symbol, d, round(q, 8)))
+        sm = next((m for m in own if m.slow), None)
         if sm is not None:
             gap.reason = (f"a move from your account {sm.out_account} "
-                          f"({sm.out_date}, {sm.days} days before) — its "
+                          f"({sm.out_date}, {sm.slow} days before) — its "
                           f"cost carries over, it is not a purchase")
             gaps.append(gap)
             continue
@@ -4588,12 +4669,14 @@ def _draft_transfers(rows: List[Dict[str, Any]],
 
 def format_purchase_drafts(drafts: List[PurchaseDraft],
                            gaps: List[DraftGap], *, country: str,
-                           account: str, final_name: str = "purchases.tt"
-                           ) -> str:
+                           account: str, final_name: str = "purchases.tt",
+                           date_basis: Optional[str] = None) -> str:
     """The draft file's text for one account: a header that says how to
-    use it, then each line under its `#` notes."""
-    from taxjson.lib.country import is_canada
+    use it, then each line under its `#` notes. `date_basis`: the
+    project's tax_date (else the country's default)."""
+    from taxjson.lib.country import default_tax_date, is_canada
     ca = is_canada(country)
+    settle = (date_basis or default_tax_date(country)) == 'settle'
     head = [
         f"# {DRAFT_NAME} — DRAFT purchase lines for account {account},",
         "# written by `taxjson find-missing-history --write-purchases`.",
@@ -4603,7 +4686,9 @@ def format_purchase_drafts(drafts: List[PurchaseDraft],
         "#   1. check it against your records (statements, trade "
         "confirmations);",
         f"#   2. replace every {DATE_PLACEHOLDER} with the real purchase "
-        f"date and every {COST_PLACEHOLDER} with the real cost (total = "
+        f"date" + (" (its settlement date: tax_date settle)"
+                   if settle else "")
+        + f" and every {COST_PLACEHOLDER} with the real cost (total = "
         "qty x price + commission; price = total / qty);",
         "#   3. delete any line you cannot vouch for.",
         f"# Then rename the file to {final_name} (any name ending in .tt) "

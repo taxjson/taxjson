@@ -27,7 +27,7 @@ user's own machine. Python 3.10+, `src/taxjson/`; the CLI is `taxjson` (`tjs`).
    scope: `docs/limits.md`; terms: `docs/glossary.md`; a first project:
    `docs/getting-started.md`; the year end: `docs/filing.md`.
 4. **Where the code is:** `docs/architecture-map.md`. Don't read
-   `src/taxjson/bin/taxjson_run.py` (31k lines) top to bottom: search it for
+   `src/taxjson/bin/taxjson_run.py` (34k lines) top to bottom: search it for
    the `cmd_<command>` or `stage_` name the map gives.
 
 **Privacy.** Work from tjs command output. Never read the raw CSVs in a

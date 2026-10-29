@@ -7,6 +7,8 @@
 #                                push would publish (--diff / --text /
 #                                --message / --identity on stdin)
 #   scripts/check-pii.sh PATH…   ad hoc, on files or directories
+#                                (`--` first when a path starts with -)
+#   scripts/check-pii.sh --help  this text
 #
 # Two pattern sources:
 #   1. Generic, below: broker account-id shapes, home paths, e-mail
@@ -344,6 +346,9 @@ case "${1:-}" in
     for d in "$@"; do case "$d" in /*) dirs+=("$d") ;; *) dirs+=("$PWD0/$d") ;; esac; done
     exec "$PYB" -c "$FIG_PY" collect "$AMOUNTS" "$(printf '%s' "$AMOUNTS" | sed "s#^$HOME#~#")" "${dirs[@]}"
     ;;
+  -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0"; exit 0 ;;   # the comment block above
+  --) shift ;;
+  -*) echo "check-pii: unknown option $1 (scripts/check-pii.sh --help; a path that starts with -: put -- before it)" >&2; exit 2 ;;
 esac
 hits=0
 CI=""        # "-i" while scanning the (case-insensitive) denylist
@@ -500,6 +505,26 @@ mask_hit() {   # mask_hit [PATTERN [EXEMPT]]
         else
           printf '%s\n' "$line" | mask
         fi
+        ;;
+    esac
+  done
+}
+
+# Figure-list hits on stdin ("PATH<SEP>N", or "message line N" from a
+# text scan), out as PATH:N with hide_loc's path; never the line itself.
+fig_loc() {
+  local line num
+  load_deny_pats
+  while IFS= read -r line; do
+    case "$line" in
+      *"$SEP"*)
+        num="${line##*"$SEP"}"
+        case "$num" in ''|*[!0-9]*) num="?" ;; esac
+        printf '%s:%s\n' "$(hide_loc "${line%"$SEP"*}")" "$num"
+        ;;
+      *)
+        if [[ "$line" =~ ^(message|text)\ line\ [0-9]+$ ]]; then printf '%s\n' "$line"
+        else printf '%s\n' "$line" | mask; fi
         ;;
     esac
   done
@@ -952,7 +977,9 @@ if [ -n "$NAMES" ]; then
     if id_in_name "$f"; then n="$n$f
 "; fi
   done <<< "$NAMES"
-  [ -z "$n" ] || fail "file NAME carries an account-id shape (IB names downloads after the account)" "$(printf '%s' "$n" | sort -u | mask)"
+  # Located as every other hit is (hide_loc): only the parts that would
+  # themselves be refused are masked.
+  [ -z "$n" ] || fail "file NAME carries an account-id shape (IB names downloads after the account)" "$(printf '%s' "$n" | sort -u | head -20 | hide_paths)"
 fi
 
 if [ "$mode" != identity ]; then
@@ -1186,7 +1213,10 @@ elif ! PYF="$(command -v "${PYTHON:-python3}" 2>/dev/null)" || [ -z "$PYF" ]; th
   fail "private figure list $AMTSHOW present but no python3 to check it — cannot be scanned"
 else
   case "$mode" in
-    tree) fig_out="$(printf '%s\n' "$SCANLIST" | grep -v '^$' \
+    # (The helper skips blank lines itself: a `grep -v '^$'` here exited 1
+    # on an empty list — an empty folder, or only a path that does not
+    # exist — and that read as the guard failing.)
+    tree) fig_out="$(printf '%s\n' "$SCANLIST" \
                      | "$PYF" -c "$FIG_PY" files "$AMOUNTS" "$SEP" "$XT" 2>&1)"; rc=$? ;;
     diff) fig_out="$(tr -d '\0' < "$RAWF" | "$PYF" -c "$FIG_PY" diff "$AMOUNTS" "$SEP" 2>&1)"; rc=$? ;;
     text) fig_out="$(printf '%s\n' "$INPUT" | "$PYF" -c "$FIG_PY" text "$AMOUNTS" "$SEP" "$([ "$MSG" = 1 ] && echo message || echo text)" 2>&1)"; rc=$? ;;
@@ -1195,9 +1225,10 @@ else
     fail "private figure list $AMTSHOW could not be checked — that guard is DISABLED until fixed" "$(printf '%s\n' "$fig_out" | tail -3 | mask)"
   elif [ -n "$fig_out" ]; then
     # Location only: the path (XT mirror shown as the binary's own path)
-    # and line number — never the line, which holds the figure.
-    fail "$FIGMSG" "$(printf '%s\n' "$fig_out" \
-      | sed "s#^${XT:-/nonexistent}/\(.*\)$SEP#\1 (embedded text)$SEP#; s#^$HOME/#~/#" | tr "$SEP" ':' | head -50)"
+    # and line number — never the line, which holds the figure. The path
+    # as every other hit shows it (hide_loc).
+    fail "$FIGMSG" "$(printf '%s\n' "$fig_out" | head -20 \
+      | sed "s#^${XT:-/nonexistent}/\(.*\)$SEP#\1 (embedded text)$SEP#" | fig_loc)"
   fi
   denynote="$denynote; figure list: $AMTSHOW"
 fi

@@ -1,9 +1,7 @@
 import unittest
-import tempfile
 from _tmpfiles import private_tmpfile
 import os
 import sys
-from pathlib import Path
 import subprocess
 import json
 

@@ -42,9 +42,12 @@ permissions:
 
 jobs:
   lint:
-    # Critical-tier only (syntax errors, undefined names, misused
-    # comparisons): the class of defect that once let a dead parameter
-    # survive five audit cycles. Style rules are deliberately excluded.
+    # The critical tier (syntax errors, undefined names, misused
+    # comparisons: the class of defect that once let a dead parameter
+    # survive five audit cycles) and unused imports (F401, TJ-0593).
+    # Style rules are deliberately excluded. The same line as
+    # scripts/ci.sh's lint stage. The job keeps its name: the ruleset's
+    # required checks name it.
     if: github.event_name != 'schedule' || github.repository == 'taxjson/taxjson'
     name: ruff (critical tier)
     runs-on: ${{ github.repository == 'taxjson/taxjson' && 'ubuntu-24.04' || 'taxjson-dev' }}
@@ -65,7 +68,7 @@ jobs:
       # changes neither gate, and both lint alike (scripts/lock_deps.py
       # moves it with the other locks).
       - run: 'pip install --require-hashes --only-binary :all: -r requirements/dev.txt'
-      - run: ruff check --select E9,F63,F7,F82 src/ tests/ packages/
+      - run: ruff check --select E9,F63,F7,F82,F401 src/ tests/ scripts/ packages/
 
   gates:
     # The ci.sh stages besides lint and the suite: release consistency,

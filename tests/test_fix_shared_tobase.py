@@ -8,7 +8,6 @@ Every fixture is SYNTHETIC: invented tickers (QZ*), invented FIGIs
 (BBG0000000xx), invented names.
 """
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path

@@ -14,14 +14,12 @@ the case for traceability.
 """
 import json
 import os
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction
 from taxjson.lib.missing_history import (
-    MissingHistoryCandidate,
     detect_missing_history,
     detect_superficial_loss_warnings,
     format_suggestions,

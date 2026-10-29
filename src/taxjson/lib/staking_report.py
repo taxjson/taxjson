@@ -309,7 +309,7 @@ def build_report(rows: Iterable[tuple[str, dict]], *, currency: str,
     notes = [
         "Amounts disclose the existing books; this view does not change income, fees or acquisition cost.",
         "Totals cover booked reward events; fully consumed or omitted dust rewards have no entries here.",
-        "Recorded income already reflects commissions netted by the importer; do not deduct those commissions again.",
+        "Recorded income is after the commissions the importer netted: a commission shown is already out of it.",
         "Gross and commission totals with missing evidence are known subtotals, not complete totals.",
         "Quantities are per asset. Commission quantities in another asset are shown separately and never summed with reward units.",
         "An absent acquisition can be intentional for rewards treated as cash; it does not prove a missing cost basis.",
@@ -360,6 +360,11 @@ def _display_column(values: list[Any]) -> list[str]:
         for offset in range(abs(difference)):
             rounded[order[offset % len(order)]] += Decimal(".01") if difference > 0 else Decimal("-.01")
     return [_money(value) for value in rounded]
+
+
+def _has_commission(rewards: list) -> bool:
+    """A reward in the view carries a known commission other than 0."""
+    return any((_number(r.get("commission_amount")) or 0) != 0 for r in rewards)
 
 
 def render(report: dict, *, summary: bool = False, details: bool = False) -> list[str]:
@@ -420,7 +425,10 @@ def render(report: dict, *, summary: bool = False, details: bool = False) -> lis
             doc.table(["ACCOUNT SCOPE", "COUNT", "NET INCOME", "KNOWN / EVENTS"], scope_rows)
     else:
         doc.para("No crypto rewards in the selected final books.")
-    doc.line(f"Commissions already netted in recorded income must not be deducted again — {command} --details")
+    if _has_commission(report["rewards"]):
+        # What the figures are, not what to do on the return (AGENTS.md
+        # "No tax advice"), and only over a commission (backlog TJ-0288).
+        doc.line(f"NET INCOME is after the COMMISSION the exchange kept — {command} --details")
     coverage = report["coverage"]
     if coverage["unknown_commission"] or coverage["unclassified"] or coverage["unknown_gross"]:
         doc.line(f"Unknown: gross {coverage['unknown_gross']}, commission {coverage['unknown_commission']}; "

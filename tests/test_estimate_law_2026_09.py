@@ -7,7 +7,6 @@ sources are cited in lib/tax_estimate.py and bin/taxjson_instalments.py.
 181,440-258,482 (1,623 over 77,042); AMT 20.5% over 181,440.
 """
 
-import os
 import json
 import subprocess
 import sys
@@ -261,11 +260,11 @@ class TestStakingIsOrdinaryIncome(unittest.TestCase):
             work.mkdir()
             (work / "margin_gains.json").write_text(json.dumps({
                 "summary": {"year": "2026"}, "transactions": [
-                    {"action": "DIVIDEND", "symbol": "KO.US",
+                    {"action": "DIVIDEND", "date": "2026-03-02", "symbol": "KO.US",
                      "dividend": 500.0, "currency": "CAD"}]}))
             (work / "cb_main_gains.json").write_text(json.dumps({
                 "summary": {"year": "2026"}, "transactions": [
-                    {"action": "DIVIDEND", "symbol": "ETH",
+                    {"action": "DIVIDEND", "date": "2026-03-02", "symbol": "ETH",
                      "dividend": 1000.0, "currency": "CAD"}]}))
             r = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",

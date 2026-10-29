@@ -1,5 +1,4 @@
 """Tests for `taxjson init` — scaffolding a new, ready-to-populate project."""
-import os
 import argparse
 import io
 import re

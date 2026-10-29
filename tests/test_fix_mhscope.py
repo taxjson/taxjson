@@ -415,12 +415,15 @@ class TestRunConsoleLines(unittest.TestCase):
         tmp, root = _make("canada")
         self.addCleanup(shutil.rmtree, tmp, True)
         # A file that parses to nothing: a stderr warning in the middle
-        # of the stdout steps.
+        # of the stdout steps. (Its row is in a section no parser branch
+        # reads: a file with no row at all is an Info, TJ-0483.)
         (root / "inputs" / "margin" / "ib_empty.csv").write_text(
             "Statement,Header,Field Name,Field Value\n"
             "Trades,Header,DataDiscriminator,Asset Category,Currency,"
             "Symbol,Date/Time,Quantity,T. Price,Proceeds,Comm/Fee,Basis,"
-            "Realized P/L,Code\n")
+            "Realized P/L,Code\n"
+            "Zzz Section,Header,Field Name,Field Value\n"
+            "Zzz Section,Data,Note,x\n")
         r = _tj(root, "run", "--no-input", merged=True)
         self.assertEqual(r.returncode, 0, r.stdout)
         lines = r.stdout.splitlines()

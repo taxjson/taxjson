@@ -10,7 +10,6 @@ All fixtures are synthetic. Items:
   LOW multi-asset dust sweeps, UTC -> local dates, CA$ amounts
 """
 import io
-import json
 import os
 import subprocess
 import sys

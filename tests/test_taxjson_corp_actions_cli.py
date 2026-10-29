@@ -3,7 +3,6 @@ into emitted taxjson rows. The rule/extractor primitives are tested elsewhere;
 this covers the previously-untested orchestration (_emit_resolved, _unresolved,
 and the non-interactive main path)."""
 import json
-import os
 import subprocess
 import sys
 import tempfile

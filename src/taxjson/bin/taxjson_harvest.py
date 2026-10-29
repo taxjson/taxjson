@@ -68,8 +68,7 @@ def _declared_multiplier(h: Dict[str, Any]) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return m if m > 0 else None
-from taxjson.lib.report_model import (fmt_money,
-                                      gains_basis_label, load_report_json)
+from taxjson.lib.report_model import fmt_money, gains_basis_label
 
 PROG = "taxjson-harvest"
 
@@ -265,16 +264,28 @@ def _option_quote_symbols(option_tickers: List[str], files: List[Path],
     out: Dict[str, Optional[str]] = {t: t for t in option_tickers}
     if not option_tickers or ticker_map is None or not Path(ticker_map).exists():
         return out
+    # The map read strictly: the lenient loader DROPS a line it cannot
+    # parse, and without a dropped `GLOBAL OLD.TO NEW.TO` the books'
+    # NEW contract was quoted for the OLD one held — a loss shown as a
+    # gain (backlog TJ-0352, audit TJ-0399). A map with a problem line,
+    # or one that cannot be read, cannot say which contract is held:
+    # the option rows are omitted, never quoted from another contract.
     try:
         from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                    map_file_problems,
                                                     map_symbol,
                                                     merge_renames)
+        _problems = map_file_problems(Path(ticker_map))
+        if _problems:
+            raise ValueError(f"{len(_problems)} problem line(s), first "
+                             f"{_problems[0]}")
         renames = merge_renames(load_map_file(Path(ticker_map)),
                                 to_base=True)
     except Exception as e:
-        warn(PROG, f"could not read {ticker_map} ({e}) — option quotes "
-                   f"use the books' symbols.")
-        return out
+        warn(PROG, f"could not read {ticker_map} ({e}) — "
+                   f"{len(option_tickers)} option position(s) omitted: "
+                   f"which contract is held cannot be told; fix the map.")
+        return {t: None for t in option_tickers}
     if not renames:
         return out
     sources: Dict[str, set] = {}
@@ -624,6 +635,38 @@ def _act_item(text: str, cmd: Optional[str] = None):
     return out.act(text, cmd)[len(out.ACT):], "", out.ACT
 
 
+def _project_map(files: List[Path]) -> Optional[Path]:
+    """The project's ticker.map beside the inputs or one folder up (the
+    project root for work/ files), as the QUOTE lines are found."""
+    for f in files:
+        for d in (f.resolve().parent, f.resolve().parent.parent):
+            if (d / "ticker.map").is_file():
+                return d / "ticker.map"
+    return None
+
+
+def _booked_as(symbols, ticker_map: Optional[Path]) -> Dict[str, str]:
+    """{symbol: the symbol the books hold it under} for each share
+    listing of `symbols` a ticker.map (tobase.map read with it) rename
+    moves — `TOBASE ZZX.US ZZX.TO`: {ZZX.US: ZZX.TO}. {} without a map
+    or when it cannot be read (the wrapper refuses a broken one)."""
+    if not symbols or ticker_map is None or not Path(ticker_map).is_file():
+        return {}
+    try:
+        from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                    merge_renames)
+        final = merge_renames(load_map_file(Path(ticker_map)),
+                              to_base=True)
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for s in symbols:
+        b = str(final.get(s) or final.get(s.upper()) or "").upper()
+        if b and b != s.upper():
+            out[s.upper()] = b
+    return out
+
+
 def main(argv: Optional[List[str]] = None,
          fetchers: Optional[List] = None,
          option_fetchers: Optional[List] = None) -> int:
@@ -739,6 +782,19 @@ def main(argv: Optional[List[str]] = None,
     if args.symbol:
         want = {s.upper() for s in args.symbol}
         held = {r["symbol"].upper() for r in positions}
+        # A listing the ticker map books under another (TOBASE ZZX.US
+        # ZZX.TO: the books hold ZZX.TO) is that row: `harvest ZZX.US`
+        # said "No open positions" for a listing the broker shows
+        # (backlog TJ-0450), while buy-check / sell-check resolve it.
+        for _s, _b in sorted(_booked_as(
+                want - held, args.ticker_map or _project_map(files))
+                .items()):
+            if _b in held:
+                from taxjson.lib.cli_diag import note as _note_b
+                _note_b(PROG, f"{_s} is booked as {_b} (one security: "
+                              f"ticker.map / tobase.map) — its row is "
+                              f"{_b}.")
+            want.add(_b)
         # `harvest margn` filtered on a SYMBOL "margn" and said "No open
         # positions for margn." with rc 0 (audit A2-0684): a bare token
         # (no .TO/.US listing suffix) that matches nothing is named.

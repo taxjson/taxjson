@@ -39,7 +39,7 @@ from taxjson.lib import check_dates
 from taxjson.lib import checklist as cl
 from taxjson.lib.dispatch import python_module_argv
 
-from test_checklist import FakeSub, _ctx, _project
+from test_checklist import _ctx, _project
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 _PYPATH = os.pathsep.join(str(REPO_ROOT / p) for p in (
@@ -268,7 +268,8 @@ class TestCheckFiled(_Years):
         shared.write_text(shared.read_text().replace(
             "ZZQB.TO -50 CAD 12.00 600.00", "ZZQB.TO -50 CAD 13.00 650.00"))
         r = _ok(self, _cli(self.y, "check-filed"))
-        self.assertIn("1 shared export(s) changed or lost a row of 2023",
+        self.assertIn("1 shared export(s) gained, changed or lost a row "
+                      "of 2023",
                       r.stdout)
         self.assertIn("../inputs/margin/trades.tt", r.stdout)
         self.assertIn("filed 2023: OK", r.stdout)

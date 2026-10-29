@@ -732,8 +732,19 @@ class TestWashRadarCmd(unittest.TestCase):
     def test_missing_account_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = _runsub(self._project(tmp), "wash-radar", "nope")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("nope_base.json", r.stderr)
+        # The configured accounts named, not "run `taxjson run`"
+        # (backlog TJ-0157).
+        self.assertEqual(r.returncode, 2, r.stderr)
+        err = " ".join(r.stderr.split())
+        self.assertIn("no [accounts.nope] in taxjson.toml", err)
+        self.assertIn("(configured: margin, rrsp)", err)
+        # A configured account without books still blames the run.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            (root / "work" / "margin_base.json").unlink()
+            r = _runsub(root, "wash-radar", "margin")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("margin_base.json", r.stderr)
 
 
 class TestWashSalesCmd(unittest.TestCase):

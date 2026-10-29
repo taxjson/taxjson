@@ -1,6 +1,4 @@
 """Tests for the corporate-action extractor + rules + manifest."""
-import io
-import json
 import tempfile
 from _tmpfiles import private_tmpfile
 import unittest

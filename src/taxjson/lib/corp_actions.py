@@ -1150,9 +1150,19 @@ def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
 # NOT the s.85.1 share-for-share rollover: it applies automatically
 # unless the vendor reports the gain in its return (s.85.1(1)(a) and
 # (5)); there is no election form (audit R1-138).
+#
+# s.86.1 covers a FOREIGN parent's eligible distribution: a Canadian
+# parent's tax-deferred spin-off (a butterfly, an s.86 reorganization),
+# which docs/limits.md books with the same election, has no election of
+# the holder's to file — the reminder says which it applies to
+# (backlog TJ-0441: "file the s. 86.1 election" for every one).
 FILING_REQUIRED_ELECTIONS: Dict[str, str] = {
-    'rollover_s_86_1': "file the s. 86.1 election with your return "
-                       "(spinoff must be on CRA's eligibility list)",
+    'rollover_s_86_1': "if the parent is a foreign corporation: file the "
+                       "s. 86.1 election with your return (the spin-off "
+                       "must be on CRA's eligibility list); a Canadian "
+                       "parent's tax-deferred spin-off (a butterfly, an "
+                       "s. 86 reorganization) has no election of yours "
+                       "to file",
     # No US entry: §354/§355 non-recognition applies by law when the
     # transaction qualifies, and the Reg. §1.368-3 / §1.355-5 statement
     # is due only from a significant holder — omitting it does not undo
@@ -2894,6 +2904,32 @@ def _summary_identifies(summary: str, ev: "CorporateAction",
                                       root(ev.target_symbol))
 
 
+def manifest_lock_path(path: Path) -> Path:
+    """The lock file a change to the elections manifest `path` holds: a
+    hidden file beside it (`.manifest.json.lock`), so no inputs scan
+    reads or counts it (run's dot-file rule; the project's .gitignore
+    leaves out `.*.lock`)."""
+    path = Path(path)
+    return path.with_name(f".{path.name}.lock")
+
+
+def manifest_lock(path: Path):
+    """`with manifest_lock(path):` — hold the elections manifest's lock
+    (lib/safe_write.file_lock, an advisory flock; the second holder
+    waits) across a load-change-save of `path` (Manifest.update). The
+    folder is made first so the lock can live there (a first election
+    of a new account); where it cannot be, the block runs unlocked and
+    the save says why. A symlink at the lock's name that cannot be
+    replaced raises safe_write.LockLinkError."""
+    from taxjson.lib.safe_write import file_lock
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return file_lock(manifest_lock_path(path))
+
+
 class Manifest:
     """JSON-backed elections store.
 
@@ -3041,6 +3077,23 @@ class Manifest:
             except OSError:
                 pass
             raise
+
+    @classmethod
+    def update(cls, path: Path, change) -> "Tuple[Manifest, Any]":
+        """Load the manifest at `path`, apply `change(manifest)` and save
+        it when the change returns a true value, as ONE step under
+        `manifest_lock`. Returns (the manifest as saved, the change's
+        value). Two writers (two `taxjson elect --set`s, a run's prompt
+        beside a --set) each loaded, changed and saved the whole file:
+        the later save dropped the other's election, although both said
+        "Election saved" (backlog TJ-0544)."""
+        path = Path(path)
+        with manifest_lock(path):
+            man = cls.load(path)
+            result = change(man)
+            if result:
+                man.save(path)
+        return man, result
 
     def migrate_legacy(self, events: List["CorporateAction"]) -> int:
         """Rekey records saved under an older id scheme to the current
@@ -4607,16 +4660,17 @@ CANADA_SPINOFF = RuleSpec(
             'rollover_s_86_1',
             "Defer the income (s. 86.1 foreign-spinoff rollover): part "
             "of the parent's cost basis moves to the spun-off shares, "
-            "no tax this year. Only valid if the spinoff is on CRA's "
-            "s. 86.1 eligibility list AND you file the election with "
-            "your return. You supply the CAD cost to allocate: the "
+            "no tax this year. For a foreign parent, only valid if the "
+            "spinoff is on CRA's s. 86.1 eligibility list AND you file "
+            "the election with your return. You supply the CAD cost to allocate: the "
             "parent's ACB in CAD immediately before the distribution "
             "(`taxjson list` shows it) times the spin-off's share of the "
             "combined fair market value right after it (s. 86.1(3)). A "
             "company's Form 8937 percentage is a US figure and can "
             "differ. A Canadian parent's tax-deferred "
             "spin-off (a butterfly reorganization) is booked the same "
-            "way: pick this and enter the allocated ACB.",
+            "way: pick this and enter the allocated ACB (it has no "
+            "election of yours to file).",
         ),
     ],
     apply=lambda ev, opt, hints: (

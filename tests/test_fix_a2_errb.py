@@ -28,6 +28,7 @@ REPO_ROOT = Path(os.environ.get("ERRB_REPO") or Path(__file__).resolve().parent.
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from taxjson.lib import cli_diag  # noqa: E402
+from _planted_rates import plant  # noqa: E402
 from _style import CapturedWidth
 
 
@@ -67,16 +68,19 @@ def _tool(module, *a, cwd, home):
                           stdin=subprocess.DEVNULL, env=_env(home))
 
 
-def _rates(path: Path):
+def _rates(path: Path, home: Path):
+    """The rates file, and the same rates in `home`'s currency cache: a
+    run that rebuilds the file keeps them (backlog TJ-0635)."""
     d, lines = date(2024, 1, 1), []
     while d <= date(2026, 12, 31):
         lines.append(f"{d.isoformat()} 12:00:00 USD CAD 1.3500 boc")
         d += timedelta(days=1)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
+    plant(path, "\n".join(lines) + "\n", home)
 
 
 def _make_project(root: Path, *, extra_accounts=""):
+    """A project at `root`, run under the HOME beside it (root.parent /
+    "home", as _Built and test_fix_review_low run it)."""
     (root / "inputs" / "m").mkdir(parents=True)
     (root / "inputs" / "m" / "a.tt").write_text(
         "BUYSELL 2025-01-06 10:00:00 ABC.TO 100 CAD 10 -1000 0\n"
@@ -86,7 +90,7 @@ def _make_project(root: Path, *, extra_accounts=""):
         'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
         'option_grant_timing_since = 2025\n\n'
         '[accounts.m]\ntype = "taxable"\n' + extra_accounts)
-    _rates(root / "work" / "to_base.csv")
+    _rates(root / "work" / "to_base.csv", root.parent / "home")
 
 
 class _Built(unittest.TestCase):
@@ -426,14 +430,15 @@ class TestViews(_Built):
         self.assertIn("not a list of transaction objects", r.stdout)
 
     def test_list_date_fails_when_an_account_recompute_fails(self):
-        """A2-1450."""
+        """A2-1450: never a list without the account. The dated view
+        reads the cost timeline the run wrote (backlog TJ-0417): without
+        it, one line naming the file and `taxjson run`."""
         root = self.copy()
-        b = root / "work" / "m_base.json"
-        doc = json.loads(b.read_text())
-        doc["transactions"][0]["quantity"] = "abc"
-        b.write_text(json.dumps(doc))
+        for t in (root / "work").glob(".*.timeline.json"):
+            t.unlink()
         r = self.cli(root, "list", "--date", "2025-06-30")
-        self.assertOneLine(r, 1, "as-of compute failed for m")
+        self.assertOneLine(r, 1, "no cost timeline for m")
+        self.assertIn("taxjson run", r.stderr)
         self.assertNotIn("no base files", r.stderr)
 
     def test_audit_one_line_and_same_code_with_json(self):

@@ -127,21 +127,52 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
                   -a["bpa_credit"],
                   f"[basic personal amount {m(a.get('bpa_amount', 0.0))}"
                   f": its credit at 50%]"))
+    # s.127.54(2): the greater of the regular credit and the lesser of
+    # 2/3 of the foreign tax and 20.5% of the foreign income (an older
+    # result without the parts prints no note).
+    _sftc_note = ""
+    if "ftc_regular" in a:
+        from taxjson.lib.tax_estimate import CA_AMT_SFTC_RATE, fmt_pct
+        _sftc_note = (f"[the greater of the regular credit "
+                      f"{m(a['ftc_regular'])} and the lesser of 2/3 of "
+                      f"the foreign tax "
+                      f"({m(a.get('ftc_foreign_taxes', 0.0))}) and "
+                      f"{fmt_pct(CA_AMT_SFTC_RATE)} of the foreign "
+                      f"income ({m(a.get('ftc_income_limit', 0.0))})]")
     L.append(_row("- Special foreign tax credit (s.127.54)",
-                  -float(a.get("ftc") or 0.0), "[in full]"))
+                  -float(a.get("ftc") or 0.0), _sftc_note))
     L.append(_row("= Federal minimum tax", a["minimum_fed"]))
     L.append(_row("  Federal regular tax", a["regular_fed"]))
     if a["binding"]:
+        # What carries forward is s.120.2(3)'s additional tax, which is
+        # the excess only when the special foreign tax credit is the
+        # regular one (backlog TJ-0626).
+        _cf = float(a.get("carryforward", a["excess_fed"]))
         L.append(_row("=> AMT BINDS: additional federal tax",
-                      a["excess_fed"], "[s.120.2(3): carries forward]"))
-        txt = (f"{a['provincial_factor'] * 100:.2f}% of the federal "
-               f"excess" + (" + surtax on it"
-                            if a.get("provincial_amt_surtax", 0) > 0.005
-                            else "")
+                      a["excess_fed"],
+                      "[s.120.2(3): carries forward]"
+                      if abs(_cf - a["excess_fed"]) <= 0.005
+                      else f"[s.120.2(3): carries forward {m(_cf)}]"))
+        from taxjson.lib.tax_estimate import ca_prov_amt_base_text
+        txt = (f"{a['provincial_factor'] * 100:.2f}% of "
+               f"{ca_prov_amt_base_text(a)}"
+               + (f" {m(a['provincial_amt_base'])}"
+                  if a.get("provincial_amt_base_kind", "excess")
+                  != "excess" else "")
+               + (" + surtax on it"
+                  if a.get("provincial_amt_surtax", 0) > 0.005 else "")
                + (", factor ASSUMED" if a.get("provincial_factor_assumed")
                   else ""))
         L.append(_row(f"   {prov} minimum tax", a["provincial_amt"],
                       f"[{txt}]"))
+        # The provincial foreign tax credit of the minimum-tax year
+        # (form T2036) less the regular one (backlog TJ-0591).
+        _pfc = float(a.get("provincial_ftc_change") or 0.0)
+        if abs(_pfc) > 0.005:
+            L.append(_row(f"   {prov} foreign tax credit (T2036)", _pfc,
+                          f"[credit {m(a['provincial_ftc_min_tax'])} "
+                          f"with AMT, {m(a['provincial_ftc_regular'])} "
+                          f"in regular tax]"))
         L.append(_row("   Top-up over regular tax", a["topup"]))
     else:
         L.append(_row("=> AMT does not bind: regular tax over minimum",
@@ -195,8 +226,11 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
     for o, v in (c.get("lapsing_by_year") or {}).items():
         L.append(f"  {o}: {m(v)} left unrecovered expires after "
                  f"{doc['year']}")
-    L.append(_row("Created this year (additional tax)",
-                  c.get("created", a.get("excess_fed", 0.0))))
+    _created = c.get("created", a.get("carryforward",
+                                      a.get("excess_fed", 0.0)))
+    L.append(_row("Created this year (additional tax)", _created,
+                  "[s.120.2(3); T691 Part 7 line 14]"
+                  if float(_created or 0.0) > 0.005 else ""))
     closing = c.get("closing_by_year") or {}
     try:
         nxt = int(doc["year"]) + 1
@@ -209,8 +243,13 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
     L.append("")
     L.append(_row("Estimated tax on investment income",
                   doc.get("estimated_tax")))
+    # Incremental: the top-up the other income owes on its own is not
+    # counted (backlog TJ-0489).
+    _base_top = float(a.get("base_topup") or 0.0)
     L.append(_row("  with AMT and carryover", doc.get(
-        "estimated_tax_with_amt")))
+        "estimated_tax_with_amt"),
+        f"[less the other income's own top-up {m(_base_top)}]"
+        if _base_top > 0.005 else ""))
     notes = doc.get("notes") or []
     if notes and details:
         L += _notes(notes)

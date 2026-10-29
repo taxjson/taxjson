@@ -111,17 +111,13 @@ class TestChildPythonNeverImportsFromCwd(unittest.TestCase):
             self.assertFalse(marker.exists())
 
     def test_no_bare_dash_m_child_launch_in_the_package(self):
-        # Every child Python launch goes through python_module_argv. A
-        # `[sys.executable, "-m", "taxjson.bin.X"]` list is only the
-        # tool-command marker dispatch.run_cmd takes (in process, or out
-        # of process through python_module_argv): taxjson_run hands
-        # every one to run_cmd.
+        # Every child Python launch goes through python_module_argv,
+        # the tool commands taxjson_run hands dispatch.run_cmd too
+        # (backlog TJ-0632; the AST scan: test_fix_1029_r4_commands).
         import re
         pat = re.compile(r"sys\.executable\s*,\s*[\"']-m[\"']")
-        allowed = {"dispatch.py", "taxjson_run.py"}
         for p in (SRC / "taxjson").rglob("*.py"):
-            if p.name not in allowed:
-                self.assertIsNone(pat.search(p.read_text()), p)
+            self.assertIsNone(pat.search(p.read_text()), p)
 
 def _git(root, *args):
     return subprocess.run(["git", "-c", "user.name=T", "-c",
@@ -496,6 +492,9 @@ class TestLoosePermissionWarning(unittest.TestCase):
             r = self._cli(root, "run", "--no-input")
             self.assertNotIn("go-rwx", r.stderr)
             (root / "inputs").chmod(0o755)
+            # (a project folder others can pass through: under a 0700
+            # one inputs/ is out of their reach, backlog TJ-0426)
+            root.chmod(0o711)
             r = self._cli(root, "run", "--no-input")
             self.assertEqual(r.stderr.count("chmod -R go-rwx"), 1,
                              r.stderr)

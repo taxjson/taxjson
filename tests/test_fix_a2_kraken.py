@@ -12,7 +12,6 @@ migration), A2-1019 (instant-trade leg signs). Synthetic data only.
 """
 import os
 import io
-import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr

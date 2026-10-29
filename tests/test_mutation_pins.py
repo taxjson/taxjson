@@ -956,8 +956,7 @@ class TestRoundSixPins(unittest.TestCase):
     def test_us_2026_ordinary_boundary(self):
         """Mutation est-B4: a 2026 US bracket edge that moved between
         vintages (12,400 vs 11,925 first-bracket top)."""
-        from taxjson.lib.tax_estimate import (apply_vintage,
-                                              US_ORD_BRACKETS)
+        from taxjson.lib.tax_estimate import apply_vintage
         import taxjson.lib.tax_estimate as te
         apply_vintage(2026)
         self.assertEqual(te.US_ORD_BRACKETS[0][0], 12400)

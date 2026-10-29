@@ -215,6 +215,34 @@ def _wash_window_rows(txs) -> List[tuple]:
     return rows
 
 
+def _settled_cells(txs) -> Optional[List[str]]:
+    """Each window row's settlement date, when one differs from its
+    trade date (else None: the DATE column says both). The window and
+    its DAY count run on settlement dates, as s.54 does (backlog
+    TJ-0258); a window of older books has none."""
+    cells = [str(t.get('date_settle') or t.get('date') or '') for t in txs]
+    if any(c != str(t.get('date') or '') for c, t in zip(cells, txs)):
+        return cells
+    return None
+
+
+def _loss_when(ww: Dict[str, Any]) -> str:
+    """The loss sale's date as the window header gives it: the trade
+    date, and the settlement date the window counts from when it
+    differs (backlog TJ-0258)."""
+    ld = str(ww.get('loss_date') or '')
+    ls = str(ww.get('loss_settle') or ld)
+    return ld if ls == ld else f"{ld}, settled {ls}"
+
+
+def _window_triggers(g: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The window's trigger rows (each replacement that backs the
+    denial), in the window's order."""
+    ww = g.get('wash_window') or {}
+    return [t for t in ww.get('transactions') or []
+            if t.get('role') == 'trigger']
+
+
 def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     """Render the ±30 day window listing for a Canada wash sale.
 
@@ -232,7 +260,7 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     # name, never "wash sale" (audit A2-1352).
     out.append("# --- SUPERFICIAL-LOSS WINDOW (±30 days, all accounts) ---")
     out.append(f"#   T-30  = {ww['window_start']}")
-    out.append(f"#   LOSS  = {ww['loss_date']}")
+    out.append(f"#   LOSS  = {_loss_when(ww)}")
     out.append(f"#   T+30  = {ww['window_end']}")
 
     bal = float(ww.get('bal_at_end', 0.0) or 0.0)
@@ -279,6 +307,12 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
                'pool_bal', 'acb/sh', 'role')
     # qty/price/pool_bal/acb/sh right-align (numeric), others left-align.
     numeric_cols = {4, 5, 6, 7}
+    settled = _settled_cells(txs)
+    if settled:
+        # DAY counts settlement dates (TJ-0258): the date it counts.
+        headers = headers[:2] + ('settled',) + headers[2:]
+        rows = [r[:2] + (c,) + r[2:] for r, c in zip(rows, settled)]
+        numeric_cols = {5, 6, 7, 8}
     widths = [
         max(len(h), max(len(r[i]) for r in rows))
         for i, h in enumerate(headers)
@@ -324,7 +358,24 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
             out.append(
                 f"#   raw loss {_fmt_signed_money(raw)} -> {_fmt_money(dis)} disallowed (partial)"
             )
-        if 'trigger_date' in wt:
+        trigs = _window_triggers(g)
+        if len(trigs) > 1:
+            # Each replacement that backs the denial, as the window
+            # table lists them: naming only the first hid a second
+            # account's buy that took the deferred part (backlog
+            # TJ-0259).
+            out.append(f"#   triggered by {len(trigs)} acquisitions:")
+            for t in trigs:
+                tag = (" [affiliated]" if t.get('affiliated')
+                       else " [sheltered]" if t.get('sheltered') else "")
+                act = ('BUY' if t.get('action') == 'BUYSELL'
+                       else str(t.get('action') or 'BUY'))
+                out.append(
+                    f"#     {t.get('date')} {act} "
+                    f"{float(t.get('qty') or 0.0):+.4f} @ "
+                    f"{float(t.get('price') or 0.0):.4f}   "
+                    f"account={t.get('account', '')}{tag}")
+        elif 'trigger_date' in wt:
             if wt.get('trigger_affiliated'):
                 sheltered = " [affiliated]"
             elif wt.get('trigger_sheltered'):
@@ -795,7 +846,7 @@ def _report_window_lines(g: Dict[str, Any], width_: Optional[int],
     out = [indent + "Superficial-loss window (±30 days, all accounts)"]
     out += kv_lines([
         ("window", f"{ww['window_start']} to {ww['window_end']} (loss "
-                   f"{ww['loss_date']})"),
+                   f"{_loss_when(ww)})"),
         ("test", "ITA s.54, per holder: units a holder ACQUIRED in the "
                  "window and still holds at T+30 back the denial (holders: "
                  "your taxable accounts together; each registered or "
@@ -821,12 +872,24 @@ def _report_window_lines(g: Dict[str, Any], width_: Optional[int],
     out.append("")
     for ln in legend:
         out += wrap(ln, width_, indent + "  ", indent + "    ")
-    out += fit_table(
-        ["DAY", "DATE", "ACCOUNT", "ACTION", "QTY", "PRICE", "POOL_BAL",
-         "ACB/SH", "ROLE"],
-        [r[:8] + (r[9],) for r in rows],
-        aligns=["<", "<", "<", "<", ">", ">", ">", ">", "<"],
-        drop=(6, 5), width_=width_, indent=indent + "  ")
+    headers = ["DAY", "DATE", "ACCOUNT", "ACTION", "QTY", "PRICE",
+               "POOL_BAL", "ACB/SH", "ROLE"]
+    body = [r[:8] + (r[9],) for r in rows]
+    aligns = ["<", "<", "<", "<", ">", ">", ">", ">", "<"]
+    drop = (6, 5)
+    settled = _settled_cells(txs)
+    if settled:
+        # DAY counts settlement dates, as the window does (backlog
+        # TJ-0258): the date it counts, beside the trade date.
+        headers.insert(2, "SETTLED")
+        body = [r[:2] + (c,) + r[2:] for r, c in zip(body, settled)]
+        aligns.insert(2, "<")
+        drop = (7, 6)
+        out += wrap("DAY: days from the loss sale's settlement to the "
+                    "row's (SETTLED); DATE: the trade date", width_,
+                    indent + "  ", indent + "    ")
+    out += fit_table(headers, body, aligns=aligns, drop=drop,
+                     width_=width_, indent=indent + "  ")
     return out
 
 

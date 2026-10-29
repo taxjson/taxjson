@@ -22,7 +22,6 @@ engine fixes):
   covering BUY of a phantom short.
 """
 import json
-import os
 import subprocess
 import sys
 import tempfile

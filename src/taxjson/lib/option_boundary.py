@@ -356,7 +356,8 @@ def reported_premiums(doc: Any) -> Optional[Dict[Tuple[str, str], float]]:
 
 
 def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
-                warn=None, premiums: Optional[Dict[int, Any]] = None):
+                warn=None, premiums: Optional[Dict[int, Any]] = None,
+                labels: Optional[Dict[int, str]] = None):
     """Every filed-year lock this project can see — taxjson_filed.
     project_locks: its own ``filed/<year>.json`` files plus the previous
     year's record named by ``[settings] prior_year_record`` — as
@@ -367,7 +368,10 @@ def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
     ``warn(text)`` is called for a lock that cannot be read (its timing
     is then unknown). ``premiums`` (a dict, when given) receives each
     lock's ``reported_premiums``, what `straddling` takes as
-    ``filed_premiums``. A ``prior_year_record`` that is not a path string
+    ``filed_premiums``; ``labels`` (a dict, when given) each lock's name
+    in messages (taxjson_filed.lock_label: ``filed/<year>.json``, or the
+    path a ``prior_year_record`` gives), what `straddling` takes as
+    ``filed_labels`` (backlog TJ-0225). A ``prior_year_record`` that is not a path string
     is skipped here (every config reader refuses it). Shared by
     option-boundary's twin edge-cases, so the two give one verdict on
     the same contract (audit A2-0390, A2-1205, A2-0360)."""
@@ -390,6 +394,8 @@ def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
     for fy, f, _where in locks:
         years.add(fy)
         _lbl = _tfl.lock_label(root, f)
+        if labels is not None:
+            labels[fy] = _lbl
         try:
             # The one check every reader of a lock applies (read_lock;
             # backlog TJ-0069): a damaged or other-country lock's timing
@@ -567,7 +573,32 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         # it again at the close (2026-09 audit: consecutive default
         # projects reported +399 then +298 for a 298 economic gain).
         filed_close = _filed_on_close(wy, filed_timing)
-        double = transition and wy in filed_years and filed_close is not True
+        # What the wy lock's return reported for this write: its
+        # dispositions name the premium as a gain of the write date
+        # under grant timing (None: the lock records no list).
+        _rep = (filed_premiums or {}).get(wy)
+        _rep_key = (lot.written_as or lot.symbol, lot.write_date[:10])
+        reported = (None if _rep is None
+                    else _rep.get(_rep_key, 0.0) > 0.005)
+        # Explicit close timing (option_premium_timing = "close") is the
+        # same double count when the wy return reported the premium:
+        # its lock records grant timing, or its dispositions show the
+        # premium (backlog TJ-0396). A lock whose dispositions are known
+        # and leave it out never reported it; one that records close
+        # timing is taken at its word (a same-day close of another lot
+        # of the series shares the write date).
+        close_double = (not grant_mode and wy in filed_years
+                        and filed_close is not True
+                        and (reported if reported is not None
+                             else filed_close is False))
+        double = ((transition and wy in filed_years
+                   and filed_close is not True) or close_double)
+        _rec_since = ((filed_timing or {}).get(wy) or {}).get(
+            "option_grant_since")
+        # The cutoff the wy return used (its lock's), else wy itself.
+        since_hint = (_rec_since if isinstance(_rec_since, int)
+                      and not isinstance(_rec_since, bool)
+                      and _rec_since <= wy else wy)
         # The mirror case (S075-10): this project puts the lot on GRANT
         # timing (premium in wy, ITA s.49(1)) but the wy lock records
         # that wy was filed on CLOSE timing — the wy return never
@@ -588,6 +619,20 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         def _double_text(prem_text: str, cy: Optional[int]) -> str:
             known = filed_close is False
             where_now = f"again in {cy}" if cy else "again when it closes"
+            if close_double:
+                return (f"ATTENTION: {wy} is locked ({_lk(wy)}) and "
+                        + (f"its lock records grant timing, so the {wy} "
+                           f"return reported the {prem_text} premium; "
+                           if known else
+                           f"its lock reports the {prem_text} premium as a "
+                           f"{wy} gain; ")
+                        + f"this project is on close timing "
+                          f"(option_premium_timing = \"close\") and taxes "
+                          f"it {where_now}. Stay on the timing the {wy} "
+                          f"return used: option_premium_timing = \"grant\" "
+                          f"with option_grant_timing_since = {since_hint} "
+                          f"(s.49(1)); keep close timing only if {wy} is "
+                          f"amended to remove the premium (T1-ADJ {wy})")
             return (f"ATTENTION: {wy} is locked ({_lk(wy)}) and "
                     + (f"its lock records grant timing, so the {wy} return "
                        f"reported the {prem_text} premium; " if known else
@@ -608,13 +653,11 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         # units assigned later (an amendment re-closed without it, as
         # docs/filing.md step 6 has it): what it still reports is at
         # most the premium of the units not assigned (TJ-0085).
-        _rep = (filed_premiums or {}).get(wy)
         _assigned = sum(c.premium for c in later
                         if c.kind == "assignment")
         amended = (grant and wy in filed_years and _rep is not None
                    and _assigned > 0.005
-                   and _rep.get((lot.written_as or lot.symbol,
-                                 lot.write_date[:10]), 0.0)
+                   and _rep.get(_rep_key, 0.0)
                    <= lot.premium - _assigned + 0.01)
 
         def _switch(prem_text: str) -> str:
@@ -689,7 +732,13 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 else:
                     where = f"folded into the share leg in {cy}; nothing in {wy} (close timing)"
                     action = f"same as the Act's post-amendment state; if {wy} was filed with the premium as a gain, amend {wy} (s.49(4))"
-                    if double:
+                    if close_double:
+                        # The lock says the wy return reported it: the
+                        # amendment is a fact, not a condition (TJ-0396).
+                        action = (f"T1-ADJ {wy}: remove the {prem:,.2f} premium reported for {wy} (s.49(4)) — "
+                                  f"{_lk(wy)} " + ("records grant timing" if filed_close is False
+                                                   else "reports it as a gain"))
+                    elif double:
                         action = (f"ATTENTION: {wy} is locked ({_lk(wy)}); if it was filed under grant timing "
                                   f"with the {prem:,.2f} premium as a gain, T1-ADJ {wy} to remove it (s.49(4))")
             elif c.kind == "expiry":
@@ -862,8 +911,9 @@ def project_question_rows(root, cfg: Dict[str, Any],
     since = kw.get("option_grant_since")
     if since is None:
         return []
+    labels: Dict[int, str] = {}
     try:
-        years, timing = filed_locks(root, settings)
+        years, timing = filed_locks(root, settings, labels=labels)
     except Exception:                                   # noqa: BLE001
         years, timing = set(), {}
     mh_pairs = None
@@ -905,7 +955,7 @@ def project_question_rows(root, cfg: Dict[str, Any],
                 pass
         for r in straddling(txs, year, "grant", since, years,
                             filed_timing=timing, today=today,
-                            tax_date=tax_date):
+                            tax_date=tax_date, filed_labels=labels):
             if r.get("question"):
                 r["account"] = r["account"] or name
                 out.append(r)

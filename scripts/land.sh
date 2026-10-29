@@ -11,14 +11,17 @@
 # pushes the new commits as a branch land/<time>-<sha>, opens the pull
 # request, and has it rebase-merged once its checks pass: by GitHub's
 # auto-merge (`gh pr merge --auto --rebase`) when main's ruleset requires
-# checks and the repository allows auto-merge; otherwise it waits for every
-# check itself and merges (`gh pr merge --rebase`) — only while origin's
-# main is still the base it pushed on, so the rebase replays the commits
-# onto the base they were gated on (docs/releasing.md, "Why a rebase
-# merge"). Then it brings local
+# checks AND a branch up to date with main (so GitHub itself refuses to
+# merge onto a main that moved) and the repository allows auto-merge;
+# otherwise it waits for every check itself and merges
+# (`gh pr merge --rebase`) — only while origin's main is still the base
+# it pushed on, so the rebase replays the commits onto the base they were
+# gated on (docs/releasing.md, "Why a rebase merge"). Then it brings local
 # main to what landed: a rebase merge gives the commits new ids, so
 # `git pull --rebase` drops the local copies. Uncommitted work is left as
-# it was (--autostash).
+# it was (--autostash). Commits that landed on top of others anyway (main
+# moved between the last look and the merge) get a warning: run the gate
+# on main.
 #
 # A failed check, a main that moved on meanwhile (another pull request
 # merged, a promote from another clone) or a pull request closed meanwhile
@@ -106,12 +109,21 @@ URL="$(printf '%s\n' "$URL" | grep -oE 'https://[^ ]+/pull/[0-9]+' | tail -1)"
 
 # GitHub's auto-merge only when main's rules require checks (otherwise a
 # pull request with nothing required is mergeable at once, before CI) and
-# the repository allows it; else this script waits for the checks itself.
+# a branch up to date with main before it merges (otherwise auto-merge
+# replays the commits onto whatever main is when the checks pass: a main
+# that moved after this script's last look would make the landed commits
+# trees no gate ran), and the repository allows it; else this script waits
+# for the checks itself and merges only onto the base it pushed on.
 AUTO=0
-REQUIRED="$(gh api "repos/$SLUG/rules/branches/main" --jq '[.[] | select(.type == "required_status_checks")] | length' 2>/dev/null || echo 0)"
-if [ "${REQUIRED:-0}" != 0 ] && gh pr merge "$URL" --repo "$SLUG" --auto --rebase --delete-branch >/dev/null 2>&1; then
+RULES_API="repos/$SLUG/rules/branches/main"
+REQUIRED="$(gh api "$RULES_API" --jq '[.[] | select(.type == "required_status_checks")] | length' 2>/dev/null || echo 0)"
+STRICT="$(gh api "$RULES_API" --jq '[.[] | select(.type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true)] | length' 2>/dev/null || echo 0)"
+if [ "${REQUIRED:-0}" != 0 ] && [ "${STRICT:-0}" != 0 ] \
+   && gh pr merge "$URL" --repo "$SLUG" --auto --rebase --delete-branch >/dev/null 2>&1; then
   AUTO=1
   echo "→ $URL: GitHub merges it (rebase) once its required checks pass"
+elif [ "${REQUIRED:-0}" != 0 ] && [ "${STRICT:-0}" = 0 ]; then
+  echo "→ $URL: merging it (rebase) here once every check has passed (main's rules do not require a branch up to date with main, so GitHub's auto-merge could merge it onto a main that moved)"
 else
   echo "→ $URL: merging it (rebase) here once every check has passed"
 fi
@@ -212,4 +224,17 @@ git pull -q --rebase --autostash origin main
 LANDED="$(git rev-parse HEAD)"
 [ "$LANDED" = "$(git rev-parse origin/main)" ] \
   || echo "⚠ local main is not origin/main after the pull — check git status." >&2
+# Did they land right on the gated base? The first $AHEAD commits after
+# BASE on main must be these commits' rebased copies (the same patches, in
+# order). Not so when main moved between the last look and the merge.
+patch_ids() {   # patch_ids RANGE [COUNT]: a line per commit (its patch id; blank when empty), oldest first
+  local c
+  git rev-list --reverse --first-parent "$1" | sed -n "1,${2:-\$}p" \
+    | while IFS= read -r c; do
+        printf '%s\n' "$(git diff-tree -p --root "$c" | git patch-id --stable | cut -d' ' -f1)"
+      done
+}
+if [ "$(patch_ids "$BASE..$HEAD_SHA")" != "$(patch_ids "$BASE..origin/main" "$AHEAD")" ]; then
+  echo "⚠ main moved between the last look and the merge: the landed commits do not sit on ${BASE:0:9}, the base they were gated on — run the gate on main now (scripts/ci.sh)." >&2
+fi
 echo "✓ landed $AHEAD commit(s) on main as ${LANDED:0:9}: $URL"

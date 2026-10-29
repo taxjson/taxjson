@@ -127,6 +127,14 @@ LTSE = "US"
 MEMX = "US"
 PEARL = "US"
 
+# A crypto exchange → the venue suffix its coins carry in a crypto
+# account's holdings handoff (reports/<account>_holdings.toml): the form
+# the exchange's own holdings snapshot uses (BTC.KR for Kraken), so a
+# reader of both files keys the rows as coins, not as a share of the
+# same name. An exchange missing here writes the bare coin.
+[crypto_venues]
+kraken = "KR"
+
 [lists]
 # Fiat currencies (ISO 4217) an exchange or broker row can be priced
 # or quoted in. Anything else on a crypto exchange is a crypto-asset:

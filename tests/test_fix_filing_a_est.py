@@ -50,7 +50,12 @@ class UnusedFederalFtcGoesToProvince(unittest.TestCase):
         tw = r["trace_with"]
         fed_before_ftc = max(0.0, tw["fed_gross"] - tw["fed_bpa"]
                              - tw["fed_dtc"])
-        unused = tw["fed_ftc"] - fed_before_ftc
+        # The federal credit takes all of federal tax (the foreign share
+        # is 1); T2036 gets the rest of the foreign tax (backlog TJ-0367:
+        # `fed_ftc` is the credit claimed, `foreign_tax` the tax).
+        self.assertAlmostEqual(tw["fed_ftc"], fed_before_ftc, places=6)
+        unused = tw["foreign_tax"] - fed_before_ftc
+        self.assertAlmostEqual(tw["fed_ftc_unused"], unused, places=6)
         self.assertGreater(unused, 1000.0)
         self.assertAlmostEqual(r["tax_with"]["federal"], 0.0, places=2)
         prov_before = tw["prov_basic"] + tw["prov_surtax"] - tw["prov_dtc"]

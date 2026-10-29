@@ -119,7 +119,8 @@ class TestSanity(unittest.TestCase):
             _sanity_project(root, base_text="{",
                             snapshots=(("2026-01-15", 20),))
             code, doc, err = _sanity(root)
-            self.assertEqual(code, 1)
+            # (exit 2, an input that cannot be read: backlog TJ-0353)
+            self.assertEqual(code, 2)
             self.assertIsNone(doc, "no clean verdict on unreadable books")
             self.assertIn("work/margin_base.json", err)
             self.assertIn("cannot be read", err)
@@ -145,7 +146,8 @@ class TestSanity(unittest.TestCase):
             _sanity_project(root, inventory_qty=float("nan"),
                             snapshots=(("2026-02-15", 0),))
             code, doc, err = _sanity(root)
-            self.assertEqual(code, 1)
+            # (exit 2, an input that cannot be read: backlog TJ-0353)
+            self.assertEqual(code, 2)
             self.assertIsNone(doc, "no clean verdict on a NaN quantity")
             self.assertIn("work/margin_gains.json", err)
             self.assertIn("ZZQ.US", err)

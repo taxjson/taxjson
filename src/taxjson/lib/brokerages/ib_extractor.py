@@ -2,7 +2,6 @@ from taxjson.lib.stage_msg import emit_line
 import csv
 import io
 import re
-import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
@@ -108,6 +107,123 @@ def _split_known_ext(symbol: str):
     return (m.group(1), m.group(2)) if m else (symbol or '', None)
 
 
+def _listing_replay(transactions: List[Dict[str, Any]], open_qty=None):
+    """held_on(root, ext, day) -> bool for _reattribute_income_to_holdings:
+    whether the statement shows a position in listing ROOT.EXT on `day`.
+
+    A chronological replay of each listing: its trades and transfers,
+    and the corporate actions that change a count without a trade — a
+    split (a SPLIT row of one symbol; its quantity is the ratio, applied
+    before the day's trades) and a ticker change (a SPLIT row whose
+    symbol_new is another listing: the units leave the old listing and
+    arrive on the new one, times the ratio). Summing the trades alone,
+    a February buy of 10, split 2-for-1 and sold as 20 implied 10 units
+    held before the statement, and a January ROC moved onto that
+    phantom holding (backlog TJ-0521).
+
+    The opening position: `open_qty` (the Open Positions quantities)
+    less what the statement adds, when the listing is not renamed away;
+    else the least opening its replay needs never to go below zero, in
+    the units before the statement's splits. A listing with no trade,
+    transfer or arrival is no dated evidence: held on every day (it
+    cannot be excluded)."""
+    ev: Dict[tuple, list] = {}
+    for t in transactions:
+        root, ext = _split_known_ext(t.get('symbol'))
+        if not ext:
+            continue
+        day = t.get('date') or ''
+        act = t.get('action')
+        if act in _POSITION_ACTIONS:
+            q = float(t.get('quantity') or 0.0)
+            ev.setdefault((root, ext), []).append((day, 1, q, 'q', q))
+        elif act == 'SPLIT':
+            try:
+                ratio = float(t.get('quantity') or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if not 0 < ratio < float('inf'):
+                continue
+            if t.get('symbol_new'):
+                nroot, next_ = _split_known_ext(t.get('symbol_new'))
+                if not next_:
+                    continue             # a listing it cannot place
+                new = (nroot, next_)
+            else:
+                new = (root, ext)
+            if new == (root, ext):
+                ev.setdefault(new, []).append((day, 0, 0.0, 'x', ratio))
+            else:
+                ev.setdefault((root, ext), []).append(
+                    (day, 0, 0.0, 'out', None))
+                ev.setdefault(new, []).append(
+                    (day, 0, 0.0, 'in', ((root, ext), ratio)))
+    for evs in ev.values():
+        evs.sort(key=lambda e: e[:3])
+    opening: Dict[tuple, float] = {}
+    busy: set = set()
+
+    def _evidence(lst, seen=()) -> bool:
+        for _d, _o, _q, kind, val in ev.get(lst, ()):
+            if kind == 'q':
+                return True
+            if kind == 'in' and val[0] not in seen \
+                    and _evidence(val[0], seen + (lst,)):
+                return True
+        return False
+
+    def _inflow(val, day) -> float:
+        src, ratio = val
+        if src in busy or not _evidence(src):
+            return 0.0                   # a cycle, or nothing dated
+        return _qty(src, day, strict=True) * ratio
+
+    def _opening(lst) -> float:
+        if lst in opening:
+            return opening[lst]
+        busy.add(lst)
+        p, u, low, out = 1.0, 0.0, 0.0, False
+        for day, _o, _q, kind, val in ev.get(lst, ()):
+            if kind == 'x':
+                p *= val
+            elif kind == 'q':
+                u += val / p
+            elif kind == 'in':
+                u += _inflow(val, day) / p
+            else:
+                out = True
+                break
+            low = min(low, u)
+        if open_qty is not None and not out:
+            o = float(open_qty.get(f"{lst[0]}.{lst[1]}", 0.0)) / p - u
+        else:
+            o = -low
+        busy.discard(lst)
+        opening[lst] = o
+        return o
+
+    def _qty(lst, day, strict=False) -> float:
+        q = _opening(lst)
+        for d, _o, _q, kind, val in ev.get(lst, ()):
+            if d > day or (strict and d == day):
+                break
+            if kind == 'x':
+                q *= val
+            elif kind == 'q':
+                q += val
+            elif kind == 'in':
+                q += _inflow(val, d)
+            else:
+                q = 0.0
+        return q
+
+    def held_on(root, ext, day) -> bool:
+        if not _evidence((root, ext)):
+            return True              # no dated evidence: cannot exclude
+        return abs(_qty((root, ext), day)) > 1e-9
+    return held_on
+
+
 def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
                                     extra_held=None, fallback_held=None,
                                     isins_by_root=None,
@@ -168,29 +284,7 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     held.update(fb)
     if not held:
         return
-    pos: Dict[tuple, list] = {}
-    for t in transactions:
-        if t.get('action') in _POSITION_ACTIONS:
-            root, ext = _split_known_ext(t.get('symbol'))
-            if ext:
-                pos.setdefault((root, ext), []).append(
-                    (t.get('date') or '', float(t.get('quantity') or 0.0)))
-
-    def _held_on(root, ext, day) -> bool:
-        rows = sorted(pos.get((root, ext)) or ())
-        if not rows:
-            return True              # no dated evidence: cannot exclude
-        net = sum(q for _d, q in rows)
-        if open_qty is not None:
-            opening = float(open_qty.get(f"{root}.{ext}", 0.0)) - net
-        else:
-            run_q, low = 0.0, 0.0
-            for _d, q in rows:
-                run_q += q
-                low = min(low, run_q)
-            opening = -low
-        q_on = opening + sum(q for d, q in rows if d <= day)
-        return abs(q_on) > 1e-9
+    _held_on = _listing_replay(transactions, open_qty)
     for t in transactions:
         # ROC ADJUSTs come out of the same ISIN-suffixed Dividends section
         # as income rows, so they need the same held-listing rebind — an
@@ -302,10 +396,11 @@ def get_ib_settlement(date_str: str, asset_cat: str,
       currency (lib/dates._T1_CUTOVER): LSE/EU T+2 until 2027-10-11,
       the ASX and the rest T+2.
     - Everything else (equity and index options, bonds): T+1.
-    `currency` is the listing's MARKET (lib/dates.market_of), not the
-    quote currency: days are counted in that market's settlement
-    calendar (US: NYSE + Federal Reserve holidays; Canada: TSX + bank
-    holidays), see lib/market_calendar.
+    `currency` is the listing's settlement calendar (lib/dates.
+    settlement_calendar), not the quote currency: days are counted in
+    that market's settlement calendar (US: NYSE + Federal Reserve
+    holidays; Canada: TSX + bank holidays; a US-dollar trade on a
+    Canadian market, 'CAD+USD': both), see lib/market_calendar.
     """
     from taxjson.lib.dates import settlement_lag_days
     from taxjson.lib.market_calendar import add_settlement_days
@@ -322,8 +417,9 @@ def get_ib_settlement(date_str: str, asset_cat: str,
     return add_settlement_days(date_str, days, currency).isoformat()
 
 from taxjson.lib.core import STOCK_DIVIDEND, is_option_symbol
-from taxjson.lib.dates import market_of
+from taxjson.lib.dates import settlement_calendar
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         warrant_exercise_tt_hint,
                                          combined_accounts_note,
                                          combined_accounts_refusal,
                                          OPTION_STRIKE_RE,
@@ -3103,9 +3199,13 @@ class IbBrokerage(BaseBrokerage):
 
         def _strike(text: str) -> str:
             # The shared strike reader refuses a decimal comma; name
-            # the row so the user can find it (audit A2-1041).
+            # the row so the user can find it (audit A2-1041). A strike
+            # the OCC field cannot hold is refused here too, with the
+            # row (backlog TJ-0520).
             try:
-                return option_strike_text(text)
+                s = option_strike_text(text)
+                encode_occ_strike(s)
+                return s
             except BrokerageParseError as exc:
                 raise BrokerageParseError(
                     f"{where}: {asset_cat} symbol {raw!r}: {exc}") from exc
@@ -3311,8 +3411,10 @@ class IbBrokerage(BaseBrokerage):
                   f"disposal at 0, so the warrant's cost becomes a capital "
                   f"loss instead of part of the shares' cost"
                   f"{self.law(' (ITA s.49(3))', ' (US basis carryover)')}. "
-                  f"Correct it by hand: the warrant's cost belongs in the "
-                  f"shares acquired.")
+                  f"Book the exercise in a .tt file of this account and "
+                  f"remove the row from the statement: "
+                  f"{warrant_exercise_tt_hint(w, [t['symbol'] for t in cands])}"
+                  f"; the warrant's cost then goes into the shares acquired.")
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions = []
@@ -3731,7 +3833,10 @@ class IbBrokerage(BaseBrokerage):
         header_lens: Dict[str, int] = {}
         unknown_row_types: Dict[str, int] = {}
 
-        for lineno, row in enumerate(rows, 1):
+        # Each transaction remembers its statement line (backlog
+        # TJ-0124).
+        for lineno, row in self.rows_noting_lines(
+                transactions, enumerate(rows, 1), lambda x: x[0]):
             if not row:
                 continue
 
@@ -3949,12 +4054,15 @@ class IbBrokerage(BaseBrokerage):
                 date, time, broker_time = _ib_market_trade_date(
                     date, time, asset_cat, currency, _listing,
                     symbol=symbol)
-                # Settled in the listing's market (lib/dates.market_of,
-                # the rule every parser shares): a USD unit on the TSX
-                # through CDS, a USD line on the LSE on the UK cycle.
+                # Settled in the listing's market (lib/dates.
+                # settlement_calendar, the rule every parser shares): a
+                # USD unit on the TSX through CDS on the days both Canada
+                # and the US settle, a USD line on the LSE on the UK
+                # cycle.
                 date_settle = get_ib_settlement(
                     date, asset_cat,
-                    market_of(f".{_listing}" if _listing else "", currency),
+                    settlement_calendar(
+                        f".{_listing}" if _listing else "", currency),
                     futures_settle=self.futures_settle)
                 qty = _num('Quantity')
                 opt_exp = section == 'Options Expirations'
@@ -6093,8 +6201,13 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
                 comm = _n(d.get('Comm/Fee', ''), 'Comm/Fee', where)
                 ccur = (d.get('Currency') or quote).strip()
             if abs(comm) > 1e-9:
-                out.append(CE.flow(day, ccur, comm, where=where,
-                                   desc=f"Forex {sym} commission"))
+                # `_fee_of`: the conversion it was charged on — in the
+                # base currency it is part of the amount paid or
+                # received (lib/fx_cash_v2, backlog TJ-0456).
+                ev = CE.flow(day, ccur, comm, where=where,
+                             desc=f"Forex {sym} commission")
+                ev['_fee_of'] = where
+                out.append(ev)
         elif sec == 'Deposits & Withdrawals':
             cur = (d.get('Currency') or '').strip()
             if not _IB_CUR_RE.match(cur):

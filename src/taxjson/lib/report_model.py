@@ -28,7 +28,6 @@ is reserved for per-share / per-unit / quantity columns.
 
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -601,8 +600,12 @@ def gains_basis_label(files) -> str:
     paths = list(files.values() if hasattr(files, "values") else files)
     if any(Path(p).name.endswith("_gains_all.json") for p in paths):
         # The full-history file a windowed view reads for a window
-        # outside the tax year (taxjson_run _gains_all_file).
-        return "pre-wash, full history"
+        # outside the tax year (taxjson_run _gains_all_file): the
+        # engine's own denials are in it, each account's alone (the
+        # cross-account pass is the tax year's). "pre-wash" read as no
+        # superficial-loss rule over a DENIED column that showed one
+        # (backlog TJ-0452).
+        return "denials within each account, full history"
     if any(Path(p).name.endswith("_gains_wash.json") for p in paths):
         return "wash-adjusted"
     return "pre-wash"

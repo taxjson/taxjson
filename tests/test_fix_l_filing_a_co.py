@@ -13,8 +13,8 @@ from datetime import date
 from pathlib import Path
 
 from taxjson.bin import taxjson_filed as F
-from taxjson.bin.taxjson_carryover import (build_canada_ledger, load_claimed,
-                                           main, render, yearly_nets)
+from taxjson.bin.taxjson_carryover import (build_canada_ledger, main, render,
+                                           yearly_nets)
 from taxjson.lib import checklist as cl
 from tax_rules import rule
 
@@ -184,8 +184,10 @@ class TestAggregatePins(unittest.TestCase):
         {"action": "BUYSELL", "symbol": "C.TO", "qty": 1, "gain": 7.5,
          "proceeds": 57.5, "cost": 50.0, "date": "2025-04-01",
          "date_settle": "2025-04-02"},
-        {"action": "DIVIDEND", "dividend": 30.0, "pil": 0.0},
-        {"action": "DIVIDEND_IN_LIEU", "dividend": 0.0, "pil": 12.0}]}
+        {"action": "DIVIDEND", "date": "2025-05-01", "dividend": 30.0,
+         "pil": 0.0},
+        {"action": "DIVIDEND_IN_LIEU", "date": "2025-05-01", "dividend": 0.0,
+         "pil": 12.0}]}
 
     def test_aggregates(self):
         a = F.aggregates_from_gains(self.DOC, year=2025)

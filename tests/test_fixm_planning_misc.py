@@ -417,9 +417,13 @@ class TestListAsOfSaysPerAccount(unittest.TestCase):
             t = _cli(root, "list", "--date", "2025-06-30")
             h = _cli(root, "list", "--help")
         self.assertEqual(j.returncode, 0, j.stderr)
-        self.assertIn("per-account ACB", json.loads(j.stdout)["basis"])
-        self.assertIn("ZZZ.TO", t.stderr)
-        self.assertIn("s.47", t.stderr)
+        # The run's own pass (backlog TJ-0417): each account's share of
+        # the s.47 ACB, so no per-account label or note.
+        doc = json.loads(j.stdout)
+        self.assertNotIn("per-account", doc["basis"])
+        self.assertEqual({r["account"]: r["cost"] for r in doc["rows"]},
+                         {"acctA": 2000.0, "acctB": 2000.0})
+        self.assertNotIn("s.47", t.stderr)
         self.assertNotIn("full ACB", h.stdout)
 
 

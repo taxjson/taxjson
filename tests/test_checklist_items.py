@@ -145,7 +145,7 @@ class TestCoverage(unittest.TestCase):
         _p, sub = _build_parser()
         self.assertNotIn("quick-start", sub.choices)
         with self.assertRaises(ImportError):
-            import taxjson.lib.quick_start  # noqa: F401
+            import taxjson.lib.quick_start  # noqa: F401  (the import is the test: it must fail)
 
     def test_next_is_the_first_open_item_then_one_to_confirm(self):
         rs = [cl.Result("install", "done"), cl.Result("fees", "manual"),

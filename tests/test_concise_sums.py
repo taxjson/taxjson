@@ -125,8 +125,13 @@ class TestT1135(unittest.TestCase):
         assert_concise(self, r.stdout, r.stderr, budget=6,
                        legend="Amounts are cost (ACB)")
         self.assertIn("Maximum total cost in 2024: ", r.stdout)
-        self.assertIn("=> below the 100,000.00 CAD threshold", r.stdout)
-        self.assertIn("! BTC, ETH: crypto, check where held", r.stdout)
+        # The crypto account's US dollars are a cash row (tax-logic
+        # CA-RPT-20) whose cost the FX-on-cash ledger v2 cannot give
+        # (no CASHOPEN line): below the threshold, not settled.
+        self.assertIn("=> NOT SETTLED: below the 100,000.00 CAD threshold",
+                      r.stdout)
+        self.assertIn("! BTC, ETH, USD cash (crypto): crypto, check where "
+                      "held", r.stdout)
         d = _run("canada", "t1135", "--details")
         flat = _flat(d.stdout)
         self.assertIn("Registered accounts (RRSP/TFSA/...) are excluded",

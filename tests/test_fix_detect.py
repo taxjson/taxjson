@@ -7,8 +7,6 @@ coinbase/kraken) only when no content signature matched. A file matching
 two signatures is an error naming both; `taxjson run` prints how every
 file was detected. All data here is synthetic.
 """
-import contextlib
-import io
 import os
 import subprocess
 import sys

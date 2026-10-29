@@ -300,9 +300,14 @@ class TestNotOwnPairing(unittest.TestCase):
 
     @rule("US-BASIS-05")
     def test_tj0075_the_us_custody_pairing_leaves_the_legs_alone(self):
+        # The lot carry reads the arrival stage's pairing (backlog
+        # TJ-0269), NOTOWN lines and all.
         from taxjson.bin.taxjson_run import _custody_pairing
+        accounts = {"qa": {"type": "taxable"}, "qb": {"type": "taxable"}}
         with tempfile.TemporaryDirectory() as td:
-            cache = Path(td)
+            root = Path(td)
+            cache = root / "work"
+            cache.mkdir()
             for acct, d, q in (("qa", "2024-03-01", -100.0),
                                ("qb", "2024-03-16", 100.0)):
                 (cache / f"{acct}_questrade_transfers.json").write_text(
@@ -313,14 +318,14 @@ class TestNotOwnPairing(unittest.TestCase):
                         "transactions": [{"action": "TRANSFER",
                                           "symbol": "ZZQ.US",
                                           "quantity": q, "date": d}]}))
-            moves, _ = _custody_pairing(["qa", "qb"], cache)
-            self.assertEqual([(m["from"], m["to"]) for m in moves],
-                             [("qa", "qb")])
-            moves, unpaired = _custody_pairing(
-                ["qa", "qb"], cache,
-                not_own={("qa", "ZZQ.US", "2024-03-01", -100.0),
-                         ("qb", "ZZQ.US", "2024-03-16", 100.0)})
-            self.assertEqual((moves, unpaired), ([], []))
+            moves, _ = _custody_pairing(root, cache, accounts)
+            self.assertEqual([(m["from"], m["to"], m["slow"])
+                              for m in moves], [("qa", "qb", 15)])
+            (root / "inputs" / "qb").mkdir(parents=True)
+            (root / "inputs" / "qb" / "notown.tt").write_text(
+                "NOTOWN 2024-03-16 ZZQ.US 100 qa 2024-03-01\n")
+            moves, partial = _custody_pairing(root, cache, accounts)
+            self.assertEqual((moves, partial), ([], []))
 
 
 # --------------------------------------------------------------- the run

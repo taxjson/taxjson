@@ -731,10 +731,15 @@ class TestListAsOf(unittest.TestCase):
                             7000.0, "USD")]}
         with tempfile.TemporaryDirectory() as td:
             p = projects_both(td, year=2025)
+            from _runbooks import run_books
             for c, root in p.items():
                 (root / "work").mkdir(exist_ok=True)
+                # A base book's rows carry their account (the US engine
+                # keeps lots per account).
                 (root / "work" / "margin_base.json").write_text(
-                    json.dumps({"transactions": rows[c]}))
+                    json.dumps({"transactions": [dict(r, account="margin")
+                                                 for r in rows[c]]}))
+                run_books(root)
             r = cli_both(p, "list", "--date", "2025-12-31", "--json")
             for c in p:
                 self.assertEqual(r[c].returncode, 0, r[c].stderr)
@@ -759,10 +764,12 @@ class TestListAsOfOwnerCalls(unittest.TestCase):
                 _bt("2025-04-01", "2025-04-02", sym, -2, 600.0, "CAD"),
                 _bt("2025-04-10", "2025-04-11", sym, 2, 500.0, "CAD")]
         with tempfile.TemporaryDirectory() as td:
+            from _runbooks import run_books
             root = projects_both(td, year=2025)["canada"]
             (root / "work").mkdir(exist_ok=True)
             (root / "work" / "margin_base.json").write_text(
                 json.dumps({"transactions": rows}))
+            run_books(root)
             r = cli(root, "list", "--date", "2025-12-31", "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             row = [x for x in json.loads(r.stdout)["rows"]

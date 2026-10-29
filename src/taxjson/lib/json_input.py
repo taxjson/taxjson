@@ -171,6 +171,12 @@ INCOME_ROW_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU")
 # manual_reporting_required) is reported by hand from its date and units.
 DISPOSITION_FIELDS = ("qty", "gain")
 MANUAL_ROW_FIELDS = ("qty",)
+# The amount an income row is booked by (any of them; an explicit 0
+# counts): a DIVIDEND's `dividend`, a payment in lieu's `pil` (or its
+# `dividend`, a Canadian dealer's s.260 deemed dividend). A row without
+# one was read as income 0 (backlog TJ-0495).
+INCOME_AMOUNT_FIELDS = {"DIVIDEND": ("dividend",),
+                        "DIVIDEND_IN_LIEU": ("pil", "dividend")}
 
 
 def gains_row_kind(row: Dict[str, Any]) -> str:
@@ -187,8 +193,11 @@ def gains_row_kind(row: Dict[str, Any]) -> str:
 def check_gains_rows(rows, path, key: str = "transactions") -> None:
     """InputFileError naming the file and row when a computed
     disposition lacks its units, its gain or a date (DISPOSITION_FIELDS
-    and date / date_settle: absent, null or empty), or a manual row its
-    units or date (issue #17).
+    and date / date_settle: absent, null or empty), a manual row its
+    units or date (issue #17), or an income row its amount
+    (INCOME_AMOUNT_FIELDS; an explicit 0 is an amount) or date (backlog
+    TJ-0495: T1135 read a DIVIDEND without its amount as income 0 and
+    dropped an undated one).
     The readers skipped such a row in silence — a valid neighbour made
     the document look like a gains file — and the export or total left
     the disposition out at exit 0. One contract for every filing and
@@ -200,17 +209,22 @@ def check_gains_rows(rows, path, key: str = "transactions") -> None:
             continue
         kind = gains_row_kind(r)
         if kind == "income":
-            continue
-        need = DISPOSITION_FIELDS if kind == "disposition" \
-            else MANUAL_ROW_FIELDS
-        missing = [f for f in need
-                   if r.get(f) is None
-                   or (isinstance(r.get(f), str) and not r[f].strip())]
+            amt = INCOME_AMOUNT_FIELDS[r.get("action")]
+            missing = ([" or ".join(amt)]
+                       if all(r.get(f) is None for f in amt) else [])
+        else:
+            need = DISPOSITION_FIELDS if kind == "disposition" \
+                else MANUAL_ROW_FIELDS
+            missing = [f for f in need
+                       if r.get(f) is None
+                       or (isinstance(r.get(f), str) and not r[f].strip())]
         if not any(isinstance(r.get(f), str) and r[f].strip()
                    for f in ("date", "date_settle")):
             missing.insert(0, "date")
         if missing:
             what = ("a disposition" if kind == "disposition"
+                    else f"an income row ({r.get('action')})"
+                    if kind == "income"
                     else "an unknown-cost (tainted) row")
             raise InputFileError(
                 f'{path}: "{key}" row {i} ({r.get("symbol") or "?"} '
@@ -304,6 +318,29 @@ def load_transactions_or_exit(prog: str, path, *, exit_code: int = 2):
 
 # The row lists and the summary a pipeline artifact in work/ may carry.
 _WORK_ROW_LISTS = ("transactions", "inventory", "manual_reporting_required")
+# What every gains file the engine writes carries (each may be empty).
+_GAINS_PARTS = ("transactions", "inventory", "summary")
+
+
+def is_gains_name(name: str) -> bool:
+    """A gains artifact's file name: `<acct>_gains.json`,
+    `<acct>_gains_wash.json` (and the raw books' `_raw_gains.json`,
+    `_raw_base_gains.json`)."""
+    return name.endswith(("_gains.json", "_gains_wash.json"))
+
+
+def check_gains_parts(doc: Dict[str, Any], path) -> None:
+    """InputFileError when `doc`, read from a gains file (is_gains_name),
+    has none of its transactions, inventory and summary. The engine
+    writes all three (each may be empty): a gains file without any is
+    damaged, never an empty book — shares, list, sanity and wash-sales
+    read `{}` as no positions at exit 0 (backlog TJ-0412)."""
+    p = Path(path)
+    if is_gains_name(p.name) and not any(k in doc for k in _GAINS_PARTS):
+        raise InputFileError(
+            f'{p}: a gains file with none of "transactions", '
+            f'"inventory", "summary" (keys: '
+            f"{', '.join(sorted(map(str, doc))) or 'none'}): damaged")
 
 
 def read_work_doc(path) -> Dict[str, Any]:
@@ -315,6 +352,7 @@ def read_work_doc(path) -> Dict[str, Any]:
     each of those (audit S042-18)."""
     doc = read_json_doc(path, list_key="transactions")
     p = Path(path)
+    check_gains_parts(doc, p)
     for key in _WORK_ROW_LISTS:
         rows = doc.get(key)
         if rows is None:

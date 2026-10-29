@@ -25,7 +25,6 @@ import contextlib
 import math
 from taxjson.lib.stage_msg import emit_line
 import json
-import os
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -288,16 +287,27 @@ def latest_rate(history: Dict[str, Dict], cur: str,
     return float(dates[d]), d
 
 
-def _usable_price(value) -> bool:
-    """A live quote is a finite number above 0: NaN (IB's 'no price'),
-    an infinity, zero, a negative or a non-number is not a price — the
-    next candidate or tier is asked (audit finding 57: `x == x` let
-    +inf through and stopped the fallback)."""
+def _money(value) -> Optional[float]:
+    """THE price-value rule, shared by the live tiers and the caches:
+    `value` as a float when it is a finite number above 0, else None.
+    NaN (IB's 'no price'), an infinity, zero, a negative or a non-number
+    is not a price (audit finding 57: `x == x` let +inf through), and
+    neither is a bool — JSON `true` is not a price of 1 (backlog
+    TJ-0577: float(True) is 1.0, so a tier or a damaged cache entry
+    that said `true` was quoted and cached at 1)."""
+    if isinstance(value, bool):
+        return None
     try:
         f = float(value)
     except (TypeError, ValueError):
-        return False
-    return math.isfinite(f) and f > 0
+        return None
+    return f if math.isfinite(f) and f > 0 else None
+
+
+def _usable_price(value) -> bool:
+    """A live quote is a usable price (`_money`): otherwise the next
+    candidate or tier is asked."""
+    return _money(value) is not None
 
 
 def _ibkr_cache_spelling(sym: str) -> str:
@@ -308,6 +318,20 @@ def _ibkr_cache_spelling(sym: str) -> str:
     serves offline; remapped, it is not, and the entry is a miss for the
     remapped spelling (audit finding 69, issue #82)."""
     return yf_symbol_for(sym) or sym
+
+
+def _ibkr_currency(sym: str) -> Optional[str]:
+    """The currency of an IBKR hit for `sym`: the contract's, which is
+    the symbol's own listing's (`_ibkr_fetcher` asks for
+    Stock(root, 'SMART', quote_currency(sym))). It travels with the
+    quote, so a QUOTE line that remaps the Yahoo spelling to another
+    listing (SYN.US -> SYN.TO) no longer lends the native USD price the
+    remapped listing's CAD (backlog TJ-0578). None for a market that
+    quotes in pence/cents (.L/.JO/.TA): IB's figure does not say which,
+    and a unit-less quote there is refused (A2-0692)."""
+    if minor_unit_listing(sym):
+        return None
+    return quote_currency(sym)
 
 
 def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
@@ -682,15 +706,23 @@ def _load_cache(path: Path) -> Dict[str, dict]:
 
 
 def _cached_price(rec) -> Optional[float]:
-    """A cache entry's price, or None when it is not a finite number
-    above 0 — a missing, null, zero, negative, NaN or text price in a
-    hand-edited or damaged cache is a cache MISS, never a 0.0 quote
-    (audit R1-156 / R1-244: harvest showed a -100% LOSS)."""
+    """A cache entry's price, or None when it is not a usable price
+    (`_money`) — a missing, null, zero, negative, NaN, text or boolean
+    price in a hand-edited or damaged cache is a cache MISS, never a 0.0
+    quote (audit R1-156 / R1-244: harvest showed a -100% LOSS) nor a
+    1.0 one (TJ-0577)."""
     try:
-        p = float(rec.get("price"))
-    except (TypeError, ValueError, AttributeError):
+        return _money(rec.get("price"))
+    except AttributeError:
         return None
-    return p if math.isfinite(p) and p > 0 else None
+
+
+# How far ahead of today a cached quote's date may be: one day, for a
+# cache written on a machine whose date was already tomorrow (a project
+# folder shared across time zones). A date further ahead is not a quote
+# anyone fetched — a damaged or hand-edited entry — and is a miss
+# (backlog TJ-0576: an entry dated 2099 was served as current).
+CACHE_CLOCK_SKEW_DAYS = 1
 
 
 def _iso_day_in(day: str, start: str, end: str) -> bool:
@@ -742,9 +774,13 @@ def fetch_prices(pairs: Dict[str, str], *,
     currency)} or {sym: (price, source_label, currency, spelling)} —
     `spelling` is the one the tier actually priced, cached in place of
     the asked one (the IBKR tier prices the symbol's own listing, never
-    a QUOTE remap). A price that is not a finite number above 0 is
-    skipped: the next tier is asked and nothing is cached. `offline` forces the TAXJSON_OFFLINE policy decision
-    (None: the switch applies unless test fetchers are injected).
+    a QUOTE remap), and whose unit decides a pence/cents market. A price
+    that is not a finite number above 0 (or is a bool) is skipped: the
+    next tier is asked and nothing is cached. A cache entry is served
+    only when its price, its unit and its date (not after today, but for
+    CACHE_CLOCK_SKEW_DAYS) are usable. `offline` forces the
+    TAXJSON_OFFLINE policy decision (None: the switch applies unless
+    test fetchers are injected).
     """
     today = date.today().isoformat()
     quotes: Dict[str, PriceQuote] = {}
@@ -764,7 +800,7 @@ def fetch_prices(pairs: Dict[str, str], *,
         fetchers = []
         if use_ibkr:
             fetchers.append(lambda rem: {
-                s: (p, "ibkr", None, _ibkr_cache_spelling(s))
+                s: (p, "ibkr", _ibkr_currency(s), _ibkr_cache_spelling(s))
                 for s, p in _ibkr_fetcher(
                     list(rem), host=ibkr_host, port=ibkr_port,
                     verbose=verbose).items()})
@@ -788,13 +824,19 @@ def fetch_prices(pairs: Dict[str, str], *,
                 continue
             price, source = hit[0], hit[1]
             if not _usable_price(price):
-                # An infinity or NaN from any tier is not a quote: the
-                # next tier is asked, nothing is cached (finding 57).
+                # An infinity, NaN or bool from any tier is not a quote:
+                # the next tier is asked, nothing is cached (finding 57,
+                # TJ-0577).
                 emit_line(f"warning: price-chain: {source} quote for {sym}: "
                           f"{price!r} is not a usable price — ignored",
                           file=sys.stderr)
                 continue
-            price = float(price)
+            price = _money(price)
+            # The listing the tier actually priced: the IBKR tier asks
+            # for the symbol's own listing, never a QUOTE remap, so its
+            # unit is that listing's (TJ-0578), not the remapped one's.
+            listing = (hit[3] if len(hit) > 3 and hit[3]
+                       else pairs.get(sym) or sym)
             price, cur, problem = clean_quote_currency(
                 price, hit[2] if len(hit) > 2 else None)
             if problem:
@@ -808,7 +850,7 @@ def fetch_prices(pairs: Dict[str, str], *,
                           f"{problem} — not used; the next source is asked",
                           file=sys.stderr)
                 continue
-            if cur is None and minor_unit_listing(pairs.get(sym) or sym):
+            if cur is None and minor_unit_listing(listing):
                 # Pence or pounds? A unit-less quote for an LSE line is
                 # left for the next tier (Yahoo names the unit) and
                 # never cached (audit A2-0692).
@@ -850,6 +892,15 @@ def fetch_prices(pairs: Dict[str, str], *,
                        - datetime.strptime(asof, "%Y-%m-%d").date()).days
             except ValueError:
                 continue
+            if age < -CACHE_CLOCK_SKEW_DAYS:
+                # Dated after today: not a quote anyone fetched (a
+                # damaged or hand-edited entry) — a miss, never served
+                # as the freshest price there is (TJ-0576).
+                emit_line(f"warning: price cache entry for {sym} in "
+                          f"{cache_path} is dated {asof}, after today — "
+                          f"not used", file=sys.stderr)
+                continue
+            age = max(age, 0)
             price, cur, problem = clean_quote_currency(
                 price, rec.get("currency"))
             if problem:
@@ -996,11 +1047,22 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
                       file=sys.stderr)
             price = None
         if price is not None:
-            price, cur, _p = clean_quote_currency(price, rec.get("currency"))
-            cur = cur or (None if minor else quote_currency(quote_symbol))
-            if cur is not None:
-                return DayClose(price=price, currency=cur,
-                                day=rec_day, source="cache")
+            price, cur, problem = clean_quote_currency(price,
+                                                       rec.get("currency"))
+            if problem:
+                # The entry names a unit taxjson cannot read ('USd': a
+                # minor unit of unknown size): a miss, fetched again, as
+                # the live tier below refuses the same unit — never the
+                # listing's currency in its place (backlog TJ-0575).
+                emit_line(f"warning: price-chain: the close cache entry for "
+                          f"{symbol} ({quote_symbol}) on {day} in "
+                          f"{cache_path}: {problem} — not used",
+                          file=sys.stderr)
+            else:
+                cur = cur or (None if minor else quote_currency(quote_symbol))
+                if cur is not None:
+                    return DayClose(price=price, currency=cur,
+                                    day=rec_day, source="cache")
     if offline is None:
         offline = offline_enabled() and fetchers is None
     if offline:
@@ -1029,14 +1091,14 @@ def close_on(symbol: str, quote_symbol: str, day: str, *,
         days = sorted(d for d, px in hit.items()
                       if start <= str(d)[:10] <= day
                       and isinstance(px, (int, float))
-                      and math.isfinite(px) and px > 0)
+                      and _money(px) is not None)
         if not days:
             continue
         used = days[-1]
         # The provider's unit, normalised (pence -> pounds) by the one
         # table the live quote uses; one it names but taxjson cannot
         # read is refused, never replaced by the listing's currency.
-        price, cur, problem = clean_quote_currency(float(hit[used]), cur)
+        price, cur, problem = clean_quote_currency(_money(hit[used]), cur)
         if problem:
             emit_line(f"warning: price-chain: the close of {symbol} "
                       f"({quote_symbol}) on {used}: {problem} — not used",

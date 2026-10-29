@@ -8,7 +8,11 @@ account's filing aggregates (taxjson_filed.aggregates_from_gains).
 Three kinds:
 
 - `prev` (work/compare/prev/): the run before. Every full `taxjson run`
-  rotates the reports it is about to replace there (rotate_previous).
+  rotates the reports it is about to replace there (rotate_previous). A
+  `taxjson run --account` rebuilds one account's reports only: the first
+  one after a full run keeps that run's reports as `prev`, and the full
+  run after it leaves them there, so `prev` is always a full run's
+  (backlog TJ-0254).
 - a saved one (work/compare/<name>/, `taxjson compare --save NAME`): a
   baseline kept until `--delete NAME`, say before a batch of exports is
   replaced.
@@ -26,6 +30,7 @@ from __future__ import annotations
 import difflib
 import errno
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -40,6 +45,11 @@ VERSION = 1
 SNAPSHOT_FILE = "snapshot.json"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 RESERVED = (PREV, FILED)
+# reports/ mix a `taxjson run --account` into the last full run's: the
+# accounts it rebuilt, one per line, under work/compare/ (a leading dot
+# is no snapshot name). Written by rotate_previous for a single-account
+# run; removed when a full run completes (full_run_done).
+PARTIAL_MARK = ".partial-run"
 
 # A report line that says when the file was written, not what it holds
 # (`Generated:  2026-...` in a .rpt, `generated_at = ...` in a holdings
@@ -183,6 +193,11 @@ def take(root: Path, cfg: Dict[str, Any], dest: Path, kind: str,
            "files": fp,
            "accounts": aggregates(root, cfg, warn_stale=warn_stale),
            "reports": sorted(files)}
+    partial = partial_accounts(root)
+    if partial:
+        # Reports a `run --account` partly rebuilt (`compare --save`
+        # then): said, never passed off as one run's (backlog TJ-0254).
+        doc["partial_accounts"] = partial
     from taxjson.lib.safe_write import write_atomic
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -249,16 +264,52 @@ def _publish(stage: Path, dest: Path) -> None:
         shutil.rmtree(aside.parent, ignore_errors=True)
 
 
-def rotate_previous(root: Path, cfg: Dict[str, Any]) -> bool:
-    """Called by a full `taxjson run` before it writes: the reports it
-    is about to replace become the `prev` snapshot. True when kept;
-    CompareError naming the path when reports/ cannot be read (the run
-    warns that the previous reports were not kept). A wash file a `run
-    --account` left stale is not warned about: this run rebuilds it,
-    and the warnings said `taxjson run` to the run doing it (backlog
-    TJ-0154)."""
-    return take(Path(root), cfg, snap_dir(root, PREV), "previous run",
-                warn_stale=False) is not None
+def partial_accounts(root: Path) -> List[str]:
+    """The accounts a `taxjson run --account` rebuilt since the last
+    full run (PARTIAL_MARK); [] when reports/ are one full run's."""
+    try:
+        text = (snapshots_dir(root) / PARTIAL_MARK).read_text(
+            encoding="utf-8")
+    except (OSError, UnicodeError):
+        return []
+    return sorted({ln.strip() for ln in text.splitlines() if ln.strip()})
+
+
+def rotate_previous(root: Path, cfg: Dict[str, Any],
+                    account: Optional[str] = None) -> bool:
+    """Called by `taxjson run` before it writes: the reports a full run
+    is about to replace become the `prev` snapshot. A single-account
+    run (`account`) replaces part of them: the first one after a full
+    run keeps that run's reports as `prev` and records the account
+    (PARTIAL_MARK); a full run after it leaves `prev` alone, the reports
+    it replaces being partial. `prev` recorded the mixed reports as
+    "the run before" (backlog TJ-0254). True when `prev` holds the run
+    before; CompareError naming the path when reports/ cannot be read
+    (the run warns that the previous reports were not kept). A wash
+    file a `run --account` left stale is not warned about: this run
+    rebuilds it, and the warnings said `taxjson run` to the run doing
+    it (backlog TJ-0154)."""
+    root = Path(root)
+    partial = partial_accounts(root)
+    kept = True
+    if not partial:
+        kept = take(root, cfg, snap_dir(root, PREV), "previous run",
+                    warn_stale=False) is not None
+    if account:
+        from taxjson.lib.safe_write import write_atomic
+        snapshots_dir(root).mkdir(parents=True, exist_ok=True)
+        write_atomic(snapshots_dir(root) / PARTIAL_MARK,
+                     "\n".join(sorted(set(partial) | {str(account)}))
+                     + "\n")
+    return kept
+
+
+def full_run_done(root: Path) -> None:
+    """A full `taxjson run` completed: reports/ are one run's again."""
+    try:
+        (snapshots_dir(root) / PARTIAL_MARK).unlink()
+    except OSError:
+        pass
 
 
 def save(root: Path, cfg: Dict[str, Any], name: str) -> Dict[str, Any]:
@@ -384,8 +435,17 @@ def load(root: Path, cfg: Dict[str, Any], name: str
     return doc, d / "reports"
 
 
+def _finite(v: Any) -> bool:
+    """A real, finite number (not a boolean, not text)."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v))
+
+
 def _what(v: Any) -> str:
     return ("a table" if isinstance(v, dict) else
+            "NaN" if isinstance(v, float) and math.isnan(v) else
+            "an infinite number" if isinstance(v, float)
+            and math.isinf(v) else
             "a list" if isinstance(v, list) else
             "text" if isinstance(v, str) else
             "null" if v is None else
@@ -397,9 +457,11 @@ def _what(v: Any) -> str:
 def _check_snapshot(doc: Any, name: str) -> None:
     """CompareError naming the field when `doc` is not the shape
     `compare` and `list_snapshots` read: `files` a table, `accounts`
-    (when present) a table of tables, `reports` a list, `kind` and
-    `taken` text. A snapshot whose `accounts` was a list passed and
-    the comparison died on it (audit 2026-10-24 A48)."""
+    (when present) a table of tables whose figures (FIGURES) are
+    finite numbers, `reports` a list, `kind` and `taken` text. A
+    snapshot whose `accounts` was a list passed and the comparison died
+    on it (audit 2026-10-24 A48); a NaN figure compared as unchanged
+    with any amount (backlog TJ-0567)."""
     def bad(field: str, found: Any, want: str) -> CompareError:
         return CompareError(
             f"work/compare/{name}/{SNAPSHOT_FILE} is not a snapshot "
@@ -416,6 +478,10 @@ def _check_snapshot(doc: Any, name: str) -> None:
         for a, v in acc.items():
             if not isinstance(v, dict):
                 raise bad(f"accounts.{a}", v, "a table of figures")
+            for k, _kind in FIGURES:
+                f = v.get(k)
+                if f is not None and not _finite(f):
+                    raise bad(f"accounts.{a}.{k}", f, "a finite number")
     rep = doc.get("reports")
     if rep is not None and not isinstance(rep, list):
         raise bad("reports", rep, "a list of file names")
@@ -437,6 +503,10 @@ def _differs(a: Any, b: Any, kind: str) -> bool:
     fa, fb = _num(a), _num(b)
     if fa is None or fb is None:
         return a != b
+    if not (math.isfinite(fa) and math.isfinite(fb)):
+        # abs(NaN - x) > tolerance is False: a NaN was "unchanged"
+        # (backlog TJ-0567).
+        return not (fa == fb)
     return abs(fa - fb) > (0.005 if kind == "money" else 0.5)
 
 
@@ -502,12 +572,18 @@ def compare(root: Path, cfg: Dict[str, Any], name: str = PREV, *,
     # An account figure that moved is a difference even when every
     # report file matches (audit finding 66: the table was hidden and
     # the exit was 0).
+    _pb = doc.get("partial_accounts")
     out = {"against": name, "kind": doc.get("kind") or "saved",
            "taken": doc.get("taken") or "",
            "different": bool(changed or reports["added"]
                              or reports["removed"] or rows),
            "accounts": rows, "unchanged_accounts": unchanged,
-           "reports": reports, "inputs": inputs}
+           "reports": reports, "inputs": inputs,
+           # A `run --account` since the last full run: in reports/ now,
+           # or in the snapshot (backlog TJ-0254).
+           "partial_now": partial_accounts(root),
+           "partial_before": ([str(a) for a in _pb]
+                              if isinstance(_pb, list) else [])}
     if details:
         diffs = {}
         for n in changed:
@@ -614,6 +690,13 @@ def render(doc: Dict[str, Any], *, details: bool = False) -> List[str]:
                      f"{_names(inp['removed'])}")
     kv.append(("Inputs", "; ".join(parts) if parts else
                f"unchanged ({inp['same']} files)"))
+    for _who, _accts in (("reports/", doc.get("partial_now") or []),
+                         (_against(doc), doc.get("partial_before") or [])):
+        if _accts:
+            kv.append(("Partial", f"{_who} hold a `taxjson run --account "
+                       f"{', '.join(_accts)}` over the last full run's: "
+                       f"the other accounts' and the combined reports are "
+                       f"that full run's"))
     lines += _out.kv_lines(kv)
     if details and doc.get("diffs"):
         for text in doc["diffs"].values():

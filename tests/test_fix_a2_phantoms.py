@@ -406,8 +406,9 @@ class TestStaleMissingHistoryEntries(unittest.TestCase):
                          "--year", "2024", "--missing-history", ph, base)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("REMOVE from missing_history.tt", r.stdout)
-            self.assertIn("missing_history.tt LISTS it: remove that entry",
-                          r.stdout)
+            # (the line it is on, backlog TJ-0165)
+            self.assertIn("inputs/margin/missing_history.tt:1 LISTS it: "
+                          "remove that entry", r.stdout)
             self.assertNotIn("No missing-cost-basis issues", r.stdout)
 
     def test_checklist_turns_attention_on_a_stale_entry(self):
@@ -596,6 +597,10 @@ class TestOwnAccountCustodyMove(unittest.TestCase):
                           for m in moves], [("XYZ.US", "qa", "qb", 100.0)])
 
     def test_unrelated_legs_are_not_a_move(self):
+        # The June transfer-in is three months after the transfer-out:
+        # never its other leg. The 50 that arrived the next day pair
+        # with 50 of the transfer-out, as the arrival stage reads them
+        # (one pairing, backlog TJ-0269): their lots go to qb.
         from taxjson.bin.taxjson_run import own_account_custody_moves
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
@@ -607,8 +612,10 @@ class TestOwnAccountCustodyMove(unittest.TestCase):
                  "quantity": 50.0, "date": "2026-03-03"},
                 {"action": "TRANSFER", "symbol": "XYZ.US",
                  "quantity": 100.0, "date": "2026-06-03"}])
-            self.assertEqual(own_account_custody_moves(["qa", "qb"], cache),
-                             [])
+            self.assertEqual(
+                [(m["from"], m["to"], m["qty"], m["date_in"])
+                 for m in own_account_custody_moves(["qa", "qb"], cache)],
+                [("qa", "qb", 50.0, "2026-03-03")])
 
     @rule("US-BASIS-05")
     @rule_absent("US-BASIS-05", country="canada")

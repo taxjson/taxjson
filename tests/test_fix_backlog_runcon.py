@@ -216,6 +216,28 @@ class TestInKindNotBooked(unittest.TestCase):
         self.assertEqual(step["effective"], "attention", step)
         self.assertIn("in-kind", step["detail"])
 
+    def test_form_export_json_readiness(self):
+        """TJ-0251 (TJ-0375): form-export --json carries the same
+        readiness record as sum --json."""
+        r = _cli(self.root, "form-export", "--json")
+        doc = json.loads(r.stdout)
+        kinds = [i["kind"] for i in doc["readiness"]["issues"]]
+        self.assertIn("in-kind-not-booked", kinds)
+        self.assertFalse(doc["readiness"]["complete"])
+        s = json.loads(_cli(self.root, "sum", "--json").stdout)
+        self.assertEqual(sorted(kinds), sorted(
+            i["kind"] for i in s["readiness"]["issues"]))
+
+    def test_form_export_text_has_an_act_line(self):
+        """TJ-0251: and a `! ` line in its text view."""
+        r = _cli(self.root, "form-export", width="120")
+        acts = [ln for ln in r.stdout.splitlines() if ln.startswith("! ")]
+        self.assertTrue(any("in-kind move" in a and "NOT booked" in a
+                            and "tjs transfers" in a for a in acts),
+                        r.stdout)
+        r = _cli(self.root, "form-export", "--details", width="120")
+        self.assertIn("NOT in these rows", r.stdout)
+
     def test_readiness_build(self):
         from taxjson.lib import readiness as RD
         self.assertTrue(RD.build()["complete"])

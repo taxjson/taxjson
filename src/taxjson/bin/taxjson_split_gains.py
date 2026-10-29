@@ -27,7 +27,8 @@ Per-account content:
   inventory_year_end
                   the same: US rows filtered by `account`, Canada's
                   pools apportioned by the account's balance at the
-                  year end
+                  year end (`inventory_year_end_basis`, when present,
+                  copied)
 """
 
 import argparse
@@ -108,9 +109,13 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
 
 def _split_inventory(rows: List[Dict[str, Any]], account: str,
                      book: Optional[List[dict]], starts: Dict[str, str],
-                     until: str) -> List[Dict[str, Any]]:
+                     until: str, date_basis: str = "settle"
+                     ) -> List[Dict[str, Any]]:
     """The account's inventory rows: its own (US per-account lots), and
-    its share of each blended pool by its balance at the end of `until`."""
+    its share of each blended pool by its balance at the end of `until`
+    (on `date_basis`: the pools' own, a trade-date project's year end on
+    trade dates, backlog TJ-0343; `taxjson list --date` gives the
+    project's)."""
     inventory: List[Dict[str, Any]] = []
     for row in rows:
         row_acct = row.get("account")
@@ -122,7 +127,8 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
         # own share count at the blended ACB per share.
         if book is None:
             continue
-        qty = balance_on(book, row.get("symbol", ""), until)
+        qty = balance_on(book, row.get("symbol", ""), until,
+                         date_basis=date_basis)
         total_qty = float(row.get("qty") or 0.0)
         if abs(qty) < 1e-9 or abs(total_qty) < 1e-9:
             continue
@@ -183,8 +189,11 @@ def split_for_account(combined: Dict[str, Any], account: str,
     # account's own, Canada's pools go by the account's balance at that
     # day (backlog TJ-0282, TJ-0284).
     _ye_year = str((combined.get("summary") or {}).get("year") or "")
-    ye_inventory = (_split_inventory(combined["inventory_year_end"],
-                                     account, book, {}, f"{_ye_year}-12-31")
+    ye_inventory = (_split_inventory(
+        combined["inventory_year_end"], account, book, {},
+        f"{_ye_year}-12-31",
+        "trade" if combined.get("inventory_year_end_basis") == "trade"
+        else "settle")
                     if "inventory_year_end" in combined and _ye_year
                     else None)
 
@@ -248,6 +257,12 @@ def split_for_account(combined: Dict[str, Any], account: str,
         "inventory": inventory,
         **({"inventory_year_end": ye_inventory}
            if ye_inventory is not None else {}),
+        # The date the year end was read on, when not the engine's walk
+        # date (a US settle or Canadian trade project, backlog TJ-0343).
+        **({"inventory_year_end_basis":
+            combined["inventory_year_end_basis"]}
+           if ye_inventory is not None
+           and "inventory_year_end_basis" in combined else {}),
         "summary": summary,
     }
     # The manual superficial-loss warnings (unknown-cost neighbours)

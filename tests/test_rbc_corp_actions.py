@@ -10,7 +10,6 @@ removed under a temp symbol + acquirer shares received). These tests pin that:
 import contextlib
 import io
 import os
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

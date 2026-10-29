@@ -19,7 +19,7 @@ import sys
 import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch

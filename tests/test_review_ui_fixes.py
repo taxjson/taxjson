@@ -445,7 +445,10 @@ class TestR6_CliRenderingHardening(unittest.TestCase):
 
     def test_list_date_warns_on_skipped_account(self):
         # #35: account with gains but no base.json vanished silently
-        # from the as-of view.
+        # from the as-of view. The view reads the cost timeline the run
+        # writes with each account's gains (backlog TJ-0417): gains with
+        # none (hand-made here, or an older taxjson's run) stop it, never
+        # a list without the account.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._proj(tmp)
             r = _run(root, "list", "--date", "2025-06-01")
@@ -462,8 +465,9 @@ class TestR6_CliRenderingHardening(unittest.TestCase):
                      "net_amount": 100.0, "currency": "CAD",
                      "account": "other"}]}))
             r = _run(root, "list", "--date", "2025-06-01")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("margin skipped", r.stderr)
+        self.assertNotEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no cost timeline for margin", r.stderr)
+        self.assertIn("taxjson run", r.stderr)
 
     def test_init_year_range_validated(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -139,6 +139,13 @@ class TestSettingsDocFiles(unittest.TestCase):
                 | set(tt._EVENT_ACTIONS))
         self.assertEqual(want - named, set())
 
+    def test_tt_tokens(self):
+        """Every `key=` token a .tt row line takes: the income facts
+        and a warrant exercise's exercise_of= (backlog TJ-0377)."""
+        sec = _section(SETTINGS, "## .tt files", level="## ")
+        want = {f"{k}=" for k in tt._FACT_KEYS} | {f"{tt.EXERCISE_KEY}="}
+        self.assertEqual({k for k in want if k not in sec}, set())
+
     def test_generic_mapping_vocabulary(self):
         sec = _section(SETTINGS, "## Generic importer mapping", level="## ")
         want = {f"[{s}]" for s in gen._SECTIONS}

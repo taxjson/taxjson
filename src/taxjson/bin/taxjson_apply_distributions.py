@@ -185,10 +185,17 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
             held[(acct, sym)] = held.get((acct, sym), 0.0) + (
                 float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0))
         elif act == "SPLIT":
-            ratio = float(t.get("quantity") or 0.0)
-            if not ratio or id(t) in _dup_splits:
+            if id(t) in _dup_splits:
                 continue
+            # A ratio of 0 is a rename only: the US engine skips its
+            # scaling and still moves the shares to symbol_new (core.py,
+            # the US SPLIT branch). Skipping the whole row left the
+            # shares under the old ticker and sized the new one's
+            # distribution on none (backlog TJ-0491).
+            ratio = float(t.get("quantity") or 0.0) or 1.0
             target = normalize_symbol_new(sym, t.get("symbol_new")) or sym
+            if ratio == 1.0 and target == sym:
+                continue
             for key in [k for k in held
                         if k[1] == sym and (not acct or k[0] == acct)]:
                 moved = held.pop(key) * ratio
@@ -560,7 +567,11 @@ def apply_distributions(doc: dict, map_rows, account: str,
         })
         from taxjson.lib.country import is_usa
         trouble = _stamp_problem(txs, sym, date, account, adj_date)
-        if trouble and is_usa(country):
+        # Only a per-lot engine (the US) misplaces it. Without --country
+        # the tool cannot tell which engine reads the book, so it says
+        # it: is_usa(None) raised and the documented call without a
+        # country crashed (backlog TJ-0508).
+        if trouble and (country is None or is_usa(country)):
             emit_line(f"warning: ATTENTION: [[distributions]] {key}{via} "
                       f"{date}: the basis adjustment is {trouble}.",
                       file=sys.stderr)
@@ -657,6 +668,17 @@ def main(argv=None) -> int:
         cli_diag.error(PROG, f"--account {args.account!r} is not an "
                              f"account of {args.base_json.name} (its rows "
                              f"carry {', '.join(map(repr, book_accounts))})")
+        return 2
+    if len(book_accounts) > 1:
+        # One book is one account's (`taxjson run` passes each taxable
+        # account's own): the record-date balance summed every account's
+        # shares and put the whole ADJUST on one of them, and a rebuild
+        # dropped the other accounts' rows (backlog TJ-0507).
+        cli_diag.error(PROG, f"{args.base_json.name} holds the rows of "
+                             f"{len(book_accounts)} accounts "
+                             f"({', '.join(map(repr, book_accounts))}): "
+                             f"size each account's own book (`taxjson "
+                             f"run` does), one file per account")
         return 2
     account = args.account or next(
         (t.get("account") for t in doc.get("transactions", [])

@@ -65,7 +65,10 @@ class TestFilingFigures(unittest.TestCase):
     @rule("CA-RPT-12")
     def test_R02_t1135_trade_basis_uses_trade_date_weights(self):
         """A purchase traded before the merger but settling after it
-        weighs on a trade-basis project."""
+        weighed on a trade-basis project's replay. The walk reads the
+        engine's pools now (backlog TJ-0417), and the engine refuses a
+        rename inside a trade's settlement lag, as `taxjson run` does."""
+        from taxjson.lib.core import SplitStraddlesSettlementError
         b = [tx('BUYSELL', '2025-01-01', 'ZZOLD.US', 10, 100, account='b', id='b'),
              tx('BUYSELL', '2025-06-02', 'ZZOLD.US', 10, 100, account='a',
                 settle='2025-06-04', id='a')]
@@ -73,10 +76,9 @@ class TestFilingFigures(unittest.TestCase):
                  account=a, symbol_new='ZZNEW.US', id='split-' + a)
               for a, ratio in [('a', 1), ('b', 2)]]
         b += [tx('BUYSELL', '2025-07-01', 'ZZNEW.US', -15, 150, id='sale')]
-        with contextlib.redirect_stderr(io.StringIO()):
-            r = walk_costs([t.to_dict() for t in b], 2025, {},
-                           tax_date='trade')
-        self.assertEqual(r['per_symbol']['ZZNEW.US']['year_end_cost'], 100)
+        with contextlib.redirect_stderr(io.StringIO()), \
+                self.assertRaises(SplitStraddlesSettlementError):
+            walk_costs([t.to_dict() for t in b], 2025, {}, tax_date='trade')
 
 
 class TestStats(unittest.TestCase):

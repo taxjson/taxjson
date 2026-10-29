@@ -83,7 +83,12 @@ class TestCoinbaseRewardEvidence(unittest.TestCase):
             self.assertFalse(ev['commission_known'])
             self.assertIsNone(ev['fee_value'])
             self.assertEqual(ev['commission_method'], 'unknown')
-        ev = income(coinbase(fee='0'))['staking_reward']
+        # A fee of 0 is a known commission (the Total is then the
+        # Subtotal: Total = Subtotal + fee, backlog TJ-0538).
+        ev = income(parse(
+            CoinbaseBrokerage(), 'cb_rewards.csv', CB_HEADER +
+            'c1,2025-07-16 08:21:37 UTC,Staking Income,ZZC,.2,CAD,200,40,'
+            '40,0,\n'))['staking_reward']
         self.assertTrue(ev['commission_known'])
         self.assertEqual(ev['fee_value'], 0)
 

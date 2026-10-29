@@ -272,7 +272,10 @@ class TestRunStyle(unittest.TestCase):
                      str(Path(tmp) / "p")], capture_output=True, text=True,
                     env=env(), cwd=tmp, stdin=subprocess.DEVNULL)
                 self.assertEqual(r.returncode, 0, r.stderr)
-                assert_styled(self, r.stdout, allow=("taxjson -C ",))
+                # The project's path cannot wrap; its length is the
+                # temp folder's (the gate's no-extras stage nests it).
+                assert_styled(self, r.stdout,
+                              allow=("taxjson -C ", str(Path(tmp) / "p")))
                 assert_styled(self, r.stderr)
                 # The next steps, one line each (docs/output-style.md,
                 # Essentials first): the commands to copy.

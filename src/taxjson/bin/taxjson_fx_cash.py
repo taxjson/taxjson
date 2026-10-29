@@ -50,8 +50,16 @@ from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
                                                    USD_STABLECOINS)
+from taxjson.lib.core import (IN_KIND_TYPES, OPENING_TYPE,
+                              TRANSFER_BOOK_VALUE_TYPE)
 
 CA_EXEMPTION = 200.0
+# The BUYSELL types that move securities and no cash (_non_cash): an
+# opening balance (a .tt OPENING line, `taxjson opening`) records a
+# position already held on the snapshot day, never a purchase (backlog
+# TJ-0622).
+_SECURITY_ONLY_TYPES = IN_KIND_TYPES + (TRANSFER_BOOK_VALUE_TYPE,
+                                        OPENING_TYPE)
 
 # Cash-moving actions and their direction. Sign-preserving amounts:
 # a negative dividend (reversal) disposes, a negative fee (rebate)
@@ -65,18 +73,32 @@ _OUTFLOW = ("TAX", "FEE")
 # stablecoins come from the parsers' shared list: PYUSD/GUSD were left
 # out here, so a Canadian PYUSD reward never entered the USD pool
 # (re-audit A2-0589). A US book's base is USD, so a US stablecoin flow
-# never reaches the ledger.
-def _cash_like(sym: str) -> bool:
-    """A fiat currency (the ONE fiat list, lib/markets) or a stablecoin
-    (live: ticker.map STABLE lines apply)."""
-    return sym in FIAT_CURRENCIES or sym in USD_STABLECOINS
+# never reaches the ledger — but one priced in another currency (a
+# Coinbase reward valued in EUR) did, until `stable_cash` said a US
+# project's stablecoin is property (backlog TJ-0493).
+def _cash_like(sym: str, stable_cash: bool = True) -> bool:
+    """A fiat currency (the ONE fiat list, lib/markets) or, when
+    `stable_cash` (Canada, CA-CRYPTO-02), a stablecoin (live: ticker.map
+    STABLE lines apply). A US project's stablecoin is property
+    (US-CRYPTO-02, US-FX-03)."""
+    return sym in FIAT_CURRENCIES or (stable_cash
+                                      and sym in USD_STABLECOINS)
 
 
-def _non_cash(tx: Dict[str, Any]) -> bool:
+def _non_cash(tx: Dict[str, Any], stable_cash: bool = True) -> bool:
     """A row whose consideration is PROPERTY, not currency (S003-05):
     it is valued in a currency for the gains engine, but no foreign
     cash changes hands, so it neither acquires nor disposes of any
-    under ITA s.39(1.1)."""
+    under ITA s.39(1.1). `stable_cash`: a USD stablecoin is US-dollar
+    cash (Canada); False, a US project's, it is property (a reward in
+    one moves no cash)."""
+    # Securities moved in kind (lib/in_kind: into or out of a
+    # registered plan at fair value; lib/transfer_in: arriving at the
+    # broker's book value): a BUYSELL that values the shares, with no
+    # cash leg — read as a trade it made up cash in the account or a
+    # debt it never had (backlog TJ-0494).
+    if (tx.get("type") or "") in _SECURITY_ONLY_TYPES:
+        return True
     desc = str(tx.get("description") or "")
     low = desc.lower()
     # Crypto-for-crypto: Kraken trade/instant-trade legs, Coinbase
@@ -91,7 +113,7 @@ def _non_cash(tx: Dict[str, Any]) -> bool:
     # acquisition row). A reward paid in fiat or a stablecoin is cash.
     if low.startswith("staking reward"):
         sym = str(tx.get("symbol") or "").upper().split(".")[0]
-        return not _cash_like(sym)
+        return not _cash_like(sym, stable_cash)
     # Corporate-action legs (share-for-share merger, spin-off ACB
     # allocation, taxable exchange at FMV): stock for stock. Their cash
     # (cash in lieu, boot) is the row's structured `corp_cash`, read by
@@ -103,7 +125,8 @@ def _non_cash(tx: Dict[str, Any]) -> bool:
     return False
 
 
-def _cash_legs(tx: Dict[str, Any]) -> List[tuple]:
+def _cash_legs(tx: Dict[str, Any], stable_cash: bool = True
+               ) -> List[tuple]:
     """[(currency, signed native flow)] a row moves through the ledger.
     A corporate-action row with `corp_cash` ("<amount> <CUR>; ...")
     received exactly that cash, in that currency, whatever its
@@ -114,7 +137,7 @@ def _cash_legs(tx: Dict[str, Any]) -> List[tuple]:
     basis, `_open_fee`; None on an opening part): an opening fee
     leaves the cash at the opening date's rate, not the close's
     (2026-10 audit #103); the total is unchanged. Any other row is
-    `_flows` in its own currency."""
+    `_flows` in its own currency (`stable_cash`: _non_cash)."""
     if (tx.get("type") or "") == "futures_settlement" and \
             "_open_fee" in tx and tx.get("action") == "BUYSELL":
         cur = str(tx.get("currency") or "").upper()
@@ -143,19 +166,20 @@ def _cash_legs(tx: Dict[str, Any]) -> List[tuple]:
                 continue
             out.append((bits[1].upper(), amt))
         return out
-    flow = _flows(tx)
+    flow = _flows(tx, stable_cash)
     if flow is None:
         return []
     return [(str(tx.get("currency") or "").upper(), flow)]
 
 
-def _flows(tx: Dict[str, Any]) -> Optional[float]:
+def _flows(tx: Dict[str, Any], stable_cash: bool = True
+           ) -> Optional[float]:
     """Signed cash flow of a transaction in its NATIVE currency:
     positive = cash received (acquires currency), negative = cash paid
     (disposes). None = not a cash event for this ledger."""
     action = tx.get("action")
     net = float(tx.get("net_amount") or 0.0)
-    if _non_cash(tx):
+    if _non_cash(tx, stable_cash):
         return None
     # ASSIGN: an assignment/exercise stock leg carrying the strike cash
     # (Webull books both legs ASSIGN; IB/RBC/Questrade book the stock
@@ -258,11 +282,12 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
         return {c: {"units": round(p[0], 2), "acb": round(p[1], 2)}
                 for c, p in sorted(pools.items()) if p[0] > 0.005}
 
-    def _walk_flow(tx, cur, flow) -> None:
+    def _walk_flow(tx, cur, flow, cost=None) -> None:
         if not cur or cur == base or not flow:
             return
         d = str(tx.get("date_settle") or tx.get("date") or "")
-        rate = _rate(cur, d)
+        rate = (flow and cost / flow) if cost is not None and flow > 0 \
+            else _rate(cur, d)
         if rate is None:
             unrated[cur] = unrated.get(cur, 0) + 1
             return
@@ -303,10 +328,25 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
                            "symbol": tx.get("symbol"),
                            "account": tx.get("account")})
 
+    # A reward paid in a currency (a USD stablecoin is US-dollar cash
+    # in Canada, CA-CRYPTO-02) that the export prices in another: its
+    # own units come in, at the income's value when that is in the base
+    # currency — as ledger v2 books it (backlog TJ-0038, TJ-0221).
+    from taxjson.lib.country import is_usa
+    from taxjson.lib.fx_cash_v2 import _reward_cash
+    stable_cash = bool(country) and not is_usa(country)
     for tx in rows:
         if pools_ye is None and str(tx.get("date_settle")
                                     or tx.get("date") or "") > year_end:
             pools_ye = _snap()           # the balance at Dec 31
+        rw = _reward_cash(tx, stable_cash)
+        if rw is not None:
+            v = abs(float(tx.get("gross_amount") or tx.get("net_amount")
+                          or 0.0))
+            _walk_flow(tx, rw[0], rw[1],
+                       v if str(tx.get("currency") or "").upper() == base
+                       else None)
+            continue
         for cur, flow in _cash_legs(tx):
             _walk_flow(tx, cur, flow)
 
@@ -438,7 +478,8 @@ def render_brief(doc: Dict[str, Any], base: str, year: int,
             for c, s in sorted(active.items(),
                                key=lambda kv: -kv[1]["disposed"])]
     foot = [["NET (NOT RELIABLE)", "", "", fmt_money(doc["net_gain"])]]
-    lines += out.fit_table(["CUR", "ACQUIRED", "DISPOSED", "GAIN(LOSS)"],
+    lines += out.fit_table(["CUR", "UNITS IN", "UNITS OUT",
+                            f"GAIN(LOSS) {base}"],
                            body, aligns=["<", ">", ">", ">"], foot=foot,
                            width_=w)
     lines.append("")
@@ -499,11 +540,15 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
             for c, s in sorted(active.items(),
                                key=lambda kv: -kv[1]["disposed"])]
     foot = [["NET (NOT RELIABLE)", "", "", fmt_money(doc["net_gain"])]]
-    lines += out.fit_table(["CUR", "ACQUIRED", "DISPOSED", "GAIN(LOSS)"],
+    lines += out.fit_table(["CUR", "UNITS IN", "UNITS OUT",
+                            f"GAIN(LOSS) {base}"],
                            body, aligns=["<", ">", ">", ">"], foot=foot,
                            width_=w)
     lines.append("")
-    lines += out.wrap(f"All amounts {base}. {verdict['note']}", w)
+    # The units are the currency's own, the gains the base currency's:
+    # "All amounts CAD" over both read US dollars as CAD (TJ-0458).
+    lines += out.wrap(f"UNITS IN / OUT: units of each currency; the gains "
+                      f"in {base}. {verdict['note']}", w)
     # What to check, one paragraph each (continuation lines indented).
     warn: List[str] = []
     _W = out.label("warning", w)     # `Warning: ` shown, `warning: ` at 0

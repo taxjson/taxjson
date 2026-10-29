@@ -1,9 +1,11 @@
 """In-process dispatch for taxjson sub-tools.
 
-The orchestrator historically spawned every sub-tool as
-`[sys.executable, "-m", "taxjson.bin.<module>"]`. That breaks the
+The orchestrator historically spawned every sub-tool as a plain
+`python -m taxjson.bin.<module>`. That breaks the
 moment the app is frozen (PyInstaller's sys.executable is the bundled
-app, not Python) and pays interpreter start-up per stage. `run_cmd`
+app, not Python) and pays interpreter start-up per stage. The tool
+commands are built by `python_module_argv` (never with the current
+directory on sys.path, backlog TJ-0632); `run_cmd`
 recognizes that command shape and executes the tool IN-PROCESS instead:
 import the module, shim sys.argv, redirect stdio, map SystemExit to a
 return code — returning a subprocess.CompletedProcess so call sites
@@ -56,11 +58,22 @@ def python_module_argv(module: str, args: Sequence[str] = (), *,
 
 
 def tool_module(cmd: List[str]) -> Optional[Tuple[str, List[str]]]:
-    """(module_name, argv) when `cmd` is a `python -m taxjson.bin.X`
-    invocation, else None."""
-    if (len(cmd) >= 3 and cmd[0] == sys.executable and cmd[1] == "-m"
-            and str(cmd[2]).startswith("taxjson.bin.")):
-        return str(cmd[2]), [str(a) for a in cmd[3:]]
+    """(module_name, argv) when `cmd` runs a taxjson.bin.X module with
+    this Python, else None: python_module_argv's forms (`-P -m X`, the
+    `-c` bootstrap), which taxjson builds (backlog TJ-0632), and a plain
+    `-m X`, which run_cmd also takes (never run as is: out of process
+    it goes through python_module_argv)."""
+    if not cmd or cmd[0] != sys.executable:
+        return None
+    rest = [str(a) for a in cmd[1:]]
+    if rest[:2] == ["-P", "-m"] or rest[:2] == ["-c", _SAFE_BOOT]:
+        rest = rest[2:]
+    elif rest[:1] == ["-m"]:
+        rest = rest[1:]
+    else:
+        return None
+    if rest and rest[0].startswith("taxjson.bin."):
+        return rest[0], rest[1:]
     return None
 
 

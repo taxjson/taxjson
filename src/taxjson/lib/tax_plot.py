@@ -11,7 +11,8 @@ month is negative, a month that crosses a bracket costs more). The
 running total through December is the year's estimate on the same
 inputs; `taxjson estimate`'s own figure is the reference line (the two
 differ only by what is dated to the year rather than to a month: a T5
-box 18 reclassification, a US §1256 fold).
+box 18 reclassification; a US month splits its own §1256 P/L 60/40, as
+the year does).
 
 This module is pure: the command (taxjson_run.cmd_plot_tax) runs the
 estimator and hands the monthly points in.

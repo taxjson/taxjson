@@ -10,7 +10,6 @@ TestRemovedBranches below. All data synthetic; account labels fake.
 """
 import contextlib
 import io
-import os
 import unittest
 
 from taxjson.lib import core as _core
@@ -287,25 +286,6 @@ class TestRemovedBranches(unittest.TestCase):
         total = round(sum(e['gain'] for e in res['transactions']
                           if e.get('symbol') == self.P and 'gain' in e), 2)
         self.assertEqual(total, round(-100 + 450 + 120 - 240, 2))
-
-
-class TestT1135YearOnlyDeferral(unittest.TestCase):
-    """The T1135 --year-wash-only deferral loop (a2-1596-t1135-year-
-    deferral) is pinned by test_fix_a2_pins2_t1135 (A2-0916); this
-    tripwire keeps that test reaching it."""
-
-    def test_pinned_test_reaches_the_loop(self):
-        import test_fix_a2_pins2_t1135 as m
-        from taxjson.bin import taxjson_t1135
-        case = m.TestYearOnlyDeferralNetOfTheYearsAdditions(
-            'test_deferral_beyond_the_years_own')
-        tw = Tripwire(taxjson_t1135.__file__, 'a2-1596-t1135-year-deferral')
-        result = unittest.TestResult()
-        with tw, contextlib.redirect_stderr(io.StringIO()):
-            case.run(result)
-        self.assertTrue(result.wasSuccessful(),
-                        result.failures + result.errors)
-        self.assertEqual(tw.missed(), [])
 
 
 if __name__ == '__main__':

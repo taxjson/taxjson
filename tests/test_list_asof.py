@@ -1,5 +1,7 @@
 """`taxjson-gains --as-of` + `taxjson list --date`: the books as they
-stood on a date (full ACB/deferred fidelity; pre-wash, pre-map)."""
+stood on a date (full ACB/deferred fidelity). `list --date` reads the
+cost timeline the run's gains passes write (backlog TJ-0417): the tests
+that write work/ books by hand run those passes first (_runbooks)."""
 
 import json
 import subprocess
@@ -7,6 +9,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from _runbooks import run_books
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,6 +34,7 @@ def _project(tmp):
         'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
     (root / "work" / "margin_base.json").write_text(
         json.dumps({"transactions": TXS}))
+    run_books(root)
     return root
 
 
@@ -66,6 +71,7 @@ class TestAsOfShelteredAndDerivatives(unittest.TestCase):
             # A derivative that must NOT be treated as an account.
             (root / "work" / "lira_raw_base.json").write_text(
                 json.dumps({"transactions": lira}))
+            run_books(root)
             r = _run(root, "list", "--date", "2025-06-01")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("as-of compute failed", r.stderr)
@@ -120,6 +126,7 @@ class TestAsOf(unittest.TestCase):
                     '[accounts.margin]\ntype = "taxable"\n')
                 (root / "work" / "margin_base.json").write_text(
                     json.dumps({"transactions": txs}))
+                run_books(root)
                 r = _run(root, "list", "--date", "2024-12-31", "--json")
             self.assertEqual(r.returncode, 0, r.stderr)
             doc = json.loads(r.stdout)

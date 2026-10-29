@@ -422,6 +422,22 @@ _CONCISE = [
      lambda m: f"Warning: Transfer-in: {m['a']}: {m['n']} only PARTLY "
                f"covered by .tt purchases, NOT booked "
                f"({_names_of(m['l'])}) — `taxjson transfers`"),
+    # The engine's warn-only replacement flags (lib/core
+    # format_option_replacement_warning), printed by the commands that
+    # rebuild the books in-process (carryover, audit, wash-sales
+    # --explain): cut at the first colon they said "Warning:
+    # option-replacement (warn-only, numbers unchanged)" and named no
+    # loss (backlog TJ-0474).
+    (re.compile(r"(?:[\w./-]+: )?warning: option-replacement \(warn-only, "
+                r"numbers unchanged\): (?P<l>\S+) loss \S+ on (?P<d>\S+) "
+                r"has (?P<o>\S+) acquired .*"),
+     lambda m: f"Warning: {m['l']} loss on {m['d']}: {m['o']} may replace "
+               f"it (warn-only) — `taxjson wash-sales --details`"),
+    (re.compile(r"(?:[\w./-]+: )?warning: opening-balance lot \(warn-only, "
+                r"numbers unchanged\): (?P<l>\S+) loss \S+ on (?P<d>\S+): "
+                r"the opening balance dates \S+ (?P<o>\S+) as bought .*"),
+     lambda m: f"Warning: {m['l']} loss on {m['d']}: {m['o']}, an opening "
+               f"lot, may replace it — `taxjson wash-sales --details`"),
 ]
 
 

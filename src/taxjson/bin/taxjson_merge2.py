@@ -36,7 +36,7 @@ from pathlib import Path
 
 from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import (
-    TaxTransaction, coerce_transaction_row, strip_json_comments,
+    coerce_transaction_row, strip_json_comments,
 )
 from taxjson.bin.taxjson_sort import (deduplicate, sort_transactions,
                                       source_accounts_of)
@@ -205,7 +205,22 @@ def _pairing_core(description: str) -> str:
     return ' '.join(s.split()).upper()
 
 
-def reconcile_dividend_tax(txs):
+def _fld(t, k, default=None):
+    """A field of a row: a TaxTransaction (or any object) or a JSON
+    dict alike."""
+    if isinstance(t, dict):
+        return t.get(k, default)
+    return getattr(t, k, default)
+
+
+def _set_fld(t, k, v) -> None:
+    if isinstance(t, dict):
+        t[k] = v
+    else:
+        setattr(t, k, v)
+
+
+def reconcile_dividend_tax(txs, rate=None):
     """Pair each DIVIDEND with its withholding TAX so both records are
     self-describing. Runs post-dedup, so every dividend and every
     withholding row appears exactly once.
@@ -214,48 +229,83 @@ def reconcile_dividend_tax(txs):
         withholding. A dividend with no withholding row (typically a
         Canadian .TO holding) keeps net_amount equal to gross_amount.
       - each matched TAX row inherits the dividend's share count and a
-        per-share withholding rate in `price`.
+        per-share withholding rate in `price` (in its own currency).
 
     Matching is on (symbol, date, description-core), so a regular
     dividend and a same-day Payment-in-Lieu reconcile independently.
     Totals are unaffected: downstream tools read gross_amount for
     dividends and the TAX rows' net_amount — never DIVIDEND.net_amount.
-    """
+
+    A withholding in another currency than its dividend (a .tt USD
+    DIVIDEND with a same-day CAD TAX) is converted into the dividend's
+    currency at its own date's rate — `rate(currency, day)`: one unit
+    in a common currency, None when there is none — before it is
+    netted; without a rate it is left out of the net, never subtracted
+    unconverted (backlog TJ-0618). Rows are TaxTransaction objects or
+    JSON dicts. Returns {"converted": TAX rows converted, "unconverted":
+    [(symbol, date, TAX currency, DIVIDEND currency)] left out}."""
     divs = defaultdict(list)
     taxes = defaultdict(list)
     for t in txs:
-        action = (getattr(t, 'action', '') or '').upper()
-        key = (getattr(t, 'symbol', None), getattr(t, 'date', None),
-               _pairing_core(getattr(t, 'description', '') or ''))
+        action = (_fld(t, 'action', '') or '').upper()
+        key = (_fld(t, 'symbol'), _fld(t, 'date'),
+               _pairing_core(_fld(t, 'description', '') or ''))
         if action == 'DIVIDEND':
             divs[key].append(t)
-        elif action == 'TAX' or (getattr(t, 'type', '') or '').lower() == 'tax':
+        elif action == 'TAX' or (_fld(t, 'type', '') or '').lower() == 'tax':
             taxes[key].append(t)
 
+    def _cur(t) -> str:
+        return str(_fld(t, 'currency', '') or '').upper()
+
+    converted = 0
+    unconverted = []
     for key, dlist in divs.items():
         tlist = taxes.get(key)
         if not tlist:
             continue
-        # Signed sum: TAX rows are positive = withheld (parsers enforce it);
-        # a refund/reversal arrives NEGATIVE and must NET against the charge
-        # rather than add to it — abs() understated DIVIDEND.net_amount on
-        # any charge+refund pair.
-        total_tax = sum(getattr(t, 'net_amount', 0.0) or 0.0 for t in tlist)
-        total_gross = sum(getattr(d, 'gross_amount', 0.0) or 0.0 for d in dlist)
+        total_gross = sum(_fld(d, 'gross_amount', 0.0) or 0.0
+                          for d in dlist)
         if total_gross <= 0:
             continue
         # Normally a 1:1 pairing; if a payment is split across rows,
         # apportion the withholding pro-rata by gross.
         for d in dlist:
-            g = getattr(d, 'gross_amount', 0.0) or 0.0
-            d.net_amount = round(g - total_tax * (g / total_gross), 8)
-        total_qty = sum(getattr(d, 'quantity', 0.0) or 0.0 for d in dlist)
+            dcur = _cur(d)
+            # Signed sum: TAX rows are positive = withheld (parsers
+            # enforce it); a refund/reversal arrives NEGATIVE and must
+            # NET against the charge rather than add to it — abs()
+            # understated DIVIDEND.net_amount on any charge+refund pair.
+            total_tax = 0.0
+            for t in tlist:
+                amount = _fld(t, 'net_amount', 0.0) or 0.0
+                tcur = _cur(t)
+                if tcur and dcur and tcur != dcur:
+                    day = str(_fld(t, 'date', '') or '')[:10]
+                    r_t = rate(tcur, day) if rate else None
+                    r_d = rate(dcur, day) if rate else None
+                    if not r_t or not r_d:
+                        if d is dlist[0]:
+                            unconverted.append((_fld(t, 'symbol'), day,
+                                                tcur, dcur))
+                        continue
+                    amount = float(Decimal(str(amount)) * Decimal(str(r_t))
+                                   / Decimal(str(r_d)))
+                    if d is dlist[0]:
+                        converted += 1
+                total_tax += amount
+            g = _fld(d, 'gross_amount', 0.0) or 0.0
+            _set_fld(d, 'net_amount',
+                     round(g - total_tax * (g / total_gross), 8))
+        total_qty = sum(_fld(d, 'quantity', 0.0) or 0.0 for d in dlist)
         if total_qty > 0:
             for t in tlist:
-                t.quantity = total_qty
+                _set_fld(t, 'quantity', total_qty)
                 # Signed: a refund row keeps its negative per-share rate.
-                t.price = round((getattr(t, 'net_amount', 0.0) or 0.0)
-                                / total_qty, 8)
+                _set_fld(t, 'price',
+                         round((_fld(t, 'net_amount', 0.0) or 0.0)
+                               / total_qty, 8))
+    return {"converted": converted, "unconverted": unconverted}
 
 
 def cancel_trade_pairs(txs):
@@ -647,8 +697,16 @@ def main():
 
     # --- Stage 4.5: reconcile dividends with their withholding --------
     # Post-dedup and post-conversion: every dividend and withholding row
-    # is unique and in the target currency, so pairing is unambiguous.
-    reconcile_dividend_tax(txs)
+    # is unique and, with --to, in the target currency. Without --to (a
+    # native-currency merge) a withholding in another currency than its
+    # dividend has no rate here: it is left out of the dividend's net
+    # (`taxjson run` restates it with the run's rates; backlog TJ-0618).
+    _rec = reconcile_dividend_tax(txs)
+    for _sym, _day, _tcur, _dcur in _rec["unconverted"]:
+        emit_line(f"note: {_sym} {_day}: the {_tcur} withholding is left "
+                  f"out of the {_dcur} dividend's net_amount (no exchange "
+                  f"rate in a merge without --to); the dividend's gross "
+                  f"and the TAX row are unchanged.")
 
     # --- Stage 5: validate --------------------------------------------
     error_count = 0

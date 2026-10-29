@@ -515,7 +515,8 @@ class TestUsEstimateAndCarryover(unittest.TestCase):
                       "term": "SHORT_TERM", "commission": 0.0, "fee": 0.0},
                      {"action": "DIVIDEND", "symbol": "BBB.TO",
                       "date": "2025-05-01", "net_amount": 500.0,
-                      "gain": 500.0, "currency": "USD"}],
+                      "dividend": 500.0, "gain": 500.0,
+                      "currency": "USD"}],
                  "inventory": [], "wash_sales": []}
             p = projects_both(td, year=2025, canada={"province": "ON"},
                               files={"work/margin_gains.json":

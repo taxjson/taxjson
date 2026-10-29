@@ -34,7 +34,7 @@ from unittest import mock
 from _style import CapturedWidth
 from _tmpfiles import private_dir
 from tax_rules import rule, rule_absent
-from test_fix_multi_year import multi, run_ok, single, tjs
+from test_fix_multi_year import run_ok, single, tjs
 
 from taxjson.lib import project_layout as PL
 from taxjson.lib.tomlcompat import tomllib

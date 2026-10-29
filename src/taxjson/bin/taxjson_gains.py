@@ -44,6 +44,20 @@ from taxjson.lib.trace_format import (
 )
 
 
+def _day(text: str) -> str:
+    """argparse type of --lots-at: a real YYYY-MM-DD calendar date."""
+    import re
+    from datetime import date
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text or ""):
+            raise ValueError
+        date.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a YYYY-MM-DD date") from None
+    return text
+
+
 def _parse_args():
     parser = argparse.ArgumentParser(
         description="Compute capital gains from a merged transaction "
@@ -137,6 +151,12 @@ def _parse_args():
              "to that sale's basis: the adjustment is booked in the "
              "loss's year with an ATTENTION line (US-WASH-22).")
     parser.add_argument(
+        "--locked-record", action="append", default=None, metavar="PATH",
+        help="USA: a filed year's lock file (filed/<year>.json), "
+             "repeatable (`taxjson run` passes each one with its "
+             "--locked-year): a basis add its own row for that sale "
+             "already has stays in that sale, as filed (US-WASH-22).")
+    parser.add_argument(
         "--no-wash",
         action="store_true",
         help=(
@@ -167,6 +187,31 @@ def _parse_args():
             "to FILE. JSON output still goes to stdout, and the per-gain 'trace' "
             "field is stripped from it. When omitted, no traces are produced. "
             "Use 'taxjson-explain' as an interactive companion."
+        ),
+    )
+    parser.add_argument(
+        "--cost-timeline",
+        metavar="FILE",
+        help=(
+            "Write the engine's cost timeline to FILE (JSON): each pool's "
+            "quantity and cost after every row that changed it, dated on "
+            "the --tax-date basis — Canada's pools across the book's "
+            "accounts, the US lots per account. `taxjson run` writes one "
+            "beside each gains pass for `taxjson list --date`. The gains "
+            "JSON on stdout is unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--lots-at",
+        metavar="YYYY-MM-DD",
+        type=_day,
+        help=(
+            "US: also write every FIFO lot held at the end of this day, "
+            "one by one in FIFO order (`lots_at` in the gains JSON: "
+            "account, symbol, acquisition and holding-period dates, "
+            "units, basis, wash-sale deferral), the day read on the "
+            "--tax-date basis. close-year records them and `taxjson "
+            "handoff` compares them."
         ),
     )
     parser.add_argument(
@@ -381,8 +426,11 @@ def _request(args) -> GainsRequest:
         ric_january_dividends=tuple(args.ric_january_dividend or ()),
         spot_crypto=args.spot_crypto,
         locked_years=tuple(args.locked_year or ()),
+        locked_records=tuple(args.locked_record or ()),
         transfers_as_acquisitions=args.transfers_as_acquisitions,
         loss_overrides=loss_overrides_from_args(args),
+        cost_timeline=bool(getattr(args, "cost_timeline", None)),
+        lots_at=getattr(args, "lots_at", None),
     )
 
 
@@ -506,6 +554,15 @@ def _main():
     except ValueError as e:
         emit_line(f"taxjson-gains: error: {e}", file=sys.stderr)
         raise SystemExit(2)
+
+    # The cost timeline goes to its own file (backlog TJ-0417): the
+    # gains JSON stays as it was.
+    timeline = results.pop('cost_timeline', None)
+    if args.cost_timeline:
+        import json as _json
+        from taxjson.lib.cli_diag import write_text_atomic
+        write_text_atomic(args.cost_timeline, _json.dumps(
+            timeline or {}, separators=(",", ":"), allow_nan=False))
 
     # Output
     # allow_nan=False: a NaN gain is refused, not written (issue #8).

@@ -392,8 +392,6 @@ class TestTaxYearRelevance(unittest.TestCase):
                 for r in assess_tax_year_relevance(rows, cands, year)}
 
     def test_transfer_in_then_clean_sale_does_not_affect_year(self):
-        from taxjson.lib.missing_history import (MissingHistoryCandidate,
-                                                  assess_tax_year_relevance)
         # A candidate from an earlier short; the 2025 sale is backed by
         # a TRANSFER-in.
         rows = [

@@ -70,6 +70,68 @@ class TestLocksMatchPyproject(unittest.TestCase):
         self.assertNotIn("--upgrade pip", text)
 
 
+_NO_CRYPTO = ("cause: Because cryptography==50.0.2 has no usable wheels and "
+              "you require cryptography==50.0.2, we can conclude that your "
+              "requirements are unsatisfiable.")
+_INTEL = "x86_64-apple-darwin"
+
+
+class TestCoverageAcceptedGaps(unittest.TestCase):
+    """--coverage's report (backlog TJ-0637): all.txt and
+    generate-parser.txt have no Intel-macOS wheel of cryptography 50
+    (google-auth, for the generate-parser extra). Those optional locks
+    are not promised everywhere (install.sh installs the core package
+    and says so); the gap is listed as accepted, and any other gap is
+    still reported."""
+
+    def _gaps(self, why=_NO_CRYPTO, plat=_INTEL):
+        return [(plat, py, why) for py in lock_deps.PYTHONS]
+
+    def test_the_known_gap_is_accepted(self):
+        for name in ("all", "generate-parser"):
+            lines, failed = lock_deps.report(name, self._gaps())
+            with self.subTest(lock=name):
+                self.assertFalse(failed)
+                self.assertTrue(lines[0].startswith(f"ok    {name}.txt"),
+                                lines)
+                self.assertIn("accepted: x86_64-apple-darwin / Python "
+                              "3.10, 3.11, 3.12, 3.13: no cryptography "
+                              "wheel", "\n".join(lines))
+                self.assertFalse([ln for ln in lines
+                                  if ln.startswith("GAPS")], lines)
+
+    def test_another_package_or_platform_is_still_a_gap(self):
+        other = _NO_CRYPTO.replace("cryptography", "grpcio")
+        for gaps in (self._gaps(other),
+                     self._gaps(plat="aarch64-unknown-linux-gnu")):
+            lines, failed = lock_deps.report("all", gaps)
+            self.assertTrue(lines[0].startswith("GAPS  all.txt (optional): 4"),
+                            lines)
+            self.assertFalse(failed)          # an optional lock: reported
+            self.assertIn("note: the accepted gap", "\n".join(lines))
+
+    def test_a_required_lock_accepts_none(self):
+        accepted = {("fx", _INTEL, "cryptography"): "no"}
+        lines, failed = lock_deps.report("fx", self._gaps(), accepted)
+        self.assertTrue(failed)
+        self.assertTrue(lines[0].startswith("GAPS  fx.txt (required)"))
+
+    def test_a_gap_no_longer_seen_is_named(self):
+        lines, failed = lock_deps.report("all", [])
+        self.assertFalse(failed)
+        self.assertIn("accepted gap x86_64-apple-darwin / cryptography is "
+                      "no longer seen", "\n".join(lines))
+
+    def test_the_table_names_optional_locks_and_known_platforms(self):
+        names = set(lock_deps.lock_inputs())
+        for lock, plat, pkg in lock_deps.ACCEPTED_GAPS:
+            self.assertIn(lock, names)
+            self.assertNotIn(lock, lock_deps.REQUIRED)
+            self.assertIn(plat, lock_deps.PLATFORMS)
+            self.assertIn(f"\n{pkg}==", (REPO / "requirements"
+                                         / f"{lock}.txt").read_text())
+
+
 class TestCheckCatchesDrift(unittest.TestCase):
     """check() on a copy: an extra added to pyproject.toml, a hand edit,
     a lock left for a removed extra, a pin without hashes."""

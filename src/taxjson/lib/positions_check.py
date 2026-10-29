@@ -44,7 +44,6 @@ pooling — said in the row).
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -217,12 +216,33 @@ def roc_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
 def spinoff_symbols(rows: Iterable[Dict[str, Any]]) -> Set[str]:
     """Symbols whose cost a spin-off's election moved to the new shares
     (the parent's cost-reduction ADJUST a corporate action books: it
-    carries corp_event_id, or the US type spinoff_355)."""
+    carries corp_event_id, or the US type spinoff_355) — and the new
+    shares themselves: the purchase the same event books (its
+    corp_event_id, or spinoff_355), whose cost is the allocation, not a
+    purchase the broker may have costed otherwise (backlog TJ-0444:
+    "unexplained")."""
+    rows = list(rows)
     out: Set[str] = set()
+    events: Set[Tuple[str, str]] = set()
     for r in rows:
         if r.get("action") != "ADJUST":
             continue
         if (r.get("corp_event_id")
+                or str(r.get("type") or "").lower() == "spinoff_355"):
+            out.add(str(r.get("symbol") or ""))
+            if r.get("corp_event_id"):
+                events.add((str(r.get("account") or ""),
+                            str(r.get("corp_event_id"))))
+    for r in rows:
+        if r.get("action") != "BUYSELL":
+            continue
+        try:
+            if float(r.get("quantity") or 0.0) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if ((str(r.get("account") or ""), str(r.get("corp_event_id")))
+                in events
                 or str(r.get("type") or "").lower() == "spinoff_355"):
             out.add(str(r.get("symbol") or ""))
     return out

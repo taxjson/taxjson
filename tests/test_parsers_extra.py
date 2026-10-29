@@ -8,7 +8,6 @@ account-name override threading through tx-id hashing.
 """
 
 import os
-import tempfile
 from _tmpfiles import private_tmpfile
 import unittest
 from pathlib import Path

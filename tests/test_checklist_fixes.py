@@ -2,7 +2,6 @@
 said "done" on nothing, a form-export step that compared nothing, a DONE
 mark that hid a finding, US and sheltered-only projects, and the CLI's
 mark/undo/reset/--json/--only/--walk edges."""
-import argparse
 import builtins
 import io
 import json

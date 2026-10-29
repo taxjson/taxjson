@@ -76,8 +76,14 @@ class TestCloseYearRoundsOnce(unittest.TestCase):
             self.assertEqual(c.returncode, 0, c.stderr[-1500:])
             lock = json.loads((root / "filed" / "2025.json").read_text())
             f = _cli(root, "check-filed")
+        # The wash-sales total adds the rows' cents, as sum's RETURN row
+        # and close-year's CLOSED block do (backlog TJ-0428); the lock's
+        # figure is its `denied_unrounded`.
         self.assertAlmostEqual(json.loads(w.stdout)["totals"]["denied"],
-                               300.01, places=2)
+                               300.00, places=2)
+        self.assertAlmostEqual(
+            json.loads(w.stdout)["totals"]["denied_unrounded"], 300.01,
+            places=2)
         self.assertAlmostEqual(lock["totals"]["disallowed"], 300.01,
                                places=2)
         self.assertEqual(f.returncode, 0, f.stdout[-1500:] + f.stderr[-800:])

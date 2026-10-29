@@ -392,17 +392,27 @@ def merge():
         run = lambda *a, **kw: subprocess.run(["git", *a], cwd=td, check=True,
                                               capture_output=True, **kw)
         run("clone", "-q", origin, ".")
+        # "Require branches to be up to date": no merge onto a main the
+        # branch does not hold (TJ-0214).
+        if st.get("strict") and subprocess.run(
+                ["git", "merge-base", "--is-ancestor", "main",
+                 "origin/" + st["branch"]], cwd=td).returncode:
+            return False
         env = dict(os.environ, GIT_COMMITTER_NAME="GitHub",
                    GIT_COMMITTER_EMAIL="rebase@example.com",
                    GIT_COMMITTER_DATE="2030-01-01T00:00:00Z")
         run("cherry-pick", "main..origin/" + st["branch"], env=env)
         run("push", "-q", "origin", "main", ":refs/heads/" + st["branch"])
     st["state"] = "MERGED"; save()
+    return True
 if args[:2] == ["auth", "status"]:
     sys.exit(0)
 if args[:1] == ["api"]:
     path = [a for a in args[1:] if not a.startswith("-")][0]
     if path.endswith("/rules/branches/main"):
+        jq = args[args.index("--jq") + 1] if "--jq" in args else ""
+        if "strict_required_status_checks_policy" in jq:
+            print(1 if st.get("rules") and st.get("strict") else 0); sys.exit(0)
         print(1 if st.get("rules") else 0); sys.exit(0)
     if "/actions/runs?" in path:
         if "branch=%s&" % st["branch"] not in path:
@@ -431,7 +441,7 @@ if args[:2] == ["pr", "merge"]:
         if not st.get("auto_ok"):
             sys.exit(1)
         st["auto"] = True; save(); sys.exit(0)
-    merge(); sys.exit(0)
+    sys.exit(0 if merge() else 1)
 if args[:2] == ["pr", "view"]:
     if st.get("auto") and st["checks"] == "pass" and st["state"] == "OPEN":
         merge()
@@ -517,7 +527,7 @@ class TestLand(_Sandbox):
                       r.stdout)
 
     def test_required_checks_use_auto_merge(self):
-        self.set_state(rules=True, auto_ok=True)
+        self.set_state(rules=True, strict=True, auto_ok=True)
         self.commit("one")
         self.commit("two")
         r = self.land()
@@ -548,7 +558,7 @@ class TestLand(_Sandbox):
         self.assertFalse(self.calls("pr", "checks"))
 
     def test_a_failed_check_closes_the_pull_request(self):
-        self.set_state(rules=True, auto_ok=True, checks="fail")
+        self.set_state(rules=True, strict=True, auto_ok=True, checks="fail")
         mine = self.commit()
         start = self.origin_main()
         r = self.land()

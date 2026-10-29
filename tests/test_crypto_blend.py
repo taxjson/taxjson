@@ -6,7 +6,6 @@ at 40,000 on 2025-06-02 and kr2 buys 1 BTC on 2025-06-10 and holds it —
 the whole 30,000 blended loss is superficial. Computed per exchange the
 return showed a -10,000 allowed loss.
 """
-import os
 import json
 import subprocess
 import sys

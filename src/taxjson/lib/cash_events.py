@@ -417,14 +417,20 @@ def apply_declarations(events: List[Dict[str, Any]],
 UNDECLARED = "?"        # a CASHMOVE line's how, when nothing declared it
 
 
-def tt_line(e: Dict[str, Any]) -> Optional[str]:
+def tt_line(e: Dict[str, Any], base: Optional[str] = None
+            ) -> Optional[str]:
     """A cash event as the .tt line that declares it (FORMS, without
     `at=`; `taxjson cash` lists them): an FXCONV, a CASHMOVE (a broker's
     move nothing declared shows UNDECLARED where own / kept / spot /
     cost= / proceeds= goes, so the line is not copied as it is), a
     CASHOPEN; a FLOW (the fee a cash event charged) as a `#FEE` comment
     line, which a .tt file ignores. None for a CASHBAL (a statement
-    fact, never written by hand), a PERIOD, a NOTE, a CASHBOOK."""
+    fact, never written by hand), a PERIOD, a NOTE, a CASHBOOK.
+
+    `base`: the project's base currency. A broker's move IN it is no
+    foreign cash and the ledger needs no declaration of it: a
+    `#CASHMOVE` comment line, never UNDECLARED — `?` on a Canadian-dollar
+    deposit asked for a line ledger v2 ignores (backlog TJ-0461)."""
     k = e["kind"]
     if k == "FXCONV":
         s = (f"FXCONV {e['date']} {e['from_ccy']} {e['from_amt']:,.2f} "
@@ -434,6 +440,9 @@ def tt_line(e: Dict[str, Any]) -> Optional[str]:
         return s
     if k == "CASHMOVE":
         d = e.get("decl")
+        if not d and base and str(e["currency"]).upper() == base.upper():
+            return (f"#CASHMOVE {e['date']} {e['currency']} "
+                    f"{e['amount']:+,.2f}")
         if not d:
             how = UNDECLARED
         elif d.get("value") is not None:
@@ -730,7 +739,8 @@ def collect(root: Path, cfg: Dict[str, Any], country: str,
             continue
         for p in sorted(folder.iterdir()):
             if p.suffix.lower() != ".csv" or p.name.startswith((".", "~$")) \
-                    or not p.is_file():
+                    or not p.is_file() \
+                    or _PL.redacted_copy_beside_exports(p):
                 continue
             try:
                 det = detect(p)

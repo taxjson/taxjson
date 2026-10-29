@@ -3,7 +3,6 @@ import csv
 import io
 import math
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -340,6 +339,13 @@ class QtAccountContext:
     journal_legs: Dict[Tuple[str, int], Dict[str, Any]] = field(
         default_factory=dict)
     journal_codes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Every broker account (`Account #`) in ANY of the account's exports:
+    # its Account Types, and the files (resolved paths) that hold it. The
+    # taxable-versus-registered check spans the files (backlog TJ-0527):
+    # the same rows split into two exports were booked unchecked.
+    plan_types: Dict[str, set] = field(default_factory=dict)
+    plan_files: Dict[str, set] = field(default_factory=dict)
+    plans_checked: bool = False
 
     def add_codes_note(self) -> None:
         """ONE note per account for every internal code booked under a
@@ -400,6 +406,11 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
     trade_keys: set = set()
     for k in files:
         for lineno, row in _read_qt_rows(Path(k)):
+            acct = (row.get('Account #') or '').strip()
+            if acct and not _is_qt_header(row):
+                ctx.plan_types.setdefault(acct, set()).add(
+                    (row.get('Account Type') or '').strip())
+                ctx.plan_files.setdefault(acct, set()).add(k)
             act = (row.get('Activity Type') or '').strip()
             if act not in ('Trades', 'Transfers'):
                 continue
@@ -772,6 +783,15 @@ def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
     return None
 
 
+def _qt_cell_value(row, col: str) -> float:
+    """A number cell of a row _qt_reversal_kind classified (so it
+    parses) as a value two downloads agree on however they write it:
+    10, 10.00 and 10.0000 are one value."""
+    v = parse_strict_number(row.get(col), field=col, allow_blank=True,
+                            blank=0.0)
+    return round(v, 9) + 0.0
+
+
 def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
     """Pair every CIL / REI / stock-dividend reversal with its original
     across ALL of the account's exports (re-audit A2-0026, A2-0280,
@@ -782,7 +802,13 @@ def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
     copies are counted per file, as RBC's overlap plan does); a reversal
     cancels the latest original of the same security, quantity and
     amount on or before its own date (re-audit A2-1063), and every copy
-    of both rows drops out."""
+    of both rows drops out. The original must be in the same broker
+    account (`Account #`) and currency as the reversal: a USD reversal
+    cancelled a CAD reinvestment of the same symbol, units and amount,
+    and one account's reversal another account's (backlog TJ-0517).
+    Copies are matched by the numbers' values, not their spelling: one
+    download writing 10 and -100 and another 10.0000 and -100.00 gave
+    two originals, and the reversal cancelled one (backlog TJ-0666)."""
     # content key -> per file: [line numbers]
     copies: Dict[tuple, Dict[str, List[int]]] = {}
     meta: Dict[tuple, Tuple[tuple, bool, str]] = {}
@@ -791,14 +817,15 @@ def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
             kind = _qt_reversal_kind(row, helper)
             if kind is None:
                 continue
+            acct = (row.get('Account #') or '').strip()
+            cur = (row.get('Currency') or '').strip().upper()
             ck = (kind[2], _canon_action(row.get('Action')),
                   (row.get('Symbol') or '').strip().upper(),
                   ' '.join((row.get('Description') or '').split()).upper(),
-                  (row.get('Quantity') or '').strip(),
-                  (row.get('Net Amount') or '').strip(),
-                  (row.get('Account #') or '').strip())
+                  _qt_cell_value(row, 'Quantity'),
+                  _qt_cell_value(row, 'Net Amount'), acct, cur)
             copies.setdefault(ck, {}).setdefault(k, []).append(lineno)
-            meta[ck] = kind
+            meta[ck] = (kind[0] + (acct, cur), kind[1], kind[2])
     # Logical events: copy i of a content key = the i-th occurrence in
     # every file that has one.
     events = []           # (date, is_rev, key, ck, i)
@@ -976,6 +1003,45 @@ class QuestradeBrokerage(BaseBrokerage):
             return self.account_taxable
         return self._qt_taxable_hint
 
+    def _shelter_of(self, account_type: str) -> Optional[str]:
+        """The registered plan an Account Type names (TFSA, RRSP ...),
+        upper case, when the project's country shelters it; None for any
+        other type. A plan the country taxes like an ordinary account
+        (`plans_taxed`: a TFSA in a US project, tax-logic US-BASIS-09)
+        is no shelter (backlog TJ-0613)."""
+        m = _QT_REGISTERED_RE.search(account_type or '')
+        if m and m.group(1).lower() not in self.plans_taxed:
+            return m.group(1).upper()
+        return None
+
+    def _taxed_plan_of(self, account_type: str) -> Optional[str]:
+        """The registered plan an Account Type names when the project's
+        country taxes it like an ordinary account, else None."""
+        m = _QT_REGISTERED_RE.search(account_type or '')
+        if m and m.group(1).lower() in self.plans_taxed:
+            return m.group(1).upper()
+        return None
+
+    def _is_taxable_type(self, account_type: str) -> bool:
+        """A margin or cash account's Account Type, or one naming a plan
+        the project's country taxes (`_taxed_plan_of`)."""
+        if self._taxed_plan_of(account_type):
+            return True
+        return bool(re.search(r'margin|cash', account_type or '', re.I)
+                    and not _QT_REGISTERED_RE.search(account_type or ''))
+
+    def _taxed_plans_note(self, types) -> str:
+        """' (a US return taxes a TFSA like an ordinary account: ...)'
+        when `types` name such a plan, else ''."""
+        plans = sorted({p for t in types for p in [self._taxed_plan_of(t)]
+                        if p})
+        if not plans:
+            return ''
+        return (f" (a US return taxes "
+                f"{'a ' + plans[0] if len(plans) == 1 else ', '.join(plans)}"
+                f" like an ordinary account: no treaty deferral, tax-logic "
+                f"US-BASIS-09)")
+
     def apply_currency_suffix(self, symbol: str, currency: str) -> str:
         """Questrade names the LISTING in the symbol: SAMPLZ.TO is a TSX
         listing and a bare symbol a US one. A .TO symbol keeps .TO
@@ -1044,7 +1110,30 @@ class QuestradeBrokerage(BaseBrokerage):
         in a TAXABLE account — or a taxable account's rows in a
         registered one — put the wrong trades in the books: refused.
         Any other mix (two taxable accounts) is booked as one and said
-        on the console."""
+        on the console.
+
+        The same holds ACROSS the account's exports (backlog TJ-0527):
+        the TFSA's rows in a file of their own beside the margin
+        account's were booked unchecked. The account's exports of ONE
+        Questrade account whose own Account Type contradicts the taxjson
+        account (a LIRA export in a taxable folder, a margin export in a
+        sheltered one) are booked as the folder says, with an ATTENTION
+        line (backlog TJ-0477): they were booked with no word."""
+        ctx = self._ctx
+        if ctx is not None and not ctx.plans_checked:
+            ctx.plans_checked = True
+            held = [{a for a, fs in ctx.plan_files.items() if f in fs}
+                    for f in ctx.files]
+            names = sorted({shown_name(Path(f)) for f in ctx.files})
+            if len(ctx.plan_types) == 1 or not any(
+                    h >= set(ctx.plan_types) for h in held):
+                # One Questrade account, or several no one export holds
+                # all of (an export holding them all is checked below).
+                self._check_plans(
+                    ', '.join(names), ctx.plan_types,
+                    "the export holds" if len(names) == 1 else
+                    "these exports of one taxjson account hold",
+                    spread=len(names) > 1)
         accts: Dict[str, set] = {}
         for _ln, r in rows:
             if _is_qt_header(r):
@@ -1053,9 +1142,16 @@ class QuestradeBrokerage(BaseBrokerage):
             if a:
                 accts.setdefault(a, set()).add(
                     (r.get('Account Type') or '').strip())
-        if len(accts) < 2:
-            return
+        if len(accts) > 1:
+            self._check_plans(shown_name(path), accts, "the export holds")
 
+    def _check_plans(self, where: str, accts: Dict[str, set], holds: str,
+                     *, spread: bool = False) -> None:
+        """The taxable-versus-registered check of `_check_account_mix`
+        over `accts` ({Account #: {Account Type}}) of one export, or of
+        all the account's exports (`spread`)."""
+        if not accts:
+            return
         _no = {a: i for i, a in enumerate(sorted(accts), 1)}
 
         def _mask(a: str) -> str:
@@ -1065,48 +1161,76 @@ class QuestradeBrokerage(BaseBrokerage):
         taxable = self.account_taxable       # None: the caller did not say
         wrong = []
         for a, types in sorted(accts.items()):
-            reg = any(_QT_REGISTERED_RE.search(t) for t in types)
-            tax = any(re.search(r'margin|cash', t, re.I)
-                      and not _QT_REGISTERED_RE.search(t) for t in types)
+            reg = any(self._shelter_of(t) for t in types)
+            tax = any(self._is_taxable_type(t) for t in types)
             if (taxable is True and reg) or (taxable is False and tax):
                 wrong.append(_mask(a))
+        # A plan the country taxes (a US project's TFSA) said so, when it
+        # is the reason a type reads as taxable (backlog TJ-0613).
+        why = (self._taxed_plans_note({t for types in accts.values()
+                                       for t in types})
+               if taxable is False and wrong else '')
+        if len(accts) < 2:
+            if wrong:
+                # The folder's type is the user's word about this very
+                # account, the Account Type column the broker's: said
+                # out loud (`run --strict` stops), never guessed.
+                types = '/'.join(sorted(next(iter(accts.values())) - {''}))
+                emit_line(
+                    f"warning: ATTENTION: {where}: the Account Type says "
+                    f"Questrade account {wrong[0]} is "
+                    f"{'a registered plan' if taxable else 'a taxable account'}"
+                    f" ({types}){why}, but this taxjson account is "
+                    f"{'taxable' if taxable else 'sheltered'}, so its "
+                    f"trades are booked "
+                    f"{'as taxable' if taxable else 'as sheltered (none of them on the return)'}"
+                    f". If the Account Type is right, move "
+                    f"{'the exports' if spread else 'the export'} into "
+                    f"the inputs/<account>/ folder of an account of type = "
+                    f"\"{'sheltered' if taxable else 'taxable'}\".")
+            return
         if not wrong and self.combined_broker_accounts:
             # combined_broker_accounts = true (owner decision): a NOTE —
             # on a sheltered label only when every account is the SAME
             # registered plan (Questrade's Account Type names it).
             masked = [_mask(a) for a in sorted(accts)]
             if taxable is False:
-                plans = {m.group(1).upper()
-                         for types in accts.values() for t in types
-                         for m in [_QT_REGISTERED_RE.search(t)] if m}
-                untyped = any(not any(_QT_REGISTERED_RE.search(t)
-                                      for t in types)
+                plans = {p for types in accts.values() for t in types
+                         for p in [self._shelter_of(t)] if p}
+                untyped = any(not any(self._shelter_of(t) for t in types)
                               for types in accts.values())
                 if len(plans) != 1 or untyped:
                     raise combined_accounts_refusal(
-                        shown_name(path), 'Questrade', masked,
+                        where, 'Questrade', masked,
                         f"their Account Types differ ({desc})"
                         if len(plans) > 1 else
                         f"the Account Type does not name one plan for "
                         f"every account ({desc})")
-            emit_line(combined_accounts_note(shown_name(path), 'Questrade',
-                                         masked))
+            emit_line(combined_accounts_note(where, 'Questrade', masked))
             return
         if wrong:
             raise BrokerageParseError(
-                f"{shown_name(path)}: the export holds rows of {len(accts)} "
+                f"{where}: {holds} rows of {len(accts)} "
                 f"Questrade accounts ({desc}); {', '.join(wrong)} "
                 f"{'is a registered plan' if taxable else 'is a taxable account'}"
-                f" but the file sits in a "
+                f"{why} but {'the files sit' if spread else 'the file sits'} in a "
                 f"{'taxable' if taxable else 'registered'} taxjson account, "
-                f"so its trades would be booked there — refusing. Export "
-                f"each Questrade account separately into its own "
-                f"inputs/<account>/ folder.")
-        emit_line(f"warning: ATTENTION: {shown_name(path)}: the export holds rows of "
+                f"so its trades would be booked there — refusing. "
+                + ("Move each Questrade account's exports into its own "
+                   "inputs/<account>/ folder." if spread else
+                   "Export each Questrade account separately into its own "
+                   "inputs/<account>/ folder."))
+        # A US project's TFSA is no shelter (US-BASIS-09): the plans that
+        # still are, named as such.
+        plan = self.law('a registered plan (TFSA/RRSP)',
+                        'a retirement plan (RRSP/RRIF)',
+                        'a registered plan (TFSA/RRSP)')
+        emit_line(f"warning: ATTENTION: {where}: {holds} rows of "
               f"{len(accts)} Questrade accounts ({desc}) — every row is "
               f"booked to ONE account. That is right only when they are one "
-              f"tax entity (two taxable accounts of yours); export a "
-              f"registered plan (TFSA/RRSP) separately.")
+              f"tax entity (two taxable accounts of yours); "
+              + (f"give {plan} its own inputs/<account>/ folder."
+                 if spread else f"export {plan} separately."))
 
     def _listing_currency(self, sym: str, currency: str) -> str:
         """The currency whose suffix a real (non-code) symbol takes: a
@@ -1300,11 +1424,9 @@ class QuestradeBrokerage(BaseBrokerage):
         _types = {(r.get('Account Type') or '').strip() for _, r in rows
                   if not _is_qt_header(r)}
         _types.discard('')
-        if _types and all(_QT_REGISTERED_RE.search(t) for t in _types):
+        if _types and all(self._shelter_of(t) for t in _types):
             self._qt_taxable_hint = False
-        elif _types and all(re.search(r'margin|cash', t, re.I)
-                            and not _QT_REGISTERED_RE.search(t)
-                            for t in _types):
+        elif _types and all(self._is_taxable_type(t) for t in _types):
             self._qt_taxable_hint = True
         else:
             self._qt_taxable_hint = None
@@ -1887,7 +2009,9 @@ class QuestradeBrokerage(BaseBrokerage):
             # Option symbol reconstruction from Description; fall back to
             # the bare Symbol column (which is often non-OCC like SAMPLG.OPT).
             if opt:
-                symbol = self.format_occ_symbol(opt['right'], opt['base'], opt['expiry'], opt['strike'])
+                symbol = self.format_occ_symbol(
+                    opt['right'], opt['base'], opt['expiry'], opt['strike'],
+                    where=self._where(lineno))
             else:
                 # Upper-cased: 'sample.to' split the pool from SAMPLE.TO
                 # (audit R1-71).
@@ -1907,11 +2031,12 @@ class QuestradeBrokerage(BaseBrokerage):
             if date_settle is None:
                 # The LISTING's market decides the cycle and calendar,
                 # not the row currency (A2-1052 / A2-1054): SAMPLF.U.TO in
-                # USD settles through CDS, a CAD-settled US stock on the
-                # US calendar (lib/dates.market_of, the rule every parser
-                # shares).
-                from taxjson.lib.dates import market_of
-                _mkt = market_of(symbol, listing_currency)
+                # USD settles through CDS (on the days both Canada and
+                # the US settle, TJ-0705), a CAD-settled US stock on the
+                # US calendar (lib/dates.settlement_calendar, the rule
+                # every parser shares).
+                from taxjson.lib.dates import settlement_calendar
+                _mkt = settlement_calendar(symbol, listing_currency)
                 if opt and not (code_assigned or word_assigned):
                     # Options settle T+1 in every era; the equity
                     # fallback (T+2 before the 2024 cutover) moved a
@@ -2508,7 +2633,8 @@ class QuestradeBrokerage(BaseBrokerage):
         if opt:
             symbol = self.apply_currency_suffix(
                 self.format_occ_symbol(opt['right'], opt['base'],
-                                       opt['expiry'], opt['strike']),
+                                       opt['expiry'], opt['strike'],
+                                       where=self._where(lineno)),
                 currency)
         else:
             # An internal code no trade resolves is warned about (and

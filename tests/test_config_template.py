@@ -762,8 +762,10 @@ class TestLayout(unittest.TestCase):
             block = text.split("# [accounts.NAME]\n", 1)[1].split("\n\n")[0]
             keys = [m.group(2) for m in map(_KEY_LINE.match,
                                             block.split("\n")) if m]
+            # (the country's: custodian_country is Canada's, T1135)
             self.assertEqual(keys, ["type"] + sorted(
-                k.name for k in CT.ACCOUNT_SPEC if k.name != "type"))
+                k.name for k in CT.ACCOUNT_SPEC if k.name != "type"
+                and CT.owned(country, "accounts", k.name)))
             # Every key under its description, no blank line in between.
             self.assertNotIn("\n\n", block)
 
@@ -1247,7 +1249,8 @@ class TestProseMark(unittest.TestCase):
                     {k.name for k in CT.SETTINGS_SPEC
                      if CT.owned(country, "settings", k.name)})
                 self.assertEqual(set(doc["accounts"]["NAME"]),
-                                 {k.name for k in CT.ACCOUNT_SPEC})
+                                 {k.name for k in CT.ACCOUNT_SPEC
+                                  if CT.owned(country, "accounts", k.name)})
                 for t in CT.TABLES:
                     if CT.owned(country, t.name):
                         self.assertIn(t.name, doc)

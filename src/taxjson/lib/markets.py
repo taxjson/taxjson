@@ -351,6 +351,14 @@ def isin_country_suffix(cc: str) -> Optional[str]:
     return data()["isin_country_suffix"].get(str(cc or "").upper())
 
 
+def crypto_venue_suffix(broker: str) -> Optional[str]:
+    """The venue suffix a crypto exchange's coins carry in the holdings
+    handoff (`[crypto_venues]`: kraken -> KR); None for an exchange
+    with none."""
+    return (data().get("crypto_venues") or {}).get(
+        str(broker or "").strip().lower())
+
+
 def ib_venue_suffix(code: str) -> Optional[str]:
     """The listing suffix of an IB "Listing Exch" code (VENUE lines
     first); "" for a venue a `VENUE CODE NO` line removed, None for an

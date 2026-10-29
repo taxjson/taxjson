@@ -10,7 +10,6 @@ symlinked shared inputs/ keyed as the setting names it, init's --force
 help, migrate's note, option-yield's stderr."""
 import io
 import os
-import re
 import stat
 import subprocess
 import sys

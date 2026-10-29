@@ -202,13 +202,19 @@ class TestWashRadarDst(unittest.TestCase):
         self.assertNotIn("COOLING", line)
 
     def test_locked_buy_day30_across_fallback_not_clear(self):
-        # Buy 2026-10-04 still held on 2026-11-03 (day 30): selling at a loss
-        # is still a superficial loss — must be LOCKED, not CLEAR.
+        # Buy 2026-10-04 still held when a loss sale settles on day 30
+        # (2026-11-03, the Nov 1 fall-back between): a partial loss sale
+        # is still superficial — EXITABLE, not CLEAR. A sale is measured
+        # from its own settlement (T+1, backlog TJ-0243): Monday 11-02's
+        # settles on day 30; Tuesday 11-03's on day 31, clear.
         txs = [_tx("2026-10-04", "LCK.TO", 100, 1000.0)]
-        out = _radar(txs, "2026-11-03")
+        out = _radar(txs, "2026-11-02")
         line = next(l for l in radar_rows(out) if l.startswith("LCK.TO"))
         self.assertIn("EXITABLE", line)
         self.assertNotIn("CLEAR:", line)
+        out = _radar(txs, "2026-11-03")
+        line = next(l for l in radar_rows(out) if l.startswith("LCK.TO"))
+        self.assertIn("CLEAR:", line)
 
 
 class TestWashRadarViolationWindow(unittest.TestCase):

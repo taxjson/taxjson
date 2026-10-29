@@ -259,9 +259,10 @@ class TestTJ0307SanityCoverage(unittest.TestCase):
             g.write_text("{ broken")
             for args in (("sanity", "--json"), ("sanity",)):
                 r = _tjs(root, *args)
-                # (exit 1, as the refusal of such an account named with
-                # a file: test_fix_audit_1024_sanity_slips B19)
-                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                # (exit 2, an input that cannot be read, as the refusal
+                # of such an account named with a file:
+                # test_fix_audit_1024_sanity_slips B19; backlog TJ-0353)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertEqual(r.stdout, "")
                 self.assertIn(f"work/{g.name}", r.stderr)
                 self.assertIn("the books of 'margin' cannot be read",
@@ -279,7 +280,8 @@ class TestTJ0307SanityCoverage(unittest.TestCase):
             (root / "inputs/rrsp").mkdir()
             (root / "inputs/rrsp/trades.tt").write_text(self._TRADES)
             r = _tjs(root, "sanity", "--json")
-            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            # (exit 2: books missing, an input; backlog TJ-0353)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertEqual(r.stdout, "")
             self.assertIn("no gains file in work/ for account(s) rrsp",
                           r.stderr)

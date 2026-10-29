@@ -187,9 +187,10 @@ class TestIncomeSplit(unittest.TestCase):
         from taxjson.bin.taxjson_filed import (aggregates_from_gains,
                                                diff_snapshot)
         div = aggregates_from_gains({"transactions": [
-            {"action": "DIVIDEND", "dividend": 2000.0, "pil": 0.0}]})
+            {"action": "DIVIDEND", "date": "2025-03-03", "dividend": 2000.0,
+             "pil": 0.0}]})
         pil = aggregates_from_gains({"transactions": [
-            {"action": "DIVIDEND_IN_LIEU", "dividend": 0.0,
+            {"action": "DIVIDEND_IN_LIEU", "date": "2025-03-03", "dividend": 0.0,
              "pil": 2000.0}]})
         self.assertEqual(div["income"], pil["income"])
         lines = diff_snapshot({"accounts": {"m": div}}, {"m": pil})
@@ -200,7 +201,7 @@ class TestIncomeSplit(unittest.TestCase):
         from taxjson.bin.taxjson_filed import (aggregates_from_gains,
                                                diff_snapshot)
         cur = aggregates_from_gains({"transactions": [
-            {"action": "DIVIDEND", "dividend": 2000.0}]})
+            {"action": "DIVIDEND", "date": "2025-03-03", "dividend": 2000.0}]})
         old = {k: v for k, v in cur.items()
                if k not in ("dividend", "pil")}
         self.assertEqual(diff_snapshot({"accounts": {"m": old}},

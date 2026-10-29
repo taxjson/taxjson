@@ -347,6 +347,35 @@ def _check_currency(cur: str, *, field: str, where: str) -> str:
     return cur
 
 
+def _refuse_duplicate_labels(name: str, header: List[str],
+                             read: List[str], lineno: int) -> None:
+    """A column label the reader reads that the header has twice: which
+    one is the position's is a guess (two Quantity columns of 10 and
+    100), so the file is refused, naming it (backlog TJ-0530)."""
+    seen: Dict[str, int] = {}
+    for c in header:
+        k = c.replace('\ufeff', '').strip().lower()
+        seen[k] = seen.get(k, 0) + 1
+    twice = [c for c in read if seen.get(c.lower(), 0) > 1]
+    if twice:
+        raise PositionsReportError(
+            f"{name}:{lineno}: the header has {twice[0]!r} "
+            f"{seen[twice[0].lower()]} times — refusing to guess which "
+            f"column is the position's; keep one of them")
+
+
+def _blank_symbol_error(where: str, qty: float,
+                        what: str = '') -> PositionsReportError:
+    """A security row with a quantity and no symbol: the snapshot would
+    be short by it, so the file is refused (backlog TJ-0529)."""
+    return PositionsReportError(
+        f"{where}: a position of {qty:g}"
+        + (f" ({what})" if what else "")
+        + " with no Symbol — the snapshot would leave it out, and an "
+          "unreadable row is never skipped: add its symbol, or delete "
+          "the row if it is a holding taxjson does not book (a GIC)")
+
+
 def _asset_type_of(symbol: str) -> str:
     from taxjson.lib.core import is_option_symbol
     if symbol.startswith('F:'):
@@ -408,6 +437,7 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
                     f"{name}:{lineno}: Open Positions header lacks "
                     f"{', '.join(missing)} — not a layout this reader "
                     f"knows; refusing to guess which column is which")
+            _refuse_duplicate_labels(name, r[2:], list(_IB_READ), lineno)
             continue
         if r[1] != 'Data' or hm is None:
             continue            # Total / SubTotal rows
@@ -424,7 +454,17 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
         cat = g('Asset Category')
         cur = ibx._norm_ccy(g('Currency'))
         raw = g('Symbol')
-        if cat in ('Forex', 'Cash') or not raw:
+        if cat in ('Forex', 'Cash'):
+            skipped_cash += 1
+            continue
+        if not raw:
+            # A security row (not Forex or Cash) with no symbol is
+            # refused when it holds a quantity: it was left out as
+            # "cash/forex" and the snapshot read as complete (TJ-0529).
+            _q = _num(g('Quantity'), field='Quantity', where=where,
+                      blank_ok=True)
+            if _q:
+                raise _blank_symbol_error(where, _q)
             skipped_cash += 1
             continue
         _safe_cell(raw, field='Symbol', where=where, spaces_ok=True)
@@ -462,10 +502,26 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
         except BrokerageParseError as e:
             raise PositionsReportError(str(e)) from e
         _safe_cell(sym, field='Symbol', where=where)
+        _from = 'Mult'
         if mult is None:
             info = (fii.get((cat, raw))
                     or fii.get((cat, re.sub(r'\s+', ' ', raw))) or {})
             mult = info.get('mult')
+            _from = 'Financial Instrument Information Multiplier'
+            if mult is None and info.get('mult_bad'):
+                raise PositionsReportError(
+                    f"{where} ({raw}): the {_from} {info['mult_bad']!r} "
+                    f"is not a number — fix the file (an unreadable row "
+                    f"is never skipped)")
+        if mult is not None and not (math.isfinite(mult) and mult > 0):
+            # A contract size is a positive count of units, as the
+            # holdings TOML reader and the trade importer require: a 0
+            # or negative one was returned as a valid position (backlog
+            # TJ-0532).
+            raise PositionsReportError(
+                f"{where} ({raw}): {_from} {mult:g} is not a positive "
+                f"contract size — fix the file (an unreadable row is "
+                f"never skipped)")
         if 'Account' in hm:
             acct, akey = mask_account(g('Account')), account_key(
                 g('Account'))
@@ -495,6 +551,12 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
     return rep
 
 
+# The Open Positions columns the IB reader reads (each must be there
+# once: _refuse_duplicate_labels).
+_IB_READ = ('DataDiscriminator', 'Asset Category', 'Currency', 'Symbol',
+            'Quantity', 'Cost Basis', 'Value', 'Mult', 'Account')
+
+
 # ------------------------------------------------------------ RBC
 
 _RBC_COST_TOTAL_RE = re.compile(r'\bbook\s+(cost|value)\b', re.I)
@@ -511,7 +573,31 @@ _RBC_PRICE_WORD_RE = re.compile(r'\bprice\b', re.I)
 _RBC_AVERAGE_RE = re.compile(r'\baverage\b|\bavg\b', re.I)
 _RBC_TOTAL_WORD_RE = re.compile(r'\btotal\b', re.I)
 _RBC_MV_RE = re.compile(r'\bmarket\s+value\b', re.I)
-_LABEL_CUR_RE = re.compile(r'\b(CAD|USD)\b')
+# A currency a cost label names: an upper-case code anywhere ("Book
+# Value USD"), or one in any case in brackets ("Book Value (usd)") —
+# known codes only (lib/markets), so a word is never read as one.
+_LABEL_CODE_RE = re.compile(r'(?<![A-Za-z])([A-Z]{3})(?![A-Za-z])')
+_LABEL_BRACKET_RE = re.compile(r'[(\[]\s*([A-Za-z]{3})\s*[)\]]')
+
+
+def _label_currency(name: str, label: str) -> Optional[str]:
+    """The currency a cost column's label names, or None. Two different
+    ones are refused (backlog TJ-0531: "Book Value (usd)" was read in
+    the row's currency, an explicit EUR relabelled CAD)."""
+    from taxjson.lib.markets import fiat_currencies
+    fiat = fiat_currencies()
+    found = []
+    for m in list(_LABEL_CODE_RE.finditer(label)) \
+            + list(_LABEL_BRACKET_RE.finditer(label)):
+        c = m.group(1).upper()
+        if c in fiat and c not in found:
+            found.append(c)
+    if len(found) > 1:
+        raise PositionsReportError(
+            f"{name}: cost column {label!r} names {' and '.join(found)} "
+            f"— refusing to guess which currency the cost is in; rename "
+            f"the column")
+    return found[0] if found else None
 
 
 def _rbc_cost_label_error(name: str, label: str) -> PositionsReportError:
@@ -545,7 +631,7 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
             f"Symbol and Quantity — refusing to guess its columns")
     header = [c.replace('﻿', '').strip() for c in rows[hpos]]
     low = [h.lower() for h in header]
-    col = {}
+    col: Dict[str, int] = {}
     for i, h in enumerate(low):
         if h == 'symbol':
             col.setdefault('symbol', i)
@@ -574,14 +660,21 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
             raise _rbc_cost_label_error(name, header[i])
         elif h in ('name', 'description', 'security', 'symbol description'):
             col.setdefault('name', i)
+        elif h in ('product', 'product type', 'asset class'):
+            col.setdefault('product', i)
     if 'cur' not in col:
         raise PositionsReportError(
             f"{name}: an RBC Holdings Export with no Currency column — "
             f"cannot tell a TSX listing (.TO) from a US one (.US)")
+    # A column it reads that the header has twice is refused, never the
+    # first one taken (backlog TJ-0530).
+    _refuse_duplicate_labels(name, header, [header[i] for i in col.values()],
+                             hpos + 1)
+    _label_cur = {k: _label_currency(name, header[col[k]])
+                  for k in ('cost', 'avg') if k in col}
 
     def _cost_cur(key: str, row_cur: str) -> str:
-        m = _LABEL_CUR_RE.search(header[col[key]])
-        return m.group(1) if m else row_cur
+        return _label_cur.get(key) or row_cur
 
     ex = RbcBrokerage()
     rep = PositionsReport(path=path, broker='rbc_direct',
@@ -598,9 +691,21 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
             i = col.get(key)
             return _r[i].strip() if i is not None and i < len(_r) else ''
         raw = g('symbol')
+        where = f"{name}:{lineno}"
+        if not raw and g('qty') and not re.search(
+                r'\bcash\b|\btotal', f"{g('name')} {g('product')}", re.I):
+            # A row with a quantity and no symbol is a security the
+            # snapshot would be short by, unless it is cash or a total
+            # (backlog TJ-0529).
+            try:
+                _q = _num(g('qty'), field='Quantity', where=where,
+                          blank_ok=True)
+            except PositionsReportError:
+                _q = None           # a footer's text, not a quantity
+            if _q:
+                raise _blank_symbol_error(where, _q, g('name'))
         if not raw or raw.upper() in ('CASH', 'TOTAL'):
             continue
-        where = f"{name}:{lineno}"
         qty = _num(g('qty'), field='Quantity', where=where, blank_ok=False)
         if abs(qty) < 1e-12:
             continue
@@ -612,9 +717,14 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
         opt = (ex.parse_option_from_description(g('name'))
                or ex.parse_option_from_description(raw))
         if opt:
-            sym = ex.apply_currency_suffix(
-                ex.format_occ_symbol(opt['right'], opt['base'],
-                                     opt['expiry'], opt['strike']), cur)
+            from taxjson.lib.brokerages.base import BrokerageParseError
+            try:
+                occ = ex.format_occ_symbol(opt['right'], opt['base'],
+                                           opt['expiry'], opt['strike'],
+                                           where=where)
+            except BrokerageParseError as e:
+                raise PositionsReportError(str(e)) from None
+            sym = ex.apply_currency_suffix(occ, cur)
         else:
             sym = ex.apply_currency_suffix(raw.upper(), cur)
         _safe_cell(sym, field='Symbol', where=where)

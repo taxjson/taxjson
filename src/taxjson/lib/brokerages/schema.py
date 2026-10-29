@@ -42,7 +42,9 @@ Convention notes encoded here (the "why" behind the checks):
     the next tax year (audit S065-13).
 """
 
+import math
 import re
+from datetime import date as _date
 from typing import Any, Dict, List, Tuple
 
 from taxjson.lib.core import is_option_symbol, validate_staking_reward
@@ -88,6 +90,37 @@ SCHEMA: Dict[str, Dict[str, Tuple[str, ...]]] = {
 }
 
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+# The money and unit fields the checks below do arithmetic on: each
+# must be a finite number when given. A NaN fails every comparison, so
+# a NaN quantity passed the zero-trade and notional checks and was
+# reported as clean output (backlog TJ-0522).
+_NUMERIC_FIELDS = ('quantity', 'price', 'proceeds', 'commission', 'fee',
+                   'net_amount', 'gross_amount', 'multiplier')
+
+
+def _not_a_real_date(v: Any) -> bool:
+    """True for a YYYY-MM-DD string that is no calendar day
+    (2025-02-30, 2025-13-01): the pattern alone passed it (TJ-0522)."""
+    try:
+        _date.fromisoformat(str(v))
+    except ValueError:
+        return True
+    return False
+
+
+def _bad_number(v: Any) -> str:
+    """'' for a finite number (or an absent value), else what it is:
+    "not a number" or "not finite" (NaN, inf)."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return ''
+    if isinstance(v, bool):
+        return 'not a number'
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 'not a number'
+    return '' if math.isfinite(f) else 'not finite'
 # Market suffixes the toolkit understands: the market data's one venue
 # table (lib/markets; .VN was Canadian to the parsers but "unknown" here
 # — audit A2-1077). Bare symbols (no dot) are legitimate crypto assets
@@ -185,6 +218,24 @@ def validate_transactions(txs: List[Dict[str, Any]],
             if v and not _DATE_RE.match(str(v)):
                 errors.append(f"{_who(tx, i)}: {field}={v!r} is not "
                               f"YYYY-MM-DD")
+            elif v and _not_a_real_date(v):
+                errors.append(f"{_who(tx, i)}: {field}={v!r} is not a "
+                              f"calendar date — correct the row in the "
+                              f"export (or download it again), or enter "
+                              f"it as a .tt line and delete the row.")
+
+        # Every number the checks below compare, before any arithmetic:
+        # a NaN or an infinity is refused here, not let through every
+        # comparison (TJ-0522).
+        _bad = [(f, tx.get(f), why) for f in _NUMERIC_FIELDS
+                for why in (_bad_number(tx.get(f)),) if why]
+        if _bad:
+            for f, v, why in _bad:
+                errors.append(f"{_who(tx, i)}: {f}={v!r} is {why} — "
+                              f"correct the row in the export (or "
+                              f"download it again), or enter it as a "
+                              f".tt line and delete the row.")
+            continue
 
         qty = float(tx.get('quantity') or 0.0)
         net = float(tx.get('net_amount') or 0.0)

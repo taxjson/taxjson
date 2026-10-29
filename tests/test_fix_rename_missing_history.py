@@ -12,8 +12,6 @@ work; the old module name (taxjson.lib.phantom_holdings) is a shim.
 Synthetic data only: fake account numbers (55500001 # pii-ok), all-CAD
 Questrade books, no FX fetch.
 """
-import contextlib
-import io
 import json
 import os
 import subprocess
@@ -21,7 +19,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from tax_rules import rule
 

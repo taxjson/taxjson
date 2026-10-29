@@ -56,6 +56,14 @@ from taxjson.lib.core import (IN_KIND_CONTRIBUTION_TYPE,
 # The most days between the two legs of one move (a transfer between two
 # brokers can take a week).
 PAIR_DAYS = 10
+# The most days an in-kind move's in leg may post after its out leg when
+# nothing else could be either leg's partner (the same window as a
+# slower move of your own, transfer_in.SLOW_MOVE_DAYS): an ATON move to
+# or from an RRSP often takes one to three weeks. Such a pair is named,
+# NOT booked, until an INKIND line says it was one move (backlog
+# TJ-0437: its taxable leg passed in silence, the deemed sale missing
+# and the shares held in both accounts).
+SLOW_DAYS = 45
 _EPS = 1e-6
 
 CONTRIBUTION = "contribution"
@@ -171,6 +179,10 @@ class Move:
     # The plan's legs when it received (sent) the shares in parts — a
     # declared move only; else [] and `registered` is the one leg.
     parts: List[Leg] = field(default_factory=list)
+    # The days between its legs when they post more than PAIR_DAYS and
+    # at most SLOW_DAYS apart (the in leg after the out leg); 0 within
+    # the window. Undeclared, such a move's problem is "slow".
+    slow: int = 0
 
     @property
     def registered_legs(self) -> List[Leg]:
@@ -215,7 +227,7 @@ class Move:
                 "fmv": self.fmv, "currency": self.currency,
                 "source": self.source, "source_text": self.source_text,
                 "estimated": self.estimated, "problem": self.problem,
-                "booked": self.booked}
+                "slow": self.slow, "booked": self.booked}
 
 
 def legs(rows: Iterable[Tuple[str, str, Dict[str, Any]]],
@@ -249,6 +261,20 @@ def _rank(o: Leg, n: Leg) -> Tuple[Any, ...]:
     return (_gap(o.date, n.date), o.date, n.date, o.account, n.account)
 
 
+def _slow_gap(o: Leg, n: Leg, days: int, slow_days: int) -> int:
+    """The days from out leg `o` to in leg `n` when they can be one
+    slower move's legs — the same security and quantity, the in leg
+    `days` + 1 to `slow_days` days AFTER the out leg (an arrival never
+    comes from a later departure) — else 0."""
+    if o.key != n.key or abs(-o.qty - n.qty) > _EPS:
+        return 0
+    do, dn = _d(o.date), _d(n.date)
+    if do is None or dn is None:
+        return 0
+    gap = (dn - do).days
+    return gap if days < gap <= slow_days else 0
+
+
 def _make(o: Leg, n: Leg) -> Move:
     if o.registered:
         return Move(WITHDRAWAL, taxable=n, registered=o, plan=o.plan,
@@ -268,7 +294,8 @@ class Pairing:
 
 def pair_all(all_legs: Sequence[Leg], days: int = PAIR_DAYS, *,
              own: Iterable[int] = (),
-             declared: Optional[Dict[int, str]] = None) -> Pairing:
+             declared: Optional[Dict[int, str]] = None,
+             slow_days: int = SLOW_DAYS) -> Pairing:
     """Pair every out leg with an in leg of the same security and
     quantity within `days` days, each leg once, the closest date first:
 
@@ -285,6 +312,14 @@ def pair_all(all_legs: Sequence[Leg], days: int = PAIR_DAYS, *,
        cross-kind pair is booked only when neither leg has another
        plausible partner (a leg of either kind outside a journal, not a
        declared move's): else its problem is "ambiguous".
+    4. a taxable leg and a registered leg further apart: the in leg
+       `days` + 1 to `slow_days` days after the out leg, neither with
+       another candidate so far apart (a leg of either kind, any
+       account, left by the steps above): a slower move, its `slow` the
+       days between, its problem "slow" — named, NOT booked, until an
+       INKIND line declares it (a declared leg with no partner in the
+       window, nor parts of it, takes the closest such leg in step 3,
+       booked; backlog TJ-0437).
 
     `own`: id(row) of the transfer rows a line declares moves of your
     own (`plan=own`) — never in kind, and never another leg's
@@ -354,7 +389,26 @@ def pair_all(all_legs: Sequence[Leg], days: int = PAIR_DAYS, *,
             else:
                 js = _parts(d, [(j, other[j]) for j in mates], days)
                 if not js:
-                    continue        # apply_lines: a plan outside
+                    # A slower move (step 4's window): the closest leg
+                    # of the plan posted after the out leg, declared by
+                    # the line (backlog TJ-0437: the line booked the
+                    # sale "to a plan outside the project").
+                    far = sorted(
+                        ((_slow_gap(d, other[j], days, slow_days)
+                          if side == "out"
+                          else _slow_gap(other[j], d, days, slow_days)), j)
+                        for j in mates)
+                    far = [(g, j) for g, j in far if g]
+                    if not far:
+                        continue        # apply_lines: a plan outside
+                    gap, j = far[0]
+                    used.add(i)
+                    oused.add(j)
+                    o, n = (d, other[j]) if side == "out" else (other[j], d)
+                    m = _make(o, n)
+                    m.slow = gap
+                    moves.append(m)
+                    continue
                 used.add(i)
                 oused.update(js)
                 parts = sorted((other[j] for j in js),
@@ -394,6 +448,35 @@ def pair_all(all_legs: Sequence[Leg], days: int = PAIR_DAYS, *,
             key=lambda g: (g.date, g.account, g.qty))
         if m.alternatives:
             m.problem = "ambiguous"
+        moves.append(m)
+    # 4. A slower move between a taxable and a registered account (in
+    # leg after the out leg, more than `days` and at most `slow_days`
+    # apart), neither leg with another candidate so far apart among the
+    # legs left (either kind, any account; a journal's and a line's
+    # legs are no candidates): named, never booked unasked.
+    lo = [i for i, g in enumerate(outs) if i not in used_o
+          and i not in j_o and id(g.row) not in answered]
+    li = [j for j, g in enumerate(ins) if j not in used_i
+          and j not in j_i and id(g.row) not in answered]
+    by_o: Dict[int, List[Tuple[int, int]]] = {}
+    by_i: Dict[int, List[int]] = {}
+    for i in lo:
+        for j in li:
+            gap = _slow_gap(outs[i], ins[j], days, slow_days)
+            if gap:
+                by_o.setdefault(i, []).append((j, gap))
+                by_i.setdefault(j, []).append(i)
+    for i, cands in sorted(by_o.items()):
+        if len(cands) != 1:
+            continue
+        j, gap = cands[0]
+        o, n = outs[i], ins[j]
+        if len(by_i.get(j, ())) != 1 or not cross(o, n):
+            continue
+        used_o.add(i)
+        used_i.add(j)
+        m = _make(o, n)
+        m.slow, m.problem = gap, "slow"
         moves.append(m)
     moves.sort(key=lambda m: (m.date, m.taxable.account, m.key))
     unpaired = ([g for i, g in enumerate(outs) if i not in used_o]
@@ -564,7 +647,7 @@ def apply_lines(moves: List[Move],
         m.source = "tt"
         m.source_text = f"INKIND line {ln.get('source') or ''}".strip()
         m.estimated = False
-        if m.problem == "ambiguous":
+        if m.problem in ("ambiguous", "slow"):
             m.problem, m.alternatives = "", []
     moves.sort(key=lambda m: (m.date, m.taxable.account, m.key))
     return problems
@@ -864,6 +947,11 @@ def message(moves: Sequence[Move], problems: Sequence[str],
     for m in moves:
         what = (f"{m.kind} {m.pair_text()}: {m.quantity:g} {m.symbol} on "
                 f"{m.date}")
+        if m.slow and m.registered is not None:
+            o, n = ((m.taxable, m.registered) if m.kind == CONTRIBUTION
+                    else (m.registered, m.taxable))
+            what += (f" (out {o.date}, in {n.date}: {m.slow} days "
+                     f"apart)")
         if m.booked:
             val = (f"at {_money(m.fmv)} {m.currency} ({m.source_text})")
             if m.kind == CONTRIBUTION:
@@ -902,6 +990,19 @@ def message(moves: Sequence[Move], problems: Sequence[str],
                 f"{m.taxable.currency or 'CAD'} <price per share> "
                 f"plan={m.plan}` books this move; `{ln} plan=own` keeps "
                 f"it a move of your own.")
+        elif m.problem == "slow":
+            q = -m.quantity if m.kind == CONTRIBUTION else m.quantity
+            ln = f"INKIND {m.taxable.date} {m.symbol} {q:g}"
+            details.append(
+                f"- {what}: NOT booked — the two legs post more than "
+                f"{PAIR_DAYS} days apart and nothing else pairs with "
+                f"either, so it is not taken as one move on its own. The "
+                f"shares stay in {m.taxable.account}'s books as the "
+                f"transfer rows left them. If it was one move, add to a "
+                f".tt file in inputs/{m.taxable.account}/: `{ln} "
+                f"{m.taxable.currency or 'CAD'} <price per share>` (it "
+                f"books the move at that value, with {m.other_account}'s "
+                f"transfer row); if it was not, `{ln} plan=own`.")
         elif m.problem == "cash_only":
             details.append(
                 f"- {what}: NOT booked — an IRA, Roth, 401(k) or HSA "

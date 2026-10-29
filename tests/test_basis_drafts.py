@@ -462,11 +462,19 @@ class TestWritePurchasesCommand(unittest.TestCase):
                 out[c] = (root / 'inputs' / 'margin' / DRAFT_NAME
                           ).read_text()
             # Same lines in both countries (the original currency, IB's
-            # lot dates); the notes follow each country's rule only.
+            # lots), each dated on the project's tax_date: Canada's
+            # settle basis takes a lot's settlement date (IB's lot date
+            # is the trade date; backlog TJ-0419), the US trade basis
+            # IB's date. The notes follow each country's rule only.
             lines = {c: [l for l in t.splitlines()
                          if l.startswith('BUYSELL')]
                      for c, t in out.items()}
-            self.assertEqual(lines['canada'], lines['usa'])
+            self.assertEqual(
+                lines['canada'],
+                [l.replace('2023-01-10', '2023-01-12')
+                  .replace('2023-06-15', '2023-06-20')
+                 for l in lines['usa']])
+            self.assertIn('2023-01-10', lines['usa'][0])
             self.assertIn('CA-ACB-15', out['canada'])
             self.assertIn('s.47', out['canada'])
             self.assertNotIn('US-BASIS-08', out['canada'])
