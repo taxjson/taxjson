@@ -48,6 +48,11 @@ def validate_transactions(transactions, filename="input",
             issues[f"TX index_{i} (row {i+1})"].append(
                 f"Row is not a JSON object (got {type(tx).__name__})")
             continue
+        # `qty` is the loaders' alias of `quantity` (core.
+        # coerce_transaction_row): read as 0, it failed a correct book
+        # with "Quantity is 0" (backlog TJ-0977).
+        if "qty" in tx and "quantity" not in tx:
+            tx = {**tx, "quantity": tx["qty"]}
         tx_id = tx.get("id", f"index_{i}")
         context = f"TX {tx_id} (row {i+1})"
 
@@ -65,10 +70,14 @@ def validate_transactions(transactions, filename="input",
                 issues[context].append(
                     f"Field '{_fld}' must be a string, got "
                     f"{type(_v).__name__}: {_v!r}")
-        # Numeric view: value or None when the field is unusable.
+        # Numeric view: value or None when the field is unusable. The
+        # loaders' own list (core.coerce_transaction_row): a malformed
+        # multiplier, market_value or corp_parent_qty passed here and was
+        # refused by the next load (backlog TJ-0979, TJ-1226).
         nums = {}
         for _fld in ("quantity", "price", "net_amount", "gross_amount",
-                     "fee", "commission", "proceeds"):
+                     "fee", "commission", "proceeds", "multiplier",
+                     "market_value", "corp_parent_qty"):
             if _fld not in tx:
                 nums[_fld] = 0.0
                 continue
@@ -119,6 +128,11 @@ def validate_transactions(transactions, filename="input",
 
         # 2. Date validation
         date = _s("date")
+        # A real calendar day: the settlement-lag check below parses it
+        # again, and an impossible one (2025-02-30) raised there — a
+        # traceback, the report and the next files lost (backlog
+        # TJ-0987).
+        date_ok = False
         if not date:
             issues[context].append("Missing 'date'")
         elif not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
@@ -126,6 +140,7 @@ def validate_transactions(transactions, filename="input",
         else:
             try:
                 datetime.strptime(date, "%Y-%m-%d")
+                date_ok = True
             except ValueError:
                 issues[context].append(
                     f"Impossible date: '{date}' (not a real calendar day)")
@@ -141,8 +156,7 @@ def validate_transactions(transactions, filename="input",
                     f"Impossible date_settle: '{date_settle}'")
             else:
                 # CA-DATE-03 / US-DATE-04 (audit A2-0959).
-                if (action in ("BUYSELL", "ASSIGN") and date
-                        and re.match(r"^\d{4}-\d{2}-\d{2}$", date)):
+                if action in ("BUYSELL", "ASSIGN") and date_ok:
                     if date_settle < date:
                         issues[context].append(
                             f"date_settle {date_settle} is before the "
@@ -184,8 +198,7 @@ def validate_transactions(transactions, filename="input",
         if action in {"BUYSELL", "ASSIGN"}:
             # A MISSING key books as 0 in the engines (audit R1-162).
             for _fld in ("quantity", "net_amount"):
-                if _fld not in tx and not (_fld == "quantity"
-                                           and "qty" in tx):
+                if _fld not in tx:
                     issues[context].append(
                         f"Missing '{_fld}' for action '{action}'")
             # None = unusable value, already reported by the type check.

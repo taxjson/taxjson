@@ -18,7 +18,7 @@ reversing trade, with a warning.
 Rows may be dicts (parser output) or TaxTransaction objects (merge2).
 """
 
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 TRADE_CANCEL_TYPE = 'trade_cancel'
 
@@ -135,8 +135,44 @@ def _reduced(orig: Any, ca: Any) -> Any:
     return type(orig)(**d)
 
 
+def retained_fee(orig: Any, ca: Any) -> Any:
+    """The commission the broker kept on a trade it cancelled in full:
+    a FEE row (the repo sign, + charged) of the two rows' fees together
+    (both in the repo sign: the cancellation's refund is negative, so
+    the sum is the commission the cash lost), dated and settled as the
+    trade, on its symbol and account; None when the cancellation
+    refunded it all (or, oddly, more). Dropping the pair dropped that
+    real charge with it, and the account's cash no longer matched the
+    broker's (backlog TJ-0742). A dict for a dict, else the same class
+    (merge2's TaxTransaction)."""
+    left = 0.0
+    for t in (orig, ca):
+        for f in _FEE_MONEY:
+            try:
+                left += float(_g(t, f) or 0.0)
+            except (TypeError, ValueError):
+                pass
+    if left < 1e-9:
+        return None
+    d = {'action': 'FEE', 'date': _g(orig, 'date'),
+         'time': _g(orig, 'time') or '09:30:00',
+         'date_settle': _g(orig, 'date_settle') or _g(orig, 'date'),
+         'symbol': _g(orig, 'symbol'), 'quantity': 0.0,
+         'currency': _g(orig, 'currency'), 'net_amount': round(left, 10),
+         'type': 'fee', 'account': _g(orig, 'account'),
+         'description': f"{_g(orig, 'description') or ''} (commission "
+                        f"kept on a cancelled trade)".strip()}
+    for f in ('source', 'source_account', 'source_key'):
+        if _g(orig, f):
+            d[f] = _g(orig, f)
+    if isinstance(orig, dict):
+        return d
+    return type(orig)(**d)
+
+
 def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
-                       overlaps: Optional[list] = None
+                       overlaps: Optional[list] = None,
+                       acct_of: Optional[Callable[[Any], str]] = None
                        ) -> Tuple[List[Any], List[Tuple[Any, Any]],
                                   List[Any]]:
     """Drop every cancellation row together with the original it reverses.
@@ -166,11 +202,27 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
     size, the order is removed in full — the pair is (original,
     cancellation), and (original, cancellation, reduced) is appended to
     `overlaps` when a list is given — instead of the excess (440 against
-    400) staying booked as a phantom reversing trade."""
+    400) staying booked as a phantom reversing trade.
+
+    A whole trade cancelled with its commission not (all) refunded
+    leaves a FEE row of what the broker kept (`retained_fee`) in the
+    original's place in `kept`.
+
+    `acct_of(row)` gives the broker account a parser read on a row that
+    carries none (a combined statement's Account column, '' when
+    unknown): a cancellation never reverses a row of another account
+    (backlog TJ-0982), as with `source_account`."""
+    accts = [str(acct_of(t) or '') if acct_of is not None else ''
+             for t in txs]
+
+    def other_acct(i: int, ci: int) -> bool:
+        return bool(accts[i] and accts[ci] and accts[i] != accts[ci])
+
     used = set()
     pairs = []
     unmatched = []
     replaced = {}
+    residual = {}
     for ci, ca in enumerate(txs):
         if not is_trade_cancel(ca):
             continue
@@ -179,11 +231,12 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
         # residual (cancelling exactly the rest removes it), never by
         # its original size (issue #12).
         cands = [i for i, t in enumerate(txs)
-                 if i not in used and i != ci
+                 if i not in used and i != ci and not other_acct(i, ci)
                  and cancels(replaced.get(i, t), ca)]
         ca_time = _g(ca, 'time') or ''
         part = [i for i, t in enumerate(txs)
                 if i not in used and i != ci and not is_trade_cancel(t)
+                and not other_acct(i, ci)
                 and _partly_cancels(replaced.get(i, t), ca)]
         same = [i for i in part if (_g(txs[i], 'time') or '') == ca_time]
         if cands and len(same) == 1 and not any(
@@ -205,7 +258,8 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
                     partials.append((before, ca, replaced[oi]))
                 continue
             whole = [i for i in replaced
-                     if i not in used and cancels(txs[i], ca)]
+                     if i not in used and not other_acct(i, ci)
+                     and cancels(txs[i], ca)]
             if len(whole) == 1:
                 oi = whole[0]
                 used.update((oi, ci))
@@ -222,5 +276,11 @@ def pair_cancellations(txs: List[Any], partials: Optional[list] = None,
         oi = before[-1] if before else pool[0]
         used.update((oi, ci))
         pairs.append((txs[oi], ca))
-    kept = [replaced.get(i, t) for i, t in enumerate(txs) if i not in used]
+        # A commission the cancellation did not refund stays, a FEE row
+        # in the trade's place (backlog TJ-0742).
+        fee = retained_fee(replaced.get(oi, txs[oi]), ca)
+        if fee is not None:
+            residual[oi] = fee
+    kept = [residual[i] if i in residual else replaced.get(i, t)
+            for i, t in enumerate(txs) if i not in used or i in residual]
     return kept, pairs, unmatched

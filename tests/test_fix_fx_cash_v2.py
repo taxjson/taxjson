@@ -439,20 +439,26 @@ class TestOwnTransferInTransit(unittest.TestCase):
         # RBC owes US$1,000 borrowed 01-10 @1.30 (1,300). IB (US$1,000
         # costing 1,200) sends it to RBC; the arrival repays the debt with
         # pooled units costing 1,200: 1,300 - 1,200 = +100, whatever the
-        # transit time.
+        # transit time. The units are disposed of at the arrival day's
+        # value and the debt settled at it (backlog TJ-0724): @1.25 a
+        # currency gain of 50 and 50 on the debt; @1.28 80 and 20.
         rbc = self.RBC
-        for arrival in ("2025-02-01", "2025-02-08"):
+        rates = dict(R, **{"2025-02-01": 1.25, "2025-02-08": 1.28})
+        for arrival, split in (("2025-02-01", (50.0, 50.0)),
+                               ("2025-02-08", (80.0, 20.0))):
             lines = [tt("CASHOPEN 2025-01-01 USD 1000 1200"),
                      tt("CASHOPEN 2025-01-01 USD 0 0", book=rbc),
                      tt("CASHMOVE 2025-02-01 USD -1000 own"),
                      tt(f"CASHMOVE {arrival} USD 1000 own", book=rbc),
                      tt(CLOSE0), tt("CASHBAL 2025-12-31 USD 0", book=rbc)]
             doc = V2.build([bs("2025-01-10", 10, -1000.0, book=rbc)],
-                           cash([], lines), "CAD", 2025, rate_of,
-                           country="canada")
+                           cash([], lines), "CAD", 2025,
+                           lambda c, d: rates.get(d), country="canada")
             with self.subTest(arrival=arrival):
                 self.assertEqual(doc["status"], "computed", doc["problems"])
                 self.assertAlmostEqual(doc["net_gain"], 100.0, places=2)
+                usd = doc["per_currency"]["USD"]
+                self.assertEqual((usd["gain"], usd["debt_gain"]), split)
                 self.assertEqual(doc["pools_year_end"], {})
 
 

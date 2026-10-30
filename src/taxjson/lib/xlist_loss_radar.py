@@ -461,8 +461,8 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
                     buys.append(r)
             if not buys:
                 continue
-            if not is_usa(country) and _held_at(rows_by_sym.get(b, []), hi,
-                                             country) <= _EPS:
+            if not is_usa(country) and held_following(
+                    rows_by_sym, b, hi, country) <= _EPS:
                 continue            # sold out by day 30 (CA-SL-02)
             if names is None:
                 names, shown = _final_names(cache, sorted(equity), renames)
@@ -526,13 +526,42 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     return out
 
 
-def _held_at(rows: List[Dict[str, Any]], day: _date, country: str) -> float:
+def held_following(rows_by_sym: Dict[str, List[Dict[str, Any]]], sym: str,
+                   day: _date, country: str) -> float:
+    """Units of listing `sym` held across the accounts at the end of
+    `day`, under `sym` or a listing a dated rename (a SPLIT row naming
+    `symbol_new`) moved them to by `day`: a rename keeps the holding
+    (backlog TJ-0936: the SIMILAR warning lost a replacement renamed
+    inside the window). A later rename does not count: until then that
+    listing's rows are another security's (backlog TJ-1197)."""
+    from taxjson.lib.missing_history import loss_window_date
+    chain, seen = [sym], {sym}
+    i = 0
+    while i < len(chain):
+        for r in rows_by_sym.get(chain[i], []):
+            new = str(r.get("symbol_new") or "").upper()
+            rd = _d(loss_window_date(r, country))
+            if (str(r.get("action") or "") == "SPLIT" and new
+                    and new not in seen and rd is not None and rd <= day):
+                seen.add(new)
+                chain.append(new)
+        i += 1
+    rows = [r for s_ in chain for r in rows_by_sym.get(s_, [])]
+    return _held_at(rows, day, country, follow=seen)
+
+
+def _held_at(rows: List[Dict[str, Any]], day: _date, country: str,
+             follow: Iterable[str] = ()) -> float:
     """Units of a listing held across the accounts at the end of `day`
     (rows dated on the rule's basis, in their books' order within a
     day): a SPLIT row of an account scales that account's units by its
     ratio (a split, a consolidation), and one that renames the listing
     to another symbol moves them off it (third pre-release review,
-    finding 9: the ratio was added as units)."""
+    finding 9: the ratio was added as units) — unless that symbol is in
+    `follow` (held_following: the units go on under it). An account
+    short the listing holds none: its short does not offset another
+    account's shares (backlog TJ-0935)."""
+    follow = set(follow)
     from taxjson.lib.missing_history import loss_window_date
     from taxjson.lib.corporate_timeline import split_copies
     # One split reported twice is ONE event per account (CA-CORP-12).
@@ -552,13 +581,13 @@ def _held_at(rows: List[Dict[str, Any]], day: _date, country: str) -> float:
             sym = str(r.get("symbol") or "").upper()
             new = str(r.get("symbol_new") or "").upper()
             ratio = _qty(r)
-            if new and new != sym:
+            if new and new != sym and new not in follow:
                 pos[acct] = 0.0
             elif ratio > _EPS:
                 pos[acct] = pos.get(acct, 0.0) * ratio
             continue
         pos[acct] = pos.get(acct, 0.0) + _qty(r)
-    return sum(pos.values())
+    return sum(v for v in pos.values() if v > _EPS)
 
 
 def state_text(findings: Iterable[Finding], country: str) -> str:

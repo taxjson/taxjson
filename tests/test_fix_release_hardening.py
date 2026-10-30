@@ -566,8 +566,10 @@ class TestLand(_Sandbox):
         self.assertIn("Check(s) failed: ruff (critical tier), pii / new "
                       "commits", r.stderr)
         self.assertIn("the pull request is closed", r.stderr)
-        self.assertTrue([c for c in self.calls("pr", "merge")
-                         if "--disable-auto" in c])
+        # Auto-merge is turned on only once every check passed (backlog
+        # TJ-0942): never here, so nothing to turn off.
+        self.assertFalse([c for c in self.calls("pr", "merge")
+                          if "--auto" in c or "--disable-auto" in c])
         close = self.calls("pr", "close")
         self.assertEqual(len(close), 1)
         self.assertIn("--delete-branch", close[0])

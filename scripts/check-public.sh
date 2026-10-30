@@ -2,13 +2,16 @@
 # What GitHub serves BESIDE the code, scanned for personal data: the
 # notes of every release, the title and body of every issue and pull
 # request, and every issue / pull-request conversation comment, review
-# comment and commit comment. None of it is in git, so neither the
-# pre-push hook nor ci.sh ever sees it.
+# comment, pull-request review (the text a review is submitted with: GitHub
+# keeps it apart from the review's line comments, one list per pull
+# request — backlog TJ-0944) and commit comment. None of it is in git, so
+# neither the pre-push hook nor ci.sh ever sees it.
 #
 #   scripts/check-public.sh [--repo OWNER/NAME] [--days N]
 #
 # --days N: only what changed in the last N days (issues and pull requests
-# updated, comments updated), plus the messages of the commits on main in
+# updated, comments updated, the reviews of the pull requests updated), plus
+# the messages of the commits on main in
 # those days — the daily "privacy watch" workflow (.github/
 # workflows/privacy-watch.yml) runs it with --days 2. Release notes are
 # always read whole (a release's notes can be edited at any time and
@@ -42,7 +45,7 @@ while [ $# -gt 0 ]; do
     --repo=*) SLUG="${1#--repo=}"; shift ;;
     --days) DAYS="${2:-}"; shift 2 || shift ;;
     --days=*) DAYS="${1#--days=}"; shift ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
     *) echo "check-public: unknown argument '$1' (usage: scripts/check-public.sh [--repo OWNER/NAME] [--days N])" >&2; exit 2 ;;
   esac
 done
@@ -119,22 +122,36 @@ with open(txt, "w", encoding="utf-8") as t, open(idx, "w", encoding="utf-8") as 
         x.write("%d\t%s\n" % (n, " ".join(where.split())))
 print(len(items))
 '
+# The pull requests among the issues read (the issues list holds them,
+# each with a `pull_request` key): one number per line.
+PRS_PY='
+import json, sys
+raw = open(sys.argv[1], encoding="utf-8").read()
+dec = json.JSONDecoder(); pos = 0
+while True:
+    while pos < len(raw) and raw[pos].isspace():
+        pos += 1
+    if pos >= len(raw):
+        break
+    doc, pos = dec.raw_decode(raw, pos)
+    for it in doc if isinstance(doc, list) else []:
+        if isinstance(it, dict) and it.get("pull_request") \
+                and isinstance(it.get("number"), int):
+            print(it["number"])
+'
 rc=0; summary=""
-while read -r kind mode path; do
-  [ -n "$kind" ] || continue
-  if ! gh api --paginate "$path" > "$W/$kind.json" 2> "$W/$kind.err"; then
-    echo "check-public: could not read the $kind of $SLUG: $(tail -1 "$W/$kind.err" | cut -c1-200)" >&2
-    exit 2
-  fi
+# scan KIND MODE: $W/KIND.json (read already) through check-pii.sh.
+scan() {
+  local kind="$1" mode="$2" count out named n where
   if ! count="$("$PY" -c "$SPLIT_PY" "$kind" "$W/$kind.json" "$W/$kind.txt" "$W/$kind.idx" "$SINCE" 2> "$W/$kind.err")"; then
     echo "check-public: could not read the $kind of $SLUG: $(tail -1 "$W/$kind.err" | cut -c1-200)" >&2
     exit 2
   fi
   summary="$summary $count $kind,"
-  [ -s "$W/$kind.txt" ] || continue
+  [ -s "$W/$kind.txt" ] || return 0
   # The whole kind at once; on a hit (or a scanner error), item by item
   # to say where.
-  scripts/check-pii.sh "$mode" < "$W/$kind.txt" > /dev/null 2>&1 && continue
+  scripts/check-pii.sh "$mode" < "$W/$kind.txt" > /dev/null 2>&1 && return 0
   rc=1
   echo "!! $kind of $SLUG:"
   named=0
@@ -148,11 +165,34 @@ while read -r kind mode path; do
     echo "   (no single item hits on its own; the scan of them together did:)"
     scripts/check-pii.sh "$mode" < "$W/$kind.txt" 2>&1 | grep -v '^check-pii: ' | sed 's/^/     /'
   fi
+}
+while read -r kind mode path; do
+  [ -n "$kind" ] || continue
+  if ! gh api --paginate "$path" > "$W/$kind.json" 2> "$W/$kind.err"; then
+    echo "check-public: could not read the $kind of $SLUG: $(tail -1 "$W/$kind.err" | cut -c1-200)" >&2
+    exit 2
+  fi
+  scan "$kind" "$mode"
 done <<< "$KINDS"
+# The reviews of each pull request read above (with --days: those updated
+# in the window — a review submitted updates its pull request).
+if ! prs="$("$PY" -c "$PRS_PY" "$W/issues.json" 2> "$W/reviews.err")"; then
+  echo "check-public: could not read the pull requests of $SLUG: $(tail -1 "$W/reviews.err" | cut -c1-200)" >&2
+  exit 2
+fi
+: > "$W/reviews.json"
+for n in $prs; do
+  if ! gh api --paginate "repos/$SLUG/pulls/$n/reviews?per_page=100" >> "$W/reviews.json" 2> "$W/reviews.err"; then
+    echo "check-public: could not read the reviews of pull request $n of $SLUG: $(tail -1 "$W/reviews.err" | cut -c1-200)" >&2
+    exit 2
+  fi
+  echo >> "$W/reviews.json"
+done
+scan reviews --text
 summary="${summary%,}"
 if [ "$rc" -ne 0 ]; then
   echo
-  echo "check-public: personal data in what GitHub serves for $SLUG — edit or delete that issue, comment or release on GitHub (a release's title and notes stay editable even when it is immutable; a commit message needs the procedure in docs/releasing.md, "Something private leaked")."
+  echo "check-public: personal data in what GitHub serves for $SLUG — edit or delete that issue, comment, review or release on GitHub (a release's title and notes stay editable even when it is immutable; a commit message needs the procedure in docs/releasing.md, "Something private leaked")."
   exit 1
 fi
 echo "check-public: clean — what GitHub serves for $SLUG${SINCE:+ (changed since $SINCE)}:$summary"

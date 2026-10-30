@@ -340,13 +340,13 @@ def reentry_date(window_epoch: float, loss=None, us: bool = False,
     US days) — the date is the latest of theirs, so a buy of either
     listing on it settles after the window (backlog TJ-0447). Default:
     the loss's own listing."""
-    from taxjson.lib.dates import listing_market_currency
+    from taxjson.lib.dates import settlement_calendar
     loss = loss or {}
     if loss.get('same_day_settle'):
         return epoch_to_date(window_epoch + _REENTRY_DAYS * 86400)
     cals = [c for c in (calendars or ()) if c] or [
-        listing_market_currency(loss.get('symbol') or '',
-                                loss.get('currency') or 'USD') or 'USD']
+        settlement_calendar(loss.get('symbol') or '',
+                            loss.get('currency') or 'USD') or 'USD']
     return max(_reentry_on(window_epoch, loss, us, c) for c in cals)
 
 
@@ -400,6 +400,14 @@ def _listings_booked_under(map_path, booked) -> Dict[str, List[str]]:
             continue                  # ZZV.TO for ZZV.V: one listing
         out.setdefault(to, []).append(f)
     return out
+
+
+def _trade_cur(tx) -> str:
+    """The currency a row was traded in: the trade currency the
+    base-currency books keep on a relabelled row (backlog TJ-0713),
+    else its currency."""
+    return (str(getattr(tx, 'trade_currency', '') or '')
+            or str(getattr(tx, 'currency', '') or '')).strip().upper()
 
 
 def _advisory_category(adv: str) -> str:
@@ -819,12 +827,35 @@ def main():
     _tt_settle_dated = (('settle' in _bases) if _bases else not us_mode)
     _today_iso = epoch_to_date(today_epoch)
 
-    # A listing's currency (its trading calendar) for a sale of it today.
+    # A listing's currency (its trading calendar) for a sale of it today,
+    # and every currency it was traded in (a TSX listing traded in US
+    # dollars settles on 'CAD+USD' days: the books' row is relabelled in
+    # the base currency, its trade currency kept — backlog TJ-0713). Only
+    # the rows that move the shares say so: a US-dollar dividend on a
+    # stock traded in Canadian dollars moved its dates (backlog TJ-1088).
     _sym_cur: Dict[str, str] = {}
+    _sym_curs: Dict[str, List[str]] = {}
     for _t in transactions:
-        _c = (getattr(_t, 'currency', '') or '').strip().upper()
-        if _t.symbol and _c:
+        _c = _trade_cur(_t)
+        if (_t.symbol and _c and _t.action in ('BUYSELL', 'ASSIGN',
+                                               'TRANSFER',
+                                               'OPENING_BALANCE')):
             _sym_cur.setdefault(_t.symbol, _c)
+            if _c not in _sym_curs.setdefault(_t.symbol, []):
+                _sym_curs[_t.symbol].append(_c)
+    # A renamed listing with no trade of its own yet (only a SPLIT row's
+    # symbol_new) trades as the old one did (backlog TJ-1047), if on the
+    # same market: a US listing's dollars say nothing of a TSX one's
+    # (backlog TJ-1241).
+    from taxjson.lib.dates import listing_market_currency as _market
+    for _t in sorted((t for t in transactions if t.action == 'SPLIT'
+                      and (getattr(t, 'symbol_new', '') or '').strip()),
+                     key=lambda t: t.date or ''):
+        _new = _t.symbol_new.strip()
+        if (_new not in _sym_curs and _t.symbol in _sym_curs
+                and _market(_t.symbol, None) == _market(_new, None)):
+            _sym_curs[_new] = list(_sym_curs[_t.symbol])
+            _sym_cur[_new] = _sym_cur[_t.symbol]
 
     # The other listings the ticker map books under each booked symbol
     # (TOBASE ZZX.US ZZX.TO: ZZX.US's trades are in the books as
@@ -846,12 +877,23 @@ def main():
 
     def _calendars(sym: str, currency=None) -> List[str]:
         """The market calendars a trade of `sym` can settle on: its own
-        listing's, then those of the listings booked under it (an
-        option: its underlying's)."""
-        from taxjson.lib.dates import listing_market_currency
+        listing's in each currency it was traded in (`currency` first;
+        lib/dates.settlement_calendar: a TSX trade in US dollars settles
+        on days both markets settle — backlog TJ-0713), then those of
+        the listings booked under it (an option: its underlying's). No
+        currency known: the listing's own market, never US dollars on a
+        Canadian listing (backlog TJ-1047)."""
+        from taxjson.lib.dates import (listing_market_currency,
+                                       settlement_calendar)
         s = str(sym or '').strip().upper()
-        cals = [listing_market_currency(
-            s, currency or _sym_cur.get(sym) or 'USD') or 'USD']
+        cals: List[str] = []
+        for c in ([currency] if currency else []) + list(
+                _sym_curs.get(sym)
+                or ([] if currency
+                    else [listing_market_currency(s, 'USD') or 'USD'])):
+            k = settlement_calendar(s, c) or 'USD'
+            if k not in cals:
+                cals.append(k)
         for o in _other_listings.get(_listing_key(s), ()):
             c = listing_market_currency(o, None)
             if c and c not in cals:
@@ -866,6 +908,8 @@ def main():
             return ""
         names = [_listing_key(sym)] + list(
             _other_listings.get(_listing_key(sym), ()))
+        if len(names) < 2:
+            return ""       # one listing traded in two currencies
         if len(names) == 2:
             return f" on either listing, {names[0]} or {names[1]}"
         return f" on any listing ({', '.join(names)})"
@@ -926,8 +970,11 @@ def main():
         settles on its trade date, every day; a futures contract on its
         trade date, on the exchange's days)."""
         from taxjson.lib.core import _FUTURES_PREFIX_RE
+        from taxjson.lib.dates import listing_market_currency
         return {'symbol': ticker,
-                'currency': _sym_cur.get(ticker) or 'USD',
+                'currency': (_sym_cur.get(ticker)
+                             or listing_market_currency(ticker, 'USD')
+                             or 'USD'),
                 'is_option': is_option_ticker(ticker),
                 'same_day_settle': is_crypto_symbol(ticker),
                 'futures': bool(_FUTURES_PREFIX_RE.match(ticker or ''))}
@@ -996,11 +1043,11 @@ def main():
                 .endswith('.tt')
                 and (not t.date_settle or t.date_settle == t.date)
                 and t.action in ('BUYSELL', 'ASSIGN')):
-            from taxjson.lib.dates import listing_market_currency
+            from taxjson.lib.dates import settlement_calendar
             if is_crypto_symbol(t.symbol or '') or _is_futures(t):
                 return d
             return last_trade_date_settling_by(
-                d, listing_market_currency(t.symbol, t.currency or 'USD'),
+                d, settlement_calendar(t.symbol, _trade_cur(t) or 'USD'),
                 is_option_ticker(t.symbol or ''))
         return d
 
@@ -1191,8 +1238,7 @@ def main():
                 'qty': abs(float(r.get('qty') or 0.0)),
                 'loss': -float(r['raw_gain']),
                 'direction': r.get('direction') or 'LONG',
-                'currency': (getattr(tx, 'currency', '')
-                             or '').strip().upper(),
+                'currency': _trade_cur(tx),
                 'is_option': bool(r.get('is_option',
                                         is_option_ticker(tx.symbol))),
                 'source': 'engine',
@@ -1414,8 +1460,7 @@ def main():
                         'direction': 'LONG' if current_inv > 0 else 'SHORT',
                         # Settlement market for the rescue-deadline
                         # walk-back (T+1 CAD/USD equities; options T+1).
-                        'currency': (getattr(tx, 'currency', '')
-                                     or '').strip().upper(),
+                        'currency': _trade_cur(tx),
                         'is_option': is_option_ticker(ticker),
                     })
             
@@ -1465,7 +1510,7 @@ def main():
                 'denied_units': v['denied_units'],
                 'replacements': v['replacements'],
                 'direction': v['direction'],
-                'currency': (getattr(t, 'currency', '') or '').strip().upper(),
+                'currency': _trade_cur(t),
                 'is_option': v['is_option'] or is_option_ticker(t.symbol),
                 'source': 'engine-usa',
                 **({'position': v['position'],
@@ -1751,6 +1796,15 @@ def main():
             l for l in recent_losses.get(cls, [])
             if (today_epoch - l['epoch']) / 86400 <= 30
         ]
+        # A class bought in the window of a loss sale today is not dust:
+        # 0.005 shares at 100,000 each is a position the engine tests at
+        # its own zero (pool_qty_eps), and a registered account's
+        # fractional buy denies a taxable fractional loss — the 0.01
+        # cutoff hid both rows (backlog TJ-0899).
+        if _eps > pool_qty_eps(ticker) and acq_events.get(cls):
+            _lo = _sale_epoch(ticker) - window_sec
+            if any(e['epoch'] >= _lo for e in acq_events[cls]):
+                _eps = pool_qty_eps(ticker)
 
         # Class-level totals drive the still-held decisions (the engine
         # sums balances over the whole rename class); the per-ticker
@@ -1877,6 +1931,10 @@ def main():
         settle_deadline = None   # VIOLATION only: the engine's settle bound
         rescue_j = None          # VIOLATION only: who must sell what
         denied_j = None          # VIOLATION only: units denied as things stand
+        registered_window_j = None  # open VIOLATION only: taxable units a
+        #                          loss sale today would lose to a registered
+        #                          holder's in-window buy still held
+        registered_last_add_j = None  # VIOLATION: that holder's last such buy
         at_risk_j = None         # LOCKED only: taxable units a loss sale today
         loss_j = None            # BLOCKED/COOLING: (in-window loss, units sold)
         deadline_passed = False  # VIOLATION only: no rescue sale settles in time
@@ -1896,6 +1954,13 @@ def main():
         # forward view, or as COOLING when nothing is held.
         short_cover_j = None
         _short_cover_note = None
+        # VIOLATION whose last rescue date has passed (Canada): its
+        # advisory, kept aside while the forward view of a loss sale
+        # today runs; `forward_j` is that view ({category, advisory,
+        # clears_at, at_risk_qty}; backlog TJ-0775).
+        _passed_adv = None
+        _passed_clear = (None, "-")
+        forward_j = None
         # Held only in registered accounts / IRAs, bought there in the
         # past 30 days: {account, date} of the latest such buy (the
         # category stays CLEAR; sell-check's SIMILAR caveat reads it).
@@ -1996,10 +2061,29 @@ def main():
                                 {l['date'] for l in _claimed}))
                             + " is claimed as your filing position "
                               "(.tt ALLOWLOSS): the books allow it.")
-                _open = [l for l in in_window_losses
-                         if not l.get('position')
-                         and float(l['loss'])
-                         - float(l.get('disallowed') or 0.0) > 0.01]
+                # The part a BUY can still disallow: a US short-cover
+                # loss is replaced only by a new short sale (§1091(e),
+                # US-WASH-05) — its own note, below (backlog TJ-0681).
+                _open = [l for l in in_window_losses if _buy_replaces(l)]
+                _sc_open = [l for l in in_window_losses
+                            if l.get('direction', 'LONG') == 'SHORT'
+                            and not l.get('position')
+                            and float(l['loss'])
+                            - float(l.get('disallowed') or 0.0) > 0.01]
+                if _sc_open:
+                    last = max(_sc_open, key=lambda l: l['epoch'])
+                    _sc_d = max(_reentry(l) for l in _sc_open)
+                    _amt = sum(float(l['loss'])
+                               - float(l.get('disallowed') or 0.0)
+                               for l in _sc_open)
+                    short_cover_j = {"loss": round(_amt, 6),
+                                     "date": last['date'],
+                                     "reshort_ok_from": _sc_d}
+                    _short_cover_note = (
+                        f"NOTE: the loss of {_money_txt(_amt)} on covering "
+                        f"a short on {last['date']} is disallowed only by a "
+                        f"new SHORT sale before {_sc_d} (§1091(e)); buying "
+                        f"the shares does not replace it.")
                 if _open:
                     safe_d = max(_reentry(l) for l in _open)
                     days_left = _days_to(safe_d)
@@ -2024,6 +2108,22 @@ def main():
                 # passed, nothing rescues the loss (A2-0688).
                 _dl = {id(l): _rescue_deadline(l, ticker)
                        for l in violations}
+                if not us_mode:
+                    # A loss sale TODAY has its own window: a registered
+                    # holder backs it only with what it bought in THAT
+                    # window and still holds; its last such buy (a long
+                    # call's too, s.54 para (i)) says when that ends
+                    # (harvest's schedule; backlog TJ-1177).
+                    _se = _sale_epoch(ticker)
+                    _sale_cands, _sale_caps = _capacity(
+                        cls, _se - window_sec, _se + window_sec,
+                        float('inf'),
+                        share_loss=not is_option_ticker(ticker))[:2]
+                    registered_last_add_j = max(
+                        (_bought_on(_e) for _k, _e, _f in _sale_cands
+                         if (_k[1] if _k[0] == 'call' else _k)[0]
+                         == 'SHELTERED' and _sale_caps.get(_k, 0.0) > 1e-9),
+                        default=None)
                 open_v = [l for l in violations
                           if _dl[id(l)][1] >= _today_iso]
                 passed_v = [l for l in violations
@@ -2068,6 +2168,15 @@ def main():
                     clear_in = f"{safe_d} ({days_left}d)"
                     clears_at = safe_d
                     settle_deadline = settle_d
+                    if not us_mode:
+                        # That is less than the whole holding the rescue
+                        # below names (the engine's disallowed_qty;
+                        # backlog TJ-1039).
+                        registered_window_j = round(min(
+                            abs(cls_tax_q),
+                            sum(v for k, v in _sale_caps.items()
+                                if (k[1] if k[0] == 'call' else k)[0]
+                                == 'SHELTERED')), 6)
                     rescue: Dict[Any, dict] = {}
                     rescue_calls: Dict[Any, dict] = {}
                     for l in open_v:
@@ -2151,7 +2260,12 @@ def main():
                     clears_at = safe_d
                     settle_deadline = settle_d
                     deadline_passed = True
-                    adv = f"VIOLATION: {_passed_txt}"
+                    # Settled: no sale undoes it. A loss sale TODAY of
+                    # the shares still held is its own question — the
+                    # position's own view (below) answers it, beside
+                    # this one (backlog TJ-0775).
+                    _passed_adv = f"VIOLATION: {_passed_txt}"
+                    _passed_clear = (clears_at, clear_in)
             else:
                 _sc_losses = [l for l in in_window_losses if us_mode
                               and l.get('direction', 'LONG') == 'SHORT']
@@ -2488,6 +2602,22 @@ def main():
                        "a small part). Pause DRIPs/sheltered adds for 30 "
                        "days, or sell the sheltered shares too.")
 
+        if _passed_adv is not None:
+            # The settled violation stays the row's category; what a
+            # loss sale today meets (a registered account's recent buy
+            # still held: LOCKED) is said after it, and in `forward`
+            # for sell-check / buy-check.
+            if adv:
+                forward_j = {"category": _advisory_category(adv),
+                             "advisory": adv, "clears_at": clears_at,
+                             "at_risk_qty": at_risk_j}
+                adv = f"{_passed_adv} For a loss sale today: {adv}"
+            else:
+                adv = _passed_adv
+            clears_at, clear_in = _passed_clear
+            at_risk_j = None
+            is_relevant = True
+
         if not adv and _short_cover_note:
             # Nothing else to say about the position: the short-cover
             # loss's own window (a re-short is what disallows it).
@@ -2697,6 +2827,11 @@ def main():
                 # holder exits its whole holding of the class).
                 "denied_qty": denied_j,
                 "rescue": rescue_j,
+                # Open VIOLATION only: taxable units a loss sale TODAY
+                # would lose to a registered holder's buy in that sale's
+                # own window (harvest's schedule; backlog TJ-1039).
+                "registered_window_qty": registered_window_j,
+                "registered_window_last_add": registered_last_add_j,
                 # VIOLATION only: the last rescue trade date has passed —
                 # the loss is denied and no sale undoes it (A2-0688).
                 "deadline_passed": deadline_passed,
@@ -2745,6 +2880,11 @@ def main():
                 # when no in-window loss is one a buy can deny).
                 "losses": losses_j,
                 "rebuy_at": rebuy_at,
+                # VIOLATION whose rescue date has passed: what a loss
+                # sale TODAY of the shares still held meets
+                # ({category, advisory, clears_at, at_risk_qty}; None
+                # when nothing — backlog TJ-0775).
+                "forward": forward_j,
                 "category": _advisory_category(adv),
             })
 

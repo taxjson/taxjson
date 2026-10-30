@@ -118,6 +118,26 @@ def _held(rows: List[Dict[str, Any]], sym: str, until: str,
     return balance_on(rows, sym, until, "trade")
 
 
+def _held_before_split(rows: List[Dict[str, Any]],
+                       split: Dict[str, Any]) -> float:
+    """Shares of the split row's symbol just before it applies: the
+    holding at the start of its day (_held) and what an earlier split
+    of that day carried into the symbol — the second link of a same-day
+    rename chain, FIRST to SECOND then SECOND to THIRD, held the first
+    link's shares and read 0 (backlog TJ-0853). The day's splits are
+    taken in the walk's order (balance_on: by clock time, then as the
+    books list them; the run lists a chain link by link)."""
+    from taxjson.bin.taxjson_apply_distributions import balance_on
+    d = split.get("date") or ""
+    day = sorted((r for r in rows if r.get("action") == "SPLIT"
+                  and (r.get("date") or "") == d),
+                 key=lambda r: str(r.get("time") or ""))
+    k = next((i for i, r in enumerate(day) if r is split), 0)
+    pre = [r for r in rows if (r.get("date") or "") < d] + day[:k]
+    return balance_on(pre, split.get("symbol") or "", "9999-12-31",
+                      "trade")
+
+
 _SPIN_BOOKED_RE = re.compile(r"Spinoff\s+(\S+?)\s*\u2192\s*(\S+)")
 # The spin-off elections of both countries (corp_actions.RULES_BY_COUNTRY
 # keys; each key belongs to one country, so the wording below never mixes
@@ -151,7 +171,8 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     books). Elections saved under ids no current event has are stale."""
     import contextlib
     import io
-    from taxjson.bin.taxjson_corp_actions import EXTRACTORS, extract_events
+    from taxjson.bin.taxjson_corp_actions import (EXTRACTORS, extract_events,
+                                                  project_corp_renames)
     from taxjson.lib.corp_actions import combine_broker_copies
     out: Dict[str, Any] = {}
     try:
@@ -162,6 +183,9 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     from taxjson.lib.symbol_codes import SUFFIX
     _codes = root / "work" / f"{acct}{SUFFIX}"
     _codes = _codes if _codes.is_file() else None
+    # The run's map: a parent named by a broker code takes its mapped
+    # identity, as in the run's ids (backlog TJ-0849).
+    renames = project_corp_renames(root)
     groups: Dict[str, List[Path]] = {}
     for ln in lines:
         kind, _, name = ln.partition("/")
@@ -176,7 +200,7 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
             with contextlib.redirect_stderr(io.StringIO()):
                 evs = combine_broker_copies(
                     extract_events(EXTRACTORS[kind], paths, acct,
-                                   symbol_codes=_codes),
+                                   renames=renames, symbol_codes=_codes),
                     stream=io.StringIO())
         except Exception:
             continue
@@ -419,10 +443,13 @@ CIL_DAYS = 60
 
 
 def _cil_booked(rows: List[Dict[str, Any]], symbols: Iterable[str],
-                day: str, fraction: float) -> Optional[Dict[str, Any]]:
-    """The booked sale of a split's fraction (cash in lieu): a BUYSELL of
-    one of `symbols` selling exactly `fraction` units, dated `day` to
-    CIL_DAYS after it; None when there is none (backlog TJ-0445)."""
+                day: str, fraction: float,
+                short: bool = False) -> Optional[Dict[str, Any]]:
+    """The booked close of a split's fraction (cash in lieu): a BUYSELL
+    of one of `symbols` selling exactly `fraction` units — buying them,
+    for a `short` holding's fraction, which is paid, not received
+    (backlog TJ-0678) — dated `day` to CIL_DAYS after it; None when
+    there is none (backlog TJ-0445)."""
     try:
         d0 = datetime.strptime(day, "%Y-%m-%d")
     except ValueError:
@@ -437,7 +464,7 @@ def _cil_booked(rows: List[Dict[str, Any]], symbols: Iterable[str],
                                    "%Y-%m-%d")
         except (TypeError, ValueError):
             continue
-        if (q < 0 and abs(-q - fraction) < 1e-6
+        if ((q > 0 if short else q < 0) and abs(abs(q) - fraction) < 1e-6
                 and timedelta(0) <= dd - d0 <= timedelta(days=CIL_DAYS)):
             return r
     return None
@@ -463,7 +490,7 @@ def splits(root: Path, cfg: Dict[str, Any],
             new = (r.get("symbol_new") or "").strip()
             ratio = float(r.get("quantity") or 0.0)
             d = r.get("date") or ""
-            before = _held(rows, sym, d, False)
+            before = _held_before_split(rows, r)
             # after: the rename target from the split on
             after_sym = new or sym
             # A later copy of an event already applied changes nothing.
@@ -480,14 +507,25 @@ def splits(root: Path, cfg: Dict[str, Any],
             if abs(before) > 1e-9 and abs(after - round(after)) > 1e-6 \
                     and abs(before - round(before)) < 1e-9:
                 _frac = round(abs(after) - int(abs(after)), 9)
-                _cil = _cil_booked(rows, (after_sym, sym), d, _frac)
+                # A short holding's fraction is covered: bought back, its
+                # cash paid (backlog TJ-0678).
+                _short = after < 0
+                _cil = _cil_booked(rows, (after_sym, sym), d, _frac,
+                                   short=_short)
                 if _cil is not None:
                     # Paid and booked: nothing to expect (backlog
                     # TJ-0445: "need attention" for a booked one).
                     flags.append("CIL")
                     why.append(f"leaves {after:g} shares: the fraction's "
-                               f"cash in lieu is booked ({_frac:g} sold "
+                               f"cash in lieu is booked ({_frac:g} "
+                               f"{'bought back' if _short else 'sold'} "
                                f"on {str(_cil.get('date'))[:10]})")
+                elif _short:
+                    flags.append("FRACTION")
+                    why.append(f"leaves {after:g} shares (short): expect "
+                               f"to pay cash in lieu for the fraction "
+                               f"(booked as a small purchase that covers "
+                               f"it)")
                 else:
                     flags.append("FRACTION")
                     why.append(f"leaves {after:g} shares: expect cash in "

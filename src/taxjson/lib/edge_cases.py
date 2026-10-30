@@ -38,7 +38,7 @@ from __future__ import annotations
 from taxjson.lib.stage_msg import emit_line
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from taxjson.lib.corporate_timeline import dedupe_split_events
 
 WINDOW = 30
@@ -46,8 +46,8 @@ WINDOW = 30
 # or a broker's opening position, A2-0389). SPLIT rows scale it (_walk).
 ACQ_ACTIONS = ('BUYSELL', 'ASSIGN', 'TRANSFER', 'OPENING_BALANCE')
 # The engine's income actions (it has no 'PIL' or 'ROC' action: a
-# payment in lieu is DIVIDEND_IN_LIEU, a return of capital an ADJUST of
-# type roc — A2-1207).
+# payment in lieu is DIVIDEND_IN_LIEU, a return of capital an ADJUST
+# income_dating.is_return_of_capital names — A2-1207, TJ-0685).
 INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'INTEREST', 'TAX')
 
 
@@ -112,14 +112,22 @@ def _expiry(sym: str) -> Optional[date]:
 
 
 def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
-          pre: Optional[Dict[int, float]] = None
-          ) -> Dict[Tuple[str, str], float]:
+          pre: Optional[Dict[int, float]] = None,
+          pre_pooled: Optional[Dict[int, float]] = None,
+          pool_of=None) -> Dict[Tuple[str, str], float]:
     """Positions per (account, symbol) after the rows dated on or before
     `until` (by `datef`; every row when None): trades, transfers and
     openings add their quantity, a SPLIT scales the position by its
     ratio and moves it to `symbol_new` (A2-0388). `pre` gets each row's
-    position before it, keyed by id(row)."""
+    position before it, keyed by id(row); `pre_pooled` the position of
+    the row's pool (`pool_of(account)`: the accounts the engine pools,
+    Book.pool) before it (backlog TJ-0690). A SPLIT scales the whole
+    pool once, whichever accounts report it, as the engine does (backlog
+    TJ-1205, TJ-0696)."""
     pos: Dict[Tuple[str, str], float] = {}
+    pooled: Dict[Tuple[str, str], float] = {}
+    pool_of = pool_of or (lambda a: a)
+
     moving = [r for r in rows
               if r.get("action") in ACQ_ACTIONS + ("SPLIT",)]
     moving.sort(key=lambda r: (str(datef(r) or ""), r.get("time") or ""))
@@ -127,6 +135,9 @@ def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
     moving = dedupe_split_events(
         moving, per_account=True,
         account_of=lambda r: r.get("_acct") or "")
+    pool_events = {id(r) for r in dedupe_split_events(
+        moving, per_account=True,
+        account_of=lambda r: pool_of(r.get("_acct") or ""))}
     for r in moving:
         d = datef(r)
         if until is not None and (d is None or d > until):
@@ -134,16 +145,85 @@ def _walk(rows: Iterable[Dict[str, Any]], datef, until: Optional[date] = None,
         k = (r.get("_acct") or "", r.get("symbol") or "")
         if pre is not None:
             pre[id(r)] = pos.get(k, 0.0)
+        if pre_pooled is not None:
+            pre_pooled[id(r)] = pooled.get((pool_of(k[0]), k[1]), 0.0)
         q = float(r.get("quantity") or 0)
         if r.get("action") == "SPLIT":
             ratio = q if q > 0 else 1.0
             new = (str(r.get("symbol_new") or "")).strip() or k[1]
-            p = pos.pop(k, 0.0) * ratio
+            old_p = pos.pop(k, 0.0)
             nk = (k[0], new)
-            pos[nk] = pos.get(nk, 0.0) + p
+            pos[nk] = pos.get(nk, 0.0) + old_p * ratio
+            if id(r) in pool_events:
+                pk = (pool_of(k[0]), k[1])
+                held = pooled.pop(pk, 0.0)
+                npk = (pk[0], new)
+                pooled[npk] = pooled.get(npk, 0.0) + held * ratio
         else:
             pos[k] = pos.get(k, 0.0) + q
+            pk = (pool_of(k[0]), k[1])
+            pooled[pk] = pooled.get(pk, 0.0) + q
     return pos
+
+
+def _marked_short_view(book: "Book") -> Tuple[Dict[int, float],
+                                              Dict[int, float]]:
+    """Canada: ({id(row): the taxable long pool before it}, {id(row): the
+    units of a sale the broker's mark sends to the short pool}), as the
+    engine routes them (core _MarkedShortRouter: CA-DISP-04, backlog
+    TJ-0721), so a marked short is no sale of held units and does not net
+    against another account's long (backlog TJ-1204, TJ-1207). Both empty
+    when no taxable row carries a mark."""
+    from taxjson.lib.core import (TaxTransaction, _MarkedShortRouter,
+                                  _row_part)
+    router = _MarkedShortRouter()
+    fields = TaxTransaction.__dataclass_fields__
+    views: Dict[int, Any] = {}
+    for r in book.txs:
+        if (book.kind.get(r["_acct"]) != "taxable"
+                or r.get("action") not in ACQ_ACTIONS):
+            continue
+        try:
+            t = TaxTransaction(**{k: v for k, v in r.items() if k in fields})
+        except (TypeError, ValueError):
+            continue
+        t.account = r["_acct"]
+        views[id(r)] = t
+    if not any(t.action == "BUYSELL"
+               and (router._opens_short(t) or "O" in router._codes(t))
+               for t in views.values()):
+        return {}, {}
+    rows = [r for r in book.txs if book.kind.get(r["_acct"]) == "taxable"
+            and (id(r) in views or r.get("action") == "SPLIT")]
+    rows.sort(key=lambda r: (str(book.wdate(r) or ""), r.get("time") or ""))
+    long_pool: Dict[str, float] = {}
+    pre: Dict[int, float] = {}
+    marked: Dict[int, float] = {}
+    for r in dedupe_split_events(rows):
+        sym = r.get("symbol") or ""
+        if r.get("action") == "SPLIT":
+            q = float(r.get("quantity") or 0)
+            ratio = q if q > 0 else 1.0
+            new = (str(r.get("symbol_new") or "")).strip() or sym
+            router.split(sym, new, ratio)
+            long_pool[new] = (long_pool.get(new, 0.0)
+                              + long_pool.pop(sym, 0.0) * ratio)
+            continue
+        t = views[id(r)]
+        pre[id(r)] = long_pool.get(sym, 0.0)
+        units = router.crossing_units(t)
+        parts = [t]
+        if units is not None:
+            first = _row_part(t, units, "C", t.id)
+            parts = [first, _row_part(t, abs(float(t.quantity)) - units, "O",
+                                      t.id, rest_of=first)]
+        for part in parts:
+            q = float(part.quantity or 0)
+            if not router.walk(part):
+                long_pool[sym] = long_pool.get(sym, 0.0) + q
+            elif q < 0:
+                marked[id(r)] = marked.get(id(r), 0.0) - q
+    return pre, marked
 
 
 def _opening_qty(book: "Book", r: Dict[str, Any]) -> float:
@@ -215,8 +295,19 @@ class Book:
         # Position before each row, per (account, symbol), on the tax
         # date basis (year straddles, opening vs closing call buys).
         self.pre_pos: Dict[int, float] = {}
-        _walk(self.txs, self.bdate, pre=self.pre_pos)
+        # And the position of the row's pool before it: Canada's
+        # taxable accounts are one ACB pool, so a sale in one account
+        # disposes of shares another holds (backlog TJ-0690).
+        self.pool_pre_pos: Dict[int, float] = {}
+        _walk(self.txs, self.bdate, pre=self.pre_pos,
+              pre_pooled=self.pool_pre_pos, pool_of=self.pool)
+        # A broker-marked short has a pool of its own (Canada only:
+        # _marked_short_view); a book without one reads pool_pre_pos.
+        self.long_pre_pos, self.marked_short = (
+            ({}, {}) if self.usa else _marked_short_view(self))
         self.gains: List[Dict[str, Any]] = []
+        # Covers traded this year, their loss the next's (US-DATE-01).
+        self.covers_next_year: List[Dict[str, Any]] = []
         self.inventory: List[Dict[str, Any]] = []
         # The pools (Canada) or lots (US) at the end of the project
         # year: the engine's inventory_year_end; a gains file without it
@@ -239,6 +330,11 @@ class Book:
                 if self.kind.get(t["_acct"], self.kind.get(acct)) != "taxable":
                     continue            # registered: no gain or loss to report
                 self.gains.append(t)
+            for t in doc.get("covers_realized_next_year") or []:
+                t = dict(t)
+                t["_acct"] = t.get("account") or acct
+                if self.kind.get(t["_acct"], self.kind.get(acct)) == "taxable":
+                    self.covers_next_year.append(t)
             for h in doc.get("inventory") or []:
                 h = dict(h)
                 h["_acct"] = h.get("account") or acct
@@ -330,6 +426,15 @@ class Book:
         A2-1201). Canada's s.54 covers crypto."""
         return not (self.usa and acct in self.crypto)
 
+    def pool(self, acct: str) -> str:
+        """The holder whose units the engine counts together: in
+        Canada every taxable account is one (the ACB pool, and the
+        superficial-loss rule's held units, CA-SL-08), each registered
+        or affiliated account alone; in the US each account alone."""
+        if not self.usa and self.kind.get(acct) == "taxable":
+            return "\0taxable"
+        return acct
+
     def wanted(self, acct: str) -> bool:
         return not self.only or acct == self.only
 
@@ -364,12 +469,28 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
     y = book.year
     # Opening balances (missing history, a broker's opening position) and
     # splits count (A2-0389, A2-1208): Book.pre_pos.
-    pre_pos = book.pre_pos
+    # The position before the row is its pool's (Book.pool: Canada's
+    # taxable accounts are one ACB pool, backlog TJ-0690).
+    pre_pos = book.pool_pre_pos
+    # Each sale's own gain rows (one per lot), by the id the engine
+    # keeps; by (account, symbol, settlement date) only when one trade
+    # has that key — two sales of a day each showed their sum (backlog
+    # TJ-0691).
+    gains_by_id: Dict[Tuple, List[Dict[str, Any]]] = {}
     gains_by_key: Dict[Tuple, List[Dict[str, Any]]] = {}
-    for g in book.gains:
+    for g in book.gains + book.covers_next_year:
+        if g.get("id"):
+            gains_by_id.setdefault((g["_acct"], g.get("symbol"),
+                                    str(g["id"])), []).append(g)
         gains_by_key.setdefault((g["_acct"], g.get("symbol"),
                                  g.get("date_settle") or g.get("date")),
                                 []).append(g)
+    trades_by_key: Dict[Tuple, int] = {}
+    for r in book.txs:
+        if r.get("action") in ("BUYSELL", "ASSIGN"):
+            k = (r["_acct"], r.get("symbol"),
+                 r.get("date_settle") or r.get("date"))
+            trades_by_key[k] = trades_by_key.get(k, 0) + 1
     out = []
     for r in book.txs:
         if r.get("action") not in ("BUYSELL", "ASSIGN"):
@@ -385,13 +506,47 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
         qty = float(r.get("quantity") or 0)
         lands = _lands(book, r)
         taxable = book.kind.get(r["_acct"]) == "taxable"
-        hits = gains_by_key.get((r["_acct"], sym, r.get("date_settle")), [])
+        hits = (gains_by_id.get((r["_acct"], sym, str(r["id"])), [])
+                if r.get("id") else [])
+        key = (r["_acct"], sym, r.get("date_settle"))
+        if not hits and trades_by_key.get(key) == 1:
+            hits = gains_by_key.get(key, [])
+        # A short cover's loss realized on delivery is the settle year's,
+        # whatever the trade date (US-DATE-01; the engine keeps the trade
+        # in `trade_date`). A cover of several lots can be both: a gain
+        # stays on the trade date (backlog TJ-1189).
+        moved = [h for h in hits if h.get("trade_date")]
+        if moved and book.basis != "settle":
+            gain = sum(float(h.get("gain") or 0) for h in moved)
+            mq = sum(float(h.get("qty") or 0) for h in moved)
+            out.append({
+                "account": r["_acct"], "symbol": sym, "qty": mq,
+                "trade_date": str(t), "settle_date": str(s),
+                "lands_in": s.year, "taxable": taxable,
+                "gain": round(gain, 2),
+                "why": (f"traded {t}, settles {s}; a short sale closed at a "
+                        f"loss is realized when the shares are delivered to "
+                        f"close it, so it is a {s.year} short cover: a "
+                        f"disposition whose gain or loss is in {s.year}'s "
+                        f"Form 8949 ({gain:+,.2f})")})
+            hits = [h for h in hits if not h.get("trade_date")]
+            qty -= mq
+            if abs(qty) <= 1e-9:
+                continue
         g = None
         if hits:
             g = {"gain": sum(float(h.get("gain") or 0) for h in hits)}
         opt = _is_option(sym)
         before = pre_pos.get(id(r), 0.0)
-        closing = (before < -1e-9 and qty > 0) or (before > 1e-9 and qty < 0)
+        # A row the engine booked a disposition for closes a position,
+        # whatever its own account held (TJ-0690), except the premium
+        # grant timing books on the write itself (direction SHORT, the
+        # write's own id): that write opens one (s.49(1), TJ-1067).
+        grant_write = (opt and qty < 0 and bool(hits)
+                       and all(h.get("direction") == "SHORT" for h in hits))
+        closing = ((bool(hits) and not grant_write)
+                   or (before < -1e-9 and qty > 0)
+                   or (before > 1e-9 and qty < 0))
         if closing and qty > 0:
             what = ("buy-to-close of a written option" if opt
                     else "short cover")
@@ -440,7 +595,10 @@ def last_days_dispositions(book: Book, days: int = 3) -> List[Dict[str, Any]]:
     for g in book.gains:
         if not book.wanted(g["_acct"]):
             continue
-        t, s = _d(g.get("date")), _d(g.get("date_settle"))
+        # The trade date itself: a short cover's loss realized on delivery
+        # is dated its settle date and listed as a straddle (TJ-1189).
+        t, s = (_d(g.get("trade_date") or g.get("date")),
+                _d(g.get("date_settle")))
         if not t or not s or t.year != s.year:
             continue
         near = any(abs((t - date(yy, 12, 31)).days) < days
@@ -461,6 +619,114 @@ def last_days_dispositions(book: Book, days: int = 3) -> List[Dict[str, Any]]:
                     "gain": round(float(g.get("gain") or 0), 2), "why": why})
     out.sort(key=lambda x: (x["trade_date"], x["symbol"]))
     return out
+
+
+def _assign_settlement(book: Book, acct: str, opts: List[Dict[str, Any]]
+                       ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """(underlying, share legs) of the option ASSIGN rows `opts` of
+    `acct`, as the engines settle them (lib/core): the underlying the
+    assignment resolver names (_make_assign_underlying_resolver; None:
+    it never trades as shares in the account, so the assignment is
+    CASH-SETTLED, backlog TJ-0675), and the share legs the premium
+    folds into — each option's own legs (_pair_assign_legs: dated up to
+    3 days before to 7 days after it, a delivery on the next business
+    day of a new year included, backlog TJ-0674), else the first trade
+    in the assignment's direction up to 7 days after it, or with none
+    the first in the other direction, as the premium ledger drains an
+    unpaired entry (_AssignLedger.take, backlog TJ-1068), among the
+    trades whose shares the options paired with them left over (backlog
+    TJ-1230); [] when none (the run warns the premium is unconsumed)."""
+    import contextlib
+    import io
+    from taxjson.lib.core import (TaxTransaction, _assign_delivery_shares,
+                                  _assign_direction,
+                                  _make_assign_underlying_resolver,
+                                  _MARKED_LEG_MAX_LAG_DAYS,
+                                  _pair_assign_legs)
+    from taxjson.lib.corporate_timeline import event_sort_key
+    cache = book.__dict__.setdefault("_assign_books", {})
+    if acct not in cache:
+        fields = TaxTransaction.__dataclass_fields__
+        txs: List[Any] = []
+        rows: Dict[str, Dict[str, Any]] = {}
+        for n, r in enumerate(book.txs):
+            if r["_acct"] != acct or r.get("action") not in ("BUYSELL",
+                                                             "ASSIGN"):
+                continue
+            try:
+                t = TaxTransaction(**{k: v for k, v in r.items()
+                                      if k in fields})
+            except (TypeError, ValueError):
+                continue
+            # Unique ids: a base book's ids can repeat.
+            t.id = f"edge-{n}"
+            t.account = acct
+            rows[t.id] = r
+            txs.append(t)
+        if book.usa:
+            txs.sort(key=lambda x: event_sort_key(
+                x, profile="us_main", date_of=lambda t: t.date))
+        else:
+            txs.sort(key=lambda x: event_sort_key(
+                x, profile="ca_main",
+                date_of=lambda t: t.date_settle or t.date))
+        # The run already printed the pairing's notes (an assumed
+        # contract size, an ambiguous option root): not again here.
+        with contextlib.redirect_stderr(io.StringIO()):
+            resolve = _make_assign_underlying_resolver(
+                txs, lambda t: t.date, quiet=True)
+            pairs = _pair_assign_legs(txs, lambda _t: True, resolve)
+        # Each trade's shares its paired options do not take first
+        # (_AssignPremiumLedger.take, step 1).
+        left = {t.id: abs(float(t.quantity or 0)) for t in txs}
+        for t in txs:
+            need = _assign_delivery_shares(t) if t.id in pairs else None
+            for leg_id in pairs.get(t.id, ()):
+                took = min(need or 0.0, left.get(leg_id, 0.0))
+                left[leg_id] = left.get(leg_id, 0.0) - took
+                need = (need or 0.0) - took
+        cache[acct] = (txs, rows, resolve, pairs, left)
+    txs, rows, resolve, pairs, left = cache[acct]
+    ids = {i for i, r in rows.items() if any(r is o for o in opts)}
+    und: Optional[str] = None
+    got: List[str] = []
+    for n, t in enumerate(txs):
+        if t.id not in ids:
+            continue
+        with contextlib.redirect_stderr(io.StringIO()):
+            u = resolve(t)
+        if not u:
+            continue
+        und = und or u
+        paired = pairs.get(t.id)
+        if paired:
+            got += [i for i in paired if i not in got]
+            continue
+        d = _assign_direction(t)
+        leg = None
+        for x in txs[n + 1:]:
+            q = float(x.quantity or 0)
+            try:
+                gap = (datetime.strptime(x.date, "%Y-%m-%d")
+                       - datetime.strptime(t.date, "%Y-%m-%d")).days
+            except (TypeError, ValueError):
+                continue
+            if (x.symbol == u and x.action in ("BUYSELL", "ASSIGN")
+                    and abs(q) > 1e-12 and 0 <= gap
+                    <= _MARKED_LEG_MAX_LAG_DAYS):
+                free = left.get(x.id, 0.0) > 1e-9
+                if d is None or (1 if q > 0 else -1) == d:
+                    # A later leg of its own direction keeps the entry
+                    # from an opposite trade before it, even one with
+                    # no shares left to take it.
+                    leg = x if free else None
+                    if free:
+                        break
+                elif free:
+                    leg = leg or x
+        if leg is not None and leg.id not in got:
+            got.append(leg.id)
+    return und, [rows[i] for i in got]
 
 
 def option_expiries(book: Book) -> List[Dict[str, Any]]:
@@ -547,27 +813,55 @@ def option_expiries(book: Book) -> List[Dict[str, Any]]:
         base = {"account": acct, "symbol": sym, "held": held,
                 "expiry": str(exp), "traded": traded}
         if assigned > 1e-9:
-            und = _underlying(sym) or ""
-            legs = [r for r in book.txs
-                    if r["_acct"] == acct and r.get("action") == "ASSIGN"
-                    and r.get("symbol") == und
-                    and _d(r.get("date")) == exp]
-            ld = book.bdate(legs[0]) if legs else None
-            lands = ld.year if ld else exp.year
-            why = (f"{side} {assigned:g} {what} on its expiry date "
-                   f"{exp}: not an expiry — the "
-                   f"{'premium' if side == 'written' else 'cost'} "
-                   f"folds into the {und or 'share'} leg"
-                   + (f" (settles {legs[0].get('date_settle')})"
-                      if legs and legs[0].get("date_settle") else "")
-                   + f", which lands in {lands}")
+            opts = [r for r in on_day if r.get("action") == "ASSIGN"]
+            und, legs = _assign_settlement(book, acct, opts)
+            premium = "premium" if side == "written" else "cost"
+            settlement = "physical"
+            if und is None:
+                # Cash-settled (the underlying never trades as shares
+                # in the account): the option is closed for cash on
+                # the day, nothing folds into a share leg (TJ-0675).
+                settlement = "cash"
+                cash = sum(abs(float(r.get("net_amount") or 0))
+                           for r in opts)
+                od = book.bdate(opts[0]) if opts else None
+                lands = od.year if od else exp.year
+                why = (f"{side} {assigned:g} {what} on its expiry date "
+                       f"{exp} and settled in cash ({cash:,.2f} "
+                       f"{'paid' if side == 'written' else 'received'})"
+                       f": {_underlying(sym) or 'the underlying'} never "
+                       f"trades as shares in this account, so no share "
+                       f"leg takes the {premium} — a disposition of the "
+                       f"option that lands in {lands}")
+            elif legs:
+                # The share leg the engine pairs it with, which can be
+                # dated after the expiry (a delivery on the next
+                # business day of a new year, TJ-0674).
+                ld = book.bdate(legs[0])
+                lands = ld.year if ld else exp.year
+                why = (f"{side} {assigned:g} {what} on its expiry date "
+                       f"{exp}: not an expiry — the {premium} folds into "
+                       f"the {und} leg of {legs[0].get('date')}"
+                       + (f" (settles {legs[0].get('date_settle')})"
+                          if legs[0].get("date_settle") not in
+                          (None, "", legs[0].get("date")) else "")
+                       + f", which lands in {lands}")
+            else:
+                lands = None
+                why = (f"{side} {assigned:g} {what} on its expiry date "
+                       f"{exp}: not an expiry, but no {und} leg in this "
+                       f"account up to 7 days after it takes the "
+                       f"{premium} (the run warns it is unconsumed: add "
+                       f"the missing share row)")
             if abs(held) - assigned > 1e-9:
                 why += (f" ({abs(held):g} held"
                         + (f"; {traded_note}" if traded_note else "")
                         + (f"; {expiring:g} expiring" if expiring else "")
                         + ")")
             out.append(dict(base, units=sign * assigned, lands_in=lands,
-                            assigned=True, outcome=f"{assigned:g} {what}"
+                            assigned=True, settlement=settlement,
+                            outcome=f"{assigned:g} {what}"
+                            + (" for cash" if settlement == "cash" else "")
                             + (f", {traded:g} {closed}"
                                if traded > 1e-9 and not expiring else ""),
                             why=why))
@@ -649,13 +943,16 @@ def income_near_new_year(book: Book, days: int = 5) -> List[Dict[str, Any]]:
     and returns of capital paid — or dated by a record date — within
     `days` of a year end, with the year lib/income_dating puts them in
     (the engine's and divs-sum's year)."""
+    from taxjson.lib.income_dating import is_return_of_capital
     y = book.year
     rules = book.income_rules
     out = []
     for r in book.txs:
         a = r.get("action")
-        is_roc = (a == "ADJUST"
-                  and str(r.get("type") or "").lower() == "roc")
+        # The shared classification: a hand-entered ADJUST with no type
+        # is a return of capital too, as roc-sum reads it (backlog
+        # TJ-0685: only `type=roc` was listed).
+        is_roc = is_return_of_capital(r)
         if a not in INCOME_ACTIONS and not is_roc:
             continue
         if not book.wanted(r["_acct"]):
@@ -698,8 +995,10 @@ def _local_to_utc(ts: datetime, tz_name: str) -> datetime:
             cand = ts + timedelta(hours=off)
             if utc_to_local(cand, tz_name) == ts:
                 return cand
-        raise ValueError(f"local_timezone {tz_name!r} is not available "
-                         f"(install the `tzdata` package)")
+        # A time inside the hour the clocks repeat (utc_to_local orders
+        # its two passes, backlog TJ-0747) or skip: within an hour of
+        # standard time, far from any year end.
+        return ts + timedelta(hours=5)
     return ts.replace(tzinfo=tz).astimezone(timezone.utc).replace(
         tzinfo=None)
 
@@ -747,9 +1046,22 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
     on the engine's window dates (Book.wdate), not tax_date (A2-1206)."""
     y = book.year
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
+    # US: a short-cover loss is replaced by a new short sale, never a
+    # purchase (US-WASH-05, US-PLAN-02): the opening part of each sale,
+    # as a copy with that many units (backlog TJ-0686). Canada counts
+    # purchases only, after a short too (CA-SL-07).
+    shorts: Dict[str, List[Dict[str, Any]]] = {}
     for r in book.txs:
-        if book.window_row(r) and float(r.get("quantity") or 0) > 0:
+        if not book.window_row(r):
+            continue
+        q = float(r.get("quantity") or 0)
+        if q > 0:
             by_sym.setdefault(r.get("symbol") or "", []).append(r)
+        elif q < 0 and book.usa and r.get("action") == "BUYSELL":
+            opening = -q - min(-q, max(book.pre_pos.get(id(r), 0.0), 0.0))
+            if opening > 1e-9:
+                shorts.setdefault(r.get("symbol") or "", []).append(
+                    dict(r, quantity=opening, _short=True))
     out = []
     for g in book.gains:
         if float(g.get("raw_gain", g.get("gain") or 0) or 0) >= -0.005:
@@ -764,14 +1076,18 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
             lo, hi = ld - timedelta(days=WINDOW), ld + timedelta(days=WINDOW)
             if not (lo <= ye < hi):
                 continue
-            other_side = [r for r in by_sym.get(g.get("symbol") or "", [])
+            short = book.usa and g.get("direction") == "SHORT"
+            other_side = [r for r in (shorts if short else by_sym).get(
+                              g.get("symbol") or "", [])
                           if (d := book.wdate(r)) and lo <= d <= hi
                           and (d.year != ld.year)]
             if not other_side:
                 continue
             denied = float(g.get("disallowed_amount") or 0)
             perm = float(g.get("permanently_disallowed") or 0)
-            acq = ", ".join(f"{r['_acct']} {book.wdate(r)} +{float(r.get('quantity') or 0):g}"
+            sign = "-" if short else "+"
+            acq = ", ".join(f"{r['_acct']} {book.wdate(r)} "
+                            f"{sign}{float(r.get('quantity') or 0):g}"
                             for r in other_side[:4])
             allowed_by = None
             if denied > 0.005:
@@ -779,8 +1095,11 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
                            + (f" ({perm:,.2f} permanently, "
                               f"{'IRA' if book.usa else 'registered'} "
                               f"replacement)" if perm > 0.005 else
-                              f"; added to the replacement's cost, so it "
-                              f"comes back when that lot is sold"))
+                              "; taken off the replacement short sale's "
+                              "proceeds, so it comes back when that short "
+                              "is covered" if short else
+                              "; added to the replacement's cost, so it "
+                              "comes back when that lot is sold"))
             else:
                 allowed_by, verdict = _allowed_why(book, g, hi, other_side)
             out.append({"account": g["_acct"], "symbol": g.get("symbol"),
@@ -789,9 +1108,14 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
                         "denied": round(denied, 2), "permanent": round(perm, 2),
                         "allowed_by": allowed_by,
                         "other_year_acquisitions": acq,
-                        "why": (f"a {ty.year} loss whose window runs "
-                                f"{lo}..{hi}, across Dec 31 {yy}: acquisitions "
-                                f"in the other year ({acq}) count. {verdict}")})
+                        "why": (f"a {ty.year} "
+                                + ("short-cover " if short else "")
+                                + f"loss whose window runs "
+                                f"{lo}..{hi}, across Dec 31 {yy}: "
+                                + ("new short sales" if short
+                                   else "acquisitions")
+                                + f" in the other year ({acq}) count. "
+                                f"{verdict}")})
             break
     out.sort(key=lambda x: (x["loss_date"], x["symbol"] or ""))
     return out
@@ -827,13 +1151,22 @@ def _allowed_why(book: Book, g: Dict[str, Any], day30: date,
             f"not a superficial loss: an in-kind contribution to a "
             f"registered plan, whose loss ({dc:,.2f}) s.40(2)(g)(iv) "
             f"denies for good")
-    held = _held_at(book, sym, day30)
+    holders = _holders_tested(book, sym, g["_acct"],
+                              day30 - timedelta(days=WINDOW))
+    held = sum(_long_at(book, sym, day30, h) for h in holders)
+    # Units of a holder that acquired nothing in the window back no
+    # denial (CA-SL-08, backlog TJ-1113): named, never counted.
+    apart = sum(_long_at(book, sym, day30, h)
+                for h in {book.pool(r["_acct"]) for r in book.txs}
+                if h not in holders)
+    aside = (f"; {apart:g} held by another holder that acquired none in "
+             f"the window do not count" if abs(apart) > 1e-9 else "")
     if abs(held) <= 1e-9:
         return "not_held_day30", (f"allowed: no units were held at the end "
-                                  f"of day 30 ({day30})")
+                                  f"of day 30 ({day30}){aside}")
     return "unknown", (f"no denial applied by the engine ({held:g} units "
-                       f"were held at the end of day 30, {day30}; the books "
-                       f"do not record why)")
+                       f"were held at the end of day 30, {day30}{aside}; "
+                       f"the books do not record why)")
 
 
 def _us_allowed_why(book: Book, g: Dict[str, Any],
@@ -867,7 +1200,7 @@ def _us_allowed_why(book: Book, g: Dict[str, Any],
     for r in acqs:
         q = float(r.get("quantity") or 0)
         d = str(book.wdate(r))
-        label = f"{r['_acct']} {d} +{q:g}"
+        label = f"{r['_acct']} {d} {'-' if r.get('_short') else '+'}{q:g}"
         k = (r["_acct"], d)
         s = min(q, sold.get(k, 0.0))
         sold[k] = sold.get(k, 0.0) - s
@@ -955,13 +1288,11 @@ def deferred_into_next_year(book: Book) -> List[Dict[str, Any]]:
 
 # --------------------------------------------------------- window edges
 
-def _held_at(book: Book, sym: str, when: date) -> float:
-    """Units of `sym` held across every account at the end of `when` (a
-    window date): openings and SPLIT ratios applied, and a position
-    renamed into `sym` by a SPLIT counted under it (A2-0388/0389)."""
+def _names_of(book: Book, sym: str) -> Set[str]:
+    """`sym` and every symbol renamed into it by a SPLIT."""
     names = {sym}
     grew = True
-    while grew:                     # every symbol renamed into `sym`
+    while grew:
         grew = False
         for r in book.txs:
             if (r.get("action") == "SPLIT"
@@ -969,10 +1300,45 @@ def _held_at(book: Book, sym: str, when: date) -> float:
                     and (r.get("symbol") or "") not in names):
                 names.add(r.get("symbol") or "")
                 grew = True
+    return names
+
+
+def _holders_tested(book: Book, sym: str, acct: str, loss: date) -> Set[str]:
+    """The holders (Book.pool) the Canadian day-30 test is about for a
+    loss of `sym` in `acct` on `loss`: the loss's own and each that
+    acquired units in the window. The engine takes the units acquired
+    and held per holder (CA-SL-08), so another holder's older units back
+    no denial (backlog TJ-1113)."""
+    out = {book.pool(acct)}
+    names = _names_of(book, sym)
+    for r in book.txs:
+        if ((r.get("symbol") or "") in names and book.window_row(r)
+                and float(r.get("quantity") or 0) > 0
+                and (d := book.wdate(r))
+                and abs((d - loss).days) <= WINDOW):
+            out.add(book.pool(r["_acct"]))
+    return out
+
+
+def _held_at(book: Book, sym: str, when: date,
+             holder: Optional[str] = None) -> float:
+    """Units of `sym` held across every account (or, with `holder`, the
+    accounts of that Book.pool) at the end of `when` (a window date):
+    openings and SPLIT ratios applied, and a position renamed into
+    `sym` by a SPLIT counted under it (A2-0388/0389)."""
+    names = _names_of(book, sym)
     rows = [r for r in book.txs if (r.get("symbol") or "") in names
             and book.in_wash_scope(r["_acct"])]
     pos = _walk(rows, book.wdate, until=when)
-    return sum(v for (_a, s_), v in pos.items() if s_ == sym)
+    return sum(v for (a, s_), v in pos.items() if s_ == sym
+               and (holder is None or book.pool(a) == holder))
+
+
+def _long_at(book: Book, sym: str, when: date, holder: str) -> float:
+    """Units a holder holds at the end of `when`: none while it is net
+    short, whose negative must not hide another holder's units in a sum
+    (backlog TJ-1260)."""
+    return max(0.0, _held_at(book, sym, when, holder))
 
 
 def _losses(book: Book):
@@ -1006,6 +1372,9 @@ def _group(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         k = (it["kind"], it["account"], it["date"], it.get("option"))
         if k in merged:
             merged[k]["qty"] += it["qty"]
+            if it.get("opens_short"):
+                merged[k]["opens_short"] = (merged[k].get("opens_short", 0.0)
+                                            + it["opens_short"])
         else:
             merged[k] = dict(it)
     return sorted(merged.values(), key=lambda i: (i["day"], i["kind"]))
@@ -1024,13 +1393,23 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
                   "when the window closed" if it["inside"] else
                   "after day 30, so those units were still held when the "
                   "window closed"))
+        if it.get("opens_short"):
+            txt += (f" (the other {it['opens_short']:g} sold opened a "
+                    f"short)")
+    elif it["kind"] == "short sale":
+        txt = (f"short sale of {abs(it['qty']):g} in {it['account']}{reg} "
+               f"on {it['date']}, day {it['day']} after the loss: it opens "
+               f"a short (no units were held to sell), so it says nothing "
+               f"about the units held when the window closed")
     else:
         where = "INSIDE" if it["inside"] else "OUTSIDE"
         txt = (f"{it['kind']} of {it['qty']:g} in {it['account']}{reg} on "
                f"{it['date']}: day {abs(it['day'])} {side} the loss -> "
                f"{where} the window")
-        if (it["inside"] and it["day"] < 0 and held_end <= 1e-9
-                and not book.usa):
+        # (Shares held say nothing of a long call: its own check is
+        # calls_in_windows.)
+        if (it["kind"] == "acquisition" and it["inside"] and it["day"] < 0
+                and held_end <= 1e-9 and not book.usa):
             txt += (" (but none of it was still held on day 30, so it is "
                     "not a replacement: it is the lot that was sold)")
     alt = it["other_basis_day"]
@@ -1115,7 +1494,25 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
                 items.append(dict(base, kind="acquisition",
                                   inside=abs(off) <= WINDOW))
             elif q < 0 and lo_edge <= off <= hi_edge and not book.usa:
-                items.append(dict(base, kind="sale", inside=off <= WINDOW))
+                # Only the units the holder (Book.pool) held long before
+                # the row are SOLD; the rest opens a short and says
+                # nothing about the units held on day 30 (backlog
+                # TJ-1014: a new short on day 31 was explained as
+                # replacement units still held when the window closed).
+                # A broker-marked short sells none of them (TJ-1207), and
+                # is not netted with them (TJ-1204).
+                held = max(0.0, book.long_pre_pos.get(
+                    id(r), book.pool_pre_pos.get(id(r), 0.0)))
+                sold = min(-q - book.marked_short.get(id(r), 0.0), held)
+                short = -q - sold
+                if sold > 1e-9:
+                    items.append(dict(base, kind="sale", qty=-sold,
+                                      inside=off <= WINDOW,
+                                      **({"opens_short": short}
+                                         if short > 1e-9 else {})))
+                elif short > 1e-9:
+                    items.append(dict(base, kind="short sale", qty=-short,
+                                      inside=off <= WINDOW))
         if not _is_option(sym) and not book.usa:
             for r, oq in calls.get(sym, []):
                 d, od = book.wdate(r), book.wother(r)
@@ -1134,18 +1531,27 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
         if not items:
             continue
         end = ld + timedelta(days=WINDOW)
-        held_end = _held_at(book, sym, end)
-        # Units held on day 30 beyond those bought after the loss: only
-        # these can be a pre-loss acquisition still on hand.
-        bought_after = sum(float(r.get("quantity") or 0)
-                           for r in by_sym.get(sym, [])
-                           if float(r.get("quantity") or 0) > 0
-                           and (d := book.wdate(r)) and ld < d <= end)
-        pre_held = held_end - bought_after
+        # Canada: the holders the engine's test is about (CA-SL-08,
+        # backlog TJ-1113). The US has no still-held test.
+        holders = (None if book.usa
+                   else _holders_tested(book, sym, g["_acct"], ld))
+        held_end = (_held_at(book, sym, end) if holders is None
+                    else sum(_long_at(book, sym, end, h) for h in holders))
         items = _group(items)
         for it in items:
-            it["why"] = _describe(book, it,
-                                  pre_held if it["day"] < 0 else held_end)
+            pool = book.pool(it["account"])
+            own_end = (held_end if book.usa
+                       else _held_at(book, sym, end, pool))
+            # Units its holder held on day 30 beyond those bought after
+            # the loss: only these can be a pre-loss acquisition still
+            # on hand.
+            bought_after = sum(float(r.get("quantity") or 0)
+                               for r in by_sym.get(sym, [])
+                               if float(r.get("quantity") or 0) > 0
+                               and (book.usa or book.pool(r["_acct"]) == pool)
+                               and (d := book.wdate(r)) and ld < d <= end)
+            it["why"] = _describe(book, it, own_end - bought_after
+                                  if it["day"] < 0 else own_end)
         out.append({"account": g["_acct"], "symbol": sym,
                     "loss_date": str(ld),
                     "qty": float(g.get("qty") or 0),
@@ -1196,7 +1602,10 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
             if not d or abs((d - ld).days) > WINDOW:
                 continue
             osym = r.get("symbol")
-            held = _held_at(book, osym, end)
+            # Held by the call's own holder (Book.pool), as the engine
+            # takes the held units per holder (CA-SL-08): another
+            # account's call never backs this one (backlog TJ-0689).
+            held = _held_at(book, osym, end, book.pool(r["_acct"]))
             alt = (od - lo_).days if od and lo_ else None
             items.append({"kind": "long call", "account": r["_acct"],
                           "sheltered": book.kind.get(r["_acct"]) != "taxable",
@@ -1407,7 +1816,8 @@ def render_text(doc: Dict[str, Any], verbose: bool = False,
             ["ACCOUNT", "SYMBOL", "HELD", "ON EXPIRY DAY", "EXPIRES",
              "LANDS IN"],
             lambda r: (r["account"], r["symbol"], f"{r['held']:+g}",
-                       r.get("outcome") or "", r["expiry"], r["lands_in"]))
+                       r.get("outcome") or "", r["expiry"],
+                       "-" if r["lands_in"] is None else r["lands_in"]))
     section(f"{rule} windows that span Dec 31", yb["loss_windows"],
             ["ACCOUNT", "SYMBOL", "LOSS", "ON", "DENIED"],
             lambda r: (r["account"], r["symbol"], _money(r["raw_loss"]),

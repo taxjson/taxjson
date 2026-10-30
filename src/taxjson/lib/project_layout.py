@@ -180,6 +180,43 @@ def folder_setting(root, key: str, settings: Optional[Dict[str, Any]]
     return real
 
 
+def own_folder_value(root, value: Any) -> Any:
+    """A folder setting's value (`holdings_dir`) as another year's copy
+    of the project would write it: a folder inside the project itself,
+    named by way of its year folder or by its full path
+    (`"../2025/snapshots"` in 2025/), is that year's own — the copy's
+    own is the same folder inside it (`"snapshots"`); `new-year` and
+    `align` carried the path into a year that refuses a folder inside
+    another year's (backlog TJ-0798). Any other value as it is: one
+    inside the project only as written, by a link leading out of it, is
+    a folder the years can share, as folder_setting reads it (backlog
+    TJ-1081)."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    v = value.strip()
+    p = Path(v).expanduser()
+    r = _resolved(root)
+    cand = p if p.is_absolute() else r / p
+    real = _resolved(cand)
+    try:
+        real.relative_to(r)
+    except ValueError:
+        return value
+    # As written first (a link to another folder of the year keeps the
+    # name it was given), then with links followed (a full path through
+    # a link to the project's folder).
+    for form in (Path(os.path.normpath(str(cand))), real):
+        try:
+            rel = form.relative_to(r)
+        except ValueError:
+            continue
+        if not rel.parts:
+            return value
+        own = rel.as_posix()
+        return value if Path(own) == Path(os.path.normpath(v)) else own
+    return value
+
+
 def _year_folders_beside(root: Path) -> List[Path]:
     """The folders named YYYY beside `root` (resolved)."""
     try:
@@ -821,6 +858,13 @@ def compare(here: Path, other: Path) -> Dict[str, Any]:
     if not (shared_tobase(here) or shared_tobase(other)):
         ta, tb = map_rules(here / TOBASE_MAP), map_rules(other / TOBASE_MAP)
     fa, fb = flat_paths(da), flat_paths(db)
+    # A holdings folder each year names inside itself is compared (and
+    # brought over) as its own: `"../2025/snapshots"` in 2025/ is
+    # `"snapshots"`, never a path into another year (backlog TJ-0798).
+    for f, d in ((fa, here), (fb, other)):
+        if ("settings", HOLDINGS_KEY) in f:
+            f[("settings", HOLDINGS_KEY)] = own_folder_value(
+                d, f[("settings", HOLDINGS_KEY)])
     order = account_order(da, db)
     # A year closed with its inputs frozen reads its own copy: the
     # shared folders' settings are left out both ways (align never
@@ -1329,16 +1373,47 @@ def frozen_year(d, year) -> bool:
     return isinstance(fz, dict) and not fz.get("partial")
 
 
+def filed_reports_kept(d, year) -> bool:
+    """`d` (a filed/<year>/reports/ folder) holds a report close-year
+    kept (lib/compare.filed_reports_dir) after the year ended: the year
+    was closed. Reports all written on or before Dec 31 of `year` are a
+    lock taken during the year, a snapshot (taxjson_filed.
+    partial_year_note; backlog TJ-1247)."""
+    import datetime as _dt
+    d = Path(d)
+    try:
+        return d.is_dir() and not d.is_symlink() and any(
+            f.is_file() and _dt.date.fromtimestamp(f.stat().st_mtime).year
+            > int(year) for f in d.iterdir())
+    except (OSError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def lock_missing_frozen(d, year) -> bool:
-    """The year project `d`'s filed/<year>.json is gone while its
-    taxjson.toml still carries close-year's freeze note: a filed year
-    whose lock was deleted. It is treated as a damaged lock is (backlog
-    TJ-0158, TJ-0263): the year stays frozen (frozen_year), `years`,
-    check-filed and the checklist name the lock to restore. A year
-    never closed has no note; a lock taken before the year ended
-    (`close-year --force`) froze nothing and wrote none."""
-    return (not os.path.lexists(Path(d) / "filed" / f"{year}.json")
-            and _freeze_noted(d))
+    """The year project `d`'s filed/<year>.json is gone while the
+    project shows the year was closed: a filed year whose lock was
+    deleted. The sign is close-year's freeze note in its taxjson.toml,
+    or the reports close-year kept in filed/<year>/reports/ once the
+    year has ended (a year closed as a single folder, then moved by
+    `migrate --to-years`, has no note: backlog TJ-1119; a lock taken
+    during the year keeps them too, and that year is not closed, its
+    reports all dated within it: backlog TJ-1247). It is
+    treated as a damaged lock is (backlog TJ-0158, TJ-0263): `years`,
+    check-filed and the checklist name the lock to restore; a noted year
+    stays frozen as well (frozen_year). A year never closed has neither
+    sign; a lock taken before the year ended (`close-year --force`)
+    froze nothing and wrote no note."""
+    if os.path.lexists(Path(d) / "filed" / f"{year}.json"):
+        return False
+    if _freeze_noted(d):
+        return True
+    import datetime as _dt
+    try:
+        ended = _dt.date.today().year > int(year)
+    except (TypeError, ValueError):
+        return False
+    return ended and filed_reports_kept(
+        Path(d) / "filed" / str(year) / "reports", year)
 
 
 def lock_missing_parts(year) -> Tuple[str, str]:
@@ -1346,9 +1421,10 @@ def lock_missing_parts(year) -> Tuple[str, str]:
     checklist say about a lock_missing_frozen year."""
     return (f"filed/{year}.json is missing: restore it or run close-year "
             f"again",
-            "The year's taxjson.toml still carries close-year's freeze "
-            "note, so the year stays frozen: restore the lock from git or "
-            "a backup, or `taxjson close-year` locks the year again.")
+            "The year's folder shows it was closed (close-year's freeze "
+            "note in taxjson.toml, or the reports it kept as filed): "
+            "restore the lock from git or a backup, or `taxjson "
+            "close-year` locks the year again.")
 
 
 def lock_missing_text(year) -> str:

@@ -445,7 +445,9 @@ class TestUtcToLocal(unittest.TestCase):
         d = datetime(2005, 1, 1, 0, 30)
         while d.year < 2028:
             want = cc.utc_to_local(d, "America/Toronto")
-            got = d + timedelta(hours=cc._eastern_offset_hours(d))
+            # The fallback, the repeated hour ordered as utc_to_local
+            # orders it (backlog TJ-0747).
+            got = cc._eastern_local(d)
             self.assertEqual(got, want, d)
             d += timedelta(hours=37)
 

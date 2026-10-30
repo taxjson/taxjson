@@ -8,6 +8,7 @@ overrides them one symbol at a time (lib/ticker_map side rules):
     STABLE      SYMBOL USD|NO     a US-dollar stablecoin (or: not one)
     SPLITSHARE  ROOT [YES|NO]     a Canadian split-share corporation
     INDEXOPT    ROOT [YES|NO]     a US broad-based index option root
+    SECFUT      ROOT [YES|NO]     a US security future root (not §1256)
     EVENING     ROOT [YES|NO]     an option root with a Cboe evening session
     MULT        SYMBOL N          an option's contract size
     VENUE       IBCODE SUFFIX|NO  an IB listing exchange and its suffix
@@ -75,6 +76,7 @@ class Overrides:
         self.stable: Dict[str, bool] = {}
         self.splitshare: Dict[str, bool] = {}
         self.indexopt: Dict[str, bool] = {}
+        self.secfut: Dict[str, bool] = {}
         self.evening: Dict[str, bool] = {}
         self.mult: Dict[str, float] = {}
         self.venue: Dict[str, Optional[str]] = {}
@@ -125,6 +127,7 @@ def overrides() -> Overrides:
         o.stable = dict(r.stable)
         o.splitshare = dict(r.splitshare)
         o.indexopt = dict(r.indexopt)
+        o.secfut = dict(r.secfut)
         o.evening = dict(r.evening)
         o.mult = dict(r.mult)
         o.venue = dict(r.venue)
@@ -370,6 +373,17 @@ def ib_venue_suffix(code: str) -> Optional[str]:
     return data()["ib_venues"].get(c)
 
 
+def ib_futures_session(code: str) -> Optional[Dict[str, Any]]:
+    """The session data of an IB futures "Listing Exch" code
+    (`[ib_futures_sessions]`: evening_open, calendar, every_evening,
+    continuous_from, continuous_close); None for a venue it does not
+    name."""
+    c = str(code or "").strip().upper()
+    if not c:
+        return None
+    return (data().get("ib_futures_sessions") or {}).get(c)
+
+
 # A description naming a fund's US-dollar units or class ("... U S DLR
 # CURRENCY ETF", "... USD UNITS"): vocabulary, not security data.
 USD_UNITS_RE = re.compile(
@@ -444,6 +458,14 @@ def is_index_option_root(root: str, note: bool = True) -> bool:
                    "a broad-based index option (§1256)", note)
 
 
+def is_security_future_root(root: str) -> bool:
+    """A futures root the ticker.map declares a security future (a
+    single-stock or narrow-based index future, `SECFUT ROOT`): no
+    built-in list — a contract on one stock cannot be told from a
+    broad-based one by its symbol (backlog TJ-0730)."""
+    return bool(overrides().secfut.get(str(root or "").strip().upper()))
+
+
 def evening_session_roots() -> FrozenSet[str]:
     base = set(_list("cboe_evening_session_roots"))
     for k, v in overrides().evening.items():
@@ -468,6 +490,20 @@ def contract_size(symbol: str, root: str = "") -> Optional[float]:
         if k and k in o:
             return o[k]
     return None
+
+
+def option_contract_size(symbol: str, underlying: str) -> Optional[float]:
+    """The ticker.map MULT contract size of the option `symbol` whose
+    underlying is `underlying` (SYN.B.TO): the exact contract, then the
+    underlying without its listing suffix (the class share SYN.B), then
+    the root before its first dot (SYN), then the underlying as
+    written. A MULT line on a class share was never looked up: the root
+    was cut at its first dot (backlog TJ-0973). None when no line names
+    it."""
+    und = str(underlying or "").strip()
+    return (contract_size(symbol, strip_listing_suffix(und))
+            or contract_size("", und.split(".", 1)[0])
+            or contract_size("", und))
 
 
 # ------------------------------------------------------------ crypto codes

@@ -133,22 +133,28 @@ def _row_brief(tx) -> str:
 class DedupPlan:
     """What dedup does to a row list: `keep`/`drop` (indices, input
     order), `relabel` (index -> new id for a row kept although another
-    kept row has its id: `<id>~<n>`, the engine's convention), and the
-    `attention` / `notes` lines to print."""
+    kept row has its id: `<id>~<n>`, the engine's convention), `fill`
+    (index -> income facts a dropped copy adds to the kept row), and
+    the `attention` / `notes` lines to print."""
 
     def __init__(self):
         self.keep: List[int] = []
         self.drop: List[int] = []
         self.relabel: Dict[int, str] = {}
+        self.fill: Dict[int, Dict[str, Any]] = {}
         self.attention: List[str] = []
         self.notes: List[str] = []
 
 
-def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
+def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None,
+               source_brokers: Optional[Dict[str, str]] = None
                ) -> DedupPlan:
     """Decide, for every row (TaxTransaction or dict), whether it is a
-    duplicate. See the block comment above for the rules."""
+    duplicate. See the block comment above for the rules.
+    `source_brokers` maps an input file to the broker a generic mapping
+    names (`generic:<name>`, metadata.source_brokers)."""
     source_accounts = source_accounts or {}
+    source_brokers = source_brokers or {}
     plan = DedupPlan()
     uids = [_row_uid(t) for t in rows]
     # One identity per input file: the shown (masked) name plus, when
@@ -258,6 +264,13 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
         if ak and ai and not ak & ai and not is_tt(srcs[k]) \
                 and not is_tt(srcs[i]):
             return ("distinct", "")
+        # Two generic mappings naming different brokers are two
+        # sources, whatever account number each prints: equal numbers
+        # at two brokers made one broker's trades copies of the
+        # other's (backlog TJ-0975).
+        bk, bi = source_brokers.get(srcs[k]), source_brokers.get(srcs[i])
+        if bk and bi and bk != bi:
+            return ("distinct", "")
         if srcs[k] == srcs[i]:
             return ("copy", "")
         return verdict(srcs[k], srcs[i])
@@ -299,6 +312,7 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
                 if copies:
                     k, (v, _why) = copies[0]
                     plan.drop.append(i)
+                    _fill_income_facts(plan, rows, k, i, shown.get(s, s))
                     if v == "copy-ambiguous":
                         events.setdefault((srcs[k], s, v), []).append(i)
                     continue
@@ -371,6 +385,32 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
     return plan
 
 
+def _fill_income_facts(plan: DedupPlan, rows, k: int, i: int,
+                       src: str) -> None:
+    """Row i, a copy of the kept row k, is dropped: an income fact
+    (record date, dealer country ...) that only i states is kept on k.
+    The content id leaves those facts out, so the copy the file names
+    sorted first decided them, and a known Canadian dealer was lost
+    when the plainer statement came first (backlog TJ-0980). A fact the
+    two copies state differently keeps k's, with a note."""
+    from taxjson.lib.core import INCOME_FACT_FIELDS
+    have = plan.fill.setdefault(k, {})
+    for f in INCOME_FACT_FIELDS:
+        new = _row_get(rows[i], f, "") or ""
+        if not new:
+            continue
+        cur = have.get(f) or _row_get(rows[k], f, "") or ""
+        if not cur:
+            have[f] = new
+        elif str(cur) != str(new):
+            plan.notes.append(
+                f"dedup: {_row_brief(rows[k])}: its copy in {src} says "
+                f"{f} {new!r}, the kept row {cur!r} — the kept row's is "
+                f"used")
+    if not have:
+        plan.fill.pop(k, None)
+
+
 def _num(x) -> float:
     try:
         return float(x or 0)
@@ -429,6 +469,7 @@ def _tt_near_duplicates(rows, srcs, keep, is_tt) -> List[str]:
 
 def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False,
                 *, source_accounts: Optional[Dict[str, Any]] = None,
+                source_brokers: Optional[Dict[str, str]] = None,
                 report=None):
     """Remove duplicate transactions (rules: `plan_dedup`).
 
@@ -441,9 +482,15 @@ def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False
     A row kept although another kept row shares its id (separate
     records) gets the id `<id>~<n>`.
     """
-    plan = plan_dedup(transactions, source_accounts)
+    plan = plan_dedup(transactions, source_accounts, source_brokers)
     for i, new_id in plan.relabel.items():
         transactions[i].id = new_id
+    for i, facts in plan.fill.items():
+        for f, v in facts.items():
+            if isinstance(transactions[i], dict):
+                transactions[i][f] = v
+            else:
+                setattr(transactions[i], f, v)
     kept = [transactions[i] for i in plan.keep]
     dropped = [transactions[i] for i in plan.drop]
     if report is not None:
@@ -457,34 +504,63 @@ def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False
     return kept
 
 
+def _dict_of(value) -> Dict[Any, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def source_accounts_of(metadata_blocks) -> Dict[str, List[str]]:
     """Merge the `source_accounts` maps (input file -> hashed broker
-    account ids) of parsed-source metadata blocks."""
+    account ids) of parsed-source metadata blocks. An entry of another
+    shape is no account list: ignored, as a plain sort or a conversion
+    must not stop on it (backlog TJ-1225)."""
     out: Dict[str, List[str]] = {}
     for meta in metadata_blocks:
         if isinstance(meta, dict):
-            for f, accts in (meta.get("source_accounts") or {}).items():
-                out.setdefault(str(f), [])
-                out[str(f)] = sorted(set(out[str(f)]) | set(accts or ()))
+            for f, accts in _dict_of(meta.get("source_accounts")).items():
+                if not isinstance(accts, list):
+                    continue
+                out[str(f)] = sorted(set(out.get(str(f), ())) | {
+                    a for a in accts if isinstance(a, str)})
     return out
+
+
+def source_brokers_of(metadata_blocks) -> Dict[str, str]:
+    """Merge the `source_brokers` maps (input file -> `generic:<name>`)
+    of parsed-source metadata blocks."""
+    out: Dict[str, str] = {}
+    for meta in metadata_blocks:
+        if isinstance(meta, dict):
+            for f, b in _dict_of(meta.get("source_brokers")).items():
+                if b:
+                    out.setdefault(str(f), str(b))
+    return out
+
+
+def _doc_metadata_blocks(text: str) -> List[Any]:
+    """The metadata of a stage document and of every source it merged
+    (metadata.sources[].original_metadata); [] when absent or
+    unreadable."""
+    from taxjson.lib.core import strip_json_comments
+    try:
+        doc = json.loads(strip_json_comments(text))
+    except ValueError:
+        return []
+    meta = doc.get("metadata") if isinstance(doc, dict) else None
+    if not isinstance(meta, dict):
+        return []
+    sources = meta.get("sources")
+    return [meta] + [s.get("original_metadata")
+                     for s in (sources if isinstance(sources, list) else ())
+                     if isinstance(s, dict)]
 
 
 def _doc_source_accounts(text: str) -> Dict[str, List[str]]:
     """metadata.source_accounts of a stage document and of every source
     it merged (metadata.sources[].original_metadata); {} when absent or
-    unreadable (the rows' own source_account still applies)."""
-    from taxjson.lib.core import strip_json_comments
-    try:
-        doc = json.loads(strip_json_comments(text))
-    except ValueError:
-        return {}
-    meta = doc.get("metadata") if isinstance(doc, dict) else None
-    if not isinstance(meta, dict):
-        return {}
-    blocks = [meta] + [s.get("original_metadata")
-                       for s in (meta.get("sources") or ())
-                       if isinstance(s, dict)]
-    return source_accounts_of(blocks)
+    unreadable (the rows' own source_account still applies). A stage
+    that passes rows through (taxjson-sort, taxjson-convert-currency)
+    writes it back as its own metadata.source_accounts."""
+    return source_accounts_of(_doc_metadata_blocks(text))
 
 
 @guard_main("taxjson-sort")
@@ -499,21 +575,26 @@ def main():
     # Load input through the shared loader funnel (file: core.load_
     # transactions; stdin: the pipeline's stdin loader) — `#` comments,
     # qty alias, type guards; a malformed row is a clean error.
+    # The per-file broker accounts are read whether or not this pass
+    # dedups, and written out again: a plain sort dropped them, and a
+    # later dedup took two accounts' identical fills for copies
+    # (backlog TJ-0976).
     meta_accounts: Dict[str, List[str]] = {}
+    meta_brokers: Dict[str, str] = {}
     try:
         if args.input:
             transactions = load_transactions(Path(args.input))
-            if args.dedup:
-                meta_accounts = _doc_source_accounts(
-                    Path(args.input).read_text(encoding="utf-8"))
+            _text = Path(args.input).read_text(encoding="utf-8")
+            meta_accounts = _doc_source_accounts(_text)
+            meta_brokers = source_brokers_of(_doc_metadata_blocks(_text))
         else:
             import io
             from taxjson.lib.pipeline import load_stdin_transactions
             from taxjson.lib.cli_diag import read_stdin_utf8
             _stdin = read_stdin_utf8()      # UTF-8 whatever the locale
             transactions = load_stdin_transactions(io.StringIO(_stdin))
-            if args.dedup:
-                meta_accounts = _doc_source_accounts(_stdin)
+            meta_accounts = _doc_source_accounts(_stdin)
+            meta_brokers = source_brokers_of(_doc_metadata_blocks(_stdin))
     except ValueError as e:
         emit_line(f"{PROG}: error: {e}")
         sys.exit(1)
@@ -550,11 +631,16 @@ def main():
         # taxjson-merge under metadata.sources[].original_metadata):
         # the same rule merge2 and the fee report apply (A2-0297).
         transactions = deduplicate(transactions, report=sys.stderr,
-                                   source_accounts=meta_accounts)
+                                   source_accounts=meta_accounts,
+                                   source_brokers=meta_brokers)
 
     # Sort is a passthrough — preserve full input precision so downstream
     # calculations don't see truncated values.
     output_data = {"transactions": [tx.to_dict() for tx in transactions]}
+    if meta_accounts or meta_brokers:
+        output_data["metadata"] = {k: v for k, v in (
+            ("source_accounts", meta_accounts),
+            ("source_brokers", meta_brokers)) if v}
 
     json.dump(output_data, sys.stdout, indent=2, sort_keys=True)
     print()  # Add final newline

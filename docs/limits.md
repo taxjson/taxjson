@@ -264,11 +264,14 @@ different TSX ticker would share its pool.
 #### Settlement calendars outside North America skip weekends only
 
 The settlement lag follows the listing's market (`.L`, `.AX` and the North American suffixes, else the row
-currency): North America T+1 since May 2024 and T+2 from 2017-09-05; the UK, EU markets and Switzerland
+currency): North America T+1 since May 2024, T+2 from 2017-09-05, T+3 from 1995-06-07 and T+5 before; the UK, EU markets and Switzerland
 T+2 from 2014-10-06 and T+1 from 2027-10-11; the ASX, NZX, Singapore and Tokyo T+2 from their own dates;
-Hong Kong T+2. Any other market is T+3 before 2017-09-05 and T+2 after (no T+1 move modelled). Outside the
+Hong Kong T+2. Any other market is T+3 before 2017-09-05 and T+2 after (no T+1 move and no era before T+3 modelled). Outside the
 US and Canada only weekends are skipped, so a local bank holiday inside the lag can make a settle date a
-day early. IB fills on Asian exchanges are dated in the exchange's local time.
+day early. IB fills on Asian exchanges are dated and timed in the exchange's local time; IB futures fills
+follow their venue's session only on CME Globex, the Montreal Exchange and CME's 24/7 crypto contracts
+(`[ib_futures_sessions]` in taxjson/data/markets.toml): another venue's evening session keeps the Eastern
+clock date.
 **Instead:** where one day matters (a sale in the last days of the year, the edge of a 30-day window),
 check the settle date against the broker's confirmation.
 **Code:** `src/taxjson/lib/dates.py` — `market_of`; `src/taxjson/lib/market_calendar.py`
@@ -491,7 +494,8 @@ bought is not matched (US-WASH-21): applying the rule there would chain through 
 #### Sub-micro quantity tolerance in the Canadian engine
 
 A share or option position under 1e-6 units is read as flat (broker exports round share counts). One that
-still carries a cost of a cent or more is a holding: a sale of it closes it at its cost instead of opening a
+still carries a cost of a cent or more is a holding, bought that small or consolidated into it: it shows in
+the inventory and its cost counts for the T1135, and a sale of it closes it at its cost instead of opening a
 short (tax-logic CA-ACB-01). A coin's tolerance is relative to the quantities, far below that.
 
 #### Sub-micro quantity tolerance in the US engine
@@ -526,7 +530,7 @@ listing. The foreign tax credit uses the books' TAX rows (15% assumed only when 
 at 15% of each security's foreign dividends and at the Canadian tax on them (forms T2209 and T2036), all foreign
 dividends taken as one country's: a dividend classified on the wrong side moves both.
 **Instead:** `tjs tips` flags a Canadian payer held on its US line when it sees the `.TO` line.
-**Code:** `src/taxjson/bin/taxjson_run.py` — `_issuer_is_canadian_by_symbol`
+**Code:** `src/taxjson/bin/taxjson_run.py` — `_issuer_facts`, `_issuer_split`
 
 #### Credits, OAS recovery tax and AMT adjustments outside the books
 
@@ -660,7 +664,7 @@ The figures go on real returns, so correctness is checked in layers, not by test
   ACB or FIFO and the superficial-loss / wash-sale decision, and ties each figure to the pipeline's
   saved gains; any disagreement exits 1. The other filing commands (`sum`, `carryover`, `form-export`,
   `t1135`) are checked against it.
-- **10,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
+- **12,500+ tests** (`scripts/ci.sh` prints the exact count): every fix lands with a regression test that
   failed before it. This figure is the one the deck and the website quote (`tests/test_deck.py`).
 - **Property fuzzers.** Seeded generators build thousands of random books per run and check
   conservation, determinism and ordering laws (the engine, custody transfers, settlement-lag and split

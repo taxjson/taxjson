@@ -384,12 +384,13 @@ class TestNoFalseCleanBeforeRun(unittest.TestCase):  # B22
         self.assertIn("Run `taxjson run`", r.stderr)
         self.assertNotIn("No tips", r.stdout)
 
-    def test_leaps_without_books_exits_1(self):
+    def test_leaps_without_books_exits_2(self):
+        # A missing input: exit 2, as every view (backlog TJ-0644).
         with tempfile.TemporaryDirectory() as td:
             root = self._root(td)
             for sub in ("leaps", "leaps-sum"):
                 r = _tj(root, sub)
-                self.assertEqual(r.returncode, 1, sub)
+                self.assertEqual(r.returncode, 2, sub)
                 self.assertIn(f"taxjson {sub}: error: no gains files", r.stderr)
 
 

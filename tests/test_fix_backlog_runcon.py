@@ -416,7 +416,7 @@ class TestSharedExportsFolder(unittest.TestCase):
             (Path(tmp) / "t" / "inputs" / "margin" / "q.csv").write_bytes(
                 (EXAMPLES / "questrade_demo.csv").read_bytes())
             r = _cli(root, "sum")
-            self.assertEqual(r.returncode, 1)
+            self.assertEqual(r.returncode, 2)  # a missing input (backlog TJ-0644)
             self.assertNotIn("had no input", r.stderr)
             self.assertIn("Run `taxjson run` first", r.stderr)
 

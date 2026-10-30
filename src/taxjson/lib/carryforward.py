@@ -452,6 +452,16 @@ def record_block(country: str, r: Dict[str, Any],
                 # provincial form's line); the rest is surtax saved.
                 "recovered_provincial_credit": float(
                     c.get("recovered_provincial_credit") or 0.0),
+                # The surtax it saves; the rest of the provincial drop is
+                # the foreign tax credit the lower tax limits. Federal:
+                # the nominal line 40427 credit above, and the federal
+                # tax drop (backlog TJ-0653).
+                "recovered_provincial_surtax": float(
+                    c.get("recovered_provincial_surtax") or 0.0),
+                "recovered_federal_tax": float(
+                    c.get("recovered_federal_tax")
+                    if c.get("recovered_federal_tax") is not None
+                    else c.get("recovered_federal") or 0.0),
                 "created": float(c.get("created") or 0.0),
                 "closing_by_year": dict(c.get("closing_by_year") or {}),
                 "closing": float(c.get("closing") or 0.0),

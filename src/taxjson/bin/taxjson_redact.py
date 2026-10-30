@@ -729,20 +729,21 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _split(line: str) -> Optional[List[str]]:
-    """The CSV cells of one line. A line the csv module refuses (a field
-    over csv.field_size_limit()) used to return None, so its account
-    column was never read and the id stayed in the copy while the
-    report said every occurrence was replaced (R1-352): the limit is
+def _split(line: str, delim: str = ",") -> Optional[List[str]]:
+    """The CSV cells of one line (`delim`: a tab- or semicolon-delimited
+    table's, _redact_delimited_identity). A line the csv module refuses
+    (a field over csv.field_size_limit()) used to return None, so its
+    account column was never read and the id stayed in the copy while
+    the report said every occurrence was replaced (R1-352): the limit is
     raised to the line's length, and anything else csv refuses is split
     on its unquoted commas."""
     try:
-        rows = list(csv.reader(io.StringIO(line)))
+        rows = list(csv.reader(io.StringIO(line), delimiter=delim))
     except csv.Error:
         if len(line) >= csv.field_size_limit():
             csv.field_size_limit(len(line) + 1)
-            return _split(line)
-        rows = [[_unquote(line[s:e]) for s, e in _field_spans(line)]]
+            return _split(line, delim)
+        rows = [[_unquote(line[s:e]) for s, e in _field_spans(line, delim)]]
     return rows[0] if rows else []
 
 
@@ -924,20 +925,21 @@ def _collect_ids(lines: List[str]) -> List[str]:
     return ids
 
 
-def _field_spans(body: str) -> List[Tuple[int, int]]:
-    """(start, end) of each comma-separated field of one raw CSV line."""
+def _field_spans(body: str, delim: str = ",") -> List[Tuple[int, int]]:
+    """(start, end) of each `delim`-separated field of one raw CSV line."""
     spans, start, in_q = [], 0, False
     for i, ch in enumerate(body):
         if ch == '"':
             in_q = not in_q
-        elif ch == "," and not in_q:
+        elif ch == delim and not in_q:
             spans.append((start, i))
             start = i + 1
     spans.append((start, len(body)))
     return spans
 
 
-def _replace_field(line: str, cells: List[str], idx: int, value: str) -> str:
+def _replace_field(line: str, cells: List[str], idx: int, value: str,
+                   delim: str = ",") -> str:
     """Replace one CSV field in the RAW line, leaving every other byte
     (quoting, spacing, line ending) as it was. The field is located by
     POSITION — the same text in an earlier cell (a holder's name in
@@ -946,7 +948,7 @@ def _replace_field(line: str, cells: List[str], idx: int, value: str) -> str:
     if not old:
         return line
     body = line.rstrip("\r\n")
-    spans = _field_spans(body)
+    spans = _field_spans(body, delim)
     if len(spans) == len(cells):
         s, e = spans[idx]
         raw = body[s:e]
@@ -1574,6 +1576,66 @@ def _redact_broker_keys(text: str, rep: "Report") -> str:
     return out
 
 
+# The delimiters of a table that is not comma-separated: an Excel "Text
+# (Tab delimited)" save, a CSV of a locale whose decimal mark is a comma.
+_OTHER_DELIMITERS = ("\t", ";", "|")
+
+
+def _redact_delimited_identity(text: str, rep: "Report"
+                               ) -> Tuple[str, set, set]:
+    """`text` with the identity cells (_identity_cols: an alias column,
+    a name column beside an account or alias column, an address block)
+    of each tab-, semicolon- or pipe-delimited table blanked, the line
+    numbers of those tables' headers, and of all their lines (a line
+    after the table, a footer's name, is the preamble rule's again:
+    backlog TJ-1100). The rest of redact_text reads
+    comma-separated cells, where such a row is one cell: its AccountAlias
+    value was only listed for review, never replaced (backlog TJ-0569).
+    A header is a line that splits into more cells by that delimiter
+    than by commas, is a column header (_is_flat_header) and names an
+    identity column; its table runs while a line has its cell count.
+    Every other byte of the text is kept."""
+    lines = _PHYSICAL_LINE.findall(text)
+    headers = set()
+    table_lines = set()
+    delim: Optional[str] = None
+    cols: List[int] = []
+    width = 0
+    for no, ln in enumerate(lines, start=1):
+        body = ln.rstrip("\r\n")
+        if delim is not None:
+            cells = _split(body, delim) or []
+            if len(cells) == width:
+                hit = False
+                for i in cols:
+                    if cells[i].strip():
+                        new = _replace_field(ln, cells, i, "REDACTED", delim)
+                        hit = hit or new != ln
+                        ln = new
+                        cells = _split(ln.rstrip("\r\n"), delim) or []
+                rep.identity_rows += hit
+                lines[no - 1] = ln
+                table_lines.add(no)
+                continue
+            delim = None                # the table ended
+        commas = len(_split(body) or [])
+        for d in _OTHER_DELIMITERS:
+            if d not in body:
+                continue
+            cells = _split(body, d) or []
+            nonempty = [c for c in cells if c.strip()]
+            if len(cells) <= max(commas, 1) or not _is_flat_header(
+                    cells, nonempty, None):
+                continue
+            idc = _identity_cols([c.strip().lower() for c in cells])
+            if idc:
+                delim, cols, width = d, idc, len(cells)
+                headers.add(no)
+                table_lines.add(no)
+                break
+    return "".join(lines), headers, table_lines
+
+
 def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                 known_ids: Optional[Dict[str, str]] = None,
                 pseudonyms: Optional[Pseudonyms] = None,
@@ -1598,6 +1660,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
         rep.notes.append(f"pattern skipped (not a valid regex): {b}")
     text = _redact_html_identity(text, rep)
     text = _redact_broker_keys(text, rep)
+    text, delimited_headers, delimited_lines = _redact_delimited_identity(
+        text, rep)
     # One CSV record at a time: a quoted cell may span lines (TJ-0414).
     records, unbalanced = _csv_records(text)
     lines = [r for _n, r in records]
@@ -1645,6 +1709,11 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
         nonempty = [c for c in (cells or []) if c.strip()]
         is_ib_row = bool(low and len(low) > 1 and low[1] in ("header", "data"))
         header_row = False
+        # A delimited table's own lines neither end the preamble rule nor
+        # meet it (and a row's commas make it no flat header): a bare name
+        # after the table is still blanked (the main loop has no alias
+        # column for it, backlog TJ-1100).
+        in_delimited = src_line in delimited_lines
         if low and len(low) > 1 and low[1] == "header":
             header_row = True
             if "description" in low[2:] and low[0] not in rep.description_columns:
@@ -1654,8 +1723,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             free_cols[low[0]] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                  if c in _FREE_TEXT_COLS]
             free_cols[low[0]] += _name_review_cols(cells, low, alias_cols[low[0]])
-        elif low and not is_ib_row and _is_flat_header(cells, nonempty,
-                                                       flat_width):
+        elif (low and not is_ib_row and not in_delimited
+              and _is_flat_header(cells, nonempty, flat_width)):
             # (A row of `Label:,value` pairs is never a header: four
             # digit-free cells were read as one, and the label pass
             # skipped them, A2-0765.)
@@ -1672,11 +1741,15 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
                     rep.description_columns.append(_name)
             free_cols["__flat__"] += _name_review_cols(cells, low,
                                                        alias_cols["__flat__"])
+        elif src_line in delimited_headers:
+            # A tab- / semicolon-delimited table's header: its identity
+            # cells were blanked above (_redact_delimited_identity).
+            header_row = True
         # 'Name,Jane,Sample' (backlog TJ-0608): identity, and still the
         # preamble (an address line may follow it).
         identity_line = (not is_ib_row and not header_row
                          and _is_identity_line(nonempty))
-        if len(nonempty) >= 3 and not identity_line:
+        if len(nonempty) >= 3 and not identity_line and not in_delimited:
             in_preamble = False
         sect = low[0] if is_ib_row else "__flat__"
         # Identity rows (IB Account Information) and alias columns.
@@ -1789,7 +1862,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             new = _blank_cells(line)
             rep.postal_codes += new != line
             line = new
-        elif in_preamble and not is_ib_row and nonempty and not identity_line:
+        elif (in_preamble and not in_delimited and not is_ib_row and nonempty
+              and not identity_line):
             joined = " ".join(c.strip() for c in nonempty)
             kind = _name_line_kind(joined)
             if (kind == "name" or _STREET.search(joined)
@@ -3113,6 +3187,89 @@ def config_ids(root: Path) -> Tuple[List[str], List[str]]:
     return ids, local
 
 
+# A basic string's escape that names one character: \uXXXX, \UXXXXXXXX
+# and TOML 1.1's \xHH.
+_TOML_CHAR_ESCAPE = re.compile(
+    r"\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|x([0-9A-Fa-f]{2}))")
+
+
+def plain_toml_strings(text: str) -> str:
+    """A taxjson.toml with each escape of one character in a basic
+    string ("..." or \"\"\"...\"\"\", keys included) written as that
+    character, where the character needs no escape (printable, not a
+    quote or a backslash): the same TOML, read to the same values. An
+    id spelled with escapes (`account = "\\u0055..."`) is what
+    config_ids reads, but the copy's text never held it as such, so it
+    was neither replaced nor found by --check (backlog TJ-0835). Text
+    that does not read as TOML, or would read differently, is returned
+    as it was; comments and literal strings ('...') are left alone."""
+    if "\\" not in text:
+        return text
+    out: List[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "#":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(text[i:j])
+            i = j
+            continue
+        if c == "'":
+            q = "'''" if text.startswith("'''", i) else "'"
+            j = text.find(q, i + len(q))
+            if j < 0:
+                return text
+            j += len(q)
+            if q == "'''":
+                # (up to two more quotes end its text: ''''')
+                j += len(text[j:j + 2]) - len(text[j:j + 2].lstrip("'"))
+            out.append(text[i:j])
+            i = j
+            continue
+        if c != '"':
+            out.append(c)
+            i += 1
+            continue
+        q = '"""' if text.startswith('"""', i) else '"'
+        out.append(q)
+        k = i + len(q)
+        while True:
+            if k >= n or (q == '"' and text[k] == "\n"):
+                return text                     # (an unclosed string)
+            if text[k] == "\\":
+                m = _TOML_CHAR_ESCAPE.match(text, k)
+                code = (int(next(g for g in m.groups() if g), 16)
+                        if m else None)
+                if (code is not None and code <= 0x10FFFF
+                        and not 0xD800 <= code <= 0xDFFF
+                        and chr(code).isprintable()
+                        and chr(code) not in "\"\\"):
+                    out.append(chr(code))
+                    k = m.end()
+                else:
+                    out.append(text[k:k + 2])
+                    k += 2
+                continue
+            if text.startswith(q, k):
+                break
+            out.append(text[k])
+            k += 1
+        i = k + len(q)
+        if q == '"""':
+            i += len(text[i:i + 2]) - len(text[i:i + 2].lstrip('"'))
+        out.append(text[k:i])
+    new = "".join(out)
+    if new == text:
+        return text
+    from taxjson.lib.tomlcompat import tomllib
+    try:
+        same = tomllib.loads(new) == tomllib.loads(text)
+    except Exception:                                   # noqa: BLE001
+        same = False
+    return new if same else text
+
+
 # An account id key inside an inline table (`margin = { query_id =
 # "2025" }`) and its value.
 _INLINE_ID_VALUE = re.compile(
@@ -3200,6 +3357,50 @@ def _comment_at(line: str) -> int:
     return len(line)
 
 
+# Where a folder path of this computer starts in a settings file's
+# comment: as _ABS_PATH (a user's home folder `~user/`, a drive, a
+# network share, `/a/...`), after anything but a part of a word or of a
+# relative path (`# inputs_dir = "/srv/..."`, `# was:/srv/...`), or a
+# `file://` URL's own (backlog TJ-1101), but not the placeholder a first
+# pass left there (backlog TJ-1236). `~/` names no one (the templates'
+# `~/taxes/2024/taxjson.toml`); another URL's `//` (after `:`) and a
+# one-folder `/ES` are no path.
+_COMMENT_PATH = re.compile(
+    r"(?:(?<![\w./~\\-])|(?<=(?i:file://)))([\"']?)"
+    r"(?=~[A-Za-z0-9._-]+[/\\]|[A-Za-z]:[/\\]"
+    r"|(?:(?<!:)[/\\]{2}|(?<=(?i:file:))//(?!" + re.escape(PATH_PLACEHOLDER)
+    + r")|(?<=:)\\\\)[^/\\\s\"']"
+    r"|/[^/\s\"']+/)")
+_COMMENT_PATH_END = re.compile(r"[\s\"'(),\]]")
+
+
+def _redact_comment_paths(comment: str) -> Tuple[str, int]:
+    """A settings file's comment with each folder path of this computer
+    in it (_COMMENT_PATH) replaced by PATH_PLACEHOLDER, and how many: a
+    path in quotes runs to the closing quote, else to the next space. A
+    lower-case home folder (`/srv/casey/...`) is neither a name-like
+    word nor a long number, so a comment such as `# was: inputs_dir =
+    "/srv/casey/taxes/inputs"` stayed in the copy and --check passed it
+    (backlog TJ-0714)."""
+    out: List[str] = []
+    last = pos = n = 0
+    while True:
+        m = _COMMENT_PATH.search(comment, pos)
+        if m is None:
+            break
+        start = m.end()
+        q = m.group(1)
+        end = comment.find(q, start) if q else -1
+        if end < 0:
+            e = _COMMENT_PATH_END.search(comment, start)
+            end = e.start() if e else len(comment)
+        out += [comment[last:start], PATH_PLACEHOLDER]
+        last = pos = end
+        n += 1
+    out.append(comment[last:])
+    return "".join(out), n
+
+
 @functools.lru_cache(maxsize=1)
 def _generated_comments() -> frozenset:
     """The comment lines taxjson itself writes in a settings file (the
@@ -3271,7 +3472,9 @@ def redact_project_text(text: str, compiled: List[re.Pattern],
         line = _EMAIL.sub("redacted@example.com", line)
         at = _comment_at(line)
         if at < len(line):
-            line = line[:at] + _redact_contact(line[at:], rep, lineno)
+            comment, k = _redact_comment_paths(line[at:])
+            rep.paths += [lineno] * k
+            line = line[:at] + _redact_contact(comment, rep, lineno)
         for pat in compiled:
             line, k = pat.subn("REDACTED", line)
             rep.patterns += k
@@ -3421,6 +3624,10 @@ def redact_tree(root: Path, out: Optional[Path], extra: List[str],
     # below rewrites that placeholder as the id (backlog TJ-0249).
     known_ids.reserved |= _tree_ids(decoded, dirs, files, cfg_ids[0])
     for f, text, enc in decoded:
+        if as_project and f.rel == Path(_PL.CONFIG):
+            # Its ids as config_ids read them, whatever their spelling
+            # (`"U..."`, backlog TJ-0835).
+            text = plain_toml_strings(text)
         if shared and f.rel == Path(_PL.CONFIG):
             # The redacted project reads its own inputs/ and holdings/.
             for _k in _PL.FOLDER_KEYS + (_PL.TOBASE_KEY,):

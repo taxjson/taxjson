@@ -188,9 +188,11 @@ def manual_figures(r: Dict[str, Any]) -> Tuple[Optional[float],
     convention keeps the cover cost, negated, in `proceeds` (build_8949
     swaps the two for a computed short); read as proceeds it put the
     cover cost in the field the filer is told to report (backlog
-    TJ-0497)."""
-    amt = abs(float(r.get("proceeds") or 0.0))
-    return (None, amt) if is_short_cover(r) else (amt, None)
+    TJ-0497). A sale keeps its sign: a disposal for nothing whose
+    commission is the only cash carries net proceeds below zero, and
+    abs() turned that debit into proceeds received (backlog TJ-0895)."""
+    amt = float(r.get("proceeds") or 0.0)
+    return (None, abs(amt)) if is_short_cover(r) else (amt, None)
 
 
 def manual_totals(rows: List[Dict[str, Any]]) -> Tuple[float, float]:
@@ -479,6 +481,15 @@ def build_8949(entries: List[Dict[str, Any]],
             # unchanged (backlog TJ-0465: (d) was below the slip by it).
             _carried = short_carried_loss(e)
             proceeds, cost = proceeds + _carried, cost + _carried
+        if (is_plain_future(str(e.get("symbol") or ""))
+                and (proceeds < 0 or cost < 0)):
+            # A security future off §1256 (ticker.map SECFUT, TJ-0730)
+            # is booked on its settled P/L (lib/futures): a loss came
+            # out as negative proceeds, a short's gain as negative cost.
+            # The row shows the P/L as the T5008 shape does: a gain as
+            # (d), a loss as (e); (h) unchanged.
+            _pl = proceeds - cost
+            proceeds, cost = max(_pl, 0.0) + 0.0, max(-_pl, 0.0) + 0.0
         adj = float(e.get("disallowed_amount") or 0.0)
         gain = float(e.get("gain") or 0.0)
         code = "W" if adj > _EPS else ""
@@ -763,8 +774,14 @@ def mark_crypto(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{**e, "_crypto": True} for e in entries]
 
 
-def _infer_year(entries: List[Dict[str, Any]]) -> Optional[int]:
-    ys = [str(e.get("date_settle") or e.get("date") or "")[:4]
+def _infer_year(entries: List[Dict[str, Any]],
+                date_key: str = "date_settle") -> Optional[int]:
+    """The latest year among the rows, each dated as the gains files
+    were scoped (`date_key`: date_settle, or date on a trade-date
+    basis): a December trade settling in January is the trade's year
+    under the IRS's trade date (backlog TJ-0901)."""
+    ys = [str(e.get(date_key) or e.get("date_settle") or e.get("date")
+              or "")[:4]
           for e in entries]
     ys = [int(y) for y in ys if y.isdigit()]
     return max(ys) if ys else None
@@ -1700,7 +1717,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "stdout")
     parser.add_argument("--year", type=tax_year, default=None,
                         help="Defensive year filter (pipeline gains files "
-                             "are already year-scoped)")
+                             "are already year-scoped) and the form's tax "
+                             "year (default: the year the gains files "
+                             "record, else the latest row's)")
     parser.add_argument("--base-currency", default="",
                         type=norm_currency,
                         help="The amounts' currency. Must be the return's "
@@ -1733,7 +1752,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="The essentials only (what `taxjson form-export` prints "
                              "without --details): the notes and each "
                              "message's detail are left out")
+    parser.add_argument("--ticker-map", dest="ticker_map", metavar="FILE",
+                        default=None,
+                        help="The project's ticker.map: its market lines "
+                             "(a SECFUT root stays on Form 8949, an "
+                             "INDEXOPT root is on Form 6781). `taxjson "
+                             "form-export` reads the project's; without "
+                             "this option the TAXJSON_TICKER_MAP variable, "
+                             "else none")
     args = parser.parse_args(argv)
+    if args.ticker_map:
+        # Before any row is classified (backlog TJ-1029).
+        if not Path(args.ticker_map).is_file():
+            sys.exit(exit_text(f"taxjson-form-export: no such file: "
+                               f"--ticker-map {args.ticker_map}"))
+        from taxjson.lib.markets import use_ticker_map
+        use_ticker_map(args.ticker_map)
 
     # The same ownership table `taxjson` dispatch enforces: Schedule 3
     # is Canada's, Form 8949 / TXF the US's (partition COMMANDS-04; the
@@ -1776,6 +1810,46 @@ def _files_date_basis(paths: List[Path]) -> Optional[str]:
                          f"bases ({', '.join(sorted(seen))}) — rebuild "
                          f"them with one `taxjson run`")
     return seen.pop() if seen else None
+
+
+def _files_year(paths: List[Path]) -> Optional[int]:
+    """The tax year the gains files record (summary.year), when every
+    file that records one names the same year; else None (backlog
+    TJ-0901: the form's year is the files' own, not one guessed from
+    the rows' dates)."""
+    seen = set()
+    for p in paths:
+        y = str(((load_json(p) or {}).get("summary") or {}).get("year")
+                or "")
+        if len(y) == 4 and y.isdigit():
+            seen.add(int(y))
+    return seen.pop() if len(seen) == 1 else None
+
+
+def _source_years(paths: List[Path], date_key: str) -> Dict[int, List[str]]:
+    """{tax year: [file, ...]}: each gains file's year — the one it
+    records (summary.year), else the years its disposition rows fall in
+    on `date_key`. Without --year, files of more than one year are
+    refused: a 2024 and a 2025 file merged into one return labelled
+    2025, with the 2024 sale in it (backlog TJ-0993)."""
+    out: Dict[int, List[str]] = {}
+    for p in paths:
+        data = load_json(p) or {}
+        y = str((data.get("summary") or {}).get("year") or "")
+        if len(y) == 4 and y.isdigit():
+            years = {int(y)}
+        else:
+            rows = [e for e in data.get("transactions") or []
+                    if gains_row_kind(e) != "income"]
+            rows += list(data.get("manual_reporting_required") or [])
+            years = set()
+            for e in rows:
+                d = str(e.get(date_key) or e.get("date") or "")[:4]
+                if d.isdigit():
+                    years.add(int(d))
+        for yr in years:
+            out.setdefault(yr, []).append(str(p))
+    return out
 
 
 def _home_ccy(args) -> str:
@@ -1826,7 +1900,29 @@ def _check_currency(paths: List[Path], base: str) -> None:
             raise SystemExit(2)
 
 
+def _unique_paths(paths: List[Path]) -> Tuple[List[Path], List[Path]]:
+    """(each file once, in order; the repeats left out): one file named
+    twice — explicit paths and a shell glob that overlap — summed its
+    dispositions twice into the form (backlog TJ-0905)."""
+    seen: set = set()
+    once: List[Path] = []
+    again: List[Path] = []
+    for p in paths:
+        r = Path(p).resolve()
+        if r in seen:
+            again.append(p)
+            continue
+        seen.add(r)
+        once.append(p)
+    return once, again
+
+
 def _main(args) -> int:
+    args.files, _again = _unique_paths(list(args.files))
+    if _again:
+        from taxjson.lib.out import note as _note
+        _note(f"{', '.join(str(p) for p in _again)}: given more than "
+              f"once — each file is read once")
     # Rows are picked by the date the gains files were scoped on: an
     # explicit tax_date different from the country default dropped a
     # year-end sale from the export (R1-200). Without a recorded basis,
@@ -1853,6 +1949,19 @@ def _main(args) -> int:
               f"passes them).", file=sys.stderr)
         raise SystemExit(2)
     _check_currency(list(args.files) + list(args.crypto), _home)
+    if args.year is None:
+        _years = _source_years(
+            list(_unique_paths(list(args.files) + list(args.crypto))[0]),
+            date_key)
+        if len(_years) > 1:
+            _named = "; ".join(f"{y}: {', '.join(fs)}"
+                               for y, fs in sorted(_years.items()))
+            print(f"taxjson-form-export: the gains files are for more "
+                  f"than one tax year ({_named}) — a return is one year: "
+                  f"pass --year YEAR, or only that year's files "
+                  f"(`taxjson form-export` passes the project's year).",
+                  file=sys.stderr)
+            raise SystemExit(2)
     entries, tainted = load_dispositions(
         [p for p in args.files if p.resolve() not in _crypto],
         args.year, date_key)
@@ -1861,6 +1970,14 @@ def _main(args) -> int:
             sorted(_crypto), args.year, date_key)
         entries += mark_crypto(c_entries)
         tainted += c_tainted
+    # The form's tax year: --year, else the year the gains files
+    # record, else the latest row's year on the files' date basis (a
+    # December trade settling in January was the next year's Form 8949;
+    # backlog TJ-0901).
+    form_year = args.year
+    if form_year is None:
+        form_year = (_files_year(list(args.files) + list(args.crypto))
+                     or _infer_year(entries, date_key))
     if args.form == "schedule3" and any(
             e.get("term") in ("SHORT_TERM", "LONG_TERM") for e in entries):
         # Short/long-term terms exist only in the US engine's output:
@@ -1917,7 +2034,7 @@ def _main(args) -> int:
                        "(`taxjson find-missing-history`); they are listed "
                        "in the MANUAL REPORTING section."])
 
-    rep_8949 = (build_8949(entries, args.year)
+    rep_8949 = (build_8949(entries, form_year)
                 if args.form in ("8949", "txf") else None)
     if rep_8949 is not None:
         _s1256 = rep_8949["section_1256_totals"]
@@ -1936,7 +2053,7 @@ def _main(args) -> int:
                   "own format) — ignored")
         # TXF rides on the 8949 model — same rows, same code-W math.
         rep = rep_8949
-        _ynote = year_not_ended_text(args.year or _infer_year(entries))
+        _ynote = year_not_ended_text(form_year)
         if _ynote:
             _warn(_ynote)
         doc = build_txf(rep, args.box)
@@ -1982,13 +2099,12 @@ def _main(args) -> int:
         rep = rep_8949
         rep["currency"] = _home
     else:
-        rep = build_schedule3(entries, args.year, date_key)
+        rep = build_schedule3(entries, form_year, date_key)
         rep["currency"] = _home
     rep["manual_reporting_required"] = manual
     rep["manual_proceeds"] = manual_proceeds
     rep["manual_cover_cost"] = manual_cover_cost
-    _ynote = year_not_ended_note(args.year or rep.get("year")
-                                 or _infer_year(entries))
+    _ynote = year_not_ended_note(form_year or rep.get("year"))
     if _ynote:
         rep["year_not_ended"] = _ynote
     if not args.json and (args.in_kind_unbooked or args.no_purchase):
@@ -1996,10 +2112,10 @@ def _main(args) -> int:
         rep["not_in_rows"] = {"in_kind_unbooked": args.in_kind_unbooked,
                               "no_purchase": args.no_purchase}
     if args.form == "8949":
-        text = render_8949(rep, args.year, rep["currency"],
+        text = render_8949(rep, form_year, rep["currency"],
                            not args.brief)
     else:
-        text = render_schedule3(rep, args.year, rep["currency"],
+        text = render_schedule3(rep, form_year, rep["currency"],
                                 not args.brief)
 
     if args.csv:
@@ -2027,7 +2143,11 @@ def _main(args) -> int:
                 no_purchase=args.no_purchase,
                 conservation=_RD.conservation_lines(
                     list(args.files) + list(args.crypto)),
-                in_kind_unbooked=args.in_kind_unbooked)
+                in_kind_unbooked=args.in_kind_unbooked,
+                unconsumed_premium=_RD.unconsumed_premium_lines(
+                    list(args.files) + list(args.crypto)),
+                unsettled_compensation=_RD.unsettled_compensation_lines(
+                    list(args.files) + list(args.crypto)))
         # A NaN figure is refused, never written (issue #8).
         from taxjson.lib.json_input import dump_filing_json
         dump_filing_json(rep, sys.stdout)

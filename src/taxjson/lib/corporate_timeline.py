@@ -322,6 +322,21 @@ def normalize_symbol_new(symbol: str, symbol_new: Any) -> str:
     return '' if new_sym == symbol else new_sym
 
 
+def split_in_settle_lag(trade_date: Any, trade_time: Any, trade_settle: Any,
+                        split_date: Any, split_time: Any) -> bool:
+    """Whether a split dated `split_date` (its sort date: the settle date
+    when set) falls inside a trade's settle lag: after the execution
+    moment and before the settle date. Canada's engine orders by settle
+    date, so such a trade is re-denominated through the split, and the
+    trade history replays it the same way (backlog TJ-1072)."""
+    if not (trade_date and trade_settle and split_date
+            and trade_date < trade_settle):
+        return False
+    return ((trade_date, trade_time or '00:00:00')
+            < (split_date, split_time or '00:00:00')
+            and split_date < trade_settle)
+
+
 def split_event_key(symbol: str, date: str, ratio: Any, symbol_new: Any,
                     account: Optional[str] = None) -> Tuple:
     """Identity of one corporate split event, for dedup. Global by default

@@ -315,11 +315,13 @@ def _suggest_missing_history_and_exit(args, transactions,
                   if t.account})
     if args.input:
         types.update(account_types_near(args.input))
+    _affiliated = {t.account for t in affiliated_transactions}
     candidates = detect_missing_history(
         all_for_detection,
         include_options=args.include_options_in_suggestions,
         registered_accounts=types,
         country=args.country,
+        affiliated_accounts=_affiliated,
     )
     # Year-scope unless --all-history, with the SAME rule as the
     # find-missing-history report (missing_history.
@@ -335,7 +337,10 @@ def _suggest_missing_history_and_exit(args, transactions,
         basis = args.tax_date or (
             'trade' if args.country == 'usa' else 'settle')
         rows = assess_tax_year_relevance(all_for_detection, candidates,
-                                         args.year, date_basis=basis)
+                                         args.year, date_basis=basis,
+                                         registered_accounts=types,
+                                         country=args.country,
+                                         affiliated_accounts=_affiliated)
         keep = {(r.candidate.symbol, r.candidate.account)
                 for r in rows if r.affects_year}
         before = len(candidates)
@@ -369,15 +374,23 @@ def _suggest_missing_history_and_exit(args, transactions,
     try:
         _ok_pairs = {(c.symbol, c.account) for c in candidates}
         _o, _applied = synthesize_openings(all_for_detection, _ok_pairs,
-                                           flag_stale=False, until=_until)
+                                           flag_stale=False, until=_until,
+                                           registered_accounts=types,
+                                           country=args.country,
+                                           affiliated_accounts=_affiliated)
         _qty = {(e['symbol'], e['account']): e['opening_qty']
                 for e in _applied if e.get('inserted')}
         _all = {(e['symbol'], e['account']): e['opening_all_rows']
                 for e in _applied if e.get('opening_all_rows')}
+        # Short, yet not sized (two holdings renamed into one symbol;
+        # backlog TJ-0959): the reason rides on the entry.
+        _ns = {(e['symbol'], e['account']): e.get('note') or ''
+               for e in _applied if e.get('converging')}
     except Exception:                                   # noqa: BLE001
-        _qty, _all = {}, {}
+        _qty, _all, _ns = {}, {}, {}
     write_text_atomic(_out, format_suggestions(candidates, _qty, _until,
-                                               all_rows=_all))
+                                               all_rows=_all,
+                                               not_sized=_ns))
     n_reg = sum(1 for c in candidates if c.registered)
     print(
         f"Wrote {len(candidates)} candidate(s) to {args.suggest_missing_history} "

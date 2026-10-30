@@ -143,7 +143,13 @@ class TestSettingsDocFiles(unittest.TestCase):
         """Every `key=` token a .tt row line takes: the income facts
         and a warrant exercise's exercise_of= (backlog TJ-0377)."""
         sec = _section(SETTINGS, "## .tt files", level="## ")
-        want = {f"{k}=" for k in tt._FACT_KEYS} | {f"{tt.EXERCISE_KEY}="}
+        want = ({f"{k}=" for k in tt._FACT_KEYS} | {f"{tt.EXERCISE_KEY}="}
+                # a corporate action's provenance (backlog TJ-1117)
+                | {f"{k}=" for k in tt._CORP_KEYS}
+                # an INTEREST line's property, a settled futures part's
+                # facts (backlog TJ-0856, TJ-0662)
+                | {f"{tt.INTEREST_SYMBOL_KEY}=", f"{tt.SETTLE_KEY}=",
+                   tt.FUTURES_SETTLEMENT_TOKEN})
         self.assertEqual({k for k in want if k not in sec}, set())
 
     def test_generic_mapping_vocabulary(self):

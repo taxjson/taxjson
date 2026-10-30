@@ -172,6 +172,10 @@ class TestFileLock(unittest.TestCase):
 # Reviewed direct writes: (file under src/taxjson, the stripped source
 # line) -> why it is not generated project state.
 _ALLOWED = {
+    ("bin/taxjson_corp_actions.py",
+     "with open(log, 'a', encoding='utf-8') as f:"):
+        "--saved-log: an append-only log the caller names (one JSON line "
+        "per saved election), not a project file",
     ("lib/json_cache.py",
      'with os.fdopen(fd, "w", encoding="utf-8") as f:'):
         "its own mkstemp temp file, renamed into place",

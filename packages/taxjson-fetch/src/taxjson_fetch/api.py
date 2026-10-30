@@ -367,7 +367,9 @@ def qt_activities(session: Dict[str, str], number: str,
         # has TWO, the second copy is a fill the first chunk did not
         # see, kept — the way _merge_csv_text keeps the max count per
         # side (audit 2026-10-24 A21: a set dropped both copies).
-        keys = [json.dumps(act, sort_keys=True, default=str)
+        # Identity by VALUE: a window that spelled 10 as 10.0 made the
+        # boundary activity a second trade (backlog TJ-0735).
+        keys = [json.dumps(_qt_identity(act), sort_keys=True, default=str)
                 for act in _qt_activity_list(doc, path, session, seg)]
         skipped: Counter = Counter()
         for act, k in zip(doc["activities"], keys):
@@ -379,6 +381,24 @@ def qt_activities(session: Dict[str, str], number: str,
             seen_prev[k] = max(seen_prev[k], n)
         cur = chunk_end + timedelta(days=1)
     return out
+
+
+def _qt_identity(value: Any) -> Any:
+    """`value` (an API activity) with every JSON number as a float, for
+    comparing two windows' copies of one activity: 10 and 10.0 are the
+    same quantity (backlog TJ-0735). An integer a float cannot hold
+    exactly, a bool and anything else are kept as they are."""
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        return float(value) + 0.0 if abs(value) < 2 ** 53 else value
+    if isinstance(value, float):
+        return value + 0.0 if math.isfinite(value) else value
+    if isinstance(value, dict):
+        return {k: _qt_identity(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_qt_identity(v) for v in value]
+    return value
 
 
 def _qt_activity_list(doc: Dict[str, Any], path: str,
@@ -503,6 +523,126 @@ def qt_to_csv(activities: List[Dict[str, Any]], number: str) -> str:
     return buf.getvalue()
 
 
+# The money fields qt_to_csv writes BLANK when the API omits them (the
+# strict parser then refuses the row, R1-348), with their CSV columns.
+_QT_MONEY_FIELDS = (("grossAmount", "Gross Amount"),
+                    ("commission", "Commission"),
+                    ("netAmount", "Net Amount"))
+
+
+# The cells qt_to_csv writes as `a.get(key) or 0`: absent reads as 0, so
+# only one present and no number is refused (TJ-1073).
+_QT_COUNT_FIELDS = (("quantity", "Quantity"), ("price", "Price"))
+
+
+def _qt_parser_refuses(activity: Dict[str, Any]) -> bool:
+    """Whether the strict Questrade parser refuses the row qt_to_csv
+    renders for `activity`. Which cells it reads depends on the row's
+    kind (an FX conversion none, a dividend no Settlement Date), so it is
+    asked (backlog TJ-1231). Whatever else stops it counts as a refusal;
+    what it says on the way is not this run's to show."""
+    import contextlib
+    import tempfile
+    from pathlib import Path
+    from taxjson.lib.brokerages.questrade import QuestradeBrokerage
+    try:
+        with tempfile.TemporaryDirectory() as td, \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            path = Path(td) / "activity.csv"
+            path.write_text(qt_to_csv([activity], "0"), encoding="utf-8")
+            QuestradeBrokerage().parse_file(path)
+    except (Exception, SystemExit):
+        return True
+    return False
+
+
+def _qt_cash_reader_loses(activity: Dict[str, Any]) -> bool:
+    """Whether the row qt_to_csv renders for `activity` is a cash row the
+    FX-on-cash ledger's reader (questrade_cash_events) refuses, or skips
+    only because its Net Amount or currency is missing. parse_file leaves
+    these rows out unread, so it cannot speak for them (backlog TJ-1291).
+    A real zero amount has no cash to lose. The stand-in values only ask
+    whether the row would be an event when whole."""
+    import contextlib
+    import tempfile
+    from pathlib import Path
+    from taxjson.lib.brokerages.questrade import questrade_cash_events
+
+    def events(row: Dict[str, Any]) -> List[Dict[str, Any]]:
+        path = Path(td) / "activity.csv"
+        path.write_text(qt_to_csv([row], "0"), encoding="utf-8")
+        return questrade_cash_events(path)
+    try:
+        with tempfile.TemporaryDirectory() as td, \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            if events(activity):
+                return False
+            net = _finite(activity.get("netAmount"))
+            return bool(events({
+                **activity,
+                "netAmount": 1 if net is None else net,
+                "currency": str(activity.get("currency") or "").strip()
+                or "CAD"}))
+    except (Exception, SystemExit):
+        return True
+
+
+def qt_unusable_activities(activities: List[Dict[str, Any]]) -> List[str]:
+    """One line per activity qt_to_csv renders as a row the strict
+    Questrade parser refuses: no trade or transaction date or one it
+    cannot read (a settlement date too), no currency, a money field
+    missing, null, blank or not a number, or a quantity or price that is
+    no number, when the parser reads that cell on such a row
+    (_qt_parser_refuses), or as a cash row the FX-on-cash ledger cannot
+    use (_qt_cash_reader_loses). --trim-overlap retires a manual export's
+    rows on the strength of the download, so it must not trust a download
+    holding such a row: a null netAmount trimmed the manual purchase and
+    left only a fetched row `taxjson run` refuses (backlog TJ-0868), and
+    a null currency or an unreadable date did the same (TJ-1073)."""
+    from taxjson.lib.brokerages.base import BaseBrokerage
+    from taxjson.lib.brokerages.questrade import _DATE_FMTS
+
+    def readable(raw: Any) -> bool:
+        return BaseBrokerage.parse_date(_qt_date(str(raw)),
+                                        *_DATE_FMTS) is not None
+    out: List[str] = []
+    for a in activities:
+        if not isinstance(a, dict):
+            out.append(f"an item that is a JSON {type(a).__name__}, not "
+                       f"an activity")
+            continue
+        day = str(a.get("tradeDate") or a.get("transactionDate")
+                  or "")[:10].strip()
+        bad = [] if day else ["Transaction Date"]
+        bad += [col for key, col in _QT_MONEY_FIELDS
+                if _money_cell(a.get(key)) == ""
+                or _finite(a.get(key)) is None]
+        if not str(a.get("currency") or "").strip():
+            bad.append("Currency")
+        # A present cell the parser cannot read (the value is not shown:
+        # it goes on to the console).
+        unread = []
+        trade = a.get("tradeDate") or a.get("transactionDate")
+        if day and not readable(trade):
+            unread.append("Transaction Date")
+        settle = a.get("settlementDate") or a.get("transactionDate")
+        if settle and str(settle).strip() and not readable(settle):
+            unread.append("Settlement Date")
+        unread += [col for key, col in _QT_COUNT_FIELDS
+                   if a.get(key) and _finite(a.get(key)) is None]
+        if (bad or unread) and (_qt_parser_refuses(a)
+                                or _qt_cash_reader_loses(a)):
+            what = " ".join(str(x) for x in (
+                day or "undated", a.get("type") or "activity",
+                a.get("symbol") or "") if x)
+            said = ([f"no {', '.join(bad)}"] if bad else []) + (
+                [f"unreadable {', '.join(unread)}"] if unread else [])
+            out.append(f"{what} ({'; '.join(said)})")
+    return out
+
+
 def qt_positions(session: Dict[str, str], number: str,
                  http_get: Callable[[str], bytes]) -> List[Dict[str, Any]]:
     """Live open positions for the account — symbol, openQuantity,
@@ -532,12 +672,31 @@ def _symbol_id(position: Dict[str, Any]) -> Optional[int]:
     return sid if isinstance(sid, int) and sid > 0 else None
 
 
+def _declared_size(sym: str) -> Optional[float]:
+    """The contract size a ticker.map `MULT` line declares for the
+    option `sym` (the exact symbol, its root, then its underlying), the
+    way core.equity_option_size reads it — ahead of any size the books
+    or Questrade state. None when no line names it. The live snapshot
+    read only the books' and the lookup's sizes, so a mini contract
+    declared `MULT … 10` was costed at 100 shares (backlog TJ-0857)."""
+    from taxjson.lib import markets
+    from taxjson.lib.core import parse_option_underlying
+    und = str(parse_option_underlying(sym) or "")
+    root = und.split(".", 1)[0]
+    size = _finite(markets.contract_size(sym, root)
+                   or markets.contract_size(und))
+    return size if size is not None and size > 0 else None
+
+
 def qt_unbooked_option_ids(positions: List[Dict[str, Any]],
-                           book_symbols=frozenset()) -> List[int]:
+                           book_symbols=frozenset(),
+                           closed_symbols=frozenset()) -> List[int]:
     """The symbolIds of the open option positions whose contract the
     books (`book_symbols`, upper case) do not hold under any suffix:
     the ones whose contract size only Questrade's symbol lookup can
-    give (qt_contract_sizes; backlog TJ-0614)."""
+    give (qt_contract_sizes; backlog TJ-0614). One they hold only closed
+    (`closed_symbols`) too: the listing open now may be another one
+    (backlog TJ-1235)."""
     from taxjson.lib.core import is_option_symbol
     book = frozenset(str(b).upper() for b in book_symbols)
     out: List[int] = []
@@ -547,8 +706,10 @@ def qt_unbooked_option_ids(positions: List[Dict[str, Any]],
         sym = qt_position_symbol(str(p.get("symbol") or ""), frozenset(),
                                  book)
         sid = _symbol_id(p)
-        if is_option_symbol(sym) and sym.upper() not in book \
-                and sid is not None:
+        if is_option_symbol(sym) and (
+                sym.upper() not in book
+                or _qt_closed_listing(sym, book, closed_symbols)) \
+                and sid is not None and _declared_size(sym) is None:
             out.append(sid)
     return out
 
@@ -605,6 +766,118 @@ def qt_contract_sizes(session: Dict[str, str], symbol_ids,
                         and not _qt_unadjusted(it, und[0]))):
                 mult = None
             out[sid] = mult
+    return out
+
+
+def _qt_both_listings(sym: str, book_symbols) -> bool:
+    """Whether the option `sym` (taxjson spelling) is a contract the
+    books hold under BOTH listings: Montreal (.TO) and US (.US)."""
+    base, dot, _ext = str(sym).upper().rpartition(".")
+    return bool(dot) and (f"{base}.TO" in book_symbols
+                          and f"{base}.US" in book_symbols)
+
+
+def _qt_unbooked_listing(sym: str, book_symbols) -> bool:
+    """Whether the books hold the option `sym` under neither listing."""
+    base, dot, _ext = str(sym).upper().rpartition(".")
+    return bool(dot) and (f"{base}.TO" not in book_symbols
+                          and f"{base}.US" not in book_symbols)
+
+
+def _qt_closed_listing(sym: str, book_symbols, closed_symbols) -> bool:
+    """Whether the books hold the option `sym` under one listing only,
+    and closed (`closed_symbols`): that says nothing about the listing
+    open now (backlog TJ-1235)."""
+    base, dot, _ext = str(sym).upper().rpartition(".")
+    held = {f"{base}.TO", f"{base}.US"} & set(book_symbols)
+    return bool(dot) and len(held) == 1 and held <= set(closed_symbols)
+
+
+def _qt_option_root(sym: str) -> str:
+    """The root of the option `sym` (taxjson spelling), '' when it reads
+    as none."""
+    from taxjson.lib.core import parse_option_underlying
+    try:
+        return str(parse_option_underlying(sym) or "").rsplit(".", 1)[0]
+    except Exception:
+        return ""
+
+
+def _qt_book_to_roots(book_symbols) -> set:
+    """The roots of the .TO options the books (upper case) ever held,
+    open or closed."""
+    from taxjson.lib.core import is_option_symbol
+    return {r for r in (_qt_option_root(b) for b in book_symbols
+                        if b.endswith(".TO") and is_option_symbol(b)) if r}
+
+
+def _qt_payload_to_roots(positions: List[Dict[str, Any]]) -> frozenset:
+    """The roots of the .TO listings in the live payload."""
+    return frozenset(
+        str(p.get("symbol") or "").rsplit(".", 1)[0]
+        for p in positions
+        if isinstance(p, dict) and str(p.get("symbol") or "").endswith(".TO"))
+
+
+def qt_ambiguous_option_ids(positions: List[Dict[str, Any]],
+                            book_symbols=frozenset(),
+                            closed_symbols=frozenset()) -> List[int]:
+    """The symbolIds of the open option positions whose listing only
+    Questrade's symbol lookup can settle (qt_option_currencies): a
+    contract the books (`book_symbols`, upper case) hold under both
+    listings, .TO and .US — a series traded and closed on one listing
+    while the other is held (backlog TJ-0880) — and a contract they hold
+    under neither, of a root a .TO listing teaches as Montreal-listed: a
+    root trades on both exchanges, and one closed Montreal option or a
+    CDR says nothing about this contract (backlog TJ-1074, TJ-1108); and
+    a contract they hold on one listing only closed (`closed_symbols`,
+    backlog TJ-1235)."""
+    from taxjson.lib.core import is_option_symbol
+    book = frozenset(str(b).upper() for b in book_symbols)
+    taught = _qt_book_to_roots(book) | _qt_payload_to_roots(positions)
+    out: List[int] = []
+    for p in positions:
+        if not isinstance(p, dict) or not _open_qty(p):
+            continue
+        sym = qt_position_symbol(str(p.get("symbol") or ""), frozenset(),
+                                 frozenset())
+        sid = _symbol_id(p)
+        if not is_option_symbol(sym) or sid is None:
+            continue
+        if _qt_both_listings(sym, book) or (
+                _qt_unbooked_listing(sym, book)
+                and _qt_option_root(sym) in taught) or _qt_closed_listing(
+                    sym, book, closed_symbols):
+            out.append(sid)
+    return out
+
+
+def qt_option_currencies(session: Dict[str, str], symbol_ids,
+                         http_get: Callable[[str], bytes]) -> Dict[int, str]:
+    """The currency Questrade's symbol lookup (GET /v1/symbols?ids=...)
+    states for each of `symbol_ids`: {symbolId: 'CAD' or 'USD'} — a
+    Montreal-listed option trades in CAD, a US-listed one in USD. An id
+    the response does not answer, or answers with another currency, is
+    left out (not known). A malformed response is a RuntimeError."""
+    ids = sorted({int(i) for i in symbol_ids
+                  if isinstance(i, int) and not isinstance(i, bool)
+                  and i > 0})
+    out: Dict[int, str] = {}
+    for k in range(0, len(ids), 100):
+        chunk = ids[k:k + 100]
+        path = "/v1/symbols?" + urllib.parse.urlencode(
+            {"ids": ",".join(str(i) for i in chunk)})
+        doc = _qt_get(session["api_server"], session["access_token"],
+                      path, http_get)
+        items = _qt_response_list(doc, "symbols", path, session, "",
+                                  "no listing was read")
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            sid = _symbol_id(it)
+            cur = str(it.get("currency") or "").strip().upper()
+            if sid in chunk and cur in ("CAD", "USD"):
+                out[sid] = cur
     return out
 
 
@@ -773,11 +1046,19 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                                book_symbols=frozenset(),
                                book_multipliers=None,
                                live_sizes=None,
-                               assumed: Optional[List[str]] = None) -> str:
+                               assumed: Optional[List[str]] = None,
+                               live_currencies=None,
+                               ambiguous: Optional[List[str]] = None,
+                               ambiguous_unbooked: Optional[List[str]] = None,
+                               closed_symbols=frozenset(),
+                               ambiguous_closed: Optional[List[str]] = None
+                               ) -> str:
     """Render live positions as the holdings TOML that
     `taxjson sanity` reads ([[holding]] symbol/quantity; extra fields
     are informational). The positions are checked first
     (qt_check_positions: a RuntimeError, nothing rendered).
+    A ticker.map `MULT` line for an option is its contract size, ahead
+    of every other (_declared_size; backlog TJ-0857).
     `book_multipliers` ({book symbol: contract size, or None when the
     books disagree}): an option the books hold under that exact symbol
     gets its contract size (`multiplier`), or
@@ -788,9 +1069,23 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
     (`live_sizes`, qt_contract_sizes: {symbolId: size, or None for a
     deliverable that is not shares alone: unknown}); with none, the
     standard 100 is ASSUMED, said in a comment of the holding and
-    listed in `assumed` for the caller to say (backlog TJ-0614)."""
+    listed in `assumed` for the caller to say (backlog TJ-0614).
+    An option the books hold under BOTH listings (.TO and .US) takes
+    the listing of the currency Questrade's symbol lookup states
+    (`live_currencies`, qt_option_currencies: {symbolId: 'CAD' or
+    'USD'}); with none it is written with no currency, said in a
+    comment and listed in `ambiguous` — the books' history cannot say
+    which listing is open, and a closed Canadian contract made the open
+    US one .TO, costed in CAD (backlog TJ-0880). An option the books hold
+    under neither listing takes that currency's listing too (TJ-1074,
+    TJ-1108); with none, on a root only the books' .TO options teach, it
+    keeps the .TO spelling with no currency, said in a comment and listed
+    in `ambiguous_unbooked`. So does one they hold on one listing only
+    closed (`closed_symbols`): with no currency stated it keeps the books'
+    spelling with no currency, listed in `ambiguous_closed` (TJ-1235)."""
     qt_check_positions(positions)
     live_sizes = dict(live_sizes or {})
+    live_currencies = dict(live_currencies or {})
     book_multipliers = {str(k).upper(): v
                         for k, v in (book_multipliers or {}).items()}
     # Roots whose options list in Canada (Montreal): learned from .TO
@@ -806,20 +1101,12 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
     # its .TO OPTIONS teach Montreal roots — a .TO equity in the books
     # may be a CDR over a US name.
     book_symbols = frozenset(str(b).upper() for b in book_symbols)
-    from taxjson.lib.core import is_option_symbol, parse_option_underlying
-    book_to_roots = set()
-    for b in book_symbols:
-        if b.endswith(".TO") and is_option_symbol(b):
-            try:
-                book_to_roots.add(
-                    str(parse_option_underlying(b)).rsplit(".", 1)[0])
-            except Exception:
-                pass
-    to_roots = frozenset(
-        str(p.get("symbol") or "").rsplit(".", 1)[0]
-        for p in positions
-        if str(p.get("symbol") or "").endswith(".TO")) | frozenset(
-            extra_to_roots) | frozenset(book_to_roots)
+    closed_symbols = frozenset(str(b).upper() for b in closed_symbols)
+    from taxjson.lib.core import is_option_symbol
+    book_to_roots = _qt_book_to_roots(book_symbols)
+    live_to_roots = (_qt_payload_to_roots(positions)
+                     | frozenset(extra_to_roots))
+    to_roots = live_to_roots | frozenset(book_to_roots)
     q = toml_str
     lines = ["# Live Questrade holdings snapshot — taxjson fetch/verify.",
              "# Regenerated on every fetch; do not hand-edit.",
@@ -837,10 +1124,58 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
             continue
         sym = qt_position_symbol(str(p2.get("symbol") or ""), to_roots,
                                  book_symbols)
+        venue_unknown = False
+        unbooked_unknown = False
+        closed_unknown = False
+        closed_listing = _qt_closed_listing(sym, book_symbols, closed_symbols)
+        if is_option_symbol(sym) and (
+                _qt_both_listings(sym, book_symbols)
+                or _qt_unbooked_listing(sym, book_symbols)
+                or closed_listing):
+            # backlog TJ-0880, TJ-1074: the listing Questrade says.
+            listed = live_currencies.get(_symbol_id(p2))
+            base = sym.rpartition(".")[0]
+            if listed == "CAD":
+                sym = f"{base}.TO"
+            elif listed == "USD":
+                sym = f"{base}.US"
+            elif _qt_both_listings(sym, book_symbols):
+                venue_unknown = True
+            elif closed_listing:
+                venue_unknown = closed_unknown = True
+            elif (sym.endswith(".TO")
+                  and _qt_option_root(sym) not in live_to_roots):
+                # Only the books' other .TO options say Montreal.
+                venue_unknown = unbooked_unknown = True
         lines += ["", "[[holding]]",
                   f"symbol = {q(sym)}",
                   f"quantity = {qty!r}"]
-        if is_option_symbol(sym) and sym.upper() in book_multipliers:
+        if closed_unknown:
+            lines.append("# listing AMBIGUOUS: the books hold this contract "
+                         "only closed, and Questrade's symbol lookup did not "
+                         "say which listing is open: no currency written")
+            if ambiguous_closed is not None:
+                ambiguous_closed.append(sym)
+        elif unbooked_unknown:
+            lines.append("# listing AMBIGUOUS: this contract is not in the "
+                         "books yet, the books hold other options of its "
+                         "root Montreal-listed (.TO), and Questrade's symbol "
+                         "lookup did not say which it is: no currency "
+                         "written")
+            if ambiguous_unbooked is not None:
+                ambiguous_unbooked.append(sym)
+        elif venue_unknown:
+            lines.append("# listing AMBIGUOUS: the books hold this contract "
+                         "both Montreal-listed (.TO) and US-listed (.US), "
+                         "and Questrade's symbol lookup did not say which "
+                         "is open: no currency written")
+            if ambiguous is not None:
+                ambiguous.append(sym)
+        declared = _declared_size(sym) if is_option_symbol(sym) else None
+        if declared is not None:
+            # A ticker.map MULT line wins, as in the books (TJ-0857).
+            lines.append(f"multiplier = {float(declared)!r}")
+        elif is_option_symbol(sym) and sym.upper() in book_multipliers:
             mult = book_multipliers[sym.upper()]
             lines.append("contract_multiplier_unknown = true"
                          if mult is None else
@@ -866,7 +1201,7 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
         # and sanity compared a USD average with CAD books (2026-10
         # audit #43). A spelling that does not say is left out.
         from taxjson.lib.price_chain import quote_currency
-        cur = quote_currency(sym)
+        cur = None if venue_unknown else quote_currency(sym)
         if cur:
             lines.append(f"currency = {q(cur)}")
         aep = p2.get("averageEntryPrice")
@@ -1026,6 +1361,50 @@ def flex_statement_count(text: str) -> int:
         else:
             in_statement = False
     return count
+
+
+# Section columns that name the broker account a row belongs to (the
+# Activity Statement's `Account`, a Flex query's `ClientAccountID`).
+_FLEX_ACCOUNT_COLUMNS = ("account", "clientaccountid")
+
+
+def flex_account_ids(text: str) -> List[str]:
+    """The broker accounts a Flex download names, sorted: every
+    non-blank cell of an `Account` / `ClientAccountID` column of a
+    section's Data rows (a `Total` row aside), the Account Information
+    section's `Account` (its first word: "U1234567 (Custom)") and its
+    `Accounts Included` list — the cells the IB parser books rows by.
+    A combined statement has ONE Statement section and rows of two
+    accounts, so flex_statement_count said 1 and two accounts' books
+    were written into one taxjson account (backlog TJ-0867)."""
+    import csv as _csv
+    import io as _io
+    headers: Dict[str, List[str]] = {}
+    out = set()
+    for row in _csv.reader(_io.StringIO(text)):
+        if len(row) < 3:
+            continue
+        sec, kind = row[0].lstrip("﻿").strip(), row[1].strip()
+        if kind == "Header":
+            headers[sec] = [h.strip().lower() for h in row[2:]]
+            continue
+        if kind != "Data":
+            continue
+        cells = dict(zip(headers.get(sec) or [], row[2:]))
+        if sec == "Account Information":
+            name = (cells.get("field name") or "").strip()
+            value = (cells.get("field value") or "").strip()
+            if name == "Account" and value:
+                out.add(value.split()[0].upper())
+            elif name == "Accounts Included":
+                out.update(a.strip().split()[0].upper()
+                           for a in value.split(",") if a.strip())
+            continue
+        for col in _FLEX_ACCOUNT_COLUMNS:
+            v = (cells.get(col) or "").strip()
+            if v and "total" not in v.lower():
+                out.add(v.split()[0].upper())
+    return sorted(out)
 
 
 def looks_like_ib_statement(text: str) -> bool:

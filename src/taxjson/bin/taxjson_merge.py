@@ -12,9 +12,26 @@ PROG = "taxjson-merge"
 def main():
     parser = argparse.ArgumentParser(description="Merge transaction JSON files")
     parser.add_argument("files", nargs="+", help="Input JSON files")
+    parser.add_argument(
+        "--opening-cutoff", action="store_true",
+        help="Apply the opening snapshots' cut-off (lib/opening) to the "
+             "merged books: a rename one account's books carry reaches "
+             "another account's rows of the old symbol, which its own "
+             "merge could not tell (backlog TJ-0964).")
+    parser.add_argument("--year", type=int, default=None,
+                        help="With --opening-cutoff: the tax year whose "
+                             "left-out sale stops the merge.")
+    parser.add_argument("--country", default=None,
+                        help="With --opening-cutoff: the project's "
+                             "country.")
+    parser.add_argument("--tax-date", choices=("settle", "trade"),
+                        default=None,
+                        help="With --opening-cutoff: the project's date "
+                             "basis for --year.")
     args = parser.parse_args()
 
     merged_transactions = []
+    opening_cut = []
     metadata = {
         "merged_at": datetime.now(timezone.utc).isoformat(),
         "sources": []
@@ -46,6 +63,9 @@ def main():
             if not isinstance(txs, list):
                 raise ValueError("'transactions' is not a list")
             merged_transactions.extend(txs)
+            _meta = data.get("metadata")
+            if isinstance(_meta, dict):
+                opening_cut.extend(_meta.get("opening_cut") or [])
             metadata["sources"].append({
                 "file": str(path),
                 "count": len(txs),
@@ -60,6 +80,20 @@ def main():
                              "merge.")
         # exit 2: an input that cannot be read, not a finding (A2-0164)
         sys.exit(2)
+
+    if args.opening_cutoff:
+        # Each account's merge (taxjson-merge2) cut its own rows at its
+        # snapshot with the renames ITS books carry; a rename only
+        # another account reports reaches this account's old symbol
+        # here, where every account's rows meet (backlog TJ-0964).
+        from taxjson.lib.opening import OpeningError, apply_opening_cutoff
+        try:
+            merged_transactions = apply_opening_cutoff(
+                merged_transactions, year=args.year, country=args.country,
+                tax_date=args.tax_date, earlier_cut=opening_cut)
+        except OpeningError as e:
+            cli_diag.error(PROG, str(e))
+            sys.exit(1)
 
     output = {
         "transactions": merged_transactions,

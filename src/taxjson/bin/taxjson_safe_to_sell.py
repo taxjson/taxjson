@@ -114,6 +114,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # No rescue sale settles in time any more: the loss is
                 # denied — never 'Sell ... by <yesterday>' (A2-0368).
                 status = "DENIED"
+                # A loss sale today of the shares still held meets its
+                # own state (a registered account's recent buy: LOCKED;
+                # backlog TJ-0775).
+                fwd = r.get("forward")
+                if isinstance(fwd, dict) and fwd.get("category"):
+                    fc = fwd["category"]
+                    fs = _STATUS.get(fc, fc)
+                    if fc == "LOCKED" and fwd.get("at_risk_qty") is not None \
+                            and float(fwd["at_risk_qty"]) < abs(q) - 1e-6:
+                        fs = "PARTIAL"
+                    status = f"DENIED, {fs}"
             adv = r.get("advisory") or ""
             reason = adv.split(":", 1)[1].strip() if ":" in adv else adv
             output_rows.append([r.get("ticker"), f"{q:.4f}", status, reason])

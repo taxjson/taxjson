@@ -13,6 +13,7 @@ from taxjson.lib.brokerages.schema import QTY_ZERO
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
                                                    USD_STABLECOINS, RowIds,
                                                    same_coin_hint,
+                                                   order_within_seconds,
                                                    strict_money, utc_to_local,
                                                    usd_value as _usd_value,
                                                    warn_depeg)
@@ -107,6 +108,15 @@ _FIAT_FUNDING_TYPES = ('deposit', 'withdrawal', 'transfer',
 _STAKING_WALLET_MOVES = ('spottostaking', 'stakingfromspot',
                          'stakingtospot', 'spotfromstaking',
                          'spottofutures', 'spotfromfutures')
+
+# `earn` subtypes moving coins between the spot and Earn wallets (paired
+# rows, the coins stay yours): a recognised non-event. `autoallocate` is
+# the spelling Kraken documents for an automatic allocation, beside the
+# `autoallocation` seen in exports; it was left out and reported as
+# unbooked property (backlog TJ-0750). `migration`: a move between two
+# Earn programs (re-audit A2-1017).
+_EARN_WALLET_MOVES = ('allocation', 'deallocation', 'autoallocation',
+                      'autoallocate', 'migration')
 
 
 def _normalize_asset(asset: str, fold_stable: bool = True,
@@ -426,9 +436,46 @@ _LEDGER_IDENTITY = ('refid', 'time', 'type', 'subtype', 'asset',
                     'amount', 'fee')
 
 
+_LEDGER_NUMERIC = ('amount', 'fee')
+
+
+def _canon_number(text: str) -> str:
+    """A numeric cell as one spelling: -1, -1.0 and -1.00000000 are one
+    value (two exports print a quantity with different precision: they
+    were refused as DIFFERENT content, backlog TJ-0739). A cell that is
+    no plain finite number stays as written."""
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return text
+    if not d.is_finite():
+        return text
+    return '0' if d == 0 else format(d.normalize(), 'f')
+
+
 def _ledger_identity(row: Dict[str, Any]) -> tuple:
-    return tuple(str(row.get(k) or '').strip().lower()
-                 for k in _LEDGER_IDENTITY)
+    out = []
+    for k in _LEDGER_IDENTITY:
+        v = str(row.get(k) or '').strip().lower()
+        out.append(_canon_number(v) if k in _LEDGER_NUMERIC and v else v)
+    return tuple(out)
+
+
+# A repeated ledger entry's valuation cells: an older export may lack
+# them (no column, or a blank cell) while a newer one of the same entry
+# has them. They are no part of the entry's identity; a value one copy
+# has fills the other's blank (backlog TJ-0738).
+_LEDGER_VALUATION = ('amountusd', 'feeusd')
+
+
+def _fill_valuation(kept: Dict[str, Any], row: Dict[str, Any]) -> None:
+    """Fill `kept`'s blank valuation cells from `row`, another copy of
+    the same ledger entry. A value `kept` has stays."""
+    for k in _LEDGER_VALUATION:
+        if (str(kept.get(k) or '').strip() == ''
+                and str(row.get(k) or '').strip() != ''):
+            kept[k] = row[k]
 
 
 def _fee_ccy(row: Dict[str, Any], asset_name: str) -> str:
@@ -579,6 +626,32 @@ class KrakenBrokerage(BaseBrokerage):
                 f"a new Kraken export variant.")
         return utc_to_local(dt)
 
+    def _instant_key(self, time_raw: str) -> Optional[tuple]:
+        """(UTC second, fraction) of a Kraken timestamp, the order of two
+        rows in one second (`… 15:00:00.1000` before `… 15:00:00.9000`),
+        or None when the stamp does not read."""
+        from decimal import Decimal, InvalidOperation
+        head, dot, frac = (time_raw or '').strip().partition('.')
+        dt = self.parse_date(head, "%Y-%m-%d %H:%M:%S")
+        if dt is None:
+            return None
+        f = Decimal(0)
+        if dot and frac.strip().isdigit():
+            try:
+                f = Decimal('0.' + frac.strip())
+            except InvalidOperation:
+                pass
+        return (dt, f)
+
+    def _order_within_seconds(self, transactions, key_of_line) -> None:
+        """Reorder, in place, the rows that share one clock second by the
+        fraction of a second the export states: the books keep rows of
+        one second in the order the parser gives them, so a descending
+        export booked a rebuy at 15:00:00.9 before the sale at
+        15:00:00.1 it followed (backlog TJ-0746). Rows of different
+        seconds, and rows of one instant, keep their order."""
+        order_within_seconds(transactions, self.row_line, key_of_line)
+
     @staticmethod
     def _sibling_ledger_index(path: Path) -> Optional[Dict[str, list]]:
         """refid -> ledger rows, from every Kraken LEDGER export in the
@@ -616,6 +689,7 @@ class KrakenBrokerage(BaseBrokerage):
                         if tx_id:
                             prev = seen.get(tx_id)
                             if prev is not None:
+                                _fill_valuation(prev[2], row)
                                 if prev[0] != _ledger_identity(row):
                                     raise ValueError(
                                         f"Kraken ledger exports "
@@ -626,7 +700,8 @@ class KrakenBrokerage(BaseBrokerage):
                                         f"this account's ledger; remove "
                                         f"the wrong one.")
                                 continue
-                            seen[tx_id] = (_ledger_identity(row), shown_name(p))
+                            seen[tx_id] = (_ledger_identity(row),
+                                           shown_name(p), row)
                         idx.setdefault(ref, []).append(row)
             except UnicodeDecodeError:
                 continue
@@ -673,8 +748,17 @@ class KrakenBrokerage(BaseBrokerage):
         bl, ql = b_rows[0], q_rows[0]
         b_amt = self._num(bl, 'amount', ctx, required=True)
         q_amt = self._num(ql, 'amount', ctx, required=True)
-        b_fee = abs(self._num(bl, 'fee', ctx))
-        q_fee = abs(self._num(ql, 'fee', ctx))
+        # Signed: Kraken's balance is the prior one + amount − fee, so a
+        # negative fee is a credit (a maker rebate). abs() booked a
+        # rebate as a charge (backlog TJ-0749).
+        b_fee = self._num(bl, 'fee', ctx)
+        q_fee = self._num(ql, 'fee', ctx)
+        if b_fee < 0:
+            raise ValueError(
+                f"Kraken {ctx}: the ledger credits a fee of "
+                f"{-b_fee:.10g} {base} (a negative fee on the {base} "
+                f"leg) — a rebate paid in the traded coin is not "
+                f"modeled; enter this fill via a .tt file{_TT_REMOVE}.")
         for lg, a, fee in ((bl, base, b_fee), (ql, quote, q_fee)):
             fc = _fee_ccy(lg, _normalize_asset(lg.get('asset') or '',
                                                fold_stable=False))
@@ -713,7 +797,7 @@ class KrakenBrokerage(BaseBrokerage):
         # decimals than the ledger — keep that value, but only when the
         # two agree (a disagreement means the columns are not what we
         # think they are).
-        if abs(trade_fee - q_fee) > max(2e-4, 0.01 * trade_fee):
+        if abs(trade_fee - q_fee) > max(2e-4, 0.01 * abs(trade_fee)):
             raise ValueError(
                 f"Kraken {ctx}: trades fee {trade_fee:.10g} {quote} but "
                 f"the ledger charged {q_fee:.10g} {quote} and 0 {base}.")
@@ -781,6 +865,8 @@ class KrakenBrokerage(BaseBrokerage):
         # the dedup (2026-10-25 audit robustness#4; the ledger's twin is
         # S013-09).
         ids = RowIds(f"Kraken trades CSV {shown_name(path)}", "txid")
+        # export line -> (UTC second, fraction): _order_within_seconds.
+        instant_of_line: Dict[int, Optional[tuple]] = {}
         with io.StringIO(read_broker_text(path)) as f:
             # Each transaction remembers its row's line (backlog
             # TJ-0124).
@@ -804,11 +890,15 @@ class KrakenBrokerage(BaseBrokerage):
                 pair = row.get('pair') or ''
                 time_raw = row.get('time') or ''
                 dt = self._local_dt(time_raw, f"trades row (pair={pair!r})")
+                instant_of_line[line] = self._instant_key(time_raw)
                 ctx = f"trades {shown_name(path)} txid={_mask(row.get('txid'))}"
 
                 price = self._num(row, 'price', ctx, required=True)
                 cost = abs(self._num(row, 'cost', ctx, required=True))
-                fee = abs(self._num(row, 'fee', ctx))
+                # Signed: a negative fee is a maker rebate credited to
+                # the quote balance (backlog TJ-0749); it lowers a
+                # buy's cost and raises a sale's proceeds.
+                fee = self._num(row, 'fee', ctx)
                 vol = self._num(row, 'vol', ctx, required=True)
 
                 base, quote = _split_pair(pair, time_raw)
@@ -1002,6 +1092,27 @@ class KrakenBrokerage(BaseBrokerage):
                             _leg['price'] = round(_usd / _q, 8) if _q else 0.0
                             _leg['net_amount'] = round(_usd, 8)
                             _leg['gross_amount'] = round(_usd, 8)
+                    else:
+                        # Unpriced: taxjson-fill-crypto values the swap
+                        # from the received coin's units, which leave a
+                        # fee out; the fee rides along for the filler
+                        # (`swap_fee`), as the other paths' (backlog
+                        # TJ-1159). The ledger joined: a fee in the
+                        # received coin, as _build_instant_trade's
+                        # (TJ-0991); one in the spent coin is not in
+                        # amountusd's received value either. No ledger: a
+                        # buy's fee in the quote coin counts, as a fiat
+                        # quote's and Coinbase's (TJ-0981); a sell's
+                        # received amount is net of it, as a fiat quote's.
+                        _fee, _side = 0.0, ''
+                        if legs:
+                            _fee = base_fee if type_ == 'buy' else quote_fee
+                            _side = 'received'
+                        elif type_ == 'buy':
+                            _fee, _side = quote_fee, 'spent'
+                        if _fee > 0:
+                            for _leg in (base_leg, quote_leg):
+                                _leg['swap_fee'] = f"{_fee!r} {_side}"
                     # A blank txid cell still needs one stem for both
                     # legs (fill-crypto values the swap once, A2-0998)
                     # and one per fill (issue #93).
@@ -1080,6 +1191,7 @@ class KrakenBrokerage(BaseBrokerage):
                   f"coins given, with no quote-currency fee; those fees "
                   f"are therefore NOT in the fee reports (fees.rpt, "
                   f"fees-sum, the .sum FEES line).")
+        self._order_within_seconds(transactions, instant_of_line)
         self._mark_idless_fills(transactions)
         self.emit_skip_summary(shown_name(path))
         return transactions
@@ -1185,11 +1297,8 @@ class KrakenBrokerage(BaseBrokerage):
                                 row, asset_name, fee_ccy, amount, fee,
                                 path, line, date, txid, income)
                     transactions.extend(income_rows)
-                elif (type_raw == 'earn' and subtype in (
-                        'allocation', 'deallocation', 'autoallocation',
-                        # A move between two Earn programs (paired rows,
-                        # the coins stay yours) — re-audit A2-1017.
-                        'migration')
+                elif (type_raw == 'earn'
+                      and subtype in _EARN_WALLET_MOVES
                       ) or (type_raw.startswith('hybridearn')
                             and type_raw != 'hybridearnwithdrawal'
                       ) or (type_raw == 'transfer'
@@ -1277,6 +1386,7 @@ class KrakenBrokerage(BaseBrokerage):
                     transactions.extend(self._fee_coin_sale(
                         row, ctx, fee, fee_ccy, type_raw, date, time, txid))
                 elif type_raw in ('spend', 'receive') and refid:
+                    self._fill_from_copies(row, refid, txid)
                     self._add_instant_leg(
                         instant_trades, row, shown_name(path), ctx, refid,
                         type_raw, amount, fee, asset, asset_name, fee_ccy,
@@ -1474,6 +1584,25 @@ class KrakenBrokerage(BaseBrokerage):
                 'raw': asset_name,
             }
 
+    def _fill_from_copies(self, row, refid, txid) -> None:
+        """Fill the instant-trade leg `row`'s blank valuation cells from
+        another export's copy of the same ledger entry (prepare_files'
+        index): two overlapping exports that each hold the whole trade,
+        the older without amountusd, booked it at two values and the run
+        stopped on a restated row (backlog TJ-0738)."""
+        legs = (getattr(getattr(self, 'account_context', None),
+                        'instant_legs', None) or {}).get(refid, ())
+        if not txid:
+            return
+        ident = None
+        for _src, _key, other_txid, other in legs:
+            if other_txid != txid:
+                continue
+            if ident is None:
+                ident = _ledger_identity(row)
+            if _ledger_identity(other) == ident:
+                _fill_valuation(row, other)
+
     def _instant_leg_from_row(self, instant_trades, row, src) -> None:
         """_add_instant_leg for a raw ledger row of `src` (another export
         of the account: _join_instant_legs)."""
@@ -1531,6 +1660,10 @@ class KrakenBrokerage(BaseBrokerage):
         for src, _key, txid, row in entries:
             prev = seen.get(txid)
             if prev is not None:
+                # The kept copy takes a valuation only this one has (an
+                # older export first lost the newer one's amountusd,
+                # the swap then valued at a daily close: TJ-0738).
+                _fill_valuation(prev[2], row)
                 if prev[1] != _ledger_identity(row):
                     raise ValueError(
                         f"Kraken ledger exports {prev[0]} and {src} both "
@@ -1539,7 +1672,8 @@ class KrakenBrokerage(BaseBrokerage):
                         f"entry (a restated row). Keep the newer download "
                         f"only, or correct the row, and run again.")
                 continue
-            seen[txid] = (src, _ledger_identity(row))
+            row = dict(row)     # the context's row stays as read
+            seen[txid] = (src, _ledger_identity(row), row)
             rows.append((src, row))
         if {(r.get('type') or '').strip().lower()
                 for _s, r in rows} != {'spend', 'receive'}:
@@ -2388,6 +2522,15 @@ class KrakenBrokerage(BaseBrokerage):
                     leg['price'] = round(usd / q, 8) if q else 0.0
                     leg['net_amount'] = round(usd, 8)
                     leg['gross_amount'] = round(usd, 8)
+            elif recv['fee'] and abs(buy_leg['quantity']) > 0:
+                # Unpriced: taxjson-fill-crypto values the swap from the
+                # received coin's units, which are net of the receive
+                # fee. The gross amountusd values the units before it,
+                # so the fee rides along for the filler to add
+                # (`swap_fee`, backlog TJ-0991). A spend-side fee is
+                # not in amountusd's received value either: nothing.
+                for leg in (sell_leg, buy_leg):
+                    leg['swap_fee'] = f"{abs(recv['fee'])!r} received"
             if refid:
                 sell_leg['id'] = f'{refid}-sell'
                 buy_leg['id'] = f'{refid}-buy'
@@ -2425,6 +2568,32 @@ class KrakenBrokerage(BaseBrokerage):
                                refid)
 
 
+def _sibling_ledger_rows(path) -> List[tuple]:
+    """[(name as messages show it, [(row, line)])] of the other Kraken
+    LEDGER exports in `path`'s folder (_kraken_siblings), in name order.
+    One that does not read is left out: its own read reports it."""
+    out = []
+    for p in sorted(_kraken_siblings(Path(path)), key=lambda q: q.name):
+        try:
+            with io.StringIO(read_broker_text(p)) as f:
+                if _classify_header(f.readline()) != 'ledgers':
+                    continue
+                f.seek(0)
+                srows = [(_lower_row(raw), line) for raw, line in
+                         _dict_rows(f, p, 'ledger', _LEDGER_REQUIRED)]
+        except (BrokerageParseError, OSError, ValueError, csv.Error,
+                UnicodeDecodeError):
+            continue
+        out.append((shown_name(p), srows))
+    return out
+
+
+def _where_key(where: str) -> tuple:
+    """`file:line` -> (file, line), for sorting."""
+    name, _, line = where.rpartition(':')
+    return (name, int(line) if line.isdigit() else 0)
+
+
 def kraken_cash_events(path, stable_cash: bool = True
                        ) -> List[Dict[str, Any]]:
     """The cash events of a Kraken LEDGER export for the FX-on-cash
@@ -2444,7 +2613,16 @@ def kraken_cash_events(path, stable_cash: bool = True
     case; a missing ledger column refused naming the file). A fee is in
     its `feecurrency` (`_fee_ccy`): a coin fee is the position book's.
     A balance is the one after the LATEST row by its clock, whatever
-    order the export lists the rows in."""
+    order the export lists the rows in.
+
+    The account's other ledger exports (the folder's Kraken CSVs, as
+    `taxjson run` reads them) are read beside it, so the answer does not
+    depend on how the history was split across exports: a conversion
+    whose legs two exports split is joined across them (each export
+    holding a leg gives the same FXCONV, kept once by
+    cash_events.dedup_across_files; backlog TJ-0861), and the balance
+    before a wallet's first row is no start-of-year balance when another
+    export holds a row of that wallet in between (backlog TJ-0888)."""
     from datetime import datetime
     from taxjson.lib import cash_events as CE
     from taxjson.lib.brokerages.base import read_broker_text, shown_name
@@ -2470,6 +2648,25 @@ def kraken_cash_events(path, stable_cash: bool = True
             raise ValueError(f"{where}: unparseable Kraken time "
                              f"{raw!r}") from None
         return dt
+
+    def _leg(r: Dict[str, Any], where: str) -> tuple:
+        """(day, currency, amount, fee, where, bare asset, fee currency
+        when it is cash) of a trade leg, as the groups below hold it."""
+        raw_asset = (r.get('asset') or '').strip()
+        bare = _normalize_asset(raw_asset, fold_stable=False)
+        cur = _normalize_asset(raw_asset, fold_stable=stable_cash)
+        day = utc_to_local(_when(r.get('time', ''), where)).date().isoformat()
+        amt = strict_money(r.get('amount'), 'amount', f"Kraken {where}")
+        fee = strict_money(r.get('fee') or '0', 'fee', f"Kraken {where}")
+        fc = _fee_ccy(r, bare)
+        fee_cur = (_normalize_asset(fc, fold_stable=stable_cash)
+                   if fc in cashlike else None)
+        return (day, cur, amt, fee, where, bare, fee_cur)
+
+    def _wallet(raw_asset: str) -> str:
+        sfx = _ASSET_SUFFIX_RE.search(raw_asset)
+        return (_normalize_asset(raw_asset, fold_stable=False)
+                + (sfx.group(0).upper() if sfx else ''))
 
     out: List[Dict[str, Any]] = []
     groups: Dict[str, list] = {}
@@ -2504,8 +2701,7 @@ def kraken_cash_events(path, stable_cash: bool = True
             # keep their own balance beside the spot USDC / ZUSD, so the
             # wallet suffix stays in the key (backlog TJ-0019: the
             # reward wallet's balance replaced the spot one's).
-            sfx = _ASSET_SUFFIX_RE.search(raw_asset)
-            wallet = bare + (sfx.group(0).upper() if sfx else '')
+            wallet = _wallet(raw_asset)
             bal_rows.append((cur, wallet, day, when, i, strict_money(
                 r.get('balance'), 'balance', f"Kraken {where}"), amt,
                 fee if fc == bare else 0.0))
@@ -2523,6 +2719,15 @@ def kraken_cash_events(path, stable_cash: bool = True
             groups.setdefault((r.get('refid') or '').strip() or txid,
                               []).append((day, cur, amt, fee, where, bare,
                                           fee_cur))
+    # The account's other ledger exports: a leg of one of this export's
+    # trades that another export holds joins it (a conversion whose two
+    # legs a UTC-midnight export boundary split was a one-currency
+    # "spread" FLOW in each file, its paid CAD lost: backlog TJ-0861),
+    # and the rows that tell whether a balance before this export's
+    # first row is the balance at a year end (backlog TJ-0888).
+    own_ids = {(r.get('txid') or '').strip() for r, _i in rows} - {''}
+    sib_ids: set = set()
+    sib_wallets: Dict[tuple, list] = {}
     # A trade whose every leg is currency: a conversion (the position
     # book never sees it — kraken.py's fiat-for-fiat non-event).
     all_assets_by_ref: Dict[str, set] = {}
@@ -2532,7 +2737,35 @@ def kraken_cash_events(path, stable_cash: bool = True
             all_assets_by_ref.setdefault(ref, set()).add(
                 _normalize_asset((r.get('asset') or '').strip(),
                                  fold_stable=False))
+    for sname, srows in _sibling_ledger_rows(path):
+        for r, i in srows:
+            txid = (r.get('txid') or '').strip()
+            if txid and (txid in own_ids or txid in sib_ids):
+                continue        # the same entry in an overlapping export
+            sib_ids.add(txid)
+            where = f"{sname}:{i}"
+            raw_asset = (r.get('asset') or '').strip()
+            bare = _normalize_asset(raw_asset, fold_stable=False)
+            ref = (r.get('refid') or '').strip()
+            if ref and ref in groups:
+                all_assets_by_ref.setdefault(ref, set()).add(bare)
+            if bare not in cashlike:
+                continue
+            try:
+                when = _when(r.get('time', ''), where)
+                if ref and ref in groups and (r.get('type') or '').strip(
+                        ).lower() in ('trade', 'spend', 'receive'):
+                    groups[ref].append(_leg(r, where))
+            except ValueError:
+                continue        # that export's own read reports the row
+            sib_wallets.setdefault(
+                (_normalize_asset(raw_asset, fold_stable=stable_cash),
+                 _wallet(raw_asset)), []).append(
+                (when, utc_to_local(when).date().isoformat()))
     for ref, legs in groups.items():
+        # In one order whichever export holds a leg (its file, then its
+        # line), so every export gives the same event.
+        legs.sort(key=lambda lg: _where_key(lg[4]))
         if any(a not in cashlike for a in all_assets_by_ref.get(ref, ())):
             continue        # a coin leg: the position book's fill
         fees = [CE.flow(lg[0], lg[6], -lg[3], where=lg[4],
@@ -2610,6 +2843,7 @@ def kraken_cash_events(path, stable_cash: bool = True
             for y in range(y0, y1 + 1)]
         for at, _k in points:
             tot: Dict[str, float] = {}
+            unknown: set = set()
             for (cur, bare) in assets:
                 # By the row's UTC time; the row order only breaks a
                 # tie. A day's rows listed newest-first took the first
@@ -2620,9 +2854,21 @@ def kraken_cash_events(path, stable_cash: bool = True
                     v = before[-1][3]
                 else:
                     f = seq[0]
+                    if any(d > at and w <= f[0] for w, d in
+                           sib_wallets.get((cur, bare), ())):
+                        # Another export moves the wallet between `at`
+                        # and this export's first row: the balance
+                        # before that row is not the one at `at` (a
+                        # June export dated its opening to Dec 31 over
+                        # a January deposit: backlog TJ-0888). That
+                        # export gives its own.
+                        unknown.add(cur)
+                        continue
                     v = f[3] - f[4] + f[5]      # before its first row
                 tot[cur] = tot.get(cur, 0.0) + v
             for cur, v in sorted(tot.items()):
+                if cur in unknown:
+                    continue
                 out.append(CE.balance(at, cur, round(v, 8),
                                       where=f"{name}: ledger balance",
                                       statement=name))

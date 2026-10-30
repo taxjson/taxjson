@@ -352,6 +352,33 @@ def load_cash(path: Optional[Path]) -> Optional[Dict[str, Any]]:
     return doc
 
 
+def cash_mismatch(cash: Optional[Dict[str, Any]], year: int,
+                  base_currency: str, tax_date: str) -> Optional[str]:
+    """What makes the `--cash` document `cash` another report's (None
+    when it is this one's, or there is none): its year, its base
+    currency (its costs are in it) or the date basis its days are on
+    (backlog TJ-0627, TJ-0772). A document of another year carried its
+    points through this one, and one in US dollars was read as
+    Canadian dollars."""
+    if cash is None:
+        return None
+    basis = str(cash.get("basis") or "settle")
+    if basis != tax_date:
+        return f"is dated on the {basis} basis, --tax-date is {tax_date}"
+    try:
+        cyear = int(cash.get("year"))
+    except (TypeError, ValueError):
+        cyear = None
+    if cyear != int(year):
+        return (f"is for the year {cash.get('year')!r}, the report for "
+                f"{year}")
+    cur = str(cash.get("currency") or "").strip().upper()
+    if cur != str(base_currency).strip().upper():
+        return (f"has its costs in {cur or 'no currency'}, the report in "
+                f"{str(base_currency).upper()}")
+    return None
+
+
 class Custody:
     """A Canadian issuer's shares held with a custodian outside Canada
     (an account's `custodian_country` in taxjson.toml, --custodian):
@@ -516,6 +543,49 @@ class Custody:
                                          date_basis=basis)
         return self._units[uk]
 
+    # The rows whose units a day's step can be placed between: a trade
+    # or a move of the symbol itself (a split, an opening, a rename's
+    # earlier symbol on the day: the day's end is used).
+    _PLACEABLE = ("BUYSELL", "ASSIGN", "TRANSFER")
+
+    def units_at(self, account: str, symbol: str, date: str,
+                 basis: str, seq: Optional[int],
+                 seq_of: Dict[str, int]) -> float:
+        """`account`'s units of `symbol` just after the engine's step
+        `seq` on `date`: its units at the end of the day less its rows
+        of that day the engine walks after the step (`seq_of`: {row
+        id: seq}, the timeline's row_seqs). A purchase and its sale in
+        one day are held between them: the day's end (none) applied to
+        the step that holds them put their cost in the excluded
+        remainder, and the at-any-time threshold test missed it
+        (backlog TJ-0646). The day's end where the step or one of the
+        day's rows cannot be placed."""
+        u = self.units(account, symbol, date, basis)
+        if seq is None or not seq_of:
+            return u
+        rows, _days = self._held_rows(account, symbol, basis)
+        day = [t for t in rows if _tx_date(t, basis) == date]
+        if not day:
+            return u
+        first = min(str(t.get("date") or date) for t in day)
+        later = 0.0
+        for t in rows:
+            if ((t.get("action") or "").upper() == "SPLIT"
+                    and first <= _tx_date(t, basis) <= date):
+                return u            # a settle-lagged row's split
+        for t in day:
+            s = seq_of.get(str(t.get("id") or ""))
+            if (s is None or str(t.get("symbol") or "") != symbol
+                    or (t.get("action") or "").upper()
+                    not in self._PLACEABLE):
+                return u
+            if s > seq:
+                try:
+                    later += float(t.get("quantity") or 0.0)
+                except (TypeError, ValueError):
+                    return u
+        return u - later
+
     def change_dates(self, basis: str = "settle") -> Dict[str, set]:
         """{date: the Canadian symbols a custody account's rows move
         that day} — a move between your own accounts leaves the pool as
@@ -551,10 +621,19 @@ class _Pool:
         from taxjson.lib.core import pool_qty_eps
         return pool_qty_eps(self.symbol, self.qty, *scales)
 
+    def held_long(self) -> bool:
+        """A long holding: more than the flat tolerance, or a sub-micro
+        position that carries a real cost (core.pool_is_flat,
+        CA-ACB-01; backlog TJ-0649: bought or consolidated into a
+        fraction of a share, its cost amount was left out)."""
+        from taxjson.lib.core import pool_is_flat
+        return self.qty > 0 and not pool_is_flat(self.symbol, self.qty,
+                                                 self.cost)
+
     def cost_amount(self) -> float:
         """Cost amount of PROPERTY HELD: a short position is a liability,
         not property, so only long cost counts."""
-        if self.qty <= self.eps():
+        if not self.held_long():
             return 0.0
         return max(float(self.cost), 0.0)
 
@@ -716,7 +795,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             # A futures contract is a row only for a cost added to it
             # (apply); held at nil cost it is a note, as it always was.
             if not is_plain_future(s):
-                if p.qty > p.eps():
+                if p.held_long():
                     held_in_year.add(s)
                     long_in_year.add(s)
                     if p.tainted:
@@ -733,11 +812,16 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # account's units are read on it too.
     basis = str(timeline.get("basis") or tax_date)
 
-    def derive(symbol: str, date: str) -> None:
+    # Which book row each engine step is: a custody account's units at
+    # a step inside a day (Custody.units_at; backlog TJ-0646).
+    seq_of = _CT.row_seqs(timeline)
+
+    def derive(symbol: str, date: str, seq: Optional[int] = None) -> None:
         """The pools of `symbol` from the engine's state: a custody
-        account's share of it (its units at the end of `date`, at most
-        the pool's, times the pool's cost per unit; none while the pool
-        is flat or on the other side), the rest under the symbol."""
+        account's share of it (its units just after the engine's step
+        `seq` on `date`, else at the end of `date`, at most the pool's,
+        times the pool's cost per unit; none while the pool is flat or
+        on the other side), the rest under the symbol."""
         per = states.get(symbol, {})
         q = sum(v[0] for v in per.values())
         cost = sum(v[1] for v in per.values())
@@ -748,7 +832,8 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             from taxjson.lib.core import pool_qty_eps
             if abs(q) > pool_qty_eps(symbol, q):
                 for acct in custody.custody:
-                    u = custody.units(acct, symbol, date, basis)
+                    u = custody.units_at(acct, symbol, date, basis,
+                                         seq, seq_of)
                     if u * q > 0:
                         shares[acct] = min(abs(u) / abs(q), 1.0)
                 tot = sum(shares.values())
@@ -809,7 +894,11 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         per = states.setdefault(symbol, {})
         per[str(r.get("account") or "")] = (
             float(r.get("qty") or 0.0), cost, bool(r.get("unknown_cost")))
-        derive(symbol, date)
+        try:
+            seq = int(r.get("seq"))
+        except (TypeError, ValueError):
+            seq = None
+        derive(symbol, date, seq)
         new_symbol = str(r.get("renamed_to") or "")
         if new_symbol and new_symbol != symbol:
             carry(symbol, new_symbol)
@@ -1080,10 +1169,78 @@ def _gains_key(e: Dict[str, Any], custody: Optional[Custody],
     return custody.key_of(sym, str(e.get("account") or file_acct))
 
 
+# How far back from a negative payment in lieu a short position of its
+# security makes it the compensation the short seller PAID (paid_on_short):
+# the short is held over the record date, and the charge posts on the
+# pay date, a month later at most.
+PIL_SHORT_WINDOW_DAYS = 31
+
+
+def paid_on_short(timeline: Optional[Dict[str, Any]]
+                  ) -> "Any":
+    """f(symbol, date, account=None) -> True when the engine's pool of
+    `symbol` (its cost timeline) was short at some time in the
+    PIL_SHORT_WINDOW_DAYS days up to the end of `date`, or `account` was
+    (the timeline's `shorts`: a short beside another account's long is
+    no pool of its own there, and that long's reversal is not its
+    compensation; backlog TJ-1053): a negative payment in lieu then is
+    the dividend compensation the short seller paid, an expense, not a
+    reduction of the gross income the property earned (tax-logic
+    CA-RPT-14; backlog TJ-0837)."""
+    from datetime import date as _d, timedelta as _td
+    from taxjson.lib import cost_timeline as _CT
+    from taxjson.lib.core import pool_qty_eps
+
+    def points(doc, keep_account):
+        out: Dict[Any, List[Tuple[str, float]]] = {}
+        for r in _CT.rows(doc or {}):
+            acct = str(r.get("account") or "")
+            if keep_account != bool(acct):
+                continue                # Canada's pools are pooled ("")
+            try:
+                q = float(r.get("qty") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            sym = str(r.get("symbol") or "")
+            out.setdefault((sym, acct) if keep_account else sym, []).append(
+                (str(r.get("date") or ""), q))
+        return out
+
+    by_sym = points(timeline, False)
+    by_acct = points((timeline or {}).get("shorts"), True)
+
+    def short_in_window(pts, symbol: str, start: str, end: str) -> bool:
+        before = None
+        for d, q in pts or ():
+            if d < start:
+                before = q
+                continue
+            if d > end:
+                break
+            if q < -pool_qty_eps(symbol, q):
+                return True
+        return before is not None and before < -pool_qty_eps(symbol, before)
+
+    def f(symbol: str, date: str, account: Optional[str] = None) -> bool:
+        symbol = str(symbol or "")
+        end = str(date)[:10]
+        try:
+            start = (_d.fromisoformat(end)
+                     - _td(days=PIL_SHORT_WINDOW_DAYS)).isoformat()
+        except ValueError:
+            return False
+        if short_in_window(by_sym.get(symbol), symbol, start, end):
+            return True
+        return short_in_window(by_acct.get((symbol, str(account or ""))),
+                               symbol, start, end)
+    return f
+
+
 def join_income_gains(gains_paths: List[Path], year: int,
                       overrides: Optional[Dict[str, Optional[str]]] = None,
                       tax_date: str = "settle",
-                      custody: Optional[Custody] = None
+                      custody: Optional[Custody] = None,
+                      short_paid: Optional[Any] = None
                       ) -> Dict[str, Dict[str, float]]:
     """Per-symbol dividend+PIL income and realized gain(loss) for `year`,
     from the pipeline's (already year-scoped) gains files. Defensively
@@ -1097,7 +1254,10 @@ def join_income_gains(gains_paths: List[Path], year: int,
     never saw them: audit R1-199) are excluded from the gain column with
     a warning naming them. With `overrides`, only T1135-scope (foreign)
     symbols are named. With `custody`, a custody account's Canadian
-    shares are keyed as its pool (Custody.key_of)."""
+    shares are keyed as its pool (Custody.key_of). With `short_paid`
+    (paid_on_short), a negative payment in lieu made while the security
+    was held short is the compensation the short seller paid, left out
+    of the gross income (backlog TJ-0837)."""
     out: Dict[str, Dict[str, float]] = {}
     ystr = str(year)
     tainted_skipped = 0
@@ -1122,8 +1282,17 @@ def join_income_gains(gains_paths: List[Path], year: int,
             symbol = _gains_key(e, custody, file_acct)
             if not symbol:
                 continue
-            rec = out.setdefault(symbol, {"income": 0.0, "gain": 0.0})
             action = e.get("action") or ""
+            if (action == "DIVIDEND_IN_LIEU" and short_paid is not None
+                    and float(e.get("pil") or 0.0)
+                    + float(e.get("dividend") or 0.0) < 0
+                    and short_paid(e.get("symbol") or "", date,
+                                   e.get("account") or file_acct)):
+                # Dividend compensation paid on a short: an expense of
+                # the short sale, not a reduction of the gross income
+                # the property earned (CA-RPT-14; backlog TJ-0837).
+                continue
+            rec = out.setdefault(symbol, {"income": 0.0, "gain": 0.0})
             if action == "DIVIDEND":
                 rec["income"] += float(e.get("dividend") or 0.0)
             elif action == "DIVIDEND_IN_LIEU":
@@ -1415,7 +1584,11 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                     key=lambda t: _sort_key(t, tax_date)):
         if t.get("symbol") in cats and t["symbol_new"] not in cats:
             cats[t["symbol_new"]] = cats[t["symbol"]]
-    inc = join_income_gains(gains_paths, year, overrides, tax_date, cust)
+    # Dividend compensation paid on a short is not the property's gross
+    # income (CA-RPT-14; backlog TJ-0837): the timeline says when a
+    # security was held short.
+    inc = join_income_gains(gains_paths, year, overrides, tax_date, cust,
+                            short_paid=paid_on_short(timeline))
     # The interest a property pays (a foreign bond's coupon) is its
     # income too; the gains files carry none (CA-RPT-14; backlog
     # TJ-0504).
@@ -1757,8 +1930,19 @@ def _cash_acts(rep: Dict[str, Any]) -> List[Tuple[str, str]]:
                     "tjs fx-cash --ledger v2"))
     for n in rep.get("cash_not_counted") or []:
         if n.get("unknown"):
+            # The ledger could not run, or refused before it reached the
+            # account's cash (backlog TJ-0657).
             out.append((f"{n['account']}: cash not counted (fx-cash v2 "
-                        f"could not run)", "tjs fx-cash --ledger v2"))
+                        + ("refuses)"
+                           if rep.get("cash_ledger_status")
+                           == "not_computed" else "could not run)"),
+                        "tjs fx-cash --ledger v2"))
+        elif n.get("transit"):
+            # In transit inside the year: its cost is known, where it
+            # was held is not (backlog TJ-1228).
+            out.append((f"{n['account']}: {n.get('currency') or ''} cash in "
+                        f"transit during the year, not in the maximum",
+                        "tjs t1135 --details"))
         else:
             out.append((f"{n['account']}: {n.get('currency') or ''} cash "
                         f"not counted: add it by hand",
@@ -2006,6 +2190,11 @@ def render_report(rep: Dict[str, Any]) -> str:
                            "reading, so the total is not settled.")
     for n in rep.get("cash_not_counted") or []:
         cur_ = f"{n['currency']} " if n.get("currency") else ""
+        if n.get("transit"):
+            warns.append(f"{n['account']}: {n.get('why') or '?'}. Add its "
+                         f"cost by hand only if it was held outside Canada "
+                         f"and it would matter.")
+            continue
         warns.append(f"{n['account']}: its {cur_}cash is not counted — "
                      f"{n.get('why') or '?'}. Add its cost by hand"
                      + (" (the total is not settled)." if n.get("unknown")
@@ -2313,16 +2502,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     overrides = load_overrides(args.map)
     categories = load_categories(args.map)
     cash = load_cash(args.cash)
-    if cash is not None and str(cash.get("basis") or "settle") \
-            != args.tax_date:
+    bad_cash = cash_mismatch(cash, args.year, args.base_currency,
+                             args.tax_date)
+    if bad_cash:
         # Its days on another basis than the walk's: the cash that paid
-        # for shares counted with them (backlog TJ-0627).
+        # for shares counted with them (backlog TJ-0627); another year's
+        # points or another base currency's costs read as this year's
+        # Canadian dollars (backlog TJ-0772).
         from taxjson.lib.out import error as _error
-        _error(f"{args.cash}: the T1135 cash document is dated on the "
-               f"{cash.get('basis') or 'settle'} basis, --tax-date is "
-               f"{args.tax_date}", prog="taxjson-t1135",
-               details=["`taxjson t1135` writes it on the project's "
-                        "tax_date."])
+        _error(f"{args.cash}: the T1135 cash document {bad_cash}",
+               prog="taxjson-t1135",
+               details=["`taxjson t1135` writes it for the project's "
+                        "year, base currency and tax_date: rebuild it "
+                        "(`taxjson t1135`) for the report you ask for."])
         return 2
     # The interlisted pairs (lib/tobase_map): a foreign issuer's country,
     # the units and funds whose category is the user's, and the renames

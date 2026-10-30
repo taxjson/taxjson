@@ -402,7 +402,8 @@ differ from the newest year's (a filed year's are marked `(filed)`:
 its own, not a step), and its checklist marks. A year closed with its
 inputs frozen stays frozen while its lock is damaged (`lock damaged`)
 or deleted (`lock missing`) and its `taxjson.toml` still carries the
-freeze note: the line under the table says to restore the lock (from
+freeze note (a year closed as a single folder, then migrated, shows it by
+the reports kept in `filed/<year>/reports/`): the line under the table says to restore the lock (from
 git or a backup) or run `close-year` again, and `migrate` leaves the
 year alone. `--diff A B`: the rules
 and keys that differ between two years. `--json`: a stable schema
@@ -422,7 +423,8 @@ lock, last year's `[estimate]` / `[instalments]` and the accounts'
 `holdings` commented out for reference — each key once, last year's
 value in the place of the template's example — written in the template
 layout `taxjson format` keeps) and its `ticker.map` copied, and an empty
-`holdings/`. In Canada the new year keeps reading the
+`holdings/` (or the folder inside the year `holdings_dir` names; a shared
+one beside the years is only named). In Canada the new year keeps reading the
 `tobase.map` every year shares (a year from before v0.27.1 that has its
 own copy passes it on; a filed year's frozen copy is its own by design,
 which `taxjson years` says as "frozen copy of its own"), and keeps the
@@ -658,7 +660,11 @@ reorganisations) with the tax election recorded for each. `--redo`
 clears the election(s) and asks again now (an election whose event no
 export in the account's folder holds is kept: there is nothing to ask
 about); `--reset` clears them so the
-next `taxjson run` asks; `--event ID` limits either to one event. Two
+next `taxjson run` asks; `--event ID` limits either to one event
+(`--redo --event ID` asks about that event only; an event that has no
+election yet waits for `taxjson run`), and takes an election saved under
+an older id by either id: the one `taxjson elect ACCOUNT` lists or the
+one the run gives the event. Two
 elect commands at once each keep their change: the manifest is changed
 under a lock (`inputs/<account>/.manifest.json.lock`).
 `--set EVENT_ID=ELECTION` writes one election without asking (scripts,
@@ -1009,7 +1015,7 @@ Brokers Activity Statement (its Open Positions section), an RBC Holdings
 Export, or a `[[holding]]` TOML. It writes `inputs/ACCOUNT/opening_<date>.tt`,
 one `OPENING <date> <symbol> <qty> <currency> <total-cost> [<lot-date>]`
 line per long position with the report's **book cost** (never its market
-value). A relative FILE is looked for from the shell's folder, then
+value), and an option's contract size when it is not 100 (`x10`). A relative FILE is looked for from the shell's folder, then
 from the project's. A position with no cost, a short or a futures contract is listed
 and skipped, as is one whose symbol, currency or lot date a `.tt` line
 cannot carry; a report cell with a control character is refused. The
@@ -1054,9 +1060,13 @@ credit and the lesser of 2/3 of the foreign tax and 20.5% of the foreign
 income); whether it binds; the provincial AMT; the
 carryover it **creates**; the carryovers **available** by year of origin
 with their 7-year limit (ITA s.120.2); what is **recovered** this year
-(up to regular tax minus minimum tax, line 40427), with the province's
+(up to basic federal tax before the foreign tax credit minus the minimum
+amount, s.120.2(1)(b); line 40427; only while the claim still lowers tax,
+unless the origin is in its last usable year; the rest stays open), with
+the province's
 share (deducted from basic provincial tax: the provincial form's
-carryover line) and, in Ontario, the surtax that share saves on a row of
+carryover line), in Ontario the surtax that share saves, and the foreign
+tax credit the lower tax limits, each on a row of
 its own; and what carries forward. Every figure is `taxjson estimate`'s own, with the same flags.
 `YEAR` = an earlier closed year prints what its close-year lock
 recorded. Refused in a US project (Form 6251 is not modelled). The
@@ -1222,8 +1232,8 @@ table also says the post-2024 AMT shown did not apply).
   dividends at a low bracket can show a negative figure, a saving on the
   tax of the other income. A prior-year minimum tax carryover (ITA
   s.120.2, line 40427) is applied when it is entered or last year's
-  close-year lock carries it; with none, a NOTE names the headroom one
-  could use. Not modelled: QC, low-income reductions, non-eligible
+  close-year lock carries it; with none, a NOTE names the limit one
+  could use (basic federal tax less the minimum amount, s.120.2(1)(b)). Not modelled: QC, low-income reductions, non-eligible
   dividends, non-refundable credits other than the basic personal amount
   (CPP/EI, Canada employment, age, pension, donations ...), the OAS
   recovery tax (s.180.2) and AMT adjustments outside the books (the
@@ -1321,7 +1331,9 @@ numbers only, never a filing figure): `taxjson option-yield QQQ 1y`
 for the last year's QQQ options, `taxjson option-yield 2025 margin`
 for every underlying traded in that account in 2025. The positionals
 are underlyings (`QQQ` matches QQQ on any market, `QQQ.US` that
-listing), a window (`30d`, `6m`, `1y`, `mtd`, `ytd`, `all`, a tax year;
+listing, `SYN.B` the class share SYN.B.US; a class share's option root,
+`SYNB` for SYN.B.TO, is that share line when it names exactly one),
+a window (`30d`, `6m`, `1y`, `mtd`, `ytd`, `all`, a tax year;
 default: the tax year) and an account (default: all), in any order.
 Three sections: the contracts closed in the window, each with how it
 closed (expired, bought back, assigned, sold, exercised; transferred
@@ -1338,8 +1350,12 @@ currency. The
 contracts are matched per account and series from the books, first in
 first out: a sale with no long position writes, a purchase with no
 short position buys; the opposite trade closes the oldest open
-contract; a close at price 0 with no money is an expiry; an `ASSIGN`
-row is an assignment (written) or an exercise (bought). The yield is
+contract; a close at price 0 with no money but its fees is an expiry
+(the fee comes off its P/L); an `ASSIGN` row is an assignment
+(written) or an exercise (bought). A contract size (`x1000`) one row
+of a series declares sizes the rows that state none. In a Canadian
+project an option split or rename one blended taxable account reports
+moves the series' contracts of each of them, as the gains do. The yield is
 the window's realized P/L over the cost of the underlying's shares
 held now in the accounts read (the books' holdings: a covered-call
 writer's capital), annualized by 365 / the window's days; where no
@@ -1350,7 +1366,10 @@ marked `*`. Shares whose cost is in another currency than the options'
 (a USD call on shares bought in CAD) give no yield: the cost is never
 converted here, so the row's yield is `-` and `--json` names those
 shares and their cost under `shares_other_currency` (`yield_basis`
-`other_currency`). A contract opened before the data (a missing-history
+`other_currency`). Shares held partly at an unknown cost (an `OPENING
+… cost=unknown` line) give no yield either (share cost `?`,
+`shares_cost_unknown`). A tax year not yet begun is an empty window.
+A contract opened before the data (a missing-history
 opening) has no premium: its money is unknown and the row is flagged.
 So has one a trade the broker codes closing (IB code C) closes with
 nothing held to close: that sale closes a long bought before the data
@@ -1408,7 +1427,7 @@ without the denied loss the rule added to its cost (`raw_gain` plus the
 row's `deferred_loss_recovered`); taxable accounts unless a sheltered one
 is named. `YEAR` defaults to the project's year
 and takes any window token too (`30d`, `ytd`, `all` ...);
-`--all-history` covers every closed trade the books hold. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+`--all-history` covers every closed trade the books hold. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`, across the taxable accounts as the tax year's; superficial-loss / wash-sale denials among the taxable accounts only), said in an `Info:` line.
 One trade per
 closing disposition (a US sale that takes several FIFO lots is one trade,
 its lots' P/L added; one with any lot of unknown cost is left out whole
@@ -1521,7 +1540,7 @@ The estimate flags (`--other-income`, `--other-losses` ...) add the tax
 estimate block of [`taxjson estimate`](#taxjson-estimate) under the
 tables; `--verbose` adds its calculation trace.
 
-`--json` carries a `readiness` record: `complete` (true only when nothing below is open) and `issues`, each with its `kind`, what it is and the command that resolves it — `run-state` (the books are not the clean result of the current inputs), `unknown-cost` (sales left out of the totals), `no-purchase` (sales in no total), `conservation` (a cost or quantity the engine's conservation check found the books lost track of) and `in-kind-not-booked` (an in-kind move to or from a registered account the run could not value: its sale or purchase is not in the books). The figures themselves are the same either way. A conservation problem and an in-kind move not booked are also `! ` lines under the
+`--json` carries a `readiness` record: `complete` (true only when nothing below is open) and `issues`, each with its `kind`, what it is and the command that resolves it — `run-state` (the books are not the clean result of the current inputs), `unknown-cost` (sales left out of the totals), `no-purchase` (sales in no total), `conservation` (a cost or quantity the engine's conservation check found the books lost track of) `in-kind-not-booked` (an in-kind move to or from a registered account the run could not value: its sale or purchase is not in the books) `unconsumed-premium` (an option assignment whose premium found no stock leg to fold into: it is in no gain) and `compensation-not-settled` (US: dividend compensation paid on a short still open at the last row and inside its 45 days, so this year's income moves if it is covered in time). The figures themselves are the same either way. A conservation problem and an in-kind move not booked are also `! ` lines under the
 tables (`--details`: the `INKIND` line that values the move).
 
 #### taxjson win-rates
@@ -1535,11 +1554,14 @@ trades, wins, losses, win rate, net P/L, average win and loss, profit
 factor, and the asset classes the row's trades fall in. `--by account`,
 `--by month` (the month of the close) and `--by class` group the same
 trades differently. The positionals are symbols (`QQQ` matches QQQ on
-any market, `QQQ.US` that listing), a window (`30d`, `6m`, `1y`,
-`mtd`, `ytd`, `all`, a tax year; default: the tax year) and an
-account (default: every taxable account; a sheltered account only when
-named), in any order; `--all-history` covers every closed trade the
-books hold. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+any market, `QQQ.US` that listing, `SYN.B` the class share SYN.B.US;
+a digit-leading listing such as `1234.HK` is a symbol), a window
+(`30d`, `6m`, `1y`, `mtd`, `ytd`, `all`, a tax year; default: the tax
+year) and an account (default: every taxable account; a sheltered
+account only when named), in any order; an account whose name is also
+a period (`2025`) is that account beside a period (`all 2025`) or
+`--all-history`, and alone the period, with a warning.
+`--all-history` covers every closed trade the books hold. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`, across the taxable accounts as the tax year's; superficial-loss / wash-sale denials among the taxable accounts only), said in an `Info:` line.
 The trades, their economic P/L (in the base currency,
 **before** any superficial-loss / wash-sale denial; the denied total is
 its own line; with symbols given, it and the unknown-cost count cover
@@ -1655,7 +1677,9 @@ Brokers, RBC Direct, Questrade, Kraken, Coinbase) and the project's
 `.tt` cash lines — the rows `taxjson fx-cash --ledger v2` reads. Each is
 printed as the `.tt` line that declares it, in the forms of
 [settings.md](settings.md#tt-files) (`FXCONV`, `CASHMOVE`, `CASHOPEN`;
-a fee a cash event charged as a `#FEE` comment line), oldest to latest,
+a fee a cash event charged as a `#FEE` comment line, cash one brought in
+— a stock-lending receipt, a rebate — as a `#CREDIT` one, the stablecoin
+side of a Coinbase Convert as a `#TRADE` one), oldest to latest,
 the columns lined up, the broker's description (or the `.tt` file and
 line) after `#`:
 
@@ -1679,11 +1703,16 @@ declaration: it is listed as a `#CASHMOVE` comment line, counted in the
 totals. A `.tt` line that matches a broker's move
 is shown once, as that move with its declaration; one that matches none
 is a move of its own. Statement balances (`CASHBAL`) are not listed: the
-ledger reconciles them. The totals are per currency (deposits,
-withdrawals, fees) and per currency pair (converted). It needs a run
+ledger reconciles them. A line of a book other than the one a new
+`.tt` file of its account folder reads into (a book kept by hand with
+`at=`, a file's `CASHBOOK` book, one of several broker books) ends with
+its `at=<book>`, so a copy stays in that book. The totals are per
+currency (deposits, withdrawals, fees paid, other credits) and per
+currency pair (converted). It needs a run
 (the account books name each file's broker account) and reads nothing
 for a sheltered account. `--json`: `rows` (each event with its `tt`
-line), `totals`, `problems`.
+line), `totals` (`deposits`, `withdrawals`, `converted`, `fees`,
+`credits`), `problems`.
 
 #### taxjson dil
 
@@ -1765,7 +1794,7 @@ both a future and an option, so it matches `--futures` **and**
 Closed LEAPS positions: one row per disposition (date, contract, qty,
 proceeds, cost, gain, days held) plus the total realized gain. Partial
 closes appear as realized; still-open contracts are absent (no
-mark-to-market). A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+mark-to-market). A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`, across the taxable accounts as the tax year's; superficial-loss / wash-sale denials among the taxable accounts only), said in an `Info:` line.
 
 A **LEAPS** position here is a **long option buy placed more than
 `[settings] leaps_months` calendar months before expiry** (default 9,
@@ -1846,7 +1875,7 @@ year`.
 Covered-call (short call) realized-gain summary per underlying over a
 window (default: the tax year): the windowed twin of
 `reports/ccd.rpt`. Covers every account; the total is split into TAXABLE
-and SHELTERED parts when registered accounts contribute. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+and SHELTERED parts when registered accounts contribute. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`, across the taxable accounts as the tax year's; superficial-loss / wash-sale denials among the taxable accounts only), said in an `Info:` line.
 
 #### taxjson dil-sum
 
@@ -1858,7 +1887,11 @@ qualified rate), except, in a Canada project, a Canadian dealer's
 payment on a Canadian issuer's share, which ITA s.260 deems a taxable
 dividend (on the dealer's T5 box 24; counted in `divs-sum` and the
 estimate's eligible dividends). Registered accounts are split out as in
-`divs-sum`.
+`divs-sum`. In a US project, dividend compensation paid on a short sale
+closed within 45 days is shown as `capitalized(§263(h))` and left out of
+the total, as in `sum`: it is the cover's cost (`--json`:
+`totals_capitalized`). `dil` keeps its row and moves the total the same
+way (`--json`: `totals.capitalized_263h`).
 
 #### taxjson divs-sum
 
@@ -1969,7 +2002,7 @@ counts as LEAPS): per contract, quantity closed, proceeds, cost, gain
 and expiry, plus the total (period defaults to the tax year). Only the
 long position's dispositions count; a later write and buy-back of the
 same contract is covered-call P&L, in `ccd-sum`. The total is split into
-TAXABLE and SHELTERED parts when registered accounts contribute. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+TAXABLE and SHELTERED parts when registered accounts contribute. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`, across the taxable accounts as the tax year's; superficial-loss / wash-sale denials among the taxable accounts only), said in an `Info:` line.
 
 #### taxjson losers
 
@@ -1983,7 +2016,7 @@ totals as `side_*` keys. A loss denied by the superficial-loss or
 wash-sale rule is not in it (the engine-allowed amount is what ranks);
 `taxjson wash-sales` lists those. When a row shown has a denial, a
 DENIED column (the denied loss) sits before GAIN, so PROCEEDS − COST +
-DENIED is the GAIN; `--json` rows carry `denied`. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+DENIED is the GAIN; `--json` rows carry `denied`. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`, across the taxable accounts as the tax year's; superficial-loss / wash-sale denials among the taxable accounts only), said in an `Info:` line.
 
 #### taxjson roc-sum
 
@@ -2040,7 +2073,7 @@ are as in `taxjson losers`. `--json` carries every ticker, best first,
 with the overall totals as before, and the winners' own (`side_tickers`,
 `side_total_gain`, `side_total_gain_taxable`,
 `side_total_gain_sheltered`). Before v0.29.0 the text view also listed
-the worst N under the best: that is `taxjson losers` now. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`; superficial-loss / wash-sale denials within each account only), said in an `Info:` line.
+the worst N under the best: that is `taxjson losers` now. A window outside the tax year (`all`, `2y`, another year) is read from the full-history books, built on demand from the same consolidated base-currency book the tax year's gains come from (`work/<account>_gains_all.json`, across the taxable accounts as the tax year's; superficial-loss / wash-sale denials among the taxable accounts only), said in an `Info:` line.
 
 ### Before you trade
 
@@ -2810,7 +2843,10 @@ expired worthless); a worthless expiry with no slip row is
 this year and still open at the year end is `NO_SLIP_EXPECTED` too (the
 premium is reported in the write year, the broker's slip comes in the
 close year), and a close-year slip whose proceeds include an earlier
-year's write premium reconciles with a note. A slip row with amounts but
+year's write premium reconciles with a note. The cover of a short sale
+that is not in your files has unknown proceeds: its symbol is
+`UNKNOWN_PROCEEDS` (a failure: the slip's proceeds cannot be checked),
+or `MISSING_FROM_SLIP` without a slip row. A slip row with amounts but
 no symbol, or an unreadable quantity, is counted as not reconciled.
 Net-of-commission slips are detected and noted. Slips aggregated per
 type code (IBKR's SHS / OPC / FUT rows, "Various") cannot be compared:
@@ -2878,7 +2914,9 @@ exports for every year, read by every year); where
 the books hold part of a payment's return of capital, the line is the
 rest, and a note names the existing line to change instead.
 `--tolerance` is the allowed difference per box in CAD (default 1.00; a
-box holding converted money also allows 0.5% of that part). It changes
+box holding converted money also allows 0.5% of that part; a slip in
+another currency is allowed its worth in that currency, at the year's
+average rate). It changes
 nothing; exit 1 on a finding, and on anything it could not compare (NOT
 COMPARED, `--json` `not_compared`: an account with inputs and no
 readable books, an IB report no account's books carry, an IB component
@@ -2908,7 +2946,9 @@ not the books' unrounded total a cent or two apart (`--json`: `net_source`
   year's remaining net gain and never double-counted across loss years.
 - **US**: net short-term / long-term, the up-to-$3,000 ordinary-income
   offset (assumed used when available), and the running ST / LT
-  carryover per the Schedule D worksheet ordering. A year's net of §1256
+  carryover per the Schedule D worksheet ordering; while a carryover
+  remains, each year up to the project year has a row, a year with no
+  sale taking its offset too. A year's net of §1256
   contracts (futures, broad-based index options) is in NET ST 40% and
   NET LT 60%, as Form 6781 puts it on Schedule D (`--json`: the row's
   `section_1256`, `section_1256_short_term`, `section_1256_long_term`).
@@ -3045,7 +3085,10 @@ cents, recorded in the lock as `return_row`, which `taxjson years` shows
 too), and its income is `taxjson sum`'s taxable SUBTOTAL (each
 account's DIVIDEND and PIL to the cent, as `taxjson years --json` shows
 it); the drift check compares the engine's totals, a cent or two apart
-on a large year (`--details` names both). A Canadian project with no supported
+on a large year (`--details` names both). In Canada the year's T5 box
+18 capital-gains dividends `[[capital_gains_dividends]]` names are
+recorded beside it as `slip_gains`: the next year's `taxjson carryover`
+adds them to the year's filed net, the carry-back room it offers. A Canadian project with no supported
 `province` gets a federal-only estimate, said in the output (every
 figure carried forward is federal anyway). See
 [tax-rules.md](tax-rules.md#net-capital-losses-carryforward-and-carry-back).
@@ -3164,7 +3207,8 @@ check-filed`).
 
 An unreadable lock is named and counts as a failure; so does a lock
 deleted while the year's `taxjson.toml` still carries close-year's
-freeze note ("filed/2024.json is missing: restore it or run close-year
+freeze note, or its `filed/<year>/reports/` still holds the reports
+close-year kept ("filed/2024.json is missing: restore it or run close-year
 again"; `taxjson run` warns the same). A lock closed under
 the other country (every lock records its `country`) is refused by name
 and never recomputed under this project's law. A lock is recomputed on
@@ -3453,7 +3497,9 @@ before a version that kept them says its figure is at the end of the
 books (`as_of` `end_of_data`) until `tjs run` rebuilds it. A loss
 window across Dec 31 that the engine denied nothing of says why, from
 what the books show (`allowed_by`: `buyback_exempt`, `filing_position`,
-`in_kind_contribution`, `not_held_day30`; in the US `lot_sold`, every
+`in_kind_contribution`, `not_held_day30`, counting the loss's holder and
+each holder that acquired in the window, as the engine does; in the US
+`lot_sold`, every
 purchase in the window being part of the lot the sale sold, or
 `replacement_used`, some of them a replacement another loss's wash sale
 used and the rest the lot sold; or `unknown`, which claims no reason).
@@ -3496,14 +3542,17 @@ Settlement: never before the trade or on a weekend (a futures fill from
 a Sunday-evening Globex session, dated and settled on its clock day, is
 a note), and normally the standard cycle on either the US or Canadian
 calendar (a broker's own cycle is a note; corporate events, expiry-day
-options and `.tt` lines are exempt from the cycle check). An option
+options and `.tt` lines are exempt from the cycle check). A corporate
+event booked as a trade row (a stock dividend, a $0 spin-off or
+reorganisation leg) is dated the day the broker posts it, a weekend
+included: it is checked only for a settle date before its date. An option
 expiry row that settles after the contract's expiry date is a WARN (on a
 settle basis it moves the expiry to the next year). A `.tt` line carries
 its settlement date, so it may be up to one settlement cycle after
 today. A parsed file that cannot be read is an ERROR (`unreadable`), so
 is one the account's sources list names that `work/` lacks (`missing`:
 re-run `taxjson run`), and an invalid
-`futures_settle` is refused as `run` refuses it. A date before 1990, or
+`futures_settle` is refused as `run` refuses it. A date before 1900, or
 after the year following the project's, is out of range, except with
 exports shared by every year (`inputs_dir`) and in a year
 `close-year` froze from them (its copy holds the same rows), or froze
@@ -3658,7 +3707,8 @@ spin-off's election moved part of the parent's cost to the new shares),
 `unexplained`. A dividend
 row that states its share count (`ON 500 SHS`) while the books held
 another number on its record date is listed under **INCOME ON SHARES THE
-BOOKS DO NOT HOLD**. Both sections are informational: the exit code
+BOOKS DO NOT HOLD** (a check of the books alone: it runs with no
+holdings file too). Both sections are informational: the exit code
 stays the quantity check's, and `--json` adds `cost`,
 `cost_differences` and `income_share_mismatches`. The holdings formats
 are in [settings.md](settings.md#holdings-toml).
@@ -3698,9 +3748,11 @@ record list or record that cannot be read) is refused, naming why: run
 Every ticker change in the books as a dated event: its date, its source
 (a broker corporate-action row, IB's one contract id under two symbols,
 a `.tt` RENAME or SPLIT line, a legacy ticker.map `RENAME` line), and
-per account the position and book cost it carried (a sale before it
-takes cost by the country's rule: Canada's average cost, the US's
-oldest lots first; no superficial-loss or wash-sale adjustment: when
+per account the position and book cost it carried (`taxjson renames
+ACCOUNT`: that account's only; shares an assigned put or an exercised
+call delivered carry the option's premium as the books do; a sale
+before it takes cost by the country's rule: Canada's average cost, the
+US's oldest lots first; no superficial-loss or wash-sale adjustment: when
 the gains files add a denied loss on the old symbol to a replacement's
 cost by the rename date, the view says so with the amount, also
 `denied_not_in_cost` in `--json`, and `taxjson list` shows the adjusted

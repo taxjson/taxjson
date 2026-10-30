@@ -81,19 +81,77 @@ def read_missing_history_pairs(path: Optional[Path]) -> Set[Tuple[str, str]]:
         return set()
 
 
+def logged_openings(cache: Optional[Path]
+                    ) -> Dict[Tuple[str, str], List[TaxTransaction]]:
+    """{(SYMBOL, account): [OPENING_BALANCE rows]} — the .tt OPENING
+    cost=unknown lines the account's gains file (the plain one, this
+    run's) says its run booked (its `missing_history_log`): each row on
+    the date and the symbol the engine opened it, keyed by the pair the
+    line declares. {} without a readable gains file."""
+    out: Dict[Tuple[str, str], List[TaxTransaction]] = {}
+    if cache is None:
+        return out
+    from taxjson.lib.report_model import resolve_gains_files
+    try:
+        files = resolve_gains_files(cache, prefer_wash=False,
+                                    warn_stale=False)
+    except Exception:                               # noqa: BLE001
+        return out
+    for acct, f in files.items():
+        try:
+            doc = json.loads(Path(f).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        log = doc.get("missing_history_log") if isinstance(doc, dict) \
+            else None
+        for e in log or []:
+            if not isinstance(e, dict) or e.get("account") != acct \
+                    or not e.get("inserted"):
+                continue
+            try:
+                qty = float(e.get("opening_qty") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            day = str(e.get("anchor_date") or "")[:10]
+            if qty <= 0 or not day:
+                continue
+            sym = str(e.get("symbol") or "")
+            out.setdefault((sym.upper(), str(acct).lower()), []).append(
+                TaxTransaction(
+                    action="OPENING_BALANCE", date=day, date_settle=day,
+                    time="00:00:00",
+                    symbol=str(e.get("anchor_symbol") or sym),
+                    quantity=qty, net_amount=0.0, account=str(acct),
+                    id=f"missing-history-opening:{sym}:{acct}"))
+    return out
+
+
 def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
                           sheltered: Dict[str, bool],
                           covered: Set[Tuple[str, str]],
                           date_basis: str = "settle",
                           journal: Optional[Set[str]] = None,
                           country: Optional[str] = None,
+                          cache: Optional[Path] = None,
                           ) -> List[MissingHistoryRow]:
     """The tax year's sales with no purchase in the files, in taxable
     accounts, that no .tt OPENING cost=unknown line covers — the AFFECTS
     rows of `taxjson find-missing-history` (broker-marked real shorts,
     registered accounts and the old leg of a reconstructed merger are
-    left out, as there)."""
+    left out, as there).
+
+    `cache` (work/): a declared pair whose opening the gains files say
+    the run booked (logged_openings) is walked WITH that opening, on its
+    date and quantity, so a sale its units do not reach (an opening used
+    up by earlier sales, or dated after the sale) is still a sale with
+    no purchase; a declared pair without one is covered as a whole
+    (backlog TJ-0958)."""
     txs = list(txs)
+    cov = {(s.upper(), a.lower()) for s, a in covered}
+    logged = {k: v for k, v in logged_openings(cache).items() if k in cov}
+    if logged:
+        txs = txs + [r for rows in logged.values() for r in rows]
+        cov -= set(logged)
     linked_old = {(l.old_symbol, l.account)
                   for l in detect_corp_action_links(txs)}
     cands = [c for c in detect_missing_history(
@@ -103,8 +161,8 @@ def uncovered_short_sales(txs: Sequence[TaxTransaction], year: Any, *,
              if not c.broker_marked_short]
     rows = assess_tax_year_relevance(txs, cands, year,
                                      date_basis=date_basis,
-                                     journal_symbols=journal or set())
-    cov = {(s.upper(), a.lower()) for s, a in covered}
+                                     journal_symbols=journal or set(),
+                                     registered_accounts=sheltered or None)
     return [r for r in rows
             if r.affects_year and not r.candidate.registered
             and (r.candidate.symbol, r.candidate.account) not in linked_old
@@ -164,6 +222,13 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
                     d = json.loads(Path(f).read_text(encoding="utf-8"))
                     recs = [x for x in (d.get("transactions") or [])
                             if isinstance(x, dict)]
+                    # A cover of the year whose loss is the next year's
+                    # (US-DATE-01; backlog TJ-1189): the sale has its
+                    # cover, dated by its trade.
+                    recs += [dict(x, date=x.get("trade_date"),
+                                  date_settle=x.get("trade_date"))
+                             for x in (d.get("covers_realized_next_year")
+                                       or []) if isinstance(x, dict)]
                 except (OSError, ValueError, AttributeError):
                     recs = []
             docs[acct] = recs
@@ -174,6 +239,10 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
         long_by_id: Dict[str, float] = {}
         written_by_id: Dict[str, float] = {}
         covered = 0.0
+        # (date, units) of each short close of the year: a cover closes
+        # a short opened before it, so it covers only a sale dated on or
+        # before it (backlog TJ-0957).
+        covers: List[List[Any]] = []
         for x in recs:
             try:
                 q = abs(float(x.get("qty") or 0.0))
@@ -191,11 +260,14 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
                     written_by_id[i] = written_by_id.get(i, 0.0) + q
                 elif d.startswith(ys):
                     covered += q
+                    covers.append([d[:10], q])
             else:
                 i = str(x.get("id") or "")
                 long_by_id[i] = long_by_id.get(i, 0.0) + q
-        matched = rest = written = 0.0
-        for sale in r.in_year_short_sales:
+        matched = rest = written = left = 0.0
+        covers.sort(key=lambda c: c[0])
+        for sale in sorted(r.in_year_short_sales,
+                           key=lambda s: str(s[3]) if len(s) > 3 else ""):
             sid, units = sale[0], float(sale[1])
             # The engine's short units of the sale are the sale less what
             # it closed against a long position — not the walk's short
@@ -209,9 +281,23 @@ def engine_booking(cache: Path, rows: Sequence[MissingHistoryRow],
             # no cost of yours: said as a short covered (a Warning).
             w = min(units - m, written_by_id.get(sid, 0.0))
             written += w
-            rest += units - m - w
+            short = units - m - w
+            rest += short
+            # The units still short take the year's covers dated on or
+            # after the sale, each cover's units once; an earlier cover
+            # closed another short (an older sale of the symbol).
+            day = str(sale[3])[:10] if len(sale) > 3 else ""
+            for c in covers:
+                if short <= 1e-9:
+                    break
+                if c[0] < day or c[1] <= 1e-9:
+                    continue
+                take = min(short, c[1])
+                c[1] -= take
+                short -= take
+            left += max(0.0, short)
         sales = bool(r.in_year_short_sales)
-        if rest - covered > 1e-6:
+        if left > 1e-6:
             out[(sym, acct)] = BOOKED_OPEN
         elif (rest > 1e-6 or written > 1e-6
               or (not sales and covered > 1e-6)):
@@ -276,17 +362,30 @@ def declared_zero_cost(rows: Iterable[ZeroBasisRow]) -> List[Dict[str, Any]]:
 def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
                             skip_accounts: Iterable[str] = (),
                             date_basis: str = "settle",
-                            declared: Iterable[Tuple[str, str]] = ()
+                            declared: Iterable[Tuple[str, str]] = (),
+                            rules: Any = None
                             ) -> List[Dict[str, Any]]:
     """[{symbol, account, rows, first}] — the tax year's dividends (and
     payments in lieu) on a security the account's books did not hold on
-    the pay date nor in the 60 days before it: a holding whose purchase
-    is not in the files at all (nothing goes negative, so nothing else
-    sees it). A payment in the first 60 days of the account's data is
-    left out (shares sold just before the data starts are paid after
-    it), as are options, the given accounts (crypto staking) and the
-    `declared` (SYMBOL, account) pairs — the .tt OPENING cost=unknown lines', whose
-    holding the user has already declared."""
+    the pay date nor in the 60 days before it, nor on the row's record
+    date: a holding whose purchase is not in the files at all (nothing
+    goes negative, so nothing else sees it). A payment in the first 60
+    days of the account's data is left out (shares sold just before the
+    data starts are paid after it), as are options, the given accounts
+    (crypto staking) and the `declared` (SYMBOL, account) pairs — the
+    .tt OPENING cost=unknown lines', whose holding the user has already
+    declared.
+
+    `rules` (lib/income_dating.IncomeRules, the project's): the year a
+    row belongs to is the one the income stage gives it
+    (IncomeRules.income_date: a Canadian trust's distribution is the
+    year of its record date) — a distribution paid in March on units
+    sold after its December record date is the year before's income,
+    held when it was earned (backlog TJ-0811). A record date the
+    income stage would accept (on or before the pay date, less than
+    MAX_RECORD_LEAD_DAYS before it) is held when the books held the
+    security on it, however long before the pay date it is."""
+    from taxjson.lib.income_dating import MAX_RECORD_LEAD_DAYS
     skip = set(skip_accounts)
     known = {(str(sy).upper(), str(a)) for sy, a in declared}
     ys = str(year) if year is not None else None
@@ -297,6 +396,24 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
             return _date.fromisoformat(str(s or "")[:10])
         except ValueError:
             return None
+
+    def _record(tx):
+        """The row's record date, when a plausible one (else None)."""
+        rec, pay = _d(getattr(tx, "record_date", "")), _d(tx.date)
+        if rec is None or pay is None:
+            return None
+        return rec if 0 <= (pay - rec).days < MAX_RECORD_LEAD_DAYS \
+            else None
+
+    def _year_date(tx) -> str:
+        if rules is not None:
+            try:
+                d = str(rules.income_date(tx) or "")
+            except (TypeError, ValueError):
+                d = ""
+            if d and d[:10] != str(tx.date or "")[:10]:
+                return d
+        return _basis_date(tx, date_basis)
     rows = [t for t in txs if t.account not in skip]
     first_row: Dict[str, _date] = {}
     for t in rows:
@@ -305,13 +422,21 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
             first_row[t.account] = d
     run: Dict[Tuple[str, str], float] = {}
     last_held: Dict[Tuple[str, str], _date] = {}
+    # The first day of the latest stretch the position was held.
+    held_since: Dict[Tuple[str, str], _date] = {}
     hits: Dict[Tuple[str, str], Dict[str, Any]] = {}
     pending: List[TaxTransaction] = []     # the day's income rows
 
-    def _held(key, day):
+    def _held(key, day, rec=None):
         lh = last_held.get(key)
-        return run.get(key, 0.0) > 1e-9 or (
-            lh is not None and day is not None and day - lh <= grace)
+        if run.get(key, 0.0) > 1e-9 or (
+                lh is not None and day is not None and day - lh <= grace):
+            return True
+        # Held on the record date: the latest stretch of holding covers
+        # it (the units sold after it, the payment months later).
+        hs = held_since.get(key)
+        return (rec is not None and hs is not None and lh is not None
+                and hs <= rec <= lh)
 
     def _settle(day):
         # A day's income is checked after the day's trades: a deemed
@@ -320,7 +445,7 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
         for tx in pending:
             key = (tx.symbol, tx.account)
             dd = _d(tx.date)
-            if _held(key, dd):
+            if _held(key, dd, _record(tx)):
                 continue
             f = first_row.get(tx.account)
             if f is not None and dd is not None and dd - f <= grace:
@@ -349,12 +474,17 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
                 if key in last_held:
                     last_held[nk] = max(last_held.get(nk, last_held[key]),
                                         last_held[key])
+                if key in held_since:
+                    held_since[nk] = min(held_since.get(nk, held_since[key]),
+                                         held_since[key])
             elif key in run:
                 run[key] *= ratio
             continue
         if tx.action in ("BUYSELL", "ASSIGN", "OPENING_BALANCE", "TRANSFER"):
             before = run.get(key, 0.0)
             run[key] = before + float(tx.quantity or 0.0)
+            if before <= 1e-9 < run[key] and td is not None:
+                held_since[key] = td
             if (before > 1e-9 or run[key] > 1e-9) and td is not None:
                 # Held up to (and including) this row's day.
                 last_held[key] = max(last_held.get(key, td), td)
@@ -368,7 +498,7 @@ def income_without_position(txs: Sequence[TaxTransaction], year: Any, *,
         amt = float(tx.gross_amount or 0.0) or float(tx.net_amount or 0.0)
         if amt <= 0:
             continue
-        if ys is not None and not _basis_date(tx, date_basis).startswith(ys):
+        if ys is not None and not _year_date(tx).startswith(ys):
             continue
         pending.append(tx)
     _settle(day)
@@ -461,7 +591,8 @@ def collect(root: Path, cfg: Dict[str, Any], *,
     covered = read_missing_history_pairs(missing_history)
     shorts = uncovered_short_sales(txs, year, sheltered=sheltered,
                                    covered=covered, date_basis=basis,
-                                   journal=journal, country=country)
+                                   journal=journal, country=country,
+                                   cache=cache)
     booked = engine_booking(cache, shorts, year, date_basis=basis)
     from taxjson.lib.corp_actions import declared_zero_value_events
     _zrows = _zero_cost_rows(txs, year, sheltered=sheltered,
@@ -471,8 +602,15 @@ def collect(root: Path, cfg: Dict[str, Any], *,
                  and r.affects_year]
     zero_held = [r for r in _zrows if not r.declared
                  and r.still_held_qty > 0]
+    # (the income stage's year of each row: lib/income_dating)
+    try:
+        from taxjson.lib.income_dating import rules_for
+        _rules = rules_for(country, settings)
+    except ValueError:
+        _rules = None
     income = income_without_position(txs, year, skip_accounts=crypto,
-                                     date_basis=basis, declared=covered)
+                                     date_basis=basis, declared=covered,
+                                     rules=_rules)
     # A partly covered arrival (its .tt purchases account for some of
     # its units; nothing booked — lib/transfer_in, audit 2026-10-24
     # B41) is kept out with no cost too.

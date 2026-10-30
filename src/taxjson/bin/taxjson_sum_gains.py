@@ -89,6 +89,10 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
             # profit without inflating the T5/Schedule B dividend total.
             pil = float(tx.get('pil', 0) or 0)
             tick_stats['pil'] = tick_stats.get('pil', 0.0) + pil
+            # Compensation paid on a short (US-INC-04), whatever the
+            # security also received: no income reduction (TJ-1060).
+            if tx.get('paid_on_short') and pil < 0:
+                tick_stats['pil_paid'] = tick_stats.get('pil_paid', 0.0) - pil
             # A Canadian s.260 payment in lieu (a Canadian dealer, a
             # Canadian issuer) is a taxable dividend: the gains run
             # carries its amount as 'dividend' (lib/income_dating).
@@ -527,9 +531,10 @@ def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], yea
 def _require_gains(doc, where) -> None:
     """A non-gains document (no 'transactions', a stage file) printed
     GRAND TOTAL 0.00 at exit 0 (S033-01)."""
-    from taxjson.lib.json_input import InputFileError, require_gains_doc
+    from taxjson.lib.json_input import (InputFileError, require_gains_doc,
+                                        require_row_lists)
     try:
-        require_gains_doc(doc, where)
+        require_row_lists(require_gains_doc(doc, where), where)
     except InputFileError as e:
         cli_diag.error(PROG, str(e))
         sys.exit(2)
@@ -573,6 +578,12 @@ def main():
         all_by_ticker = {}
         all_txs = []
         all_manual = []
+        # The held positions too: summarize_gains resolves an option's
+        # class-share underlying from them (SYN...TO calls on SYN.B.TO
+        # shares held, no share row in the year); dropped here, a file
+        # named on the command line reported a phantom SYN.TO that stdin
+        # did not (backlog TJ-1011).
+        all_inventory = []
         total_year = 'all'
         # Merge total_fees_by_currency across files (summing per currency
         # and asset type). taxjson-gains writes this block from the raw
@@ -597,6 +608,7 @@ def main():
             if 'transactions' in data:
                 all_txs.extend(data['transactions'])
             all_manual.extend(data.get('manual_reporting_required') or [])
+            all_inventory.extend(data.get('inventory') or [])
             summary = data.get('summary') or {}
             if summary.get('year'):
                 total_year = summary['year']
@@ -624,6 +636,7 @@ def main():
             'by_ticker': all_by_ticker,
             'transactions': all_txs,
             'manual_reporting_required': all_manual,
+            'inventory': all_inventory,
             'summary': {'year': total_year, 'total_fees_by_currency': merged_fees,
                         'wash_solver_converged': wash_converged,
                         'wash_solver_iterations': wash_iters}

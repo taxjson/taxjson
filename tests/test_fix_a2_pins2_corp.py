@@ -233,7 +233,7 @@ class TestIbSpinoffParsing(unittest.TestCase):
         rows = resolve_event(evs[0], 'taxable_deemed_dividend', fx=_cad)
         self.assertEqual(sorted((r['action'], r['symbol']) for r in rows),
                          [('BUYSELL', 'ABC.WT.TO'),
-                          ('DIVIDEND', 'ABC.WT.TO')])
+                          ('DIVIDEND', 'PARNT.TO')])     # TJ-0658
 
     def test_a2_0518_cancellation_matches_its_currency(self):
         # One spin-off delivered on both listings; IB cancels the CAD

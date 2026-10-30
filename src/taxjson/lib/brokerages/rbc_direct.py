@@ -1072,6 +1072,10 @@ class _Listing:
     currency: str
     names: Dict[str, str] = field(default_factory=dict)   # norm → raw
     events: List[Tuple[str, int, int, float]] = field(default_factory=list)
+    # The same moves per broker account (the Account column, normalized):
+    # [(date, signed quantity)].
+    by_account: Dict[str, List[Tuple[str, float]]] = field(
+        default_factory=dict)
 
     def finish(self) -> None:
         self.events.sort()
@@ -1086,6 +1090,19 @@ class _Listing:
 
     def position_on(self, date: str) -> float:
         return sum(q for d, _k, _f, q in self.events if d <= date)
+
+    def account_position_on(self, account: str, date: str) -> float:
+        """Broker account `account`'s position at the end of `date`
+        (two accounts booked together each split their own position:
+        backlog TJ-0672). A row from an export with no Account column
+        (filed under '') may be any account's: it counts for every named
+        one, and a row of no named account reads the whole listing. The
+        layouts mix across years, and a short sold in the older layout
+        was no position at all for a split in the newer (TJ-1048)."""
+        if not account:
+            return self.position_on(date)
+        return sum(q for acct in (account, '') if acct in self.by_account
+                   for d, q in self.by_account[acct] if d <= date)
 
     def held_on(self, date: str) -> bool:
         if abs(self.position_on(date)) > 1e-9:
@@ -1152,6 +1169,17 @@ class RbcAccountContext:
             return same[0][2]
         after = [e for e in ent if e[0] > date]
         return min(after, key=lambda e: e[0])[2] if after else None
+
+
+def temp_symbol_ticker(ctx: RbcAccountContext, r) -> Optional[str]:
+    """The listed ticker a row under a temporary code is booked on, by
+    its security name; None when no row of the account names it."""
+    for key in (rbc_norm_company(rbc_row_company(r)),
+                rbc_rights_key(r.desc), rbc_rights_key(r.symdesc)):
+        hit = ctx.ticker_for_name(key, r.date) if key else None
+        if hit:
+            return hit
+    return None
 
 
 def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
@@ -1245,7 +1273,8 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
     # `run --strict` refused).
     _file_of = {id(r): k for k in files for r in ctx.rows(k)}
     _acct = pair_rbc_reorganizations(
-        [r for k in files for r in ctx.rows(k)])
+        [r for k in files for r in ctx.rows(k)],
+        {id(r): (k,) for k in files for r in ctx.rows(k)})
     _events: Dict[str, list] = {k: [] for k in files}
     _unm: Dict[str, list] = {k: [] for k in files}
     _unm_cil: Dict[str, list] = {k: [] for k in files}
@@ -1305,8 +1334,13 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
 
     # Listings: which (symbol, currency) lines the account actually
     # trades/holds, under which security names, with a position timeline.
+    # A split moves the position too (its signed Quantity is the change,
+    # long or short): without it a later split on a short read the
+    # pre-split count and could be taken for a reverse split (backlog
+    # TJ-0665).
     for fi, r in chrono:
-        if r.cls not in _POSITION_CLASSES or not r.symbol or not r.currency:
+        if (r.cls not in _POSITION_CLASSES and r.cls != 'split') \
+                or not r.symbol or not r.currency:
             continue
         if rbc_is_temp_symbol(r.symbol) or rbc_is_option_code(r.symbol) \
                 or helper._row_occ(r):
@@ -1318,6 +1352,22 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
         if nm:
             li.names.setdefault(nm, ' '.join(company.split()))
         li.events.append((r.date, r.k, fi, _signed_qty(r)))
+        li.by_account.setdefault(_norm_account(r.account), []).append(
+            (r.date, _signed_qty(r)))
+    # A split under a temporary code is booked on the ticker its name
+    # resolves to (_resolve_temp), so it moves that listing's position:
+    # left out, the next split on a short read a stale count and was
+    # taken for a reverse split (backlog TJ-1089). It opens no listing.
+    for fi, r in chrono:
+        if r.cls != 'split' or not r.currency \
+                or not rbc_is_temp_symbol(r.symbol) or helper._row_occ(r):
+            continue
+        li = ctx.listings.get(temp_symbol_ticker(ctx, r) or '', {}).get(
+            r.currency)
+        if li is not None:
+            li.events.append((r.date, r.k, fi, _signed_qty(r)))
+            li.by_account.setdefault(_norm_account(r.account), []).append(
+                (r.date, _signed_qty(r)))
     for per in ctx.listings.values():
         for li in per.values():
             li.finish()
@@ -1793,13 +1843,11 @@ class RbcBrokerage(BaseBrokerage):
     def _resolve_temp(self, r) -> str:
         if not rbc_is_temp_symbol(r.symbol):
             return r.symbol
-        for key in (rbc_norm_company(rbc_row_company(r)),
-                    rbc_rights_key(r.desc), rbc_rights_key(r.symdesc)):
-            hit = self._ctx.ticker_for_name(key, r.date) if key else None
-            if hit:
-                self._note(f"line {r.line}: RBC temporary code {r.symbol} "
-                           f"resolved to {hit} by its security name")
-                return hit
+        hit = temp_symbol_ticker(self._ctx, r)
+        if hit:
+            self._note(f"line {r.line}: RBC temporary code {r.symbol} "
+                       f"resolved to {hit} by its security name")
+            return hit
         return r.symbol
 
     def _equity_symbol(self, symbol: str, currency: str, r=None, *,
@@ -2088,7 +2136,8 @@ class RbcBrokerage(BaseBrokerage):
         li = self._ctx.listings.get(sym_raw, {}).get(r.currency)
         day_before = (datetime.strptime(r.date, '%Y-%m-%d')
                       - timedelta(days=1)).strftime('%Y-%m-%d')
-        if li is not None and li.position_on(day_before) < -1e-9:
+        if li is not None and li.account_position_on(
+                _norm_account(r.account), day_before) < -1e-9:
             received = -received
         factor = (base + received) / base if base > 0 else 0.0
         if factor <= 0:
@@ -2465,14 +2514,19 @@ class RbcBrokerage(BaseBrokerage):
                    f"{r.qty:g} {symbol} at {price:g}; the distribution's "
                    f"character (dividend, capital gain, ROC) is on "
                    f"{self._terms['fund_slip']}.")
-        return [{
+        div = {
             'action': 'DIVIDEND',
             'date': r.date, 'time': '09:30:00', 'date_settle': r.date,
             'symbol': symbol, 'quantity': r.qty, 'currency': r.currency,
             'price': price, 'net_amount': amount, 'gross_amount': amount,
             'type': 'dividend', 'account': self.DEFAULT_ACCOUNT,
             'description': r.desc,
-        }, {
+        }
+        # The same "REC mm/dd/yy" and distribution facts as a cash
+        # distribution (backlog TJ-0741: a December-record January-paid
+        # reinvested distribution was dated in the next year).
+        div.update(income_facts_from_description(r.desc, r.activity or ''))
+        return [div, {
             'action': 'BUYSELL',
             'date': r.date, 'time': self._time(r),
             'date_settle': r.settle or r.date,
@@ -2622,7 +2676,7 @@ class RbcBrokerage(BaseBrokerage):
                        f"divs-sum.", attention=True)
             return [self.tx_roc_adjust(symbol=symbol, currency=r.currency,
                                        date=r.date, desc=r.desc,
-                                       amount=amount)]
+                                       amount=amount, no_cash='book-cost')]
         # The notional (reinvested) distribution is taxable income of the
         # year as well as an ACB increase; the export carries only the
         # book-cost side and taxjson books only that (audit S063-17 —

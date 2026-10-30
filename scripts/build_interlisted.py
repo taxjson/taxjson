@@ -801,8 +801,9 @@ def _retract(rec: Dict[str, Any], gone: set) -> None:
 def next_stamp(previous: Optional[Dict[str, Any]], today: str) -> str:
     """The new master's `generated` value: the build date, or on a
     second changed build the same day `DATE.N` (N = 2, 3, ...): a
-    project's tobase.map stamp then tells the two apart (a stamp is
-    compared as text: "2026-01-02" < "2026-01-02.2" < "2026-01-03")."""
+    project's tobase.map stamp then tells the two apart (stamps are
+    compared by lib/tobase_map.generation_key: "2026-01-02" <
+    "2026-01-02.2" < "2026-01-02.10" < "2026-01-03")."""
     prev = str(((previous or {}).get("meta") or {}).get("generated") or "")
     day, _, n = prev.partition(".")
     if day != today:

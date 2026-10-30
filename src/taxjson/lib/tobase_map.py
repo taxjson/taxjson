@@ -1041,21 +1041,34 @@ def is_edited(ln: FileLine, master: Master) -> bool:
     return ln.rule not in could_generate(master, ln.figi)
 
 
+def generation_key(stamp: str) -> Tuple[str, int, str]:
+    """A master generation's stamp in build order: `DATE`, then the
+    same day's later builds `DATE.2`, `DATE.3`, ... `DATE.10`
+    (scripts/build_interlisted.next_stamp) — numbered, so `.10` comes
+    after `.9`, which text order put before it (backlog TJ-0945)."""
+    s = str(stamp or "")
+    day, sep, n = s.partition(".")
+    return (day, int(n) if n.isdigit() else (0 if sep else 1), s)
+
+
 def _was_given(master: Master, g: GenLine, stamp: str) -> bool:
     """The master the file was made from (its stamp) already gave `g`:
     the entry was there (first_seen) and neither listing was added
-    since (the entry's `added`)."""
+    after that generation (the entry's `added`: a listing added IN the
+    file's own generation was given; backlog TJ-0945)."""
     if not stamp or g.keyword != "TOBASE":
         return False
     e = master.security.get(g.figi) or {}
     fs = str(e.get("first_seen") or "unknown")
-    if fs == "unknown" or fs > stamp:
+    have = generation_key(stamp)
+    if fs == "unknown" or generation_key(fs) > have:
         # An entry of unknown age: never taken for a deletion (the line
         # is added again; commenting it out opts out for good).
         return False
     for a in e.get("added") or []:
         if isinstance(a, dict) and str(a.get("listing") or "").upper() in \
-                (g.a, g.b) and str(a.get("since") or "") >= stamp:
+                (g.a, g.b) and generation_key(
+                    str(a.get("since") or "")) > have:
             return False
     return True
 

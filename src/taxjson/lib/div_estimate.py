@@ -5,7 +5,7 @@ never a filing figure (tax-logic CA-PLAN-06 / US-PLAN-07).
 Per payer (a listing, across the accounts that hold it):
 - the payment frequency from its past pay dates: the grid (weekly,
   monthly, quarterly, semi-annual or annual), anchored at the latest
-  payment, that most of the last payments fall on; a payment off the
+  payment on it, that most of the last payments fall on; a payment off the
   grid (a special) or a stretch of empty slots (payments made while
   the position was not held) does not break it. No grid fits, or a
   single payment: irregular (its estimate is pro rata from the
@@ -616,53 +616,87 @@ def detect_frequency(dates: List[str]) -> Tuple[Optional[str],
                                                 Optional[int],
                                                 Optional[float]]:
     """(name, months between payments (0: weekly), typical gap in days)
-    from sorted pay dates; (None, None, gap) when irregular, (None,
-    None, None) with fewer than two payments. Each frequency's grid is
-    anchored at the latest of the last LOOKBACK payments: a payment is
-    on the grid when it is within GAP_TOL of a period from its slot. A
-    frequency fits when two thirds of the payments are on its grid, no
-    slot holds more than two (a payment and a special, or a second
-    broker's posting of it) and two payments fill adjacent slots (a
-    stretch of empty slots is the position not held; a payment off the
-    grid is a special); the one with the most adjacent slots filled
-    wins, then the most slots, then the shortest period (a quarterly
-    payer's dates are on the monthly grid too, but fill no adjacent
-    monthly slots; they are on the weekly grid as well, 13 weeks to a
-    quarter, so weekly needs two thirds of its slot gaps adjacent)."""
+    from sorted pay dates (detect_schedule without its anchor)."""
+    return detect_schedule(dates)[:3]
+
+
+def detect_schedule(dates: List[str]) -> Tuple[Optional[str],
+                                               Optional[int],
+                                               Optional[float],
+                                               Optional[str]]:
+    """(name, months between payments (0: weekly), typical gap in days,
+    the latest payment on the grid) from sorted pay dates; (None, None,
+    gap, None) when irregular, (None, None, None, None) with fewer than
+    two payments. Each frequency's grid is anchored at one of the last
+    LOOKBACK payments: a payment is on the grid when it is within
+    GAP_TOL of a period from its slot. A frequency fits when two thirds
+    of the payments are on its grid, no slot holds more than two (a
+    payment and a special, or a second broker's posting of it) and two
+    payments fill adjacent slots (a stretch of empty slots is the
+    position not held; a payment off the grid is a special); the one
+    with the most adjacent slots filled wins, then the most slots, then
+    the shortest period (a quarterly payer's dates are on the monthly
+    grid too, but fill no adjacent monthly slots; they are on the
+    weekly grid as well, 13 weeks to a quarter, so weekly needs two
+    thirds of its slot gaps adjacent), then the latest anchor. Only the
+    latest payment anchored the grids: an off-cycle special paid last
+    put every regular monthly payment off the monthly grid, and a
+    coarser grid through the special won (backlog TJ-0900). Two or more
+    payments after the winner's latest that fit a grid of their own are
+    a change of schedule, not specials: the later regime wins, whatever
+    the older one's run of slots (backlog TJ-1078)."""
     ds = [date.fromisoformat(d) for d in dates[-LOOKBACK:]]
     if len(ds) < 2:
-        return None, None, None
-    anchor = ds[-1]
-    best = None
-    for name, months, days in FREQUENCIES:
-        period = months * 365.25 / 12 if months else float(days)
-        tol = period * GAP_TOL
-        slots: Dict[int, List[date]] = {}
-        for d in ds:
-            k = max(0, int(round((anchor - d).days / period)))
-            if abs((d - _slot(anchor, months, days, k)).days) <= tol:
-                slots.setdefault(k, []).append(d)
-        # A slot holds a payment and at most one more (a special, a
-        # second broker's posting): three is a shorter period.
-        if any(len(v) > 2 for v in slots.values()):
-            continue
-        on = sum(len(v) for v in slots.values())
-        ks = sorted(slots)
-        adj = [(slots[a][-1] - slots[b][-1]).days
-               for a, b in zip(ks, ks[1:]) if b == a + 1]
-        if not adj or on * 3 < 2 * len(ds):
-            continue
-        # Every grid is on the weekly one (13 weeks to a quarter): the
-        # weekly payer is the one whose slots are mostly adjacent.
-        if not months and len(adj) * 3 < 2 * (len(ks) - 1):
-            continue
-        key = (len(adj), len(slots), -period)
-        if best is None or key > best[0]:
-            best = (key, name, months, float(median(adj)))
+        return None, None, None, None
+    best = _best_grid(ds)
     if best is None:
         gaps = [(b - a).days for a, b in zip(ds, ds[1:])]
-        return None, None, float(median(gaps))
-    return best[1], best[2], best[3]
+        return None, None, float(median(gaps)), None
+    after = [d for d in ds if d.isoformat() > best[4]]
+    if len(after) >= 2:
+        later = _best_grid(after)
+        # Two payments a week apart are two specials, not a weekly payer.
+        if later and (later[2] or len(after) >= 3):
+            best = later
+    return best[1], best[2], best[3], best[4]
+
+
+def _best_grid(ds: List[date]) -> Optional[tuple]:
+    """The winning (key, name, months, gap, latest on the grid) for the
+    sorted dates `ds` (detect_schedule's rule), or None."""
+    best = None
+    for anchor in sorted(set(ds)):
+        for name, months, days in FREQUENCIES:
+            period = months * 365.25 / 12 if months else float(days)
+            tol = period * GAP_TOL
+            slots: Dict[int, List[date]] = {}
+            for d in ds:
+                k = max(0, int(round((anchor - d).days / period)))
+                if abs((d - _slot(anchor, months, days, k)).days) <= tol:
+                    slots.setdefault(k, []).append(d)
+            # A slot holds a payment and at most one more (a special, a
+            # second broker's posting): three is a shorter period.
+            if any(len(v) > 2 for v in slots.values()):
+                continue
+            on = sum(len(v) for v in slots.values())
+            ks = sorted(slots)
+            adj = [(slots[a][-1] - slots[b][-1]).days
+                   for a, b in zip(ks, ks[1:]) if b == a + 1]
+            if not adj or on * 3 < 2 * len(ds):
+                continue
+            # Every grid is on the weekly one (13 weeks to a quarter):
+            # the weekly payer is the one whose slots are mostly
+            # adjacent.
+            if not months and len(adj) * 3 < 2 * (len(ks) - 1):
+                continue
+            key = (len(adj), len(slots), -period, anchor)
+            if best is None or key > best[0]:
+                # The latest payment on the grid (slot 0 may hold a
+                # posting a few days after the anchor).
+                best = (key, name, months, float(median(adj)),
+                        max(slots[0]).isoformat() if 0 in slots
+                        else anchor.isoformat())
+    return best
 
 
 def ttm_per_share(sched: List[Payment], as_of: str) -> float:
@@ -755,7 +789,18 @@ def estimate(positions: Iterable[Dict[str, Any]],
                          f"from the {cur} ones")
         sched = schedule(hist)
         latest = sched[-1]
-        name, step, gap = detect_frequency([p.pay_date for p in sched])
+        name, step, gap, on_grid = detect_schedule(
+            [p.pay_date for p in sched])
+        # The forecast runs from the latest payment ON the schedule: a
+        # later one off it (a special paid last) is neither the next
+        # date's base nor its amount (backlog TJ-0900).
+        base_pay = latest
+        if name and on_grid and on_grid < latest.pay_date:
+            base_pay = [p for p in sched if p.pay_date <= on_grid][-1]
+            off = [p.pay_date for p in sched if p.pay_date > on_grid]
+            flags.append(f"{len(off)} payment(s) off the {name} schedule "
+                         f"after {base_pay.pay_date} (a special?): "
+                         f"{', '.join(off)}, left out of the forecast")
         ttm = ttm_per_share(sched, as_of)
         rate = 1.0 if cur == base.upper() else fx(cur)
         # The withholding rate: this account's latest payment, every
@@ -790,7 +835,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
             elif w > 0.005 and g > 0:
                 wrate = w / g
         shares = float(pos["qty"])
-        per_pay = latest.per_share * shares
+        per_pay = base_pay.per_share * shares
         projected: List[Dict[str, Any]] = []
         missed = 0
         status = "ok"
@@ -800,8 +845,8 @@ def estimate(positions: Iterable[Dict[str, Any]],
             k = 1
             while True:
                 try:
-                    d = (add_months(latest.pay_date, step * k) if step
-                         else _iso(date.fromisoformat(latest.pay_date)
+                    d = (add_months(base_pay.pay_date, step * k) if step
+                         else _iso(date.fromisoformat(base_pay.pay_date)
                                    + timedelta(days=7 * k)))
                 except (ValueError, OverflowError):
                     break               # past 9999-12-31: nothing to come
@@ -812,7 +857,7 @@ def estimate(positions: Iterable[Dict[str, Any]],
                         - date.fromisoformat(d)).days > grace:
                     missed += 1
                     continue
-                td = _projected_tax_date(latest, d, income_date)
+                td = _projected_tax_date(base_pay, d, income_date)
                 projected.append({"pay_date": d, "tax_date": td,
                                   "amount": round(per_pay, 6)})
             if missed >= 2:
@@ -1038,7 +1083,8 @@ def render(doc: Dict[str, Any], details: bool = False,
     d.items([
         "Frequency: the grid (weekly, monthly, quarterly, semi-annual, "
         "annual) most of the last payments fall on, anchored at the "
-        "latest; a special or a stretch not held does not break it.",
+        "latest on it; a special or a stretch not held does not break "
+        "it.",
         "No grid, or a single payment: pro rata from the 12-month amount "
         "per share.",
         "Each projected payment: the latest per-share amount x the shares "

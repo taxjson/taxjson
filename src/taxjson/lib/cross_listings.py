@@ -1210,9 +1210,25 @@ def analyze(legs: List[Leg], names: Dict[str, Set[Tuple[str, ...]]],
             if _fits(o, i):
                 links.setdefault(n, []).append(m)
                 back.setdefault(m, []).append(n)
-    cands = [(o, i, False) for o, i in picked] + [
-        (outs[n], ins[m], len(ms) > 1 or len(back.get(m, ())) > 1)
-        for n, ms in sorted(links.items()) for m in ms]
+    cands = [(o, i, False) for o, i in picked]
+    # An ambiguous leg is suggested once per journal it can be: legs of
+    # one account, day, listings and size that nothing tells apart give
+    # one candidate per out-leg and in-leg, never every combination
+    # (backlog TJ-1036: `taxjson journals` listed one out-leg and two
+    # in-legs as two journals). Another listing or day stays a candidate
+    # of its own.
+    spent: Set[Tuple[Any, ...]] = set()
+    for n, ms in sorted(links.items()):
+        for m in ms:
+            ambiguous = len(ms) > 1 or len(back.get(m, ())) > 1
+            if ambiguous:
+                o, i = outs[n], ins[m]
+                g = (o.account, o.symbol, str(o.date)[:10], i.symbol,
+                     round(abs(o.quantity), 6))
+                if (g, "out", n) in spent or (g, "in", m) in spent:
+                    continue
+                spent.update(((g, "out", n), (g, "in", m)))
+            cands.append((outs[n], ins[m], ambiguous))
     for o, i, ambiguous in cands:
         frm, to = tobase_direction(o.symbol, i.symbol, base_currency)
         nx, ny = names.get(o.symbol, set()), names.get(i.symbol, set())

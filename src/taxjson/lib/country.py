@@ -222,6 +222,20 @@ def in_kind_contribution_booked(country: str) -> bool:
     return IN_KIND_CONTRIBUTION_BOOKED[canonical_country(country)]
 
 
+# The order the country's engine replays a book in (lib/corporate_timeline
+# event_sort_key): Canada's settlement-date ladder, a split ahead of every
+# execution of its day (CA-DATE-14); the US engine's trade date and clock
+# (US-DATE-13). A view that walks a book the way its engine does (the
+# holdings snapshot's trade history) sorts by this profile.
+ENGINE_SORT_PROFILE = {CANADA: "ca_main", USA: "us_main"}
+
+
+def engine_sort_profile(country: str) -> str:
+    """``"ca_main"`` | ``"us_main"``: the event_sort_key profile of the
+    country's engine."""
+    return ENGINE_SORT_PROFILE[canonical_country(country)]
+
+
 def default_tax_date(country: str) -> str:
     """CRA dates a disposition by settlement, the IRS by trade date."""
     return DEFAULT_TAX_DATE[canonical_country(country)]

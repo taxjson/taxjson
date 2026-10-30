@@ -114,6 +114,10 @@ class Close:
     # contract carries half; the as-written per-unit doubled the
     # premium of a post-split close, 2026-10-24 audit A23).
     premium: float = 0.0
+    # The series at the close and the row's trade and settlement dates:
+    # what a lock files its gain under (reported_premiums, TJ-1046).
+    series: str = ''
+    dates: Tuple[str, ...] = ()
 
 
 # Where a WriteLot came from: a write in the books (the premium is
@@ -151,6 +155,8 @@ class WriteLot:
     # The series as written (before a SPLIT renamed it): what the write
     # year's lock reports the premium under (TJ-0085).
     written_as: str = ''
+    # The write row's trade and settlement dates (TJ-1046).
+    dates: Tuple[str, ...] = ()
 
     @property
     def unknown_premium(self) -> bool:
@@ -176,6 +182,12 @@ def kept_transfers(rows: List[TaxTransaction]) -> Set[int]:
     from taxjson.lib.pipeline import _drop_self_cancelling_transfers
     kept, _dropped = _drop_self_cancelling_transfers(list(rows))
     return {id(t) for t in kept if t.action == 'TRANSFER'}
+
+
+def _row_dates(t: TaxTransaction) -> Tuple[str, ...]:
+    """The dates a lock keys a row's gain by (reported_premiums)."""
+    return tuple(sorted({str(t.date or "")[:10],
+                         str(t.date_settle or "")[:10]} - {""}))
 
 
 def write_lots(transactions: List[TaxTransaction],
@@ -287,7 +299,7 @@ def write_lots(transactions: List[TaxTransaction],
                                write_year=int(_date_of(t)[:4]), units=opening,
                                premium=net * (opening / -q),
                                open_units=opening, seq=seq,
-                               written_as=sym,
+                               written_as=sym, dates=_row_dates(t),
                                origin=(ORIGIN_TRANSFER if transfer
                                        else ORIGIN_WRITE),
                                broker_closing=(False if transfer else
@@ -318,7 +330,8 @@ def write_lots(transactions: List[TaxTransaction],
                                             paid=(per_paid * take
                                                   if kind in ("buy-back", "cash-settled")
                                                   else 0.0),
-                                            premium=lot.per_unit * take))
+                                            premium=lot.per_unit * take,
+                                            series=sym, dates=_row_dates(t)))
                     lot.open_units -= take; rem -= take
             lots[key] = [l for l in lots.get(key, []) if l.open_units > 1e-9]
         pos[key] = p + q
@@ -527,7 +540,48 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
     _date_of = date_basis_of(tax_date)
     _expired = _expired_test(transactions, year, today, _date_of)
     rows: List[Dict[str, Any]] = []
-    for lot in write_lots(transactions, tax_date=tax_date):
+    _lots = write_lots(transactions, tax_date=tax_date)
+    # A lock reports the premiums of one series written on one day as
+    # one figure (reported_premiums: by symbol and date), so the
+    # already-amended test compares it with the whole day's lots: what
+    # they still report once every assignment is out (`retained`), and
+    # the premium of the units assigned in a later year (`assigned`,
+    # signed: a write whose commission exceeds its premium nets a loss).
+    # Per lot, a second same-day write's premium read as an assigned
+    # premium still reported (backlog TJ-0679, TJ-0680). The figure also
+    # holds what else the lock files under that series and date: a
+    # buy-back of any write of the series, and a row of the day before
+    # or after whose other date it is. Left out, a lock still reporting
+    # the assigned premium read as amended (backlog TJ-1046). A lock holds
+    # only the rows that land in its own year, so the figure is per year:
+    # a row trading Dec 31 and settling Jan 2 is not in the lock of the
+    # year its other date falls in (backlog TJ-1176).
+    _day: Dict[Tuple[str, str, int], List[float]] = {}
+    for lot in _lots:
+        if lot.broker_closing:
+            continue
+        _lot_grant = grant_mode and (since is None or lot.write_year >= since)
+        for c in lot.closes:
+            if c.kind in ("buy-back", "cash-settled"):
+                # The premium was the write's gain under grant timing;
+                # on close timing it is in the close's own.
+                _gain = (0.0 if _lot_grant else c.premium) - c.paid
+                for _d in c.dates or (c.date[:10],):
+                    _day.setdefault((c.series or lot.symbol, _d,
+                                     int(c.date[:4])),
+                                    [0.0, 0.0])[0] += _gain
+        if lot.unknown_premium:
+            continue
+        _all = sum(c.premium for c in lot.closes if c.kind == "assignment")
+        _late = sum(c.premium for c in lot.closes if c.kind == "assignment"
+                    and int(c.date[:4]) > lot.write_year)
+        for _d in lot.dates or (lot.write_date[:10],):
+            acc = _day.setdefault((lot.written_as or lot.symbol, _d,
+                                   lot.write_year),
+                                  [0.0, 0.0])
+            acc[0] += lot.premium - _all
+            acc[1] += _late
+    for lot in _lots:
         later = [c for c in lot.closes if int(c.date[:4]) > lot.write_year]
         still_open = lot.open_units > 1e-9 and lot.write_year <= year
         if not later and not still_open:
@@ -651,14 +705,14 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
 
         # The wy lock's return no longer reports the premium of the
         # units assigned later (an amendment re-closed without it, as
-        # docs/filing.md step 6 has it): what it still reports is at
-        # most the premium of the units not assigned (TJ-0085).
-        _assigned = sum(c.premium for c in later
-                        if c.kind == "assignment")
+        # docs/filing.md step 6 has it): what it still reports for the
+        # day's writes is at most the premium of the units not assigned
+        # (TJ-0085; signed, and for the whole day, TJ-0679, TJ-0680).
+        _retained, _assigned = _day.get(_rep_key + (wy,), (0.0, 0.0))
         amended = (grant and wy in filed_years and _rep is not None
-                   and _assigned > 0.005
-                   and _rep.get(_rep_key, 0.0)
-                   <= lot.premium - _assigned + 0.01)
+                   and abs(_assigned) > 0.005
+                   and (_rep.get(_rep_key, 0.0) - _retained)
+                   * (1.0 if _assigned > 0 else -1.0) <= 0.01)
 
         def _switch(prem_text: str) -> str:
             if transition:

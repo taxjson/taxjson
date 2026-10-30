@@ -1234,7 +1234,8 @@ def prepare_books(transactions, sheltered_transactions=(),
         _types = {a: v for a, v in _types.items() if a}
         candidates = detect_missing_history(
             transactions + sheltered_transactions + affiliated_transactions,
-            registered_accounts=_types)
+            registered_accounts=_types,
+            affiliated_accounts={t.account for t in affiliated_transactions})
         # Options coded CLOSING that the books cannot back — a sale or a
         # purchase, with the held contract under another root named
         # (audit A2-0006: an RBC CLOSE CONTRACT booked as a new write).
@@ -1964,7 +1965,25 @@ def run_gains(transactions, sheltered_transactions=(),
                         or '').startswith(year_str)
             return (rec.get(key) or rec.get('date', '')).startswith(year_str)
 
+        # A short cover traded this year whose loss is the next year's
+        # (US-DATE-01): no row of this year, but the year's sale has its
+        # cover in the files. Said by edge-cases and the missing-history
+        # split; the key only when there is one (backlog TJ-1189).
+        _covers_later = [t for t in results['transactions']
+                         if tax_date == 'trade' and not in_year(t)
+                         and str(t.get('trade_date') or '').startswith(
+                             year_str)]
+        if _covers_later:
+            results['covers_realized_next_year'] = _covers_later
         results['transactions'] = [t for t in results['transactions'] if in_year(t)]
+        # Closes that leave no record: the year's alone, the key only
+        # when there is one (backlog TJ-1091).
+        if results.get('grant_nil_closes'):
+            _nil = [c for c in results['grant_nil_closes'] if in_year(c)]
+            if _nil:
+                results['grant_nil_closes'] = _nil
+            else:
+                del results['grant_nil_closes']
         # Option-replacement warnings follow their LOSS date (already on
         # the engine's window basis) — an out-of-year loss's warning is
         # noise in a year-scoped report.

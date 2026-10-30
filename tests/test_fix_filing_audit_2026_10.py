@@ -315,9 +315,14 @@ class TestF5T1135MicroCrypto(unittest.TestCase):
                          ['max_total_cost'], .18)
 
     def test_share_dust_still_counts_as_nothing(self):
-        row = tx('BUYSELL', '2024-01-02', 'QZSTK.US', 5e-7, 100,
+        """Share dust under a cent of cost is nothing; one that carries a
+        real cost is a holding (CA-ACB-01; backlog TJ-0649)."""
+        row = tx('BUYSELL', '2024-01-02', 'QZSTK.US', 5e-7, .004,
                  currency='CAD').to_dict()
         self.assertEqual(walk_costs([row], 2025, {})['max_total_cost'], 0)
+        row = tx('BUYSELL', '2024-01-02', 'QZSTK.US', 5e-7, 100,
+                 currency='CAD').to_dict()
+        self.assertEqual(walk_costs([row], 2025, {})['max_total_cost'], 100)
 
 
 if __name__ == '__main__':

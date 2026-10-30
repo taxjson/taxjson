@@ -322,9 +322,12 @@ class TestRadarCapacityWindow(unittest.TestCase):
         doc = json.loads(_radar_json(rows, "2022-02-20"))
         doc.pop('generated_at', None)
         # The keys buy-check's per-unit denial added since (a5c3bb4,
-        # TJ-0559): every figure v0.37.0 wrote is unchanged.
+        # TJ-0559), a settled VIOLATION's forward view (TJ-0775) and the
+        # registered units bought in the window and the last such buy
+        # (TJ-1039, TJ-1177): every figure v0.37.0 wrote is unchanged.
         added = ('recent_buy', 'recent_loss_per_unit',
-                 'recent_loss_per_unit_qty')
+                 'recent_loss_per_unit_qty', 'forward',
+                 'registered_window_qty', 'registered_window_last_add')
 
         def _v037(o):
             if isinstance(o, dict):

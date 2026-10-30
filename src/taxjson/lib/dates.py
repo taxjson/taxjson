@@ -82,6 +82,10 @@ def noon_utc(dt: datetime) -> datetime:
 # ---------------------------------------------------------- settlement
 # One home for the settlement-lag convention, per market (keyed on the
 # trade currency, which stands in for the market):
+#   T+5 -> T+3: the US and Canada 1995-06-07 (SEC Rule 15c6-1; the
+#     Canadian markets moved with it); earlier North American trades
+#     settled T+5 (backlog TJ-0833). No other market's era before its
+#     T+3 one is modelled: it stays T+3.
 #   T+3 -> T+2: North America 2017-09-05 (US and Canada together; Mexico
 #     kept with them); the UK, the EU markets and Switzerland 2014-10-06;
 #     Australia and New Zealand 2016-03-07; Singapore 2018-12-10; Japan
@@ -104,6 +108,9 @@ def noon_utc(dt: datetime) -> datetime:
 # days both Canada and the US settle (settlement_calendar, CA_USD).
 
 T3_TO_T2 = '2017-09-05'
+
+# The T+5 -> T+3 move, by trade currency (only the markets researched).
+_T3_CUTOVER = {'USD': '1995-06-07', 'CAD': '1995-06-07'}
 
 # Currencies of the EU markets outside the euro area (they move with the
 # euro markets: one EU regulation, CSDR).
@@ -137,7 +144,8 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
     from taxjson.lib.market_calendar import market_key
     cur = market_key(currency) or 'USD'      # 'CAD+USD': Canada's cycle
     if trade_iso < _T2_CUTOVER.get(cur, T3_TO_T2):
-        return 3
+        t3 = _T3_CUTOVER.get(cur)
+        return 5 if t3 is not None and trade_iso < t3 else 3
     cutover = _T1_CUTOVER.get(cur)
     if cutover is None:
         return 2
@@ -225,7 +233,7 @@ def last_trade_date_settling_by(deadline_iso: str, currency: str = 'USD',
         dt = datetime.strptime(deadline_iso, "%Y-%m-%d")
     except (TypeError, ValueError):
         return deadline_iso
-    for _ in range(21):        # lag <= 3 settlement days, plus holidays
+    for _ in range(21):        # lag <= 5 settlement days, plus holidays
         iso = dt.strftime("%Y-%m-%d")
         if is_trading_day(iso, currency) and settlement_date(
                 iso, currency, is_option) <= deadline_iso:

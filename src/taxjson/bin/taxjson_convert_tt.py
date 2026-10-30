@@ -83,7 +83,7 @@ _FORMS = {
     'DIVIDEND_IN_LIEU': ('DATE TIME SYMBOL QTY CUR PRICE GROSS',
                          '[NET] [facts]'),
     'TAX': ('DATE TIME SYMBOL QTY CUR PRICE GROSS', '[NET] [facts]'),
-    'INTEREST': ('DATE TIME CUR AMOUNT', ''),
+    'INTEREST': ('DATE TIME CUR AMOUNT', '[symbol=SYMBOL]'),
     'FEE': ('DATE TIME CUR AMOUNT', ''),
     'ADJUST': ('DATE TIME SYMBOL CUR AMOUNT',
                '[type=roc|dist] [record=YYYY-MM-DD]'),
@@ -119,6 +119,26 @@ EXERCISE_KEY = 'exercise_of'
 # at $0: a US sale's gain moved (backlog TJ-0528).
 STOCK_DIVIDEND_TOKEN = 'type=stock_dividend'
 _STOCKDIV_DATE_KEYS = {'ex': 'ex_date', 'record': 'record_date'}
+# Optional `type=futures_settlement [settle=LEG,MONEY,PL,CUR[,RATE]]` on
+# a BUYSELL line of a futures contract: the line is a part of a book
+# already on the settlement basis (lib/futures: its total is the
+# realized P/L, not qty x price), with the native facts its settlement
+# recorded (TaxTransaction.settle_native: the leg LO/LC/SO/SC, the
+# native money, the P/L, the currency, the rate) that the Canadian
+# engine re-averages a contract held in several accounts from and keeps
+# a short's pool apart with. A json -> tt -> json round trip dropped
+# both and read the parts back as raw fills: the pooled gain changed
+# (backlog TJ-0662).
+FUTURES_SETTLEMENT_TYPE = 'futures_settlement'
+FUTURES_SETTLEMENT_TOKEN = f'type={FUTURES_SETTLEMENT_TYPE}'
+# Optional `type=trade_cancel` on a BUYSELL / ASSIGN line: the line is a
+# broker's cancellation of a trade (IB code `Ca`, lib/trade_cancel), the
+# original's reverse. taxjson-merge2 drops it with the original it
+# cancels, from any input of the account. A json -> tt -> json round
+# trip wrote it as an ordinary trade: a cancelled sale stayed booked,
+# its reverse a purchase at the sale price (backlog TJ-0985).
+TRADE_CANCEL_TOKEN = 'type=trade_cancel'
+SETTLE_KEY = 'settle'
 # Optional income facts at the END of a DIVIDEND / DIVIDEND_IN_LIEU /
 # TAX / ADJUST line, as `key=value` tokens: the record date that dates
 # trust income and ROC, the broker's "distribution" label, the paying
@@ -131,6 +151,33 @@ _FACT_KEYS = {'record': 'record_date', 'ex': 'ex_date',
               'label': 'income_label', 'dealer': 'dealer_country',
               'issuer': 'issuer_country', 'type': 'type'}
 _FACT_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'ADJUST')
+# Optional corporate-action provenance at the end of a trade, income or
+# ADJUST line: the event and election that emitted the row, and an s.86.1
+# parent cost reduction's share count. The engine keys on them (an s.86.1
+# reduction after the parent was sold, a spin-off's deferred wash, a cost
+# move that is no return of capital); a json -> tt -> json round trip
+# dropped them, so a reduction read as a plain return of capital (backlog
+# TJ-1117). `cash=`: the cash the event paid (cash in lieu, boot), which
+# fx-cash reads, as `<amount>:<CUR>[:@<paid>]` joined by `;` (the row's
+# `corp_cash` with no spaces; backlog TJ-1175).
+_CORP_KEYS = {'corp': 'corp_event_id', 'election': 'corp_election',
+              'parent_qty': 'corp_parent_qty', 'cash': 'corp_cash'}
+_CORP_CASH_RE = re.compile(r'^-?\d[\d.eE+-]*:[A-Z0-9]+(?::@\d{4}-\d{2}-\d{2})?$')
+_CORP_ACTIONS = ('BUYSELL', 'ASSIGN') + _FACT_ACTIONS
+# Optional `symbol=<SYMBOL>` at the end of an INTEREST line: the
+# property the interest is paid on (a foreign bond's coupon), the
+# income of that property's T1135 row (tax-logic CA-RPT-14). Without it
+# the line is interest on the account's cash (`CASH`). A json -> tt ->
+# json round trip wrote no symbol and read the coupon back as CASH, so
+# the bond's T1135 income fell to 0 (backlog TJ-0856).
+INTEREST_SYMBOL_KEY = 'symbol'
+# Actions dated the day they were PAID, whatever the date basis: income,
+# withholding and fees (the gains engines file them by their pay date,
+# pipeline in_year; CA-DATE-11). A settle-basis export wrote a dividend
+# paid Dec 31 that settles Jan 2 with its January date, moving it into
+# the next year on re-import (backlog TJ-0862).
+PAID_DATE_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST',
+                     'FEE')
 _FACT_RE = re.compile(r'^([a-z_]+)=(\S+)$')
 _ADJUST_TYPES = ('roc', 'dist')
 
@@ -251,12 +298,26 @@ def parse_tt_line(line: str, account_name: str = 'default',
     _check_time(parts[2], line, source)
     facts = {}
     trade_keys = {}
+    corp = {}
     if action in _FACT_ACTIONS:
         while parts and _FACT_RE.match(parts[-1]):
             key, val = _FACT_RE.match(parts.pop()).groups()
             _refuse_twice(key, val, facts, line, source)
             facts[key] = val
+        corp = {k: facts.pop(k) for k in _CORP_KEYS if k in facts}
         facts = _check_facts(action, facts, line, source)
+    elif action == 'INTEREST':
+        # `symbol=<SYMBOL>`: the property the interest is paid on.
+        while len(parts) > 5 and _FACT_RE.match(parts[-1]):
+            key, val = _FACT_RE.match(parts.pop()).groups()
+            _refuse_twice(key, val, facts, line, source)
+            if key != INTEREST_SYMBOL_KEY:
+                raise ValueError(
+                    f"{_where(source)}unknown .tt token {key}={val} — an "
+                    f"INTEREST line takes {INTEREST_SYMBOL_KEY}=<SYMBOL> "
+                    f"(the property it is paid on, such as a bond): "
+                    f"{line.strip()!r}")
+            facts[key] = val
     elif action in ('BUYSELL', 'ASSIGN'):
         # `key=value` tokens past the total (`exercise_of=`), in any
         # order with the fee and the `x<size>` token.
@@ -269,6 +330,10 @@ def parse_tt_line(line: str, account_name: str = 'default',
             _refuse_twice(m.group(1), m.group(2), trade_keys, line, source)
             trade_keys[m.group(1)] = m.group(2)
         parts = kept
+        corp = {k: trade_keys.pop(k) for k in _CORP_KEYS if k in trade_keys}
+    # A futures part already on the settlement basis: its total is the
+    # realized P/L, not qty x price (backlog TJ-0662).
+    _settled = trade_keys.get('type') == FUTURES_SETTLEMENT_TYPE
     _max = _MAX_TOKENS.get(action)
     if _max is not None and len(parts) > _max:
         raise ValueError(
@@ -376,15 +441,15 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 # Futures: the contract size is not on the line — the
                 # 1/100 guess called every correct futures total a typo
                 # (S029-00), so no comparison for them.
-                from taxjson.lib.core import is_option_symbol
                 # (the run reads this warning back: lib/tt_totals)
                 from taxjson.lib.tt_totals import \
                     tolerance as _tt_tolerance
                 _is_fut = tx['symbol'].startswith(_FUTURES_PREFIXES)
-                _mult = (tx['multiplier'] if tx.get('multiplier')
-                         else 100.0 if (is_option_symbol(tx['symbol'])
-                                        and not _is_fut)
-                         else 1.0)
+                # The project's ticker.map MULT line first, as the
+                # engine sizes the contract (core.equity_option_size):
+                # a mini option's correct total was a typo at x100
+                # (backlog TJ-0864).
+                _mult = _tt_contract_size(tx)
                 _q = tx['quantity']
                 _fee = tx.get('fee', 0.0)
                 _expected = (abs(_q) * tx['price'] * _mult
@@ -397,7 +462,9 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 # check now says so instead of calling 0 correct.
                 _total = (tx['net_amount'] if _q < 0
                           else abs(tx['net_amount']))
-                if (_q < 0 and _expected < 0 and tx['price'] > 0
+                if _settled:
+                    pass        # the total is the realized P/L
+                elif (_q < 0 and _expected < 0 and tx['price'] > 0
                         and abs(tx['net_amount']) < 0.005
                         and (not _is_fut or tx.get('multiplier'))):
                     emit_line(
@@ -429,6 +496,10 @@ def parse_tt_line(line: str, account_name: str = 'default',
             tx['symbol'] = parts[3].upper()
             tx['quantity'] = _tt_num(parts[4])
             tx['currency'] = parts[5].upper()
+            # The per-share amount (PRICE): never read, the row booked
+            # price 0 and `tjs divs` showed a rate of 0 (backlog
+            # TJ-0984).
+            tx['price'] = _tt_num(parts[6])
             val = _tt_num(parts[7])
             tx['gross_amount'] = val
             # Optional 9th column: the withholding-NETTED amount (the
@@ -442,7 +513,8 @@ def parse_tt_line(line: str, account_name: str = 'default',
             tx['currency'] = parts[3].upper()
             tx['net_amount'] = _tt_num(parts[4])
             tx['type'] = action.lower()
-            tx['symbol'] = 'CASH'
+            tx['symbol'] = (str(facts.pop(INTEREST_SYMBOL_KEY, '')).upper()
+                            or 'CASH')
 
         elif action == 'ADJUST' or action == 'DISALLOW':
             tx['symbol'] = parts[3].upper()
@@ -487,6 +559,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
     # take a buy's cost as its magnitude (core _trade_money).
     if (action in ('BUYSELL', 'ASSIGN') and tx.get('quantity', 0) < 0
             and tx.get('net_amount', 0) < 0
+            and not _settled
             and not _excess_commission_sale(tx)):
         raise ValueError(
             f"{_where(source)}{action} sell total {parts[7]} is negative "
@@ -498,7 +571,13 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"and the total equals qty x price - commission. "
             f"Line: {line.strip()!r}")
 
-    if trade_keys and 'type' in trade_keys:
+    if _settled:
+        tx.update(_check_futures_settlement(action, tx, trade_keys, line,
+                                            source))
+    elif trade_keys.get('type') == _TRADE_CANCEL_TYPE:
+        tx.update(_check_trade_cancel(action, tx, trade_keys, line,
+                                      source))
+    elif trade_keys and 'type' in trade_keys:
         tx.update(_check_stock_dividend(action, tx, trade_keys, line,
                                         source))
     elif trade_keys:
@@ -506,6 +585,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                                            source)
     # Not part of the id (as in TaxTransaction.compute_id).
     tx.update(facts)
+    tx.update(_check_corp(action, corp, line, source))
     _canonical_ca_symbols(tx)
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
@@ -991,15 +1071,22 @@ def parse_inkind_line(line: str, source: str = ''):
         raise ValueError(f"{where}INKIND currency {cur!r} is not a "
                          f"three-letter code (CAD, USD): {line.strip()!r}")
     from taxjson.lib.core import is_option_symbol
-    size = 100.0 if is_option_symbol(sym.upper()) else 1.0
+    # An option's price is per share of the contract; its size (a
+    # ticker.map MULT line, a transfer row's multiplier) is known only
+    # to the run, which values the line again at it (lib/in_kind.
+    # apply_lines, `price`): the total here assumes the standard 100,
+    # and a price given with a total is compared there (backlog TJ-0933).
+    option = is_option_symbol(sym.upper())
+    size = 100.0 if option else 1.0
     by_price = abs(qty) * price * size
+    stated = total is not None
     if total is None:
         if price <= 0:
             raise ValueError(f"{where}INKIND line has no value — give the "
                              f"fair market value per share, or 0 and the "
                              f"total: {line.strip()!r}")
         total = by_price
-    elif price > 0 and abs(total - by_price) > max(
+    elif price > 0 and not option and abs(total - by_price) > max(
             0.05, 0.01 * max(by_price, 1.0)):
         raise ValueError(f"{where}INKIND total {total:.2f} differs from "
                          f"qty x price {by_price:.2f} — give one of them "
@@ -1021,22 +1108,34 @@ def parse_inkind_line(line: str, source: str = ''):
                              f"registered plan kind: {line.strip()!r}")
     return {'date': day, 'symbol': sym.upper(), 'quantity': qty,
             'currency': cur.upper(), 'total': float(total), 'plan': plan,
-            'source': source}
+            'source': source, 'price': float(price),
+            'total_stated': stated}
 
 
 def parse_opening_line(parts, line: str, account_name: str,
                        source: str) -> dict:
     """`OPENING <snapshot-date> <symbol> <qty> <currency> <total-cost>
-    [<lot-date>]` -> an opening-balance row: a BUYSELL of type
+    [<lot-date>] [x<size>]` -> an opening-balance row: a BUYSELL of type
     `opening` (core.OPENING_TYPE) dated the snapshot day at 00:00:00,
     with the lot's acquisition date in `lot_date`. It sets a position
     and its cost but is not a purchase (tax-logic CA-OPEN-01 /
     US-OPEN-01); `taxjson opening` writes these lines from a positions
     report. Only a long position can be opened (a written option's or a
     short sale's premium depends on its write date: enter the write as
-    a BUYSELL line)."""
+    a BUYSELL line). `x<size>`: an option's contract size other than
+    100 (a mini option), as a BUYSELL line carries it — the units one
+    contract delivers on its exercise (backlog TJ-0963)."""
     from taxjson.lib.core import OPENING_TYPE, is_option_symbol
     where = _where(source)
+    declared = None
+    if len(parts) in (7, 8) and _MULT_RE.match(parts[-1]):
+        declared = float(_MULT_RE.match(parts[-1]).group(1))
+        if not (math.isfinite(declared) and declared > 0):
+            raise ValueError(
+                f"{where}contract size {parts[-1]!r} must be > 0 (the "
+                f"units one contract covers, such as x10): "
+                f"{line.strip()!r}")
+        parts = parts[:-1]
     if len(parts) > 2 and _TIME_RE.match(parts[2]):
         raise ValueError(
             f"{where}an OPENING line has no time column (it is booked "
@@ -1087,7 +1186,12 @@ def parse_opening_line(parts, line: str, account_name: str,
         raise ValueError(
             f"{where}OPENING currency {cur!r} is not a three-letter code "
             f"(CAD, USD): {line.strip()!r}")
-    size = 100.0 if is_option_symbol(sym) else 1.0
+    if declared is not None and not is_option_symbol(sym):
+        raise ValueError(
+            f"{where}a contract size (x{size_text(declared)}) is an "
+            f"option's: {sym} is not an option symbol: {line.strip()!r}")
+    size = (declared if declared is not None
+            else 100.0 if is_option_symbol(sym) else 1.0)
     tx = {
         'action': 'BUYSELL',
         'type': OPENING_TYPE,
@@ -1108,6 +1212,8 @@ def parse_opening_line(parts, line: str, account_name: str,
     }
     if lot:
         tx['lot_date'] = lot
+    if declared is not None:
+        tx['multiplier'] = declared
     _canonical_ca_symbols(tx)
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
@@ -1200,6 +1306,35 @@ def _check_exercise(action: str, tx: dict, keys: dict, line: str,
     return target
 
 
+_TRADE_CANCEL_TYPE = TRADE_CANCEL_TOKEN.split('=', 1)[1]
+
+
+def _check_trade_cancel(action: str, tx: dict, keys: dict, line: str,
+                        source: str) -> dict:
+    """The `type=trade_cancel` token of a BUYSELL / ASSIGN line (with
+    no other key but an ASSIGN's `exercise_of=`), checked: a
+    cancellation reverses a fill, so its QTY is not 0. Returns the
+    fields it sets on the row."""
+    from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE
+    shown = line.strip()
+    bad = sorted(set(keys) - {'type', EXERCISE_KEY})
+    if bad:
+        raise ValueError(
+            f"{_where(source)}unknown .tt token {bad[0]}={keys[bad[0]]} — "
+            f"a broker's trade cancellation takes {TRADE_CANCEL_TOKEN} "
+            f"(and an exercise's {EXERCISE_KEY}=): {shown!r}")
+    if not abs(float(tx.get('quantity') or 0.0)) > 0:
+        raise ValueError(
+            f"{_where(source)}a trade cancellation ({TRADE_CANCEL_TOKEN}) "
+            f"reverses a fill: its QTY is the original's, negated, not 0: "
+            f"{shown!r}")
+    out = {'type': TRADE_CANCEL_TYPE}
+    if EXERCISE_KEY in keys:
+        out[EXERCISE_KEY] = _check_exercise(
+            action, tx, {EXERCISE_KEY: keys[EXERCISE_KEY]}, line, source)
+    return out
+
+
 def _check_stock_dividend(action: str, tx: dict, keys: dict, line: str,
                           source: str) -> dict:
     """The `type=stock_dividend [ex=DATE] [record=DATE]` tokens of a
@@ -1211,8 +1346,10 @@ def _check_stock_dividend(action: str, tx: dict, keys: dict, line: str,
     shown = line.strip()
     if keys.get('type') != STOCK_DIVIDEND:
         raise ValueError(
-            f"{where}type={keys.get('type')}: a BUYSELL line's only type "
-            f"is {STOCK_DIVIDEND} (a stock dividend's new shares): "
+            f"{where}type={keys.get('type')}: a BUYSELL line's only types are "
+            f"{STOCK_DIVIDEND} (a stock dividend's new shares), "
+            f"{FUTURES_SETTLEMENT_TYPE} (a settled futures part) and "
+            f"{_TRADE_CANCEL_TYPE} (a broker's trade cancellation): "
             f"{shown!r}")
     bad = sorted(set(keys) - {'type'} - set(_STOCKDIV_DATE_KEYS))
     if bad:
@@ -1244,6 +1381,102 @@ def _check_stock_dividend(action: str, tx: dict, keys: dict, line: str,
                 f"{shown!r}")
         out[field] = keys[key]
     return out
+
+
+def _check_futures_settlement(action: str, tx: dict, keys: dict,
+                              line: str, source: str) -> dict:
+    """The `type=futures_settlement [settle=LEG,MONEY,PL,CUR[,RATE]]`
+    tokens of a BUYSELL line, checked: a part of a futures book on the
+    settlement basis (lib/futures), its leg agreeing with the line's
+    direction (LO and SC buy, LC and SO sell). Returns the fields they
+    set on the row (backlog TJ-0662)."""
+    from taxjson.lib.futures import is_plain_future, parse_settle_native
+    where = _where(source)
+    shown = line.strip()
+    form = (f"{FUTURES_SETTLEMENT_TOKEN} [{SETTLE_KEY}=LEG,MONEY,PL,CUR"
+            f"[,RATE]]")
+    bad = sorted(set(keys) - {'type', SETTLE_KEY})
+    if bad:
+        raise ValueError(
+            f"{where}unknown .tt token {bad[0]}={keys[bad[0]]} — a "
+            f"settled futures line takes {form}: {shown!r}")
+    sym = str(tx.get('symbol') or '')
+    if action != 'BUYSELL' or not is_plain_future(sym):
+        raise ValueError(
+            f"{where}{FUTURES_SETTLEMENT_TOKEN} marks a futures contract's "
+            f"part on the settlement basis: only a BUYSELL line of a "
+            f"future (an F: or / symbol) takes it: {shown!r}")
+    out = {'type': FUTURES_SETTLEMENT_TYPE, 'settle_native': ''}
+    if SETTLE_KEY not in keys:
+        return out
+    native = keys[SETTLE_KEY].split(',')
+    leg = parse_settle_native(' '.join(native))
+    if leg is None:
+        raise ValueError(
+            f"{where}{SETTLE_KEY}={keys[SETTLE_KEY]} is not a settlement's "
+            f"native facts (LEG,MONEY,PL,CUR[,RATE], LEG one of LO LC SO "
+            f"SC): {shown!r}")
+    q = float(tx.get('quantity') or 0.0)
+    if q == 0 or (q > 0) != (leg[0] in ('LO', 'SC')):
+        raise ValueError(
+            f"{where}{SETTLE_KEY}={keys[SETTLE_KEY]}: a {leg[0]} leg "
+            f"{'buys' if leg[0] in ('LO', 'SC') else 'sells'}, the line's "
+            f"QTY {tx.get('quantity')} does not: {shown!r}")
+    out['settle_native'] = ' '.join(native)
+    return out
+
+
+def _check_corp(action: str, corp: dict, line: str, source: str) -> dict:
+    """Validate a line's `corp=` / `election=` / `parent_qty=` tokens and
+    map them to their row fields."""
+    out = {}
+    shown = line.strip()
+    for key, val in corp.items():
+        if key == 'election' and not re.match(r'^[a-z0-9_]+$', val):
+            raise ValueError(
+                f"{_where(source)}election={val} must be an election's "
+                f"name (rollover_s_86_1): {shown!r}")
+        if key != 'corp' and 'corp' not in corp:
+            raise ValueError(
+                f"{_where(source)}{key}={val} needs the event it belongs "
+                f"to (corp=<event id>): {shown!r}")
+        if key == 'parent_qty':
+            try:
+                num = float(val)
+            except ValueError:
+                num = 0.0
+            if action != 'ADJUST' or not math.isfinite(num) or num <= 0:
+                raise ValueError(
+                    f"{_where(source)}parent_qty={val}: an ADJUST line's "
+                    f"count of parent shares, above 0: {shown!r}")
+            val = num
+        if key == 'cash':
+            if not all(_CORP_CASH_RE.match(p) for p in val.split(';')):
+                raise ValueError(
+                    f"{_where(source)}cash={val}: the cash the event paid, "
+                    f"<amount>:<CUR> (7.5:USD), a later payment "
+                    f"<amount>:<CUR>:@<date>, joined by `;`: {shown!r}")
+            val = '; '.join(p.replace(':', ' ') for p in val.split(';'))
+        out[_CORP_KEYS[key]] = val
+    return out
+
+
+def _corp_tokens(tx: dict, action: str) -> str:
+    """A row's corporate-action provenance tokens (_CORP_KEYS)."""
+    if action not in _CORP_ACTIONS or not tx.get('corp_event_id'):
+        return ""
+    toks = []
+    for key, field in _CORP_KEYS.items():
+        val = tx.get(field)
+        if key == 'parent_qty':
+            val = _num(float(val)) if val and action == 'ADJUST' else ''
+        elif key == 'cash':
+            val = ';'.join(p.strip().replace(' ', ':')
+                           for p in str(val or '').split(';'))
+        val = str(val or '').strip()
+        if val and not re.search(r'[\s#]', val):
+            toks.append(f"{key}={val}")
+    return (" " + " ".join(toks)) if toks else ""
 
 
 def _check_facts(action: str, facts: dict, line: str, source: str) -> dict:
@@ -1288,8 +1521,20 @@ def tt_tail(tx: dict, action: str) -> str:
     pasted trust distribution moved to its pay year (backlog TJ-0390).
     '' when there are none; else the tokens with a leading space."""
     if action in ('BUYSELL', 'ASSIGN'):
-        return _trade_tokens(tx, action)
-    return _fact_tokens(tx, action)
+        return _trade_tokens(tx, action) + _corp_tokens(tx, action)
+    if action == 'INTEREST':
+        return _interest_tokens(tx)
+    return _fact_tokens(tx, action) + _corp_tokens(tx, action)
+
+
+def _interest_tokens(tx: dict) -> str:
+    """An INTEREST line's `symbol=` token: the property the interest
+    is paid on (backlog TJ-0856); none for interest on the account's
+    cash (`CASH`, or no symbol)."""
+    sym = str(tx.get('symbol') or '').strip()
+    if not sym or sym.upper() == 'CASH' or any(c.isspace() for c in sym):
+        return ""
+    return f" {INTEREST_SYMBOL_KEY}={sym}"
 
 
 def size_text(size: float) -> str:
@@ -1302,6 +1547,20 @@ def size_text(size: float) -> str:
     if '.' in s:
         s = s.rstrip('0').rstrip('.')
     return s
+
+
+def _opening_size_token(tx: dict) -> str:
+    """An OPENING line's ` x<size>`: an option's declared contract size
+    other than 100 (backlog TJ-0963); '' otherwise."""
+    from taxjson.lib.core import is_option_symbol
+    try:
+        size = float(tx.get('multiplier') or 0.0)
+    except (TypeError, ValueError):
+        return ''
+    if (math.isfinite(size) and size > 0 and size != 100.0
+            and is_option_symbol(str(tx.get('symbol') or ''))):
+        return f" x{size_text(size)}"
+    return ''
 
 
 def _trade_tokens(tx: dict, action: str) -> str:
@@ -1329,6 +1588,16 @@ def _trade_tokens(tx: dict, action: str) -> str:
         toks.append(f"x{size_text(size)}")
     if exercise:
         toks.append(f"{EXERCISE_KEY}={exercise}")
+    from taxjson.lib.futures import is_plain_future, is_settlement_row
+    if (action == 'BUYSELL' and is_settlement_row(tx)
+            and is_plain_future(symbol)):
+        toks.append(FUTURES_SETTLEMENT_TOKEN)
+        native = str(tx.get('settle_native') or '').split()
+        if native:
+            toks.append(f"{SETTLE_KEY}={','.join(native)}")
+    from taxjson.lib.trade_cancel import is_trade_cancel
+    if is_trade_cancel(tx):
+        toks.append(TRADE_CANCEL_TOKEN)
     from taxjson.lib.core import is_stock_dividend
     if action == 'BUYSELL' and is_stock_dividend(tx):
         toks.append(STOCK_DIVIDEND_TOKEN)
@@ -1372,18 +1641,39 @@ def _num(x: float) -> str:
     return format(Decimal(repr(x)), 'f')
 
 
+def _tt_contract_size(tx: dict) -> float:
+    """The units one contract of a .tt BUYSELL / ASSIGN line covers,
+    for the total check: an equity option's ticker.map `MULT` line (the
+    option, its root, or its underlying; the one `taxjson run` reads,
+    lib/markets.contract_size) first, as the engine sizes it (core.
+    equity_option_size); else the line's `x<size>`; else 100 for an
+    equity option and 1 for anything else. Without the MULT line a
+    mini option's correct total read as a typo at x100, which `run
+    --strict` stops on (backlog TJ-0864)."""
+    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    sym = str(tx.get('symbol') or '')
+    option = is_option_symbol(sym) and not sym.startswith(_FUTURES_PREFIXES)
+    if option:
+        from taxjson.lib import markets
+        und = parse_option_underlying(sym) or ''
+        ovr = markets.option_contract_size(sym, und)
+        if ovr:
+            return float(ovr)
+    if tx.get('multiplier'):
+        return float(tx['multiplier'])
+    return 100.0 if option else 1.0
+
+
 def _excess_commission_sale(tx: dict) -> bool:
     """A SELL (or ASSIGN) line whose negative total is a commission
     larger than its gross: fee > |qty| x price x size and the total is
     |qty| x price x size - fee within the typo-check tolerance. A
     futures line needs its size on the line (`x1000`) to tell."""
-    from taxjson.lib.core import is_option_symbol
     sym = str(tx.get('symbol') or '')
     is_fut = sym.startswith(_FUTURES_PREFIXES)
     if is_fut and not tx.get('multiplier'):
         return False
-    mult = (tx['multiplier'] if tx.get('multiplier')
-            else 100.0 if is_option_symbol(sym) else 1.0)
+    mult = _tt_contract_size(tx)
     gross = abs(float(tx.get('quantity') or 0.0)) * float(
         tx.get('price') or 0.0) * mult
     fee = float(tx.get('fee') or 0.0)
@@ -1446,6 +1736,41 @@ def compute_tt_id(tx: dict) -> str:
     return hashlib.sha256(raw_id.encode('utf-8')).hexdigest()[:16]
 
 
+def tx_tt_date(tx: dict, date_basis: str = 'settle') -> str:
+    """The one date a row's .tt line carries: on the settle basis a
+    trade's settlement date, on the trade basis its trade date; an
+    income, withholding or fee row's (PAID_DATE_ACTIONS) the day it was
+    paid on either basis (backlog TJ-0862)."""
+    action = str(tx.get('action') or '').upper()
+    if (date_basis == 'settle' and tx.get('date_settle')
+            and action not in PAID_DATE_ACTIONS):
+        return tx['date_settle']
+    return tx.get('date', '')
+
+
+# The clock a .tt line gives a row with none (the reader requires the
+# column; TaxTransaction's own default).
+UNKNOWN_TT_TIME = '09:30:00'
+_CLOCK_RE = re.compile(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?$')
+
+
+def tt_time(tx: dict) -> str:
+    """The time column of a row's .tt line: UNKNOWN_TT_TIME for a row
+    without one (no key, null or empty: the JSON loaders accept all
+    three), a clock the loaders accept unpadded (`9:30`) written
+    HH:MM:SS. An empty or null time wrote a missing column or `None`,
+    a line the reader refused (backlog TJ-0983)."""
+    raw = tx.get('time')
+    text = '' if raw is None else str(raw).strip()
+    if not text:
+        return UNKNOWN_TT_TIME
+    m = _CLOCK_RE.match(text)
+    if m:
+        return (f"{int(m.group(1)):02d}:{m.group(2)}:"
+                f"{m.group(3) or '00'}")
+    return text
+
+
 def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
     """Emit a single `.tt` line for one transaction, in the field order
     parse_tt_line reads. Returns None for transactions whose action
@@ -1459,10 +1784,15 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
     times a disposition on settlement) writes `date_settle`: writing the
     trade date moved a Dec-31 sale settling in January into the earlier
     year on re-import (R1-130). `'trade'` writes the trade date (a
-    trade-basis project)."""
+    trade-basis project). An income, withholding or fee row keeps the
+    day it was paid on either basis (tx_tt_date; backlog TJ-0862)."""
     action = tx.get('action', '')
     if action not in _VALID_ACTIONS:
         return None
+    if 'qty' in tx and 'quantity' not in tx:
+        # The loaders' alias (core.coerce_transaction_row): read as 0,
+        # every trade's quantity was written 0 (backlog TJ-0977).
+        tx = {**tx, 'quantity': tx['qty']}
     from taxjson.lib.core import is_opening_row
     if is_opening_row(tx):
         # OPENING <snapshot-date> <symbol> <qty> <currency> <total>
@@ -1476,12 +1806,11 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         return (f"OPENING {tx.get('date', '')} {tx.get('symbol', '')} "
                 f"{_num(float(tx.get('quantity') or 0.0))} {cur} "
                 f"{float(tx.get('net_amount') or 0.0):.5f}"
-                + (f" {lot}" if lot else ''))
+                + (f" {lot}" if lot else '')
+                + _opening_size_token(tx))
 
-    date = tx.get('date', '')
-    if date_basis == 'settle' and tx.get('date_settle'):
-        date = tx['date_settle']
-    time = tx.get('time', '09:30:00')
+    date = tx_tt_date(tx, date_basis)
+    time = tt_time(tx)
     symbol = tx.get('symbol', '')
     qty = float(tx.get('quantity') or 0.0)
     currency = str(tx.get('currency') or '').strip().upper()
@@ -1550,7 +1879,9 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
 
     if action in ('INTEREST', 'FEE'):
         # ACTION date time currency amount  (sign preserved on interest)
-        return f"{action} {date} {time} {currency} {net:.5f}"
+        # [symbol=SYMBOL]: the property an INTEREST row is paid on.
+        return (f"{action} {date} {time} {currency} {net:.5f}"
+                + tt_tail(tx, action))
 
     if action in ('ADJUST', 'DISALLOW'):
         # ACTION date time symbol currency amount
@@ -1801,13 +2132,17 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
             skipped += 1
             continue
         if (tx.get('date_settle') and tx.get('date')
-                and tx['date_settle'] != tx['date']):
+                and tx['date_settle'] != tx['date']
+                and str(tx.get('action') or '').upper()
+                not in PAID_DATE_ACTIONS):
             two_dates += 1
         m = tx.get('multiplier')
         try:
             if (m not in (None, '') and float(m) not in (1.0, 100.0)
                     and not any(_MULT_RE.match(t)
-                                for t in line.split()[9:])):
+                                for t in line.split()[
+                                    6 if line.startswith('OPENING ')
+                                    else 9:])):
                 mults.append(f"{tx.get('symbol')} x{size_text(float(m))}")
         except (TypeError, ValueError):
             mults.append(f"{tx.get('symbol')} x{m!r}")

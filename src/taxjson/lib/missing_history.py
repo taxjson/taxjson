@@ -285,6 +285,71 @@ def _drop_duplicate_splits(txs):
     return SplitTimeline.dedupe(txs, per_account=True)
 
 
+def _spread_global_splits(txs: Sequence[Any], registered_accounts=None,
+                          country: Optional[str] = None,
+                          affiliated_accounts=None) -> List[Any]:
+    """`txs` plus, for every account with rows of a symbol, a copy of
+    each stock split (a SPLIT with no new symbol) of that symbol another
+    account OF THE SAME BOOK reports. The engines apply one account's
+    SPLIT row to every account's shares of that book only
+    (corporate_timeline.split_copies, per security; core's SPLIT branch
+    never touches the taxable pool for a sheltered or affiliated row,
+    and the pipeline sizes openings per book), while this module's walks
+    run per (symbol, account), so a split reported only by account a
+    never re-denominated account b's units — a purchase drafted for b's
+    sale was written in post-split units, and b's sale of its split
+    shares read as a short (backlog TJ-0832). A registered or affiliated
+    account's split does not re-denominate a taxable account here, since
+    the books do not: the checks and drafts match the books, and b's
+    sale is flagged (backlog TJ-1022). The book is the configured type
+    (`registered_accounts`, else the label: is_registered_account), or
+    `affiliated_accounts`. An account with its own copy of the event (a
+    day apart, a ratio rounded otherwise) walks its own copy. A rename
+    (a SPLIT with a new symbol) stays its account's."""
+    from taxjson.lib.corporate_timeline import split_copies
+    txs = list(txs)
+    splits = [t for t in txs if t.action == 'SPLIT'
+              and not normalize_symbol_new(t.symbol,
+                                           getattr(t, 'symbol_new', ''))]
+    if not splits:
+        return txs
+    affiliated = set(affiliated_accounts or ())
+
+    def _book(account: str) -> str:
+        if account in affiliated:
+            return 'affiliated'
+        return ('sheltered' if is_registered_account(
+            account, registered_accounts, country) else 'taxable')
+    by_book: Dict[str, List[Any]] = {}
+    for t in splits:
+        by_book.setdefault(_book(t.account), []).append(t)
+    holders: Dict[Tuple[str, str], Set[str]] = {}
+    for t in txs:
+        if t.account and t.action != 'SPLIT':
+            holders.setdefault((_book(t.account), t.symbol),
+                               set()).add(t.account)
+    own: Dict[Tuple[str, str], List[Any]] = {}
+    for t in splits:
+        own.setdefault((t.symbol, t.account), []).append(t)
+    extra: List[Any] = []
+    for book, rows in by_book.items():
+        drop = split_copies(rows, per_account=False)
+        events: Dict[str, List[Any]] = {}
+        for t in rows:
+            if id(t) not in drop:
+                events.setdefault(t.symbol, []).append(t)
+        for sym, kept in events.items():
+            for acct in sorted(holders.get((book, sym), ())):
+                mine = own.get((sym, acct), [])
+                for t in kept:
+                    if t.account == acct or (mine and len(split_copies(
+                            mine + [t], per_account=False)) > len(
+                            split_copies(mine, per_account=False))):
+                        continue
+                    extra.append(replace(t, account=acct))
+    return txs + extra
+
+
 @dataclass
 class MissingHistoryCandidate:
     """One (symbol, account) pair whose running position went negative."""
@@ -364,6 +429,46 @@ def unbacked_close(tx, prev: float, order_prev: Optional[float] = None
             return order_prev >= -1e-9
         return prev + q > 1e-9
     return False
+
+
+class FutureBrokerBooks:
+    """A plain future's position in each broker account of one project
+    account: the books its settlement keeps apart (futures._broker_books,
+    TJ-0949), for the walks that net a folder's rows into one position
+    (TJ-1194)."""
+
+    def __init__(self, transactions):
+        from taxjson.lib.futures import is_plain_future
+        srcs: Dict[Tuple[str, str, str], Set[str]] = {}
+        for t in transactions:
+            if t.action == 'BUYSELL' and is_plain_future(t.symbol):
+                srcs.setdefault(
+                    (t.symbol, t.account, (t.currency or '').upper()),
+                    set()).add(str(getattr(t, 'source_account', '') or ''))
+        self._split = {k for k, s in srcs.items()
+                       if len(s) > 1 and '' not in s}
+        self._pos: Dict[Tuple[str, ...], float] = {}
+
+    def step(self, tx) -> Optional[float]:
+        """The row's own broker account's position before it, and walk
+        past it; None for any other row. Called once per row, in the
+        walk's order."""
+        k = (tx.symbol, tx.account, (tx.currency or '').upper())
+        if k not in self._split or tx.action != 'BUYSELL':
+            return None
+        bk = k + (str(tx.source_account),)
+        own = self._pos.get(bk, 0.0)
+        self._pos[bk] = own + float(tx.quantity or 0)
+        return own
+
+
+def _close_unbacked(tx, prev: float, order_prev: Optional[float],
+                    own: Optional[float]) -> bool:
+    """unbacked_close, also against the row's own broker account (`own`,
+    FutureBrokerBooks.step): a close its own account backs is no missing
+    history, whatever the folder's rows net to."""
+    return (unbacked_close(tx, prev, order_prev)
+            and (own is None or unbacked_close(tx, own)))
 
 
 class OrderStarts:
@@ -1008,6 +1113,7 @@ def detect_missing_history(
     registered_accounts=None,
     country: Optional[str] = None,
     journal_symbols: Optional[Set[str]] = None,
+    affiliated_accounts=None,
 ) -> List[MissingHistoryCandidate]:
     """Walk transactions per (symbol, account, currency) and return one
     MissingHistoryCandidate per pair whose running position ever went negative.
@@ -1047,12 +1153,16 @@ def detect_missing_history(
     # otherwise read as an N-share short with a missing purchase.
     transactions = list(transactions)
     journal_symbols = _book_journals(transactions, journal_symbols)
+    # (A split another account of the book reports re-denominates this
+    # account's units too, as in the engines: backlog TJ-0832, TJ-1022.)
     sorted_txs = _drop_duplicate_splits(sorted(
-        transactions,
+        _spread_global_splits(transactions, registered_accounts, country,
+                              affiliated_accounts),
         key=lambda t: (_walk_key(t, journal_symbols),
                        0 if float(t.quantity or 0) > 0 else 1),
     ))
     orders = OrderStarts()
+    books = FutureBrokerBooks(transactions)
 
     for tx in sorted_txs:
         # TRANSFER also moves position and is now consumed by the engine,
@@ -1107,6 +1217,17 @@ def detect_missing_history(
                     tgt = state[(new_sym, tx.account, '')] = _new_state(
                         is_option_symbol(new_sym)
                         or new_sym.startswith(('F:', '/', '\\')))
+                if s['running'] < -1e-9:
+                    # The short moves with its broker evidence: a short
+                    # the broker marks (RBC SHORT.) stays a real short
+                    # under the new ticker, one the broker codes
+                    # closing stays missing history (backlog TJ-0819:
+                    # a partial cover after the rename read as a new,
+                    # unmarked short and drew a long OPENING).
+                    for _f in ('marked', 'unmarked', 'closing'):
+                        tgt[_f] = tgt[_f] or s[_f]
+                    tgt['basis'] = tgt['basis'] or s['basis']
+                    tgt['markers'] |= s['markers']
                 tgt['running'] += s['running'] * factor
                 s['running'] = 0.0
             else:
@@ -1115,6 +1236,7 @@ def detect_missing_history(
 
         prev = s['running']
         order_prev = orders.prev(key, tx, prev)
+        own = books.step(tx)
         s['running'] += tx.quantity
 
         # A disposition while running is negative is one of the events
@@ -1126,7 +1248,7 @@ def detect_missing_history(
                 # A sale that OPENS (or extends) the short side — also
                 # one that crosses zero (IB `C;O`: closed the long, the
                 # rest opened a short in the same fill).
-                if unbacked_close(tx, prev, order_prev):
+                if _close_unbacked(tx, prev, order_prev, own):
                     # The broker says this sale CLOSED a position the
                     # data never bought (audit S013-00) — even with an
                     # O beside it (C;O on a sale with no long held).
@@ -1203,6 +1325,8 @@ def detect_unbacked_covers(
     include_options: bool = False,
     date_basis: str = 'settle',
     journal_symbols: Optional[Set[str]] = None,
+    registered_accounts=None,
+    country: Optional[str] = None,
 ) -> List[UnbackedCover]:
     """Broker-marked covers the data's own short cannot back — the
     mirror of a sale that goes short. Walked like detect_missing_history (per
@@ -1216,12 +1340,15 @@ def detect_unbacked_covers(
     orders = OrderStarts()
     out: List[UnbackedCover] = []
     transactions = list(transactions)
+    books = FutureBrokerBooks(transactions)
     journal_symbols = _book_journals(transactions, journal_symbols)
 
     def _key(t):
         k = _walk_key(t, journal_symbols)
         return k[:3] + ((3 - k[3]) if k[3] in (1, 2) else k[3],)
-    for tx in _drop_duplicate_splits(sorted(transactions, key=_key)):
+    for tx in _drop_duplicate_splits(sorted(
+            _spread_global_splits(transactions, registered_accounts,
+                                  country), key=_key)):
         key = (tx.symbol, tx.account)
         if tx.action == 'SPLIT':
             ratio = float(tx.quantity or 0.0)
@@ -1239,6 +1366,7 @@ def detect_unbacked_covers(
         prev = run.get(key, 0.0)
         q = float(tx.quantity or 0.0)
         order_prev = orders.prev(key, tx, prev)
+        own = books.step(tx)
         run[key] = prev + q
         if q <= 1e-9 or tx.action != 'BUYSELL':
             continue
@@ -1247,7 +1375,7 @@ def detect_unbacked_covers(
         if _BROKER_SHORT_RE.search((tx.description or '').upper()):
             marker = 'COVER SHORT.'
             unbacked = q - max(0.0, -prev)
-        elif unbacked_close(tx, prev, order_prev):
+        elif _close_unbacked(tx, prev, order_prev, own):
             marker = 'IB code C'
             unbacked = q - max(0.0, -prev)
             if 'O' in open_close_codes(tx):
@@ -1443,8 +1571,9 @@ class MissingHistoryRow:
     # pair's short moves their gain.
     pooled_with: Tuple[str, ...] = ()
     # The in-year sales that drew on the short: (row id, units sold
-    # beyond the position, units of the whole sale) — what
-    # lib/first_run.engine_booking looks up in the gains files.
+    # beyond the position, units of the whole sale, its date on the
+    # walk's date basis) — what lib/first_run.engine_booking looks up
+    # in the gains files.
     in_year_short_sales: Tuple[Tuple[Any, ...], ...] = ()
 
     @property
@@ -1472,6 +1601,9 @@ def assess_tax_year_relevance(
     date_basis: str = 'settle',
     journal_symbols: Optional[Set[str]] = None,
     pool: Optional[Dict[Tuple[str, str], Set[str]]] = None,
+    registered_accounts=None,
+    country: Optional[str] = None,
+    affiliated_accounts=None,
 ) -> List[MissingHistoryRow]:
     """For each missing-history candidate, decide whether its missing history actually
     bears on tax year `year`.
@@ -1528,7 +1660,8 @@ def assess_tax_year_relevance(
     transactions = list(transactions)
     journal_symbols = _book_journals(transactions, journal_symbols)
     for tx in _drop_duplicate_splits(
-            sorted(transactions,
+            sorted(_spread_global_splits(transactions, registered_accounts,
+                                         country, affiliated_accounts),
                    key=lambda t: _walk_key(t, journal_symbols))):
         key = (tx.symbol, tx.account)
         d = _basis_date(tx, date_basis)
@@ -1583,7 +1716,7 @@ def assess_tax_year_relevance(
             if tx.quantity < 0 and cur < -1e-9:
                 st['sales'].append((str(tx.id or ''),
                                     min(-tx.quantity, -cur),
-                                    -tx.quantity))
+                                    -tx.quantity, d))
 
     def _carriers(ck: Tuple[str, str]) -> List[Tuple[str, str]]:
         """The pair and every later pair carrying its short."""
@@ -1734,7 +1867,8 @@ def classify_year_shorts(transactions: Iterable[TaxTransaction], year: Any,
     return {(r.candidate.symbol, r.candidate.account): r
             for r in assess_tax_year_relevance(
                 txs, cands, year, date_basis=date_basis,
-                journal_symbols=journal_symbols, pool=pool)}
+                journal_symbols=journal_symbols, pool=pool,
+                registered_accounts=registered or None, country=country)}
 
 
 def missing_history_suspect(c: MissingHistoryCandidate) -> bool:
@@ -2221,6 +2355,8 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
                        quantities: Optional[Dict[Tuple[str, str], float]]
                        = None, sized_through: Optional[str] = None, *,
                        all_rows: Optional[Dict[Tuple[str, str], float]]
+                       = None,
+                       not_sized: Optional[Dict[Tuple[str, str], str]]
                        = None) -> str:
     """Write the candidate JSON to a string. Underscore-prefixed fields are
     notes for human review; the loader ignores them. `quantities`: the
@@ -2228,7 +2364,9 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
     (synthesize_openings: the rows through `sized_through`, the tax
     year's end), recorded as `quantity` with `_sized_through`;
     `all_rows`: the deepest shortage of every row (`_quantity_all_rows`:
-    what a .tt line opens for a pair short only after the year end)."""
+    what a .tt line opens for a pair short only after the year end).
+    `not_sized`: why an entry has no quantity although it is short (two
+    holdings renamed into one symbol: `_not_sized`, backlog TJ-0959)."""
     entries = []
     for c in candidates:
         note = (
@@ -2246,7 +2384,9 @@ def format_suggestions(candidates: List[MissingHistoryCandidate],
                        if c.broker_basis else ""))
         _q = (quantities or {}).get((c.symbol, c.account))
         _qa = (all_rows or {}).get((c.symbol, c.account))
+        _ns = (not_sized or {}).get((c.symbol, c.account))
         entries.append({
+            **({"_not_sized": _ns} if _ns and not _q else {}),
             "symbol": c.symbol,
             "account": c.account,
             **({QUANTITY_KEY: round(_q, 10)} if _q else {}),
@@ -3255,6 +3395,32 @@ def _short_again(entry: Dict[str, Any],
             return
 
 
+def _long_side_path(trades: Sequence[Tuple[TaxTransaction, float]],
+                    day: str, opening: float
+                    ) -> List[Tuple[str, float, float]]:
+    """The (date, position less the real short still open, factor) of
+    each row (tx, its split factor) dated from `day`, for _short_again:
+    the units a sale the broker marks as opening a short (RBC SHORT., IB
+    code O) took below what was held, the line's `opening` units
+    included, are a real short, not units with no purchase (backlog
+    TJ-1171; synthesize_openings' walk for a sized pair, TJ-0960)."""
+    running = real_short = 0.0
+    out: List[Tuple[str, float, float]] = []
+    for tx, f in trades:
+        d = str(tx.date)[:10]
+        q = tx.quantity / f
+        held = running + real_short + (opening if d >= day else 0.0)
+        if q < 0 and tx.action in ('BUYSELL', 'ASSIGN'):
+            if broker_short_marker(tx) and not unbacked_close(tx, held * f):
+                real_short += max(0.0, -(held + q)) - max(0.0, -held)
+        elif q > 0 and real_short > 0:
+            real_short -= min(q, real_short)
+        running += q
+        if d >= day:
+            out.append((d, running + real_short, f))
+    return out
+
+
 def reverse_dated(sorted_txs: Sequence[TaxTransaction]
                   ) -> Dict[Tuple[str, str], List[Tuple[str, str]]]:
     """{(new symbol, account): [(old symbol, date)]} of the rename SPLIT
@@ -3435,6 +3601,7 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
         factor = 1.0
         factor_at: Optional[float] = None
         path: List[Tuple[str, float, float]] = []
+        trades: List[Tuple[TaxTransaction, float]] = []
         member_rows: List[TaxTransaction] = []
         seen = False
         for tx in sorted_txs:
@@ -3454,6 +3621,7 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                 continue
             running += tx.quantity / factor
             path.append((d, running, factor))
+            trades.append((tx, factor))
         if account not in book_accounts:
             entry['note'] = (f'no rows for this symbol/account in the data '
                              f'— check the spelling in {t.where}')
@@ -3490,7 +3658,7 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
                     entry['short_before'] = {
                         'date': d, 'qty': round(abs(run) * f, 10)}
                     break
-        _short_again(entry, [x for x in path if x[0] >= day], opening)
+        _short_again(entry, _long_side_path(trades, day, opening), opening)
         sym_on = _symbol_on(symbol, account, day, renames)
         currency = _opening_currency(t, sym_on, account, member_rows,
                                      sorted_txs, pairs_in)
@@ -3507,6 +3675,27 @@ def _apply_fixed_openings(sorted_txs: Sequence[TaxTransaction],
     return out
 
 
+def _converging_renames(members: Iterable[Tuple[str, str]],
+                        reverse_renames: Dict[Tuple[str, str],
+                                              List[Tuple[str, str]]],
+                        ratios: Dict[Tuple[str, str, str], float]
+                        ) -> List[str]:
+    """['OLD_A -> NEW x2', 'OLD_B -> NEW x3'] when two or more distinct
+    symbols of a rename chain's `members` were renamed into one symbol
+    (the chain converges); [] for a chain that is one line of renames."""
+    out: List[str] = []
+    for m in sorted(members):
+        olds = sorted({o for o in reverse_renames.get(m, ())
+                       if o[0] != m[0]})
+        if len(olds) < 2:
+            continue
+        for o in olds:
+            r = ratios.get((o[0], m[0], m[1]))
+            out.append(f"{o[0]} -> {m[0]}"
+                       + (f" x{r:g}" if r else ""))
+    return out
+
+
 def synthesize_openings(
     transactions: List[TaxTransaction],
     pairs: Optional[Set[Tuple[str, str]]] = None,
@@ -3514,6 +3703,9 @@ def synthesize_openings(
     flag_stale: bool = True,
     phantoms: Optional[Set[Tuple[str, str]]] = None,
     until: Optional[str] = None,
+    registered_accounts=None,
+    country: Optional[str] = None,
+    affiliated_accounts=None,
 ) -> Tuple[List[TaxTransaction], List[Dict[str, Any]]]:
     """For each (symbol, account) in pairs, compute the minimum running
     position over the rows dated up to `until` (the tax year's end,
@@ -3576,6 +3768,7 @@ def synthesize_openings(
     # and anchor the opening on the CHAIN's earliest symbol/date so the
     # engine replays it through the rename.
     reverse_renames: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    rename_ratio: Dict[Tuple[str, str, str], float] = {}
     for tx in sorted_txs:
         if tx.action == 'SPLIT':
             new_sym = normalize_symbol_new(tx.symbol,
@@ -3583,6 +3776,8 @@ def synthesize_openings(
             if new_sym:
                 reverse_renames.setdefault((new_sym, tx.account), []).append(
                     (tx.symbol, tx.account))
+                rename_ratio.setdefault(
+                    (tx.symbol, new_sym, tx.account), float(tx.quantity or 0))
 
     # Each listed pair's chain: itself plus every ancestor symbol. When
     # a listed pair is an ANCESTOR of another listed pair (both ends of a
@@ -3668,15 +3863,42 @@ def synthesize_openings(
     path: Dict[Tuple[str, str], List[Tuple[str, float, float]]] = {
         p: [] for p in pairs}
     split_factor: Dict[Tuple[str, str], float] = {p: 1.0 for p in pairs}
+    # The units a sale the broker marks as opening a short (RBC SHORT.,
+    # IB code O; not an unbacked close) took below what was held, not
+    # yet bought back: a real short, never missing long shares — left
+    # out of the shortage the opening fills when the pair is also short
+    # of long shares (backlog TJ-0960). `held_*`: the walk of the long
+    # side (the position less that real short); a pair whose only
+    # shortage is a real short keeps the whole walk (a listed real
+    # short is the user's record, applied and flagged stale).
+    real_short: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
+    held_min_running: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
+    held_min_all: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
+    held_path: Dict[Tuple[str, str], List[Tuple[str, float, float]]] = {
+        p: [] for p in pairs}
     # pair -> (anchor_symbol, anchor_date): first activity anywhere in the
     # pair's chain. The opening must carry the chain's EARLIEST symbol.
     anchor: Dict[Tuple[str, str], Tuple[str, str]] = {}
     currency: Dict[Tuple[str, str], str] = {}
 
-    for tx in sorted_txs:
+    # Sized on the book's splits (a split another account of the book
+    # reports re-denominates this pair's units too, as in the engines:
+    # backlog TJ-0832, TJ-1022); such a copy never anchors the opening.
+    _own = {id(t) for t in transactions}
+    _sizing = _drop_duplicate_splits(
+        sorted(_spread_global_splits(transactions, registered_accounts,
+                                     country, affiliated_accounts),
+               key=lambda t: event_sort_key(t, profile='missing_history_walk')))
+    for tx in _sizing:
         key = (tx.symbol, tx.account)
         pair = member_to_pair.get(key)
         if pair is None:
+            continue
+        if id(tx) not in _own:
+            if tx.action == 'SPLIT' and pair in anchor:
+                ratio = tx.quantity
+                if ratio and abs(ratio) > 1e-12:
+                    split_factor[pair] *= ratio
             continue
         seen_rows.add(pair)
         # TRANSFER moves engine position too (detect_missing_history counts it, and
@@ -3693,7 +3915,16 @@ def synthesize_openings(
             if ratio and abs(ratio) > 1e-12:
                 split_factor[pair] *= ratio
             continue
-        running[pair] += tx.quantity / split_factor[pair]
+        q = tx.quantity / split_factor[pair]
+        held = running[pair] + real_short[pair]
+        if q < 0 and tx.action in ('BUYSELL', 'ASSIGN'):
+            if broker_short_marker(tx) and not unbacked_close(
+                    tx, held * split_factor[pair]):
+                real_short[pair] += (max(0.0, -(held + q))
+                                     - max(0.0, -held))
+        elif q > 0 and real_short[pair] > 0:
+            real_short[pair] -= min(q, real_short[pair])
+        running[pair] += q
         if running[pair] < min_all[pair]:
             min_all[pair] = running[pair]
         if (until is None or str(tx.date)[:10] <= until) \
@@ -3701,8 +3932,24 @@ def synthesize_openings(
             min_running[pair] = running[pair]
         path[pair].append((str(tx.date)[:10], running[pair],
                            split_factor[pair]))
+        # The long side: the position less the real short still open.
+        held = running[pair] + real_short[pair]
+        if held < held_min_all[pair]:
+            held_min_all[pair] = held
+        if (until is None or str(tx.date)[:10] <= until) \
+                and held < held_min_running[pair]:
+            held_min_running[pair] = held
+        held_path[pair].append((str(tx.date)[:10], held,
+                                split_factor[pair]))
         if tx.currency and pair not in currency:
             currency[pair] = tx.currency
+
+    for pair in pairs:
+        if held_min_all[pair] < -1e-6:
+            # Short of long shares: sized on the long side only.
+            min_running[pair] = held_min_running[pair]
+            min_all[pair] = held_min_all[pair]
+            path[pair] = held_path[pair]
 
     out = list(transactions)
     applied: List[Dict[str, Any]] = []
@@ -3755,6 +4002,23 @@ def synthesize_openings(
             continue
         _rec = (getattr(pairs_in, "quantities", None) or {}).get(
             (symbol, account))
+        _conv = _converging_renames(chains.get((symbol, account), ()),
+                                    reverse_renames, rename_ratio)
+        if _rec is None and _conv and min_pos < -1e-6:
+            # Two holdings became one symbol (OLD_A -> NEW x2, OLD_B ->
+            # NEW x3): which of them the missing units were, and so the
+            # ratio that sizes them, the rows cannot tell — one product
+            # of both ratios sized an opening its replay did not carry
+            # through (backlog TJ-0959). Not sized: the user writes each
+            # old holding's line.
+            entry['converging'] = _conv
+            entry['note'] = (f"{' and '.join(_conv)} became one symbol: "
+                             f"the units held before the data cannot be "
+                             f"sized from the rows — write the OPENING "
+                             f"cost=unknown line of each old holding "
+                             f"(its units, dated before its rename)")
+            applied.append(entry)
+            continue
         if _rec is None and min_pos >= -1e-6:
             if min_all[(symbol, account)] < -1e-6:
                 # Short only after the year end: no opening for this
@@ -4145,9 +4409,12 @@ def draft_purchases(
         if d and (t.account not in first_day or d < first_day[t.account]):
             first_day[t.account] = d
     journal_symbols = _book_journals(txs, journal_symbols)
+    # A split another account of the book reports re-denominates this
+    # account's units too, as in the engines (backlog TJ-0832, TJ-1022).
     sorted_txs = _drop_duplicate_splits(sorted(
-        txs, key=lambda t: (_walk_key(t, journal_symbols),
-                            0 if float(t.quantity or 0) > 0 else 1)))
+        _spread_global_splits(txs, registered_accounts, country),
+        key=lambda t: (_walk_key(t, journal_symbols),
+                       0 if float(t.quantity or 0) > 0 else 1)))
 
     # 'virt': the units the drafts so far add before the data (the walk
     # reads the pair as if they were in: _draft_sale's lines). 'low':
@@ -4158,6 +4425,7 @@ def draft_purchases(
                 'bought': False, 'virt': 0.0}
     state: Dict[Tuple[str, str], Dict[str, Any]] = {}
     orders = OrderStarts()
+    books = FutureBrokerBooks(txs)
     for tx in sorted_txs:
         key = (tx.symbol, tx.account)
         if tx.action == 'SPLIT':
@@ -4187,6 +4455,7 @@ def draft_purchases(
         prev = s['qty']
         q = float(tx.quantity or 0.0)
         order_prev = orders.prev(key, tx, prev)
+        own = books.step(tx)
         if q > 0:
             if str(getattr(tx, 'type', '') or '') == \
                     TRANSFER_BOOK_VALUE_TYPE:
@@ -4215,7 +4484,7 @@ def draft_purchases(
         unbacked = abs(q) - held
         if unbacked <= 1e-9:
             continue
-        closing = unbacked_close(tx, prev, order_prev)
+        closing = _close_unbacked(tx, prev, order_prev, own)
         if not closing and (broker_short_marker(tx)
                             or _derivative_symbol(tx.symbol or '')):
             # A short the broker declares (RBC SHORT., IB code O) or an

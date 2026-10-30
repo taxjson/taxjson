@@ -4,7 +4,9 @@ export-coverage).
 
 A data check, not a tax rule (both countries). For each account of the
 project (crypto accounts excepted: a coin is held for years with no row)
-and each broker whose exports feed it, the date the exports END:
+and each broker whose exports feed it (each broker ACCOUNT of it, when
+an explicitly combined account holds several: _units), the date the
+exports END:
 
 * an IB Activity Statement's Period ("Statement,Data,Period"): the
   latest period end among the account's IB statements;
@@ -33,7 +35,9 @@ the account's books hold too, on the same side (held_at_broker: a
 broker's sale of calls an opening .tt line bought is no written call
 open at that broker)) that the account's later rows of
 any source dated inside the gap (after the end, up to the cutoff) — a .tt line closing it, another broker's sale, a
-transfer-out — do not close. A broker whose positions are all closed is
+transfer-out — do not close; a row of a broker that its own rows open
+and close (a sale of what it bought itself) closes nothing else
+(_spend_own_units). A broker whose positions are all closed is
 never listed: nothing after its end can be missing; when .tt lines
 closed them, the run says so as an Info ("... were closed by .tt lines —
 no export needed"), not a Warning. Slack: an
@@ -284,11 +288,39 @@ def _expired_by(sym: str, day: date) -> bool:
     return exp is not None and exp <= day
 
 
-def open_positions(rows: Iterable[Dict[str, Any]], day: date
+def _moment(r: Dict[str, Any], split_at_open: bool) -> Tuple[str, int, str]:
+    """A row's place in a walk of trade dates (backlog TJ-0931): its
+    date, then its clock — the US engine's order (US-DATE-13: a split
+    stamped noon follows a 09:30 sale). With `split_at_open` (Canada:
+    the engine's ladder, CA-DATE-14; corporate_timeline's missing-
+    history walk, _walk_rest) a split is effective at the open: it and
+    the trades of its day that settle later (executed before an evening
+    split, which the engine re-denominates through it) come first, in
+    clock order, an opening before them, and the day's other rows after
+    them, whatever their clock."""
+    d, t = str(r.get("date") or ""), str(r.get("time") or "")
+    if not split_at_open:
+        return (d, 0, t)
+    act = str(r.get("action") or "")
+    if act == "OPENING_BALANCE":
+        group = -1
+    elif act == "SPLIT":
+        group = 0
+    elif act in ("BUYSELL", "ASSIGN") and d \
+            and str(r.get("date_settle") or "") > d:
+        group = 0
+    else:
+        group = 1
+    return (d, group, t)
+
+
+def open_positions(rows: Iterable[Dict[str, Any]], day: date,
+                   split_at_open: bool = False
                    ) -> List[Tuple[str, float]]:
     """[(symbol, quantity)] a broker's rows leave open at the end of
     `day` (trade dates; a SPLIT row scales the symbol's units by its
-    ratio, or moves them to its new symbol): long positions and written
+    ratio, or moves them to its new symbol; `split_at_open`: _moment):
+    long positions and written
     options, an option whose contract expired by `day` left out (the
     run's expired-options check covers a missing expiry row). A short
     share position is left out: with no purchase in the data it is
@@ -307,10 +339,10 @@ def open_positions(rows: Iterable[Dict[str, Any]], day: date
             continue
         rd = _d(r.get("date"))
         if rd is not None and rd <= day:
-            dated.append((rd, str(r.get("time") or ""), r))
-    dated.sort(key=lambda x: (x[0], x[1]))
+            dated.append(r)
+    dated.sort(key=lambda r: _moment(r, split_at_open))
     pos: Dict[str, float] = {}
-    for _rd, _t, r in dated:
+    for r in dated:
         sym = str(r.get("symbol") or "").upper()
         if not sym:
             continue
@@ -459,9 +491,98 @@ def _expiry_in_gap(sym: str, end: date, cutoff: date, current: bool
     return None
 
 
-def account_gaps(root: Path, acct: str, year: int, today: date
-                 ) -> List[Gap]:
-    """The short exports of one account (module docstring)."""
+def _units(rows: List[Dict[str, Any]], paths: List[Path],
+           accts_of: Dict[Path, List[str]],
+           path_of: Dict[int, Path]
+           ) -> List[Tuple[List[Dict[str, Any]], List[Path],
+                           List[Dict[str, Any]]]]:
+    """One broker's rows and files in an account, split by the broker
+    ACCOUNT they came from (the hashed `source_account` the parse writes
+    on a row, and per file in metadata.source_accounts) when they come
+    from more than one — an explicitly combined account holding two IB
+    accounts: each one's statements end where its own do, never where
+    the other's reach (backlog TJ-0930). A file naming no account, or a
+    row with none, goes with the others of its kind (the whole
+    broker's files when none names an account). Each unit: (its rows,
+    its files, the rows that date how far its files reach — its own and
+    every row of its files: one export of two accounts (a Questrade
+    file) reaches its last row for both, `path_of`: id(row) -> file).
+    One broker account: [(rows, paths, rows)] as before."""
+    names = ({str(r.get("source_account") or "") for r in rows}
+             | {a for p in paths for a in accts_of.get(p, [])})
+    names.discard("")
+    if len(names) < 2:
+        return [(rows, paths, rows)]
+    out = []
+    for n in sorted(names) + [""]:
+        unit_rows = [r for r in rows
+                     if str(r.get("source_account") or "") == n]
+        unit_paths = [p for p in paths
+                      if (n in accts_of.get(p, []) if n
+                          else not accts_of.get(p))]
+        if unit_rows:
+            mine = {id(r) for r in unit_rows}
+            dated = unit_rows + [r for r in rows if id(r) not in mine
+                                 and path_of.get(id(r)) in unit_paths]
+            out.append((unit_rows, unit_paths or paths, dated))
+    return out
+
+
+def _merge(gaps: List[Gap], all_rows: List[Dict[str, Any]],
+           split_at_open: bool) -> List[Gap]:
+    """Gaps of one broker with one end (two of its accounts whose
+    exports stop on the same day) as one: one question, one message, one
+    entry per symbol with the units added, at most what the account holds
+    (`all_rows`; backlog TJ-1313)."""
+    out: List[Gap] = []
+    merged: Dict[str, Gap] = {}
+    seen: Dict[str, Gap] = {}
+    for g in gaps:
+        m = seen.get(g.key)
+        if m is None:
+            seen[g.key] = g
+            out.append(g)
+            continue
+        merged[g.key] = m
+        m.positions = m.positions + g.positions
+        m.expired = m.expired + g.expired
+        m.closed_by_tt = m.closed_by_tt + [s for s in g.closed_by_tt
+                                           if s not in m.closed_by_tt]
+        if g.next_activity and (m.next_activity is None
+                                or g.next_activity < m.next_activity):
+            m.next_activity = g.next_activity
+    for m in merged.values():
+        units: Dict[str, float] = {}
+        for sym, q in m.positions:
+            units[sym] = units.get(sym, 0.0) + q
+        # Each unit is capped alone (held_at_broker); their sum, on the
+        # account's holding at the cutoff, as `positions` are after later
+        # rows (a split past the end), or at the end when that is larger:
+        # a rename past the end leaves only a later buy, or nothing, at the
+        # cutoff (backlog TJ-1331). One no row leaves open (an option
+        # expired that day) keeps its sum.
+        acct = dict(open_positions(all_rows, date.fromisoformat(m.cutoff),
+                                   split_at_open))
+        for sym, q in open_positions(all_rows, date.fromisoformat(m.end),
+                                     split_at_open):
+            if abs(q) > abs(acct.get(sym, 0.0)):
+                acct[sym] = q
+        m.positions = [
+            (sym, acct[sym] if abs(acct.get(sym, 0.0)) < abs(q)
+             and acct.get(sym, 0.0) * q > 0 else q)
+            for sym, q in sorted(units.items())]
+        expired: Dict[Tuple[str, str], float] = {}
+        for sym, q, exp in m.expired:
+            expired[(sym, exp)] = expired.get((sym, exp), 0.0) + q
+        m.expired = [(sym, q, exp) for (sym, exp), q in sorted(expired.items())]
+    return out
+
+
+def account_gaps(root: Path, acct: str, year: int, today: date,
+                 split_at_open: bool = False) -> List[Gap]:
+    """The short exports of one account (module docstring).
+    `split_at_open`: a split leads its day in the walks (Canada's
+    engine order; _moment)."""
     cache = root / "work"
     base = _load(cache / f"{acct}_base.json")
     if base is None:
@@ -477,6 +598,11 @@ def account_gaps(root: Path, acct: str, year: int, today: date
     # file_source_id), never by the real name metadata keeps.
     by_source: Dict[str, Optional[str]] = {}
     inputs: Dict[str, List[Path]] = {}
+    accts_of: Dict[Path, List[str]] = {}
+    # A book row's input file, by the source ids the parse writes
+    # (file_source_id; the shown name alone too): {id: path}.
+    file_of: Dict[str, Path] = {}
+    from taxjson.lib.brokerages.base import shown_name
     corp_keys: Dict[Tuple[str, str, str, str], str] = {}
     sidecars: Dict[str, List[Dict[str, Any]]] = {}
     renames = _book_renames(root, cache)
@@ -488,6 +614,17 @@ def account_gaps(root: Path, acct: str, year: int, today: date
             add_source(by_source, n, b)
         folder = _PL.inputs_dir(root) / acct
         inputs[b] = [folder / n for n in names if (folder / n).is_file()]
+        for n in names:
+            file_of.setdefault(file_source_id(n), folder / n)
+            file_of.setdefault(shown_name(n), folder / n)
+        # The hashed broker accounts each file names (the parse's
+        # metadata.source_accounts, keyed by the file's source id).
+        src_accts = md.get("source_accounts") or {}
+        if isinstance(src_accts, dict):
+            for n in names:
+                got = src_accts.get(file_source_id(n))
+                if isinstance(got, list):
+                    accts_of[folder / n] = [str(a) for a in got if a]
         for r in _rows(_load(cache / f"{acct}_{b}_corp.json")):
             corp_keys.setdefault(_row_key(_as_booked(r, renames)), b)
         side = _load(cache / f"{acct}_{b}_transfers.json")
@@ -498,16 +635,17 @@ def account_gaps(root: Path, acct: str, year: int, today: date
             sidecars[b] = [_as_booked(r, renames) for r in _rows(side)
                            if str(r.get("action")) == "TRANSFER"]
     rows_by: Dict[str, List[Dict[str, Any]]] = {}
-    last: Dict[str, date] = {}
+    path_of: Dict[int, Path] = {}
     for r in _rows(base):
         b = source_broker(by_source, r) if r.get("source") \
             else corp_keys.get(_row_key(r))
         if b is None:
             continue
         rows_by.setdefault(b, []).append(r)
-        rd = _d(r.get("date"))
-        if rd is not None and (b not in last or rd > last[b]):
-            last[b] = rd
+        for i in row_source_ids(r):
+            if i in file_of:
+                path_of[id(r)] = file_of[i]
+                break
     # Every position-moving row of the account, any source (a .tt line,
     # another broker, a transfer leg): what happened after an export's end.
     # A move between two of your accounts is there twice — its sidecar
@@ -516,60 +654,85 @@ def account_gaps(root: Path, acct: str, year: int, today: date
     all_rows = ([r for r in _rows(base) if r.get("type") != LOT_MOVE_TYPE]
                 + [r for v in sidecars.values() for r in v])
     gaps: List[Gap] = []
-    for b, _p in files:
-        rows = rows_by.get(b, []) + sidecars.get(b, [])
-        for r in sidecars.get(b, []):
-            rd = _d(r.get("date"))
-            if rd is not None and (b not in last or rd > last[b]):
-                last[b] = rd
-        if not rows or b not in last:
-            continue
-        end, how = _explicit_end(b, inputs.get(b, []))
-        if how == "year":
-            # A trading summary's year bounds it; its last row dates it —
-            # so does a row past that year (an export beside it whose end
-            # cannot be read).
-            if end >= year_start or last[b] > end:
-                end, how = last[b], "last-row"
-        elif end is not None:
-            end = max(end, last[b])
+    # The units each later row has already closed, across the account's
+    # brokers: one sale closes its own units once (closed_later).
+    spent: Dict[int, float] = {}
+    units = [(b, u) for b, _p in files for u in _units(
+        rows_by.get(b, []) + sidecars.get(b, []), inputs.get(b, []),
+        accts_of, path_of)]
+    if len(units) > 1:
+        for _b, (rows, _paths, _dated) in units:
+            _spend_own_units(rows, spent, split_at_open)
+    for b, (rows, paths, dated) in units:
+        g = _unit_gap(acct, b, rows, paths, dated, all_rows, year_start,
+                      cutoff, current, split_at_open, spent)
+        if g is not None:
+            gaps.append(g)
+    return _merge(gaps, all_rows, split_at_open)
+
+
+def _unit_gap(acct: str, b: str, rows: List[Dict[str, Any]],
+              paths: List[Path], dated: List[Dict[str, Any]],
+              all_rows: List[Dict[str, Any]],
+              year_start: date, cutoff: date, current: bool,
+              split_at_open: bool, spent: Dict[int, float]
+              ) -> Optional[Gap]:
+    """The gap of one broker's exports (one of its accounts': _units) in
+    an account, else None (account_gaps). `dated`: the rows whose last
+    date is how far its exports reach when they name no end."""
+    last: Optional[date] = None
+    for r in dated:
+        rd = _d(r.get("date"))
+        if rd is not None and (last is None or rd > last):
+            last = rd
+    if not rows or last is None:
+        return None
+    end, how = _explicit_end(b, paths)
+    if how == "year":
+        # A trading summary's year bounds it; its last row dates it —
+        # so does a row past that year (an export beside it whose end
+        # cannot be read).
+        if end >= year_start or last > end:
+            end, how = last, "last-row"
+    elif end is not None:
+        end = max(end, last)
+    else:
+        end, how = last, "last-row"
+    if how == "last-row":
+        short = end < cutoff - timedelta(days=LAST_ROW_SLACK)
+    elif current:
+        short = end < cutoff - timedelta(days=GRACE_DAYS)
+    else:
+        short = end < cutoff and not _quiet_days(end, cutoff)
+    if not short:
+        return None
+    held = held_at_broker(open_positions(rows, end, split_at_open),
+                          open_positions(all_rows, end, split_at_open))
+    if not held:
+        return None
+    # Only rows inside the gap the missing export would cover (after
+    # its end, up to the cutoff) close a position: a .tt close dated
+    # next year says nothing about this year's missing months.
+    later = [r for r in all_rows
+             if end < (_d(r.get("date")) or end) <= cutoff
+             and str(r.get("action") or "") in _POSITION_ACTIONS]
+    still, by_tt, by_other = closed_later(
+        held, later, split_at_open=split_at_open, spent=spent)
+    if not still and not by_tt:
+        return None                 # closed by another broker's rows
+    open_: List[Tuple[str, float]] = []
+    expired: List[Tuple[str, float, str]] = []
+    for sym, q in still:
+        exp = _expiry_in_gap(sym, end, cutoff, current)
+        if exp is None:
+            open_.append((sym, q))
         else:
-            end, how = last[b], "last-row"
-        if how == "last-row":
-            short = end < cutoff - timedelta(days=LAST_ROW_SLACK)
-        elif current:
-            short = end < cutoff - timedelta(days=GRACE_DAYS)
-        else:
-            short = end < cutoff and not _quiet_days(end, cutoff)
-        if not short:
-            continue
-        held = held_at_broker(open_positions(rows, end),
-                              open_positions(all_rows, end))
-        if not held:
-            continue
-        # Only rows inside the gap the missing export would cover (after
-        # its end, up to the cutoff) close a position: a .tt close dated
-        # next year says nothing about this year's missing months.
-        later = [r for r in all_rows
-                 if end < (_d(r.get("date")) or end) <= cutoff
-                 and str(r.get("action") or "") in _POSITION_ACTIONS]
-        still, by_tt, by_other = closed_later(held, later)
-        if not still and not by_tt:
-            continue                    # closed by another broker's rows
-        open_: List[Tuple[str, float]] = []
-        expired: List[Tuple[str, float, str]] = []
-        for sym, q in still:
-            exp = _expiry_in_gap(sym, end, cutoff, current)
-            if exp is None:
-                open_.append((sym, q))
-            else:
-                expired.append((sym, q, exp))
-        gaps.append(Gap(acct, b, end.isoformat(), how, cutoff.isoformat(),
-                        current, open_, by_tt, expired,
-                        next_activity(all_rows, end,
-                                      {s for s, _q in open_}
-                                      | {s for s, _q, _e in expired})))
-    return gaps
+            expired.append((sym, q, exp))
+    return Gap(acct, b, end.isoformat(), how, cutoff.isoformat(),
+               current, open_, by_tt, expired,
+               next_activity(all_rows, end,
+                             {s for s, _q in open_}
+                             | {s for s, _q, _e in expired}))
 
 
 def next_activity(rows: Iterable[Dict[str, Any]], end: date,
@@ -625,8 +788,70 @@ def _is_tt(r: Dict[str, Any]) -> bool:
     return Path(str(r.get("source") or "")).suffix.lower() == ".tt"
 
 
+def _spend_own_units(rows: List[Dict[str, Any]], spent: Dict[int, float],
+                     split_at_open: bool) -> None:
+    """Enter in `spent` (closed_later) the units of one unit's rows that
+    its own rows open and close: a broker's sale of what it bought
+    itself, oldest first. Only the rest of a row can close another
+    broker's position (backlog TJ-1158: a sale of its own 10 units closed
+    the 10 another account's short export still held). A sale beyond its
+    own units opens a lot a later buy closes only when it writes an option
+    or the broker marks it a short (backlog TJ-1287)."""
+    from types import SimpleNamespace
+
+    from taxjson.lib.core import LOT_MOVE_TYPE, is_option_symbol
+    from taxjson.lib.corporate_timeline import split_copies
+    from taxjson.lib.missing_history import broker_short_marker
+    dup = split_copies(rows)
+    walk = sorted((r for r in rows
+                   if str(r.get("action") or "") in _POSITION_ACTIONS
+                   and id(r) not in dup and r.get("type") != LOT_MOVE_TYPE
+                   and _d(r.get("date")) is not None),
+                  key=lambda r: _moment(r, split_at_open))
+    # {symbol: [[id(row), its units still open, today's units per unit]]}
+    lots: Dict[str, List[List[Any]]] = {}
+    for r in walk:
+        sym = str(r.get("symbol") or "").upper()
+        try:
+            q = float(r.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not sym:
+            continue
+        if str(r.get("action")) == "SPLIT":
+            moved = lots.pop(sym, [])
+            for lot in moved:
+                lot[2] *= q if q > _EPS else 1.0
+            new = str(r.get("symbol_new") or "").upper()
+            lots.setdefault(new or sym, []).extend(moved)
+            continue
+        here = lots.setdefault(sym, [])
+        left = q
+        while here and abs(left) > 1e-9 and (here[0][1] > 0) != (left > 0):
+            lot = here[0]
+            take = min(abs(left), abs(lot[1] * lot[2]))
+            way = 1.0 if left > 0 else -1.0
+            spent[id(r)] = spent.get(id(r), 0.0) + way * take
+            spent[lot[0]] = spent.get(lot[0], 0.0) - way * take / lot[2]
+            lot[1] += way * take / lot[2]
+            left -= way * take
+            if abs(lot[1]) <= 1e-9:
+                here.pop(0)
+        # A sale of no units of its own opens no lot for a later buy to
+        # close (backlog TJ-1287), unless it writes an option or the broker
+        # marks it a short.
+        if abs(left) > 1e-9 and (
+                left > 0 or is_option_symbol(sym)
+                or broker_short_marker(SimpleNamespace(
+                    description=str(r.get("description") or ""), quantity=left,
+                    open_close=r.get("open_close")))):
+            here.append([id(r), left, 1.0])
+
+
 def closed_later(held: List[Tuple[str, float]],
-                 later: List[Dict[str, Any]]
+                 later: List[Dict[str, Any]], *,
+                 split_at_open: bool = False,
+                 spent: Optional[Dict[int, float]] = None
                  ) -> Tuple[List[Tuple[str, float]], List[str], List[str]]:
     """(still open, closed by .tt lines, closed by other rows) for the
     positions a broker held at its export's end, walked through the
@@ -635,12 +860,20 @@ def closed_later(held: List[Tuple[str, float]],
     closed once the later rows bring it to zero or past it; it is
     closed by .tt when the row that closed it is a .tt line. A SPLIT row
     scales the units left by its ratio, or moves them to its new symbol,
-    as open_positions does."""
+    as open_positions does (`split_at_open`: _moment).
+
+    A row's units count once: a row that closes a position is spent up
+    to the units it closed, and what is left of it (another position's
+    units) is all a later walk sees. `spent` (id(row) -> units used)
+    carries that across the calls for one account's brokers, so one
+    .tt sale of 10 never closes 10 at each of two brokers (backlog
+    TJ-0932)."""
     from taxjson.lib.corporate_timeline import split_copies
+    if spent is None:
+        spent = {}
     dup = split_copies(later)
     rows = sorted((r for r in later if id(r) not in dup),
-                  key=lambda r: (str(r.get("date") or ""),
-                                 str(r.get("time") or "")))
+                  key=lambda r: _moment(r, split_at_open))
     still: List[Tuple[str, float]] = []
     by_tt: List[str] = []
     by_other: List[str] = []
@@ -661,7 +894,13 @@ def closed_later(held: List[Tuple[str, float]],
                 if new:
                     cur = new
                 continue
-            left += rq
+            avail = rq - spent.get(id(r), 0.0)
+            if abs(avail) <= 1e-9 or (avail > 0) != (rq > 0):
+                continue                # spent on another position
+            if (avail > 0) != (left > 0) and abs(avail) > abs(left):
+                avail = -left           # closes this one; the rest stays
+            spent[id(r)] = spent.get(id(r), 0.0) + avail
+            left += avail
             if abs(left) <= 1e-6 or (left > 0) != (q > 0):
                 closer = r
                 break
@@ -684,12 +923,22 @@ def find_gaps(root: Path, cfg: Dict[str, Any],
     if not isinstance(year, int) or isinstance(year, bool):
         return []
     today = today or date.today()
+    # A split leads its day as the country's engine orders it (Canada:
+    # effective at the open; the US: by its clock) — lib/country.
+    try:
+        from taxjson.lib.country import (engine_sort_profile,
+                                         settings_country)
+        split_at_open = engine_sort_profile(
+            settings_country(settings)) == "ca_main"
+    except Exception:                                   # noqa: BLE001
+        split_at_open = False
     out: List[Gap] = []
     for name, a in sorted(((cfg or {}).get("accounts") or {}).items()):
         if not isinstance(a, dict) or a.get("crypto"):
             continue
         try:
-            out += account_gaps(root, str(name), year, today)
+            out += account_gaps(root, str(name), year, today,
+                                split_at_open=split_at_open)
         except Exception:                               # noqa: BLE001
             continue                    # advisory: never a crash
     return out

@@ -39,9 +39,12 @@ timing.
 
 An assigned written option's premium is counted once: as that option's
 P/L. The share rows lose it again — a call's premium comes out of the
-sale at the strike, a put's out of the delivered shares: the part that
-covers a short out of that cover, the rest out of the next sales (per
-delivered share, in date order). Which rows those are follows the
+sale at the strike (the part on shares that opened a short, out of the
+buy-backs that cover it), a put's out of the delivered shares: the part
+that covers a short out of that cover, the rest out of the sales that
+take the delivered lot (first in, first out in a US project; a
+Canadian average-cost pool shares it among the pool's sales). Which
+rows those are follows the
 engine's own pairing (CA-OPT-08 / US-OPT-05): a leg within 3 days before
 or 7 after the option row, else the premium stays with the option (the
 engine leaves it undrained and warns); a cash-settled contract (its
@@ -118,10 +121,27 @@ def _as_tx(r: Dict[str, Any]) -> SimpleNamespace:
                            exercise_of=r.get("exercise_of") or "")
 
 
+def contract_size(r: Dict[str, Any]) -> float:
+    """Shares one contract of the option row `r` delivers, as the engine
+    sizes an assignment (lib/core equity_option_size): a ticker.map
+    `MULT` line for the option or its root first, else the row's own
+    multiplier, else the standard 100. The row's multiplier alone made
+    a mini option's assignment 100 shares a contract when the map said
+    10 (backlog TJ-0789)."""
+    from taxjson.lib import markets
+    sym = str(r.get("symbol") or "")
+    und = parse_option_underlying(sym) or ""
+    ovr = markets.option_contract_size(sym, und)
+    if ovr:
+        return float(ovr)
+    return _f(r.get("multiplier")) or 100.0
+
+
 def written_option_trades(rows: Iterable[Dict[str, Any]],
                           date_of: Callable[[Dict[str, Any]], str],
                           in_books: Optional[Callable[[Dict[str, Any]],
                                                       bool]] = None,
+                          split_at_open: bool = False,
                           ) -> Dict[str, Any]:
     """Closed written-option trades of ONE account's base-currency book.
 
@@ -129,6 +149,13 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
     files cover (a year project's books hold one tax year; the base book
     holds the whole history) — a close outside it is left out, as the
     other classes' rows are.
+
+    `split_at_open`: a split takes effect at the start of its day,
+    whatever its clock stamp, as the Canadian engine orders it (lib/
+    country engine_sort_profile 'ca_main', CA-DATE-14): a buy-back of
+    the new series stamped before a noon split read as a new long
+    (backlog TJ-0697). False: by the clock, as the US engine does
+    ('us_main', US-DATE-13).
 
     An OPENING_BALANCE row (a missing-history `OPENING ... cost=unknown`
     line, synthesized by the caller as the gains stage does) is a
@@ -146,14 +173,17 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
 
     Returns {'trades': [ {date, symbol, account, pnl, kind, contracts,
     premium, in_books, cash_settled} ], 'credits': [ {account, underlying,
-    right, shares, amount, date, strike, delivered} ] (an assigned
-    option's premium the tax rules folded into its shares; `underlying`
-    the stock line the engine pairs it with, `delivered` the assignment
-    row's shares), 'exercised_long': n, 'exercises': [ {date, in_books} ]
-    (the exercises of long options, which are not trades), 'unknown':
-    [ {date, in_books} ] (the closes of a write with an unknown
-    premium, and the closes the broker codes C that close a position
-    opened before the data: IB code C with nothing held to close)}."""
+    right, shares, amount, option, date, strike, delivered} ] (what an
+    assigned option's close folded into its shares under the tax rules:
+    `amount` the premium net of what the assignment row paid;
+    `underlying` the stock line the engine pairs it with, `option` the
+    assignment row, `delivered` its shares), 'exercised_long': n,
+    'exercises': [ {date, in_books} ] (the exercises of long options,
+    which are not trades), 'unknown': [ {date, in_books} ] (the closes
+    of a write with an unknown premium, and the closes the broker codes
+    C that close a position opened before the data: IB code C with
+    nothing held to close; a close only partly of such contracts is
+    unknown whole, no trade)}."""
     from taxjson.lib.corporate_timeline import dedupe_split_events
     from taxjson.lib.missing_history import OrderStarts, unbacked_close
     rows = [r for r in rows if isinstance(r, dict)]
@@ -166,9 +196,31 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
             if r.get("action") in ("BUYSELL", "ASSIGN", "SPLIT",
                                    "OPENING_BALANCE", "TRANSFER")
             and is_option_symbol(str(r.get("symbol") or ""))]
+    # A zero-net cluster of the account's TRANSFER rows (a custody move
+    # out and back within days) is a no-op, as the books and
+    # option-yield read it (option_yield._kept_transfer_ids). Read leg
+    # by leg, the move out took the written contracts off the queue and
+    # the move back made a short of unknown premium: its close was no
+    # trade (backlog TJ-0767).
+    if any(r.get("action") == "TRANSFER" for r in book):
+        from taxjson.lib.option_yield import _kept_transfer_ids
+        kept = _kept_transfer_ids(
+            [(str(r.get("account") or ""), r) for r in book])
+        book = [r for r in book
+                if r.get("action") != "TRANSFER" or id(r) in kept]
     # A split first at its stamp, then an opening, as the engines order
-    # them.
-    book.sort(key=lambda r: (str(r.get("date") or ""),
+    # them; with `split_at_open`, the day's opening balance, then its
+    # split, then the trades, whatever their stamps (TJ-0697): the
+    # Canadian engine's phases (lib/corporate_timeline _ca_phase) and
+    # option_yield.contracts' order. The split first left a same-day
+    # opening in the old series, and the sale of the renamed contracts
+    # read as a write (backlog TJ-1096).
+    def day_rank(r: Dict[str, Any]) -> int:
+        if not split_at_open:
+            return 0
+        act = r.get("action")
+        return 0 if act == "OPENING_BALANCE" else 1 if act == "SPLIT" else 2
+    book.sort(key=lambda r: (str(r.get("date") or ""), day_rank(r),
                              str(r.get("time") or ""),
                              0 if r.get("action") == "SPLIT"
                              else 1 if r.get("action") == "OPENING_BALANCE"
@@ -341,12 +393,21 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
             trade["contracts"] += m
             trade["premium"] += premium
             if assigned and delivered_to:
-                mult = _f(r.get("multiplier")) or 100.0
+                # The engine's contract size: a ticker.map MULT first
+                # (TJ-0789).
+                mult = contract_size(r)
+                # What the engine folds into the shares is the option's
+                # would-be gain: the premium net of what the assignment
+                # row paid (its fee). The premium alone took the fee out
+                # of the share P/L a second time (backlog TJ-0769).
+                # `option`: the assignment row (one row's credits share
+                # its legs).
                 credits.append({
                     "account": acct,
                     "underlying": delivered_to,
                     "right": parse_option_right(sym) or "",
-                    "shares": m * mult, "amount": premium,
+                    "shares": m * mult, "amount": premium - paid,
+                    "option": ordinal[id(r)],
                     "date": str(r.get("date") or ""),
                     "strike": _f(parse_option_strike(sym)),
                     "delivered": c * mult})
@@ -359,8 +420,17 @@ def written_option_trades(rows: Iterable[Dict[str, Any]],
                 unknown.append({"date": date_of(r), "symbol": sym,
                                 "in_books": in_books is None
                                 or bool(in_books(r))})
+            unknown_said = True
         elif rem > _EPS:
             longs[key] = longs.get(key, 0.0) + rem
+        if unknown_said and trade is not None:
+            # Part of what this row closed has an unknown premium: the
+            # whole close is of unknown outcome (counted once in
+            # `unknown`), as a share sale with a lot of unknown cost is
+            # skipped whole (closed_trades, TJ-0545). Its known part
+            # read as the trade's outcome: a loss the unknown premium
+            # could make a win (backlog TJ-0786).
+            trades.remove(trade)
     return {"trades": trades, "credits": credits,
             "exercised_long": len(exercises), "exercises": exercises,
             "unknown": unknown}
@@ -376,101 +446,270 @@ def _day_gap(a: str, b: str) -> Optional[int]:
         return None
 
 
-def _assignment_legs(cr: Dict[str, Any], events: List[Dict[str, Any]],
+def _assignment_legs(credits: List[Dict[str, Any]],
+                     events: List[Dict[str, Any]],
                      state_at: Callable[[Dict[str, Any], int],
                                         Tuple[Tuple[str, str], float]],
-                     ) -> List[int]:
-    """The indices in `events` of the share legs an assigned option's
-    premium went into: a call's sales, a put's purchases, of the same
-    account and underlying (as split or renamed by then: `state_at(cr,
-    i)` is the credit's key and split factor at event i), told apart
-    from an unrelated trade as the engines pair them (CA-OPT-08 /
-    US-OPT-05, lib/core _pair_assign_legs). A leg dated before the
-    option row (up to 3 days) needs strong identity (a marked ASSIGN
-    leg, or the delivered shares at the strike); one on or after it (up
-    to 7 days) a single sign (marked, at the strike, or the delivered
-    shares). Best first: at the strike, marked, sized, nearest; extra
-    legs only at the strike or marked (2026-10 audit #35). Nothing
-    identified: every trade of that side from the option row to 7 days
-    after it, as the engine's ledger drains by proximity; none at all:
-    [] — the premium stays with the option, as the engine leaves it
+                     ) -> Dict[int, List[int]]:
+    """{id(credit): the indices in `events` of the share legs that
+    assigned option's premium went into}: a call's sales, a put's
+    purchases, of the same account and underlying (as split or renamed
+    by then: `state_at(cr, i)` is the credit's key and split factor at
+    event i), told apart from an unrelated trade as the engines pair
+    them (CA-OPT-08 / US-OPT-05, lib/core _pair_assign_legs). A leg
+    dated before the option row (up to 3 days) needs strong identity (a
+    marked ASSIGN leg, or the delivered shares at the strike); one on or
+    after it (up to 7 days) a single sign (marked, at the strike, or the
+    delivered shares).
+
+    The options are paired together, best pair first (at the strike,
+    marked, sized, nearest): two assignments of one day are told apart
+    by strike, as the engine pairs them. Read one option at a time, each
+    claimed every marked leg of the day and put its whole premium in the
+    first (backlog TJ-0893). A leg goes to several options only up to
+    its shares, on strong identity, as the engine's _claim shares it
+    (one delivery of two puts' shares: backlog TJ-1052). An option then
+    takes extra legs at its strike (or marked) until its delivered
+    shares are covered (2026-10 audit #35). The credits of one
+    assignment row (`option`: several writes it closed) share its legs.
+    Nothing identified: every trade of that side from the option row to
+    7 days after it, as the engine's ledger drains by proximity; none at
+    all: [] — the premium stays with the option, as the engine leaves it
     undrained (2026-10-24 audit A44)."""
-    want_sale = cr["right"] == "C"
-    strike = _f(cr.get("strike"))
-    size = _f(cr.get("delivered")) or _f(cr.get("shares"))
-    near: List[int] = []
+    groups: Dict[Any, List[Dict[str, Any]]] = {}
+    for n, cr in enumerate(credits):
+        opt = cr.get("option")
+        groups.setdefault((cr.get("account"), opt) if opt is not None
+                          else ("", -1 - n), []).append(cr)
+    near: Dict[Any, List[int]] = {}
+    sizes: Dict[Any, float] = {}
     cands = []
-    for i, s in enumerate(events):
-        if s.get("action") not in ("BUYSELL", "ASSIGN"):
-            continue
-        q = _f(s.get("quantity"))
-        if abs(q) <= _EPS or (q < 0) != want_sale:
-            continue
-        key, factor = state_at(cr, i)
-        if (str(s.get("account") or ""),
-                str(s.get("symbol") or "")) != key:
-            continue
-        gap = _day_gap(cr["date"], str(s.get("date") or ""))
-        if gap is None or not -_LEG_LEAD_DAYS <= gap <= _LEG_LAG_DAYS:
-            continue
-        if gap >= 0:
-            near.append(i)
-        marked = s.get("action") == "ASSIGN"
-        k = strike / factor if strike > 0 and factor > 0 else 0.0
-        at_strike = k > 0 and abs(_f(s.get("price")) - k) <= max(
-            0.005, 1e-6 * k)
-        sized = abs(abs(q) - size * factor) < 1e-6
-        if gap < 0:
-            if not (marked or (at_strike and sized)):
+    for order, (g, crs) in enumerate(groups.items()):
+        cr = crs[0]
+        want_sale = cr["right"] == "C"
+        strike = _f(cr.get("strike"))
+        size = _f(cr.get("delivered")) or sum(_f(c.get("shares"))
+                                              for c in crs)
+        sizes[g] = size
+        near[g] = []
+        for i, s in enumerate(events):
+            if s.get("action") not in ("BUYSELL", "ASSIGN"):
                 continue
-        elif not (marked or at_strike or sized):
-            continue
-        cands.append(((not at_strike, not marked, not sized, abs(gap),
-                       gap < 0, i), i, marked or at_strike))
-    if not cands:
-        return near
+            q = _f(s.get("quantity"))
+            if abs(q) <= _EPS or (q < 0) != want_sale:
+                continue
+            key, factor = state_at(cr, i)
+            if (str(s.get("account") or ""),
+                    str(s.get("symbol") or "")) != key:
+                continue
+            gap = _day_gap(cr["date"], str(s.get("date") or ""))
+            if gap is None or not -_LEG_LEAD_DAYS <= gap <= _LEG_LAG_DAYS:
+                continue
+            if gap >= 0:
+                near[g].append(i)
+            marked = s.get("action") == "ASSIGN"
+            k = strike / factor if strike > 0 and factor > 0 else 0.0
+            at_strike = k > 0 and abs(_f(s.get("price")) - k) <= max(
+                0.005, 1e-6 * k)
+            sized = abs(abs(q) - size * factor) < 1e-6
+            if gap < 0:
+                if not (marked or (at_strike and sized)):
+                    continue
+            elif not (marked or at_strike or sized):
+                continue
+            cands.append(((not at_strike, not marked, not sized, abs(gap),
+                           gap < 0, i, order), g, i,
+                          abs(q) / factor if factor > 0 else abs(q),
+                          marked or at_strike))
     cands.sort(key=lambda c: c[0])
-    return [i for n, (_sc, i, strong) in enumerate(cands)
-            if n == 0 or strong]
+    pairs: Dict[Any, List[int]] = {}
+    covered: Dict[Any, float] = {}
+    # Each leg's shares not yet claimed, as the engine's _claim keeps
+    # them: one marked delivery of two assignments' shares is the leg
+    # of each, up to its shares; a leg is shared only on strong
+    # identity (marked, or at the strike) and only while its unclaimed
+    # shares cover what the option still needs. A `used` set gave it to
+    # one option only: the other's premium went to the trades near its
+    # row, or nowhere (backlog TJ-1052).
+    left: Dict[int, float] = {}
+
+    def claim(g: Any, i: int, q: float, strong: bool) -> None:
+        need = sizes[g] - covered.get(g, 0.0)
+        rem = left.get(i, q)
+        if i in left and not (strong and sizes[g] > _EPS
+                              and rem >= need - 1e-6):
+            return
+        if rem <= 1e-6:
+            return
+        got = min(rem, need) if sizes[g] > _EPS else rem
+        left[i] = rem - got
+        covered[g] = covered.get(g, 0.0) + got
+        pairs.setdefault(g, []).append(i)
+
+    for _sc, g, i, q, strong in cands:
+        if g not in pairs:
+            claim(g, i, q, strong)
+    for _sc, g, i, q, strong in cands:
+        if (not strong or g not in pairs or i in pairs[g]
+                or sizes[g] <= _EPS or covered[g] >= sizes[g] - 1e-6):
+            continue
+        claim(g, i, q, strong)
+    return {id(cr): pairs.get(g, near[g])
+            for g, crs in groups.items() for cr in crs}
 
 
 def credits_by_sale(rows: Iterable[Dict[str, Any]],
                     credits: List[Dict[str, Any]],
                     covers: Optional[Dict[str, float]] = None,
                     ) -> Dict[str, float]:
-    """{row id: premium to take out of that row's P/L} — each assigned
-    option's premium drawn by the rows of the underlying whose gain the
-    engine folded it into (CA-OPT-08 / US-OPT-05), replayed in date
-    order with the underlying's splits and renames (a split scales the
-    shares still to be drawn, a rename moves them: 2026-10 audit #32,
-    #33; a split between the assignment and its leg scales the credit
-    before the leg draws it: 2026-10-24 audit A12).
+    """{row id: premium to take out of that row's P/L} for the credits
+    of one book (`share_credits` over the accounts its rows name, every
+    sale read as a sale of shares held: no gains rows to say what
+    opened a short; `covers`: {row id: shares the gains rows book as a
+    short cover})."""
+    by_acct: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        if isinstance(r, dict):
+            by_acct.setdefault(str(r.get("account") or ""), []).append(r)
+    out: Dict[str, float] = {}
+    for (_acct, sid), amt in share_credits(
+            by_acct, credits,
+            {a: dict(covers or {}) for a in by_acct}).items():
+        out[sid] = out.get(sid, 0.0) + amt
+    return out
+
+
+def _take_lots(lots: List[List[Any]], n: float, fifo: bool
+               ) -> Tuple[float, List[List[Any]]]:
+    """Take `n` shares out of `lots` ([shares, premium, ...] each, in
+    order): first in, first out (`fifo`), else from every lot pro rata
+    (one average-cost pool). Returns (the premium they carry, the parts
+    taken, each [shares, premium, ...rest of its lot])."""
+    held = sum(lot[0] for lot in lots)
+    n = min(n, held)
+    if n <= _EPS:
+        return 0.0, []
+    taken: List[List[Any]] = []
+    if not fifo:
+        f = n / held
+        for lot in lots:
+            part = [lot[0] * f, lot[1] * f] + lot[2:]
+            lot[0] -= part[0]
+            lot[1] -= part[1]
+            taken.append(part)
+        lots[:] = [lot for lot in lots if lot[0] > _EPS]
+        return sum(p[1] for p in taken), taken
+    while n > _EPS and lots:
+        lot = lots[0]
+        if lot[0] <= n + _EPS:
+            taken.append(lots.pop(0))
+            n -= lot[0]
+            continue
+        f = n / lot[0]
+        part = [n, lot[1] * f] + lot[2:]
+        lot[0] -= n
+        lot[1] -= part[1]
+        taken.append(part)
+        n = 0.0
+    return sum(p[1] for p in taken), taken
+
+
+def share_credits(books: Dict[str, List[Dict[str, Any]]],
+                  credits: List[Dict[str, Any]],
+                  covers: Optional[Dict[str, Dict[str, float]]] = None,
+                  longs: Optional[Dict[str, Dict[str, float]]] = None,
+                  known: Optional[Callable[[str, Dict[str, Any]], bool]]
+                  = None,
+                  fifo: bool = True,
+                  deemed: Optional[Dict[Tuple[str, str],
+                                        List[Tuple[str, float]]]] = None,
+                  timelines: Optional[Dict[str, Optional[Dict[str, Any]]]]
+                  = None,
+                  ) -> Dict[Tuple[str, str], float]:
+    """{(account, row id): premium to take out of that row's P/L} — each
+    assigned option's premium drawn by the share rows whose gain the
+    engine folded it into (CA-OPT-08 / US-OPT-05), the accounts' books
+    ({account: rows}) replayed together in date order with the
+    underlying's splits and renames (a split scales the shares still to
+    be drawn, a rename moves them: 2026-10 audit #32, #33; a split
+    between the assignment and its leg scales the credit before the leg
+    draws it: 2026-10-24 audit A12).
+
+    The shares held are replayed as lots, each with the premium its
+    cost holds: a sale takes them first in, first out (`fifo`, the US
+    engine's lots per account, US-BASIS-01), else pro rata (one
+    average-cost pool). A move between two of your own accounts (a
+    TRANSFER lot_move pair) carries its lots, premium and all, into the
+    receiving account in purchase-date order, as the US engine moves
+    them (US-BASIS-05; backlog TJ-0788). A stock dividend grows the
+    lots held before its ex-dividend (else record) date, its shares
+    sharing their premium as they share their basis (§307,
+    US-STKDIV-01; backlog TJ-0770).
 
     A call's premium comes out of its own share leg(s) (`_assignment_legs`:
     the sale at the strike, dated up to 3 days before the option row or
-    7 after it). A put's goes into the delivered shares, so its credit
-    opens at the delivery leg (an earlier sale of other shares keeps its
-    P/L: A49): the delivered shares that cover a short carry it in that
-    cover's own gain (`covers`: {row id: shares the gains rows book as a
-    short cover}; A37), the rest in the account's later sales, per
-    delivered share. The last leg coming takes the remainder, as the
-    engine's ledger does. With no leg in the engine's window the premium
-    stays with the option, where the engine leaves it undrained (A44)."""
+    7 after it); the part of the leg that opened a short carries its
+    part to the buy-backs that cover that short (backlog TJ-0787). A
+    put's goes into the delivered shares: the shares that cover a short
+    carry it in that cover's own gain (A37), the rest is a lot of the
+    account's (an earlier sale of other shares keeps its P/L: A49; a
+    later sale takes the older lots first: backlog TJ-0771). The last
+    leg coming takes the remainder, as the engine's ledger does. With
+    no leg in the engine's window the premium stays with the option,
+    where the engine leaves it undrained (A44).
+
+    What a row closed is the gains rows' word where they hold the row
+    (`known(account, row)`; `covers` / `longs`: {account: {row id:
+    shares}} the gains rows book as a short's cover / a long's sale),
+    else the replayed position. Without `longs` every sale is read as a
+    sale of shares held, as a book alone shows it.
+
+    A return of capital beyond the cost the shares held (`deemed`:
+    {(account, ADJUST row id): [(the lot's acquired date, "" for the
+    whole pool; the deemed gain)]}, `_deemed_gains`) took the premium
+    in that cost first: the lots give up as much of it as the deemed
+    gain, and a later sale no longer carries it (backlog TJ-1006). Two
+    lots of one date: the row's lot, by its row id (a third item of the
+    entry; another lot of that date keeps its premium, TJ-1218).
+
+    A missing-history opening (an OPENING_BALANCE row) is a lot with no
+    premium: left out, a later sale took the delivered lot in its place
+    (backlog TJ-1097).
+
+    `timelines` ({account: the engine's cost timeline}; given for the US
+    lots): a §355 spin-off books its new shares block for block with
+    the parent's entitled lots (US-CORP-07), each giving up the same
+    part of its basis: the same part of its premium goes with it, read
+    from the timeline; with none it stays on the parent. It all stayed
+    there, and the parent's sale carried the child's part too (backlog
+    TJ-1095)."""
+    from taxjson.lib.core import (LOT_MOVE_TYPE, SPINOFF_355_TYPE,
+                                  is_stock_dividend, spin_entitlement)
     from taxjson.lib.corporate_timeline import dedupe_split_events
-    open_ = [dict(cr, left=cr["shares"], amt_left=cr["amount"],
+    open_ =[dict(cr, left=cr["shares"], amt_left=cr["amount"],
                   key=(cr["account"], cr["underlying"]))
              for cr in credits
              if cr["underlying"] and cr["shares"] > _EPS]
     if not open_:
         return {}
     covers = covers or {}
-    accts = {cr["account"] for cr in open_}
-    events = [r for r in rows if isinstance(r, dict)
-              and str(r.get("account") or "") in accts
-              and not is_option_symbol(str(r.get("symbol") or ""))
-              and (r.get("action") == "SPLIT"
-                   or (r.get("action") in ("BUYSELL", "ASSIGN")
-                       and abs(_f(r.get("quantity"))) > _EPS))]
+    deemed = deemed or {}
+    events: List[Dict[str, Any]] = []
+    for acct in sorted(books):
+        for r in books[acct]:
+            if not isinstance(r, dict) \
+                    or is_option_symbol(str(r.get("symbol") or "")):
+                continue
+            act = r.get("action")
+            if act == "SPLIT" or (
+                    act == "ADJUST"
+                    and (acct, str(r.get("id") or "")) in deemed) or (
+                    (act in ("BUYSELL", "ASSIGN", "OPENING_BALANCE")
+                     or (act == "TRANSFER"
+                         and r.get("type") == LOT_MOVE_TYPE))
+                    and abs(_f(r.get("quantity"))) > _EPS):
+                events.append(r if str(r.get("account") or "") == acct
+                              else dict(r, account=acct))
     # One split reported twice is one event, per account here.
     keep_split = {id(r) for r in dedupe_split_events(
         [r for r in events if r.get("action") == "SPLIT"], per_account=True)}
@@ -488,6 +727,26 @@ def credits_by_sale(rows: Iterable[Dict[str, Any]],
         k = key_of(e)
         return (q if q > 0 else 1.0,
                 (k[0], str(e.get("symbol_new") or "").strip() or k[1]))
+
+    # The two legs of each move between your own accounts (the US
+    # engine's pairing: same symbol, moment, description and size).
+    move_pair: Dict[int, Dict[str, Any]] = {}
+    moves = [e for e in events if e.get("action") == "TRANSFER"]
+    for o in moves:
+        if _f(o.get("quantity")) >= 0 or id(o) in move_pair:
+            continue
+        for i in moves:
+            if (id(i) not in move_pair and _f(i.get("quantity")) > 0
+                    and i.get("account") != o.get("account")
+                    and i.get("symbol") == o.get("symbol")
+                    and i.get("date") == o.get("date")
+                    and (i.get("time") or "") == (o.get("time") or "")
+                    and i.get("description") == o.get("description")
+                    and abs(_f(i.get("quantity")) + _f(o.get("quantity")))
+                    <= 1e-9 * max(1.0, abs(_f(i.get("quantity"))))):
+                move_pair[id(o)] = i
+                move_pair[id(i)] = o
+                break
 
     # The splits that reach each credit — dated after its assignment,
     # following the renames — by event index.
@@ -513,34 +772,105 @@ def credits_by_sale(rows: Iterable[Dict[str, Any]],
             key = nk
         return key, factor
 
+    paired = _assignment_legs(open_, events, state_at)
     for cr in open_:
-        legs = _assignment_legs(cr, events, state_at)
+        legs = paired[id(cr)]
         cr["legs"] = set(legs)
         cr["last_leg"] = max(legs) if legs else None
-        # A put's credit opens at its delivery.
-        cr["open_at"] = min(legs) if legs else None
-    out: Dict[str, float] = {}
+    # The shares held: per (account, symbol) the long lots [shares,
+    # premium, date, order] and the short ones [shares, premium].
+    longs_held: Dict[Tuple[str, str], List[List[Any]]] = {}
+    shorts_held: Dict[Tuple[str, str], List[List[Any]]] = {}
+    out: Dict[Tuple[str, str], float] = {}
+    done: set = set()
+    # A §355 spin-off's parent ADJUST, by (account, corp_event_id): the
+    # engine's join with the new shares' BUYSELL.
+    spin_adj: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    spin_spent: Dict[str, Dict[int, float]] = {}
+    if timelines is not None:
+        for acct, rows in books.items():
+            for r in rows:
+                if (isinstance(r, dict) and r.get("action") == "ADJUST"
+                        and r.get("type") == SPINOFF_355_TYPE
+                        and r.get("corp_event_id")):
+                    spin_adj.setdefault((acct, str(r["corp_event_id"])), r)
 
-    def draw(cr: Dict[str, Any], s: Dict[str, Any], room: float) -> float:
-        take = min(room, cr["left"])
-        if take <= _EPS:
-            return 0.0
-        sid = str(s.get("id") or "")
-        amt = cr["amt_left"] * take / cr["left"]
-        if sid:
-            out[sid] = out.get(sid, 0.0) + amt
-        cr["amt_left"] -= amt
-        cr["left"] -= take
-        return take
+    def spin_off(acct: str, e: Dict[str, Any], n: float) -> bool:
+        """The new shares `e` as the US engine books them, block for
+        block with the parent's entitled lots. False: not one (a plain
+        purchase of the new shares, as the engine books it)."""
+        adj = spin_adj.get((acct, str(e.get("corp_event_id") or "")))
+        if adj is None or e.get("type") != SPINOFF_355_TYPE:
+            return False
+        pk = (acct, str(adj.get("symbol") or ""))
+        plots = [lot for lot in longs_held.get(pk, []) if lot[0] > _EPS]
+        if not plots or shorts_held.get(pk):
+            return False
+        # Bought on or after the entitlement date: no part of it, the
+        # lot keeps its basis (TJ-0951).
+        ent = str(e.get("ex_date") or e.get("record_date") or "").strip()
+        late = [lot for lot in plots if ent and lot[2] >= ent]
+        if len(late) == len(plots):
+            late = []
+        elif late:
+            # As the engine reads the date (a due bill, TJ-1161).
+            late_qty = sum(lot[0] for lot in late)
+            held_qty = sum(lot[0] for lot in plots)
+            if spin_entitlement(str(e.get("ex_date") or "").strip(),
+                                _f(adj.get("corp_parent_qty")),
+                                held_qty - late_qty, held_qty) != "dated":
+                late = []
+        plots = [lot for lot in plots if not any(lot is x for x in late)]
+        late_cost = 0.0
+        for lot in late:
+            row = events[lot[3]]
+            late_cost += (lot[0] * abs(_f(row.get("net_amount")))
+                          / max(abs(_f(row.get("quantity"))), _EPS) - lot[1])
+        # (one day's spin-offs of the parent: the engine books them at
+        # one row of the timeline)
+        day_total = sum(
+            -_f(a.get("net_amount")) for (ac, _c), a in spin_adj.items()
+            if ac == acct and a.get("symbol") == adj.get("symbol")
+            and a.get("date") == adj.get("date"))
+        frac = _spin_part((timelines or {}).get(acct), acct, adj, e,
+                          late_cost, day_total, spin_spent.setdefault(acct, {}))
+        total = sum(lot[0] for lot in plots)
+        dest = longs_held.setdefault(key_of(e), [])
+        for lot in plots:
+            mv = lot[1] * frac
+            lot[1] -= mv
+            dest.append([n * lot[0] / total, mv] + lot[2:])
+        dest.sort(key=lambda lot: (lot[2], lot[3]))
+        return True
 
-    def at_leg(cr: Dict[str, Any], j: int, q: float) -> None:
-        # The last leg takes what is left of the premium (a smaller
-        # leg: the engine folds the whole remainder into it).
+    def book(acct: str, sid: str, amt: float) -> None:
+        if sid and abs(amt) > 1e-12:
+            out[(acct, sid)] = out.get((acct, sid), 0.0) + amt
+
+    def credit_at(cr: Dict[str, Any], j: int, room: float, q: float
+                  ) -> Tuple[float, float]:
+        """(shares, premium) the leg at event j takes of `cr`, out of
+        `room` of its `q` shares. The last leg takes what is left of
+        the premium (a smaller leg: the engine folds the whole
+        remainder into it)."""
         if j == cr["last_leg"] and q < cr["left"]:
             cr["left"] = q
+        take = min(room, cr["left"])
+        if take <= _EPS:
+            return 0.0, 0.0
+        amt = cr["amt_left"] * take / cr["left"]
+        cr["amt_left"] -= amt
+        cr["left"] -= take
+        return take, amt
+
+    def told(acct: str, e: Dict[str, Any]) -> bool:
+        return longs is None or known is None or bool(known(acct, e))
 
     for j, e in enumerate(events):
         k = key_of(e)
+        acct, sym = k
+        sid = str(e.get("id") or "")
+        q = _f(e.get("quantity"))
         if e.get("action") == "SPLIT":
             ratio, nk = split_of(e)
             d = str(e.get("date") or "")
@@ -549,35 +879,135 @@ def credits_by_sale(rows: Iterable[Dict[str, Any]],
                     cr["left"] *= ratio
                     cr["shares"] *= ratio
                     cr["key"] = nk
-            continue
-        q = abs(_f(e.get("quantity")))
-        if _f(e.get("quantity")) > 0:
-            # A put's delivery: the shares that covered a short carry
-            # their part of the premium in the cover's own gain.
-            room = min(covers.get(str(e.get("id") or ""), 0.0), q)
-            for cr in open_:
-                if cr["right"] == "C" or j not in cr["legs"]:
+            for held in (longs_held, shorts_held):
+                lots = held.pop(k, None)
+                if not lots:
                     continue
-                at_leg(cr, j, q)
-                if room > _EPS:
-                    room -= draw(cr, e, room)
+                for lot in lots:
+                    lot[0] *= ratio
+                dest = held.setdefault(nk, [])
+                dest.extend(lots)
+                if held is longs_held:
+                    dest.sort(key=lambda lot: (lot[2], lot[3]))
             continue
-        room = q
-        # A call's own share leg first.
+        if e.get("action") == "ADJUST":
+            # A return of capital beyond the cost: its deemed gain took
+            # the premium the lots' cost held (TJ-1006).
+            for acq, gain, *lot_id in deemed.get((acct, sid), ()):
+                lots = [lot for lot in longs_held.get(k, [])
+                        if not acq or lot[2] == acq]
+                if lot_id:
+                    own = [lot for lot in lots if str(
+                        events[lot[3]].get("id") or "") == lot_id[0]]
+                    lots = own or lots
+                held_amt = sum(lot[1] for lot in lots if lot[1] > 0)
+                if held_amt <= _EPS or gain <= _EPS:
+                    continue
+                f = min(1.0, gain / held_amt)
+                for lot in lots:
+                    if lot[1] > 0:
+                        lot[1] -= lot[1] * f
+            continue
+        if e.get("action") == "TRANSFER":
+            if id(e) in done:
+                continue
+            other = move_pair.get(id(e))
+            if other is None:
+                # A move whose other leg is not in these books: the
+                # shares leave with their premium, or arrive without.
+                if q < 0:
+                    _take_lots(longs_held.get(k, []), -q, True)
+                else:
+                    longs_held.setdefault(k, []).append(
+                        [q, 0.0, str(e.get("date") or ""), j])
+                continue
+            done.update((id(e), id(other)))
+            src, dst = (e, other) if q < 0 else (other, e)
+            _amt, moved = _take_lots(longs_held.get(key_of(src), []),
+                                     abs(q), True)
+            if moved:
+                dest = longs_held.setdefault(key_of(dst), [])
+                dest.extend(moved)
+                dest.sort(key=lambda lot: (lot[2], lot[3]))
+            continue
+        n = abs(q)
+        lots = longs_held.setdefault(k, [])
+        shorts = shorts_held.setdefault(k, [])
+        if e.get("action") == "OPENING_BALANCE":
+            # Held before the data: a lot with no premium (TJ-1097).
+            if q > 0:
+                lots.append([n, 0.0, str(e.get("date") or ""), j])
+            else:
+                shorts.append([n, 0.0])
+            continue
+        if q > 0:
+            if spin_off(acct, e, n):
+                continue
+            if is_stock_dividend(e) and lots and not shorts:
+                # The new shares join the lots entitled to them (held
+                # before the ex-dividend, else record, date): each grows
+                # pro rata, its premium spread over old and new.
+                ent = str(e.get("ex_date") or e.get("record_date")
+                          or "").strip()
+                entitled = [lot for lot in lots
+                            if not ent or lot[2] < ent]
+                base = sum(lot[0] for lot in entitled)
+                if base > _EPS:
+                    for lot in entitled:
+                        lot[0] *= (base + n) / base
+                    continue
+            # The shares that cover a short: the gains rows' word, else
+            # the short the replay holds.
+            held_short = sum(lot[0] for lot in shorts)
+            cov = ((covers.get(acct) or {}).get(sid, 0.0)
+                   if told(acct, e) else held_short)
+            cov = min(cov, n)
+            amt, _parts = _take_lots(shorts, cov, fifo)
+            book(acct, sid, amt)
+            # A put's delivery: the shares that covered a short carry
+            # their part of the premium in the cover's own gain; the
+            # rest is in the cost of the lot they make.
+            room, room_cov, lot_amt = n, cov, 0.0
+            for cr in open_:
+                if cr["right"] == "C" or j not in cr["legs"] \
+                        or room <= _EPS:
+                    continue
+                take, amt = credit_at(cr, j, room, n)
+                if take <= _EPS:
+                    continue
+                room -= take
+                c = min(room_cov, take)
+                room_cov -= c
+                book(acct, sid, amt * c / take)
+                lot_amt += amt * (take - c) / take
+            if n - cov > _EPS:
+                lots.append([n - cov, lot_amt, str(e.get("date") or ""), j])
+            continue
+        # A sale: the long shares it closed (the gains rows' word, else
+        # the lots held; with no gains rows to ask, all of it), the rest
+        # opened a short.
+        if longs is None:
+            closed = n
+        elif told(acct, e):
+            closed = min(n, (longs.get(acct) or {}).get(sid, 0.0))
+        else:
+            closed = min(n, sum(lot[0] for lot in lots))
+        amt, _parts = _take_lots(lots, closed, fifo)
+        book(acct, sid, amt)
+        short_amt = 0.0
+        room = n
+        # A call's own share leg: the part that opened a short carries
+        # its premium to that short's cover (TJ-0787).
         for cr in open_:
             if room <= _EPS:
                 break
             if cr["right"] == "C" and j in cr["legs"]:
-                at_leg(cr, j, q)
-                room -= draw(cr, e, room)
-        # Then the puts whose delivered shares are being sold.
-        for cr in open_:
-            if room <= _EPS:
-                break
-            if (cr["right"] == "C" or cr["key"] != k
-                    or cr["open_at"] is None or j <= cr["open_at"]):
-                continue
-            room -= draw(cr, e, room)
+                take, amt = credit_at(cr, j, room, n)
+                room -= take
+                book(acct, sid, amt * closed / n)
+                short_amt += amt * (n - closed) / n
+        if n - closed > _EPS:
+            shorts.append([n - closed, short_amt])
     return out
 
 
@@ -729,9 +1159,160 @@ def _days_apart(a: str, b: str) -> int:
         return 0
 
 
+def _acb_drops(timeline: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The rows of an engine cost timeline (lib/cost_timeline) where a
+    long pool's cost fell while its units stayed: an ADJUST that took
+    cost out of it (a spin-off's ACB moved to the new shares), each
+    {symbol, account, seq, date, before, drop, id, used}, in the
+    engine's order: `id` the book row the engine walked (the timeline's
+    `row_ids`; "" where it records none). [] for a timeline this
+    version does not read."""
+    from taxjson.lib import cost_timeline as CT
+    if CT.check(timeline):
+        return []
+    ids = [str(i or "") for i in timeline.get("row_ids") or []]
+    out: List[Dict[str, Any]] = []
+    last: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for r in CT.rows(timeline):
+        k = (str(r.get("account") or ""), str(r.get("symbol") or ""))
+        prev = last.get(k)
+        last[k] = r
+        if prev is None:
+            continue
+        q, pq = _f(r.get("qty")), _f(prev.get("qty"))
+        before = _f(prev.get("total_cost"))
+        drop = before - _f(r.get("total_cost"))
+        if (pq > _EPS and abs(q - pq) <= 1e-9 * max(1.0, abs(q))
+                and before > 0.005 and drop > 0.005):
+            seq = r.get("seq")
+            rid = (ids[seq] if isinstance(seq, int)
+                   and 0 <= seq < len(ids) else "")
+            out.append({"symbol": k[1], "account": k[0], "seq": seq,
+                        "date": str(r.get("date") or ""),
+                        "before": before, "drop": drop, "id": rid,
+                        "used": False})
+    return out
+
+
+def _rocs_on_nil_acb(timeline: Dict[str, Any],
+                     adjusts: Iterable[Dict[str, Any]]) -> set:
+    """Row ids of the negative ADJUSTs `adjusts` that found a long pool
+    of a nil ACB in the engine's cost timeline: it left the pool as it
+    was, so the timeline has no row of its own (the row's seq in
+    `row_ids` has none) and the symbol's last row before it holds shares
+    at no cost. All of such a return of capital is a deemed gain
+    (s.40(3)), and `_acb_drops` sees no drop in it (backlog TJ-1220)."""
+    from taxjson.lib import cost_timeline as CT
+    if CT.check(timeline):
+        return set()
+    seq_of: Dict[str, int] = {}
+    for n, i in enumerate(timeline.get("row_ids") or []):
+        if i:
+            seq_of.setdefault(str(i), n)
+    rows = [r for r in CT.rows(timeline) if isinstance(r.get("seq"), int)]
+    seen = {r["seq"] for r in rows}
+    out: set = set()
+    for adj in adjusts:
+        rid = str(adj.get("id") or "")
+        seq = seq_of.get(rid)
+        if seq is None or seq in seen:
+            continue
+        sym = str(adj.get("symbol") or "")
+        prev = None
+        for r in rows:
+            if r["seq"] < seq and str(r.get("symbol") or "") == sym:
+                prev = r
+        if (prev is not None and _f(prev.get("qty")) > _EPS
+                and abs(_f(prev.get("total_cost"))) <= 0.005):
+            out.add(rid)
+    return out
+
+
+def _acb_moved(drops: List[Dict[str, Any]], adj: Dict[str, Any]
+               ) -> Optional[float]:
+    """The part of its pool's ACB the spin-off ADJUST `adj` took out,
+    as the engine booked it: the drop of `drops` (`_acb_drops`) the
+    engine walked as that row (its id); where the timeline names no
+    row, the first unused one of its symbol, on its trade or settlement
+    date, of its amount. By date and amount alone, a return of capital
+    of the same amount earlier that day was taken for the spin-off
+    (backlog TJ-1019). None when the timeline has none."""
+    amt = -_f(adj.get("net_amount"))
+    dates = {str(adj.get("date") or ""), str(adj.get("date_settle") or "")}
+    aid = str(adj.get("id") or "")
+    for d in drops:
+        if d["used"] or d["symbol"] != str(adj.get("symbol") or ""):
+            continue
+        if aid and d.get("id"):
+            if d["id"] == aid:
+                d["used"] = True
+                return min(1.0, d["drop"] / d["before"])
+            continue
+        if (d["date"] in dates
+                and abs(d["drop"] - amt) <= max(0.01, 1e-6 * amt)):
+            d["used"] = True
+            return min(1.0, d["drop"] / d["before"])
+    return None
+
+
+def _spin_part(timeline: Optional[Dict[str, Any]], acct: str,
+               adj: Dict[str, Any], child: Dict[str, Any],
+               late_cost: float = 0.0, day_total: float = 0.0,
+               spent: Optional[Dict[int, float]] = None) -> float:
+    """The part of its basis each entitled lot of the parent gave up in
+    the US spin-off of the parent ADJUST `adj` and the new shares'
+    BUYSELL `child`, as the engine booked it: the parent's cost timeline
+    row of the ADJUST's day and amount, or of the amount of all the
+    parent's spin-offs of that day (`day_total`: the engine books them
+    at one row). The row's place is no guide: another account's rows or
+    another child's can come between (backlog TJ-1254); among rows of
+    that amount, the one at the new shares' row (a return of capital of
+    the same amount is another row). Failing that amount, the row at the
+    new shares' row. `late_cost`: the basis of the parent's lots not
+    entitled, which moved nothing. `spent`: {row's seq: what earlier
+    spin-offs took of it}, kept by the caller. 0.0 with no timeline or
+    no such row."""
+    from taxjson.lib import cost_timeline as CT
+    if not timeline or CT.check(timeline):
+        return 0.0
+    spent = {} if spent is None else spent
+    dates = {str(child.get("date") or ""), str(child.get("date_settle") or "")}
+    csym = str(child.get("symbol") or "")
+    psym = str(adj.get("symbol") or "")
+    seqs = {r.get("seq") for r in CT.rows(timeline)
+            if str(r.get("account") or "") == acct
+            and str(r.get("symbol") or "") == csym
+            and str(r.get("date") or "") in dates}
+    amt = -_f(adj.get("net_amount"))
+    tol = max(0.01, 1e-6 * abs(amt))
+    drops = [d for d in _acb_drops(timeline)
+             if d["account"] == acct and d["symbol"] == psym
+             and isinstance(d["seq"], int)]
+    near = [d for d in drops if d["seq"] in seqs or d["seq"] - 1 in seqs]
+    named = [d for d in drops
+             if d["date"] in dates
+             and spent.get(d["seq"], 0.0) + amt <= d["drop"] + tol
+             and (abs(d["drop"] - amt) <= tol
+                  or abs(d["drop"] - day_total) <= tol)]
+    if named:
+        at_child = [d for d in named if d in near]
+        d = (at_child or named)[-1]
+        base = d["before"] - spent.get(d["seq"], 0.0) - late_cost
+        spent[d["seq"]] = spent.get(d["seq"], 0.0) + amt
+        return min(1.0, amt / base) if base > _EPS else 0.0
+    for d in near:
+        base = d["before"] - late_cost
+        return min(1.0, d["drop"] / base) if base > _EPS else 0.0
+    return 0.0
+
+
 def pooled_put_credits(pool: Dict[str, List[Dict[str, Any]]],
                        credits: List[Dict[str, Any]],
                        covers: Optional[Dict[str, Dict[str, float]]] = None,
+                       timeline: Optional[Dict[str, Any]] = None,
+                       deemed: Optional[Dict[Tuple[str, str],
+                                             List[Tuple[str, float]]]]
+                       = None,
                        ) -> Dict[Tuple[str, str], float]:
     """{(account, row id): premium to take out of that row's P/L} for
     the assigned PUTS of a Canadian average-cost pool (ITA s.47: one
@@ -755,9 +1336,27 @@ def pooled_put_credits(pool: Dict[str, List[Dict[str, Any]]],
     account of the pool, splits every account's shares (TJ-0682). The
     pool is walked in the books' order, on settlement dates
     (`_ca_book_order`; TJ-0683). A credit with no delivery leg in the
-    engine's window stays with the option (A44)."""
+    engine's window stays with the option (A44).
+
+    A spin-off that moves part of the parent's ACB to the new shares
+    (the parent's negative ADJUST and the new shares' BUYSELL of one
+    corp_event_id, as the engine joins them) moves that part of the
+    premium in the pool with it: the new shares' sales carry it. The
+    part is the engine's own, read from its cost timeline (`timeline`,
+    lib/cost_timeline: the parent pool's cost before and after the
+    ADJUST); without one the premium stays on the parent. It all
+    stayed there: the parent's sale carried the child's part too
+    (backlog TJ-0894).
+
+    A return of capital beyond the pool's ACB (a deemed gain, s.40(3):
+    `deemed`, {(account, ADJUST row id): [("", gain)]} from the gains
+    rows, else the cost timeline's nil ACB after it) took the premium
+    the ACB held first: the pool gives up as much of it as the deemed
+    gain. A later sale still gave it up, the stock's own P/L short by
+    it (backlog TJ-1006)."""
     from taxjson.lib.corporate_timeline import dedupe_split_events
     covers = covers or {}
+    deemed = deemed or {}
     open_ = [dict(cr, left=cr["shares"], amt_left=cr["amount"],
                   key=(cr["account"], cr["underlying"]))
              for cr in credits
@@ -775,9 +1374,48 @@ def pooled_put_credits(pool: Dict[str, List[Dict[str, Any]]],
             if act == "SPLIT" or (
                     act in ("BUYSELL", "ASSIGN", "TRANSFER",
                             "OPENING_BALANCE")
-                    and abs(_f(r.get("quantity"))) > _EPS):
+                    and abs(_f(r.get("quantity"))) > _EPS) or (
+                    act == "ADJUST" and _f(r.get("net_amount")) < 0):
                 events.append(r if str(r.get("account") or "") == acct
                               else dict(r, account=acct))
+    # A spin-off's new shares, by (account, corp_event_id): the engine's
+    # join of the parent's ADJUST and the new shares' BUYSELL (core
+    # compute_gains `_cev_moves`).
+    spun: Dict[Tuple[str, str], str] = {
+        (str(r.get("account") or ""), str(r["corp_event_id"])):
+            str(r.get("symbol") or "")
+        for r in events
+        if r.get("action") == "BUYSELL" and r.get("corp_event_id")
+        and _f(r.get("quantity")) > 0}
+    drops = _acb_drops(timeline) if timeline else []
+    # The ADJUSTs that took the pool's ACB to nil, by row id: the ACB
+    # before them (the cost timeline's word where the gains rows hold
+    # no deemed gain: another year's).
+    floors = {d["id"]: d["before"] for d in drops
+              if d["id"] and d["drop"] >= d["before"] - 0.005}
+    on_nil = (_rocs_on_nil_acb(timeline, [r for r in events
+                                          if r.get("action") == "ADJUST"])
+              if timeline else set())
+
+    def child_of(r: Dict[str, Any]) -> Optional[str]:
+        """A spin-off ADJUST's new shares (None: not one)."""
+        ce = str(r.get("corp_event_id") or "")
+        child = spun.get((str(r.get("account") or ""), ce)) if ce else None
+        return child if child != str(r.get("symbol") or "") else None
+
+    def excess(acct: str, r: Dict[str, Any]) -> float:
+        """The deemed gain of a return of capital beyond the ACB."""
+        rid = str(r.get("id") or "")
+        g = sum(x[1] for x in deemed.get((acct, rid), ()))
+        if g <= _EPS and rid in floors:
+            g = -_f(r.get("net_amount")) - floors[rid]
+        elif g <= _EPS and rid in on_nil and not child_of(r):
+            # On an ACB that was nil already: all of it (TJ-1220).
+            g = -_f(r.get("net_amount"))
+        return g if g > 0.005 else 0.0
+    events = [r for r in events if r.get("action") != "ADJUST"
+              or child_of(r)
+              or excess(str(r.get("account") or ""), r) > 0]
     # A split is the security's, as in the books' one pool (CA-CORP-12):
     # one reported by several accounts, or twice, is one event, and it
     # splits the shares of every account of the pool. Applied to the
@@ -819,8 +1457,9 @@ def pooled_put_credits(pool: Dict[str, List[Dict[str, Any]]],
             key = nk
         return key, factor
 
+    paired = _assignment_legs(open_, events, state_at)
     for cr in open_:
-        legs = _assignment_legs(cr, events, state_at)
+        legs = paired[id(cr)]
         cr["legs"] = set(legs)
         cr["last_leg"] = max(legs) if legs else None
         # The premium still to be delivered (`pending`, for `left`
@@ -830,17 +1469,19 @@ def pooled_put_credits(pool: Dict[str, List[Dict[str, Any]]],
         cr["pending"], cr["amt_left"] = cr["amount"], 0.0
         cr["in_pool"] = False
         cr["sym"] = cr["underlying"]
-    # Each account's position, and the pool's shares per symbol (the
-    # accounts' long positions added).
+    # Each account's position, and the pool's shares per symbol: the
+    # accounts' positions netted, as the books' one pool holds them (a
+    # sale in one account comes out of another's long shares). The
+    # long positions alone held the shares an account's sale had taken
+    # out of the pool: a later sale carried too small a part of the
+    # premium (backlog TJ-0676).
     held: Dict[Tuple[str, str], float] = {}
     pooled: Dict[str, float] = {}
     out: Dict[Tuple[str, str], float] = {}
 
     def move(acct: str, sym: str, dq: float) -> None:
-        old = held.get((acct, sym), 0.0)
-        held[(acct, sym)] = old + dq
-        pooled[sym] = (pooled.get(sym, 0.0) + max(old + dq, 0.0)
-                       - max(old, 0.0))
+        held[(acct, sym)] = held.get((acct, sym), 0.0) + dq
+        pooled[sym] = pooled.get(sym, 0.0) + dq
 
     for j, e in enumerate(events):
         acct, sym = key_of(e)
@@ -859,6 +1500,34 @@ def pooled_put_credits(pool: Dict[str, List[Dict[str, Any]]],
                     # account holds the old symbol.
                     if cr["sym"] == sym and pooled.get(sym, 0.0) <= _EPS:
                         cr["sym"] = new
+            continue
+        if e.get("action") == "ADJUST":
+            # A return of capital beyond the ACB: its deemed gain took
+            # the premium the ACB held (TJ-1006).
+            gain = excess(acct, e)
+            carried = [cr for cr in open_ if cr["in_pool"]
+                       and cr["sym"] == sym and cr["amt_left"] > _EPS]
+            held_amt = sum(cr["amt_left"] for cr in carried)
+            if gain > 0 and held_amt > _EPS:
+                f = min(1.0, gain / held_amt)
+                for cr in carried:
+                    cr["amt_left"] -= cr["amt_left"] * f
+            # A spin-off: the part of the parent's ACB it moved takes
+            # that part of the premium to the new shares (TJ-0894).
+            child = child_of(e)
+            if not child:
+                continue
+            frac = _acb_moved(drops, e)
+            if frac is None:
+                continue
+            for cr in list(open_):
+                if not cr["in_pool"] or cr["sym"] != sym \
+                        or abs(cr["amt_left"]) <= _EPS:
+                    continue
+                mv = cr["amt_left"] * frac
+                cr["amt_left"] -= mv
+                open_.append(dict(cr, amt_left=mv, sym=child, legs=set(),
+                                  last_leg=None, pending=0.0, left=0.0))
             continue
         sid = str(e.get("id") or "")
         if q > 0:
@@ -900,13 +1569,47 @@ def pooled_put_credits(pool: Dict[str, List[Dict[str, Any]]],
             continue
         sold = min(-q, before)
         for cr in open_:
+            # A negative premium (a write whose commission exceeded it)
+            # is in the pool's cost too: it comes out as a positive one
+            # does (backlog TJ-0768).
             if not cr["in_pool"] or cr["sym"] != sym \
-                    or cr["amt_left"] <= _EPS:
+                    or abs(cr["amt_left"]) <= _EPS:
                 continue
             amt = cr["amt_left"] * sold / before
             if sid:
                 out[(acct, sid)] = out.get((acct, sid), 0.0) + amt
             cr["amt_left"] -= amt
+    return out
+
+
+def _deemed_gains(docs: Dict[str, Dict[str, Any]]
+                  ) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
+    """{(account, ADJUST row id): [(acquired date, gain)]} of the deemed
+    gains the gains documents `docs` ({account: document}) hold for a
+    return of capital beyond the cost (a qty-0 `deemed` row of the
+    ADJUST's id, per US lot its acquired date, "" for a Canadian pool):
+    what `share_credits` / `pooled_put_credits` take the premium out of
+    the cost with (backlog TJ-1006). A row that names its lots
+    (`deemed_lots`, {lot's row id: gain}: two lots of one date) gives
+    one entry per lot, its id third (TJ-1218)."""
+    out: Dict[Tuple[str, str], List[Tuple]] = {}
+    for acct, doc in docs.items():
+        for t in (doc or {}).get("transactions") or []:
+            if (not isinstance(t, dict) or not t.get("deemed")
+                    or "gain" not in t or not t.get("id")
+                    or abs(_f(t.get("qty"))) > _EPS
+                    or _f(t.get("gain")) <= 0
+                    or is_option_symbol(str(t.get("symbol") or ""))):
+                continue
+            entries = out.setdefault(
+                (str(t.get("account") or acct), str(t["id"])), [])
+            acq = str(t.get("acquired_date") or "")
+            by_lot = t.get("deemed_lots")
+            if isinstance(by_lot, dict) and by_lot:
+                entries.extend((acq, _f(g), str(i))
+                               for i, g in by_lot.items())
+            else:
+                entries.append((acq, _f(t.get("gain"))))
     return out
 
 
@@ -979,6 +1682,17 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
                   symbol_ok: Optional[Callable[[str], bool]] = None,
                   pools: Optional[List[Dict[str, List[Dict[str, Any]]]]]
                   = None,
+                  timelines: Optional[List[Optional[Dict[str, Any]]]]
+                  = None,
+                  split_at_open: bool = False,
+                  fifo_books: Optional[Dict[str, List[Dict[str, Any]]]]
+                  = None,
+                  cover_docs: Optional[Dict[str, Dict[str, Any]]] = None,
+                  fifo_timelines: Optional[Dict[str, Optional[Dict[str, Any]]]]
+                  = None,
+                  history_docs: Optional[Dict[str, Dict[str, Any]]] = None,
+                  cover_history_docs: Optional[Dict[str, Dict[str, Any]]]
+                  = None,
                   ) -> Dict[str, Any]:
     """Every closed trade in the window `keep` (applied to
     `date_of(row)`), one record each: {date, symbol, underlying (an
@@ -995,8 +1709,29 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
     Canadian project's average-cost pools, each {account: book rows}
     (the blended taxable accounts, whether shown or not; another
     account a pool of its own): an assigned put's premium comes out of
-    the pool's sales (`pooled_put_credits`). None (a US project): out
-    of the next sales of the credit's account, per delivered share."""
+    the pool's sales (`pooled_put_credits`). None (a US project): the
+    accounts' lots replayed first in, first out (`share_credits`), the
+    books of `fifo_books` (every taxable account's, whether shown or
+    not: a move between your own accounts carries its lots) with
+    `books`. timelines: each pool's engine cost timeline
+    (lib/cost_timeline; None where there is none), in the order of
+    `pools`: a spin-off's part of the premium (TJ-0894).
+    split_at_open: a split takes effect at the start of its day in the
+    written options' replay (`written_option_trades`; TJ-0697).
+    cover_docs: {account: gains document} of the accounts of `pools`
+    not shown (a view of one account): read for the short covers alone,
+    so a put's shares that covered another account's short keep their
+    premium there (backlog TJ-0994).
+    fifo_timelines: {account: the engine's cost timeline} of the US lots:
+    a spin-off's part of the premium (TJ-1095).
+    history_docs: {account: full-history gains document} of a US year
+    view whose books hold a return of capital of an earlier year: read
+    for its deemed gain alone, which the year's rows do not hold
+    (backlog TJ-1133).
+    cover_history_docs: {account: full-history gains document} of a
+    Canadian year view whose pool may hold a short covered by a put's
+    delivery in an earlier year: read for those covers alone, which the
+    year's rows do not hold (backlog TJ-1222)."""
     crypto = set(crypto_accounts)
     if symbol_ok is None:
         def symbol_ok(_sym: str) -> bool:
@@ -1010,9 +1745,19 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
 
     # The share rows the gains engine booked as a short's cover (a put's
     # delivered shares covering a short keep the premium in that cover's
-    # gain: 2026-10-24 audit A37), per account and row id.
+    # gain: 2026-10-24 audit A37), per account and row id: every
+    # account of the pools, shown or not. A view of one account read
+    # another's cover as shares into the pool, its premium then taken
+    # out of the shown account's sale (backlog TJ-0994).
     covers: Dict[str, Dict[str, float]] = {}
-    for acct, doc in gains_docs.items():
+    cover_from = {a: d for a, d in (cover_docs or {}).items()
+                  if a not in gains_docs and isinstance(d, dict)}
+    cover_from.update(gains_docs)
+    # A return of capital beyond the cost takes the premium the cost
+    # held (backlog TJ-1006).
+    deemed = _deemed_gains(history_docs or {})
+    deemed.update(_deemed_gains(cover_from))
+    for acct, doc in cover_from.items():
         for t in doc.get("transactions") or []:
             if (isinstance(t, dict) and "gain" in t
                     and t.get("direction") == "SHORT"
@@ -1020,6 +1765,41 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
                     and t.get("id")):
                 c = covers.setdefault(acct, {})
                 c[str(t["id"])] = c.get(str(t["id"]), 0.0) + abs(_f(t.get("qty")))
+    # A cover of an earlier year: the rows the year's files do not hold
+    # (TJ-1222).
+    for acct, doc in (cover_history_docs or {}).items():
+        earlier: Dict[str, float] = {}
+        for t in doc.get("transactions") or []:
+            if (isinstance(t, dict) and "gain" in t
+                    and t.get("direction") == "SHORT"
+                    and not is_option_symbol(str(t.get("symbol") or ""))
+                    and t.get("id")):
+                earlier[str(t["id"])] = (earlier.get(str(t["id"]), 0.0)
+                                         + abs(_f(t.get("qty"))))
+        for sid, n in earlier.items():
+            if sid not in covers.get(acct, ()):
+                covers.setdefault(acct, {})[sid] = n
+    # And the share rows it booked as a sale of long shares (with the
+    # lots of unknown cost): what a sale did not close of them opened a
+    # short (a call's leg opening one: backlog TJ-0787).
+    sold: Dict[str, Dict[str, float]] = {}
+    for acct, doc in gains_docs.items():
+        for t in ([t for t in doc.get("transactions") or []
+                   if isinstance(t, dict) and "gain" in t]
+                  + list(doc.get("manual_reporting_required") or [])):
+            if (isinstance(t, dict) and t.get("id")
+                    and t.get("direction") != "SHORT"
+                    and not t.get("deemed")
+                    and t.get("action") not in _INCOME
+                    and not is_option_symbol(str(t.get("symbol") or ""))):
+                c = sold.setdefault(acct, {})
+                c[str(t["id"])] = c.get(str(t["id"]), 0.0) + abs(_f(t.get("qty")))
+
+    def known(acct: str, r: Dict[str, Any]) -> bool:
+        # The gains rows hold what this row closed (a year project's
+        # gains hold one tax year).
+        return acct in gains_docs and (in_books is None
+                                       or bool(in_books(r)))
 
     # A row id is unique within one account's book only: the credits
     # are keyed by account and id (audit A07).
@@ -1027,8 +1807,9 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
     written: List[Dict[str, Any]] = []
     pooled = {a for p in (pools or []) for a in p}
     put_credits: Dict[str, List[Dict[str, Any]]] = {}
+    fifo_credits: List[Dict[str, Any]] = []
     for acct, rows in books.items():
-        wo = written_option_trades(rows, date_of, in_books)
+        wo = written_option_trades(rows, date_of, in_books, split_at_open)
         written += wo["trades"]
         put_credits[acct] = [c for c in wo["credits"]
                              if c.get("right") != "C"]
@@ -1039,26 +1820,59 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
         tainted += sum(1 for u in wo.get("unknown") or []
                        if u["in_books"] and keep(u["date"])
                        and symbol_ok(str(u.get("symbol") or "")))
+        if pools is None:
+            # FIFO lots: every account's together, below.
+            fifo_credits += wo["credits"]
+            continue
         # A put's premium in an average-cost pool: drawn by the pool's
         # sales below (backlog TJ-0546).
         creds = [c for c in wo["credits"]
                  if acct not in pooled or c.get("right") == "C"]
-        for sid, amt in credits_by_sale(rows, creds,
-                                        covers.get(acct)).items():
-            credit[(acct, sid)] = credit.get((acct, sid), 0.0) + amt
-    for pool in pools or []:
+        for ck, amt in share_credits({acct: rows}, creds, covers, sold,
+                                     known, fifo=False,
+                                     deemed=deemed).items():
+            credit[ck] = credit.get(ck, 0.0) + amt
+    if pools is None:
+        # The US engine's lots per account (US-BASIS-01), moved with
+        # their basis between your own accounts (US-BASIS-05): the
+        # premium travels with the delivered lot, and a sale takes the
+        # older lots first (backlog TJ-0771, TJ-0788). An account not
+        # shown: its credits read here.
+        joint = dict(fifo_books or {})
+        joint.update(books)
+        for acct, rows in joint.items():
+            if acct not in books:
+                fifo_credits += written_option_trades(
+                    rows, date_of, in_books, split_at_open)["credits"]
+        for ck, amt in share_credits(joint, fifo_credits, covers, sold,
+                                     known, fifo=True, deemed=deemed,
+                                     timelines=fifo_timelines or {}
+                                     ).items():
+            credit[ck] = credit.get(ck, 0.0) + amt
+    for n, pool in enumerate(pools or []):
         # (an account of the pool not shown: its puts read here)
         puts = [c for acct, rows in pool.items()
                 for c in (put_credits[acct] if acct in put_credits else
-                          written_option_trades(rows, date_of,
-                                                in_books)["credits"])
+                          written_option_trades(rows, date_of, in_books,
+                                                split_at_open)["credits"])
                 if c.get("right") != "C"]
-        for ck, amt in pooled_put_credits(pool, puts, covers).items():
+        tl = timelines[n] if timelines and n < len(timelines) else None
+        for ck, amt in pooled_put_credits(pool, puts, covers,
+                                          timeline=tl,
+                                          deemed=deemed).items():
             credit[ck] = credit.get(ck, 0.0) + amt
 
     # A sale split into several gains rows (lots) shares its credit by
     # quantity.
     qty_by_id: Dict[Tuple[str, str], float] = {}
+    # What a return of capital took of a sale's denied-loss tally (the
+    # engine's `deferred_loss_cut`): the ACB it read that from was also
+    # short by the premium, and the premium still to come out of the
+    # sale makes up as much (backlog TJ-1217). Only a premium that was in
+    # that ACB: one delivered since the cut (`premium_after_cut`) was not
+    # (TJ-1309).
+    cut_by_id: Dict[Tuple[str, str], float] = {}
+    late_by_id: Dict[Tuple[str, str], float] = {}
     for acct, doc in gains_docs.items():
         for t in doc.get("transactions") or []:
             if not isinstance(t, dict):
@@ -1066,6 +1880,10 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
             ck = (acct, str(t.get("id") or ""))
             if ck in credit:
                 qty_by_id[ck] = qty_by_id.get(ck, 0.0) + abs(_f(t.get("qty")))
+                cut_by_id[ck] = (cut_by_id.get(ck, 0.0)
+                                 + _f(t.get("deferred_loss_cut")))
+                late_by_id[ck] = (late_by_id.get(ck, 0.0)
+                                  + _f(t.get("premium_after_cut")))
 
     # One trade per closing DISPOSITION: the US engine books a sale
     # that consumes several FIFO lots as one gains row per lot, all
@@ -1142,10 +1960,16 @@ def closed_trades(gains_docs: Dict[str, Dict[str, Any]],
                 continue
             pnl = economic_pnl(t)
             ck = (acct, str(t.get("id") or ""))
-            if ck in credit and cls in ("long-shares", "short-shares"):
+            # (a futures option's premium is in the future it delivered:
+            # its gain held it, counted again as the option's; backlog
+            # TJ-1007)
+            if ck in credit and cls in ("long-shares", "short-shares",
+                                        "futures"):
                 share = (abs(_f(t.get("qty"))) / qty_by_id[ck]
                          if qty_by_id.get(ck) else 1.0)
-                pnl -= credit[ck] * share
+                pnl -= (credit[ck] - max(0.0, min(
+                    credit[ck] - late_by_id.get(ck, 0.0),
+                    cut_by_id.get(ck, 0.0)))) * share
             sym = str(t.get("symbol") or "")
             # The class is part of the key: one disposition's rows are
             # of one class; a row of another stays a trade of its own.
@@ -1212,12 +2036,25 @@ def compute(gains_docs: Dict[str, Dict[str, Any]],
             crypto_accounts: Iterable[str] = (),
             in_books: Optional[Callable[[Dict[str, Any]], bool]] = None,
             pools: Optional[List[Dict[str, List[Dict[str, Any]]]]] = None,
+            timelines: Optional[List[Optional[Dict[str, Any]]]] = None,
+            split_at_open: bool = False,
+            fifo_books: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+            cover_docs: Optional[Dict[str, Dict[str, Any]]] = None,
+            fifo_timelines: Optional[Dict[str, Optional[Dict[str, Any]]]]
+            = None,
+            history_docs: Optional[Dict[str, Dict[str, Any]]] = None,
+            cover_history_docs: Optional[Dict[str, Dict[str, Any]]] = None,
             ) -> Dict[str, Any]:
     """Per-class statistics over the window `keep` (applied to
     `date_of(row)`): the closed trades of `closed_trades` folded per
     class, with a total."""
     res = closed_trades(gains_docs, books, keep, date_of, crypto_accounts,
-                        in_books, pools=pools)
+                        in_books, pools=pools, timelines=timelines,
+                        split_at_open=split_at_open, fifo_books=fifo_books,
+                        cover_docs=cover_docs,
+                        fifo_timelines=fifo_timelines,
+                        history_docs=history_docs,
+                        cover_history_docs=cover_history_docs)
     per: Dict[str, Dict[str, Any]] = {c: _new_stats() for c, _ in CLASSES}
     total = _new_stats()
     for tr in res["trades"]:

@@ -28,7 +28,7 @@ from typing import Dict, List
 
 from taxjson.lib import cli_diag
 from taxjson.lib.json_input import (InputFileError, read_json_doc,
-                                    require_gains_doc)
+                                    require_gains_doc, require_row_lists)
 from taxjson.lib.ticker_map import (get_option_type, get_underlying,
                                     is_option_ticker)
 
@@ -83,6 +83,26 @@ def process_data(data, groups, *, direction: str, calls_only: bool):
         cur = tx.get('currency') or '?'
         g['total_gain'][cur] = (g['total_gain'].get(cur, 0.0)
                                 + float(tx.get('gain', 0.0) or 0.0))
+    # The pipeline moves unknown-cost dispositions out of `transactions`
+    # into manual_reporting_required: they are counted too, or the
+    # report read TOTAL 0.00 over a sale to report by hand (backlog
+    # TJ-1008). A legacy row flagged inline was counted above.
+    seen = {str(tx.get('id')) for tx in data.get('transactions', []) or []
+            if isinstance(tx, dict) and tx.get('tainted')
+            and tx.get('id') is not None}
+    for tx in data.get('manual_reporting_required', []) or []:
+        if not isinstance(tx, dict):
+            continue
+        symbol = tx.get('symbol', '') or ''
+        if not is_option_ticker(symbol):
+            continue
+        if calls_only and get_option_type(symbol) != 'C':
+            continue
+        if (tx.get('direction') or 'LONG') != direction:
+            continue
+        if tx.get('id') is not None and str(tx.get('id')) in seen:
+            continue
+        groups['_tainted'] = groups.get('_tainted', 0) + 1
 
 
 def _legs(tx, direction: str):
@@ -142,7 +162,7 @@ def load_inputs(prog: str, files: List[str]):
             cli_diag.error(prog, "<stdin>: expected a JSON object")
             sys.exit(2)
         try:
-            require_gains_doc(doc, "<stdin>")
+            require_row_lists(require_gains_doc(doc, "<stdin>"), "<stdin>")
         except InputFileError as e:
             cli_diag.error(prog, str(e))
             sys.exit(2)
@@ -152,7 +172,8 @@ def load_inputs(prog: str, files: List[str]):
         try:
             # A stage file or a non-gains JSON printed TOTAL 0.00
             # (S033-01).
-            docs.append(require_gains_doc(read_json_doc(path), path))
+            docs.append(require_row_lists(
+                require_gains_doc(read_json_doc(path), path), path))
         except InputFileError as e:
             # A report missing an input is not a report: the old code
             # printed TOTAL 0.00 and exited 0 (audit R1-173).

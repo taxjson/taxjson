@@ -126,6 +126,11 @@ class PriceQuote:
     # The currency the SOURCE reported the price in (major units), when
     # it says; None = infer from the quoted symbol (quote_currency).
     currency: Optional[str] = None
+    # The spelling the source actually priced: the asked (QUOTE-mapped)
+    # one, or the symbol's own listing for an IBKR hit, which never
+    # sees a QUOTE remap. A QUOTE line's ratio applies only to a quote
+    # of its target (backlog TJ-1038). None: not recorded.
+    listing: Optional[str] = None
 
 
 def is_crypto_symbol(symbol: str) -> bool:
@@ -858,7 +863,7 @@ def fetch_prices(pairs: Dict[str, str], *,
                     unit_less.append(sym)
                 continue
             quotes[sym] = PriceQuote(price=price, source=source, asof=today,
-                                     currency=cur)
+                                     currency=cur, listing=listing)
             if len(hit) > 3 and hit[3]:
                 spelled[sym] = hit[3]
             remaining.pop(sym, None)
@@ -919,7 +924,7 @@ def fetch_prices(pairs: Dict[str, str], *,
                 continue
             quotes[sym] = PriceQuote(price=price,
                                      source=f"cache:{age}d", asof=asof,
-                                     currency=cur)
+                                     currency=cur, listing=remaining[sym])
             remaining.pop(sym)
             if age > max_cache_age_days:
                 stale.append(f"{sym} ({age}d)")

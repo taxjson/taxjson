@@ -186,8 +186,8 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
     if not losses:
         return []
 
-    wanted = {b for acct, r in losses
-              for b in others.get(str(r.get("symbol") or "").upper(), [])}
+    # Every listing's position rows: the still-held test follows a
+    # dated rename of a replacement to its new listing (backlog TJ-0936).
     rows_by_sym: Dict[str, List[Dict[str, Any]]] = {}
     for p in book_files(cache):
         acct = p.name[:-len("_base.json")]
@@ -195,8 +195,7 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
             continue
         for r in XR._rows(p):
             sym = str(r.get("symbol") or "").upper()
-            if sym not in wanted or str(r.get("action") or "") \
-                    not in XR._POSITION_ACTIONS:
+            if str(r.get("action") or "") not in XR._POSITION_ACTIONS:
                 continue
             r = dict(r)
             r.setdefault("account", acct)
@@ -221,8 +220,8 @@ def analyze(root: Path, cfg: Dict[str, Any]) -> List[Finding]:
                     buys.append(r)
             if not buys:
                 continue
-            if not is_usa(country) and XR._held_at(
-                    rows_by_sym.get(b, []), hi, country) <= XR._EPS:
+            if not is_usa(country) and XR.held_following(
+                    rows_by_sym, b, hi, country) <= XR._EPS:
                 continue            # sold out by day 30 (CA-SL-02)
             f = found.get((a, b))
             if f is None:

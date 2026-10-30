@@ -115,6 +115,14 @@ class CorporateAction:
     # from a second broker account holding the same security (its
     # shares must be booked too). See `combine_broker_copies`.
     broker_account: str = ''
+    # The record date the broker states for a distribution (Questrade's
+    # "REC mm/dd/yy"): the parent shares bought on or after it are not
+    # entitled to it. '' when not stated. NOT part of the event id.
+    record_date: str = ''
+    # The shares paid on over two broker accounts of one chain, each
+    # stating its own count (Questrade's "ON n SHS"); `ratio_old` is one
+    # account's, and is in the event id. 0: `ratio_old` says it (TJ-1290).
+    parent_qty_all_accounts: float = 0.0
 
     def __post_init__(self):
         # The emitters date a second leg one second AFTER the event
@@ -677,7 +685,9 @@ def _ib_apply_cancellations(cancels: List[Dict[str, Any]],
     """Remove from `pools` (in place) the original of every `Ca` row:
     same description, negated quantity, same row account and currency
     (a spin-off delivered on two listings: a Ca of the CAD leg used to
-    cancel the USD one, A2-0518), dated on or
+    cancel the USD one, A2-0518) — the row account being the statement's
+    declared account when the row has no Account cell (TJ-0752) — dated
+    on or
     before the cancellation (same date preferred, else the latest) —
     the statement parser's `_ca_undo` rule. The cancellation and its
     original may sit in different statements of the account. Only the
@@ -690,16 +700,38 @@ def _ib_apply_cancellations(cancels: List[Dict[str, Any]],
     for ca in sorted(cancels, key=lambda c: c['date_time']):
         cands = [(pool, r) for pool in pools for r in pool
                  if r['description'] == ca['description']
-                 and (r.get('account') or '') == (ca.get('account') or '')
+                 and _ib_same_broker_account(r, ca)
                  and (r.get('currency') or '') == (ca.get('currency') or '')
                  and abs(_qty(r) + ca['qty']) < 1e-9
                  and r['date_time'][:10] <= ca['date_time'][:10]]
         if not cands:
             continue
+        # A row of the cancellation's own known account first; a
+        # statement that declares no account matches any.
+        exact = [c for c in cands
+                 if _ib_broker_account(c[1]) == _ib_broker_account(ca)]
+        cands = exact or cands
         same = [c for c in cands
                 if c[1]['date_time'][:10] == ca['date_time'][:10]]
         pool, r = max(same or cands, key=lambda c: c[1]['date_time'])
         pool.remove(r)
+
+
+def _ib_broker_account(r: Dict[str, Any]) -> str:
+    """The broker account an IB Corporate Actions row belongs to: the
+    row's own Account cell (a consolidated statement), else the account
+    its statement declares. Matching a `Ca` row on the Account cell
+    alone read two single-account statements as one account, and one
+    account's cancellation removed the other's live merger (TJ-0752)."""
+    return r.get('account') or r.get('stmt') or ''
+
+
+def _ib_same_broker_account(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """Two IB rows of one broker account, as far as is known: equal
+    accounts, or one of them (a statement with no Account Information)
+    unknown."""
+    x, y = _ib_broker_account(a), _ib_broker_account(b)
+    return x == y or not x or not y
 
 
 def _ib_dt_days(a: str, b: str) -> int:
@@ -800,6 +832,20 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
                     mb['currency'] = r['currency']
                 else:
                     # Each in-leg's parenthetical names ITS successor.
+                    # One leg per successor and currency: the rows of
+                    # two broker accounts (or two deliveries) of one
+                    # successor are added. Kept apart, the second
+                    # account's continuing company was read as a
+                    # spin-off of itself (BETA -> BETA) and the
+                    # successors' quantities were split (TJ-0753).
+                    same = next((l for l in mb['in_legs']
+                                 if (l['sym'], l['isin'], l['currency'])
+                                 == (leg_sym, leg_isin, r['currency'])),
+                                None)
+                    if same is not None:
+                        same['qty'] += qty
+                        same['val'] += val
+                        continue
                     mb['in_legs'].append({
                         'sym': leg_sym, 'isin': leg_isin, 'qty': qty,
                         'val': val, 'currency': r['currency']})
@@ -1052,15 +1098,21 @@ def _ib_spinoff_events(spin_rows, account, acct_of, fii=None
     removed); a group this statement holds no row of is another
     statement's event."""
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    # One event per day, description and currency: deliveries of one
+    # spin-off stamped at two times of the day made two events with one
+    # event id, and the combiner kept one as if they were two copies of
+    # one statement (TJ-0758). Their quantities and values are added;
+    # the event takes the earliest time.
     for r in spin_rows:
         if r['qty'] <= 0:
             continue
-        groups.setdefault((r['date_time'], r['description'],
+        groups.setdefault((r['date_time'][:10], r['description'],
                            r['currency']), []).append(r)
     events = []
-    for (date_time, desc, currency), recs in groups.items():
+    for (_day, desc, currency), recs in groups.items():
         if not any(r.get('own', True) for r in recs):
             continue
+        date_time = min(r['date_time'] for r in recs)
         parts = recs[0]['parts']
         qty = sum(r['qty'] for r in recs)
         val = abs(sum(r['value'] for r in recs))
@@ -1227,6 +1279,21 @@ def _apply_suffix(symbol: str, suffix: str) -> str:
     return f"{symbol}.{suffix}"
 
 
+def _journal_continues(prev: CorporateAction, hop: CorporateAction) -> bool:
+    """`hop` (a 1-for-1 listing journal) moves the shares `prev`
+    delivered: dated on or after it, the same quantity less under one
+    share (IB journals 120 of a delivered 120.0041), and the same
+    broker account when both name one. A journal months earlier, of
+    other shares, was folded into a later merger and its own event
+    deleted (TJ-0754)."""
+    if hop.date < prev.date:
+        return False
+    if abs(hop.qty_disposed - prev.qty_received) >= 1.0:
+        return False
+    return (not prev.broker_account or not hop.broker_account
+            or prev.broker_account == hop.broker_account)
+
+
 def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[CorporateAction]:
     """Fold IB's cross-listing journals into the upstream merger.
 
@@ -1244,7 +1311,8 @@ def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[Corpor
     Match condition for each hop: ratio is 1-for-1, source_symbol of
     the candidate equals current.target_symbol, and target_isin matches
     the upstream event's target_isin (same underlying security across
-    the journal — only the currency-side wrapper differs).
+    the journal — only the currency-side wrapper differs), and the hop
+    moves the shares the previous step delivered (`_journal_continues`).
     """
     # Index by source_symbol so we can find a chain rooted at any event's
     # target.
@@ -1287,6 +1355,7 @@ def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[Corpor
                     and d.ratio_new == 1 and d.ratio_old == 1
                     and d.target_isin == current.target_isin
                     and d.target_symbol not in visited_targets
+                    and _journal_continues(current, d)
                 ),
                 None,
             )
@@ -1562,12 +1631,17 @@ def parse_questrade_corporate_actions(
         # while its reversal/repost pair carries the real symbol
         # and netted to zero (event skipped). All three rows share
         # the REC/PAY dates and the ON-N-SHS count — that is the
-        # chain identity; symbol is only the fallback.
+        # chain identity; symbol is only the fallback. And the parent's
+        # SEC# code, which every leg names: two parents' spin-offs on the
+        # same dates and share count were one chain, the two children
+        # netted into one target (TJ-0751).
         m_rp = _QT_REC_PAY_RE.search(description)
         m_shs = _QT_ON_SHS_RE.search(description)
+        m_par = _QT_PARENT_RE.search(description)
         if m_rp:
             key = ('chain', m_rp.group(1), m_rp.group(2),
-                   m_shs.group(1).replace(',', '') if m_shs else '')
+                   m_shs.group(1).replace(',', '') if m_shs else '',
+                   m_par.group(1).strip().upper() if m_par else '')
         else:
             key = ('symbol', symbol)
         by_target[key].append({
@@ -1576,9 +1650,20 @@ def parse_questrade_corporate_actions(
             'account': (row.get('Account #') or '').strip(),
             'own': ident in own_ids,
         })
+    # A leg that names no parent joins the chain of its dates and share
+    # count when exactly one parent's chain has them.
+    for key in [k for k in by_target if k[0] == 'chain' and not k[4]]:
+        sib = [k for k in by_target
+               if k[0] == 'chain' and k[1:4] == key[1:4] and k[4]]
+        if len(sib) == 1:
+            by_target[sib[0]].extend(by_target.pop(key))
 
     events: List[CorporateAction] = []
-    for _key, rows in by_target.items():
+    chains: List[list] = []
+    for rows in by_target.values():
+        if any(r['own'] for r in rows):
+            chains.extend(_qt_split_chain(rows, cil_rows))
+    for rows in chains:
         if not any(r['own'] for r in rows):
             continue                    # another export's chain
         rows.sort(key=lambda r: (r['date'], -r['qty']))
@@ -1735,6 +1820,7 @@ def parse_questrade_corporate_actions(
         currency = rows[0]['currency']
         cil_cash, cil_frac, cil_cur, cil_date = _qt_spinoff_cil(
             rows, cil_rows, cil_used)
+        from taxjson.lib.brokerages.base import income_facts_from_description
 
         events.append(CorporateAction(
             date=event_date, time='09:30:00',
@@ -1760,6 +1846,12 @@ def parse_questrade_corporate_actions(
             fraction_in_lieu=cil_frac,
             cash_in_lieu_date=cil_date,
             cil_broker_booked=cil_cash > 0,
+            # Who is entitled: the parent lots held before it (a US
+            # §355 allocation, TJ-0951).
+            record_date=next((d for d in (
+                income_facts_from_description(r['description']).get(
+                    'record_date', '') for r in rows) if d), ''),
+            parent_qty_all_accounts=_qt_paid_on_all_accounts(rows),
             raw_descriptions=[r['description'] for r in rows],
             broker_account=','.join(sorted({r['account'] for r in rows}
                                            - {''})),
@@ -1769,6 +1861,147 @@ def parse_questrade_corporate_actions(
         events[-1].target_symbol = symbol
 
     return events
+
+
+def _qt_child_name(description: str) -> str:
+    """The distributed security's name, as a DIS row's text gives it
+    ("SPNW WT SPINOFF ON ..." -> "SPNW WT")."""
+    m = _QT_SPINOFF_RE.search(description or '')
+    return ' '.join((description or '')[:m.start()].split()).upper() if m \
+        else ''
+
+
+def _qt_paid_on_all_accounts(rows: List[dict]) -> float:
+    """The shares a chain of two or more broker accounts was paid on: each
+    account states its own "ON n SHS", once however many legs repeat it (a
+    posting, its reversal, the repost), and one whose units were all taken
+    back was paid on nothing. 0 with one account (TJ-1290)."""
+    by_acct: Dict[str, List[dict]] = {}
+    for r in rows:
+        by_acct.setdefault(r['account'], []).append(r)
+    if len(by_acct) < 2:
+        return 0.0
+    total = 0.0
+    for legs in by_acct.values():
+        if (sum(r['qty'] for r in legs) <= 1e-9
+                and any(abs(r['qty']) > 1e-12 for r in legs)):
+            continue
+        m = next(filter(None, (_QT_ON_SHS_RE.search(r['description'])
+                               for r in legs)), None)
+        if m:
+            total += _num_text(m.group(1), where=legs[0]['description'])
+    return total
+
+
+def _qt_split_chain(rows: List[dict], cil_rows=()) -> List[List[dict]]:
+    """One distribution chain as the events it holds. The chain identity
+    (dates, share count, parent) cannot name the child, since a
+    placeholder leg carries no symbol, so a parent distributing two
+    securities on one day (shares and warrants) was one chain, netted into
+    one event under the first symbol (TJ-1107). Two symbols that each end
+    with units are two events; a chain with one such symbol stays whole,
+    as a posting reversed and reposted under another symbol is one event.
+
+    A symbol that ends with fewer units cancels the one symbol holding
+    exactly that many (a posting reversed under another symbol). Any other
+    take-back cannot be assigned: a chain with two securities left is
+    refused, and one that nets a removal stays whole for the caller's
+    warning, so the events' units add up to the chain's net (TJ-1249).
+
+    A blank-symbol placeholder joins the symbol its text names, else
+    cancels another placeholder's opposite quantity, else joins the one
+    symbol holding the reversal of its quantity. One none of those explains
+    cannot be assigned: a chain that still ends with units is refused with
+    a warning (no rows returned), as a guess moves one security's units
+    onto another (TJ-1250).
+
+    Cash in lieu under a symbol left out of the events (`cil_rows`) is on
+    no event, and the warning says so."""
+    by_sym: Dict[str, List[dict]] = {}
+    blanks = []
+    for r in rows:
+        if r['symbol']:
+            by_sym.setdefault(r['symbol'], []).append(r)
+        else:
+            blanks.append(r)
+    if len(by_sym) < 2:
+        return [rows]
+    groups = {sym: list(rs) for sym, rs in by_sym.items()}
+    names: Dict[str, set] = {}
+    for sym, rs in by_sym.items():
+        for r in rs:
+            names.setdefault(_qt_child_name(r['description']), set()).add(sym)
+    unknown = []
+    for r in blanks:
+        hit = names.get(_qt_child_name(r['description'])) or ()
+        if len(hit) == 1:
+            groups[next(iter(hit))].append(r)
+        elif abs(r['qty']) > 1e-12:
+            twin = next((u for u in unknown
+                         if abs(u['qty'] + r['qty']) < 1e-9), None)
+            if twin is None:
+                unknown.append(r)
+            else:
+                unknown.remove(twin)
+
+    def _net(rs) -> float:
+        return sum(x['qty'] for x in rs)
+    for r in sorted(unknown, key=lambda x: -abs(x['qty'])):
+        reversed_in = [s for s, rs in by_sym.items()
+                       if any(abs(x['qty'] + r['qty']) < 1e-9 for x in rs)]
+        if len(reversed_in) == 1:
+            groups[reversed_in[0]].append(r)
+            unknown.remove(r)
+
+    def _ends_with_units(rs) -> bool:
+        # (A leg of no units at all: wholly cash in lieu of a fraction,
+        # which the caller decides.)
+        return _net(rs) > 1e-9 or all(abs(x['qty']) < 1e-12 for x in rs)
+    live = [rs for rs in groups.values() if _ends_with_units(rs)]
+    taken_back = []
+    for rs in groups.values():
+        if _net(rs) < -1e-9:
+            twins = [x for x in live if abs(_net(x) + _net(rs)) < 1e-9]
+            if len(twins) == 1:
+                live.remove(twins[0])
+            else:
+                taken_back.append(rs)
+    syms = ', '.join(sorted(by_sym))
+    chain_net = _net(rows)
+    if unknown and (len(live) >= 2 or chain_net > 1e-9):
+        total = sum(r['qty'] for r in unknown)
+        emit_line(f"warning: UNBOOKED: Questrade DIS corporate-action chain "
+                  f"on {min(r['date'] for r in rows)} holds {syms} and "
+                  f"{total:g} unit(s) on rows with no symbol, and nothing "
+                  f"says which of them those units are. NOTHING was booked: "
+                  f"book the distributions by hand in a .tt file. "
+                  f"{unknown[0]['description'][:90]}")
+        return []
+    if taken_back and len(live) >= 2 and chain_net > 1e-9:
+        total = sum(_net(rs) for rs in taken_back)
+        emit_line(f"warning: UNBOOKED: Questrade DIS corporate-action chain "
+                  f"on {min(r['date'] for r in rows)} holds {syms} and takes "
+                  f"back {-total:g} unit(s), and nothing says which security "
+                  f"those units came from. NOTHING was booked: book the "
+                  f"distributions by hand in a .tt file. "
+                  f"{taken_back[0][0]['description'][:90]}")
+        return []
+    if taken_back or len(live) < 2:
+        return [rows]
+    rest = [r for rs in groups.values() if rs not in live for r in rs]
+    if rest:
+        cash, _frac, cur, day = _qt_spinoff_cil(rest, cil_rows, set(),
+                                                dry=True)
+        if cash:
+            left = ', '.join(sorted({r['symbol'] for r in rest}))
+            emit_line(f"warning: ATTENTION: Questrade cash in lieu of "
+                      f"{cash:.2f} {cur} on {day} under {left}: the "
+                      f"distribution chain on "
+                      f"{min(r['date'] for r in rows)} reversed that "
+                      f"symbol's units and books the other securities of "
+                      f"{syms}, so this cash is on no spin-off event. Check "
+                      f"which security paid it and book it in a .tt file.")
+    return live
 
 
 def _qt_spinoff_cil(chain: List[dict], cil_rows: List[Dict[str, str]],
@@ -2127,6 +2360,36 @@ def _rbc_account(row) -> str:
     return re.sub(r'\D', '', s) or s.upper()
 
 
+# A share class a security name states: "CLASS A", "CL B", "CL-B". The
+# name tokens drop it (CLASS / CL are stop words, a single letter is not
+# a token), so it is read on its own.
+_RBC_SHARE_CLASS_RE = re.compile(r'\b(?:CLASS|CL)\s*[-.]?\s*([A-Z])\b')
+
+
+def _rbc_share_class(name: str) -> str:
+    """The share class `name` states ('A'), '' when none."""
+    m = _RBC_SHARE_CLASS_RE.search((name or '').upper())
+    return m.group(1) if m else ''
+
+
+def _rbc_class_fit(rem, rc) -> int:
+    """How a receipt's share class fits the removal's: -2 when the
+    removal names the NEW class ("... TO BETA CORP CLASS A") and the
+    receipt is another class (never paired), -1 / 1 when only the old
+    class is named and the receipt's differs / agrees, 0 when either
+    side names none. Equal names, quantities and dates otherwise tie,
+    and row order swapped two classes' cost (TJ-0757)."""
+    old, new = _rbc_removal_names(rem)
+    got = _rbc_share_class(_rbc_receipt_name(rc))
+    want = _rbc_share_class(new) if new else ''
+    if want and got:
+        return 1 if want == got else -2
+    want = want or _rbc_share_class(old)
+    if not want or not got:
+        return 0
+    return 1 if want == got else -1
+
+
 def _rbc_stock_score(rem, rc) -> Tuple[float, float]:
     """(score, name similarity) of pairing removal `rem` with receipt `rc`."""
     old, new = _rbc_removal_names(rem)
@@ -2250,23 +2513,48 @@ def _rbc_cross_issuer(rem, rc) -> bool:
                rbc_name_similarity(_rbc_receipt_name(rc), old)) < 0.8
 
 
-def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
+def _rbc_cil_tie(c, legs, qty_key, homes) -> Tuple[int, tuple]:
+    """How a cash-in-lieu row `c` ranks an event of the same score (`legs`:
+    the event's rows) when the account cannot tell them apart: exports
+    with no Account column make every event a candidate. The export
+    holding both wins: one export per RBC account is the usual layout,
+    and a tie that fell to the first event gave each file's own event
+    both accounts' cash (TJ-1027, TJ-1064). No export in common: a key
+    of the event's quantities, not its place in `rows`, so every file's
+    view gives the row to the same event and it counts once."""
+    if homes is None:
+        return 0, ()
+    home = homes.get(id(c)) or ()
+    if any(home_of in home for x in legs
+           for home_of in homes.get(id(x)) or ()):
+        return 1, ()
+    return 0, qty_key
+
+
+def pair_rbc_reorganizations(rows, homes=None) -> RbcReorgPairing:
     """Pair RBC reorganization legs (rows classified 'reorg') into events
     and fold cash-in-lieu rows ('cil') into them. `rows` are
     rbc_direct.RbcRow objects (read_rbc_rows). Nothing is dropped: every
-    leg either joins an event or is returned in `unmatched`."""
+    leg either joins an event or is returned in `unmatched`.
+
+    `homes` ({id(row): the exports holding it}) is given when `rows` span
+    several exports; it only breaks a tie (_rbc_cil_tie)."""
     legs = [r for r in rows if getattr(r, 'cls', '') == 'reorg']
     chrono = lambda r: (r.date, getattr(r, 'k', 0), -r.order)
     used: set = set()
     events: List[RbcReorgEvent] = []
 
-    # 1) A booked leg and its "REVERSE ENTRY" correction cancel out.
+    # 1) A booked leg and its "REVERSE ENTRY" correction cancel out. The
+    #    original is on or before the reversal: a corrected rebooking
+    #    the day after is a new posting, and taking it as the original
+    #    kept the cancelled event instead (TJ-0763).
     for leg in sorted(legs, key=chrono):
         if id(leg) in used or 'REVERSE ENTRY' not in leg.desc.upper():
             continue
         cands = [m for m in legs
                  if m is not leg and id(m) not in used
                  and m.symbol == leg.symbol and abs(m.qty + leg.qty) < 1e-9
+                 and m.date <= leg.date
                  and _rbc_days(m.date, leg.date) <= 7
                  and _rbc_same_account(m, leg)]
         if not cands:
@@ -2314,11 +2602,15 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
             # More than half the significant name tokens: 'ALPHA
             # RESOURCES' vs 'ALPHA GOLD' (0.5) is two companies, and a
             # 0.5 pair moved one company's pool into the other's.
-            named = [s for s in scored if s[0][1] > 0.5]
+            # A receipt of another share class than the one the removal
+            # names is another security (TJ-0757).
+            named = [s for s in scored if s[0][1] > 0.5
+                     and _rbc_class_fit(rem, s[1]) > -2]
             if named:
                 pick = max(named, key=lambda s: (
-                    s[0][0], -_rbc_days(s[1].date, rem.date)))[1]
-            elif len(window) == 1:
+                    s[0][0], _rbc_class_fit(rem, s[1]),
+                    -_rbc_days(s[1].date, rem.date)))[1]
+            elif len(window) == 1 and _rbc_class_fit(rem, window[0]) > -2:
                 # A lone candidate with an unrecognisable name: accept only
                 # when a STATED ratio explains its quantity. Accepting any
                 # lone receipt in the window paired a removal whose own
@@ -2376,7 +2668,11 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
                         rbc_name_similarity(cname, old) if old else 0.0)
                 if s < 1.0:
                     continue
-            key = (s, -abs(lag))
+            home, qty_key = _rbc_cil_tie(
+                c, (ev.removal, ev.receipt),
+                (abs(ev.removal.qty), ev.receipt.qty, ev.removal.symbol,
+                 ev.receipt.symbol), homes)
+            key = (s, home, -abs(lag), qty_key)
             if best is None or key > best[0]:
                 best = (key, ev)
         if best is None:
@@ -2407,7 +2703,8 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
                                         rbc_row_company(sp))
                 if s < 1.0:
                     continue
-            key = (s, -abs(lag))
+            home, qty_key = _rbc_cil_tie(c, (sp,), (sp.qty, sp.symbol), homes)
+            key = (s, home, -abs(lag), qty_key)
             if best is None or key > best[0]:
                 best = (key, sp)
         if best is None:
@@ -2436,19 +2733,41 @@ _RBC_CIL_QTY_RE = re.compile(
 def rbc_spinoff_cil_fraction(cils: List[Any]) -> float:
     """The fraction RBC paid cash for, from its CIL rows: the row's own
     quantity (under one share), else the number its description states;
-    0 when no row states it (the sale cannot be sized)."""
-    total = 0.0
-    for c in cils:
-        if c.value <= 0:
-            continue                    # a reversal states no fraction
+    0 when no row states it (the sale cannot be sized).
+
+    SIGNED, as the cash is: a reversal (a negative value) cancels the
+    payment of the same amount, whose fraction no longer counts; a
+    reversal of no such payment takes off the fraction it states.
+    Summing every positive posting kept a cancelled payment's fraction
+    beside its corrected one's (TJ-0759)."""
+    def _frac(c) -> float:
         q = abs(c.qty or 0.0)
         if not 0 < q < 1:
             m = _RBC_CIL_QTY_RE.search(c.desc or '')
             q = _num_text(m.group(1), where=c.desc[:60]) if m else 0.0
-        if not 0 < q < 1:
+        return q if 0 < q < 1 else 0.0
+    pays = [c for c in cils if c.value > 0]
+    total = 0.0
+    for c in sorted((c for c in cils if c.value < 0),
+                    key=lambda c: getattr(c, 'date', '')):
+        same = [p for p in pays if abs(p.value + c.value) < 0.005]
+        day = getattr(c, 'date', '')
+        hit = (max((p for p in same if getattr(p, 'date', '') <= day),
+                   key=lambda p: getattr(p, 'date', ''), default=None)
+               or (same[0] if same else None))
+        if hit is not None:
+            pays.remove(hit)            # the payment it cancels
+            continue
+        q = _frac(c)
+        if not q:
+            return 0.0
+        total -= q
+    for c in pays:
+        q = _frac(c)
+        if not q:
             return 0.0
         total += q
-    return total
+    return total if total > 1e-9 else 0.0
 
 
 _RBC_SUFFIXER = None
@@ -2474,6 +2793,46 @@ _RBC_SPINOFF_RE = re.compile(
     r'(\S+)\s+(.+?)(?:\s+REC\s+\d\d/|\s*$)', re.I)
 
 
+def _rbc_context_rows(rows, other_files) -> List[Any]:
+    """The rows of the account's OTHER exports that this export (`rows`)
+    does not already hold. A row overlapping exports repeat counts once
+    — as many copies as the export holding the most of it, the way the
+    brokerage parser's overlap plan counts them (two genuinely identical
+    postings in one export stay two). Excluding only the rows of this
+    export let two other exports' copies of one cash-in-lieu payment
+    both reach the spin-off, doubling its cash and fraction (TJ-0755)."""
+    from taxjson.lib.brokerages.rbc_direct import _row_content_key
+    have: Dict[tuple, int] = defaultdict(int)
+    for r in rows:
+        have[(_rbc_account(r), _row_content_key(r))] += 1
+    out: List[Any] = []
+    for f_rows in other_files:
+        groups: Dict[tuple, List[Any]] = {}
+        for r in f_rows:
+            groups.setdefault((_rbc_account(r), _row_content_key(r)),
+                              []).append(r)
+        for key, rs in groups.items():
+            if len(rs) > have[key]:
+                out.extend(rs[have[key]:])
+                have[key] = len(rs)
+    return out
+
+
+def _rbc_row_homes(file_rows) -> Dict[int, set]:
+    """{id(row): the exports (their places in `file_rows`) holding that
+    broker row}: a row an overlapping download repeats is at home in
+    both, so a payment in the re-download is still its event's."""
+    from taxjson.lib.brokerages.rbc_direct import _row_content_key
+    where: Dict[tuple, set] = defaultdict(set)
+    keyed = []
+    for i, f_rows in enumerate(file_rows):
+        for r in f_rows:
+            k = (_rbc_account(r), _row_content_key(r))
+            where[k].add(i)
+            keyed.append((id(r), k))
+    return {rid: where[k] for rid, k in keyed}
+
+
 def parse_rbc_corporate_actions(
     csv_path: Path, account: str = 'RBC',
     context_files: Optional[List[Path]] = None,
@@ -2492,6 +2851,7 @@ def parse_rbc_corporate_actions(
     `renames` — the project's ticker.map renames (`taxjson run` passes
     them): a spin-off booked under a temporary code that the map already
     renames needs no "map it" warning."""
+    from taxjson.lib.brokerages.base import income_facts_from_description
     from taxjson.lib.brokerages.rbc_direct import read_rbc_rows
     rows = read_rbc_rows(Path(csv_path)).rows
 
@@ -2510,6 +2870,9 @@ def parse_rbc_corporate_actions(
         except Exception:
             continue
         lookup_rows.extend(other_files[-1])
+    # Every row of the account once, this export's own rows first (they
+    # stay the representatives a copy elsewhere is folded into).
+    _all_rows = list(rows) + _rbc_context_rows(rows, other_files)
     # name -> {symbol: {listing currencies}}. Only SHARE lines count (an
     # option's code and description name the issuer too, and an s.86.1
     # ADJUST pointed at the option's empty pool became a phantom gain —
@@ -2539,12 +2902,21 @@ def parse_rbc_corporate_actions(
     def _listings(sym: str) -> set:
         return trade_cur.get(sym) or other_cur.get(sym) or set()
 
+    from taxjson.lib.brokerages.rbc_direct import (_POSITION_CLASSES,
+                                                   _signed_qty)
+    _moves = set(_POSITION_CLASSES) | {'split'}
+
     def _position(sym: str, cur: str, date: str) -> float:
-        """Shares of one listing held at the end of `date` (trades and
-        transfers of that symbol settled in that currency)."""
-        return sum(x.qty for x in share_rows
+        """Shares of one listing held at the end of `date`: every row of
+        the account's exports (an overlapping copy once) that moves that
+        symbol's shares in that currency, signed as the broker parser
+        signs them. Trades and transfers alone missed a stock split's
+        added shares: after a 2-for-1 split and a sale of more than the
+        pre-split count the parent listing still held read as sold out,
+        and the spin-off's parent was left unresolved (TJ-0764)."""
+        return sum(_signed_qty(x) for x in _all_rows
                    if x.symbol == sym and (x.currency or '').upper() == cur
-                   and getattr(x, 'cls', '') in ('trade', 'transfer')
+                   and getattr(x, 'cls', '') in _moves
                    and x.date <= date)
 
     def _resolve(syms, prefer_cur: str = '', what: str = '',
@@ -2576,6 +2948,12 @@ def parse_rbc_corporate_actions(
         return _rbc_ca_symbol(*opts[0])
 
     pairing = pair_rbc_reorganizations(rows)
+    # Every row of the account once, paired as the brokerage parser pairs
+    # them: the cash in lieu that belongs to an event, in whichever
+    # export of the account it posts.
+    _homes = _rbc_row_homes([rows] + other_files) if other_files else None
+    _all_pairing = (pair_rbc_reorganizations(_all_rows, _homes) if other_files
+                    else pairing)
     merger_pairs = [ev for ev in pairing.events if ev.kind == 'merger']
     unmatched = list(pairing.unmatched)
     # Legs of one merger split across two statements (a December removal,
@@ -2595,7 +2973,7 @@ def parse_rbc_corporate_actions(
             pool += [x for x in other.unmatched if _key(x) not in own_keys]
             pool += [x for x in f_rows if getattr(x, 'cls', '') == 'cil'
                      and _key(x) not in own_keys]
-        cross = pair_rbc_reorganizations(pool)
+        cross = pair_rbc_reorganizations(pool, _homes)
         own_left = {id(x) for x in unmatched}
         for ev in cross.events:
             if id(ev.removal) in own_left or id(ev.receipt) in own_left:
@@ -2670,8 +3048,14 @@ def parse_rbc_corporate_actions(
                     f"opening lot or a ticker.map GLOBAL line for "
                     f"{_rbc_ca_symbol(rem.symbol, rem.currency)}.")
         tgt = _rbc_ca_symbol(rc.symbol, rc.currency)
+        # The cash in lieu from every export of the account: a payment
+        # posted in a later export than both share legs was lost when
+        # the legs paired in this one (TJ-0756).
+        cils = next((x.cil for x in _all_pairing.events
+                     if x.removal is rem
+                     and x.kind in ('merger', 'reorg')), ev.cil)
         # SIGNED: a reversal CIL row cancels its posting (audit S063-19).
-        cil_amount = max(0.0, sum(c.value for c in ev.cil))
+        cil_amount = max(0.0, sum(c.value for c in cils))
         events.append(CorporateAction(
             date=rem.date, time='09:30:00', action_type='merger',
             source_symbol=src, source_isin=src,
@@ -2682,8 +3066,12 @@ def parse_rbc_corporate_actions(
             target_currency=rc.currency or 'USD',
             account=account,
             cash_in_lieu=cil_amount,
-            cash_in_lieu_currency=(ev.cil[0].currency if ev.cil else ''),
-            raw_descriptions=[rem.desc, rc.desc] + [c.desc for c in ev.cil],
+            cash_in_lieu_currency=(cils[0].currency if cils else ''),
+            # The day the cash was paid: the fraction is sold for it then
+            # (as the parser books a reorganization's cash in lieu), not
+            # on the exchange date (TJ-0866).
+            cash_in_lieu_date=min((c.date for c in cils), default=''),
+            raw_descriptions=[rem.desc, rc.desc] + [c.desc for c in cils],
             broker_account=_rbc_account(rem),
         ))
 
@@ -2693,25 +3081,27 @@ def parse_rbc_corporate_actions(
     # whichever statement of the account holds it — as the reorg legs'
     # step 1 does. A reversed-and-rebooked spin-off was offered twice and
     # the reversal read as a short parent (A2-0213).
-    def _spin_key(x):
-        return (x.date, x.symbol, round(x.qty, 9), x.desc, x.account)
-    spin_all = [x for x in rows if getattr(x, 'cls', '') == 'spinoff']
-    _own_spin = {_spin_key(x) for x in spin_all}
-    spin_all += [x for f_rows in other_files for x in f_rows
-                 if getattr(x, 'cls', '') == 'spinoff'
-                 and _spin_key(x) not in _own_spin]
+    spin_all = [x for x in _all_rows if getattr(x, 'cls', '') == 'spinoff']
     # Cash in lieu of a spin-off's fraction, in whichever statement of
     # the account it posts — the pairing the parser makes over every
     # statement, so the rows it leaves to this stage are the ones booked.
-    def _row_key(x):
-        return (x.date, x.symbol, round(x.qty, 9), x.desc, x.currency,
-                x.account, round(x.value, 2))
-    _own_keys = {_row_key(x) for x in rows}
-    _all_rows = list(rows) + [x for f_rows in other_files for x in f_rows
-                              if _row_key(x) not in _own_keys]
-    spin_cil = {id(sp): cils for sp, cils
-                in pair_rbc_reorganizations(_all_rows).spinoff_cil}
+    # Overlapping exports' copies of one payment count once (TJ-0755).
+    spin_cil = {id(sp): cils for sp, cils in _all_pairing.spinoff_cil}
     reversed_ids: set = set()
+
+    def _spin_parent(x) -> str:
+        m = _RBC_SPINOFF_RE.search(x.desc or '')
+        return m.group(2).strip().upper() if m else ''
+
+    def _same_spinoff(x, rev) -> bool:
+        """The same distribution: its listing currency and, when both
+        rows name it, its parent (SEC# code). A bare ticker is not unique
+        across exchanges: a USD reversal cancelled a same-ticker CAD
+        spin-off of another parent, by row order (TJ-0762)."""
+        if (x.currency or '').upper() != (rev.currency or '').upper():
+            return False
+        a, b = _spin_parent(x), _spin_parent(rev)
+        return not a or not b or a == b
     for rev in sorted((x for x in spin_all if x.qty < 0
                        and 'REVERSE ENTRY' in (x.desc or '').upper()),
                       key=lambda x: x.date):
@@ -2719,7 +3109,7 @@ def parse_rbc_corporate_actions(
                  if x.qty > 0 and id(x) not in reversed_ids
                  and x.symbol == rev.symbol
                  and abs(x.qty + rev.qty) < 1e-9 and x.date <= rev.date
-                 and _rbc_same_account(x, rev)]
+                 and _rbc_same_account(x, rev) and _same_spinoff(x, rev)]
         if cands:
             orig = max(cands, key=lambda x: x.date)
             reversed_ids.update((id(orig), id(rev)))
@@ -2803,6 +3193,10 @@ def parse_rbc_corporate_actions(
             fraction_in_lieu=(rbc_spinoff_cil_fraction(cils)
                               if cil_amount > 0 else 0.0),
             cash_in_lieu_date=min((c.date for c in cils), default=''),
+            # Who is entitled, as Questrade's (a US §355 allocation,
+            # TJ-0951, TJ-1193).
+            record_date=income_facts_from_description(r.desc).get(
+                'record_date', ''),
             raw_descriptions=[r.desc] + [c.desc for c in cils],
             broker_account=_rbc_account(r),
         ))
@@ -3217,6 +3611,25 @@ class Manifest:
                    "ratio match")
         return migrated
 
+    def migration_aliases(self, events: List["CorporateAction"]
+                          ) -> Dict[str, str]:
+        """{saved id: current event id} for each record `migrate_legacy`
+        would carry over to an event of `events`, worked out on a copy:
+        this manifest is not changed. A run whose manifest is not
+        rewritten (shared exports: --decisions-only) applies such a
+        record under its old id; `taxjson elect --redo/--reset --event`
+        takes either id for it (backlog TJ-0848)."""
+        recs = {eid: ElectionRecord(event_id=r.event_id, summary=r.summary,
+                                    election=r.election, notes=r.notes,
+                                    hints=dict(r.hints or {}))
+                for eid, r in self.records.items()}
+        saved_as = {id(r): eid for eid, r in recs.items()}
+        twin = Manifest(recs)
+        if not twin.migrate_legacy(events):
+            return {}
+        return {saved_as[id(r)]: eid for eid, r in twin.records.items()
+                if saved_as[id(r)] != eid}
+
     def _pop_resymbolled(self, ev: "CorporateAction",
                          events: Optional[List["CorporateAction"]] = None,
                          current: Optional[set] = None
@@ -3345,43 +3758,58 @@ def _snap_received(event: CorporateAction, qty_received: float,
                    total_fmv: float) -> Tuple[float, float, float]:
     """Broker-aware wrapper around _snap_qty_to_whole_shares: on a
     fractional-delivery broker (event.fractional_delivery), only dust
-    is snapped — the delivered fraction stays in the book."""
+    is snapped — the delivered fraction stays in the book. Dust is a
+    residue ON whole shares (100.0026): a delivery that is all fraction
+    (0.005 shares, under one share) is the holding itself and is kept
+    with its value. Snapped as dust, it vanished with the child's
+    acquisition and the parent's cost reduction (TJ-0841)."""
     if getattr(event, 'fractional_delivery', False):
         import math
         qty_abs = abs(qty_received)
-        frac = qty_abs - math.floor(qty_abs + 1e-9)
-        if frac >= _FRACTIONAL_DUST:
+        whole = math.floor(qty_abs + 1e-9)
+        frac = qty_abs - whole
+        if frac >= _FRACTIONAL_DUST or (whole == 0 and qty_abs >= 1e-6):
             return qty_received, total_fmv, 0.0
     return _snap_qty_to_whole_shares(qty_received, total_fmv)
 
 
 def _corp_cash(*parts) -> str:
     """The cash an event paid, for the row's `corp_cash` evidence
-    ("<amount> <CUR>; ..."): cash in lieu of a fraction, boot. fx-cash
-    reads it (re-audit A2-1014) — the description used to be the only
-    sign of it, and only one emitter's wording matched."""
+    ("<amount> <CUR>[ @<paid>]; ..."): cash in lieu of a fraction, boot.
+    fx-cash reads it (re-audit A2-1014) — the description used to be the
+    only sign of it, and only one emitter's wording matched. `@<paid>`:
+    cash the broker paid on a later day than the row's own (a part is
+    (amount, currency) or (amount, currency, paid))."""
     return '; '.join(f"{float(a):.10g} {str(c).upper()}"
-                     for a, c in parts
+                     + (f" @{rest[0]}" if rest and rest[0] else '')
+                     for a, c, *rest in parts
                      if a and abs(float(a)) >= 0.005 and c)
 
 
 def _fraction_cash(event: CorporateAction, cil_amt: float, cil_cur: str,
                    frac_qty: float, frac_value: float, frac_cur: str):
-    """(amount, currency) of the cash for the fractional entitlement: the
-    broker's own cash in lieu when it reported one, else the snapped
-    fraction's value (the implicit cash in lieu, see
-    _snap_qty_to_whole_shares)."""
+    """(amount, currency, paid) of the cash for the fractional
+    entitlement: the broker's own cash in lieu when it reported one, with
+    the later day it paid it (the rows carrying this cash stay on the
+    event's date, and the cash ledger counted it before it came: TJ-1063,
+    TJ-1106), else the snapped fraction's value (the implicit cash in
+    lieu, see _snap_qty_to_whole_shares)."""
     if cil_amt and cil_amt > 0:
-        return cil_amt, cil_cur
+        paid = getattr(event, 'cash_in_lieu_date', '') or ''
+        return cil_amt, cil_cur, paid if paid > event.date else ''
     if frac_qty > 0 and frac_value > 0:
-        return frac_value, frac_cur
-    return 0.0, ''
+        return frac_value, frac_cur, ''
+    return 0.0, '', ''
 
 
 # Reserved key resolve_event puts on the (copied) hints dict: a currency
 # converter `fx(amount, from_cur, to_cur, date) -> Optional[float]` built
 # from the project's rates file. Never persisted in the manifest.
 FX_HINT = '__fx__'
+# Reserved key resolve_event sets when the account's .tt files sell a
+# spin-off's fraction by hand (_tt_fraction_sale): the taxable booking
+# then leaves the fraction to that sale, as before TJ-0948.
+HAND_FRACTION_HINT = '__hand_fraction__'
 
 
 def _convert(hints: dict, amount: float, from_cur: str, to_cur: str,
@@ -3631,12 +4059,17 @@ def _emit_basis_carryover_rename(event: CorporateAction, hints: dict,
     if settle_frac:
         cil_currency = (event.cash_in_lieu_currency
                         or event.target_currency or event.currency)
+        # Sold for the cash on the day the broker paid it (an RBC CIL
+        # row dated after the exchange): dated on the exchange, the
+        # cash ledger counted cash not yet received (TJ-0866).
+        paid = max(event.date, getattr(event, 'cash_in_lieu_date', '') or '')
         rows.append({
             'action': 'BUYSELL',
-            'date': event.date,
+            'date': paid,
             # After the SPLIT so the fractional lot exists to sell against.
-            'time': _bump_time(event.time, 1),
-            'date_settle': event.date,
+            'time': (_bump_time(event.time, 1) if paid == event.date
+                     else event.time),
+            'date_settle': paid,
             'symbol': event.target_symbol,
             'quantity': -frac,
             'currency': cil_currency,
@@ -3963,6 +4396,18 @@ def spinoff_broker_value(event: CorporateAction) -> Tuple[float, str]:
     return 0.0, ''
 
 
+def _parent_is_broker_code(event: CorporateAction) -> bool:
+    """The event's parent is named only by a broker-internal code: the
+    extractor could not resolve a ticker (source_symbol=parent code, and
+    the code is also its source_isin), so the name says neither a listing
+    nor a country. A real ISIN does say the country; a mapped or traded
+    parent differs from the code."""
+    code = event.source_symbol or ''
+    return (bool(code) and code == (event.source_isin or '')
+            and '.' not in code
+            and not re.fullmatch(r'[A-Z]{2}[A-Z0-9]{9}[0-9]', code))
+
+
 def _emit_distribution(event: CorporateAction, hints: dict,
                        *, description_base: str) -> List[dict]:
     """Country-neutral taxable distribution: the received shares are
@@ -3996,30 +4441,65 @@ def _emit_distribution(event: CorporateAction, hints: dict,
     whole_qty, adjusted_fmv, frac_qty = _snap_received(event,
         event.qty_received, total_fmv,
     )
+    # A fraction the broker paid in cash on a row of its own (Questrade,
+    # RBC: `fraction_in_lieu`, `cash_in_lieu`) is part of the
+    # distribution: it is income at the same value as the whole shares,
+    # received with them at that cost, and sold for the cash (TJ-0948;
+    # the delivered quantity left it out: the income missed it and the
+    # broker's $0 fraction diluted the new shares' cost).
+    frac_paid = float(getattr(event, 'fraction_in_lieu', 0.0) or 0.0)
+    frac_cash = float(getattr(event, 'cash_in_lieu', 0.0) or 0.0)
+    sell_frac = (frac_paid > 1e-9 and frac_cash >= 0.005
+                 and frac_qty <= 0 and fmv_per_share > 0
+                 and not hints.get(HAND_FRACTION_HINT))
+    frac_fmv = fmv_per_share * frac_paid if sell_frac else 0.0
+    total_fmv += frac_fmv
     description = description_base
     if frac_qty > 0:
         description += f"; cash-in-lieu for {frac_qty:.6g} fractional share(s)"
+    if sell_frac:
+        description += (f"; {frac_paid:.6g} fractional share(s) paid in "
+                        f"cash, sold below")
     if total_fmv <= 0:
         description += "; ZERO VALUE — no FMV given"
     # The fraction is paid in cash (fx-cash, A2-1014).
-    _cash = _corp_cash(_fraction_cash(
+    _cash = '' if sell_frac else _corp_cash(_fraction_cash(
         event, _cil_evidence(event),
         event.cash_in_lieu_currency or currency, frac_qty,
         total_fmv - adjusted_fmv, currency))
+    # The dividend is paid by the distributing parent: its income is the
+    # parent's (a foreign parent's dividend is foreign income however the
+    # received shares are listed). Booked on the received shares, a
+    # foreign parent's spin-off into a Canadian company read as a
+    # Canadian eligible dividend and left the T1135 (TJ-0658). With no
+    # parent named, the received shares are all there is to name; so too
+    # when the parent is only a broker's internal code (a Questrade or
+    # RBC SEC# code: no listing and no ISIN to read a country from, so
+    # booked on it a Canadian dividend read as foreign, TJ-1025).
+    payer = (event.source_symbol
+             if event.source_symbol
+             and event.source_symbol != '(unknown parent)'
+             and not _parent_is_broker_code(event)
+             else event.target_symbol)
     rows = [
         {
             'action': 'DIVIDEND',
             'date': event.date, 'time': event.time, 'date_settle': event.date,
-            'symbol': event.target_symbol,
+            'symbol': payer,
             'quantity': 0.0, 'currency': currency,
             'net_amount': total_fmv, 'gross_amount': total_fmv,
             'type': 'dividend', 'account': event.account,
             'description': description,
         },
     ]
+    if payer == event.source_symbol and re.fullmatch(
+            r'[A-Z]{2}[A-Z0-9]{9}[0-9]', event.source_isin or ''):
+        # The payer's country from its ISIN, as an IB dividend row
+        # carries it (income_dating.is_canadian_issuer).
+        rows[0]['issuer_country'] = event.source_isin[:2]
     if _cash:
         rows[0]['corp_cash'] = _cash
-    if whole_qty > 0:
+    if whole_qty > 0 or sell_frac:
         rows.append({
             'action': 'BUYSELL',
             'date': event.date,
@@ -4028,10 +4508,37 @@ def _emit_distribution(event: CorporateAction, hints: dict,
             'time': _bump_time(event.time, 1),
             'date_settle': event.date,
             'symbol': event.target_symbol,
-            'quantity': whole_qty, 'currency': currency,
-            'price': fmv_per_share, 'net_amount': adjusted_fmv, 'fee': 0.0,
+            'quantity': whole_qty + frac_paid if sell_frac else whole_qty,
+            'currency': currency,
+            'price': fmv_per_share, 'net_amount': adjusted_fmv + frac_fmv,
+            'fee': 0.0,
             'account': event.account, 'description': description,
         })
+    if sell_frac:
+        cash_cur = (event.cash_in_lieu_currency or event.target_currency
+                    or currency)
+        paid = max(event.date, getattr(event, 'cash_in_lieu_date', '')
+                   or '')
+        sale = {
+            'action': 'BUYSELL',
+            'date': paid,
+            # After the buy when paid the same day.
+            'time': _bump_time(event.time, 2 if paid == event.date else 0),
+            'date_settle': paid,
+            'symbol': event.target_symbol,
+            'quantity': -frac_paid, 'currency': cash_cur,
+            'price': frac_cash / frac_paid, 'net_amount': frac_cash,
+            'fee': 0.0,
+            'corp_cash': _corp_cash((frac_cash, cash_cur)),
+            'account': event.account,
+            'description': (f"{description_base}: cash in lieu of "
+                            f"{frac_paid:.6g} fractional share(s), sold "
+                            f"for the cash at its value as income"),
+        }
+        if getattr(event, 'cil_broker_booked', False):
+            # Replaces Questrade's own $0 pair (drop_broker_cil_pairs).
+            sale['type'] = CIL_TAKEOVER_TYPE
+        rows.append(sale)
     return rows
 
 
@@ -4340,7 +4847,7 @@ def drop_broker_cil_pairs(txs: List[Any]) -> List[Any]:
             if f + q <= frac + 1e-9 and c + amt <= cash + 0.005:
                 took.append((b, i))
                 f, c = f + q, c + amt
-        what = (f"{g(m, 'symbol')}: the s.86.1 spin-off's sale of the "
+        what = (f"{g(m, 'symbol')}: the spin-off's sale of the "
                 f"{frac:g} fractional share paid {cash:,.2f} "
                 f"{g(m, 'currency') or ''} in cash on {g(m, 'date')}")
         if took and abs(f - frac) < 1e-6 and abs(c - cash) < 0.01:
@@ -4544,12 +5051,66 @@ def _us_spinoff_tax_free_355(event: CorporateAction, hints: dict
         alloc_cur='USD')
     rows = _allocation_in_listing_currency(event, hints, rows, 'USD',
                                            '§355')
+    if getattr(event, 'record_date', ''):
+        # Only the parent lots held before the record date share their
+        # basis and dates (TJ-0951; US-CORP-07).
+        for r in rows:
+            if (r.get('action') == 'BUYSELL'
+                    and float(r.get('quantity') or 0.0) > 0):
+                r.setdefault('record_date', event.record_date)
+    # A $0 allocation (the parent's basis is zero: a return of capital
+    # took it all) still names the parent: the engine pairs the spun-off
+    # shares with the parent's lots by the ADJUST, and their holding
+    # period tacks whether or not any basis moves (§1223(1); TJ-0723:
+    # with no ADJUST the shares were a new lot on the spin date).
+    if (not any(r.get('action') == 'ADJUST' for r in rows)
+            and any(r.get('action') == 'BUYSELL'
+                    and r.get('symbol') == event.target_symbol
+                    for r in rows)
+            and event.source_symbol
+            and event.source_symbol != '(unknown parent)'):
+        buy = next(r for r in rows if r.get('action') == 'BUYSELL'
+                   and r.get('symbol') == event.target_symbol)
+        rows.append({
+            'action': 'ADJUST',
+            'date': event.date, 'time': event.time,
+            'date_settle': event.date,
+            'symbol': event.source_symbol,
+            'currency': event.currency or buy.get('currency') or 'USD',
+            'net_amount': 0.0,
+            'account': event.account,
+            'description': (buy.get('description', '')
+                            + ' (parent: no basis moves)'),
+        })
+    # The shares the broker paid on: the engine checks the record date
+    # against them (a due bill, core.spin_entitlement; TJ-1161).
+    parent_qty = ((event.parent_qty_all_accounts or _spinoff_parent_qty(event))
+                  if getattr(event, 'record_date', '') else 0.0)
     # The US engine books the pair per parent lot (Reg. §1.358-2: each
     # lot gives up the same fraction of its basis; one spun-off block per
     # parent block, its holding period tacked, §1223(1)) — US-CORP-07.
     for r in rows:
         r['type'] = 'spinoff_355'
+        if parent_qty > 0 and r.get('action') == 'ADJUST':
+            r['corp_parent_qty'] = parent_qty
     return rows
+
+
+def _spinoff_parent_qty(event: CorporateAction) -> float:
+    """How many parent shares a spin-off was paid on, from its ratio; 0
+    when the export did not say: the parsers read a missing parent count
+    as `ratio_old` 1 with `ratio_new` the delivered shares. A ratio that
+    is the event's own counts (Questrade, RBC: `40` on `400 SHS`) already
+    is the number, even with a fraction paid in cash on top of the 40."""
+    new = float(event.ratio_new or 0.0)
+    old = float(event.ratio_old or 0.0)
+    got = float(event.qty_received or 0.0)
+    if new <= 0 or old <= 0 or got <= 0:
+        return 0.0
+    if abs(new - got) <= 1e-9:
+        return 0.0 if old == 1.0 and got != 1.0 else old
+    return ((got + float(getattr(event, 'fraction_in_lieu', 0.0) or 0.0))
+            * old / new)
 
 
 def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: dict) -> List[dict]:
@@ -4591,6 +5152,11 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
     if cad:
         rows = _allocation_in_listing_currency(event, hints, rows, 'CAD',
                                                's.86.1')
+    parent_qty = _spinoff_parent_qty(event)
+    if parent_qty > 0:
+        for r in rows:
+            if r['action'] == 'ADJUST':
+                r['corp_parent_qty'] = parent_qty
     return rows
 
 
@@ -5025,6 +5591,10 @@ def resolve_event(
     hints = dict(hints or {})
     if fx is not None:
         hints[FX_HINT] = fx
+    if (_spinoff_cil_row(event)
+            and not getattr(event, 'cil_broker_booked', False)
+            and _tt_fraction_sale(event, tt_sales or []) is not None):
+        hints[HAND_FRACTION_HINT] = True
     rows = rule.apply(event, election_key, hints)
     warn_unsold_spinoff_cil(event, election_key, rows, tt_sales)
     # Traceability: every emitted row names the event (and choice) it

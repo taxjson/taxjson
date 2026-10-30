@@ -75,7 +75,7 @@ class TestTwoYearProject(unittest.TestCase):
         self.assertEqual([x["ticker"] for x in w["rows"]], ["ZZQ.US"])
         self.assertLess(w["total_gain"], 0)
         self.assertEqual(w["basis"],
-                         "denials within each account, full history")
+                         "denials among taxable accounts, full history")
 
     def test_in_year_rows_equal_the_filing_file(self):
         """The full-history file comes from the same consolidated book
@@ -120,10 +120,10 @@ class TestTwoYearProject(unittest.TestCase):
 class TestBasisLabel(unittest.TestCase):
     def test_full_history_label(self):
         from taxjson.lib.report_model import gains_basis_label
-        # Backlog TJ-0452: the engine's own denials are in it, each
-        # account's alone; "pre-wash" read as none at all.
+        # Backlog TJ-0452: the engine's own denials are in it, among
+        # the taxable accounts (TJ-0677); "pre-wash" read as none at all.
         self.assertEqual(gains_basis_label({"m": Path("m_gains_all.json")}),
-                         "denials within each account, full history")
+                         "denials among taxable accounts, full history")
         self.assertEqual(gains_basis_label([Path("m_gains_wash.json")]),
                          "wash-adjusted")
         self.assertEqual(gains_basis_label([Path("m_gains.json")]),

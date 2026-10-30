@@ -140,8 +140,8 @@ def load_claimed(path: Optional[Path],
     return claimed
 
 
-def yearly_nets(results: dict, tax_date: str, s1256: bool = False
-                ) -> Dict[int, Dict[str, float]]:
+def yearly_nets(results: dict, tax_date: str, s1256: bool = False,
+                filed_gap: bool = False) -> Dict[int, Dict[str, float]]:
     """Bucket ALLOWED disposition gains by tax year, using the same
     date-basis rule as the pipeline's --year filter (dispositions key on
     date_settle under the settle basis; income rows are not dispositions
@@ -151,10 +151,18 @@ def yearly_nets(results: dict, tax_date: str, s1256: bool = False
     the year's short-term and 60% to its long-term net, whatever its
     holding period, as Form 6781 lines 8 and 9 put it on Schedule D
     (US-FUT-03; backlog TJ-0466); `s1256` in the year's dict is its
-    net."""
+    net. `filed_gap` (a Canadian ledger): each year's `filed_gap` is its
+    net on Schedule 3 less this net: Schedule 3 rounds a gain to the cent
+    per row, one row per line and symbol (taxjson_form_export
+    build_schedule3; build_canada_ledger; backlog TJ-1195)."""
     from taxjson.lib.futures import section_1256_kind
     date_key = 'date_settle' if tax_date == 'settle' else 'date'
     nets: Dict[int, Dict[str, float]] = {}
+    schedule_rows: Dict[int, Dict[Tuple[str, str], float]] = {}
+    from taxjson.bin.taxjson_form_export import (_cents, _line_key,
+                                                 property_class,
+                                                 schedule3_line,
+                                                 schedule3_period)
     # The gains-row contract (issue #17): a disposition without its gain
     # or units is refused, never left out of a year's net.
     from taxjson.lib.json_input import check_gains_rows, gains_row_kind
@@ -170,10 +178,21 @@ def yearly_nets(results: dict, tax_date: str, s1256: bool = False
             continue
         year = int(date[:4])
         rec = nets.setdefault(year, {'net': 0.0, 'st': 0.0, 'lt': 0.0,
-                                     'dispositions': 0})
+                                     'dispositions': 0, 'subcent': 0})
         gain = float(t.get('gain') or 0.0)
         rec['net'] += gain
         rec['dispositions'] += 1
+        # A gain in whole cents rounds to itself on Schedule 3: only a
+        # sub-cent one can leave the filed loss apart from the ledger's
+        # (build_canada_ledger's slack; backlog TJ-1018).
+        if abs(gain * 100.0 - round(gain * 100.0)) > 1e-4:
+            rec['subcent'] += 1
+        if filed_gap:
+            _key = (schedule3_line(_line_key(property_class(t)), year,
+                                   schedule3_period(t, year, date_key))['key'],
+                    str(t.get('symbol') or '?'))
+            _rows = schedule_rows.setdefault(year, {})
+            _rows[_key] = _rows.get(_key, 0.0) + gain
         if s1256 and section_1256_kind(str(t.get('symbol') or '')):
             rec['s1256'] = rec.get('s1256', 0.0) + gain
             _st, _lt = section_1256_split(gain)
@@ -183,6 +202,9 @@ def yearly_nets(results: dict, tax_date: str, s1256: bool = False
             rec['st'] += gain
         elif t.get('term') == 'LONG_TERM':
             rec['lt'] += gain
+    for year, _rows in schedule_rows.items():
+        nets[year]['filed_gap'] = (sum(_cents(v) for v in _rows.values())
+                                   - nets[year]['net'])
     return nets
 
 
@@ -244,8 +266,18 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     # row — a fixed 0.005 slack left a phantom cents carryforward or
     # warned that a correct claim exceeds the losses (S027-10, S028-00).
     # The slack therefore grows with the dispositions behind the
-    # balance (an upper bound on its Schedule 3 rows).
+    # balance (an upper bound on its Schedule 3 rows) — only those whose
+    # gain is not whole cents: rows in whole cents foot exactly however
+    # they are grouped, and a 0.005-per-row slack zeroed the 0.02 left
+    # of 100.00 of such losses after a 99.98 claim (backlog TJ-1018).
+    # A year with its `filed_gap` (yearly_nets) needs no bound: only that
+    # real gap is absorbed, and only on its side, or a partial claim
+    # landing within the bound lost what it left (backlog TJ-1195).
+    # `filed_over`: the filed loss above the ledger's (below it, when
+    # negative). `_EPS` absorbs the float residue of an exact claim.
     slack = 0.0
+    filed_over = 0.0
+    _EPS = 1e-6
     # The year before is a lock's record: the balance carried into this
     # one is the record's, not a rebuild (a partial history rebuilds
     # less).
@@ -255,8 +287,15 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
         loss = max(0.0, -net)
         if loss:
             balance += loss
-            slack += 0.005 * max(1, int(nets.get(y, _ZERO)['dispositions']
-                                        or 0))
+            _rec = nets.get(y, _ZERO)
+            # A year from another source (a lock, a return row alone)
+            # names no sub-cent rows: each of its dispositions counts.
+            if 'filed_gap' in _rec:
+                filed_over -= float(_rec['filed_gap'])
+            else:
+                slack += 0.005 * (int(_rec['subcent'] or 0)
+                                  if 'subcent' in _rec
+                                  else max(1, int(_rec['dispositions'] or 0)))
         if claimed.get(y):
             pending_by_year[y] = pending_by_year.get(y, 0.0) + claimed[y]
         # A claim recorded against year C can only be met by a loss
@@ -291,15 +330,17 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             pending_by_year[_cy] -= take
             if _cy in cb_capacity:
                 cb_capacity[_cy] = max(0.0, cb_capacity[_cy] - take)
-            if 0.0 < pending_by_year[_cy] <= slack:
+            if 0.0 < pending_by_year[_cy] <= (slack + max(0.0, filed_over)
+                                              + _EPS):
                 # The claim is the filed (per-row-rounded) loss and the
                 # unrounded ledger came out a few cents short of it.
                 pending_by_year[_cy] = 0.0
-        if applied > 0.0 and 0.0 < balance <= slack:
+        if applied > 0.0 and 0.0 < balance <= (slack + max(0.0, -filed_over)
+                                               + _EPS):
             # ...or a few cents over it: the filed claim used it all.
             balance = 0.0
         if balance <= 0.005:
-            slack = 0.0
+            slack = filed_over = 0.0
         if y in carried and y != own_year:
             # The lock is the record of this year's return: of the
             # claims under earlier years, it took only the carry-back it
@@ -337,7 +378,7 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             if y == own_year:
                 balance = max(0.0, balance - max(
                     0.0, carried_back - float(locked_back.get(y) or 0.0)))
-            slack = 0.0
+            slack = filed_over = 0.0
             if y not in claimed:
                 lock_applied = min(max(0.0, float(locked_applied.get(y)
                                                   or 0.0)),
@@ -462,7 +503,8 @@ def _us_worksheet(st_net: float, lt_net: float, allowed: float):
 def build_usa_ledger(nets: Dict[int, Dict[str, float]],
                      claimed: Dict[int, float],
                      carried: Optional[Dict[int, Any]] = None,
-                     locked_deduction: Optional[Dict[int, float]] = None
+                     locked_deduction: Optional[Dict[int, float]] = None,
+                     through_year: Optional[int] = None
                      ) -> Dict[str, Any]:
     """`carried`: {year: (st, lt) carryover a close-year lock recorded
     out of that year} — the running carryover becomes it at the end of
@@ -471,7 +513,10 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
     for a lock that records none, what its balance implies (the year's
     loss less the balance carried): the row adds up to the balance it
     shows, never the [carryover] claimed or assumed offset beside a
-    balance that did not take it (backlog TJ-0464)."""
+    balance that did not take it (backlog TJ-0464). `through_year`
+    (the project year): the walk goes on to it, so a loss still carried
+    after the last year with a sale or a claim takes each later year's
+    deduction up to that year (backlog TJ-0896)."""
     carried = carried or {}
     locked_deduction = locked_deduction or {}
     # Every RETURN year matters, not just disposition years: while a
@@ -484,7 +529,12 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
     # claim targets it). This is the USA twin of the Canada REVIEW #23
     # union fix.
     all_years = set(nets) | set(claimed) | set(carried)
-    years = list(range(min(all_years), max(all_years) + 1)) if all_years else []
+    last = max(all_years) if all_years else None
+    if last is not None and through_year is not None:
+        # A trailing year with no sale and no claim still takes its
+        # deduction while a carryover exists (backlog TJ-0896).
+        last = max(last, int(through_year))
+    years = list(range(min(all_years), last + 1)) if all_years else []
     _ZERO = {'net': 0.0, 'st': 0.0, 'lt': 0.0, 'dispositions': 0}
     rows: List[Dict[str, Any]] = []
     st_carry = lt_carry = 0.0        # positive loss magnitudes
@@ -693,6 +743,12 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
                    if isinstance(ft, dict) and ft.get('gain') is not None
                    else None)
         out: Dict[str, Any] = {
+            # The year the lock records (read_lock held it to the
+            # file's name): a YEAR=PATH binding is checked against it
+            # (backlog TJ-0904).
+            'year': (int(doc['year']) if isinstance(doc.get('year'), int)
+                     and not isinstance(doc.get('year'), bool)
+                     else taxjson_filed.file_year(Path(path))),
             'dispositions': int(totals.get('dispositions') or 0),
             'realized': realized, 'filed_totals_gain': ft_gain,
             # Taken before its year ended (close-year --force): a
@@ -733,6 +789,11 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
             else:
                 fig, source = realized, 'realized'
             out.update(figure=fig, st=0.0, lt=0.0, source=source)
+            # The year's slip capital gains (T5 box 18) close-year
+            # recorded beside the RETURN row: part of the year's net,
+            # the carry-back room it offers (backlog TJ-0898).
+            if doc.get('slip_gains') is not None:
+                out['slip_gains'] = _finite(doc['slip_gains'], 'slip_gains')
         # The balance close-year recorded as carried into the next year
         # (lib/carryforward.record_block; tax-logic CA-CARRY-04 /
         # US-CARRY-04). None for a lock written before it did.
@@ -1454,6 +1515,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"taxjson-carryover: --filed-lock expects YEAR=PATH, got "
                   f"{item!r}", file=sys.stderr)
             return 2
+        from taxjson.bin.taxjson_filed import file_year as _file_year
+        if _file_year(Path(lp)) not in (None, y):
+            # filed/2024.json given as 2021: the filed return of one
+            # year taken for another's (backlog TJ-0904). A lock whose
+            # own year field disagrees with its file name is damaged:
+            # `tjs carryover` keys a prior_year_record by that field, so
+            # the binding is the wrapper's, not the user's — say what
+            # read_lock says (restore or re-close), not YEAR=PATH advice
+            # (backlog TJ-1075).
+            try:
+                lock_figure(Path(lp), country)
+            except LockUnreadable as exc:
+                from taxjson.lib.out import error as _error
+                _error(str(exc), prog="taxjson-carryover")
+                return 1
+            print(f"taxjson-carryover: --filed-lock {item}: the lock is "
+                  f"for {_file_year(Path(lp))}, not {y} — give it as "
+                  f"{_file_year(Path(lp))}={lp}", file=sys.stderr)
+            return 2
         lock_years.append(y)
         try:
             info = lock_figure(Path(lp), country)
@@ -1483,6 +1563,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                   details=_dl([f"{exc}", "`taxjson check-filed` checks "
                                "the lock."]))
             continue
+        if info.get('year') is not None and info['year'] != y:
+            # A lock named anything (a prior_year_record) whose own
+            # year is another (backlog TJ-0904).
+            print(f"taxjson-carryover: --filed-lock {item}: the lock "
+                  f"records year {info['year']}, not {y} — give it as "
+                  f"{info['year']}={lp}", file=sys.stderr)
+            return 2
         info['path'] = lp
         lock_info[y] = info
     # Every lock the wrapper names, readable or not: the pipeline's
@@ -1530,7 +1617,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         emit_line(f"taxjson-carryover: error: {exc}", file=sys.stderr)
         return 1
     nets = yearly_nets(results, req.effective_tax_date(),
-                       s1256=(country == 'usa'))
+                       s1256=(country == 'usa'),
+                       filed_gap=(country == 'canada'))
     # The unknown-cost dispositions every computation left out of the
     # nets (the equity run's and the US crypto pass's): the US crypto
     # pass's were dropped in silence (backlog TJ-0323).
@@ -1578,6 +1666,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             if v < 0:
                 raise ValueError(f"--claimed-year {y}: the amount must be "
                                  f">= 0, got {v!r}")
+            # The claimed file's year range (S027-23): a typo such as
+            # 2205 ran the ledger through invented returns to 2205 and
+            # used the whole loss up (backlog TJ-1002).
+            if not CLAIM_MIN_YEAR <= y <= _claim_max_year():
+                raise ValueError(f"--claimed-year {y}: {y} is not a "
+                                 f"plausible tax year ({CLAIM_MIN_YEAR}.."
+                                 f"{_claim_max_year()})")
             claimed[y] = claimed.get(y, 0.0) + v
         filed: Dict[int, float] = dict(
             _year_amount(i, "--filed") for i in args.filed)
@@ -1635,6 +1730,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             seeded[y] = {'rebuilt': float(rebuilt.get('net') or 0.0),
                          'had_rows': bool(rebuilt.get('dispositions')),
                          **info}
+            if info.get('slip_gains') is not None:
+                # The slip gains the lock recorded, as filed: this
+                # project's inputs seldom hold that year's slips any
+                # more (backlog TJ-0898).
+                slip_by[y] = float(info['slip_gains'])
     # A year's net as the return files it (`taxjson sum`'s RETURN row,
     # each Schedule 3 row's cents), not the engine's unrounded total a
     # cent or two apart: the carryforward balance, and the carry-back
@@ -1647,6 +1747,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         rec = nets.setdefault(y, dict(_zero))
         engine_net[y] = float(rec.get('net') or 0.0)
         rec['net'] = v
+        if 'filed_gap' in rec:
+            rec['filed_gap'] = 0.0      # (the filed figure itself)
     for y, v in slip_by.items():
         rec = nets.setdefault(y, dict(_zero))
         rec['net'] = rec.get('net', 0.0) + v
@@ -1655,7 +1757,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         ledger = build_canada_ledger(nets, claimed, carried, locked_back,
                                      locked_applied, own_year=own_year)
     else:
-        ledger = build_usa_ledger(nets, claimed, carried, locked_deduction)
+        ledger = build_usa_ledger(nets, claimed, carried, locked_deduction,
+                                  through_year=args.project_year)
 
     # Every book's rows, the US crypto pass's too: a crypto-only US
     # ledger said its history started nowhere (TJ-0323).

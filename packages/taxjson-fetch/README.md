@@ -95,7 +95,10 @@ machine-wide because Questrade runs one rotating chain per API app;
 `$QUESTRADE_TOKEN_FILE` overrides). The read, refresh and save of the
 token happen under a lock beside it (`~/.questrade_token.lock`): a second
 fetch waits and uses the token the first one saved, since each refresh
-kills the token it used. IBKR reads `$IBKR_FLEX_TOKEN`.
+kills the token it used. When the token file is a symlink (to a token
+another tool shares), its target is read, locked and rewritten; a link
+to no file is refused before the token is used. IBKR reads
+`$IBKR_FLEX_TOKEN`.
 Prefer the environment variables over the flags, which show in `ps`.
 
 Network, only when you run `taxjson fetch`: `https://login.questrade.com`

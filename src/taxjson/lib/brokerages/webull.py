@@ -1,4 +1,5 @@
 from taxjson.lib.stage_msg import emit_line
+from collections import Counter
 import contextlib
 import csv
 import io
@@ -42,10 +43,10 @@ def _deliverable_size(opt, rows) -> float:
     row of the same option showed (a mini's 10), else the standard 100
     (B10)."""
     from taxjson.lib.core import parse_option_underlying
-    from taxjson.lib.markets import contract_size
+    from taxjson.lib.markets import option_contract_size
     sym = str(opt.get('symbol') or '')
     und = parse_option_underlying(sym) or ''
-    m = contract_size(sym, und.split('.', 1)[0]) or contract_size(und)
+    m = option_contract_size(sym, und)
     if m:
         return float(m)
     for t in rows:
@@ -83,6 +84,11 @@ class WebullBrokerage(BaseBrokerage):
         # leg settles in January in the next. Sibling rows only take
         # part in the pairing; this file's rows are what is returned.
         pool, pool_exp = list(transactions), list(expiries)
+        # Overlapping downloads repeat rows: a row is pooled as many
+        # times as the one file holding it most often does, as the
+        # cross-file dedup keeps it (backlog TJ-0855: three copies of an
+        # expiry counted as three buys and refused a closed position).
+        pooled = Counter(self._row_key(t) for t in transactions)
         for sib in self._sibling_exports(path):
             try:
                 with contextlib.redirect_stderr(io.StringIO()):
@@ -92,8 +98,17 @@ class WebullBrokerage(BaseBrokerage):
             except (ValueError, OSError, UnicodeDecodeError):
                 continue        # reported when that file is parsed
             if sp:
-                pool.extend(sp[0])
-                pool_exp.extend(sp[1])
+                exp_ids = {id(t) for t in sp[1]}
+                before, seen = Counter(pooled), Counter()
+                for t in sp[0]:
+                    k = self._row_key(t)
+                    seen[k] += 1
+                    if seen[k] <= before[k]:
+                        continue        # already pooled from another file
+                    pooled[k] += 1
+                    pool.append(t)
+                    if id(t) in exp_ids:
+                        pool_exp.append(t)
         self._mark_assignments(pool, pool_exp, own=transactions,
                                source=path.name)
         self._check_zero_closes(pool, expiries, path.name)
@@ -138,6 +153,14 @@ class WebullBrokerage(BaseBrokerage):
                           f"cost (a .tt TRANSFER is refused in a taxable "
                           f"account).")
         return transactions
+
+    @staticmethod
+    def _row_key(t: Dict[str, Any]) -> tuple:
+        """A parsed row's content, without its file position (the
+        `_where` line): the same trade in two overlapping exports has
+        one key."""
+        return tuple(sorted((k, repr(v)) for k, v in t.items()
+                            if not k.startswith('_')))
 
     @staticmethod
     def _sibling_exports(path: Path) -> List[Path]:

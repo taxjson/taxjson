@@ -175,9 +175,13 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
                           f"in regular tax]"))
         L.append(_row("   Top-up over regular tax", a["topup"]))
     else:
+        # A carryover's room is s.120.2(1)(b)'s, before the foreign
+        # tax credit, not this headroom (backlog TJ-0719).
+        _lim = a.get("recovery_limit")
         L.append(_row("=> AMT does not bind: regular tax over minimum",
                       a["headroom"],
-                      "[the room a carryover can use]"))
+                      f"[a carryover can use {m(_lim)}]"
+                      if _lim is not None else ""))
     L.append("")
     c = a.get("carryover") or {}
     L.append("MINIMUM TAX CARRYOVER (s.120.2)" if details
@@ -200,10 +204,15 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
         L.append(f"  expired: {o} {m(v)} (usable through {int(o) + 7}; "
                  f"dropped)")
     if avail:
-        L.append(_row("Recovery limit (regular - minimum, federal)",
-                      c.get("limit")))
+        L.append(_row("Recovery limit (s.120.2(1)(b))", c.get("limit"),
+                      "[basic federal tax, before the foreign tax "
+                      "credit, less the minimum amount]"))
         L.append(_row("Recovered: federal (line 40427)",
                       c.get("recovered_federal")))
+        if float(c.get("claim_kept") or 0.0) > 0.005:
+            # The limit is a ceiling (tax-logic CA-AMT-04, TJ-1030).
+            L.append(_row("  More would fit, kept open", c.get("claim_kept"),
+                          "[a larger claim lowers no tax]"))
         # The share deducted from basic provincial tax, what the
         # provincial form's carryover line takes; the surtax it saves
         # apart (backlog TJ-0016).
@@ -216,6 +225,16 @@ def render(doc: Dict[str, Any], details: bool = True) -> List[str]:
         if abs(_sur) > 0.005:
             L.append(_row(f"  {prov} surtax it saves", _sur,
                           f"[the {prov} tax drop: "
+                          f"{m(c.get('recovered_provincial', 0.0))}]"))
+        # The foreign tax credit the lower tax limits: the tax falls by
+        # less than the credit (backlog TJ-0653).
+        _red = float(c.get("recovered_credits_reduced") or 0.0)
+        if abs(_red) > 0.005:
+            L.append(_row("  less: foreign tax credit it limits", -_red,
+                          f"[tax falls by "
+                          f"{m(c.get('recovered', 0.0))}: federal "
+                          f"{m(c.get('recovered_federal_tax', 0.0))}, "
+                          f"{prov} "
                           f"{m(c.get('recovered_provincial', 0.0))}]"))
         if abs(float(c.get("attributed", 0.0))
                - float(c.get("recovered", 0.0))) > 0.005:
@@ -278,10 +297,23 @@ def render_recorded(year: Any, label: str, mt: Dict[str, Any]
     if mt.get("recovered_provincial_credit") is not None:
         L.append(_row("Recovered: provincial share",
                       mt.get("recovered_provincial_credit")))
-        _sur = (float(mt.get("recovered_provincial") or 0.0)
-                - float(mt.get("recovered_provincial_credit") or 0.0))
-        if abs(_sur) > 0.005:
-            L.append(_row("  provincial surtax it saves", _sur))
+        _rest = (float(mt.get("recovered_provincial") or 0.0)
+                 - float(mt.get("recovered_provincial_credit") or 0.0))
+        if mt.get("recovered_provincial_surtax") is not None:
+            # Recorded apart: the rest of the provincial drop is the
+            # foreign tax credit the lower tax limits (backlog TJ-0653).
+            _sur = float(mt.get("recovered_provincial_surtax") or 0.0)
+            if abs(_sur) > 0.005:
+                L.append(_row("  provincial surtax it saves", _sur))
+            if abs(_rest - _sur) > 0.005:
+                L.append(_row("  provincial foreign tax credit it limits",
+                              _rest - _sur))
+        elif abs(_rest) > 0.005:
+            # An older lock: the rest of the drop, surtax and foreign
+            # tax credit together.
+            L.append(_row("  provincial tax drop beyond the share",
+                          _rest, "[surtax saved, foreign tax credit "
+                                 "limited]"))
     else:
         # A lock written before the share was recorded apart: its figure
         # is the whole provincial drop (backlog TJ-0016).

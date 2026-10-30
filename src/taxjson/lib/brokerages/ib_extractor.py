@@ -21,6 +21,20 @@ _IB_EXT_RE = _sfx_re(set(_IB_CURRENCY_EXT.values()))
 _IB_WARNED_CURRENCIES: set = set()
 
 
+def _strip_ib_ext(symbol: str, currency: str = '') -> str:
+    """`symbol` without the listing suffix a currency gives (.TO, .US,
+    .L ...). A dotted preferred series keeps its letter: FTN.PR.L is
+    series L, not a London listing, and FTN.PR.V series V (backlog
+    TJ-0970), unless the row's `currency` gives that very suffix
+    (SYN.PF.L in GBP is that listing: backlog TJ-1202)."""
+    from taxjson.lib.brokerages.base import is_ca_pref_series
+    ext = _IB_CURRENCY_EXT.get(currency)
+    if (is_ca_pref_series(symbol)
+            and not (ext and symbol.upper().endswith(f'.{ext}'.upper()))):
+        return symbol
+    return _IB_EXT_RE.sub('', symbol)
+
+
 def _ib_currency_ext(currency: str) -> str:
     ext = _IB_CURRENCY_EXT.get(currency)
     if ext is None:
@@ -57,6 +71,14 @@ _IB_CIL_RE = re.compile(
     r'^\s*([A-Z0-9\s\.]+?)\s*\([^)]*\).*?\bcash\s+in\s+lieu\b', re.IGNORECASE)
 
 
+# A Corporate Actions row of a split: `TICKER(ISIN) Split 3 for 2`. Ratio
+# terms may be comma-grouped ('Split 1 for 1,000'): the old [\d\.]+ stopped
+# at the comma and read it as 1 for 1 (audit S058-19).
+_IB_SPLIT_RE = re.compile(
+    r'^([A-Z0-9\s\.]+)\s*\(([^)]+)\)\s+Split\s+([\d\.,]+)\s+for\s+'
+    r'([\d\.,]+)', re.IGNORECASE)
+
+
 def _ib_refine_split_ratio(info: Dict[str, Any]) -> None:
     """Snap an emitted SPLIT to the broker's own leg quantities once both
     legs are known. IB books fractional results to 4 dp, so the text
@@ -68,6 +90,13 @@ def _ib_refine_split_ratio(info: Dict[str, Any]) -> None:
     the legs describe something else; keep the text ratio."""
     if not (info['new'] and info['old']):
         return
+    if _ib_split_mixed(info):
+        # A long book's legs and a short book's (two accounts of a
+        # combined statement): their sums are no ratio at all (155 new
+        # for 152.5 old in a 21-for-20) — the declared ratio stands
+        # (backlog TJ-0967).
+        info['tx']['quantity'] = info['text_ratio']
+        return
     # `new` sums the positive legs and `old` the negative ones. On a
     # LONG pool the old shares leave (negative) and the new arrive; on
     # a SHORT pool the signs flip — the positive leg covers the old
@@ -75,13 +104,70 @@ def _ib_refine_split_ratio(info: Dict[str, Any]) -> None:
     # gave the reciprocal, which a ratio near 1 (102-for-100) let
     # through the 5% bound (audit S058-20). The reading closer to the
     # text ratio wins; cash in lieu exists only on a long pool.
+    # Each new leg can fall short of old x ratio by less than one share
+    # (the fraction a whole-share split pays in cash, or IB's 4-dp
+    # rounding): a reading whose new shares miss the text ratio's by
+    # more than that is no split of one book — the text ratio stands
+    # (backlog TJ-0967: a long and a short book's legs summed came
+    # within the 5% bound).
     text = info['text_ratio']
-    cands = [(info['new'] + info['cil']) / info['old']]
+    legs = info.get('legs') or ()
+    n_pos = sum(1 for q in legs if q > 0) or 1
+    n_neg = sum(1 for q in legs if q < 0) or 1
+    new_long = info['new'] + info['cil']
+    cands = [(new_long / info['old'],
+              abs(new_long - info['old'] * text), n_pos)]
     if not info['cil']:
-        cands.append(info['old'] / info['new'])
-    derived = min(cands, key=lambda r: abs(r / text - 1.0))
-    if abs(derived / text - 1.0) < 0.05:
+        cands.append((info['old'] / info['new'],
+                      abs(info['old'] - info['new'] * text), n_neg))
+    derived, miss, n_new = min(cands, key=lambda c: abs(c[0] / text - 1.0))
+    if abs(derived / text - 1.0) < 0.05 and (
+            miss < n_new + 1e-6 or _ib_legs_one_way(legs, derived, text)):
         info['tx']['quantity'] = derived
+    else:
+        info['tx']['quantity'] = text
+
+
+def _ib_legs_one_way(legs, derived: float, text: float) -> bool:
+    """True when a split's legs read as one book, or as books of one
+    direction that each deliver about the `derived` ratio: a description
+    that rounds its ratio (Split 1.05 for 1, 10526 delivered per 10000)
+    misses the text by more than a share on a large position, and the
+    broker's legs stand (backlog TJ-1166). Two books' pairs of opposite
+    directions do not fit: their sums are no ratio."""
+    pos = sorted(q for q in legs if q > 0)
+    neg = sorted(-q for q in legs if q < 0)
+    if len(pos) != len(neg) or not pos:
+        return False
+    if len(pos) == 1:
+        return True
+    if abs(derived - text) >= abs(derived - 1.0):
+        return False                     # equal long and short books sum to 1
+    return (all(abs(n - o * derived) < 1 + 1e-6 for o, n in zip(neg, pos))
+            or all(abs(n - o * derived) < 1 + 1e-6 for o, n in zip(pos, neg)))
+
+
+def _ib_split_mixed(info: Dict[str, Any]) -> bool:
+    """True when a split's legs (`info['legs']`, signed quantities) hold
+    both a long position's pair (old shares out, about old x ratio in)
+    and a SHORT position's (the short covered, about cover x ratio
+    opened), on four different legs: a combined statement's long and
+    short accounts (backlog TJ-0967). A pair's new leg is old x ratio
+    within IB's rounding; floored legs are left to the share bound of
+    _ib_refine_split_ratio."""
+    legs = list(info.get('legs') or ())
+    text = info['text_ratio']
+    pos = [(i, q) for i, q in enumerate(legs) if q > 0]
+    neg = [(i, -q) for i, q in enumerate(legs) if q < 0]
+    if len(pos) < 2 or len(neg) < 2:
+        return False
+
+    def near(old_q, new_q):
+        return abs(new_q - old_q * text) <= 1e-3 + 1e-9 * new_q
+    longs = [(n, p) for n, nq in neg for p, pq in pos if near(nq, pq)]
+    shorts = [(p, n) for p, pq in pos for n, nq in neg if near(pq, nq)]
+    return any(n1 != n2 and p1 != p2
+               for n1, p1 in longs for p2, n2 in shorts)
 
 
 # A dotted symbol whose last part is a currency code is an IB currency or
@@ -121,22 +207,39 @@ def _listing_replay(transactions: List[Dict[str, Any]], open_qty=None):
     held before the statement, and a January ROC moved onto that
     phantom holding (backlog TJ-0521).
 
+    Events of one day replay in clock order, then the input's order
+    (a split first): sorting a day's trades by quantity put a day
+    trade's sale before its buy and invented a holding (backlog
+    TJ-0659).
+
     The opening position: `open_qty` (the Open Positions quantities)
-    less what the statement adds, when the listing is not renamed away;
-    else the least opening its replay needs never to go below zero, in
-    the units before the statement's splits. A listing with no trade,
-    transfer or arrival is no dated evidence: held on every day (it
-    cannot be excluded)."""
+    less what the statement adds, when the listing is not renamed away.
+    Else the least opening its replay needs never to go below zero, in
+    the units before the statement's splits. A sale the broker codes an
+    opening (IB `O`, not `C`) opens a short, and a buy coded a closing
+    (`C`, not `O`) covers it: neither asks for units held before the
+    statement (backlog TJ-0660). A listing with no trade, transfer or
+    arrival is no dated evidence: held on every day (it cannot be
+    excluded)."""
     ev: Dict[tuple, list] = {}
-    for t in transactions:
+    for n, t in enumerate(transactions):
         root, ext = _split_known_ext(t.get('symbol'))
         if not ext:
             continue
         day = t.get('date') or ''
+        seq = (t.get('time') or '', n)
         act = t.get('action')
         if act in _POSITION_ACTIONS:
             q = float(t.get('quantity') or 0.0)
-            ev.setdefault((root, ext), []).append((day, 1, q, 'q', q))
+            codes = {c for c in re.split(r'[;,\s]+', str(
+                t.get('open_close') or '').upper()) if c}
+            short = ''
+            if q < 0 and 'O' in codes and 'C' not in codes:
+                short = 'open'
+            elif q > 0 and 'C' in codes and 'O' not in codes:
+                short = 'cover'
+            ev.setdefault((root, ext), []).append(
+                (day, 1, seq, 'q', q, short))
         elif act == 'SPLIT':
             try:
                 ratio = float(t.get('quantity') or 0.0)
@@ -152,19 +255,20 @@ def _listing_replay(transactions: List[Dict[str, Any]], open_qty=None):
             else:
                 new = (root, ext)
             if new == (root, ext):
-                ev.setdefault(new, []).append((day, 0, 0.0, 'x', ratio))
+                ev.setdefault(new, []).append(
+                    (day, 0, seq, 'x', ratio, ''))
             else:
                 ev.setdefault((root, ext), []).append(
-                    (day, 0, 0.0, 'out', None))
+                    (day, 0, seq, 'out', None, ''))
                 ev.setdefault(new, []).append(
-                    (day, 0, 0.0, 'in', ((root, ext), ratio)))
+                    (day, 0, seq, 'in', ((root, ext), ratio), ''))
     for evs in ev.values():
         evs.sort(key=lambda e: e[:3])
     opening: Dict[tuple, float] = {}
     busy: set = set()
 
     def _evidence(lst, seen=()) -> bool:
-        for _d, _o, _q, kind, val in ev.get(lst, ()):
+        for _d, _o, _s, kind, val, _sh in ev.get(lst, ()):
             if kind == 'q':
                 return True
             if kind == 'in' and val[0] not in seen \
@@ -182,10 +286,20 @@ def _listing_replay(transactions: List[Dict[str, Any]], open_qty=None):
         if lst in opening:
             return opening[lst]
         busy.add(lst)
-        p, u, low, out = 1.0, 0.0, 0.0, False
-        for day, _o, _q, kind, val in ev.get(lst, ()):
+        # u: the long units the replay adds (pre-split units); short:
+        # the units a coded short opening sold and no coded cover has
+        # bought back. Only the long balance must stay >= 0.
+        p, u, low, out, short = 1.0, 0.0, 0.0, False, 0.0
+        for day, _o, _s, kind, val, sh in ev.get(lst, ()):
             if kind == 'x':
                 p *= val
+            elif kind == 'q' and sh == 'open':
+                short += -val / p
+                continue
+            elif kind == 'q' and sh == 'cover' and short > 1e-12:
+                covered = min(short, val / p)
+                short -= covered
+                u += val / p - covered
             elif kind == 'q':
                 u += val / p
             elif kind == 'in':
@@ -195,7 +309,12 @@ def _listing_replay(transactions: List[Dict[str, Any]], open_qty=None):
                 break
             low = min(low, u)
         if open_qty is not None and not out:
-            o = float(open_qty.get(f"{lst[0]}.{lst[1]}", 0.0)) / p - u
+            # The Open Positions hold a short still open (IB prints it
+            # negative): what the statement added is the long units less
+            # that short, or a short opened in the statement reads as a
+            # holding before it (backlog TJ-1044).
+            o = (float(open_qty.get(f"{lst[0]}.{lst[1]}", 0.0)) / p
+                 - (u - short))
         else:
             o = -low
         busy.discard(lst)
@@ -204,7 +323,7 @@ def _listing_replay(transactions: List[Dict[str, Any]], open_qty=None):
 
     def _qty(lst, day, strict=False) -> float:
         q = _opening(lst)
-        for d, _o, _q, kind, val in ev.get(lst, ()):
+        for d, _o, _s, kind, val, _sh in ev.get(lst, ()):
             if d > day or (strict and d == day):
                 break
             if kind == 'x':
@@ -317,6 +436,18 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
                 t['symbol'] = f"{root}.{want}"
 
 
+def _ib_level_key(cat: str, sym: str, cur: str, acct: str,
+                  when: str) -> tuple:
+    """The fill a Trades row's detail levels describe: (category, raw
+    symbol, currency, broker Account, trade day). An Order row and the
+    execution-level Trade rows under it share it; a row of another
+    account or currency of the same ticker on the same day is another
+    trade (backlog TJ-0965)."""
+    return ((cat or '').strip(), (sym or '').strip(), _norm_ccy(cur),
+            (acct or '').strip(),
+            ((when or '').replace(',', ' ').split() or [''])[0])
+
+
 FUTURES_CATEGORIES = ('Futures', 'Options On Futures')
 # Row kinds (column 2) IB writes besides Header and Data: roll-ups,
 # footnotes, and the blank kind of a short trailing row.
@@ -392,7 +523,8 @@ def get_ib_settlement(date_str: str, asset_cat: str,
       (the clearing house's option-premium date).
     - Stocks/Warrants: T+1 since the cutover (US 2024-05-28; Canada
       2024-05-27, a TSX trading day the US spent closed for Memorial
-      Day), T+2 before, T+3 before 2017-09-05. Other markets by
+      Day), T+2 before, T+3 before 2017-09-05, T+5 before 1995-06-07
+      in USD and CAD (tax-logic CA-DATE-04 / US-DATE-04). Other markets by
       currency (lib/dates._T1_CUTOVER): LSE/EU T+2 until 2027-10-11,
       the ASX and the rest T+2.
     - Everything else (equity and index options, bonds): T+1.
@@ -433,10 +565,11 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          ticker_map_renames,
                                          ticker_map_rules,
                                          ticker_map_mentioned)
+from taxjson.lib.income_dating import PIL_LABEL_RETURN_OF_CAPITAL
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
                                       ib_spinoff_parts, ib_tender_root)
 from taxjson.lib.trade_cancel import (TRADE_CANCEL_TYPE, pair_cancellations,
-                                      trade_cancel_what)
+                                      retained_fee, trade_cancel_what)
 
 # Statement sections that are statement METADATA or roll-ups of rows the
 # parser reads elsewhere — never tax events of their own. Any section
@@ -479,6 +612,16 @@ _IB_MONEY_COLUMNS = frozenset({
 _IB_CASH_TOL = 0.02
 _IB_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 _IB_TIME_RE = re.compile(r'^\d{1,2}:\d{2}(?::\d{2})?$')
+# A Trades row's own settlement date (Flex `Settle Date Target`, an
+# optional field): the row's settle date when given (tax-logic
+# CA-DATE-06 / US-DATE-06, backlog TJ-0971).
+_IB_SETTLE_COLS = ('Settle Date Target', 'SettleDateTarget', 'Settle Date',
+                   'SettleDate')
+# A stated settle date this many days after the trade is refused, as in
+# the generic importer: no listed security settles a month late, and
+# the tax year follows the settle date.
+_IB_SETTLE_REFUSE_DAYS = 31
+_IB_SETTLE_LATE_DAYS = 7
 # FII option symbol, OCC-style with IB's padding: "QZD   261218P00012500".
 _IB_FII_OCC_RE = re.compile(r'^([A-Z0-9.]+)\s+(\d{6})([CP])(\d{8})$')
 _MON_MAP = {
@@ -732,15 +875,20 @@ def _ib_split_datetime(raw: str, where: str):
 #   * a US-listed stock or ETF filled in the overnight session (20:00 ET
 #     onward, Sunday to Thursday nights — and its after-midnight half on
 #     a day the NYSE is closed) trades on the NEXT trading day;
-#   * a US-dollar futures or futures-option fill in the CME Globex
-#     evening session (18:00 ET onward, Sunday to Thursday) or on a
-#     weekday the exchange is closed trades on the next trading day;
+#   * a futures or futures-option fill in its venue's evening session
+#     (lib/markets.ib_futures_session, by the contract's Listing Exch;
+#     a US-dollar contract elsewhere: CME Globex, 18:00 ET onward,
+#     Sunday to Thursday), on a weekday the exchange is closed, or in a
+#     24/7 venue's weekend session trades on the next trading day;
 #   * an option on a root with a Cboe Global Trading Hours session
 #     (lib/markets.is_evening_session_root: shipped market data plus
-#     ticker.map EVENING lines) filled from 20:15 ET trades on the next
-#     trading day;
+#     ticker.map EVENING lines) filled from 20:15 ET, or on a weekday
+#     the exchange is closed (the holiday GTH session), trades on the
+#     next trading day;
 #   * a fill on the ASX, HKEX, Tokyo, Singapore or NZX exchanges (every
-#     asset class) is dated in the exchange's local time.
+#     asset class; read from the currency, except a future whose venue
+#     has session data, which that data dates) is dated AND timed in the
+#     exchange's local time.
 _IB_OVERNIGHT_OPEN = '20:00:00'
 _IB_OVERNIGHT_CLOSE = '04:00:00'        # the session ends 03:50 ET
 _IB_CME_EVENING_OPEN = '18:00:00'
@@ -754,26 +902,72 @@ _IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney',
                             'CNH': 'Asia/Shanghai',
                             'NZD': 'Pacific/Auckland'}
 
-def _ib_next_trading_day(d, include_today: bool = False):
+def _ib_next_trading_day(d, include_today: bool = False,
+                         calendar: str = 'USD'):
     from taxjson.lib.market_calendar import is_trading_day
     nxt = d if include_today else d + timedelta(days=1)
-    while not is_trading_day(nxt, 'USD'):
+    while not is_trading_day(nxt, calendar):
         nxt += timedelta(days=1)
     return nxt
 
 
+def _ib_futures_trade_date(d, date: str, time: str, cur: str, exch: str,
+                           stamp: str):
+    """The futures branch of _ib_market_trade_date: the venue's session
+    data (lib/markets.ib_futures_session, by the contract's Listing
+    Exch), else CME Globex's for a US-dollar contract; a fill of any
+    other venue keeps its clock date."""
+    from taxjson.lib.markets import ib_futures_session
+    from taxjson.lib.market_calendar import is_trading_day
+    venue = ib_futures_session(exch)
+    if venue is None and cur != 'USD':
+        return date, time, ''
+    venue = venue or {}
+    cal = str(venue.get('calendar') or 'USD')
+    nxt = (_ib_next_trading_day(d, calendar=cal).isoformat(), '00:00:00',
+           stamp)
+    if d.weekday() < 5 and not is_trading_day(d, cal):
+        # A holiday session (MLK day): its trade date is the next
+        # trading day.
+        return nxt
+    cont = str(venue.get('continuous_from') or '')
+    if cont and f"{date} {time}" >= cont:
+        # 24/7 contracts (CME crypto from May 29, 2026): the trade date
+        # rolls at the daily close, and Friday evening to Sunday evening
+        # is the next business day's. No other contract trades then.
+        close = str(venue.get('continuous_close') or '17:00:00')
+        if d.weekday() >= 5 or time > close:
+            return nxt
+        return date, time, ''
+    opens = str(venue.get('evening_open') or _IB_CME_EVENING_OPEN)
+    every = bool(venue.get('every_evening'))
+    if time >= opens and (every or d.weekday() in (6, 0, 1, 2, 3)):
+        return nxt
+    return date, time, ''
+
+
 def _ib_market_trade_date(date: str, time: str, asset_cat: str,
-                          currency: str, ext: str, symbol: str = ''):
+                          currency: str, ext: str, symbol: str = '',
+                          exch: str = ''):
     """(trade date, time, broker stamp) of a Trades row whose exchange
     trade date is not the clock date IB printed; the broker stamp is ''
     when nothing changes. A fill moved to the next trading day is placed
     at 00:00:00 of that day — before its regular session, the fills of
-    one night keeping their export (clock) order. A Friday- or
-    Saturday-night US fill is left as stamped: there is no session
-    then, and `taxjson check-dates` flags it."""
+    one night keeping their export (clock) order. An Asia-Pacific fill
+    takes its exchange's local date AND time, so one day's fills share
+    one clock. A Friday- or Saturday-night US fill is left as stamped:
+    there is no session then, and `taxjson check-dates` flags it.
+    `exch`: the contract's Listing Exch (futures: its venue's session,
+    lib/markets.ib_futures_session)."""
     stamp = f"{date} {time} ET"
     cur = (currency or '').upper()
     zone = _IB_LOCAL_TZ_BY_CURRENCY.get(cur)
+    if zone and asset_cat in FUTURES_CATEGORIES:
+        # A contract's venue decides, not its currency: a yen future on
+        # CME follows CME's session, not Tokyo's clock (backlog TJ-1120).
+        from taxjson.lib.markets import ib_futures_session
+        if ib_futures_session(exch) is not None:
+            zone = None
     if zone:
         from zoneinfo import ZoneInfo
         clock = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
@@ -791,26 +985,26 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
                 f"system's time-zone database does not have ({e}) — "
                 f"install it: pip install tzdata") from None
         ld, lt = local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S")
-        if ld != date:
+        # The local time even when the date is the same: an Eastern
+        # 23:30 buy (12:30 local) and a 00:30 sale (13:30 local) of one
+        # Tokyo afternoon sorted the sale first (backlog TJ-0872).
+        if (ld, lt) != (date, time):
             return ld, lt, stamp
         return date, time, ''
     d = datetime.strptime(date, "%Y-%m-%d").date()
     sun_thu = d.weekday() in (6, 0, 1, 2, 3)
     from taxjson.lib.market_calendar import is_trading_day
     if asset_cat in FUTURES_CATEGORIES:
-        if cur != 'USD':
-            return date, time, ''
-        if time >= _IB_CME_EVENING_OPEN and sun_thu:
-            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
-        if d.weekday() < 5 and not is_trading_day(d, 'USD'):
-            # A holiday session (MLK day): its trade date is the next
-            # trading day.
-            return (_ib_next_trading_day(d).isoformat(), '00:00:00',
-                    stamp)
-        return date, time, ''
+        return _ib_futures_trade_date(d, date, time, cur, exch, stamp)
     if asset_cat == 'Equity and Index Options':
         root = (symbol or '').strip().split(' ')[0].upper()
-        if cur == 'USD' and time >= _IB_GTH_OPEN and sun_thu:
+        if cur != 'USD':
+            return date, time, ''
+        holiday = d.weekday() < 5 and not is_trading_day(d, 'USD')
+        if (time >= _IB_GTH_OPEN and sun_thu) or holiday:
+            # A holiday GTH session (Sunday 20:15 ET through MLK Monday)
+            # trades on the next trading day, its after-midnight part
+            # too (backlog TJ-0871).
             from taxjson.lib.markets import is_evening_session_root
             if is_evening_session_root(root):
                 return (_ib_next_trading_day(d).isoformat(), '00:00:00',
@@ -1029,6 +1223,50 @@ def _ib_tender_parked(rows, fii=None) -> Dict[str, float]:
     return out
 
 
+def _ib_stated_settle(raw: str, date: str, where: str,
+                      field: str) -> str:
+    """The settle date a Trades row states (`raw`, YYYY-MM-DD or
+    YYYYMMDD, a time after it ignored), or '' when the cell is blank.
+    Refused when it does not read, is before the trade `date` or more
+    than _IB_SETTLE_REFUSE_DAYS after it (backlog TJ-0971)."""
+    tok = ((raw or '').replace(',', ' ').replace(';', ' ').split()
+           or [''])[0]
+    if not tok:
+        return ''
+    settle = ''
+    for fmt in ('%Y-%m-%d', '%Y%m%d'):
+        try:
+            settle = datetime.strptime(tok, fmt).strftime('%Y-%m-%d')
+            break
+        except ValueError:
+            continue
+    if not settle:
+        raise BrokerageParseError(
+            f"{where}: {field} {raw!r} is not a date (YYYY-MM-DD or "
+            f"YYYYMMDD) — refusing to guess the settle date")
+    try:
+        lag = (datetime.strptime(settle, '%Y-%m-%d')
+               - datetime.strptime(date, '%Y-%m-%d')).days
+    except ValueError:
+        return settle
+    if lag < 0:
+        raise BrokerageParseError(
+            f"{where}: {field} {settle} is before the trade date {date} — "
+            f"refusing it (are the columns swapped?)")
+    if lag > _IB_SETTLE_REFUSE_DAYS:
+        raise BrokerageParseError(
+            f"{where}: {field} {settle} is more than "
+            f"{_IB_SETTLE_REFUSE_DAYS} days after the trade date {date} — "
+            f"no listed security settles that late, and the tax year "
+            f"follows the settle date. Fix the cell (or blank it for the "
+            f"standard cycle).")
+    if lag > _IB_SETTLE_LATE_DAYS:
+        emit_line(f"{ATTENTION_PREFIX} {where}: {field} {settle} is {lag} "
+                  f"days after the trade date {date} — the tax year "
+                  f"follows the settle date: check the cell.")
+    return settle
+
+
 def _ib_require_date(raw: str, where: str, field: str = 'Date') -> str:
     d = (raw or '').strip()
     if not _IB_DATE_RE.match(d):
@@ -1124,8 +1362,7 @@ def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
 
 def _ib_stock_symbol(asset_cat: str, raw_symbol: str, currency: str,
                      fii: Dict[tuple, Any]) -> str:
-    sym = (raw_symbol or '').strip().replace(' ', '.')
-    sym = _IB_EXT_RE.sub('', sym)
+    sym = _strip_ib_ext((raw_symbol or '').strip().replace(' ', '.'), currency)
     return f"{sym}.{_ib_listing_ext(asset_cat, raw_symbol, currency, fii)}"
 
 
@@ -2141,11 +2378,14 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                         _eday[:10], ib_merger_owned(g('Description'))))
         if (sec == 'Trades'
                 and g('DataDiscriminator') in ('Order', 'Trade')):
-            # Quantity per (category, symbol, trade day) and detail
-            # level: an execution-level 'Trade' row is a duplicate only
-            # when an 'Order' row covers the same symbol and day.
-            _okey = (g('Asset Category'), g('Symbol'),
-                     (g('Date/Time').replace(',', ' ').split() or [''])[0])
+            # Quantity per (category, symbol, currency, account, trade
+            # day) and detail level: an execution-level 'Trade' row is a
+            # duplicate only when an 'Order' row covers the same listing
+            # of the same account on that day (backlog TJ-0965: another
+            # account's or currency's Trade row was dropped as one).
+            _okey = _ib_level_key(g('Asset Category'), g('Symbol'),
+                                  g('Currency'), g('Account'),
+                                  g('Date/Time'))
             try:
                 _oq = parse_strict_number(g('Quantity'), field='Quantity',
                                           where=where)
@@ -2257,11 +2497,13 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
     out['root_alias'], out['alias_conids'] = _root_aliases(
         occ_by_conid, out['opt_underlying'])
     out['contract_conids'] = contract_conids
-    for (_cat, _sym, _day), _lv in out['order_levels'].items():
+    for (_cat, _sym, _cur, _acct, _day), _lv in out['order_levels'].items():
         if ('Order' in _lv and 'Trade' in _lv
                 and abs(_lv['Order'] - _lv['Trade']) > 1e-6):
             raise BrokerageParseError(
-                f"{where}: Trades {_cat} {_sym} on {_day}: the Order rows "
+                f"{where}: Trades {_cat} {_sym} ({_cur}"
+                f"{', account ' + _mask_account(_acct) if _acct else ''}) "
+                f"on {_day}: the Order rows "
                 f"total {_lv['Order']:g} but the execution-level Trade "
                 f"rows total {_lv['Trade']:g} — the two detail levels "
                 f"disagree; refusing to pick one. Export one detail "
@@ -2314,20 +2556,204 @@ def _ib_in_period(ex, t: Dict[str, Any]) -> bool:
     return not ps or (t.get('date') or '') >= ps
 
 
-def _ib_refund_hits(adj: Dict[str, Any], txs) -> List[Dict[str, Any]]:
+def _ib_trade_meta(ex, t: Dict[str, Any]) -> Dict[str, Any]:
+    """What a statement's parse knows of its trade row `t` beyond the
+    row (`ex.trade_meta`, by the row's id, the row itself kept so the
+    id stays its own): `acct`, the broker Account the row names (a
+    combined statement's); `fee0`, its commission before any refund
+    was folded in; `applied`, the refunds folded in (their keys). Never
+    written out: the rows stay the schema's."""
+    meta = ex.__dict__.setdefault('trade_meta', {})
+    e = meta.get(id(t))
+    if e is None or e['t'] is not t:
+        e = meta[id(t)] = {'t': t, 'acct': '',
+                           'fee0': float(t.get('fee') or 0.0),
+                           'applied': set()}
+    return e
+
+
+# The columns that carry IB's id of one execution (optional Flex fields),
+# the most specific first.
+_IB_EXEC_ID_COLS = ('IB Execution ID', 'IBExecID', 'Execution ID',
+                    'Trade ID', 'TradeID')
+# Each column's namespace: an id says nothing of an id from another one
+# (backlog TJ-1165).
+_IB_EXEC_NS = {'IB Execution ID': 'exec', 'IBExecID': 'exec',
+               'Execution ID': 'exec', 'Trade ID': 'trade', 'TradeID': 'trade'}
+_IB_FILL_MARK_RE = re.compile(r'\s*\[fill #\d+\]$')
+
+
+def _ib_share_stated_settle(parsed) -> None:
+    """A Flex row's stated settle date (backlog TJ-0971) is also the
+    date of that execution's copy in a statement with no such column: the
+    id hashes the date, so the two copies stayed two trades and one sale
+    was booked twice (backlog TJ-1164). Copies are paired by the row's
+    identity across statements and broker account, one stated row per
+    copy; two statements stating different dates keep their own."""
+    def _rows(ex, txs):
+        for t in txs:
+            if (t.get('action') in ('BUYSELL', 'ASSIGN')
+                    and t.get('type') != TRADE_CANCEL_TYPE):
+                e = (getattr(ex, 'trade_meta', None) or {}).get(id(t))
+                yield t, bool(e is not None and e['t'] is t
+                              and e.get('settle_stated'))
+
+    files = [(ex, txs) for _p, ex, txs in parsed
+             if isinstance(ex, IbBrokerage)]
+    stated: Dict[tuple, list] = {}
+    for n, (ex, txs) in enumerate(files):
+        for t, said in _rows(ex, txs):
+            if said:
+                stated.setdefault(_ib_trade_key(t), []).append(
+                    (n, _ib_row_acct(ex, t), t['date_settle']))
+    if not stated:
+        return
+    for n, (ex, txs) in enumerate(files):
+        left = {k: [s for s in v if s[0] != n] for k, v in stated.items()}
+        for t, said in _rows(ex, txs):
+            if said:
+                continue
+            cands = left.get(_ib_trade_key(t)) or []
+            hit = next((s for s in cands
+                        if _ib_accts_agree(s[1], _ib_row_acct(ex, t))), None)
+            if hit is not None:
+                cands.remove(hit)
+                t['date_settle'] = hit[2]
+
+
+def _ib_number_executions(parsed) -> None:
+    """Number the fills of one account's statements that look alike in
+    every booked field by IB's execution id (backlog TJ-0966). A parse
+    marks the second and later of identical rows of ONE statement
+    "[fill #N]", so the books keep each; the same two fills split over
+    two statements had no mark, and dedup kept one as an overlapping
+    copy. When such rows carry two or more different execution ids,
+    each id gets one number across the statements (the ids in sorted
+    order: the first unmarked, the next "[fill #2]" ...): one execution
+    exported twice stays one row, two executions stay two. Rows without
+    an id keep their statement's own marks. Ids of two columns are two
+    namespaces (backlog TJ-1165), and two broker accounts are numbered
+    apart unless one statement lists both (backlog TJ-1198)
+    (_ib_number_group)."""
+    groups: Dict[tuple, list] = {}
+    for n, (_p, ex, txs) in enumerate(parsed):
+        if not isinstance(ex, IbBrokerage):
+            continue
+        meta = getattr(ex, 'trade_meta', None) or {}
+        for t in txs:
+            if (t.get('action') not in ('BUYSELL', 'ASSIGN')
+                    or t.get('type') == TRADE_CANCEL_TYPE):
+                continue
+            e = meta.get(id(t))
+            xids = (e.get('execs') or {}) if (e is not None
+                                              and e['t'] is t) else {}
+            base = _IB_FILL_MARK_RE.sub('', t.get('description') or '')
+            key = tuple(repr(t.get(f)) for f in (
+                'action', 'date', 'time', 'symbol', 'quantity',
+                'currency', 'price', 'net_amount', 'gross_amount',
+                'account', 'type', 'date_settle')) + (base,)
+            groups.setdefault(key, []).append(
+                (t, xids, base, _ib_row_acct(ex, t), n))
+    for rows in groups.values():
+        # Accounts one statement lists together share a numbering: the
+        # statement's alike rows must stay apart. A row naming no account
+        # may be any of them.
+        parts: List[set] = []
+        for n in {r[4] for r in rows}:
+            part = {r[3] for r in rows if r[4] == n}
+            for other in [o for o in parts if o & part]:
+                part |= other
+                parts.remove(other)
+            parts.append(part)
+        if any('' in part for part in parts):
+            parts = [set().union(*parts)]
+        for part in parts:
+            _ib_number_group([r for r in rows if r[3] in part])
+
+
+def _ib_number_group(rows: List[tuple]) -> None:
+    """Number alike rows (t, ids by namespace, description without a mark,
+    ...) by the first namespace in which they carry two or more ids: a
+    row with only another namespace's id takes the number of the row
+    that lists both ids, else keeps its statement's own mark."""
+    for ns in ('exec', 'trade'):
+        ids = sorted({r[1][ns] for r in rows if ns in r[1]})
+        if len(ids) >= 2:
+            break
+    else:
+        return
+    rank = {x: n for n, x in enumerate(ids, 1)}
+    alias = {(o, v): r[1][ns] for r in rows if ns in r[1]
+             for o, v in r[1].items() if o != ns}
+    for t, xids, base, *_ in rows:
+        x = xids.get(ns) or next((alias[kv] for kv in xids.items()
+                                  if kv in alias), '')
+        if x:
+            t['description'] = (f"{base} [fill #{rank[x]}]".strip()
+                                if rank[x] > 1 else base)
+
+
+def _ib_trade_acct(ex, t: Dict[str, Any]) -> str:
+    """The broker Account `ex`'s parse read on trade row `t` ('' when
+    the statement has no Account column or `t` is not its row)."""
+    e = (getattr(ex, 'trade_meta', None) or {}).get(id(t))
+    return e['acct'] if e is not None and e['t'] is t else ''
+
+
+def _ib_row_acct(ex, t: Dict[str, Any]) -> str:
+    """The broker Account of `ex`'s row `t`: the one the row names, else
+    the statement's only account ('' when neither says)."""
+    a = _ib_trade_acct(ex, t)
+    if a:
+        return a
+    accts = ex.statement_accounts()
+    return next(iter(accts)) if len(accts) == 1 else ''
+
+
+def _ib_accts_agree(a: str, b: str) -> bool:
+    """False only when two broker accounts are both known and differ."""
+    return not a or not b or a == b
+
+
+def _ib_fold_refund_into(ex, t: Dict[str, Any], amount: float,
+                         rkey) -> None:
+    """_ib_fold_refund, with the fold recorded in `ex.trade_meta` (the
+    commission before the first refund, the refunds applied) and on the
+    row's `commission_refunds` (the refund's date, `rkey`'s second
+    item, and cash: the cash ledger walks it on that date, backlog
+    TJ-0748), kept in date order so overlapping copies read alike."""
+    e = _ib_trade_meta(ex, t)
+    _ib_fold_refund(t, amount)
+    e['applied'].add(rkey)
+    parts = [x for x in str(t.get('commission_refunds') or '').split('; ')
+             if x]
+    parts.append(f"{rkey[1]} {round(float(amount), 10)!r}")
+    t['commission_refunds'] = '; '.join(
+        sorted(parts, key=lambda x: (x.split()[0], float(x.split()[1]))))
+
+
+def _ib_refund_hits(adj: Dict[str, Any], txs,
+                    acct_of=None) -> List[Dict[str, Any]]:
     """The trade(s) of `txs` a Commission Adjustments refund names
     (ticker, signed quantity, trade date). An exact quantity first; else
     the ONE same-symbol, same-date, same-sign trade whose quantity
     covers the named one — IB names an execution of a statement that
     lists only the Order row (a 'Refund (QZW, -40, ...)' for a
-    -50 order, audit A2-0604)."""
+    -50 order, audit A2-0604). `acct_of(t)`: the broker Account of a
+    trade row; when the refund and the trade both name one they must be
+    the same — two accounts of a combined statement with the same fill
+    matched the refund twice and it was folded into neither (backlog
+    TJ-0740)."""
     def _base(t):
         return (t.get('action') == 'BUYSELL'
                 and t.get('type') != TRADE_CANCEL_TYPE
                 and t.get('currency') == adj['currency']
                 and _split_known_ext(t.get('symbol'))[0] == adj['ticker']
                 and adj['trade_date'] in (
-                    t.get('date'), (t.get('broker_time') or '')[:10]))
+                    t.get('date'), (t.get('broker_time') or '')[:10])
+                and not (adj.get('account') and acct_of is not None
+                         and acct_of(t)
+                         and acct_of(t) != adj['account']))
     cands = [t for t in txs if _base(t)]
     exact = [t for t in cands
              if abs(float(t.get('quantity') or 0) - adj['qty']) < 1e-9]
@@ -2445,6 +2871,7 @@ class IbBrokerage(BaseBrokerage):
                         continue         # parse_file reports it
             accts = frozenset(pre['accounts'])
             ctx['file_accounts'][name] = accts
+            span = None
             for row in rows:
                 if (len(row) >= 4 and row[0] == 'Statement'
                         and row[1] == 'Data' and row[2] == 'Period'):
@@ -2568,6 +2995,8 @@ class IbBrokerage(BaseBrokerage):
         try:
             cls._reconcile_files(parsed)
             _book_conid_renames(parsed)
+            _ib_share_stated_settle(parsed)
+            _ib_number_executions(parsed)
         finally:
             for _p, ex, _t in parsed:
                 flush = getattr(ex, 'ca_side_effects', None)
@@ -2722,28 +3151,39 @@ class IbBrokerage(BaseBrokerage):
             if not hit and not e['joined']:
                 emit_line(_ib_cil_unmatched_note(e['c']))
 
-        # --- 3. Trades `Ca` cancellations.
+        # --- 3. Trades `Ca` cancellations. One cancellation is the
+        # original's key and its broker Account: in a combined statement
+        # of two accounts with the same fill, the key alone dropped the
+        # other account's copy (backlog TJ-1130).
         pairs: Dict[tuple, int] = {}
         for _p, ex, _t in files:
             per: Dict[tuple, int] = {}
             for o, _c in getattr(ex, 'trade_pairs', None) or ():
-                k = _ib_trade_key(o)
+                k = (_ib_trade_key(o), o.get('_acct') or '')
                 per[k] = per.get(k, 0) + 1
             for k, n in per.items():
                 pairs[k] = max(pairs.get(k, 0), n)
-        for k, n in pairs.items():
+        # A pair naming no Account is the named one's copy: once.
+        for k, a in list(pairs):
+            if not a and any(k2 == k and a2 for k2, a2 in pairs):
+                del pairs[(k, a)]
+        for (k, acct), n in pairs.items():
             owners = [i for i, (_p, ex, _t) in enumerate(files)
                       if any(_ib_trade_key(o) == k
+                             and _ib_accts_agree(o.get('_acct') or '', acct)
                              for o, _c in getattr(ex, 'trade_pairs', ()))]
             for j, (_p, ex, txs) in enumerate(files):
-                if (j in owners or k in getattr(ex, 'trade_ca_keys', ())
+                if (j in owners
+                        or any(ck == k and _ib_accts_agree(ca, acct)
+                               for ck, ca in getattr(ex, 'trade_ca_keys', ()))
                         or not any(same_acct(ex, files[i][1])
                                    for i in owners)):
                     continue
                 hits = [t for t in txs
                         if t.get('action') in ('BUYSELL', 'ASSIGN')
                         and t.get('type') != TRADE_CANCEL_TYPE
-                        and _ib_trade_key(t) == k][-n:]
+                        and _ib_trade_key(t) == k
+                        and _ib_accts_agree(_ib_row_acct(ex, t), acct)][-n:]
                 if not hits:
                     continue
                 gone = {id(t) for t in hits}
@@ -2774,11 +3214,20 @@ class IbBrokerage(BaseBrokerage):
                            round(float(ca.get('quantity') or 0), 9),
                            ca.get('description'))
                     hit = key in done
+                    kept_fee = None
+                    # A combined statement's Ca names its broker account:
+                    # never another account's row (backlog TJ-0982).
+                    _ca_acct = _ib_row_acct(ex, ca)
+
+                    def _other(ex_t, t, _a=_ca_acct):
+                        _ta = _ib_row_acct(ex_t, t)
+                        return bool(_a and _ta and _a != _ta)
                     for j, (_p2, ex2, txs2) in enumerate(files):
                         if hit or j == i or not same_acct(ex, ex2):
                             continue
                         cands = [t for t in txs2 if match(t, ca)
-                                 and _ib_in_period(ex2, t)]
+                                 and _ib_in_period(ex2, t)
+                                 and not _other(ex2, t)]
                         if not cands:
                             continue
                         same = [t for t in cands
@@ -2786,11 +3235,16 @@ class IbBrokerage(BaseBrokerage):
                                 and (t.get('time') or '')
                                 == (ca.get('time') or '')]
                         orig = (same or cands)[-1]
+                        if what == 'trade':
+                            # The commission IB kept stays (backlog
+                            # TJ-0742), once.
+                            kept_fee = retained_fee(orig, ca)
                         for k, (_p3, ex3, txs3) in enumerate(files):
                             if k == i or not same_acct(ex, ex3):
                                 continue
                             dup = [t for t in txs3 if match(t, ca)
                                    and _ib_in_period(ex3, t)
+                                   and not _other(ex3, t)
                                    and t.get('date') == orig.get('date')
                                    and (t.get('time') or '')
                                    == (orig.get('time') or '')]
@@ -2806,7 +3260,8 @@ class IbBrokerage(BaseBrokerage):
                         hit = True
                     if hit:
                         done.add(key)
-                        txs[:] = [t for t in txs if t is not ca]
+                        txs[:] = [kept_fee if t is ca else t for t in txs
+                                  if t is not ca or kept_fee is not None]
 
         from taxjson.lib.trade_cancel import cancels as _cancels
         _held_cross('held_trade_cas', _cancels, 'trade')
@@ -2816,7 +3271,8 @@ class IbBrokerage(BaseBrokerage):
             held_t = [c for c in getattr(ex, 'held_trade_cas', None) or ()
                       if any(t is c for t in txs)]
             if held_t:
-                kept, tpairs, unpaired = pair_cancellations(txs)
+                kept, tpairs, unpaired = pair_cancellations(
+                    txs, acct_of=lambda t, _ex=ex: _ib_trade_acct(_ex, t))
                 txs[:] = kept
                 for _o, _c in tpairs:
                     emit_line(f"note: {nm_}: IB cancelled (Ca) "
@@ -2872,52 +3328,82 @@ class IbBrokerage(BaseBrokerage):
                       f"{nm(owner)} — dropped from this overlapping "
                       f"statement too.")
 
-        # --- 5. Commission refunds.
+        # --- 5. Commission refunds. One refund is its key and its broker
+        # Account: two accounts of a combined statement refunded alike
+        # (same currency, date, amount and wording) are two refunds, one
+        # kept and the other lost when the key alone named them (backlog
+        # TJ-1042, TJ-1043). A row with no Account is the same refund as
+        # a named one of that key (one account's own statement and a
+        # combined one list it differently).
         folds: Dict[tuple, tuple] = {}
         for i, (_p, ex, _t) in enumerate(files):
             for f in getattr(ex, 'refund_folds', None) or ():
-                folds.setdefault(f['refund'], (f, i))
+                folds.setdefault((f['refund'], f['refund_acct']), (f, i))
 
-        def _drop_fee_rows(rkey):
+        def _refund_seen(ex, rkey, acct) -> bool:
+            return any(k == rkey and _ib_accts_agree(a, acct)
+                       for k, a in getattr(ex, 'refund_seen', ()))
+
+        def _drop_fee_rows(rkey, acct):
             for _p, ex, txs in files:
                 for adj in getattr(ex, 'unmatched_refunds', None) or ():
-                    if adj['key'] == rkey:
+                    if adj['key'] == rkey and _ib_accts_agree(adj['account'],
+                                                              acct):
                         txs[:] = [t for t in txs if t is not adj['fee_tx']]
 
-        for rkey, (f, owner) in folds.items():
+        # The copy of the trade: the same key and broker Account, the
+        # same commission BEFORE any refund, this refund not yet in it.
+        # Its commission as it stands said nothing: a copy holding
+        # another subset of the trade's refunds (its rows in another
+        # order) never matched, and the purchase was booked twice
+        # (backlog TJ-0760).
+        for (rkey, racct), (f, owner) in folds.items():
             for j, (_p, ex, txs) in enumerate(files):
-                if (j == owner or rkey in getattr(ex, 'refund_seen', ())
+                if (j == owner or _refund_seen(ex, rkey, racct)
                         or not same_acct(ex, files[owner][1])):
                     continue
                 hit = next((t for t in txs
                             if t.get('action') == 'BUYSELL'
                             and _ib_trade_key(t) == f['key']
-                            and abs(float(t.get('fee') or 0.0)
-                                    - f['fee']) < 1e-9), None)
+                            and _ib_accts_agree(_ib_row_acct(ex, t),
+                                                f.get('acct') or racct)
+                            and rkey not in _ib_trade_meta(ex, t)['applied']
+                            and abs(_ib_trade_meta(ex, t)['fee0']
+                                    - f.get('fee0', f['fee'])) < 1e-9),
+                           None)
                 if hit is not None:
-                    _ib_fold_refund(hit, f['amount'])
+                    _ib_fold_refund_into(ex, hit, f['amount'], rkey)
                     emit_line(f"note: {nm(j)}: the commission refund of "
                           f"{f['amount']:+.2f} on the {f['key'][0]} trade "
                           f"of {f['key'][2]} (in {nm(owner)}) is folded "
                           f"into this overlapping statement's copy too.")
             # An overlapping copy of the REFUND (its trade not in that
             # statement) must not stay as a FEE row next to the fold.
-            _drop_fee_rows(rkey)
+            _drop_fee_rows(rkey, racct)
         open_refunds: Dict[tuple, tuple] = {}
         for i, (_p, ex, _t) in enumerate(files):
             for adj in getattr(ex, 'unmatched_refunds', None) or ():
-                if adj['key'] not in folds:
-                    open_refunds.setdefault(adj['key'], (adj, i))
-        for rkey, (adj, owner) in open_refunds.items():
+                if not any(k == adj['key']
+                           and _ib_accts_agree(a, adj['account'])
+                           for k, a in folds):
+                    open_refunds.setdefault((adj['key'], adj['account']),
+                                            (adj, i))
+        # A copy naming no Account is the named refund's copy: once.
+        for k, a in list(open_refunds):
+            if not a and any(k2 == k and a2 for k2, a2 in open_refunds):
+                del open_refunds[(k, a)]
+        for (rkey, racct), (adj, owner) in open_refunds.items():
             hits = []
             for j, (_p, ex, txs) in enumerate(files):
                 if j != owner and same_acct(ex, files[owner][1]):
-                    hits += _ib_refund_hits(adj, txs)
-            keys = {_ib_trade_key(t) for t in hits}
+                    hits += [(ex, t) for t in _ib_refund_hits(
+                        adj, txs,
+                        acct_of=lambda t, _ex=ex: _ib_row_acct(_ex, t))]
+            keys = {_ib_trade_key(t) for _ex, t in hits}
             if len(keys) == 1:
-                for t in hits:
-                    _ib_fold_refund(t, adj['amount'])
-                _drop_fee_rows(rkey)
+                for _ex, t in hits:
+                    _ib_fold_refund_into(_ex, t, adj['amount'], rkey)
+                _drop_fee_rows(rkey, racct)
                 emit_line(f"note: {nm(owner)}: commission adjustment of "
                       f"{adj['amount']:+.2f} {adj['currency']} on "
                       f"{adj['date']} ({adj['ticker']} {adj['qty']:g} on "
@@ -3588,6 +4074,9 @@ class IbBrokerage(BaseBrokerage):
                     info['new'] -= eff['qty']
                 elif eff['qty'] < 0:
                     info['old'] += eff['qty']
+                _legs = info.get('legs')
+                if _legs and eff['qty'] in _legs:
+                    _legs.remove(eff['qty'])
                 if abs(info['new']) < 1e-9 and abs(info['old']) < 1e-9:
                     # No leg left: the split never happened.
                     drop.add(id(info['tx']))
@@ -3980,10 +4469,12 @@ class IbBrokerage(BaseBrokerage):
                     # two levels disagree on the quantity.
                     if _disc == 'Trade' and 'Order' in pre[
                             'order_levels'].get(
-                            (asset_cat, self._cell(row, header_map,
-                                                   'Symbol'),
-                             (self._cell(row, header_map, 'Date/Time')
-                              .replace(',', ' ').split() or [''])[0]),
+                            _ib_level_key(
+                                asset_cat,
+                                self._cell(row, header_map, 'Symbol'),
+                                self._cell(row, header_map, 'Currency'),
+                                self._cell(row, header_map, 'Account'),
+                                self._cell(row, header_map, 'Date/Time')),
                             {}):
                         self.count_skip(f"{_NE}Trades execution-level "
                                         f"duplicate of an Order row")
@@ -4051,9 +4542,18 @@ class IbBrokerage(BaseBrokerage):
                 _listing = (_ib_listing_ext(asset_cat, symbol, currency,
                                             fii)
                             if asset_cat in ('Stocks', 'Warrants') else '')
+                # A futures contract's venue (its Listing Exch) decides
+                # its sessions: Montreal's 20:00 ET opening, CME's 24/7
+                # crypto contracts (backlog TJ-0878, TJ-0879).
+                _fexch = ''
+                if asset_cat in FUTURES_CATEGORIES:
+                    _finfo = (fii.get((asset_cat, symbol.strip()))
+                              or fii.get((asset_cat, re.sub(
+                                  r'\s+', ' ', symbol.strip()))) or {})
+                    _fexch = _finfo.get('exch') or ''
                 date, time, broker_time = _ib_market_trade_date(
                     date, time, asset_cat, currency, _listing,
-                    symbol=symbol)
+                    symbol=symbol, exch=_fexch)
                 # Settled in the listing's market (lib/dates.
                 # settlement_calendar, the rule every parser shares): a
                 # USD unit on the TSX through CDS on the days both Canada
@@ -4064,6 +4564,22 @@ class IbBrokerage(BaseBrokerage):
                     settlement_calendar(
                         f".{_listing}" if _listing else "", currency),
                     futures_settle=self.futures_settle)
+                # The settle date the row states (a Flex query's Settle
+                # Date Target) is the row's: the standard cycle is the
+                # fallback when the statement gives none (backlog
+                # TJ-0971). Futures keep the futures_settle rule
+                # (CA-DATE-09 / US-DATE-09); an expiry its own day.
+                _stated = ''
+                if (section == 'Trades'
+                        and asset_cat not in FUTURES_CATEGORIES):
+                    for _scol in _IB_SETTLE_COLS:
+                        if _scol in header_map:
+                            _stated = _ib_stated_settle(
+                                self._cell(row, header_map, _scol), date,
+                                where, _scol)
+                            if _stated:
+                                date_settle = _stated
+                            break
                 qty = _num('Quantity')
                 opt_exp = section == 'Options Expirations'
                 price = _num('T. Price', optional=opt_exp)
@@ -4159,11 +4675,11 @@ class IbBrokerage(BaseBrokerage):
                     symbol = f"F:{symbol}"
                 else:
                     symbol = symbol.replace(' ', '.')
-                    self._check_symbol_tag(_IB_EXT_RE.sub('', symbol),
+                    self._check_symbol_tag(_strip_ib_ext(symbol),
                         where)
 
                 # Remove common known exchange extensions to avoid doubling
-                symbol = _IB_EXT_RE.sub('', symbol)
+                symbol = _strip_ib_ext(symbol, currency)
 
                 ext = (_ib_listing_ext(asset_cat, description, currency, fii)
                        if asset_cat in ('Stocks', 'Warrants')
@@ -4247,6 +4763,21 @@ class IbBrokerage(BaseBrokerage):
                           f"buy is almost always a transfer or journal "
                           f"row: give the real cost in a .tt file and "
                           f"remove the row, if so.")
+                if 'Account' in header_map:
+                    _ib_trade_meta(self, _trade_tx)['acct'] = self._cell(
+                        row, header_map, 'Account')
+                if _stated and date_settle == _stated:
+                    _ib_trade_meta(self, _trade_tx)['settle_stated'] = True
+                # The broker's id of the execution (optional Flex
+                # columns): two fills alike in every booked field are
+                # two trades when their ids differ, in one statement or
+                # in two (reconcile_files, backlog TJ-0966).
+                for _xcol in _IB_EXEC_ID_COLS:
+                    _xid = (self._cell(row, header_map, _xcol)
+                            if _xcol in header_map else '')
+                    if _xid:
+                        _ib_trade_meta(self, _trade_tx).setdefault(
+                            'execs', {}).setdefault(_IB_EXEC_NS[_xcol], _xid)
                 if 'Ca' in code_tokens:
                     # (description stays the raw symbol: the security
                     # overrides key on it, and the original must get the
@@ -4422,6 +4953,12 @@ class IbBrokerage(BaseBrokerage):
                     transactions[-1]['issuer_country'] = isin[:2].upper()
                 if dealer_country:
                     transactions[-1]['dealer_country'] = dealer_country
+                if is_pil and is_roc_description(description):
+                    # The distribution it replaces was a return of
+                    # capital, no taxable dividend: a neutral fact the
+                    # income rules read (s.260(5.1)(c); TJ-0729).
+                    transactions[-1]['income_label'] = (
+                        PIL_LABEL_RETURN_OF_CAPITAL)
                 self.note_row_consumed()
 
             elif section == 'Open Positions':
@@ -4455,7 +4992,7 @@ class IbBrokerage(BaseBrokerage):
                 except ValueError:
                     self.count_skip(f"malformed {section} row")
                     continue
-                self._check_symbol_tag(_IB_EXT_RE.sub('', symbol.strip()),
+                self._check_symbol_tag(_strip_ib_ext(symbol.strip()),
                                        shown_name(path))
                 _op_full = _ib_stock_symbol(asset_cat, symbol, currency,
                                             fii)
@@ -4810,7 +5347,7 @@ class IbBrokerage(BaseBrokerage):
                     if _occ:
                         symbol = f"{_occ}.{_ib_currency_ext(currency)}"
                     else:
-                        _tk = _IB_EXT_RE.sub('', _raw_tk.replace(' ', '.'))
+                        _tk = _strip_ib_ext(_raw_tk.replace(' ', '.'), currency)
                         # The listing rule of the trades (S010-06): a
                         # TSX USD unit's refund sits on SAMPMD.U.TO with its
                         # trades, not SAMPMD.U.US (audit A2-0086).
@@ -4845,10 +5382,21 @@ class IbBrokerage(BaseBrokerage):
                         _adj_occ = _ib_option_ref(self, _adj_tk, fii,
                                                   root_alias, aliased_roots,
                                                   where)
+                        # The row's Account, else the statement's only
+                        # account: one account's own statement has no
+                        # such column (backlog TJ-1245).
+                        _adj_accts = self.statement_accounts()
                         comm_adjustments.append({
+                            'account': ((self._cell(row, header_map,
+                                                    'Account')
+                                         if 'Account' in header_map
+                                         else '')
+                                        or (next(iter(_adj_accts))
+                                            if len(_adj_accts) == 1
+                                            else '')),
                             'fee_tx': transactions[-1], 'amount': amount,
-                            'ticker': (_adj_occ or _IB_EXT_RE.sub(
-                                '', _adj_tk.replace(' ', '.'))),
+                            'ticker': (_adj_occ or _strip_ib_ext(
+                                _adj_tk.replace(' ', '.'), currency)),
                             'qty': _aq, 'trade_date': _tm.group(3),
                             'currency': currency, 'date': date,
                             'key': (currency, date, round(amount, 6),
@@ -5158,10 +5706,8 @@ class IbBrokerage(BaseBrokerage):
                                             'frac': -qty, 'eff': _eff})
                     handled = True
 
-                # Ratio terms may be comma-grouped ('Split 1 for 1,000'):
-                # the old [\d\.]+ stopped at the comma and read it as 1
-                # for 1 (audit S058-19). Parsed strictly.
-                split_match = re.search(r'^([A-Z0-9\s\.]+)\s*\(([^)]+)\)\s+Split\s+([\d\.,]+)\s+for\s+([\d\.,]+)', description, re.IGNORECASE)
+                # Ratio terms parsed strictly.
+                split_match = _IB_SPLIT_RE.search(description)
                 if split_match and not handled:
                     ticker = split_match.group(1).strip().replace(' ', '.')
                     self._check_symbol_tag(ticker, where)
@@ -5191,7 +5737,7 @@ class IbBrokerage(BaseBrokerage):
                         transactions.append(tx)
                         info = {'tx': tx, 'new': 0.0, 'old': 0.0,
                                 'text_ratio': ratio, 'key': split_key,
-                                'cil': 0.0}
+                                'cil': 0.0, 'legs': []}
                         emitted_splits[split_key] = info
                         for _c in [c for c in pending_cil
                                    if c['symbol'] == symbol
@@ -5204,6 +5750,8 @@ class IbBrokerage(BaseBrokerage):
                         info['new'] += qty
                     elif qty < 0:
                         info['old'] += -qty
+                    if qty:
+                        info['legs'].append(qty)
                     _ib_refine_split_ratio(info)
                     _eff.update(kind='split', split=info)
                     if (qty > 0 and _deliv
@@ -5449,10 +5997,10 @@ class IbBrokerage(BaseBrokerage):
                     symbol = f"F:{symbol.replace(' ', '.')}"
                 else:
                     symbol = symbol.replace(' ', '.')
-                    self._check_symbol_tag(_IB_EXT_RE.sub('', symbol),
+                    self._check_symbol_tag(_strip_ib_ext(symbol),
                         where)
 
-                symbol = _IB_EXT_RE.sub('', symbol)
+                symbol = _strip_ib_ext(symbol, currency)
                 ext = (_ib_listing_ext(asset_cat, self._cell(
                            row, header_map, 'Symbol'), currency, fii)
                        if asset_cat in ('Stocks', 'Warrants')
@@ -5534,6 +6082,12 @@ class IbBrokerage(BaseBrokerage):
                     'currency': currency,
                     'price': price,
                     'net_amount': abs(total_cost),
+                    # The contract size the price above is per (IB's
+                    # Financial Instrument Information; 1 per share),
+                    # as on a trade row: the loss rule reads a moved
+                    # option's size from it (backlog TJ-0830: a mini's
+                    # stated 10 was dropped and 100 assumed).
+                    'multiplier': multiplier,
                     'account': 'IB',
                     'description': xfer_desc,
                     # IB's Market Value: the fair market value of the
@@ -5628,7 +6182,10 @@ class IbBrokerage(BaseBrokerage):
         # Trades `Ca` rows (keys of the originals they reverse) and the
         # pairs dropped here — offered to the account's overlapping
         # statements (reconcile_files, audit A2-0259 / A2-0088).
-        self.trade_ca_keys = {_ib_trade_key(c, negate=True)
+        # (`_ib_row_acct`: the statement's only account names the rows of
+        # a statement with no Account column, backlog TJ-1244.)
+        self.trade_ca_keys = {(_ib_trade_key(c, negate=True),
+                               _ib_row_acct(self, c))
                               for c in trade_cancels}
         self.trade_pairs: List[tuple] = []
         # A Ca dated before the statement's period (its candidates are
@@ -5641,11 +6198,18 @@ class IbBrokerage(BaseBrokerage):
         if trade_cancels and len(_held) < len(trade_cancels):
             _partials: list = []
             _overlaps: list = []
+            # A combined statement's rows name their broker account:
+            # A's cancellation never removes B's same fill (backlog
+            # TJ-0982).
             _kept, _pairs, _unpaired = pair_cancellations(
                 [t for t in transactions if id(t) not in _held],
-                partials=_partials, overlaps=_overlaps)
+                partials=_partials, overlaps=_overlaps,
+                acct_of=lambda t: _ib_trade_acct(self, t))
             _kept += [t for t in transactions if id(t) in _held]
-            self.trade_pairs = [(dict(_o), dict(_c)) for _o, _c in _pairs]
+            # `_acct`: the row's broker Account (the copies lose its
+            # trade_meta entry); never written out.
+            self.trade_pairs = [(dict(_o, _acct=_ib_row_acct(self, _o)),
+                                 dict(_c)) for _o, _c in _pairs]
             # A Ca of one execution of a multi-fill order (A2-0298).
             for _o, _c, _r in _partials:
                 emit_line(f"note: {shown_name(path)}: IB cancelled (Ca) "
@@ -5668,11 +6232,15 @@ class IbBrokerage(BaseBrokerage):
             for _o, _c in _pairs:
                 if id(_c) in _whole:
                     continue
+                _kf = retained_fee(_o, _c)
                 emit_line(f"note: {shown_name(path)}: IB cancelled (Ca) "
                       f"{trade_cancel_what(_o['quantity'], _c['quantity'])} "
                       f"{_o['symbol']} trade of {_o['quantity']:g} @ "
                       f"{_o['price']:g} on {_o['date']} — the trade and "
-                      f"its cancellation are both dropped.")
+                      f"its cancellation are both dropped"
+                      + (f"; the commission IB kept "
+                         f"({_kf['net_amount']:g} {_kf['currency']}) "
+                         f"stays, a FEE row." if _kf else "."))
             for _c in _unpaired:
                 emit_line(f"note: {shown_name(path)}: IB cancelled (Ca) a "
                       f"{_c['symbol']} trade of {-_c['quantity']:g} @ "
@@ -5698,9 +6266,21 @@ class IbBrokerage(BaseBrokerage):
         _folded = 0
         self.refund_folds: List[Dict[str, Any]] = []
         self.unmatched_refunds: List[Dict[str, Any]] = []
-        self.refund_seen = {_adj['key'] for _adj in comm_adjustments}
+        # Two rows of one statement alike in every field are two refunds:
+        # the row's place among them joins its key, so a copy in another
+        # statement is the same refund and neither is lost when the
+        # account's statements are reconciled (backlog TJ-1246).
+        _adj_nth: Dict[tuple, int] = {}
         for _adj in comm_adjustments:
-            _hits = _ib_refund_hits(_adj, transactions)
+            _k = (_adj['key'], _adj['account'])
+            _adj_nth[_k] = _adj_nth.get(_k, 0) + 1
+            _adj['key'] = _adj['key'] + (_adj_nth[_k],)
+        self.refund_seen = {(_adj['key'], _adj['account'])
+                            for _adj in comm_adjustments}
+        for _adj in comm_adjustments:
+            _hits = _ib_refund_hits(
+                _adj, transactions,
+                acct_of=lambda t: _ib_trade_acct(self, t))
             if len(_hits) != 1:
                 if not _hits and ctx is not None:
                     # The account's other statements are searched once
@@ -5719,8 +6299,12 @@ class IbBrokerage(BaseBrokerage):
             _t = _hits[0]
             self.refund_folds.append({
                 'key': _ib_trade_key(_t), 'fee': float(_t.get('fee') or 0.0),
-                'amount': _adj['amount'], 'refund': _adj['key']})
-            _ib_fold_refund(_t, _adj['amount'])   # cash: a refund is +
+                'fee0': _ib_trade_meta(self, _t)['fee0'],
+                'acct': _ib_row_acct(self, _t),
+                'amount': _adj['amount'], 'refund': _adj['key'],
+                'refund_acct': _adj['account']})
+            # cash: a refund is +
+            _ib_fold_refund_into(self, _t, _adj['amount'], _adj['key'])
             transactions[:] = [t for t in transactions
                                if t is not _adj['fee_tx']]
             _folded += 1
@@ -6124,6 +6708,98 @@ _IB_ADVANCE_RE = re.compile(r'^\s*(?:Adjustment:\s*Deposit Advance|'
 _IB_CUR_RE = re.compile(r'^[A-Z]{3}$')
 
 
+def _ib_forex_cancels(orig: Dict[str, Any], ca: Dict[str, Any]) -> bool:
+    """True when the Forex `Ca` row `ca` reverses the fill `orig`: the
+    same pair and trade date, the negated quantity, the same price
+    (when the statement gives one) — the rule of lib/trade_cancel."""
+    if orig['ca'] or orig['sym'] != ca['sym'] or orig['day'] != ca['day']:
+        return False
+    if abs(ca['qty']) < 1e-12 or abs(orig['qty'] + ca['qty']) > \
+            1e-9 * max(1.0, abs(ca['qty'])):
+        return False
+    if orig['price'] is None or ca['price'] is None:
+        return True
+    return abs(orig['price'] - ca['price']) <= 1e-6 * max(1.0,
+                                                          abs(ca['price']))
+
+
+def _ib_forex_events(forex: List[Dict[str, Any]], name: str
+                     ) -> List[Dict[str, Any]]:
+    """The cash events of a statement's Forex fills (ib_cash_events): an
+    FXCONV each, its commission a FLOW. A fill IB cancelled (a `Ca` row
+    reversing it: the same pair, date and price, the negated quantity)
+    and its `Ca` row are no conversion — read as two, the round trip
+    realized a gain on currency that never changed hands (backlog
+    TJ-0743). What the two rows' commissions leave (a commission IB
+    kept) stays a fee of its own. Among several originals the one at
+    the cancellation's own clock wins, else the latest before it, else
+    the first after it (lib/trade_cancel's rule). A `Ca` row whose
+    original is not in this statement stays a reversing conversion,
+    said in a note."""
+    from taxjson.lib import cash_events as CE
+    used: set = set()
+    paired: Dict[int, int] = {}
+    for ci, ca in enumerate(forex):
+        if not ca['ca']:
+            continue
+        cands = [i for i, f in enumerate(forex)
+                 if i not in used and i != ci and _ib_forex_cancels(f, ca)]
+        if not cands:
+            continue
+        pool = [i for i in cands if forex[i]['time'] == ca['time']] \
+            or cands
+        before = [i for i in pool if i < ci]
+        oi = before[-1] if before else pool[0]
+        used.update((oi, ci))
+        paired[ci] = oi
+    out: List[Dict[str, Any]] = []
+    for i, f in enumerate(forex):
+        sym, where, day = f['sym'], f['where'], f['day']
+        if i in used:
+            if i not in paired:
+                continue            # the original: said with its Ca
+            o = forex[paired[i]]
+            fees = ([(o['ccur'], o['comm'] + f['comm'])]
+                    if o['ccur'] == f['ccur']
+                    else [(o['ccur'], o['comm']), (f['ccur'], f['comm'])])
+            for ccur, comm in fees:
+                if abs(comm) > 1e-9:
+                    ev = CE.flow(day, ccur, comm, where=where,
+                                 desc=f"Forex {sym} commission kept on a "
+                                      f"cancelled order")
+                    ev['time'] = f['time']
+                    out.append(ev)
+            continue
+        qty, proceeds = f['qty'], f['proceeds']
+        if abs(qty) < 1e-12 or abs(proceeds) < 1e-12:
+            continue
+        if qty > 0:          # bought BASE, paid QUOTE
+            ev = CE.conv(day, f['quote'], proceeds, f['base'], qty,
+                         where=where, desc=f"Forex {sym}")
+        else:                # sold BASE, received QUOTE
+            ev = CE.conv(day, f['base'], qty, f['quote'], proceeds,
+                         where=where, desc=f"Forex {sym}")
+        ev['time'] = f['time']
+        out.append(ev)
+        if f['ca']:
+            out.append({"kind": "NOTE", "date": day, "settle": day,
+                        "currency": "", "where": name, "origin": "broker",
+                        "text": f"{where}: IB cancelled (Ca) a {sym} "
+                                f"conversion of {-qty:g} on {day} whose "
+                                f"original is not in this statement — "
+                                f"kept as a reversing conversion"})
+        if abs(f['comm']) > 1e-9:
+            # `_fee_of`: the conversion it was charged on — in the
+            # base currency it is part of the amount paid or
+            # received (lib/fx_cash_v2, backlog TJ-0456).
+            ev = CE.flow(day, f['ccur'], f['comm'], where=where,
+                         desc=f"Forex {sym} commission")
+            ev['_fee_of'] = where
+            ev['time'] = f['time']
+            out.append(ev)
+    return out
+
+
 def ib_cash_events(path) -> List[Dict[str, Any]]:
     """The cash events of one IB activity statement (lib/cash_events):
     FXCONV per Forex order (its commission a FLOW when charged in a
@@ -6151,7 +6827,29 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
         return parse_strict_number(v, field=what, where=where,
                                    allow_blank=True, blank=0.0)
 
-    for lineno, row in enumerate(csv.reader(io.StringIO(text)), 1):
+    rows = list(csv.reader(io.StringIO(text)))
+    # One detail level of the Forex fills, the security parser's rule
+    # (parse_file, prescan `has_order_level`): the Order rows when the
+    # statement has any, else the Trade (execution) rows — read only at
+    # the Order level, a statement of Trade rows moved no cash here
+    # while the parser reconciled it (backlog TJ-0858).
+    _hdr: Dict[str, List[str]] = {}
+    has_order_level = False
+    for row in rows:
+        if len(row) < 3:
+            continue
+        if row[1].strip() == 'Header':
+            _hdr[row[0].strip()] = row[2:]
+        elif row[0].strip() == 'Trades' and row[1].strip() == 'Data' \
+                and (dict(zip(_hdr.get('Trades') or [], row[2:])).get(
+                    'DataDiscriminator') or '').strip() == 'Order':
+            has_order_level = True
+            break
+    # The Forex fills, turned into events once all are read: a `Ca` row
+    # and the order it cancels are no conversion (backlog TJ-0743).
+    forex: List[Dict[str, Any]] = []
+
+    for lineno, row in enumerate(rows, 1):
         if len(row) < 3:
             continue
         sec, kind = row[0].strip(), row[1].strip()
@@ -6174,23 +6872,20 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
         if sec == 'Statement' and d.get('Field Name') == 'Period':
             period = _ib_period(d.get('Field Value', ''))
         elif sec == 'Trades' and d.get('Asset Category') == 'Forex' \
-                and d.get('DataDiscriminator', 'Order') == 'Order':
+                and ((d.get('DataDiscriminator') or '').strip() == 'Order'
+                     or ((d.get('DataDiscriminator') or '').strip()
+                         in ('', 'Trade') and not has_order_level)):
             sym = (d.get('Symbol') or '').strip()
             base, _, quote = sym.partition('.')
             if not base or not quote:
                 raise BrokerageParseError(
                     f"{where}: Forex symbol {sym!r} is not BASE.QUOTE")
-            day, _t = _ib_split_datetime(d.get('Date/Time', ''), where)
+            # The clock too: one day's conversions are walked in the
+            # order IB executed them, not the order of the rows
+            # (backlog TJ-0859).
+            day, clock = _ib_split_datetime(d.get('Date/Time', ''), where)
             qty = _n(d.get('Quantity', ''), 'Quantity', where)
             proceeds = _n(d.get('Proceeds', ''), 'Proceeds', where)
-            if abs(qty) < 1e-12 or abs(proceeds) < 1e-12:
-                continue
-            if qty > 0:          # bought BASE, paid QUOTE
-                out.append(CE.conv(day, quote, proceeds, base, qty,
-                                   where=where, desc=f"Forex {sym}"))
-            else:                # sold BASE, received QUOTE
-                out.append(CE.conv(day, base, qty, quote, proceeds,
-                                   where=where, desc=f"Forex {sym}"))
             comm_col = next((c for c in h
                              if re.match(r'^Comm in [A-Z]{3}$', c or '')),
                             None)
@@ -6200,14 +6895,13 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
             else:
                 comm = _n(d.get('Comm/Fee', ''), 'Comm/Fee', where)
                 ccur = (d.get('Currency') or quote).strip()
-            if abs(comm) > 1e-9:
-                # `_fee_of`: the conversion it was charged on — in the
-                # base currency it is part of the amount paid or
-                # received (lib/fx_cash_v2, backlog TJ-0456).
-                ev = CE.flow(day, ccur, comm, where=where,
-                             desc=f"Forex {sym} commission")
-                ev['_fee_of'] = where
-                out.append(ev)
+            forex.append({
+                'where': where, 'sym': sym, 'base': base, 'quote': quote,
+                'day': day, 'time': clock, 'qty': qty,
+                'proceeds': proceeds, 'comm': comm, 'ccur': ccur,
+                'price': (_n(d.get('T. Price', ''), 'T. Price', where)
+                          if 'T. Price' in d else None),
+                'ca': 'Ca' in re.split(r'[;,\s]+', d.get('Code') or '')})
         elif sec == 'Deposits & Withdrawals':
             cur = (d.get('Currency') or '').strip()
             if not _IB_CUR_RE.match(cur):
@@ -6242,6 +6936,7 @@ def ib_cash_events(path) -> List[Dict[str, Any]]:
             if _IB_CUR_RE.match(cur):
                 fxbal[cur] = fxbal.get(cur, 0.0) + _n(
                     d.get('Quantity', ''), 'Quantity', where)
+    out.extend(_ib_forex_events(forex, name))
     if len(members) > 1:
         # Its Cash Report has no Account column: one combined balance,
         # so the ledger keeps the statement's accounts in one book — a

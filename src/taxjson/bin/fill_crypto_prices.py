@@ -126,6 +126,55 @@ def load_symbol_overrides(dirs):
         merged.update(side_rules_in([str(d)]).crypto)
     return merged
 
+def chart_close(data, quote: str, date_str: str) -> float:
+    """The USD close of `quote` ("SYN-USD") for the UTC day `date_str`
+    in a Yahoo chart response, or ValueError saying why there is none.
+    The response must name that quote and USD (when it names them) and
+    carry a candle stamped on that UTC day whose close is a real
+    positive number: the first positive close of the response was taken
+    whatever its day, symbol or currency, and `true` read as 1 — an
+    adjacent day's close, cached for good as the asked day's price
+    (backlog TJ-0744). HTTP 200 with a null/empty/non-positive close (a
+    data gap or an unfinished candle) is a failed lookup like any other
+    (audit S000-00)."""
+    res = data['chart']['result'][0]
+    meta = res.get('meta') or {}
+    got = str(meta.get('symbol') or '').strip()
+    if got and got.upper() != quote.upper():
+        raise ValueError(f"Yahoo answered for {got}, not {quote}")
+    ccy = str(meta.get('currency') or '').strip()
+    if ccy and ccy.upper() != 'USD':
+        raise ValueError(f"Yahoo quoted {quote} in {ccy}, not USD")
+    closes = res['indicators']['quote'][0]['close'] or []
+    stamps = res.get('timestamp')
+
+    def usable(c):
+        if isinstance(c, bool) or not isinstance(c, (int, float)):
+            return None
+        v = float(c)
+        return v if math.isfinite(v) and v > 0 else None
+    days = []
+    if stamps is None:
+        # No timestamps at all: only the one candle the one-day window
+        # asked for can be that day's.
+        given = [c for c in closes if c is not None]
+        if len(given) == 1 and usable(given[0]) is not None:
+            return usable(given[0])
+    elif len(stamps) != len(closes):
+        raise ValueError(f"Yahoo returned {len(closes)} close(s) for "
+                         f"{len(stamps)} timestamp(s) of {quote}")
+    for ts, c in zip(stamps or [], closes):
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            continue
+        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+        days.append(day)
+        if day == date_str and usable(c) is not None:
+            return usable(c)
+    raise ValueError(f"Yahoo returned no usable close for {quote} on "
+                     f"{date_str} (days {', '.join(days) or 'none'}; "
+                     f"close={closes!r})")
+
+
 def get_crypto_price(symbol, date_str):
     y_symbol = yahoo_id(symbol)
     try:
@@ -149,18 +198,7 @@ def get_crypto_price(symbol, date_str):
         # without this the whole pipeline freezes on a single bad symbol.
         with urllib.request.urlopen(req, timeout=15) as res:
             data = json.loads(res.read().decode())
-        closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
-        for c in closes:
-            if c is not None:
-                v = float(c)
-                if math.isfinite(v) and v > 0:
-                    return v
-        # HTTP 200 with a null/empty/non-positive close (a data gap or
-        # an unfinished candle) is a failed lookup like any other — it
-        # used to fall through to `return 0.0` with no warning at all
-        # (audit S000-00).
-        raise ValueError(f"Yahoo returned no usable close for "
-                         f"{y_symbol}-USD (close={closes!r})")
+        return chart_close(data, f"{y_symbol}-USD", date_str)
     except Exception as e:
         hint = ("" if symbol in PROJECT_CRYPTO_IDS
                 else f" — {_crypto_line_hint(symbol)}")
@@ -241,6 +279,38 @@ def _swap_pairs(loaded):
     return pairs
 
 
+def _swap_fee_factor(recv, spent):
+    """How much more than the received units' value the swap's one value
+    is: the swap fee the parser put on its legs (`swap_fee`, "<units>
+    received" or "<units> spent": the coin of the leg that received or
+    spent, whatever ticker.map maps its symbol to), which its priced
+    rows count in that value (a Coinbase
+    Advanced Trade buy's Total; a Kraken ledger's gross amountusd). A fee
+    in the received coin: the units that arrived plus the fee, over the
+    units that arrived; in the spent coin: the units spent, fee
+    included, over the units spent for the received coin. 1.0 without
+    one, or when it does not fit the legs. Only a value taken from the
+    received leg is scaled: the spent leg's units already hold a fee in
+    the spent coin, and bought the gross received units."""
+    text = (getattr(recv, 'swap_fee', '') or getattr(spent, 'swap_fee', '')
+            or '')
+    parts = str(text).split()
+    if len(parts) != 2:
+        return 1.0
+    try:
+        units = float(parts[0])
+    except ValueError:
+        return 1.0
+    if not (math.isfinite(units) and units > 0):
+        return 1.0
+    q_recv, q_spent = abs(recv.quantity), abs(spent.quantity)
+    if parts[1] == 'received' and q_recv > 0:
+        return (q_recv + units) / q_recv
+    if parts[1] == 'spent' and q_spent > units:
+        return q_spent / (q_spent - units)
+    return 1.0
+
+
 def _value_swaps_once(pairs, unpriced):
     """One exchange, one value (audit S013-08): each leg priced from its
     own coin's daily close gave the spent coin's proceeds and the
@@ -251,6 +321,8 @@ def _value_swaps_once(pairs, unpriced):
     of consideration, whatever Yahoo's close of the coin; B32), else
     the RECEIVED coin's fair value (what the spent coin was exchanged
     for), else the spent coin's when the received coin has no price.
+    A swap fee the parser says the value includes is added to a value
+    taken from the received coin (_swap_fee_factor).
     Returns the number of swaps valued."""
     n = 0
 
@@ -263,10 +335,17 @@ def _value_swaps_once(pairs, unpriced):
     for recv, spent in pairs:
         stable = [leg for leg in (recv, spent)
                   if leg.symbol in _STABLE_ONE_TO_ONE]
-        value = (_value(stable[0]) if stable else 0.0) \
-            or _value(recv) or _value(spent)
-        if not value > 0:
+        source = ((stable[0] if stable and _value(stable[0]) else None)
+                  or (recv if _value(recv) else None)
+                  or (spent if _value(spent) else None))
+        if source is None:
             continue
+        value = _value(source)
+        if source is recv:
+            # The received coin's value is of the units that arrived;
+            # a fee the parser says the swap's value includes is added
+            # at the exchange's own rate (backlog TJ-0981 / TJ-0991).
+            value *= _swap_fee_factor(recv, spent)
         for leg in (recv, spent):
             leg.net_amount = value
             leg.gross_amount = value
@@ -451,6 +530,20 @@ def _fill(args):
                 tx.gross_amount = tx.net_amount
                 tx.currency = 'USD'
                 _stamp_reward_price(tx, 'stablecoin par assumption')
+                transactions.append(tx)
+                continue
+            # A reward with a stated price and a 0 total (a .tt income
+            # line's PRICE column, read since TJ-0984): the price values
+            # it, in the row's currency. Skipped by the lookup below and
+            # by --require-prices, it booked $0 income at exit 0 (backlog
+            # TJ-1173).
+            if (tx.action == 'DIVIDEND' and abs(tx.price) >= 1e-8
+                    and abs(tx.net_amount) < 1e-8
+                    and abs(tx.gross_amount) < 1e-8
+                    and abs(tx.quantity) > 1e-12):
+                tx.net_amount = abs(tx.price * tx.quantity)
+                tx.gross_amount = tx.net_amount
+                _stamp_reward_price(tx, 'stated price x reward quantity')
                 transactions.append(tx)
                 continue
             if abs(tx.price) < 1e-8 and tx.symbol not in ('USD', 'CAD'):

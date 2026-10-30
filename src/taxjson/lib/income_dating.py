@@ -36,7 +36,9 @@ Canada
   ordinary income. The slip is authoritative.
 - [CA-INC-07] s.260 deems a dividend on a share only: a payment in
   lieu on a unit the books show to be a Canadian trust's (the
-  distribution test that dates trust income) stays ordinary income.
+  distribution test that dates trust income) stays ordinary income, and
+  so does one in lieu of a payment that was no taxable dividend
+  (s.260(5.1)(c); the row's income_label ``return_of_capital``).
 
 United States
 - [US-INC-DATE-DIV] Dividends and payments in lieu: the pay date.
@@ -93,6 +95,10 @@ ATTENTION_INCOME_YEAR = "ATTENTION: income year: "
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SETTING_CORPORATE = "corporate_distributions"
 SETTING_RIC = "ric_january_dividends"
+# income_label of a payment in lieu whose underlying distribution the
+# broker designates a return of capital (IB "(Return of Capital)"): a
+# neutral fact the parser records; pil_is_dividend reads it (TJ-0729).
+PIL_LABEL_RETURN_OF_CAPITAL = "return_of_capital"
 
 
 def _get(row: Any, key: str, default: Any = "") -> Any:
@@ -313,8 +319,10 @@ class IncomeRules:
         lowers the ACB on (s.53(2)(h)), or '' (the pay date)."""
         if self.country != _C.CANADA:
             return ""
-        if (str(_get(row, "action")).upper() != "ADJUST"
-                or str(_get(row, "type")).lower() != "roc"):
+        # The shared ROC test (is_return_of_capital): a hand-entered
+        # ADJUST with no type is one too, and its record date moves it
+        # as the typed row's does (TJ-0655: only `type=roc` was dated).
+        if not is_return_of_capital(row):
             return ""
         rec, pay = _iso(_get(row, "record_date")), _iso(_get(row, "date"))
         if not rec or not pay or rec >= pay \
@@ -356,12 +364,32 @@ class IncomeRules:
         if not (str(_get(row, "dealer_country")).upper() == "CA"
                 and is_canadian_issuer(row)):
             return False
-        if self.is_canadian_trust(row) and (
-                str(_get(row, "income_label")).lower() == "distribution"
-                or str(_get(row, "symbol")).upper()
-                in {str(s).upper() for s in (trust_units or ())}):
+        if self.pil_on_trust_unit(row, trust_units):
+            return False
+        # s.260(5.1)(a) deems a dividend only when the payment replaced
+        # was a taxable dividend: one in lieu of a return of capital is
+        # ordinary income under (c) (CA-INC-07; backlog TJ-0729).
+        if (str(_get(row, "income_label")).lower()
+                == PIL_LABEL_RETURN_OF_CAPITAL):
             return False
         return True
+
+    def pil_on_trust_unit(self, row: Any,
+                          trust_units: Optional[Iterable[str]] = None
+                          ) -> bool:
+        """Canada: a payment in lieu on a Canadian trust's unit — the row
+        labelled a distribution, or its symbol in `trust_units` (the
+        books' trust test, trust_units()). Never a dividend, whoever
+        paid it: ordinary income, a T5 box 14 / T3 box 26 amount
+        (CA-INC-07; pil_is_dividend, lib/slip_audit.load_books)."""
+        if self.country != _C.CANADA:
+            return False
+        if str(_get(row, "action")).upper() != "DIVIDEND_IN_LIEU":
+            return False
+        return self.is_canadian_trust(row) and (
+            str(_get(row, "income_label")).lower() == "distribution"
+            or str(_get(row, "symbol")).upper()
+            in {str(s).upper() for s in (trust_units or ())})
 
     # ------------------------------------------------------------ USA
     def ric_prior_year(self, row: Any) -> bool:
@@ -573,9 +601,14 @@ class IncomeRules:
             amt = -float(_get(r, "net_amount", 0.0) or 0.0)
         is_dist = (action == "DIVIDEND" and str(
             _get(r, "income_label")).lower() == "distribution")
-        is_roc = (action == "ADJUST"
-                  and str(_get(r, "type")).lower() == "roc")
+        is_roc = is_return_of_capital(r)
+        # A [[distributions]] entry's row: taxjson dated it itself, the
+        # day before a sale that straddles its record date when there
+        # is one (apply-distributions), so nothing in the export or the
+        # T3 is there to check (backlog TJ-1061).
+        is_table_entry = str(_get(r, "id")).startswith("DIST-")
         if (rec and (is_dist or is_roc) and self.is_canadian_trust(r)
+                and not is_table_entry
                 and not self._plausible_record(rec, pay)
                 and (year is None or year in (int(rec[:4]),
                                               int(pay[:4])))):

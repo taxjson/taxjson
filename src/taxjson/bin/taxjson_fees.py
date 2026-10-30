@@ -143,6 +143,52 @@ def add_stat(s: Dict[str, Any], fee: float, qty: float,
         s["fee_stocks"] += fee
 
 
+def _num(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _option_map_size(tx: Dict[str, Any]) -> float:
+    """The contract size a ticker.map `MULT` line gives the equity option
+    of row `tx` (lib/markets.option_contract_size, as convert-tt's total
+    check and the engine read it), 0.0 when none does."""
+    from taxjson.lib import markets
+    from taxjson.lib.core import parse_option_underlying
+    from taxjson.lib.futures import _FUTURES_PREFIXES
+    sym = str(tx.get("symbol") or "")
+    if sym.startswith(_FUTURES_PREFIXES):
+        return 0.0
+    return float(markets.option_contract_size(
+        sym, parse_option_underlying(sym) or "") or 0.0)
+
+
+def trade_value(tx: Dict[str, Any], is_opt: bool, is_fut: bool) -> float:
+    """The row's gross trade value, fees left out: its gross_amount;
+    else, where the row gives a price, price x quantity (x the contract
+    size: an equity option's ticker.map `MULT` line, as the engine sizes
+    it (backlog TJ-1079); a declared `multiplier`; else 100 for an
+    option; a future's size unknown, 0); else its net cash. 0 = no
+    notional: the row is
+    out of %NOTNL on both sides. `abs(gross or net)` read a commission-
+    only assignment's fee as its trade value and the fee-inclusive net
+    of a hand-entered (.tt) trade as its gross (backlog TJ-0776)."""
+    gross = _num(tx.get("gross_amount"))
+    if gross:
+        return abs(gross)
+    if tx.get("price") is not None:
+        mult = _option_map_size(tx) if is_opt else 0.0
+        if mult <= 0:
+            mult = _num(tx.get("multiplier"))
+        if mult <= 0:
+            if is_fut:
+                return 0.0
+            mult = 100.0 if is_opt else 1.0
+        return abs(_num(tx.get("price")) * _num(tx.get("quantity")) * mult)
+    return abs(_num(tx.get("net_amount")))
+
+
 def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
               deleted=frozenset(), until=None, quiet=frozenset()):
     """Walk the parsed files, dedup by id, accumulate per-key buckets.
@@ -206,8 +252,10 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
                 all_rows.append(tx)
                 row_broker.append(broker)
 
-    from taxjson.bin.taxjson_sort import plan_dedup, source_accounts_of
-    plan = plan_dedup(all_rows, source_accounts_of(metas))
+    from taxjson.bin.taxjson_sort import (plan_dedup, source_accounts_of,
+                                          source_brokers_of)
+    plan = plan_dedup(all_rows, source_accounts_of(metas),
+                      source_brokers_of(metas))
     dropped = set(plan.drop)
 
     for i, tx in enumerate(all_rows):
@@ -252,7 +300,7 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         from taxjson.lib.futures import is_plain_future
         is_fut = is_plain_future(tx.get("symbol") or "")
         qty = abs(float(tx.get("quantity") or 0))
-        notional = abs(float(tx.get("gross_amount") or tx.get("net_amount") or 0))
+        notional = trade_value(tx, is_opt, is_fut)
         fee_base = to_base(fee, curr, date)
         notional_base = to_base(notional, curr, date)
 
@@ -336,8 +384,9 @@ _DEFINITIONS = (
     "MEAN / MEDIAN: the fee per trade.",
     "%NOTNL: fees as a percent of gross trade value (rows with notional "
     "> 0).",
-    "$/UNIT: the non-option fee per unit (share, coin, contract of a "
-    "future); $/CONTR: the option fee per contract.",
+    "$/UNIT: the non-option fee per share or coin (a future's fee is in "
+    "TOTAL and NON-OPTION, not per unit); $/CONTR: the option fee per "
+    "contract.",
 )
 
 
@@ -393,12 +442,14 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
     if converting:
         # Stock vs option split (absolute), and native composition.
         # Non-option = shares, units, futures and crypto (a coin
-        # exchange's fees were labelled 'stocks', audit S031-04).
+        # exchange's fees were labelled 'stocks', audit S031-04): the
+        # futures' fees too, which the split left out (backlog
+        # TJ-0897).
         doc.section("Non-option vs option fees")
         split = []
         for name, b in rows:
             m = metrics(b["base"])
-            split.append([name, _money(m["stock_fee"]),
+            split.append([name, _money(m["stock_fee"] + m["futures_fee"]),
                           _money(m["option_fee"])])
         doc.line("\n".join(fit_table(["BROKERAGE", "NON-OPTION", "OPTIONS"],
                                      split, width_=doc.w)))
@@ -595,6 +646,10 @@ def main():
     # int-typed at the CLI (A1 convention) but flows through as a string.
     year = str(args.year) if args.year is not None else None
     deleted = frozenset()
+    # The map's MULT lines size an option's trade value (backlog TJ-1079);
+    # without one, TAXJSON_TICKER_MAP (`taxjson run` sets it).
+    from taxjson.lib.markets import use_ticker_map
+    use_ticker_map(args.ticker_map)
     if args.ticker_map:
         from taxjson.bin.taxjson_ticker_map import load_map_file
         deleted = frozenset(str(x).upper() for x in

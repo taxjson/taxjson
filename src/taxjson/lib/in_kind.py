@@ -92,8 +92,17 @@ CA_WITHDRAWAL_INCOME = {
     "lrif": "that value is income on your T4RIF",
     "fhsa": ("that value is income on your T4FHSA unless it is a "
              "qualifying withdrawal"),
-    "resp": ("that value is an educational assistance payment on the "
-             "student's T4A"),
+    # An RESP pays three ways and the transfer row does not say which:
+    # a refund of contributions is tax-free with no slip; the plan's
+    # income and grants are an educational assistance payment (the
+    # student's T4A) or an accumulated income payment (the subscriber's
+    # T4A). Every withdrawal used to be called the first kind of income
+    # (backlog TJ-0926).
+    "resp": ("a refund of contributions is not income (no slip); paid "
+             "from the plan's income or grants it is an educational "
+             "assistance payment on the student's T4A or an accumulated "
+             "income payment on the subscriber's T4A — the plan's "
+             "statement says which"),
     "rdsp": "that value is partly income on your T4A(RDSP)",
     "prpp": "that value is income on your T4A",
     "tfsa": "",
@@ -300,7 +309,8 @@ def pair_all(all_legs: Sequence[Leg], days: int = PAIR_DAYS, *,
     quantity within `days` days, each leg once, the closest date first:
 
     1. legs of ONE account (a journal between two listings ticker.map
-       joins, a broker's cancel and rebook);
+       joins, a broker's cancel and rebook), none a line declares in
+       kind (backlog TJ-0829);
     2. legs of the same kind in two accounts — taxable <-> taxable or
        registered <-> registered: a move of your own, never in kind;
     3. a taxable leg with a registered leg: an in-kind move. Legs a
@@ -345,8 +355,14 @@ def pair_all(all_legs: Sequence[Leg], days: int = PAIR_DAYS, *,
             got.append((i, j))
         return got
 
-    # 1. One account's own legs.
-    journal = greedy(lambda o, n: o.account == n.account)
+    # 1. One account's own legs — never a leg a line declares in kind:
+    # the line says where it went (backlog TJ-0829: an unrelated
+    # transfer-in of the account a day later took the declared
+    # contribution's leg as a journal, and the line then booked a move
+    # to a plan outside the project, the real plan's receipt left over).
+    journal = greedy(lambda o, n: (o.account == n.account
+                                   and id(o.row) not in declared
+                                   and id(n.row) not in declared))
     j_o = {i for i, _ in journal}
     j_i = {j for _, j in journal}
     # 2. The same kind in two accounts (a leg a line declares in kind
@@ -607,14 +623,17 @@ def apply_lines(moves: List[Move],
                 lines: Iterable[Tuple[str, Dict[str, Any]]],
                 all_legs: Sequence[Leg], *,
                 key: Optional[Callable[[str], str]] = None,
-                days: int = PAIR_DAYS) -> List[str]:
+                days: int = PAIR_DAYS,
+                refused: Optional[List[str]] = None) -> List[str]:
     """Apply each (taxable account, INKIND line): it names the transfer
     row of that account, security and signed quantity nearest its date
     (within `days`; `line_legs`). It values and dates the move of that
     row; with none, it declares a move for the row whose plan is outside
     the project (added to `moves`). A `plan=own` line values nothing
     (`pair_all` kept its row out). Returns a problem text per line that
-    matches no transfer row."""
+    matches no transfer row. `refused` receives the text of each option
+    line whose price and total disagree at the contract's size: the run
+    stops on those (backlog TJ-1163), as it does on a share's."""
     keyf = key or (lambda s: str(s or "").upper())
     problems: List[str] = []
     taken: set = set()
@@ -627,12 +646,21 @@ def apply_lines(moves: List[Move],
                 f"transfer row of {acct} ({abs(q):g} {ln['symbol']} "
                 f"{'out' if q < 0 else 'in'} within {days} days of "
                 f"{ln['date']}): ignored")
+            bad = line_total_problem(ln)
+            if bad and refused is not None:
+                refused.append(bad)
             continue
         taken.add(id(g.row))
         if ln.get("plan") == OWN:
             continue
         kind = CONTRIBUTION if q < 0 else WITHDRAWAL
         m = next((m for m in moves if m.taxable.row is g.row), None)
+        fmv = _line_value(ln, g, m.registered if m is not None else None)
+        if isinstance(fmv, str):
+            problems.append(f"{fmv}: ignored")
+            if refused is not None:
+                refused.append(fmv)
+            continue
         if m is None:
             m = Move(kind, taxable=g, registered=None,
                      plan=ln.get("plan") or "sheltered",
@@ -642,7 +670,7 @@ def apply_lines(moves: List[Move],
             m.plan = ln["plan"]         # the line names the unnamed plan
         m.line = ln
         m.date = ln["date"]
-        m.fmv = float(ln["total"])
+        m.fmv = fmv
         m.currency = ln["currency"]
         m.source = "tt"
         m.source_text = f"INKIND line {ln.get('source') or ''}".strip()
@@ -651,6 +679,52 @@ def apply_lines(moves: List[Move],
             m.problem, m.alternatives = "", []
     moves.sort(key=lambda m: (m.date, m.taxable.account, m.key))
     return problems
+
+
+def _line_value(ln: Dict[str, Any], leg: Leg, other: Optional[Leg]):
+    """The value an INKIND line gives the move of `leg` (float), or the
+    problem text when its price and total disagree. An option's price is
+    per share of the contract: valued at the rows' own contract size (a
+    ticker.map MULT line's 10), not the parser's standard 100 (backlog
+    TJ-0933)."""
+    total = float(ln["total"])
+    try:
+        px = float(ln.get("price") or 0.0)
+    except (TypeError, ValueError):
+        px = 0.0
+    from taxjson.lib.core import is_option_symbol
+    if px <= 0 or not is_option_symbol(str(ln.get("symbol") or "")):
+        return total
+    size = contract_size(leg, other)
+    by_price = round(abs(float(ln["quantity"])) * px * size, 2)
+    if not ln.get("total_stated"):
+        return by_price
+    return line_total_problem(ln, size) or total
+
+
+def line_total_problem(ln: Dict[str, Any], *sizes: float) -> str:
+    """Why an option's INKIND line is refused: it states a price and a
+    total that agree at none of `sizes` (default: the size the symbol's
+    own rule gives, a ticker.map MULT line, else the standard 100); ""
+    for any other line (backlog TJ-1163)."""
+    from taxjson.lib.core import is_option_symbol
+    sym = str(ln.get("symbol") or "")
+    try:
+        px = float(ln.get("price") or 0.0)
+    except (TypeError, ValueError):
+        px = 0.0
+    if not ln.get("total_stated") or px <= 0 or not is_option_symbol(sym):
+        return ""
+    total = float(ln["total"])
+    qty = abs(float(ln["quantity"]))
+    size = 0.0
+    for size in sizes or (contract_size(Leg("", "", {"symbol": sym}, "")),):
+        by_price = round(qty * px * size, 2)
+        if abs(total - by_price) <= max(0.05, 0.01 * max(by_price, 1.0)):
+            return ""
+    return (f"the INKIND line {ln.get('source') or ''}: total {total:.2f} "
+            f"differs from qty x price x {size:g} = {by_price:.2f} — give "
+            f"one of them (price 0 and the total, or the price alone)")
 
 
 def contract_size(leg: Leg, *others: Optional[Leg]) -> float:
@@ -851,7 +925,9 @@ def mark_sheltered(rows: List[Dict[str, Any]], moves: Iterable[Move], *,
     row added for it (a plan whose transfers are kept out, or one
     outside the project). A withdrawal's
     plan leg missing from the book is added as the plan's disposal, so
-    the plan does not look like it still holds the shares. Returns the
+    the plan does not look like it still holds the shares; so is a
+    withdrawal from a plan outside the project, up to the units its
+    earlier contributions added (backlog TJ-0828). Returns the
     number of rows changed or added. `currency`: the label of an added
     row (the book's base currency; an added row carries no money)."""
     keyf = key or (lambda s: str(s or "").upper())
@@ -882,7 +958,8 @@ def mark_sheltered(rows: List[Dict[str, Any]], moves: Iterable[Move], *,
                 if hit is not None:
                     taken.add(hit)
                     rows[hit] = dict(rows[hit], action="BUYSELL",
-                                     type=IN_KIND_CONTRIBUTION_TYPE)
+                                     type=IN_KIND_CONTRIBUTION_TYPE,
+                                     **_declared_day(m, rows[hit]))
                 else:
                     rows.append(_plan_row(m, reg, +qty,
                                           IN_KIND_CONTRIBUTION_TYPE,
@@ -894,13 +971,57 @@ def mark_sheltered(rows: List[Dict[str, Any]], moves: Iterable[Move], *,
                 n += 1
             elif hit is not None:
                 taken.add(hit)
+    # A withdrawal declared from a plan outside the project takes the
+    # shares out of that plan's side, as far as an earlier contribution
+    # put them there: the plan no longer holds a replacement (backlog
+    # TJ-0828: the loss was denied for good although the plan gave the
+    # shares back before day 30). Never more than it holds: a plan
+    # outside the project that never received them is not made short.
+    for m in sorted((m for m in moves if m.booked and m.kind == WITHDRAWAL
+                     and not m.registered_legs),
+                    key=lambda m: (m.date, m.key)):
+        acct = f"{m.plan or 'registered'}-outside"
+        held = 0.0
+        for t in rows:
+            if (str(t.get("account") or "") != acct
+                    or keyf(str(t.get("symbol") or "")) != m.key
+                    or str(t.get("date") or "")[:10] > m.date):
+                continue
+            try:
+                held += float(t.get("quantity") or 0.0)
+            except (TypeError, ValueError):
+                continue
+        qty = min(m.quantity, held)
+        if qty > _EPS:
+            rows.append(_plan_row(m, None, -qty, IN_KIND_WITHDRAWAL_TYPE,
+                                  currency, seen))
+            n += 1
     return n
+
+
+def _declared_day(m: Move, row: Dict[str, Any]) -> Dict[str, Any]:
+    """The date fields of a contribution's plan row when an INKIND line
+    declares the move: the line's date, as the taxable side's sale has
+    it. The plan's posting a few days later used to stay its acquisition
+    date for the loss rule, so a declared contribution inside a loss's
+    30 days counted outside them (backlog TJ-0925). {} when no line."""
+    if m.line is None or m.kind != CONTRIBUTION or not m.date:
+        return {}
+    d = str(row.get("date") or "")
+    out: Dict[str, Any] = {"date": m.date + d[10:]}
+    if row.get("date_settle") is not None:
+        out["date_settle"] = m.date
+    return out
 
 
 def _plan_row(m: Move, reg: Optional[Leg], qty: float, typ: str,
               currency: str, seen: Dict[str, int]) -> Dict[str, Any]:
     acct = reg.account if reg else f"{m.plan or 'registered'}-outside"
-    day = reg.date if reg else m.date
+    # A declared contribution's plan side is on the line's date
+    # (_declared_day, backlog TJ-0925).
+    day = (m.date if reg is None or (m.line is not None
+                                     and typ == IN_KIND_CONTRIBUTION_TYPE)
+           else reg.date)
     return {"action": "BUYSELL", "type": typ, "date": day,
             "date_settle": day, "time": "09:30:00", "symbol": m.key,
             "quantity": float(qty), "currency": currency or m.currency,
@@ -928,10 +1049,14 @@ def _money(x: float) -> str:
 
 def message(moves: Sequence[Move], problems: Sequence[str],
             results: Dict[Tuple[str, str, str], Dict[str, float]],
-            country: str, base: str) -> Optional[Tuple[str, List[str]]]:
+            country: str, base: str, inputs: str = "inputs"
+            ) -> Optional[Tuple[str, List[str]]]:
     """(headline, details) of the run's ONE in-kind warning, or None.
     `results`: (taxable account, security key, date) -> {"gain",
-    "denied"} of a contribution's sale in the books (base currency)."""
+    "denied"} of a contribution's sale in the books (base currency).
+    `inputs`: the exports folder as the project names it (`../inputs`
+    when every year shares one), where the INKIND line goes (backlog
+    TJ-0827)."""
     from taxjson.lib.country import COST_TERM, is_canada
     cost = COST_TERM.get(country, "cost")
     if not moves and not problems:
@@ -984,7 +1109,7 @@ def message(moves: Sequence[Move], problems: Sequence[str],
             details.append(
                 f"- {what}: NOT booked — ambiguous: {alts} could be the "
                 f"other side too, so it is not clear which move was in "
-                f"kind. Say which in a .tt file in inputs/"
+                f"kind. Say which in a .tt file in {inputs}/"
                 f"{m.taxable.account}/ (or the folder of the taxable "
                 f"account whose move it was): `{ln} "
                 f"{m.taxable.currency or 'CAD'} <price per share> "
@@ -999,7 +1124,7 @@ def message(moves: Sequence[Move], problems: Sequence[str],
                 f"either, so it is not taken as one move on its own. The "
                 f"shares stay in {m.taxable.account}'s books as the "
                 f"transfer rows left them. If it was one move, add to a "
-                f".tt file in inputs/{m.taxable.account}/: `{ln} "
+                f".tt file in {inputs}/{m.taxable.account}/: `{ln} "
                 f"{m.taxable.currency or 'CAD'} <price per share>` (it "
                 f"books the move at that value, with {m.other_account}'s "
                 f"transfer row); if it was not, `{ln} plan=own`.")
@@ -1019,7 +1144,7 @@ def message(moves: Sequence[Move], problems: Sequence[str],
             q = -m.quantity if m.kind == CONTRIBUTION else m.quantity
             details.append(
                 f"- {what}: NOT booked — {why}. Add the fair market value "
-                f"as a line in a .tt file in inputs/{m.taxable.account}/: "
+                f"as a line in a .tt file in {inputs}/{m.taxable.account}/: "
                 f"INKIND {m.date} {m.symbol} {q:g} "
                 f"{m.taxable.currency or 'CAD'} <price per share>")
     for p in problems:
@@ -1044,11 +1169,12 @@ def message(moves: Sequence[Move], problems: Sequence[str],
     return head, details
 
 
-def parts_message(found: Sequence[Tuple[Leg, List[Leg]]]
+def parts_message(found: Sequence[Tuple[Leg, List[Leg]]],
+                  inputs: str = "inputs"
                   ) -> Optional[Tuple[str, List[str]]]:
     """(headline, details) of the run's ONE warning about transfer rows
     that are possibly an in-kind move delivered in parts (`in_parts`),
-    or None."""
+    or None. `inputs`: the exports folder as `message` takes it."""
     if not found:
         return None
     details: List[str] = []
@@ -1067,7 +1193,7 @@ def parts_message(found: Sequence[Tuple[Leg, List[Leg]]]
             f"{'out' if out else 'in'} on {g.date}; {plans} — possibly a "
             f"{'contribution' if out else 'withdrawal'} in kind in "
             f"parts. If the shares {'went into' if out else 'came from'} "
-            f"the plan, add to a .tt file in inputs/{g.account}/: `{ln} "
+            f"the plan, add to a .tt file in {inputs}/{g.account}/: `{ln} "
             f"{g.currency or 'CAD'} <price per share>` (it books the move "
             f"at that value, with the plan's legs that add up to it); if "
             f"it was a move of your own: `{ln} plan=own`.")

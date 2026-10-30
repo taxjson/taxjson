@@ -180,6 +180,10 @@ def load_positions(files: List[Path],
                 "is_option": is_opt,
                 "multiplier": ((_declared_multiplier(h) or OPTION_MULTIPLIER)
                                if is_opt else 1.0),
+                # A lot whose basis the books do not have: total_cost
+                # leaves it out (TJ-0598), so no definite unrealized
+                # result can be computed (backlog TJ-0710).
+                "unknown_cost": bool(h.get("unknown_cost")),
             })
     return out
 
@@ -372,6 +376,18 @@ def load_radar(paths: List[Path]) -> Dict[str, Dict[str, Any]]:
                               # today would lose (the rest is claimable).
                               "at_risk_qty": r.get("at_risk_qty"),
                               "taxable_qty": r.get("taxable_qty"),
+                              # VIOLATION: who must sell to rescue the
+                              # loss, per holder, and the taxable units a
+                              # sale today would lose to a registered
+                              # holder's buy in its own window (backlog
+                              # TJ-0908, TJ-1039).
+                              "rescue": (r.get("rescue")
+                                         if isinstance(r.get("rescue"),
+                                                       list) else None),
+                              "registered_window_qty": r.get(
+                                  "registered_window_qty"),
+                              "registered_window_last_add": r.get(
+                                  "registered_window_last_add"),
                               # The engine's warn-only flags (a warrant,
                               # an adjusted-series call, a futures
                               # option, a US long call): the ADVISORY
@@ -467,6 +483,24 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
                 out["no_clear"] += loss
                 continue
             clears, cat = age_out, "LOCKED-AGE-OUT"
+        elif cat == "VIOLATION":
+            # Before the deadline a full exit rescues the units a
+            # TAXABLE rebuy backs — claimable now. The units a
+            # registered account bought in the window and still holds
+            # are not: a sale today is superficial for them as well and
+            # the denial is permanent, unless that account sells too.
+            # They wait for its buy to age out (last add + 31 days), as
+            # past the deadline (backlog TJ-0908; sell-check says
+            # UNSAFE).
+            frac = _registered_backed_fraction(rec, r.get("qty"))
+            if frac > 1e-9:
+                out["now"] += loss * (1.0 - frac)
+                loss *= frac
+                age_out = _registered_age_out(r)
+                if age_out is None:
+                    out["no_clear"] += loss
+                    continue
+                clears, cat = age_out, "LOCKED-AGE-OUT"
         if cat in ("CLEAR", "RISK", "VIOLATION", "EXITABLE", "CAUTION",
                    "BLOCKED", "WASHED"):
             # RISK = sellable now with a forward-window caveat — the
@@ -515,6 +549,50 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
     return {k: round(v, 2) for k, v in out.items()}
 
 
+def _registered_backed_fraction(rec: Optional[Dict[str, Any]],
+                                row_qty: Any = None) -> float:
+    """Share of an open VIOLATION's taxable units a registered account
+    backs for a loss sale TODAY: what it bought in that sale's own
+    window and still holds (s.54, per holder; the radar's
+    registered_window_qty). The sale is superficial for those units and
+    the denial is permanent (CA-SL-02): they are not harvestable now
+    (backlog TJ-0908). The units it held from before that window deny
+    nothing: the rescue list's quantity is its whole holding, what it
+    must sell to rescue the EARLIER loss, so it stands in only for a
+    sidecar without the field (backlog TJ-1039). Each sale is judged on
+    its own (CA-SL-08), so the share is of `row_qty`, the units of this
+    account's row, not of every account's (backlog TJ-1242). 0.0 when
+    the radar names no registered holder (an older sidecar has no rescue
+    list)."""
+    reg = 0.0
+    win = (rec or {}).get("registered_window_qty")
+    if win is not None:
+        try:
+            reg = abs(float(win))
+        except (TypeError, ValueError):
+            win = None
+    if win is None:
+        for x in (rec or {}).get("rescue") or []:
+            if not isinstance(x, dict) or x.get("call"):
+                continue
+            if x.get("holder") != "sheltered":
+                continue
+            try:
+                reg += abs(float(x.get("qty") or 0.0))
+            except (TypeError, ValueError):
+                continue
+    if reg <= 1e-9:
+        return 0.0
+    try:
+        tq = abs(float(row_qty if row_qty
+                       else (rec or {}).get("taxable_qty")))
+    except (TypeError, ValueError):
+        return 1.0
+    if tq <= 1e-9:
+        return 1.0
+    return max(0.0, min(1.0, reg / tq))
+
+
 def _deadline_passed(clears: Optional[str], today: date) -> bool:
     """A VIOLATION's clears_at is the LAST trade date that rescues the
     loss (inclusive); past it, no sale does."""
@@ -528,10 +606,14 @@ def _registered_age_out(row: Dict[str, Any]) -> Optional[str]:
     """The date a sale today stops being superficial on account of the
     registered side's last buy (last add + 31 days; today or earlier =
     already clear). None when the registered side is unknown (no
-    --sheltered input)."""
+    --sheltered input). The holdings name shares only: the radar's
+    registered_window_last_add also has a long call (backlog TJ-1177)."""
     if not row.get("sheltered_known"):
         return None
     add = row.get("sheltered_last_add")
+    window_add = (row.get("radar") or {}).get("registered_window_last_add")
+    if isinstance(window_add, str) and (not add or window_add > str(add)):
+        add = window_add
     if not add:
         return date.min.isoformat()          # nothing registered: clear
     try:
@@ -723,7 +805,9 @@ def main(argv: Optional[List[str]] = None,
                    help="Days before a cache-served price warns "
                         "(default: %(default)s)")
     p.add_argument("--ticker-map", type=Path, default=None, metavar="FILE",
-                   help="The project's ticker.map. With --options, a "
+                   help="The project's ticker.map: its QUOTE and CRYPTO "
+                        "lines pick what each holding is quoted as. "
+                        "With --options, a "
                         "contract the pipeline renamed onto another "
                         "listing's code (TOBASE SAMPLK.US SAMPLJ.TO turns "
                         "SAMPLK...US calls into SAMPLJ...TO) is quoted as the "
@@ -861,17 +945,44 @@ def main(argv: Optional[List[str]] = None,
         for d in (f.resolve().parent, f.resolve().parent.parent):
             if d not in _dirs:
                 _dirs.append(d)
-    external_map = load_yf_map(_dirs + [Path(".")])
-    # The coin spellings the books were priced with: fill-crypto's
-    # ids, the project's ticker.map CRYPTO lines (A2-0364).
-    # Project root first — `taxjson run` reads the map from there.
-    crypto_overrides = load_crypto_overrides(
-        [d for d in reversed(_dirs)])
+    if args.ticker_map is not None:
+        # The map NAMED is the one whose QUOTE / CRYPTO lines pick each
+        # quote's identity: it was used for the option renames only,
+        # and a ticker.map found beside the inputs (or none) quoted the
+        # equities (backlog TJ-0911).
+        try:
+            from taxjson.lib.ticker_map import (map_problem_line,
+                                                read_side_rules,
+                                                say_map_message)
+            _side = read_side_rules(args.ticker_map)
+        except (OSError, ValueError) as e:
+            error(PROG, f"cannot read --ticker-map {args.ticker_map}: {e}")
+            return 2
+        for _msg in _side.problems:
+            say_map_message(map_problem_line(_msg))
+        external_map = dict(_side.quote)
+        crypto_overrides = dict(_side.crypto)
+    else:
+        external_map = load_yf_map(_dirs + [Path(".")])
+        # The coin spellings the books were priced with: fill-crypto's
+        # ids, the project's ticker.map CRYPTO lines (A2-0364).
+        # Project root first — `taxjson run` reads the map from there.
+        crypto_overrides = load_crypto_overrides(
+            [d for d in reversed(_dirs)])
     yf_map: Dict[str, str] = {}
+    # A QUOTE line's QTY_RATIO: the quoted ticker's units per book share
+    # (`QUOTE ZZOLD.TO ZZNEW.TO 0.25`: 4 old = 1 new). Ignored, 100 old
+    # shares were valued as 100 new ones (backlog TJ-0709).
+    quote_ratio: Dict[str, float] = {}
     for t in tickers:
         if t in external_map:
-            yf_map[t] = external_map[t][0]      # spelling only: positions
-            continue                            # are in CURRENT tickers
+            yf_map[t] = external_map[t][0]
+            try:
+                _ratio = float(external_map[t][1])
+            except (TypeError, ValueError, IndexError):
+                _ratio = 1.0
+            quote_ratio[t] = _ratio if _ratio > 0 else 1.0
+            continue
         yf = yf_symbol_for(t, crypto_overrides)
         if yf is not None:
             yf_map[t] = yf
@@ -950,10 +1061,20 @@ def main(argv: Optional[List[str]] = None,
     # short's (negative) credited proceeds netted against long cost made
     # every-row -10% read -50%, or flip sign (audit S034-05).
     tot_gross = 0.0
+    unknown_basis: List[str] = []
     for r in positions:
         q = quotes.get(r["symbol"])
         if q is None:
             _omit(r, "no price")
+            continue
+        if r.get("unknown_cost"):
+            # Part of the holding's cost is unknown (an OPENING with
+            # cost=unknown): the known part's cost against the whole
+            # holding's value read as a definite GAIN and swelled the
+            # totals (backlog TJ-0710). Left out, with the reason.
+            _omit(r, "cost basis unknown for part of the holding")
+            if r["symbol"] not in unknown_basis:
+                unknown_basis.append(r["symbol"])
             continue
         if r.get("is_option"):
             # Premium currency follows the UNDERLYING's listing — the
@@ -1003,7 +1124,16 @@ def main(argv: Optional[List[str]] = None,
                            f"({rate_date}) — run `taxjson run` to refresh.")
         mult = (float(r.get("multiplier") or OPTION_MULTIPLIER)
                 if r.get("is_option") else 1.0)
-        value = r["qty"] * q.price * mult * fx
+        ratio = (1.0 if r.get("is_option")
+                 else quote_ratio.get(r["symbol"], 1.0))
+        if (ratio != 1.0 and q.listing
+                and q.listing != yf_map.get(r["symbol"])):
+            # The source priced the book symbol's own listing (an IBKR
+            # hit: that tier never sees a QUOTE remap), so the quote is
+            # already per book share: the QUOTE line's ratio is for its
+            # target's quote only (backlog TJ-1038).
+            ratio = 1.0
+        value = r["qty"] * ratio * q.price * mult * fx
         # A written option's premium already recognised at the write
         # (grant timing) is not recovered by the buy-back: the close
         # books the whole buy-back cost as the loss. Netting it against
@@ -1022,9 +1152,10 @@ def main(argv: Optional[List[str]] = None,
         exit_native = None
         if (unreal < -0.005 and r["qty"] > 0 and r["cost"] > 0
                 and fx > 0):
+            # In the QUOTED listing's units (a QUOTE ratio's).
             exit_native = round(
-                r["cost"] / (r["qty"] * mult * fx) * _BREAKEVEN_BUFFER,
-                4)
+                r["cost"] / (r["qty"] * ratio * mult * fx)
+                * _BREAKEVEN_BUFFER, 4)
         expiry = (parse_option_expiry(r["symbol"])
                   if r.get("is_option") else None)
         dte = None
@@ -1051,7 +1182,10 @@ def main(argv: Optional[List[str]] = None,
             "sheltered_last_add_days": _days_from_today((sh or {}).get(
                 "last_add")),
             "price": q.price,
-            "price_base": q.price * fx,
+            # Per BOOK share, beside COST/SH: a QUOTE ratio's quote is
+            # per quoted unit.
+            "price_base": q.price * fx * ratio,
+            "quote_ratio": ratio,
             "price_currency": qcur,
             "fx_rate": fx,
             "breakeven_exit_native": exit_native,
@@ -1073,6 +1207,12 @@ def main(argv: Optional[List[str]] = None,
         tot_cost += cost_basis
         tot_gross += abs(cost_basis)
         tot_value += value
+    if unknown_basis:
+        warn(PROG, f"{', '.join(unknown_basis)} omitted: the books do not "
+                   f"have the cost of part of the holding (an `OPENING "
+                   f"... cost=unknown` line, a transfer in with no "
+                   f"cost), so its gain or loss cannot be told — give "
+                   f"that cost, then `taxjson run`.")
     for qcur, syms in sorted(no_rate.items()):
         # `taxjson run` fetches the rates of [settings] source_currencies
         # only: a currency only a QUOTE line's listing is in is never
@@ -1359,7 +1499,7 @@ def main(argv: Optional[List[str]] = None,
     doc.items(legend)
 
     notes: List[str] = []
-    if any((r.get("recognised_premium") or 0) > 0.005 for r in rows):
+    if any(abs(r.get("recognised_premium") or 0) > 0.005 for r in rows):
         notes.append("Written options under grant timing: the premium "
                      "was taxed when the option was written, so COST "
                      "leaves it out and UNREALIZED is the capital loss "

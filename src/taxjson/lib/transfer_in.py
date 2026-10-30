@@ -620,7 +620,8 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
              no_move: Optional[Callable[[Tuple[str, str, Dict[str, Any]]],
                                         bool]] = None,
              not_own: Optional[Sequence[NotOwn]] = None,
-             paired: Optional[List[Tuple[str, str, str, float]]] = None
+             paired: Optional[List[Tuple[str, str, str, float]]] = None,
+             apart: Optional[Callable[[str, str], bool]] = None
              ) -> List[Arrival]:
     """The transfer-in quantities that came from outside the books.
 
@@ -664,7 +665,11 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     the pairing cancelled, wholly or in part (a move of your own, a
     journal inside one account, shares out and back): the positive
     evidence `taxjson transfers` needs to call a transfer-in your own
-    move (backlog TJ-0308)."""
+    move (backlog TJ-0308).
+
+    `apart(out symbol, in symbol)`: true when the user's ticker.map
+    keeps the two securities apart (a DISTINCT line): such legs are
+    never a listing journal (step 2; backlog TJ-0821)."""
     keyf = key or (lambda s: str(s or "").upper())
     rows = list(rows)
     # A journal inside one account (its legs' pair id, a .tt JOURNAL
@@ -771,14 +776,25 @@ def arrivals(rows: Iterable[Tuple[str, str, Dict[str, Any]]], *,
     #    and a day are no journal (audit 2026-10-24 B03): the in leg
     #    stays an arrival, said as ATTENTION; a journal between two
     #    roots is declared by the ticker.map TOBASE line joining them.
+    #    Nor are two listings a DISTINCT line keeps apart (backlog
+    #    TJ-0821: the arrival of the other company's shares was cancelled
+    #    and their sale read as a short).
     from taxjson.lib.cross_listings import listing_root
+
+    def _apart(o, inn) -> bool:
+        if apart is None:
+            return False
+        so = str(o[2].get("symbol") or "")
+        si = str(inn[2].get("symbol") or "")
+        return apart(so, si) or apart(o[3], inn[3])
     _cancel([(_gap(inn, o), str(inn[2].get("date")), i, j)
              for i, inn in enumerate(ins) for j, o in enumerate(outs)
              if inn[3] != o[3] and inn[0] == o[0]
              and abs(inn[4] - o[4]) <= _EPS
              and _gap(inn, o) <= LISTING_JOURNAL_DAYS
              and listing_root(str(inn[2].get("symbol") or ""))
-             == listing_root(str(o[2].get("symbol") or ""))])
+             == listing_root(str(o[2].get("symbol") or ""))
+             and not _apart(o, inn)])
 
     # 3. A move of your own slower than the window (audit 2026-10-25
     #    diff-engine#4): the in leg 11 to SLOW_MOVE_DAYS days after an
@@ -905,7 +921,9 @@ def _tt_events(rows: Iterable[Dict[str, Any]], keyf: Callable[[str], str]
 def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
                                         str]],
                  consumed: Sequence[Tuple[str, str, str, float]],
-                 a: Arrival) -> float:
+                 a: Arrival,
+                 landed: Sequence[Tuple[str, str, str, float]] = ()
+                 ) -> float:
     """The units of `a.key` the account's .tt rows hold when `a`
     arrives, replayed: every .tt acquisition dated on or before the
     arrival day (the documented fix is a purchase "dated on or before
@@ -917,7 +935,34 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
     purchase into the units that arrived: B04); the units earlier
     arrivals of this account took (`consumed`: (date, time, key,
     units)), at their own place in the replay, so a split between two
-    arrivals scales them too."""
+    arrivals scales them too. The units an earlier arrival took are in
+    the account from then on: a later .tt sale sells the .tt units on
+    hand first, and what it sells beyond them is the arrived units, not
+    a purchase dated after it (backlog TJ-0823: such a sale also spent
+    the second arrival's own later purchase, whose book value was then
+    booked as well — held twice; TJ-1054: a sale of the arrived units
+    first left the account's own .tt units looking unspent, and they
+    covered an arrival with no purchase, never booked). A broker sale
+    takes the broker's units, then the arrived ones, then the units the
+    account held by other means (`other`), then the .tt units on hand:
+    nothing else was there for it to sell (backlog TJ-1179, TJ-1283).
+
+    `landed`: the same (date, time, key, units) of the units of earlier
+    arrivals no .tt purchase accounts for (booked at the broker's book
+    value, or kept out): in the account from then on, as the arrived
+    units are, and they spend no purchase (backlog TJ-1055).
+
+    mark_covered's other events (backlog TJ-0822): a declared dated
+    rename is a `split` of 1 that renames; `broker` an acquisition
+    (sale) of the account's broker rows, its own pool; an in-kind
+    move's taxable side `inkind`: a contribution takes its units out of
+    the account — the arrived units first, then the broker's, only then
+    the .tt purchases still unspent (a contributed .tt purchase covers
+    no later arrival; it never spends a purchase dated after it) —, a
+    withdrawal's units are in the account as an arrival's are. `other`
+    (read by a broker sale alone; backlog TJ-1283): an opening balance's
+    units and a move of your own in; `broker_split`, a broker row's SPLIT,
+    adds what it makes of the units a broker sale can read."""
     arrival_time = str(a.row.get("time") or "") if a.row else ""
 
     def before(d: str, tm: str) -> bool:
@@ -926,9 +971,19 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
 
     merged = list(events) + [(d, tm, 10 ** 9 + n, "consume", k, -u, k)
                              for n, (d, tm, k, u) in enumerate(consumed)]
+    merged += [(d, tm, 2 * 10 ** 9 + n, "landed", k, u, k)
+               for n, (d, tm, k, u) in enumerate(landed)]
     merged.sort(key=lambda e: (e[0], e[1], e[2]))
-    held: Dict[str, float] = {}
+    held: Dict[str, float] = {}         # .tt units no arrival took yet
+    arrived: Dict[str, float] = {}      # units earlier arrivals took
+    broker: Dict[str, float] = {}       # the broker rows' units
+    other: Dict[str, float] = {}        # units held by other means
     redirect: Dict[str, str] = {}
+
+    def _take(pool: Dict[str, float], k: str, want: float) -> float:
+        got = min(want, max(0.0, pool.get(k, 0.0)))
+        pool[k] = pool.get(k, 0.0) - got
+        return want - got
 
     def rk(k: str) -> str:
         while k in redirect:
@@ -942,25 +997,68 @@ def _tt_units_at(events: Sequence[Tuple[str, str, int, str, str, float,
         if kind == "trade":
             if v < 0 and not before(d, tm):
                 continue
+            if v < 0:
+                # The .tt units on hand first; beyond them, the arrived
+                # units; what is still left is a short the .tt lines
+                # open (a later purchase closes it).
+                v = -_take(arrived, k2, _take(held, k2, -v))
             held[k2] = held.get(k2, 0.0) + v
         elif kind == "consume":
             if not (d < a.date or (d == a.date and tm <= a.time)):
                 continue
             held[k2] = held.get(k2, 0.0) + v
+            arrived[k2] = arrived.get(k2, 0.0) - v
+        elif kind == "landed":
+            if d < a.date or (d == a.date and tm <= a.time):
+                arrived[k2] = arrived.get(k2, 0.0) + v
+        elif kind == "broker":
+            if v < 0 and not before(d, tm):
+                continue
+            if v < 0:
+                _take(held, k2, _take(other, k2, _take(
+                    arrived, k2, _take(broker, k2, -v))))
+            else:
+                broker[k2] = broker.get(k2, 0.0) + v
+        elif kind == "other":
+            other[k2] = other.get(k2, 0.0) + v
+        elif kind == "broker_split":
+            if not before(d, tm):
+                continue
+            tk = rk(nk)
+            units = sum(max(0.0, p.get(k2, 0.0))
+                        for p in (broker, arrived, other))
+            other[tk] = other.get(tk, 0.0) + max(
+                0.0, units * v - (units if tk == k2 else 0.0))
+        elif kind == "inkind":
+            if not before(d, tm):
+                continue
+            if v > 0:
+                arrived[k2] = arrived.get(k2, 0.0) + v
+            else:
+                _take(held, k2, _take(broker, k2, _take(arrived, k2, -v)))
         elif kind == "split":
             if not before(d, tm):
                 continue
-            held[k2] = held.get(k2, 0.0) * v
             tk = rk(nk)
+            for pool in (held, arrived, broker, other):
+                pool[k2] = pool.get(k2, 0.0) * v
+                if tk != k2:
+                    pool[tk] = pool.get(tk, 0.0) + pool.pop(k2, 0.0)
             if tk != k2:
-                held[tk] = held.get(tk, 0.0) + held.pop(k2, 0.0)
                 redirect[k2] = tk
     return max(0.0, held.get(rk(a.key), 0.0))
 
 
 def mark_covered(found: List[Arrival],
                  tt_rows: Dict[str, List[Dict[str, Any]]], *,
-                 key: Optional[Callable[[str], str]] = None) -> None:
+                 key: Optional[Callable[[str], str]] = None,
+                 renames: Iterable[Tuple[str, str, str]] = (),
+                 broker_rows: Optional[Dict[str, List[Dict[str, Any]]]]
+                 = None,
+                 in_kind: Optional[Dict[str, List[Tuple[str, str, float]]]]
+                 = None,
+                 own_in: Optional[Dict[str, List[Tuple[str, str, float]]]]
+                 = None) -> None:
     """Set `covered` on each arrival the receiving account's .tt rows
     already account for: the .tt acquisitions of the security dated on
     or before the arrival, its .tt SPLIT lines before the arrival
@@ -971,9 +1069,31 @@ def mark_covered(found: List[Arrival],
     not covered and booked_rows books nothing for it — booking it
     whole would hold the covered units twice (audit 2026-10-24 B41),
     booking a pro-rata rest would guess which units the .tt lines
-    are."""
+    are.
+
+    The declarations the converted rows leave out, replayed with them
+    (backlog TJ-0822): `renames`, the project's dated renames (date,
+    old symbol, new symbol: a purchase of the old symbol covers an
+    arrival of the new one after the date, as a SPLIT line that renames
+    does); `in_kind`, account -> its booked in-kind moves' taxable side
+    (date, symbol, signed units: a contribution's shares left the
+    account); `broker_rows`, account -> its parsed broker rows, whose
+    shares a contribution takes before a .tt purchase's and whose sales
+    sell the arrived units (backlog TJ-1054). An arrival the rows do not
+    cover is in the account from then on too, booked or not (backlog
+    TJ-1055). `own_in`, account -> the moves of your own into it (date,
+    symbol, units), and the account's opening balances: a broker sale of
+    those units spends no .tt purchase (backlog TJ-1283)."""
     from taxjson.lib.core import is_opening_row
     keyf = key or (lambda s: str(s or "").upper())
+    extra: List[Tuple[str, str, int, str, str, float, str]] = []
+    for n, (d, old, new) in enumerate(renames):
+        ko, kn = keyf(old), keyf(new)
+        if ko != kn:
+            # At the start of its day: a row of that day is the new
+            # symbol's.
+            extra.append((str(d)[:10], "00:00:00", -1 - n, "split", ko,
+                          1.0, kn))
     for acct in sorted({a.account for a in found}):
         rows = [t for t in tt_rows.get(acct) or [] if isinstance(t, dict)]
         # An opening balance (CA-OPEN-03) dated on or after an arrival
@@ -988,19 +1108,48 @@ def mark_covered(found: List[Arrival],
             if (a.account == acct and not a.covered
                     and a.date <= snap.get(a.key, "")):
                 a.covered, a.covered_by = True, "tt"
-        events = _tt_events(rows, keyf)
+        events = _tt_events(rows, keyf) + extra
+        for d, tm, _n, kind, k, v, nk in _tt_events(
+                (broker_rows or {}).get(acct) or [], keyf):
+            if kind == "trade":
+                events.append((d, tm, 10 ** 6 + _n, "broker", k, v, k))
+            elif kind == "split":
+                events.append((d, tm, 10 ** 6 + _n, "broker_split", k, v, nk))
+        for n, (d, sym, q) in enumerate((in_kind or {}).get(acct) or []):
+            k = keyf(sym)
+            events.append((str(d)[:10], "09:30:00", 10 ** 8 + n,
+                           "inkind", k, float(q), k))
+        for n, t in enumerate(rows):
+            if is_opening_row(t):
+                k = keyf(str(t.get("symbol") or ""))
+                try:
+                    q = float(t.get("quantity") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if q > 0:
+                    events.append((str(t.get("date") or "")[:10], "",
+                                   -10 ** 6 + n, "other", k, q, k))
+        for n, (d, sym, q) in enumerate((own_in or {}).get(acct) or []):
+            k = keyf(sym)
+            events.append((str(d)[:10], "", -10 ** 5 + n, "other", k,
+                           float(q), k))
+        events.sort(key=lambda e: (e[0], e[1], e[2]))
         consumed: List[Tuple[str, str, str, float]] = []
+        landed: List[Tuple[str, str, str, float]] = []
         for a in sorted((x for x in found if x.account == acct
                          and not x.covered),
                         key=lambda x: (x.date, x.time)):
             a.covered_units = 0.0
-            avail = _tt_units_at(events, consumed, a)
+            avail = _tt_units_at(events, consumed, a, landed)
             if avail >= a.quantity - _EPS:
                 a.covered, a.covered_by = True, "tt"
                 consumed.append((a.date, a.time, a.key, a.quantity))
-            elif avail > _EPS:
+                continue
+            if avail > _EPS:
                 a.covered_units = round(avail, 8)
                 consumed.append((a.date, a.time, a.key, avail))
+            landed.append((a.date, a.time, a.key,
+                           a.quantity - max(0.0, avail)))
 
 
 def mark_missing_history(found: List[Arrival],

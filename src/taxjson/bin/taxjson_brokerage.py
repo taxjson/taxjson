@@ -993,6 +993,9 @@ Examples:
     _source_names: dict = {}
     _source_keys: dict = {}
     source_accounts: dict = {}
+    # A generic mapping's named broker, per file: one account number at
+    # two named brokers is two accounts (backlog TJ-0975).
+    source_brokers: dict = {}
     for input_path, extractor, _txs in parsed_files:
         _nm = shown_name(input_path)
         _base, _k = _nm, 1
@@ -1016,9 +1019,13 @@ Examples:
             source_accounts[source_identity(
                 _nm, _source_keys[id(extractor)])] = sorted(
                 hash_broker_account(a) for a in _accts)
+        if source_label.startswith('generic:'):
+            source_brokers[source_identity(
+                _nm, _source_keys[id(extractor)])] = source_label
         stamp_source_accounts(_txs, _accts)
 
     _bare_warned: set = set()
+    row_instants: list = []
     for input_path, extractor, transactions in parsed_files:
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
         _source = _source_names[id(extractor)]
@@ -1232,6 +1239,18 @@ Examples:
             multipliers.append(t.get('multiplier'))
             row_lines.append(_row_line)
             given_ids.append(bool(str(t.get('id') or '').strip()))
+            row_instants.append(
+                (getattr(extractor, '_instant_of_line', None) or {}).get(
+                    _row_line))
+
+    # Rows of one second from two exports, by their instants (TJ-1227).
+    if len(parsed_files) > 1:
+        from taxjson.lib.brokerages._crypto_common import order_across_exports
+        _order = order_across_exports(normalized, row_instants)
+        normalized = [normalized[i] for i in _order]
+        multipliers = [multipliers[i] for i in _order]
+        row_lines = [row_lines[i] for i in _order]
+        given_ids = [given_ids[i] for i in _order]
 
     _restated = (_restated_id(normalized, given_ids)
                  or _restated_evidence(kept_aside_per_file,
@@ -1294,6 +1313,8 @@ Examples:
             "input_files": [str(p) for p in input_paths],
             **({"source_accounts": source_accounts}
                if source_accounts else {}),
+            **({"source_brokers": source_brokers}
+               if source_brokers else {}),
         }
     }
     if args.transfers_out and not args.transfers:
@@ -1314,7 +1335,12 @@ Examples:
             {"transactions": kept_aside,
              "metadata": {"kind": "transfer_sidecar",
                           "account": args.account_name,
-                          "brokerage": brokerage_id}},
+                          "brokerage": brokerage_id,
+                          # The exports it was parsed from (names): one
+                          # removed since is stale evidence
+                          # (crypto_sends.stale_evidence, TJ-0671).
+                          "input_files": sorted(
+                              p.name for p in input_paths)}},
             indent=2, sort_keys=True))
     if args.override_log:
         _lp = Path(args.override_log)

@@ -566,13 +566,16 @@ class TestDeletedPriorLock(_ClosedPerYear):
         self.assertIn(self._GONE, json.dumps(doc, ensure_ascii=False))
 
     def test_a_year_never_closed_is_still_no_record(self):
-        """Without the freeze note the year was never closed: a missing
-        lock stays "no record" (new-year names it before the close)."""
+        """Without the freeze note and the reports close-year keeps as
+        filed (filed/2024/reports/, TJ-0272's rest) the year was never
+        closed: a missing lock stays "no record" (new-year names it
+        before the close)."""
         y5 = self.copy()
         toml = y5.parent / "2024" / "taxjson.toml"
         toml.write_text("".join(
             ln for ln in toml.read_text().splitlines(keepends=True)
             if not ln.startswith("## frozen by")))
+        shutil.rmtree(y5.parent / "2024" / "filed" / "2024")
         r = _cli(y5, "estimate")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         from taxjson.bin import taxjson_filed as TF

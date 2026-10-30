@@ -112,6 +112,9 @@ class Lot:
     closes: List[Close] = field(default_factory=list)
     notional: float = 0.0    # strike x size x units at the open (split-invariant)
     splits: List[Tuple[str, float, str]] = field(default_factory=list)
+    # (date, contract size) from a split that moved the lot into a
+    # series of another size (backlog TJ-1003), in replay order.
+    resizes: List[Tuple[str, float]] = field(default_factory=list)
 
     def factor(self, through: str, first: int = 0) -> float:
         """The ratios of the lot's splits from the `first`-th on, dated
@@ -158,14 +161,29 @@ class Lot:
         f = self.factor(through)
         return self.strike / f if f else self.strike
 
+    def size_on(self, through: str) -> float:
+        """The contract size in the series of `through`: the opened
+        one, else the size of the series a split moved the lot into."""
+        size = self.size
+        for d, s in self.resizes:
+            if d <= through:
+                size = s
+        return size
+
     def notional_on(self, through: str) -> float:
         """The lot's strike notional in the series of `through`: the
         opened notional, rescaled when the series' strike is not the
-        opened one over the split ratios (a renamed strike)."""
+        opened one over the split ratios (a renamed strike), and when
+        its contract size is not the opened one (a series renamed into
+        one the ticker.map or its rows size otherwise: it kept the old
+        size, backlog TJ-1003)."""
         f = self.factor(through)
         base = self.strike / f if f else self.strike
         now = self.strike_on(through)
-        return self.notional * (now / base) if base and now else self.notional
+        out = (self.notional * (now / base) if base and now
+               else self.notional)
+        size = self.size_on(through)
+        return out * (size / self.size) if self.size and size else out
 
     def expiry_on(self, through: str) -> str:
         sym = self.symbol_on(through)
@@ -190,8 +208,21 @@ def _row(t: Dict[str, Any], key: str, default: Any = None) -> Any:
 
 
 def _is_flat(t: Dict[str, Any]) -> bool:
-    return (abs(float(_row(t, "price", 0.0) or 0.0)) < 1e-12
-            and abs(float(_row(t, "net_amount", 0.0) or 0.0)) < 1e-9)
+    """A close at price 0 with no money but its fees: an expiry. A fee
+    the broker charged on the expiry (IB's `C;Ep` with a commission)
+    is no buy-back price: it made the expiry read as "bought back"
+    (backlog TJ-0790). The fee still comes off the P/L (the row's net
+    money is the close's cash)."""
+    if abs(float(_row(t, "price", 0.0) or 0.0)) >= 1e-12:
+        return False
+    net = abs(float(_row(t, "net_amount", 0.0) or 0.0))
+    if net < 1e-9:
+        return True
+    gross = (abs(float(_row(t, "gross_amount", 0.0) or 0.0))
+             + abs(float(_row(t, "proceeds", 0.0) or 0.0)))
+    fees = (abs(float(_row(t, "fee", 0.0) or 0.0))
+            + abs(float(_row(t, "commission", 0.0) or 0.0)))
+    return gross < 1e-9 and fees > 1e-9 and net <= fees + 1e-6
 
 
 def default_size(t: Dict[str, Any]) -> float:
@@ -227,35 +258,87 @@ def _kept_transfer_ids(opts: List[Tuple[str, Dict[str, Any]]]) -> set:
 
 def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
               size_of: Optional[Callable[[Dict[str, Any]], float]] = None,
-              through: Optional[str] = None) -> List[Lot]:
+              stated_size: Optional[Callable[[str], Optional[float]]] = None,
+              through: Optional[str] = None,
+              pool_of: Optional[Callable[[str], str]] = None,
+              split_at_open: bool = False) -> List[Lot]:
     """The option contracts of the books, matched per account and
     series (FIFO), in the order they were opened. `rows` are
     (account, native row) pairs, any actions, any order; `through`
-    stops the replay after that date."""
+    stops the replay after that date. `pool_of` (account -> pool): a
+    SPLIT one account reports moves the series' contracts of every
+    account of its pool (a Canadian project's blended taxable
+    accounts: the event is the security's; reported in one account, it
+    left the others' contracts in the old series, backlog TJ-0907);
+    default: each account its own pool. `split_at_open`: a split takes
+    effect at the start of its day whatever its clock stamp, after the
+    day's opening balance, as the Canadian engine orders it (lib/
+    country engine_sort_profile 'ca_main'): a morning buy-back of the
+    new series before a noon-stamped split read as a new long (backlog
+    TJ-0697). False: by the clock, as the US engine does."""
     from types import SimpleNamespace
     from taxjson.lib.missing_history import OrderStarts, unbacked_close
     size_of = size_of or default_size
-    opts = [(a, t) for a, t in rows
-            if _row(t, "action", "") in ("BUYSELL", "ASSIGN", "SPLIT",
-                                         "OPENING_BALANCE", "TRANSFER")
-            and is_option_symbol(str(_row(t, "symbol", "") or "").upper())
-            and (through is None or str(_row(t, "date", "") or "") <= through)]
+    every = [(a, t) for a, t in rows
+             if _row(t, "action", "") in ("BUYSELL", "ASSIGN", "SPLIT",
+                                          "OPENING_BALANCE", "TRANSFER")
+             and is_option_symbol(str(_row(t, "symbol", "") or "").upper())]
     # A day's order: the opening balance first whatever its stamp (it
     # is the position the day starts from: a native close stamped
     # midnight sorted before its synthetic midnight opening and read as
     # a new write, 2026-10-24 audit A22), then by clock, a split before
-    # the trades of its moment.
-    opts.sort(key=lambda at: (str(_row(at[1], "date", "")),
-                              0 if _row(at[1], "action") == "OPENING_BALANCE"
-                              else 1,
-                              str(_row(at[1], "time", "") or "00:00:00"),
-                              0 if _row(at[1], "action") == "SPLIT" else 1))
-    # One split reported twice is one event, per account here.
+    # the trades of its moment (`split_at_open`: a split right after
+    # the opening, before every trade of its day; TJ-0697).
+    every.sort(key=lambda at: (str(_row(at[1], "date", "")),
+                               0 if _row(at[1], "action") == "OPENING_BALANCE"
+                               else 1 if split_at_open
+                               and _row(at[1], "action") == "SPLIT"
+                               else 2,
+                               str(_row(at[1], "time", "") or "00:00:00"),
+                               0 if _row(at[1], "action") == "SPLIT" else 1))
+    opts = [(a, t) for a, t in every
+            if through is None or str(_row(t, "date", "") or "") <= through]
+    pool_of = pool_of or (lambda a: a)
+    acct_of = {id(t): a for a, t in opts}
+    # One split reported twice is one event, per pool here.
     splits = dedupe_split_events(
         [t for _a, t in opts if _row(t, "action") == "SPLIT"],
-        per_account=True)
+        per_account=True,
+        account_of=lambda t: pool_of(acct_of.get(id(t), "")))
     split_ids = {id(t) for t in splits}
     transfer_ids = _kept_transfer_ids(opts)
+    # A series' contract size is the series': a multiplier one of its
+    # rows declares sizes the rows that state none (a futures option's
+    # x1000 on its close alone priced the open at the default 100:
+    # backlog TJ-0694). A row's own multiplier stays its own. A size is
+    # no later event the as-of replay hides: a row after `through`
+    # declares it too (backlog TJ-1087).
+    declared: Dict[str, float] = {}
+    for _a, t in every:
+        m = float(_row(t, "multiplier", 0.0) or 0.0)
+        s = str(_row(t, "symbol", "") or "").upper()
+        if m > 0 and s not in declared:
+            declared[s] = m
+
+    def _size(t: Dict[str, Any], sym: str) -> float:
+        if float(_row(t, "multiplier", 0.0) or 0.0) <= 0 and sym in declared:
+            t = dict(t, multiplier=declared[sym])
+        return float(size_of(t) or 0.0) or 100.0
+
+    def _series_size(sym: str) -> Optional[float]:
+        """A series' own contract size, where its rows or the size
+        resolver (a ticker.map MULT line) state one; None: the default,
+        stated nowhere."""
+        if sym in declared:
+            return declared[sym]
+        # (a MULT line saying 100 states it too: a value equal to the
+        # default does not say who stated it; backlog TJ-1223)
+        said = stated_size(sym) if stated_size else None
+        if said:
+            return float(said)
+        bare = {"symbol": sym}
+        s = float(size_of(bare) or 0.0)
+        return s if s > 0 and s != default_size(bare) else None
     pos: Dict[Tuple[str, str], float] = {}
     open_lots: Dict[Tuple[str, str], List[Lot]] = {}
     out: List[Lot] = []
@@ -271,22 +354,33 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
                 continue
             ratio = q if q > 0 else 1.0
             new = str(_row(t, "symbol_new", "") or "").strip().upper() or sym
-            p_old = pos.pop(key, 0.0) * ratio
-            moved = open_lots.pop(key, [])
-            for lot in moved:
-                lot.open_units *= ratio
-                lot.splits.append((d, ratio, new))
-            nk = (acct, new)
-            pos[nk] = pos.get(nk, 0.0) + p_old
-            if moved:
-                # Renamed into a series with open contracts of its own:
-                # the queue stays first in, first out, by the opening's
-                # replay order (2026-10 audit #36; by open date alone a
-                # 09:00 write moved in closed after the destination's
-                # 10:00 write, 2026-10-24 audit A28).
-                dest = open_lots.setdefault(nk, [])
-                dest.extend(moved)
-                dest.sort(key=lambda lot: lot.seq)
+            # Renamed into a series of a size of its own: the lots take
+            # it from here (TJ-1003); a series of no stated size keeps
+            # the lot's.
+            new_size = _series_size(new) if new != sym else None
+            pool = pool_of(acct)
+            for x in sorted({a for a, s in list(pos) + list(open_lots)
+                             if s == sym and a != acct
+                             and pool_of(a) == pool}) + [acct]:
+                xkey = (x, sym)
+                p_old = pos.pop(xkey, 0.0) * ratio
+                moved = open_lots.pop(xkey, [])
+                for lot in moved:
+                    lot.open_units *= ratio
+                    lot.splits.append((d, ratio, new))
+                    if new_size and abs(new_size - lot.size_on(d)) > 1e-9:
+                        lot.resizes.append((d, new_size))
+                nk = (x, new)
+                pos[nk] = pos.get(nk, 0.0) + p_old
+                if moved:
+                    # Renamed into a series with open contracts of its
+                    # own: the queue stays first in, first out, by the
+                    # opening's replay order (2026-10 audit #36; by open
+                    # date alone a 09:00 write moved in closed after the
+                    # destination's 10:00 write, 2026-10-24 audit A28).
+                    dest = open_lots.setdefault(nk, [])
+                    dest.extend(moved)
+                    dest.sort(key=lambda lot: lot.seq)
             continue
         if q == 0:
             continue
@@ -304,7 +398,7 @@ def contracts(rows: Iterable[Tuple[str, Dict[str, Any]]], *,
             money = abs(money)
         und = parse_option_underlying(sym) or sym
         strike = float(parse_option_strike(sym) or 0.0)
-        size = float(size_of(t) or 0.0) or 100.0
+        size = _size(t, sym)
         cur = str(_row(t, "currency", "") or "").upper()
         if action == "OPENING_BALANCE":
             lot = Lot(account=acct, symbol=sym, underlying=und,
@@ -416,10 +510,28 @@ def _next_day(d: str) -> str:
     return (date.fromisoformat(d) + timedelta(days=1)).isoformat()
 
 
+# A listing's last part that is the security's own, not a market: units,
+# warrants, rights, preferreds, debentures (SYN.UN, SYN.WS).
+_SECURITY_PARTS = frozenset(("UN", "WS", "WT", "RT", "PR", "DB"))
+
+
 def underlying_matches(und: str, wanted: Iterable[str]) -> bool:
-    """`QQQ` names QQQ.US (any market), `QQQ.US` that listing."""
+    """`QQQ` names QQQ.US (any market), `QQQ.US` that listing; `SYN.B`
+    names the class share SYN.B.US, never SYN.US: a market suffix comes
+    off, the security's own part stays (the first dot dropped the
+    class, backlog TJ-0692). A market is a known listing suffix, or a
+    last part of two letters or more that is no designator of the
+    security (`SYNX.DE`, as a manual or generic book spells it: only
+    the built-in venues came off and the bare ticker named nothing,
+    backlog TJ-1084); a one-letter part is a class."""
+    from taxjson.lib.markets import strip_listing_suffix
     u = und.upper()
-    root = u.split(".", 1)[0]
+    root = strip_listing_suffix(u)
+    if root == u and "." in u:
+        base, part = u.rsplit(".", 1)
+        if (base and len(part) >= 2 and part.isalpha()
+                and part not in _SECURITY_PARTS):
+            root = base
     for w in wanted:
         w = str(w or "").strip().upper()
         if w and (w == u or w == root):
@@ -534,7 +646,8 @@ def _fold(acc: Dict[str, Any], lot: Lot, start: str, end: str) -> None:
 def _finish(acc: Dict[str, Any], days: int,
             shares: Tuple[float, float] = (0.0, 0.0),
             capital: Optional[Tuple[str, float]] = None,
-            other: Optional[Dict[str, Tuple[float, float]]] = None
+            other: Optional[Dict[str, Tuple[float, float]]] = None,
+            shares_unknown: bool = False
             ) -> Dict[str, Any]:
     """The window's figures with the yield: on the cost of the shares
     held (`shares` = (quantity, cost)), else on the average strike
@@ -545,7 +658,9 @@ def _finish(acc: Dict[str, Any], days: int,
     whose cost is in another currency than the options' — never
     converted here, so there is no yield (basis OTHER_CURRENCY); they
     were added to the capital as if in the options' currency (backlog
-    TJ-0543)."""
+    TJ-0543). `shares_unknown`: the shares' cost is not all known (an
+    opening with cost=unknown): the capital is incomplete, so there is
+    no yield (the known part read as the whole: backlog TJ-0774)."""
     avg = acc["notional_days"] / days if days > 0 else 0.0
     sq, sc = shares
     other = {k: v for k, v in sorted((other or {}).items())
@@ -554,7 +669,7 @@ def _finish(acc: Dict[str, Any], days: int,
         basis, cap = capital
     elif other:
         basis, cap = OTHER_CURRENCY, 0.0
-    elif sq > _EPS and sc > 0.005:
+    elif sq > _EPS and (sc > 0.005 or shares_unknown):
         basis, cap = "shares", sc
     elif avg > 0.005:
         basis, cap = "notional", avg
@@ -565,7 +680,7 @@ def _finish(acc: Dict[str, Any], days: int,
     settled = acc["closed_contracts"] - acc["transferred_out"]
     y = ((acc["realized"] / cap)
          if cap > 0.005 and not unknown and settled > _EPS
-         and basis != OTHER_CURRENCY
+         and basis != OTHER_CURRENCY and not shares_unknown
          else None)
     out = {k: (round(v, 2) if isinstance(v, float) else v)
            for k, v in acc.items() if k != "notional_days"}
@@ -577,6 +692,7 @@ def _finish(acc: Dict[str, Any], days: int,
         out[k] = round(acc[k], 4)
     out["shares_held"] = round(sq, 4)
     out["shares_cost"] = round(sc, 2)
+    out["shares_cost_unknown"] = bool(shares_unknown)
     out["shares_other_currency"] = {
         k: {"shares": round(q, 4), "cost": round(c, 2)}
         for k, (q, c) in other.items()}
@@ -601,19 +717,29 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
             underlyings: Iterable[str] = (),
             accounts: Optional[Iterable[str]] = None,
             groups: Optional[Dict[str, str]] = None,
-            shares: Optional[Dict[tuple, tuple]] = None
+            shares: Optional[Dict[tuple, tuple]] = None,
+            unknown_shares: Iterable[tuple] = (),
+            aliases: Optional[Dict[str, str]] = None
             ) -> Dict[str, Any]:
     """The window's figures per underlying and per account, side and
     right, the contracts closed in the window and those open at its
     end, with totals per currency. `shares` = {(account, underlying[,
     currency]): (quantity, cost)} of the underlying's shares held now,
     the yield's capital where there are any and their cost is in the
-    options' currency (no currency: taken as the options')."""
+    options' currency (no currency: taken as the options').
+    `unknown_shares`: the keys of `shares` whose cost is not all known
+    (a holding opened with cost=unknown): no yield on them (backlog
+    TJ-0774). `aliases` = {option underlying: share line}: a class
+    share's option root (SYNB.TO for SYN.B.TO, core.class_root_aliases)
+    is that share line (backlog TJ-0910)."""
     wanted = [w for w in underlyings if str(w or "").strip()]
     accts = set(accounts) if accounts is not None else None
     groups = groups or {}
-    # (account, underlying, quantity, cost, currency): a key or value
-    # without the currency is taken as the options' currency.
+    aliases = {str(k).upper(): str(v).upper()
+               for k, v in (aliases or {}).items()}
+    unknown_keys = set(unknown_shares or ())
+    # (account, underlying, quantity, cost, currency, cost unknown): a
+    # key or value without the currency is taken as the options'.
     held_rows = []
     for key, v in (shares or {}).items():
         a, u = key[0], key[1]
@@ -621,7 +747,7 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
             continue
         scur = key[2] if len(key) > 2 else (v[2] if len(v) > 2 else "")
         held_rows.append((a, str(u).upper(), float(v[0]), float(v[1]),
-                          str(scur or "").upper()))
+                          str(scur or "").upper(), key in unknown_keys))
     days = _days(start, _next_day(end))
     by_und: Dict[Tuple[str, str], Dict[str, Any]] = {}
     by_part: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
@@ -634,11 +760,13 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
             continue
         # The series as it stood at the window's end: a renamed series
         # is found by its new underlying (2026-10 audit R05, R10).
-        und = lot.underlying_on(end)
+        raw_und = lot.underlying_on(end)
+        und = aliases.get(raw_und.upper(), raw_und)
         sym = lot.symbol_on(end)
         strike, expiry = lot.strike_on(end), lot.expiry_on(end)
-        seen_unds.add(und)
-        if wanted and not underlying_matches(und, wanted):
+        seen_unds.update({und, raw_und})
+        if wanted and not (underlying_matches(und, wanted)
+                           or underlying_matches(raw_und, wanted)):
             continue
         touches = ((start <= lot.open_date <= end)
                    or any(start <= c.date <= end for c in lot.closes)
@@ -686,11 +814,13 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
 
     def _shares_of(und: str, cur: str, acct: Optional[str] = None):
         """(quantity, cost) of the underlying's shares whose cost is in
-        `cur`, and {currency: (quantity, cost)} of those in another
-        currency (a share value without one is taken as `cur`)."""
+        `cur`, {currency: (quantity, cost)} of those in another
+        currency (a share value without one is taken as `cur`), and
+        whether the cost of those in `cur` is not all known."""
         q = c = 0.0
+        unknown = False
         other: Dict[str, Tuple[float, float]] = {}
-        for a, u, sq, sc, scur in held_rows:
+        for a, u, sq, sc, scur, unk in held_rows:
             scur = scur or cur
             if u == und and (acct is None or a == acct) and (
                     acct is not None or any(
@@ -699,22 +829,23 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
                 if scur == cur:
                     q += sq
                     c += sc
+                    unknown = unknown or unk
                 else:
                     oq, oc = other.get(scur, (0.0, 0.0))
                     other[scur] = (oq + sq, oc + sc)
-        return (q, c), other
+        return (q, c), other, unknown
     rows = []
     for (und, cur), acc in sorted(by_und.items()):
-        held, other = _shares_of(und, cur)
-        r = _finish(acc, days, held, other=other)
+        held, other, unk = _shares_of(und, cur)
+        r = _finish(acc, days, held, other=other, shares_unknown=unk)
         r.update({"underlying": und, "currency": cur,
                   "accounts": sorted({p[2] for p in by_part
                                       if p[0] == und and p[1] == cur})})
         rows.append(r)
     parts = []
     for (und, cur, acct, side, right), acc in sorted(by_part.items()):
-        held, other = _shares_of(und, cur, acct)
-        r = _finish(acc, days, held, other=other)
+        held, other, unk = _shares_of(und, cur, acct)
+        r = _finish(acc, days, held, other=other, shares_unknown=unk)
         r.update({"underlying": und, "currency": cur, "account": acct,
                   "group": groups.get(acct, ""), "side": side,
                   "right": right})
@@ -737,7 +868,9 @@ def analyze(lots: Iterable[Lot], *, start: str, end: str, scope: str,
             for k, v in r["shares_other_currency"].items():
                 oq, oc = other.get(k, (0.0, 0.0))
                 other[k] = (oq + v["shares"], oc + v["cost"])
-        t = _finish(acc, days, (sq, sc), capital=(basis, cap), other=other)
+        t = _finish(acc, days, (sq, sc), capital=(basis, cap), other=other,
+                    shares_unknown=any(r["shares_cost_unknown"]
+                                       for r in mine))
         t["notional_capital"] = round(sum(
             r["_capital"] for r in mine if r["yield_basis"] == "notional"), 2)
         totals[cur] = t
@@ -852,7 +985,9 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
             fmt_money(r["received"]), fmt_money(r["paid"]),
             _money(r["realized"]), _rate(r["win_rate"]),
             _n(r["open_contracts"]),
-            _n(r["shares_held"]), fmt_money(r["shares_cost"]),
+            _n(r["shares_held"]),
+            ("?" if r.get("shares_cost_unknown")
+             else fmt_money(r["shares_cost"])),
             _pct(r["yield"]) + star, _pct(r["annualized"]) + star])
     d.table(["UNDERLYING", "CUR", "WRITTEN", "BOUGHT", "RECEIVED", "PAID",
              "REALIZED", "WIN%", "OPEN", "SHARES", "SHARE COST", "YIELD",
@@ -902,6 +1037,12 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
             kv.append((f"Yield, {cur}",
                        f"none: {held}, not {cur} (never converted here)"))
             continue
+        if t.get("shares_cost_unknown"):
+            kv.append((f"Yield, {cur}",
+                       f"unknown: the cost of the {_n(t['shares_held'])} "
+                       f"share(s) held is not all known (known part "
+                       f"{fmt_money(t['shares_cost'])})"))
+            continue
         if t["yield_basis"] == "shares":
             on = (f"the {fmt_money(t['shares_cost'])} cost of "
                   f"{_n(t['shares_held'])} share(s) held")
@@ -944,6 +1085,12 @@ def render(doc: Dict[str, Any], cmd: str = "tjs option-yield"):
         acts.append(out.act_list(
             f"{len(mixed)} close(s) not in the open's currency: check "
             f"that row's currency", mixed))
+    unk_sh = [r["underlying"] for r in rows if r.get("shares_cost_unknown")]
+    if unk_sh:
+        acts.append(out.act(
+            f"{len(unk_sh)} underlying(s) whose shares held have an "
+            f"unknown cost (no yield): {', '.join(unk_sh[:3])}",
+            "tjs find-missing-history"))
     xcur = [r["underlying"] for r in rows
             if r["yield_basis"] == OTHER_CURRENCY]
     if xcur:

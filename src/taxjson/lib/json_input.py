@@ -267,6 +267,19 @@ def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:
     return doc
 
 
+def require_row_lists(doc: Dict[str, Any], path) -> Dict[str, Any]:
+    """``doc`` when its ``inventory`` and ``manual_reporting_required``,
+    if present and not empty, are lists of objects: for a tool that
+    iterates them (a wrong-shape file was a traceback, backlog TJ-1196)."""
+    for key in ("inventory", "manual_reporting_required"):
+        rows = doc.get(key)
+        if rows and (not isinstance(rows, list)
+                     or any(not isinstance(r, dict) for r in rows)):
+            raise InputFileError(f'{path}: "{key}" must be a list of JSON '
+                                 f'objects')
+    return doc
+
+
 def load_json_doc_or_exit(prog: str, path, *, exit_code: int = 2,
                           **kw) -> Dict[str, Any]:
     """:func:`read_json_doc`, or print ``<prog>: error: ...`` and exit."""

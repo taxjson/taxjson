@@ -22,7 +22,9 @@ names both answers (`TOBASE` if one security, `DISTINCT` if two).
 
 Unused rules (unused_rules) are judged the way the ENGINE applies the
 map (taxjson_ticker_map.map_symbol): a rule's FROM must equal a symbol
-of the parsed sources exactly, or an option's underlying — ROOT-aware
+of the parsed sources exactly (a row's symbol, a rename's destination
+`symbol_new`, or a dated RENAME's symbols, TJ-0802), or an option's
+underlying — ROOT-aware
 on purpose: a rule with no stock rows is still live through OPTION
 trades (ABC271217C00050000.US needs `TOBASE ABC.US ABC.TO`; a root-blind
 check once pruned ten live rules). A rule reached through another
@@ -371,7 +373,8 @@ def unused_rules(root: Path) -> Tuple[List[UnusedRule], List[str]]:
     from taxjson.bin.taxjson_run import _audit_source_files
     from taxjson.lib.core import is_option_symbol, parse_option_underlying
     cache = root / "work"
-    accounts = _accounts(_config(root))
+    cfg = _config(root)
+    accounts = _accounts(cfg)
     seen: Set[str] = set()
     unread: List[str] = []
     for acct in accounts:
@@ -391,11 +394,27 @@ def unused_rules(root: Path) -> Tuple[List[UnusedRule], List[str]]:
                               f"objects)")
                 continue
             for t in rows:
-                sym = str(t.get("symbol") or "").upper()
-                if sym:
-                    seen.add(sym)
+                # A rename's destination (symbol_new) is mapped too
+                # (taxjson_ticker_map.apply_mapping): a rule for it is
+                # used (backlog TJ-0802).
+                for fld in ("symbol", "symbol_new", "exercise_of"):
+                    sym = str(t.get(fld) or "").upper()
+                    if sym:
+                        seen.add(sym)
     if unread:
         return [], unread
+    # A dated rename (a .tt RENAME line, or a legacy ticker.map one) is
+    # booked as an event, not a parsed row: its new symbol goes through
+    # the map the same way (`GLOBAL NEW.TO FINAL.TO` renames the
+    # destination, backlog TJ-0802).
+    from taxjson.lib.dated_events import tt_renames
+    _accts = cfg.get("accounts")
+    for dr in list(tt_renames(root, _accts if isinstance(_accts, dict)
+                              else {})) \
+            + list(getattr(tmap, "dated", ()) or ()):
+        for sym in (getattr(dr, "old", ""), getattr(dr, "new", "")):
+            if sym:
+                seen.add(str(sym).upper())
     reached: Set[str] = set()
     for sym in seen:
         reached.add(sym)

@@ -55,7 +55,9 @@ STATUS_AMBIGUOUS = "ambiguous"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _REASON_RE = re.compile(r'reason\s*=\s*"([^"]*)"')
 # Units: the pool's own tolerance is far below this; a declared quantity
-# is what the broker printed.
+# is what the broker printed. RELATIVE to the units: an absolute floor of
+# 0.000001 let a line naming 0.00010050 units of a coin name a sale of
+# 0.00010000 (backlog TJ-0921).
 _QTY_TOL = 1e-6
 # A sale this many calendar days from the line's date (by trade or
 # settlement date) is "near" for the no-match message: the settlement
@@ -374,7 +376,7 @@ def plan(overrides: Sequence[Dict[str, Any]], rows_in_order) -> Plan:
         q = ov.get("qty")
         if q:
             def _eq(a: float) -> bool:
-                return abs(abs(a) - q) <= _QTY_TOL * max(1.0, q)
+                return abs(abs(a) - q) <= _QTY_TOL * max(abs(a), q)
             # The units name a WHOLE sale: its total. A quantity equal
             # to one fill of a several-fill sale used to name the whole
             # sale (pre-release review) — a line written for one fill

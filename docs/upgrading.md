@@ -59,6 +59,1219 @@ In each project you keep working in (each year folder):
 Newest first. Each says what changed and what to do. Releases not listed
 needed nothing.
 
+- Canada, Schedule 3 / superficial-loss figures can move on re-run
+  (TJ-0828, TJ-0829, TJ-0654): (a) a loss whose replacement went in kind
+  into a plan outside the project and was withdrawn (INKIND lines) before
+  day 30 is now allowed; (b) a declared INKIND contribution with another
+  transfer-in of the stock in the same account within 10 days now pairs
+  with the project's plan, and the plan's own sale clears the replacement;
+  (c) a replacement bought in one registered account and moved to another
+  registered account in the window, still held on day 30, now denies the
+  loss for good, and older units moved into an account that bought and
+  sold a replacement in the window no longer deny one. Compare `tjs
+  wash-sales` and `tjs sum` before and after; a filed year's lock (`tjs
+  check-filed`) may report the change.
+- Canada, IB (TJ-0830): an option moved in kind into a registered plan,
+  whose IB statement states a contract size other than 100, now replaces
+  that many shares, and a denial it caused shrinks accordingly. A
+  ticker.map `MULT` line added only to work around this can be removed.
+- Transfer-ins (TJ-0823, TJ-0822, TJ-0821): a re-run can change which
+  transfer-ins are booked at the broker's stated cost. (a) A second
+  transfer-in covered by its own .tt purchase, after a .tt sale of the
+  first, is no longer also booked (a phantom holding goes; gain up by the
+  duplicate's cost). (b) An arrival covered by a .tt purchase under its
+  old ticker plus a RENAME line is no longer booked again. (c) A .tt
+  purchase contributed in kind no longer covers a later arrival, so that
+  arrival is booked at its stated cost and its sale enters the totals. (d)
+  A transfer-in of a listing a DISTINCT line keeps apart from a same-day
+  transfer-out of the other listing is booked as an arrival and its sale
+  counts. `tjs transfers` shows the new status of each.
+- TJ-0832: a purchase line drafted by an older `--write-purchases` for a
+  lot bought before a split that another account reports is in post-split
+  units. Divide its quantity by the split ratio (the cost stays), then
+  `tjs run`. Re-drafting with `--write-purchases --force` gives the right
+  line.
+- TJ-0819: an `OPENING … cost=unknown` line that an older
+  `--write-missing-history` wrote for the new ticker of a broker-marked
+  short after a rename should be deleted from
+  inputs/<account>/missing_history.tt; the cover's gain then comes back
+  into the totals.
+- TJ-0825/TJ-0814: if a project already holds two openings of one security
+  under spellings ticker.map joins, keep the one with the right cost and
+  remove the other. `tjs opening` now refuses to write such a pair.
+- Canada, superficial loss: a share loss whose only replacement was a call
+  expiring on day 30 of the window, or a call series a split renamed and
+  that was sold before day 30, is now allowed. Schedule 3's capital loss
+  grows by the amount once denied, and a denial added to a taxable call's
+  cost is gone (TJ-0725, TJ-0716). Re-run tjs run.
+- Canada, futures: a loss with a long replacement held at day 30 is now
+  denied even when another account opened a short in the same contract
+  inside the window. The year's loss shrinks, and the replacement's cost
+  (and T1135 cost) grows by the denied amount (TJ-0651, TJ-0650).
+- Canada, short sales: a broker-marked short (RBC SHORT. / COVER SHORT.,
+  IB codes O and C) in one taxable account no longer sells shares another
+  account holds. Its gain moves from the year the short opened to the year
+  it is covered, and the long shares stay in the year-end holdings and the
+  T1135 cost. A year already filed with the old figure may need an
+  adjustment (TJ-0721).
+- Canada, grant timing: an assignment in one account now retracts that
+  account's own written option, not an older one in another account. The
+  year of the grant that is retracted, the share ACB and that year's
+  option gain can change (TJ-0718). Buy-backs and expiries close their own
+  account's write first, which can move a premium between write years on
+  Schedule 3.
+- Assignments delivered as one stock row for several option contracts now
+  fold every premium into the shares (Canada and US). The shares' ACB
+  falls by the premium that was missing, and the later sale's gain rises.
+  The unconsumed option-assignment warning goes away (TJ-0838).
+- Canada: shares delivered December 31 from an exercise whose option close
+  is posted in January now count in the December 31 holdings (tjs
+  close-year, tjs list --date) and in the T1135 cost at their
+  premium-inclusive cost. A T1135 near the threshold can become required
+  (TJ-0839).
+- RBC merger elected rollover_s_85_1_5 (or US reorg_368, or a sheltered
+  account's default) with a cash-in-lieu row dated after the exchange: the
+  fraction's sale moves to the payment date. A year-end merger whose cash
+  is paid in January moves the fraction's small gain or loss into the next
+  year (TJ-0866).
+- RBC spin-off cash in lieu repeated across overlapping exports, or
+  reversed and re-paid: the s.86.1 fraction sale now covers one payment
+  and one fraction; the fraction's gain and the remaining shares' cost
+  change (TJ-0755, TJ-0759).
+- RBC merger whose cash in lieu sits in a later export: the fraction is
+  now sold for the cash; the fraction's gain appears and the new shares'
+  cost falls by its share (TJ-0756).
+- Event ids change, so elections must be set again with `tjs elect
+  --pending`, for: a Questrade spin-off that was merged with another
+  parent's on the same dates (TJ-0751); an RBC merger reversed and
+  rebooked (now dated on the rebooking, TJ-0763); RBC share-class
+  reorganizations that were paired across classes (TJ-0757); an RBC
+  spin-off whose parent was the SEC# code after a stock split (now the
+  parent's ticker, TJ-0764); an RBC spin-off a cross-currency reversal had
+  replaced (TJ-0762).
+- tjs fx-cash --ledger v2 (Canada): a year with a gain or loss on repaying
+  a foreign-currency debt (the ON DEBT column) reports a different
+  REPORTABLE figure on a re-run. The $200 now applies only to the gain on
+  currency, and the gain on debts counts in full. Own currency that an own
+  move uses to repay a debt now needs that day's FX rate. Without one the
+  ledger is NOT COMPUTED ('no USD rate on file'), as an overdraft already
+  is (TJ-0724).
+- tjs fx-cash --ledger v2 and tjs t1135: a year with an own move that the
+  receiving broker booked a few days before the sending one changes on a
+  re-run. The FX gain and the year-end pool can drop (a phantom pool after
+  a debt repayment), and the T1135 cash maximum no longer counts those
+  units in both accounts (TJ-0717).
+- tjs t1135 with tax_date = "trade": the year-end (and maximum) cost of
+  foreign cash changes on a re-run when an account had a receipt or
+  payment traded in the year and settled after it, because every account
+  is now at the trade-date pool's average (TJ-0720).
+- tjs fx-cash --ledger v2: a year with overlapping exports of one account
+  (a year's statement plus a year-to-date one) and two equal conversions
+  on one day may change by a commission on a re-run (TJ-0860).
+- tjs fx-cash --ledger v2: a year whose ledger refused, or crashed with
+  ZeroDivisionError, over a small Forex order whose commission took all it
+  bought, or over a broker's cash return of capital, may now compute a
+  figure (TJ-0722, TJ-0846).
+- tjs fx-cash --ledger v2: two `CASHOPEN <Jan 1> CAD` lines (base
+  currency) for one book are now refused, and the ledger is NOT COMPUTED
+  until one is deleted. Delete the wrong line (TJ-0840).
+- tjs fx-cash --ledger v2: a year after one in which an account of a
+  broker had no export may now carry a balance that was dropped before.
+  The opening pool and year-end figures change on a re-run (TJ-0834).
+- tjs close-year with ledger v2: a year whose own move is still in transit
+  at Dec 31 (its arrival in the books) now computes, and its lock records
+  `fx_cash_v2.transit`. An older release reading that lock ignores the key
+  and refuses the January arrival, so use this release for the next year
+  (TJ-0656).
+- Kraken: run `tjs run` again if a Kraken trades export has maker fills
+  with a negative fee. Each such fill's cost (a buy) or proceeds (a sale)
+  moves by twice the rebate, in your favour (TJ-0749).
+- Kraken: with an older and a newer ledger export of the same period, a
+  coin-for-coin swap whose older copy had no amountusd is now valued at
+  the broker's amountusd instead of a daily close, so its gain can move
+  (TJ-0738).
+- Kraken: a sale and a rebuy of one coin within the same second, in a
+  trades export listed newest first, now replay sale-first. The gain and
+  the cost of the remaining coins can move (TJ-0746).
+- FX on cash (v2), Kraken: a conversion split across two ledger exports
+  now uses the CAD paid as the cost of the currency bought, so the
+  realized FX gain can move. A Kraken account with several ledger exports
+  of one year that was NOT COMPUTED over a false opening balance may now
+  compute; remove any CASHOPEN line added only to satisfy that false
+  opening (TJ-0861, TJ-0888).
+- FX-on-cash ledger v2 (opt-in): a re-run can change the figures of a year
+  with IB Forex fills at the Trade level only (TJ-0858), several Forex
+  fills of one day listed out of clock order (TJ-0859), a cancelled (`Ca`)
+  Forex order (TJ-0743), or a commission refund dated after its trade
+  (TJ-0748).
+- IB trades: a trade cancelled in full whose commission IB did not refund
+  now leaves a FEE row. It shows in `tjs fees`, and the cash ledger now
+  reconciles (TJ-0742).
+- IB combined-accounts statements: a commission refund naming its account
+  now lowers that trade's cost, so the year's gain can change by the
+  refund (TJ-0740).
+- IB overlapping statements with several refunds of one trade: a purchase
+  booked twice is now booked once, so gains and holdings can change on a
+  re-run (TJ-0760).
+- A trade that has a commission refund folded into it now carries a
+  `commission_refunds` field in work/ JSON and `--json` outputs. The field
+  is evidence only and is not part of the row id.
+- taxjson-fetch, IBKR Flex (TJ-0869): in a single-folder project, `tjs
+  fetch` now refuses to replace ib_flex.csv when the new download drops
+  dates before the tax year or up to 37 days after it. Before, it refused
+  only for the year's own dates. The download is saved as ib_flex.csv.new.
+  Widen the Flex query's period to cover the dates named (for example Jan
+  1 of the year to Jan 31 of the next), or move ib_flex.csv aside to
+  accept the new file. If an earlier fetch already dropped a January
+  repurchase, restore it from ib_flex.csv.bak and re-run: a denied
+  superficial loss comes back (the year's gain moves).
+- taxjson-fetch, IBKR Flex (TJ-0867): a Flex query that covers several
+  accounts (a combined statement) is now refused. Scope it to one account
+  per taxjson account.
+- taxjson-fetch, Questrade --positions (TJ-0857, TJ-0880): re-run `tjs
+  fetch --positions`. An option with a ticker.map MULT line now carries
+  that multiplier, so its snapshot cost in `tjs sanity` / `tjs opening`
+  changes (for example tenfold for a mini). An open option whose series
+  the books also hold on the other listing may change suffix and currency,
+  or lose its currency with a note.
+- taxjson-fetch, Questrade (TJ-0885): a symlinked token path now rotates
+  the shared target. Anyone whose link was already replaced by a separate
+  file should copy the newer token over the shared file and restore the
+  link.
+- Re-run `tjs run` to refresh `reports/<account>_holdings.toml`. Nothing
+  filed changes. Its `trades` arrays can change: a round closed before a
+  same-day split, or before a same-settlement-day rebuy in a US project,
+  is no longer listed, and an opening balance no longer appears as a BUY
+  on its snapshot date. A holding of unknown cost under the dust threshold
+  (0.001 units, or 1e-6 for a crypto account) but at least a millionth of
+  a unit now appears with `cost_unknown = true`; before, it was left out.
+- `taxjson-export` with a holdings TOML as input, used on its own (`tjs
+  run` never does this): the output gains `[meta] as_of`, the input
+  snapshot's day. A holding with no cost field is now `cost_unknown =
+  true` instead of `total_cost = 0.0`. A Questrade `average_entry_price`
+  gives the cost. `asset_type = "cash"` lines are no longer written as
+  holdings. `--map` GLOBAL renames now apply. The base_* and cost_source
+  fields are kept. Two new refusals (exit 2): snapshots of different days
+  in one call (export them one at a time), and a `[meta] holdings_count`
+  that differs from the number of `[[holding]]` tables. The snapshot
+  readers (`tjs sanity`, `tjs opening`, and portoml, which ignores unknown
+  keys) read the new `as_of` key as the positions' date.
+- tjs reconcile-slips can now fail, with no change to any figure in the
+  books, where it used to pass: a slip CSV with a duplicated amount column
+  (exit 2); a slip quantity of 0; an option strike finer than 0.001; a
+  cover of a short sale that is not in your files (UNKNOWN_PROCEEDS); and,
+  under grant timing, an option written this year that expired by the year
+  end, or a buy-back of an earlier year's write, with no slip row
+  (MISSING_FROM_SLIP). Fix the slip CSV or add the broker's row; checklist
+  step t5008 shows these.
+- The reconcile-slips --json counts gain a key, `unknown_proceeds`, which
+  is always present.
+- `tjs stats` and `tjs win-rates` figures can change (review views only;
+  no filed figure moves). Assigned-option premiums now come out of share
+  trades differently in these cases: two same-day assignments, pools
+  shared across accounts, negative net premiums, fees on assignment rows,
+  and Canadian spin-offs. A custody round-trip of a written option now
+  counts its trade. A buy-back partly of pre-data contracts is now counted
+  as unknown-cost instead of a trade. For the spin-off case, run `tjs run`
+  once so work/ has the cost timeline the view reads.
+- option-yield figures can change after a re-run (planning numbers only,
+  nothing filed): a class share's options now use the shares' cost as
+  their capital (TJ-0910), so the yield can drop a lot; shares held partly
+  at an unknown cost now give no yield (TJ-0774); a futures option series
+  with its multiplier on one row only now has the right notional
+  (TJ-0694); an expiry with a fee is counted as expired instead of bought
+  back (TJ-0790).
+- The option-yield / win-rates filter `SYN` no longer selects the class
+  share SYN.B.US: give `SYN.B` (TJ-0692).
+- ccd-sum (grant timing): CLOSES / QTY can change. A narrow window now
+  counts an expiry that falls inside it (TJ-0778), and a renamed write
+  that was bought back no longer adds an extra close (TJ-0903).
+  winners/losers CLOSES follow renames too. Gains and premiums are
+  unchanged.
+- An account named like a period (for example `2025`) is still read as the
+  period when given alone, now with a warning: give a period before it
+  (`all 2025`, `tax_year 2025`) to select the account (TJ-0909).
+- JSON additions: option-yield rows, parts and totals have
+  `shares_cost_unknown`; list rows have `unknown_cost` and list totals
+  `unknown_cost_positions`; shares rows have `unknown_cost`.
+- tjs edge-cases --json: a year_boundary.option_expiries row for an
+  assignment now carries `settlement` ("cash" or "physical"), and its
+  `lands_in` can be null when no share leg falls within 7 days of the
+  assignment (the text shows LANDS IN '-'). A script that reads lands_in
+  as an integer should allow null. No figure the return reports changes.
+- Canada, minimum tax carryover (TJ-0719): in a year with foreign
+  dividends credited and a carryover larger than the old limit, more
+  carryover is recovered and less lapses or carries forward, the foreign
+  tax credit falls, and `estimated_tax_with_amt` (and `tjs amt`'s
+  carried-forward figure) falls. A year closed by an older release
+  recorded the old recovery in filed/<year>.json: re-close it (`tjs
+  close-year --force`) or enter the carryover from the notice of
+  assessment in [estimate] amt_carryover. `amt.headroom` is unchanged; the
+  new limit is `amt.recovery_limit`.
+- Canada, line 40427 (TJ-0653): `--json` `amt.carryover.recovered_federal`
+  and the lock's `carryforwards.minimum_tax.recovered_federal` are now the
+  nominal credit, not the federal tax drop; the drop is
+  `recovered_federal_tax`. `recovered_provincial_surtax` is the surtax
+  itself, and the foreign tax credit the lower tax limits is
+  `recovered_credits_reduced`. `recovered` (the total tax drop) and every
+  tax figure are unchanged. A script that read `recovered_federal` as the
+  tax drop should read `recovered_federal_tax`.
+- Canada, eligible dividend compensation (TJ-0727): where the year's
+  eligible dividends net of compensation paid on a short are negative, the
+  estimate (and plot-tax and the AMT check) rises by the saving it showed.
+  The new `--json` keys are `eligible_dividends` and
+  `eligible_compensation_excess`.
+- Canada, issuer country (TJ-0726): for a security whose dividends carry
+  ISINs of both countries, the estimate, the foreign tax credit and
+  plot-tax move: each payment now follows its own issuer country.
+- Canada, unpaired withholding (TJ-0715): where one account names a
+  security on its TAX rows and another account has TAX rows naming no
+  security on the same security's dividends, the credit rises and the
+  estimated tax falls (up to 15% of the second account's dividends, within
+  the security's ceiling).
+- plot-tax (TJ-0783): no figure changes. The JSON gains
+  `unknown_cost_routed`, `unknown_cost_included` and `complete`.
+- `tjs migrate --to-years` now stops, with nothing moved, when
+  taxjson.toml or .gitignore is read-only (and .gitignore still needs its
+  `exports/` line), when taxjson.toml is a symlink leaving the project, or
+  when an account is named `slips`. Run `chmod u+w` on the file, replace
+  the outside link with a copy, or rename the account and its inputs
+  folder. Then run it again. No figures move.
+- `tjs align` and `tjs years --diff` now compare a `holdings_dir` inside
+  each year's own folder as that year's own (`"../2025/snapshots"` in
+  2025/ is shown and brought over as `"snapshots"`). A 2026 started by an
+  older `new-year` from such a year: set `holdings_dir = "snapshots"` in
+  2026/taxjson.toml and make that folder.
+- tjs sanity exits 2 instead of 1 for a holdings TOML it cannot read as a
+  snapshot: no [[holding]] array, a [[holding]] row with no quantity, a
+  quantity that is not a finite number, a quantity with no symbol, or an
+  entry that is not a table. Scripts that treated exit 1 as 'positions
+  differ' now see these as input errors. The Error names the file from the
+  project (holdings/NAME.toml). (TJ-0643)
+- tjs sanity may list INCOME ON SHARES THE BOOKS DO NOT HOLD rows it did
+  not list before: pre-September-2017 dividends on purchases too late for
+  the T+3 cycle, and any project with no holdings snapshot. These rows are
+  informational; exit code and clean are unchanged. (TJ-0815, TJ-0826,
+  TJ-0688)
+- tjs sanity --json may show a COST row as 'n/a' where it said match or
+  differs before: a position with cost=unknown, or a dated snapshot whose
+  pooled ACB another account moved after its date. A contract matched by
+  its underlying may now show a cost difference where it said 'not
+  compared'. Informational only. (TJ-0818, TJ-0817, TJ-0813)
+- Settlement (TJ-0833): a US or Canadian share traded before 1995-06-07
+  whose export prints no settlement date now settles T+5 instead of T+3.
+  Its foreign-currency cost is converted at the later day's rate, so the
+  ACB and later gains of such long-held positions can change. Re-run `tjs
+  run` and compare; a printed settle date is used as before.
+- Exit codes (TJ-0644): with no gains files in work/, sum, estimate,
+  plot-tax, shares, list, gains, leaps, leaps-sum, ccd-sum, winners and
+  losers now exit 2 instead of 1. A script that tested for 1 should test
+  for 2 (or for non-zero).
+- Exit code (TJ-0645, TJ-0684): carryover's refusal of a damaged
+  work/<account>_base.json under [[capital_gains_dividends]], and `list
+  --date`'s refusal of a damaged cost timeline, now exit 2 instead of 1.
+- Readiness (TJ-0824): `sum --json` / `form-export --json` readiness can
+  now be incomplete with an `unconsumed-premium` issue, and the
+  checklist's form-export step needs attention, where an assignment's
+  stock delivery is missing. Add the delivery rows and re-run. A consumer
+  of the readiness kinds should accept the new kind.
+- US projects: a sale between a stock dividend's ex-dividend date and its
+  pay date, with a split or a ticker change in between, gives up more of
+  its cost to the new shares: its gain and the held shares' basis change
+  (TJ-0647, TJ-0648). Re-run `tjs run`.
+- Canada: a position under a millionth of a share that carries a cent or
+  more of cost now appears in `tjs list`, the inventory and the T1135 cost
+  amount; after a consolidation into such a fraction its later sale
+  realizes a gain where none was booked and the 'stranded basis' warning
+  goes away (TJ-0649).
+- Canada: a hand-entered ADJUST with record= and no type=roc now lowers
+  the ACB on its record date: a sale between the record date and the pay
+  date (often across a year end) changes, and its gain can move between
+  years (TJ-0655). Check a year already filed with such a line.
+- Canada: an IB 'Payment in Lieu of Dividend ... (Return of Capital)' on a
+  Canadian corporation's share moves from dividends (divs-sum, gross-up
+  and credit) to ordinary payments in lieu (dil-sum); the estimated tax on
+  it rises (TJ-0729). Re-run `tjs run` so the parse records the label.
+- US projects: §355 spin-off shares received with a $0 allocation now
+  carry the parent's purchase dates; their sale's term can change from
+  short to long (TJ-0723).
+- US projects with single-stock or other security futures: add `SECFUT
+  ROOT` to ticker.map to take them off Form 6781's 60/40 and onto Form
+  8949 with their own term; without the line nothing changes (TJ-0730).
+- US projects: a short covered within 45 days of the short sale, with
+  dividend compensation paid while it was open, has that payment in its
+  cost (gain lower, the payment no longer negative ordinary income); the
+  estimate stops subtracting other paid compensation (it reports
+  pil_paid_not_deducted). Estimated tax and Form 8949 figures of such
+  years change (TJ-0728).
+- Taxable spin-offs (taxable_deemed_dividend, taxable_distribution_301):
+  the dividend is now on the parent's ticker. For a foreign parent with
+  Canadian new shares, the estimate moves income from Canadian eligible to
+  foreign dividends (no gross-up or credit; the tax rises), `tjs t1135`
+  adds the income to the parent, and `tjs divs-sum` lists it under the
+  parent. Re-run `tjs run` (TJ-0658).
+- rollover_s_86_1 spin-offs of a parent sold before the distribution: the
+  gain moves from the distribution year (a gain with proceeds 0) to the
+  year of the sale, whose cost drops by the allocated amount. If that
+  year's return is already filed, it needs an adjustment; the run's note
+  names the sale dates (TJ-0842).
+- IB spin-offs and mergers that delivered less than 0.01 share in total
+  are now booked: a new position appears, and under rollover_s_86_1 the
+  parent's cost drops by the allocated amount (TJ-0841).
+- IB: a merger that one account's cancellation used to hide is now offered
+  for election, and `tjs run` stops (exit 3) until it is elected
+  (TJ-0752).
+- IB: an earlier listing journal that was folded into a later merger is
+  now its own event. The merger's event id changes (its target is now the
+  merger's own listing), so both the merger and the journal ask for an
+  election again (TJ-0754).
+- IB split-ups held in two accounts: the phantom spin-off of the
+  continuing company into itself is gone, and any election saved for it is
+  no longer used. The merger and spin-off quantities now cover both
+  accounts (TJ-0753).
+- IB spin-offs delivered in two rows on one day: the shares and the
+  dividend (or allocated cost) now cover both deliveries (TJ-0758).
+- TJ-0696: after upgrading, run `tjs run` again. In a project with two or
+  more taxable accounts holding one security whose split or rename only
+  one account's export reports, the other accounts' per-account holdings
+  (`tjs list`, `tjs list ACCOUNT DATE`, `tjs sanity`,
+  reports/<account>_holdings.toml, the <account>_wash.sum inventory)
+  change: their quantity takes the split and their share of the pool's
+  cost rises to match. The pool's total cost, every gain and every filed
+  figure are unchanged.
+- TJ-0852: `tjs renames` (and its `--json` `carried.book_cost`) can show a
+  different book cost for shares delivered by an assigned put (lower, by
+  the premium) or an exercised call (higher, by its cost). It now matches
+  what `tjs list` and the books carry. Filed figures are unchanged.
+- TJ-0851: `tjs renames ACCOUNT --json` now lists only that account under
+  `accounts` and `carried`. A script that read other accounts' rows from
+  an account-filtered report must call `tjs renames --json` without an
+  account.
+- Canada, fx_cash_ledger = "v2", Coinbase: currency gains move after a
+  re-run when the exports hold USDC (or another USD stablecoin) Converted
+  to or from a coin (TJ-0916), a Coinbase One subscription paid in USD or
+  USDC (TJ-0870), or two exports with distinct IDs but otherwise identical
+  cash rows (TJ-0865). A `CASHMOVE … spot` line added by hand for a
+  Convert's stablecoin leg or a subscription is now counted twice: remove
+  it.
+- tjs crypto-sends (Canada): a stablecoin send's currency gain can move.
+  An arrival of another stablecoin after a `self` send is now new money
+  (TJ-0652), and a Kraken conversion split across two yearly exports now
+  keeps its CAD cost (TJ-0667).
+- tjs crypto-sends: two sends of one coin and quantity in the same second
+  (ids ending `-1` and `-1-2`) are now numbered in the broker's id order.
+  Once after upgrading, check the decisions of such pairs: one saved under
+  the old row order may now name the other send (TJ-0663).
+- taxjson-fill-crypto: a price an older release cached from the wrong
+  Yahoo candle stays in ~/.crypto_price_cache.json. To refresh it, delete
+  the cache file and run `tjs run` online (TJ-0744).
+- Crypto rows in the fall-back repeated hour (early November in Toronto)
+  show compressed local times. A sale and a rebuy in that hour can change
+  gains after a re-run (TJ-0747). The transfer sidecar now records its
+  input file names; sidecars from older releases are checked by time alone
+  until the next `tjs run` (TJ-0671).
+- FX (TJ-0843): a project whose rates use Yahoo Finance (a currency the
+  Bank of Canada does not publish, or a US project's rates) may now stop
+  with "no exchange rate for N row(s)" for a row whose only rate is 13 to
+  19 days old. Older releases used a stale rate for such a row; the rules
+  say 12 days at most. Fix: enter that row in the base currency at its
+  date's rate as a .tt line. The rates file is rebuilt once its newest
+  rate is more than 3 days old; delete work/to_base.csv to rebuild it at
+  once.
+- Futures (TJ-0745): only books converted twice with the stand-alone
+  taxjson-convert-currency (USD to EUR, then EUR to CAD) are affected. For
+  a contract held in two taxable accounts, the Canadian pooled gain moves
+  to what a direct conversion gives. Convert the books again. `taxjson
+  run` converts once and is not affected.
+- taxjson-audit (TJ-0773) takes a new optional `--effective-map PATH`, the
+  run's work/ticker.map.effective. `tjs audit` passes it on its own; only
+  someone who calls taxjson-audit by hand needs to add it.
+- Windowed views outside the tax year (`stats all`, `stats 2y`, `win-rates
+  all`, `winners all`, `losers 2023`, `ccd-sum`, `leaps`, `leaps-sum`,
+  `--all-history`) in a project with two or more taxable accounts holding
+  the same security: gains change to use the cost pooled across those
+  accounts (as the tax year's books do), and superficial-loss / wash-sale
+  denials now span those taxable accounts. The `--json` `basis` value
+  "denials within each account, full history" is now "denials among
+  taxable accounts, full history". Filed figures do not change. The views
+  rebuild the work/<account>_gains_all.json files on their own the next
+  time they run.
+- `tjs handoff` can now exit 1 with a 'missed' item for a Dec-31
+  straddling sale that an earlier release cleared against another
+  account's same-size sale: add the sale to that account's inputs.
+- In a year folder whose prior year was closed as a single folder and then
+  moved by `migrate --to-years`, a deleted prior-year lock now stops `tjs
+  estimate`, `amt`, `carryover`, `handoff` and `fx-cash --ledger v2` with
+  'the 2024 close-year lock is missing, while the 2024 project holds the
+  reports close-year kept as filed'. Restore filed/<year>.json, or close
+  that year again.
+- IB trade dates change on a re-run for: Cboe evening-session index
+  options traded on a weekday the exchange was closed; Montreal Exchange
+  futures traded from 20:00 ET; CME fills from May 29, 2026 that fall
+  after 17:00 ET, on a weekend or on a holiday. Each moves to the next
+  trading day (time 00:00:00, broker_time keeps IB's stamp). Its
+  settlement date and exchange-rate date move with it, and a December 31
+  evening fill can move into January, which changes the year it is in.
+- IB fills on Asia-Pacific exchanges (AUD, HKD, JPY, SGD, CNH and NZD
+  rows) now carry the exchange's local time even when the date is
+  unchanged. Their time changes, and so does their transaction id, which
+  includes the time. Same-day fills can reorder, which can change lot
+  matching and short detection.
+- IB dividends, withholding and return of capital on an interlisted ticker
+  (for example a .US and a .TO listing) can move to a different listing on
+  a re-run: when the other listing was only day-traded or sold short
+  later, or the income sits in a statement of its own. Canadian deemed
+  gains on an empty pool can disappear, and the held listing's ACB
+  changes. Re-run `tjs run` and review the year's figures.
+- Generic importer, option rows with a ticker.map MULT line (or a mini
+  whose amounts show x10): cost, proceeds and gains move to the declared
+  contract size; re-run tjs run and compare tjs sum (TJ-0863).
+- Generic importer, a zero-price sale or $0 option expiry whose amount
+  equals its commission: the fee is now a cost of the disposition (the
+  loss grows by twice the fee), and a Dec-31 expiry's loss moves back into
+  that year (TJ-0731, TJ-0732).
+- Generic importer, mappings whose [formats] date includes a time: trades
+  now carry the stated time; a same-day sale and rebuy listed newest first
+  can change its gain and superficial-loss result (TJ-0734).
+- Generic importer, futures: a row whose fee or rebate exceeds its amount
+  in a file of unsigned amounts is now refused; export the amount signed
+  (negative = paid) or enter the fill in a .tt file. Futures gross_amount
+  (display only) is now the notional's magnitude (TJ-0668).
+- Merged books with two accounts' same-day dividends of one security:
+  DIVIDEND net_amount and the TAX row's quantity and per-share price
+  change; gross dividends and the total withheld do not (TJ-0736).
+- taxjson-xlsx-to-csv: a workbook with uncalculated formula cells is now
+  refused; open it in a spreadsheet program, recalculate, save and convert
+  again (TJ-0737).
+- RBC Direct: an in-kind reinvested distribution ('Reinvest @ $p') whose
+  description gives a December record date and a January pay date moves
+  into the record date's year after `tjs run`. The income on the year's
+  return can change (TJ-0741).
+- Questrade: a reinvestment (or stock dividend, or cash in lieu) and its
+  reversal that were refused because their Symbol cells differed now both
+  drop out: run `tjs run` again (TJ-0761).
+- Questrade and RBC Direct: a split ratio that was inverted is corrected
+  after `tjs run`, so gains, positions and ACB change. This happened in
+  three cases: an overlapping Questrade download repeating earlier sales,
+  an earlier split on a short position, or two broker accounts under
+  combined_broker_accounts on opposite sides of one security (TJ-0664,
+  TJ-0665, TJ-0672).
+- T1135 figures can move on re-run. A property's INCOME rises where
+  negative payments in lieu were paid on a short of it (TJ-0837).
+  `max_total_cost` and the filing verdict can rise where an account with a
+  foreign `custodian_country` bought and sold Canadian shares within one
+  day (TJ-0646). The total can turn NOT SETTLED (checklist t1135 step:
+  attention) where the FX-on-cash ledger v2 refuses before walking an
+  account's cash, until the problem `tjs fx-cash --ledger v2` names (often
+  a missing CASHBOOK line) is fixed (TJ-0657). If you copied T1135 figures
+  to a filed return, compare.
+- .tt files written by taxjson-convert-tt or copied from `tjs events` can
+  now carry new tokens: `symbol=` on INTEREST lines, and
+  `type=futures_settlement settle=...` on settled futures lines. An older
+  taxjson refuses these lines. A book converted to .tt with an earlier
+  release lost those facts (a bond coupon became cash interest; settled
+  futures became raw fills), and income rows exported on the settle basis
+  took their settlement date: convert such books again from the JSON.
+- taxjson-t1135 used on its own: `--cash` now has to be the document for
+  the same `--year` and base currency (exit 2 otherwise). `tjs t1135`
+  builds it correctly.
+- The engine cost timeline (taxjson-gains --cost-timeline FILE, Canada)
+  has a new top-level key `row_ids`, one book row id per step. Readers
+  that zip `fields` with `rows` are unaffected.
+- tjs slip-audit can now give attention or incomplete (exit 1) where an
+  older release said ok: (1) a fund's return of capital differs from its
+  T3's while the account total agrees (security-differs); (2) an IB
+  payment's components do not add up to its Summary row (not_compared kind
+  report-mismatch). The checklist's t5-t3 step then shows as not done.
+- Projects with status = "amended" typed in slips.toml: the original is
+  now left out of the comparison. A slip-audit that showed the two added
+  (and a difference) now compares the amended slip alone.
+- Re-run tjs slip-audit before applying return-of-capital suggestions
+  taken from an older release when a fund's T3 has both a box 42 and a
+  [[slip.line]] of the same fund (TJ-0791: the old draft doubled the ROC),
+  when a [[slip.line]] carries a date (TJ-0792), or when IB's report
+  covers a trust distribution with a record date (TJ-0794). The older
+  drafts could put the return of capital on the wrong date, or count it
+  twice, which moves the ACB and the gain on a later sale once applied.
+  The figures taxjson computes from the books do not change until the user
+  changes the books.
+- slip-audit --json: new not_compared kinds amended-slip and
+  report-mismatch, new issue kind security-differs, and a roc_status key
+  on securities[] records (schema_version stays 1; keys only added).
+- `tjs stats` / `tjs win-rates` (planning views only; no filed figure
+  changes): the share-trade P/L, win counts and NET_P/L can change for an
+  assigned put whose delivered shares were later grown by a stock dividend
+  (US), sold after older shares (US FIFO) or moved to another of your own
+  accounts (US); for an assigned call that opened or partly opened a short
+  (both countries); for options sized by a ticker.map MULT line; and, in
+  Canada, for an option series split on a day with an earlier trade of the
+  new series. No `tjs run` is needed: the views read the existing work/
+  files.
+- `tjs option-yield`: a project whose ticker.map has MULT lines now uses
+  them for the contract size, so the notional, capital and yield of those
+  options change (they were 100/N times off).
+- Re-run `tjs run` once: the converted books (work/*_base.json) now record
+  each foreign-currency row's trade currency (`trade_currency`). Until
+  they are rebuilt, the wash radar dates a TSX US-dollar unit on the TSX's
+  days alone, and around a US-only holiday its sell-by date can be a day
+  late (backlog TJ-0713).
+- Planning dates can move: a US-dollar trade of a Canadian listing
+  (sell-by one day earlier, re-entry one day earlier around US-only
+  holidays), and a bare ticker (no market suffix) traded in a currency
+  other than the base one, which is now planned on its trade currency's
+  calendar (backlog TJ-0713).
+- Planning verdicts that change: sell-check can now say UNSAFE (exit 1)
+  beside a superficial loss whose rescue date has passed, when a
+  registered account's recent buy would deny a new loss sale (TJ-0775). A
+  fractional position under 0.01 units bought in the past 30 days can now
+  show as LOCKED or UNSAFE (TJ-0899). US buy-check can now say SAFE*
+  instead of UNSAFE for a WASHED row whose remaining loss is a short cover
+  (TJ-0681). The wash radar's --json rows gain a `forward` key (null
+  unless a settled VIOLATION has a forward view).
+- tjs harvest: harvestable 'now' falls for a VIOLATION backed by
+  registered-account buys (those units move to their age-out bucket). A
+  holding with unknown cost leaves the rows and totals and is listed under
+  omitted. A holding with a QUOTE ratio other than 1 changes value and
+  unrealized result, and price_base is now per book share (new JSON field
+  quote_ratio).
+- tjs watch --harvest: the state file gains a harvest_omitted list. The
+  first run after upgrading compares as before; after that, a run that
+  leaves out a position the baseline valued keeps the baseline and warns
+  instead of reporting a change.
+- tjs div-estimate: a payer whose latest payment was an off-cycle special
+  shows its regular frequency, next date and amount, and is listed to
+  check with an 'off the <frequency> schedule' flag.
+- tjs fees-sum: %NOTNL moves slightly for hand-entered (.tt) trades and
+  for zero-price assignments; NON-OPTION now includes futures commissions.
+  TOTAL is unchanged.
+- TJ-0895: an unknown-cost sale whose net proceeds are below zero now
+  shows them signed in MANUAL REPORTING, the CSV `MANUAL` row and `--json`
+  `manual_proceeds`. Report it by hand with proceeds 0 and the commission
+  as outlays.
+- TJ-0896 (US): `tjs carryover` can now show a lower carryover, with rows
+  for the years after the last sale year up to the project year. Check the
+  carryover entered on the return.
+- TJ-0898 (Canada): to have a closed year's T5 box 18 capital-gains
+  dividends count in the next year's carry-back room, run `tjs close-year
+  --force` in that year's project once, so its lock records `slip_gains`.
+  Locks without it behave as before.
+- TJ-0904: scripts that call the standalone `taxjson-carryover
+  --filed-lock YEAR=PATH` with a YEAR other than the lock's now stop with
+  exit 2. Give each lock with its own year.
+- TJ-0901: the standalone `taxjson-form-export` without `--year` may now
+  label a form with an earlier year than before (the files' own year).
+- TJ-0889/TJ-0693: `tjs cash` text and `--json` `tt` lines can now end
+  with `at=<book>`. A positive cash flow is now `#CREDIT` and goes in
+  `totals.credits`, and `totals.fees` no longer counts it.
+- Redacted copies: run `tjs redact --force` again over a copy made by an
+  older release if its taxjson.toml used TOML escapes in account /
+  query_id values, or if a settings file's comments named a folder of this
+  computer. The new copy has placeholders and `<redacted path>` there.
+- Installer: an install whose checkout sits on a newer vX.Y.Z tag that is
+  not an annotated release on main (a tag made by hand) moves to its
+  channel's release on the next installer run; pin a version with
+  --channel vX.Y.Z to choose one.
+- Installer: a channels.json on main that is not exactly {"stable":
+  "vX.Y.Z", "beta": "vX.Y.Z"} now stops the stable / beta install with an
+  error instead of picking a release from it; --channel vX.Y.Z or
+  --channel latest still installs.
+- RENAME lines of one change more than seven days apart, joined into one
+  event by a line between them, now stop the run with 'one change has one
+  date'. Keep the one line with the date the change took effect (TJ-0941).
+- `tjs format-map --write` in a project whose crypto account (or an
+  account of the other kind) has exports but no work/<account>_base.json
+  now asks for `tjs run` first. After an older release moved a crypto
+  RENAME into the securities account's renames.tt, move that line to the
+  crypto account's file and run again (TJ-0940).
+- A tobase.map pair added back by an older `update-tobase-map --write`
+  after you deleted it: delete it again, or comment it out to opt out for
+  good. A pair wrongly recorded as '# removed:': delete that comment and
+  update again (TJ-0945).
+- `taxjson run` while `taxjson close-year` is running now stops. The busy
+  message now reads 'another `taxjson run` (or `taxjson close-year`) is in
+  progress in this project' (TJ-0924).
+- A project that a failed close on an older release left frozen ('Nothing
+  was written', yet taxjson.toml's inputs_dir commented out and copies in
+  the year's inputs/): restore taxjson.toml from git or its backup, delete
+  the copies, fix filed/, then close again (TJ-0917).
+- No figures move: these fixes change refusals, warnings and staleness
+  only.
+- Canada, in-kind contributions declared with an INKIND line: the
+  registered plan's acquisition for the superficial-loss rule is now on
+  the line's date, not the plan's posting date. A loss sold up to 30 days
+  before the line's date can now be denied (for good when the plan holds
+  the shares at day 30). Re-run `tjs run`. If the plan really acquired the
+  shares on its posting date, date the INKIND line on that day (TJ-0925).
+- In-kind moves of an option with a contract size other than 100 (a MULT
+  line or the row's multiplier) that were valued by an INKIND line's
+  per-share price are now valued at the real size. Their deemed gain or
+  loss and the plan's cost change; re-run. An INKIND line for an option
+  giving both a price and a total that disagree at the real size is now
+  refused (named in the problems) (TJ-0933).
+- ALLOWLOSS lines with units that are not exactly the sale's (within a
+  millionth) now stop the run ('name no single denied superficial loss').
+  Write the sale's units as the books carry them (TJ-0921).
+- US handoff: a re-described option whose lots differ from the closed
+  year's is now a problem (exit 1). Fix the opening's purchase date
+  (TJ-0920).
+- crypto-sends (TJ-0927): a `--price` saved by an older release has no
+  `price_currency` and is still read in the project's current base
+  currency. After changing `base_currency` (for example, a copy of a
+  Canadian project for a US return), enter those prices again with `tjs
+  crypto-sends <acct> --set ID=payment --price P`. Decisions saved from
+  now on keep their currency.
+- Coinbase (TJ-0981): a crypto-quoted Advanced Trade buy with a fee (Price
+  Currency is a coin) gets a cost that includes the fee, and the quote
+  coin's proceeds rise by the same amount after `tjs run`. Gains on both
+  coins move by the fee's value.
+- Kraken (TJ-0991): a ledger swap exported without `amountusd` that has a
+  fee in the received coin is valued at the gross units. The spent coin's
+  proceeds and the received coin's cost each rise by the fee's value,
+  which moves gain between the swap's year and the year of the later sale.
+- Coinbase (TJ-0988): a sale with a blank Price whose Total is 0 (the fee
+  took the Subtotal) now books its stated 0 proceeds instead of market
+  proceeds, so its loss grows. Other blank-Price rows keep their net
+  amounts; only the price shown (Subtotal / quantity) and the gross
+  change.
+- Coinbase (TJ-0992): `tjs run` now stops on a Buy/Sell row with a blank
+  Total whose Subtotal does not fit Quantity x Price. Correct the row, or
+  fill in its Total, from the Coinbase statement.
+- tjs t1135: when foreign cash left one of your accounts in the tax year
+  and arrives in another after December 31, re-running can change the cash
+  figures. If both accounts are held abroad in one country, the sending
+  account's year-end (and maximum) cost rises by that cash's cost. If only
+  one of them is held abroad, or they are in two countries, the total now
+  reads NOT SETTLED and cash_not_counted names the amount and its cost for
+  you to judge (backlog TJ-0946).
+- tjs run / tjs checklist: export-coverage may newly show a gap (Warning,
+  and attention on the checklist) for a combined account holding two IB
+  accounts where one account's statements stop early, or where one .tt
+  sale was counted as closing two brokers' positions. Download the missing
+  statements, or answer with `tjs checklist --done export-coverage`
+  (backlog TJ-0930, TJ-0932).
+- Maintainers: scripts/land.sh --no-wait no longer turns on GitHub
+  auto-merge. Merge the pull request yourself once its checks pass (the
+  message gives the command). With main's rules requiring checks,
+  auto-merge is now turned on only after land.sh has seen every check pass
+  (backlog TJ-0942).
+- TJ-0947: a sale of shares that came from an unknown-cost option's
+  exercise or assignment leaves the gain totals and moves to manual
+  reporting. Add the option's purchase to get a gain.
+- TJ-0948 (taxable spin-off with the fraction paid in cash): dividend
+  income rises by the fraction's value, the small capital gain on the
+  fraction disappears, and the new shares' cost rises. An RBC .tt hand
+  sale of the fraction is still honoured.
+- TJ-0949: with two broker accounts' futures in one folder, gains can move
+  between years, to the year each account's own position actually closed.
+- TJ-0951 (US §355 spin-off): lots bought on or after the record date keep
+  their own basis and term, so Form 8949 basis and term can change for
+  later sales.
+- TJ-0953 (US): a short covered at a loss on the last trading days of
+  December and settled in January moves to the next year. A year already
+  filed with that loss needs an amendment.
+- TJ-0954 (US): an unsized warrant exercise delivered in several rows
+  changes the basis of the FIFO lots, and so later sales' gains. The total
+  is unchanged.
+- TJ-0956 (US): a return of capital that exceeds the basis of many small
+  lots raises that year's gain by the missing excess and lowers a later
+  sale's gain by the same amount.
+- TJ-0990: if you built an opening with `tjs opening ACCOUNT FILE` from a
+  holdings file that taxjson-export wrote, run it again with `--force`. A
+  Canadian opening's cost changes to the file's base_total_cost.
+- TJ-0963: an option position whose contract size is not 100 is now
+  skipped by `tjs opening` until ticker.map has its `MULT` line. Add the
+  line, then run `tjs opening` again.
+- TJ-0960: if an older `--write-missing-history` wrote an oversized
+  OPENING cost=unknown line for a pair that also had a broker-marked
+  short, edit that line down. The run now sizes it from the long shortage
+  only.
+- TJ-0957/TJ-0958: `tjs form-export` and the checklist may now say the
+  books are incomplete and list sales as NOT in the totals that an earlier
+  release counted as covered.
+- TJ-0961: US snapshots that earlier releases refused because of a Dec 31
+  sale settling in January are now accepted. Re-run `tjs run`.
+- TJ-0962: the gains of a year with an option exercised or assigned on or
+  before an OPENING snapshot of its shares change when you re-run: the
+  premium is now counted once.
+- TJ-0964: in projects with two or more taxable accounts, an OPENING
+  snapshot plus a rename that only another account reports changes the
+  blended gains and holdings on the next run.
+- IB, combined statements (combined_broker_accounts = true) and tickers
+  traded in two currencies: a purchase that was dropped because another
+  account's or currency's Order row covered the same day is booked again
+  on a re-run. Gains, ACB and holdings change (TJ-0965).
+- IB combined statements with a Ca cancellation: the cancelled fill is now
+  the cancelling account's own. A purchase's cost (its commission) and any
+  'commission IB kept' FEE row can change on a re-run (TJ-0982).
+- IB Flex exports with Settle Date Target: trades take the broker's settle
+  date. A sale near December 31 can move to the other tax year on Canada's
+  settle-date basis. A statement with a settle date that is unreadable,
+  before the trade or more than 31 days after it now stops the parse; fix
+  or blank the cell (TJ-0971).
+- IB combined statements with a split that is long in one account and
+  short in another: the SPLIT ratio is the declared one. Share counts and
+  per-share ACB after the split change (TJ-0967).
+- IB Flex exports with execution-id columns: alike fills split over two
+  statements are both booked. Proceeds, gains and holdings change
+  (TJ-0966).
+- tjs sanity / tjs opening with an IB statement whose Open Positions are
+  Lot rows only now stops with an error. Export the Summary level (the
+  default Activity Statement) and use that file (TJ-0969).
+- Re-run `tjs run`: a project holding dotted preferred series L or V
+  (SYN.PR.L, SYN.PR.V) now books them as separate securities (SYN.PR.L.TO,
+  SYN.PR.V.TO) instead of one pool SYN.PR.TO; their gains and ACB move. A
+  ticker.map line written for SYN.PR.TO as a workaround may need its new
+  spelling. A .tt line that spells such a series with no venue (SYN.PR.V)
+  is now kept as written and warned about: write SYN.PR.V.TO.
+- Re-run `tjs run`: two generic mappings with different [broker].name and
+  the same account number now keep both brokers' identical trades
+  (proceeds, ACB and gains rise to include the previously dropped ones).
+- Re-run `tjs run`: an income row duplicated across overlapping exports
+  can change category (payment in lieu to dividend) when only one copy
+  named the Canadian dealer.
+- Re-run `tjs run`: an option on a class share with a ticker.map MULT on
+  the class root (MULT SYN.B 10) is now sized by it (it was 100 or the
+  root's MULT); assignment cost/proceeds and stats move.
+- Re-run `tjs run`: a warrant exercise whose share target is renamed by
+  ticker.map no longer realizes a loss of the warrants' cost; that cost
+  moves into the shares' ACB.
+- Re-run `tjs sanity` / `tjs opening` for an RBC Holdings Export holding
+  the ticker CASH: the holding now appears (an opening written from such a
+  file omitted it).
+- A hand-written or edited JSON book whose dividend, interest, withholding
+  or fee rows have a date_settle later than their date now converts those
+  rows at the paid date's rate (TJ-0974): the converted income amounts
+  change. Parser output gives such rows one date, so a project's own run
+  is unchanged.
+- A .tt DIVIDEND / DIVIDEND_IN_LIEU / TAX line now reads its PRICE column
+  (TJ-0984): such a row's per-share amount is no longer 0, and its row id
+  changes when PRICE is not 0 (the id now matches a JSON load of the same
+  content). A PRICE token that is not a number is now refused with the
+  line.
+- A .tt file written by an older taxjson-convert-tt from a book with an IB
+  trade cancellation booked the cancelled trade (TJ-0985): convert the
+  book again, or add `type=trade_cancel` to the end of the cancellation's
+  BUYSELL line. The cancelled trade's proceeds and gain then drop out.
+- A .tt file converted by an older release from a book that spelled `qty`,
+  or that had empty or null times, needs converting again (TJ-0977,
+  TJ-0983).
+- slip-audit: an interest line that showed 'under-50' can now be 'differs'
+  (exit 1, the t5-t3 checklist step not done) when the same broker's T5
+  shows other income or its other income brings the total to 50: type box
+  13 from the slip.
+- slip-audit: a foreign-currency slip's per-box tolerance is now the CAD
+  tolerance converted at the year's average rate (smaller for USD), so a
+  box that passed before may now differ.
+- slip-audit: a slips.toml table with the same box typed twice under two
+  spellings ("024" and 24) is now an error: keep one.
+- slip-audit --import-cra: a T5 that an older release wrote under a broker
+  account that has none of its kind of income, or a T3 placed from an
+  equal name-band tie, may be in the wrong broker account: check its
+  broker_key. Two equal-figure T5s for two accounts that an older release
+  collapsed: import the PDFs again with --write.
+- reconcile-slips: a slip CSV row with more cells than its header now
+  fails the check until the amount is quoted ("1,000") or written without
+  the comma.
+- Re-run `tjs run`: after a return of capital that took the ACB / basis
+  below the deferred loss it held, the holdings' `deferred_wash` and a
+  later sale's `deferred_loss_recovered` in work/ now come out lower (at
+  most the ACB left). `tjs stats` / `win-rates` / `winners` / `losers` P/L
+  for such sales drops by the amount already consumed. Filed gains and
+  taxable amounts do not change (TJ-1017).
+- `tjs stats` / `win-rates` figures move in these cases: an assigned put's
+  shares sold after a return of capital beyond the ACB (TJ-1006); a
+  futures position delivered by an assigned futures option (TJ-1007, lower
+  by the premium); a Canadian one-account view next to another account's
+  put-delivery short cover (TJ-0994); a spin-off with a same-day return of
+  capital of the same amount (TJ-1019). `tjs option-yield` notional and
+  yield move for options renamed into a series of another contract size
+  (TJ-1003). These are view figures only, never filing ones.
+- Canada, `tjs carryover`: when `[carryover] claimed` records less than a
+  year's whole loss and the loss rows are in whole cents, the small
+  remainder (for example 0.02) is now carried forward and shown as
+  available to apply, where an older release showed 0.00. Re-run `tjs
+  carryover` before filing (backlog TJ-1018).
+- Canada, `tjs estimate` / `tjs plot-tax` / `tjs instalments`: with
+  `[[capital_gains_dividends]]` mapping a security that has a dividend and
+  a later correction in the year, eligible dividends, the gross-up and the
+  estimated tax can go down. They now match a single net payment (backlog
+  TJ-1020).
+- Scripts that call `taxjson-form-export` directly with gains files from
+  more than one year and no `--year` now get exit 2. Pass `--year YEAR` or
+  only that year's files. `tjs form-export` is not affected (backlog
+  TJ-0993).
+- Scripts that call `taxjson-carryover --claimed-year` with a year outside
+  1900 to next year now get exit 2 (backlog TJ-1002).
+- Canada, grant timing: run `tjs run` after upgrading so each account's
+  inventory carries its own share of a pooled written option's recognised
+  premium (TJ-1010) and a net-debit write's negative premium (TJ-1012).
+  Only harvest --options figures change (planning); booked gains and the
+  year's totals do not.
+- harvest: when the saved wash-radar reports are from an earlier day,
+  harvest now runs the radar live as of today (TJ-1009). Its
+  harvestable-now figure for a LOCKED holding can be larger than before,
+  as registered-account buys age out of the window.
+- Canada, re-run `tjs run`: a broker-marked short covered by a larger buy,
+  or an IB sale coded C;O larger than its account's own holding, changes
+  gains. The sale of the shares left after such a buy returns to Schedule
+  3. A C;O short no longer sells another account's shares, so its gain
+  moves to the year it is covered and the other account's ACB and holding
+  change. Compare a filed year with `tjs check-filed`.
+- Canada, written options: where the same contract is open in two taxable
+  accounts and the close is on close timing, or on a pre-since or
+  missing-history lot, an assignment's share ACB and a buy-back's gain now
+  use the closing account's own average premium. The other account's
+  contract keeps its own, so a later close's figure and year can move.
+- Canada: work/<account>_gains.json inventory and inventory_year_end can
+  now hold a symbol twice, a long row plus short rows carrying `account`
+  and `short_pool`, when a short sits beside a long (shares and futures).
+  Anything reading those files by symbol should expect it. Gains from this
+  display change do not move. The T1135 income of a stock with a marked
+  short in another account rises by the compensation left out.
+- Canada: a taxable loss whose replacement was bought in a registered
+  account and moved to another registered account in parts (out 100, in 60
+  and 40) or gathered from two senders into one row is now denied
+  permanently: re-run `tjs run`; the denied amount and the gain move
+  (TJ-1102).
+- Transfer-in coverage: re-run `tjs run`. If a `.tt` sale lies between two
+  transfer-ins, or an `INKIND` contribution of a book-value transfer-in
+  comes before another transfer-in, `tjs transfers` statuses and the gain
+  can move: a transfer-in with no purchase left is booked at its stated
+  book value, and one with its own purchase is `.tt_covers` (TJ-1054,
+  TJ-1055). Compared with v0.38.0, the second-arrival fix (TJ-0823)
+  applies when that purchase is dated after the `.tt` sale; one dated
+  before it stays `book_value` unless the purchase line is dated on the
+  arrival day.
+- A year closed as a single folder, migrated, and with its
+  `filed/<year>.json` deleted now shows `lock missing`; check-filed exits
+  1 and the checklist's filed-lock step is blocked until the lock is
+  restored or `tjs close-year` is run there (TJ-1119).
+- `tjs renames` book cost changes for option series written or (US) bought
+  at more than one premium; no filed figure moves (TJ-1069).
+- An s.86.1 spin-off distributed after the parent was sold: compared with
+  v0.38.0, the reduction now moves from the distribution year (a gain with
+  proceeds 0) to the year of the sale of the shares it was made on, the
+  holding's last sales. An earlier trim's gain does not change. If that
+  sale's year is filed, the return needs an adjustment; the run's note
+  names the sales (TJ-1026).
+- A warrant exercise after a dated RENAME, in an account that held only
+  the warrants: the capital loss of the warrants' cost goes away, and that
+  cost joins the new shares' ACB, so the shares' later gain falls by it
+  (TJ-1132).
+- A .tt file written from the books by an older release has no `corp=`
+  tokens and keeps booking an s.86.1 reduction as a return of capital.
+  Write the file again, or add `corp=<event id> election=rollover_s_86_1
+  parent_qty=<parent shares>` to its ADJUST line (TJ-1117).
+- RBC, two broker accounts' exports with no Account column in one folder,
+  with a merger or spin-off paid partly in cash: re-run. The cash in lieu
+  falls to what the broker paid, so the fraction's gain and the cash
+  ledger change. Nothing to re-elect.
+- RBC, a stock split on a short where the exports mix the layouts with and
+  without an Account column, or where an earlier split is under a
+  temporary code: re-run. The split's ratio changes, and so do later gains
+  and positions.
+- Questrade, a parent distributing two securities on the same dates and
+  share count: re-run and elect each one with `tjs elect --pending`. They
+  have new ids, and an election saved for the merged event no longer
+  applies.
+- A merger under a taxable election (Canada taxable_disposition, US
+  taxable_exchange, reorg_368_boot) whose cash in lieu was paid after the
+  exchange: the gain does not change, but the cash ledger's date for that
+  cash does, so an FX gain on the currency can move. A .tt CASHBAL between
+  the two dates now reconciles.
+- Questrade, if you added a RENAME line only because of a false 'looks
+  renamed' warning from overlapping downloads: take it out.
+- US project with dividend compensation paid on a partly covered short:
+  the cover's gain rises and the paid compensation left rises by the same
+  amount. Re-run tjs run.
+- US project: a cover whose capitalized compensation makes a loss, with a
+  re-short within 30 days: the loss is now deferred, so that year's gain
+  rises and the replacement short's falls. The 'add it by hand' warning is
+  gone: remove any manual adjustment made for it.
+- US project: tjs estimate rises by the tax on compensation paid on a
+  short that had been netted against a payment received on the same
+  security. tjs run first to stamp paid_on_short.
+- US project: dil-sum's and dil's payment-in-lieu totals leave out the
+  capitalized part, and dil-sum --json adds totals_capitalized (dil
+  --json: totals.capitalized_263h).
+- US project: readiness may now report compensation-not-settled, which
+  makes complete false and makes the checklist's form-export step need
+  attention, so close-year refuses without --yes. Add the later rows, or
+  use --yes knowing the figure can move.
+- Canada and US: a sub-micro position with a real cost sold in parts now
+  realizes each sale (Canada's engine: gain rises, the phantom short is
+  gone).
+- IB, relative to v0.38.0: a CME or Montreal future quoted in an
+  Asia-Pacific currency changes date and time on re-run, which can move a
+  fill across a year end or a superficial-loss window.
+- IB, relative to v0.38.0: overlapping combined statements where one
+  account's identical fill was cancelled change gains on re-run; the other
+  account's trade comes back and the cancelled one goes.
+- fx-cash v2 (--ledger v2): a year where a same-day IB deposit,
+  withdrawal, fee or income row shares a day with a timed Forex conversion
+  can change on re-run: phantom borrowings and their gains go away.
+- taxjson-export --holdings-toml: a holding summed from inputs where not
+  all give base_total_cost no longer has base_* fields (it used to show
+  one input's figure as the whole holding's). Export the inputs one at a
+  time, or pass --base-gains for all of them.
+- taxjson-export --holdings-toml: a cost_source = "blended" holding
+  another input also holds is now cost_unknown, with no total_cost (it
+  used to show a sum of the blended and own-books figures). Export that
+  account's snapshot on its own to keep its figure.
+- taxjson-export --holdings-toml now exits 2 on a [[holding]] with
+  acquired. Use the lot file directly with tjs sanity and tjs opening;
+  --report still sums it. A file re-exported by an older release has lost
+  its lot dates: go back to the original.
+- taxjson-export --holdings-toml now writes cost_currency beside currency
+  when the input has it, cost_kind when the inputs agree, and [meta]
+  account and broker_account when every input names the same one. A
+  consumer that read currency as the cost's currency should read
+  cost_currency.
+- tjs fetch --positions: run it again after upgrading. A live option not
+  in the books yet, on a root with a closed Montreal option, can change
+  from .TO / CAD to .US / USD, or lose its currency with a note when
+  Questrade's lookup gives no answer.
+- Holdings trades arrays: after a split inside a purchase's settle lag, a
+  re-run of tjs run can drop entries from a closed round.
+- `tjs t1135`: `max_total_cost` can rise for a year with a foreign-cash
+  move between two counted accounts of one country, or for a same-day
+  round trip at a superficial loss in a foreign-custody account. A move
+  with only one end counted now appears in `cash_not_counted` with its
+  largest cost: add it by hand if it was held outside Canada.
+- `tjs fx-cash --ledger v2`: a year refused because an own move arrived in
+  late December and left in early January now computes; `tjs close-year`
+  records `early_out` in `filed/<year>.json`.
+- `tjs crypto-sends`: a sends.json with same-second sends may have its
+  keys moved once (a note names them) and become `schema_version` 2. The
+  `crypto_sends.tt` then shows OUT OF DATE until `taxjson crypto-sends
+  <acct> --write` or `tjs run`. If an export was downloaded again in
+  another order before upgrading, check those sends.
+- Rates: a Yahoo rate past the fill limit left in
+  `~/.currency_price_cache.json` is dropped once when the rates are next
+  built. Delete `work/to_base.csv` and run `tjs run` to rebuild at once. A
+  row that relied on it may now stop with 'no exchange rate' and needs a
+  rate of its own, entered in the base currency as a `.tt` line.
+- Generic importer, from v0.38.0: an option closed at price 0 on its
+  expiry with no fee column, where the amount is a negative or (on a
+  buy-to-close) any commission-sized charge, now books that charge as a
+  cost and settles on the expiry day. A Dec-31 expiry's loss moves back
+  into the expiry year, and the old +1 'proceeds' becomes -1. Run `tjs
+  run` again and compare `tjs sum`.
+- Redact: a copy could keep a folder path after a colon or in a file:// URL in a settings
+  comment (TJ-1101). Run `tjs redact --force` again before sharing.
+- Review figures only; nothing filed changes. Figures that can move after
+  upgrading: `tjs stats` and `tjs win-rates` per-class P/L and win/loss
+  counts, for two puts sharing one delivery, for an OPENING line dated an
+  option split's day (Canada), and for US projects with an OPENING line of
+  the stock, a tax_free_355 spin-off of assigned shares, or an earlier
+  year's deemed return-of-capital gain.
+- `tjs ccd-sum`, `tjs winners` and `tjs losers` CLOSES can move in a
+  window that holds a grant-timing write but not its expiry (one fewer) or
+  its expiry but not the write (one more, with no premium). A tax-year
+  view can list an underlying whose only row is that close, with a gain of
+  0.
+- `tjs option-yield` of a window can show a larger average notional and a
+  lower yield when the series' multiplier is declared on a row after the
+  window.
+- US spin-off premium: run `tjs run` after upgrading so the cost timeline
+  in work/ exists; without one the premium stays on the parent, as before.
+- `tjs win-rates 1.5y` and `tjs option-yield 1.5y` now exit 2 instead of
+  reporting the tax year.
+- `tjs win-rates SYNX` matches SYNX.DE again.
+- A US year view, or a Canadian grant-timing year view, can now build
+  work/<account>_gains_all.json on demand when the books hold an
+  earlier-year return of capital with an assigned option, or an
+  earlier-year sold option that can expire in or after the year.
+- reconcile-slips, grant timing: re-run `tjs run` so the gains files name
+  nil expiries (grant_nil_closes). An option written in an earlier year
+  that expired at nil this year then expects a slip row: with none, the
+  check now reports MISSING_FROM_SLIP and exits 1, where it was clean
+  before. No gain or tax figure changes.
+- slip-audit: an amended T3 with no `security` and no [[slip.line]]s no
+  longer replaces another T3 of the issuer. If it really amends that
+  table, give both the same `security` or comment out the replaced table;
+  the audit's notice says so.
+- slip-audit: if you applied suggested ROC lines from an earlier release,
+  compare `tjs roc-sum` with the T3's box 42. Dated box-42 lines could
+  overshoot the slip, a prior year's IB payment could add a prior-year
+  ADJUST, and same-day payments could fall short.
+- Minimum tax carryover (Canada, with TJ-0719's note): in a year where the
+  foreign tax credit takes all of the federal tax, the amount recovered on
+  line 40427 falls and the carryover carried forward rises; the tax with
+  AMT and carryover does not change. Example shape: a carryover of 5,000
+  with years left now recovers only what still lowers tax, and the rest
+  stays open. A year already closed with the larger recovery: re-close it
+  (`tjs close-year --force`) or enter the carryover from the notice of
+  assessment in `[estimate] amt_carryover`.
+- `tjs harvest`: the buckets of a VIOLATION with a registered holder can
+  move. Only the units a registered account bought in the window of a sale
+  today wait; the rest counts as `now`. Planning output only; no filed
+  figure changes.
+- `tjs wash-radar` and `tjs sell-check`: around a US-only holiday, the
+  dates of a renamed TSX listing or a TSX stock with a USD dividend move a
+  day later, to the date the engine accepts. Re-run `tjs run` to refresh
+  the books.
+- `tjs div-estimate`: a payer that changed schedule now forecasts on the
+  new one, so its window and next-payment figures move.
+- `tjs fees-sum`: %NOTNL moves for a `.tt` option with a `MULT` line.
+  TOTAL does not change.
+- The checklist's form-export step can move from done to attention on a
+  project whose run prints `warning: conservation: ...`. No figure
+  changes: run `tjs audit` and check the account's rows for the symbol.
+- Canada: a broker sale of .tt units followed by a transfer-in with a
+  stated book value is now booked at that value. Figures in such a project
+  change on the next `tjs run`: the gain rises (the book value becomes the
+  later sale's cost) and the short position goes away. `tjs transfers`
+  shows `book_value` instead of `.tt_covers`.
+- A project moved by an older `migrate --to-years`, whose filed year holds
+  a relative link to a file at the top: repair it with `ln -sfn
+  ../../../maps/more.tt 2025/inputs/margin/more.tt` (your own path), then
+  `tjs -C 2025 run`. The troubleshooting entry says the same.
+- US projects with a §355 spin-off where the broker prints REC and ON n
+  SHS: a parent lot bought after the record date keeps its own basis and
+  date when the count matches the shares held before the record date. This
+  is a change from v0.38.0. When the count matches the pay-date holding,
+  or fits neither, every lot still shares it and the v0.38.0 figures stay.
+  RBC US projects now get the same check. Run `tjs run` again; a year
+  already filed with the older figures may need correcting.
+- A US short covered at a loss and delivered in the next year (TJ-0953):
+  the gains file gains the key covers_realized_next_year, present only
+  when there is one. Nothing else in the file changes.
+- A `.tt` file written earlier by `taxjson-convert-tt` holds no cash=:
+  write it again from the books so `tjs fx-cash` counts a corporate
+  action's cash.
+- Canada, close timing, the same written option open in two taxable
+  accounts: `tjs list` and `tjs harvest --options` now show each account's
+  own premium instead of the average, so the per-account cost and
+  unrealized figures move. The total and the filing figures do not move.
+- Canada, marked shorts with own moves: compared with v0.38.0 a sale coded
+  C;O past the shares an account received matches the control with no
+  move. Where the sender keeps shares and sells past them coded C;O, the
+  part past its own long now opens a short instead of selling the moved
+  shares, under the same note as TJ-1023's filing-figure change.
+- Canadian project with a base-cost OPENING on a foreign listing (from
+  `tjs opening` on a holdings file): the native books and
+  reports/<account>_holdings.toml are back. `total_cost` there is the base
+  cost restated at the snapshot day's rate, an estimate of the native
+  cost; `base_total_cost` is as stated. Filing figures do not move.
+- An option exercised on or before an OPENING snapshot with its shares
+  delivered after it: re-run. Against the earlier fix-round build, gains
+  on those shares move back to include the premium (v0.38.0 already had
+  these figures).
+- `tjs find-missing-history` and checklist step 10 can change verdict
+  after a re-run: a used-up OPENING cost=unknown line now shows under
+  AFFECTS with [!], and old-symbol lines covering a converging rename now
+  show COVERED with [x]. Figures do not move.
+- IB, combined accounts: a commission refund or a Ca in one account's own
+  statement (no Account column) now reaches only that account's row in a
+  combined statement. The ACB and gains of such a year change on a re-run.
+- IB: a purchase with two alike commission refunds in one statement (same
+  date, amount and wording) now has both in its cost, and an overlapping
+  copy no longer books it twice. The ACB, later gains and cash change on a
+  re-run.
+- Canada: re-run `tjs carryover` if you recorded a partial `[carryover]
+  claimed` over losses with sub-cent amounts. The carryforward can rise by
+  a few cents (0.005 or less per such row) where the old allowance erased
+  it. A claim of the filed Schedule 3 total still leaves 0.00.
+- Questrade: after upgrading taxjson-fetch, run `tjs fetch --positions`
+  again if you hold an option whose series the books show closed. Its
+  `.TO` or `.US` suffix and currency in
+  `holdings/<account>_live_holdings.toml` can change, with a matching
+  change in `tjs sanity`. If the note says the lookup gave no answer, the
+  holding has no currency until a later run.
+- T1135 with tax_date = "trade": year-end foreign cash cost and
+  max_total_cost can change on a re-run when an own move trades in the
+  year and settles after it (a double count falls, an omitted amount
+  returns). With no arrival in the books, or one end in Canada, a
+  previously settled total becomes NOT SETTLED: add the arrival's CASHMOVE
+  ... own line, or decide where it was held.
+- T1135: max_total_cost can fall when two own departures are in transit at
+  the year end, and can flip a filing verdict. A transit between counted
+  accounts can become settled when a move next year had named other
+  accounts. A move with senders in both countries is now split: the
+  counted part is in its row and only the rest is named.
+- T1135: a project with a .tt cash line 'its account folder holds several
+  books' goes from settled to NOT SETTLED until the line gets at=<book> or
+  the file a CASHBOOK line.
+- Kraken trades exports: an unpriced coin-to-coin fill with a fee changes
+  both legs' value on a re-run, moving gains between the swap's year and
+  the later sale's.
+- Coinbase: a Buy or Sell row with a blank Total and a Subtotal of 0 that
+  does not fit quantity x price now stops the parse; correct it from the
+  statement.
+- Coinbase with several exports: gains can change where a sale and a rebuy
+  shared a compressed second in the repeated hour.
+- Export coverage: a combined account can show a new gap that asks for the
+  short account's later exports.
+- Generic importer: a share buy at a stated $0 with amount = fee stays
+  refused, as in v0.38.0: map the row to skip and enter the real cost in a
+  .tt file.
+- Generic importer: a `MULT` row that v0.38.0 refused can now be accepted
+  at the MULT size. A blank fee cell on a $0 option expiry moves that
+  expiry's loss back to the expiry year (a Dec-31 expiry: from the next
+  year), so compare `tjs sum`.
+- Questrade: a chain that holds two securities and a placeholder or
+  take-back nothing explains is now UNBOOKED where v0.38.0 merged it into
+  one event; book the distributions by hand in a .tt file. Shapes that now
+  split into two events get new event ids, so elect them again with `tjs
+  elect --pending`.
+- Run `tjs run` after upgrading: the fixes to denied-loss tallies,
+  same-date US lots and spin-offs read new or corrected engine output.
+  Nothing filed changes: gains, ACB and forms are the same.
+- Review figures can move in `tjs stats` and `tjs win-rates` (per-trade
+  P/L, wins and losses), `tjs option-yield` (avg_notional, annualized) and
+  `tjs ccd-sum` / `tjs winners` / `tjs losers` (closes, contracts). This
+  applies only to the shapes in the fixes.
+- Gains rows can carry two new keys, only in these shapes:
+  `deferred_loss_cut` (what a return of capital took of the denied-loss
+  tally) and, on a US deemed row, `deemed_lots`.
+- A year view can now build `work/<account>_gains_all.json` on demand in
+  two more cases: a US project with an assigned option in any taxable
+  account and a return of capital in another, and a Canadian pool that
+  went short before the year with an option assigned before it. The first
+  such view takes a little longer.
+- tjs slip-audit --import-cra: a T5 with income no broker account holds,
+  where the broker's second account has trades only, used to be written
+  under the paid account and is now listed. A table an older release wrote
+  that way: check its broker_key's account.
+- tjs slip-audit: a T3 naming one listing beside another listing of the
+  same root no longer shows false differences on Canadian dividends and
+  foreign income. No computed tax figure moves.
+- tjs reconcile-slips: a row with an amount of 000 or 050 right after a
+  whole number now fails the check until the amount is quoted, as a row
+  with surplus cells already does.
+- Re-run `tjs run` after upgrading: `tjs harvest` figures move. A
+  registered long call's part of an open VIOLATION's loss leaves 'now'
+  until the call's buy ages out, which needs the radar's new
+  registered_window_last_add field in the saved reports; with several
+  taxable accounts, 'now' drops because registered units apply to each
+  account's row.
+- `tjs harvest` can now stop with exit 2 ('no sheltered_base.json in work/
+  ...') when the saved wash-radar reports are of an earlier day or older
+  than the books and that file is missing in a project with a registered
+  account: run `tjs run` first.
+- `tjs wash-radar` / `tjs sell-check`: a US listing renamed into a TSX
+  listing with no trade of its own moves its safe-sale date a day later,
+  to the date the engine agrees with. `tjs buy-check` of an option
+  spelling a same-market share line rewrites can now answer UNSAFE where
+  it said SAFE.
+- US projects: run `tjs run` again if a negative payment in lieu is dated
+  within 31 days after a short's cover, with no short open on the pay
+  date. On a short closed within 45 days in the same year, the cover's
+  gain falls by the payment (Form 8949 cost rises) and the payment leaves
+  `tjs sum`'s payment-in-lieu figure. On any such row the estimate no
+  longer subtracts it, so it can rise when the security also received a
+  payment. Check the new note "is read as paid on that short": the rows
+  carry no ex-date, so this is a reading of the dates, and a charge that
+  actually reverses a smaller payment you received leaves the estimate
+  high by the tax on it.
+- US, Questrade §355 spin-off with the same ON n SHS in two broker
+  accounts of one folder (combined_broker_accounts): re-run `tjs run`.
+  Figures can move when a lot was bought on or after the record date. A
+  later purchase that came with a due bill now gives up its share of
+  basis, and its spun-off shares take that lot's date. Your saved election
+  stays.
+
 ### v0.38.0
 
 - **A redacted copy left in inputs/ is no longer read.** An account

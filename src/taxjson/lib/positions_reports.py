@@ -152,6 +152,12 @@ class PositionRow:
     lot_date: str = ''
     multiplier: float = 0.0
     source: str = ''
+    # A holdings file's cost in the books' base currency at the
+    # acquisition dates (taxjson-export's base_total_cost /
+    # base_currency), when it states one: the tax cost an opening keeps
+    # (backlog TJ-0990). None / '' when the file gives none.
+    base_cost: Optional[float] = None
+    base_currency: str = ''
     # A one-way key of the whole broker account id (account_key()):
     # two accounts that mask alike (the same first two characters) keep
     # distinct keys. Never shown; `account` is the label.
@@ -424,6 +430,11 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
     hm: Optional[Dict[str, int]] = None
     lots = skipped_cash = 0
     seen_section = False
+    # (category, symbol, currency) of the Lot rows that hold a quantity,
+    # and of the Summary rows: a lot with no Summary row of its security
+    # is a position this reader would leave out (backlog TJ-0969).
+    lot_keys: Dict[tuple, str] = {}
+    summary_keys: set = set()
     for lineno, r in enumerate(rows, 1):
         if len(r) < 2 or r[0].strip() != 'Open Positions':
             continue
@@ -448,9 +459,20 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
 
         where = f"{name}:{lineno}"
         discr = g('DataDiscriminator')
+        _pkey = (g('Asset Category'), g('Symbol'),
+                 ibx._norm_ccy(g('Currency')))
         if discr and discr != 'Summary':
             lots += 1
+            if _pkey[0] not in ('Forex', 'Cash'):
+                try:
+                    _lq = _num(g('Quantity'), field='Quantity',
+                               where=where, blank_ok=True)
+                except PositionsReportError:
+                    _lq = 1.0       # unreadable: not known to be empty
+                if _lq:
+                    lot_keys.setdefault(_pkey, where)
             continue
+        summary_keys.add(_pkey)
         cat = g('Asset Category')
         cur = ibx._norm_ccy(g('Currency'))
         raw = g('Symbol')
@@ -542,6 +564,18 @@ def _read_ib(path: Path, text: str) -> PositionsReport:
         raise PositionsReportError(
             f"{name}: an Interactive Brokers statement with no Open "
             f"Positions section — no positions to read")
+    _uncovered = sorted(k for k in lot_keys if k not in summary_keys)
+    if _uncovered:
+        _syms = ', '.join(f"{k[1] or '(no symbol)'} {k[2]}".strip()
+                          for k in _uncovered[:5])
+        _more = (f" and {len(_uncovered) - 5} more"
+                 if len(_uncovered) > 5 else '')
+        raise PositionsReportError(
+            f"{lot_keys[_uncovered[0]]}: Open Positions Lot rows of "
+            f"{_syms}{_more} have no Summary row — this reader takes "
+            f"each position from its Summary row, so the snapshot would "
+            f"leave them out. Export the statement with the Summary "
+            f"level (the default Activity Statement) and use that file")
     if lots:
         rep.notes.append(f"{name}: {lots} Open Positions Lot row(s) not "
                          f"read (the Summary rows carry the position)")
@@ -704,7 +738,14 @@ def _read_rbc(path: Path, text: str) -> PositionsReport:
                 _q = None           # a footer's text, not a quantity
             if _q:
                 raise _blank_symbol_error(where, _q, g('name'))
-        if not raw or raw.upper() in ('CASH', 'TOTAL'):
+        if not raw or raw.upper() == 'TOTAL':
+            continue
+        if raw.upper() == 'CASH' and not (
+                'product' in col and g('product')
+                and not re.search(r'\bcash\b', g('product'), re.I)):
+            # A cash balance -- unless the row's Product names a
+            # security (Equities, ETFs): CASH is also a listed ticker,
+            # and that holding was dropped (backlog TJ-0968).
             continue
         qty = _num(g('qty'), field='Quantity', where=where, blank_ok=False)
         if abs(qty) < 1e-12:
@@ -964,6 +1005,13 @@ def _read_toml(path: Path) -> PositionsReport:
                 cps = _money('cost_per_share')
                 if cps is not None:
                     cost = cps * abs(qty)
+        # taxjson-export's base-currency companion of the cost (the
+        # books' cost at the acquisition dates' rates): kept beside the
+        # native cost, never in its place (backlog TJ-0990).
+        base_cost = _money('base_total_cost')
+        base_cur = str(h.get('base_currency') or '').strip().upper()
+        if base_cost is None or not base_cur:
+            base_cost, base_cur = None, ''
         lot = h.get('acquired')
         lot_date = _iso_day(lot) if lot not in (None, '') else ''
         if lot not in (None, '') and not lot_date:
@@ -991,7 +1039,8 @@ def _read_toml(path: Path) -> PositionsReport:
                            .upper() or cur),
             cost_kind=kind, market_value=_money('market_value'),
             as_of=as_of, asset_type=atype, lot_date=lot_date,
-            multiplier=float(mult), source=name))
+            multiplier=float(mult), source=name, base_cost=base_cost,
+            base_currency=base_cur))
 
     # Every row is read before a refusal of one of its fields is
     # raised: a malformed cost on row 1 hid a contract size of -50 or

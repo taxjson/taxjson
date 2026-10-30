@@ -143,6 +143,9 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 #   SPLITSHARE  ROOT [YES|NO]     a Canadian split-share corporation
 #   INDEXOPT    ROOT [YES|NO]     a US broad-based index option root
 #                                 (§1256; US projects)
+#   SECFUT      ROOT [YES|NO]     a US security future's root (a single-
+#                                 stock or narrow-based index future: not
+#                                 a §1256 contract; US projects)
 #   EVENING     ROOT [YES|NO]     an option root traded in a Cboe evening
 #                                 session (dated the next trading day)
 #   MULT        SYMBOL N          an option's contract size (SYMBOL: the
@@ -164,11 +167,12 @@ def underlying_of(symbol: str, aliases: dict) -> str:
 
 TICKER_MAP_NAME = "ticker.map"
 SIDE_KEYWORDS = ("QUOTE", "CRYPTO", "EXTRACT", "T1135", "SIMILAR", "STABLE",
-                 "SPLITSHARE", "INDEXOPT", "EVENING", "MULT", "VENUE")
+                 "SPLITSHARE", "INDEXOPT", "SECFUT", "EVENING", "MULT",
+                 "VENUE")
 # The market-list keywords (lib/markets): each extends or overrides one
 # entry of taxjson's shipped market data (taxjson/data/markets.toml).
-MARKET_KEYWORDS = ("STABLE", "SPLITSHARE", "INDEXOPT", "EVENING", "MULT",
-                   "VENUE")
+MARKET_KEYWORDS = ("STABLE", "SPLITSHARE", "INDEXOPT", "SECFUT", "EVENING",
+                   "MULT", "VENUE")
 # Keywords of removed features: lines carrying them are skipped by every
 # reader (read_side_rules lists where they are) — {keyword: what went}.
 RETIRED_KEYWORDS = {"TRADINGVIEW": "TradingView export removed"}
@@ -226,6 +230,7 @@ class SideRules:
         self.stable: dict = {}
         self.splitshare: dict = {}
         self.indexopt: dict = {}
+        self.secfut: dict = {}
         self.evening: dict = {}
         self.mult: dict = {}
         self.venue: dict = {}
@@ -236,7 +241,8 @@ class SideRules:
     def empty(self) -> bool:
         return not (self.quote or self.crypto or self.extract
                     or self.t1135 or self.similar or self.stable
-                    or self.splitshare or self.indexopt or self.evening
+                    or self.splitshare or self.indexopt or self.secfut
+                    or self.evening
                     or self.mult or self.venue)
 
 
@@ -325,11 +331,16 @@ def parse_side_line(kw: str, line: str):
                     f"suffix (ZZSP.US, ZZVF.TO): never an option, a future "
                     f"or a bare ticker")
         return "similar", tuple(syms), tuple(syms)
-    if kw in ("SPLITSHARE", "INDEXOPT", "EVENING"):
+    if kw in ("SPLITSHARE", "INDEXOPT", "SECFUT", "EVENING"):
         if len(toks) not in (1, 2) or (
                 len(toks) == 2 and toks[1].upper() not in ("YES", "NO")):
             raise ValueError(f"{kw} needs `{kw} ROOT` or `{kw} ROOT NO`")
-        root = toks[0].upper().split(".", 1)[0]
+        root = toks[0].upper()
+        if kw == "SECFUT":
+            # A futures root may be written with its book prefix
+            # (F:ZZQ, /ZZQ).
+            root = re.sub(r'^(F:|[\\/])', '', root)
+        root = root.split(".", 1)[0]
         return (kw.lower(), root,
                 not (len(toks) == 2 and toks[1].upper() == "NO"))
     if kw == "STABLE":

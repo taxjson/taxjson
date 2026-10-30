@@ -403,25 +403,34 @@ def report(root: Path, cfg: Dict[str, Any], account: Optional[str] = None,
     accts = [n for n, c in ((cfg.get("accounts") or {}).items())
              if not (c or {}).get("crypto")]
     found: List[Dict[str, Any]] = []
-    seen = set()
+    # Journals listed per leg key, counted: two same-day journals of the
+    # same size (two broker references) are two records the run already
+    # told apart, and a key seen once dropped the second (TJ-0850). A
+    # later state's record, or a broker journal of the exports, only
+    # repeats as many journals of its key as are listed already.
+    listed: Dict[Tuple[str, str, str, str, float], int] = {}
     for state in STATES:
+        repeats = dict(listed)
         for rec in st.get(state) or []:
             j = _from_record(rec, state)
             k = _leg_key(j["account"], j["from"], j["date"], j["to"],
                          j["quantity"])
-            if k in seen:
+            if repeats.get(k, 0) > 0:
+                repeats[k] -= 1
                 continue
-            seen.add(k)
+            listed[k] = listed.get(k, 0) + 1
             found.append(j)
     base = str((cfg.get("settings") or {}).get("base_currency")
                or "").upper() or None
+    repeats = dict(listed)
     for rec in _broker_journals(cache, accts, base):
         j = _from_record(rec, "suggested")
         k = _leg_key(j["account"], j["from"], j["date"], j["to"],
                      j["quantity"])
-        if k in seen:
+        if repeats.get(k, 0) > 0:
+            repeats[k] -= 1
             continue
-        seen.add(k)
+        listed[k] = listed.get(k, 0) + 1
         j["reason"] = None
         found.append(j)
     m = _Map(root)

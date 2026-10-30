@@ -346,6 +346,13 @@ class QtAccountContext:
     plan_types: Dict[str, set] = field(default_factory=dict)
     plan_files: Dict[str, set] = field(default_factory=dict)
     plans_checked: bool = False
+    # Planned at the first parse (plan_rows), when the codes `taxjson
+    # run` resolved are known: the reversal pairing above, and each
+    # broker account's signed position per listing (_plan_qt_positions)
+    # that tells a split on a short position from a reverse split.
+    rows_planned: bool = False
+    positions: Dict[Tuple[str, str], List[Tuple[str, float]]] = field(
+        default_factory=dict)
 
     def add_codes_note(self) -> None:
         """ONE note per account for every internal code booked under a
@@ -390,9 +397,20 @@ class QtAccountContext:
         for m in self.messages:
             emit_line(m)
 
+    def plan_rows(self, helper) -> None:
+        """The plans that resolve a row's symbol as parse_file does
+        (so after `prepare_files` has the inferred codes): once."""
+        if self.rows_planned:
+            return
+        self.rows_planned = True
+        _plan_qt_reversals(self, helper)
+        _plan_qt_positions(self, helper)
+
     def position_on(self, listing: str, date: str, *,
-                    before: bool = False) -> float:
-        return sum(q for d, q in self.timelines.get(listing, ())
+                    before: bool = False, account: str = '') -> float:
+        """Broker account `account`'s signed position in `listing` on
+        `date` (`before`: not counting that day's rows)."""
+        return sum(q for d, q in self.positions.get((account, listing), ())
                    if (d < date if before else d <= date))
 
 
@@ -404,6 +422,8 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
     by_name: Dict[tuple, set] = {}
     where: Dict[str, str] = {}
     trade_keys: set = set()
+    # {(listing, date, quantity, the row's content): {file: copies}}.
+    copies: Dict[tuple, Dict[str, int]] = {}
     for k in files:
         for lineno, row in _read_qt_rows(Path(k)):
             acct = (row.get('Account #') or '').strip()
@@ -445,8 +465,15 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
             if dt is None or abs(q) < 1e-12:
                 continue
             listing = helper.apply_currency_suffix(sym, cur)
-            ctx.timelines.setdefault(listing, []).append(
-                (dt.strftime('%Y-%m-%d'), q))
+            try:
+                net = _qt_cell_value(row, 'Net Amount')
+            except BrokerageParseError:
+                net = (row.get('Net Amount') or '').strip()  # parse_file names it
+            per = copies.setdefault(
+                (listing, dt.strftime('%Y-%m-%d'), q, acct, action,
+                 (row.get('Symbol') or '').strip().upper(),
+                 ' '.join(desc.split()).upper(), net, cur), {})
+            per[k] = per.get(k, 0) + 1
             where.setdefault(listing, Path(k).name)
             if key:
                 by_name.setdefault((key, cur), set()).add(listing)
@@ -464,12 +491,44 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
                 by_name.pop((bk, bc)))
     ctx.transfer_keys -= trade_keys
     ctx.transfer_keys &= set(ctx.desc_to_ticker)
+    # A row in two overlapping downloads is ONE broker row: its copies
+    # are counted per file (as _plan_qt_positions does). A sale counted
+    # twice made a flat listing read short, and a false "looks renamed"
+    # ATTENTION followed (backlog TJ-1122).
+    for ck, per in copies.items():
+        ctx.timelines.setdefault(ck[0], []).extend(
+            [(ck[1], ck[2])] * max(per.values()))
     for tl in ctx.timelines.values():
         tl.sort(key=lambda e: (e[0], -e[1]))
     _detect_qt_ticker_changes(ctx, by_name, where)
-    _plan_qt_reversals(ctx, helper)
     _plan_qt_journals(ctx, helper)
     return ctx
+
+
+def _quiet_resolver(ctx: QtAccountContext, helper) -> 'QuestradeBrokerage':
+    """A parser bound to `ctx` that resolves a row's symbol as
+    parse_file does (`_resolve_symbol(..., quiet=True)`): the plans key
+    a row by the security it is booked on, not by its Symbol cell (bare
+    SYN and SYN.TO on a CAD row, or an internal code its name resolves,
+    are one listing: backlog TJ-0761)."""
+    h = type(helper)()
+    h.account_context = ctx
+    h._ctx = ctx
+    h._qt_name = ''
+    h._ambiguous_warned = set()
+    h.lint_findings = []
+    return h
+
+
+def _qt_booked_listing(row, h, rei: bool = False) -> Optional[str]:
+    """The listing parse_file books a non-trade row on, or None (no
+    Currency: parse_file refuses the row)."""
+    cur = (row.get('Currency') or '').strip().upper()
+    if not cur:
+        return None
+    sym, scur = h._resolve_symbol(row, cur, rei=rei, quiet=True)
+    sym = (sym or '').replace(' ', '.')
+    return h.apply_currency_suffix(sym, scur) if sym else None
 
 
 def _journal_listing(ctx: QtAccountContext, helper, sym: str, cur: str,
@@ -749,7 +808,6 @@ def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
     action = _canon_action(row.get('Action'))
     act = (row.get('Activity Type') or '').strip()
     desc = row.get('Description') or ''
-    sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
     try:
         qty = parse_strict_number(row.get('Quantity'), field='Quantity',
                                   allow_blank=True, blank=0.0)
@@ -765,18 +823,27 @@ def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
     if helper._is_stock_split(action, act, desc) \
             and not helper._is_cash_only(row):
         return None
+    # The listing each branch of parse_file books the row on (backlog
+    # TJ-0761: the Symbol cell as written kept bare SYN and SYN.TO apart).
     if action == 'DIS' and _STK_DIV_RE.search(desc) and abs(qty) > 1e-9:
+        sym = _qt_booked_listing(row, helper)
+        if sym is None:
+            return None
         return ('STK DIV', sym, round(abs(qty), 6), 0.0), qty < 0, date
     if action == 'CIL' and _CIL_RE.search(desc):
         try:
             frac = desc_number(_CIL_RE.search(desc).group(1))
         except BrokerageParseError:
             return None                 # parse_file refuses the row
-        if frac <= 0 or abs(net) <= 0:
+        sym = _qt_booked_listing(row, helper)
+        if frac <= 0 or abs(net) <= 0 or sym is None:
             return None
         return ('CIL', sym, round(frac, 6), round(abs(net), 2)), net < 0, date
     if action == 'REI' or act == 'Dividend reinvestment':
         if abs(qty) <= 1e-12 or abs(net) < 0.005 or (qty > 0) == (net > 0):
+            return None
+        sym = _qt_booked_listing(row, helper, rei=True)
+        if sym is None:
             return None
         return (('REI', sym, round(abs(qty), 6), round(abs(net), 2)),
                 qty < 0, date)
@@ -812,6 +879,7 @@ def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
     # content key -> per file: [line numbers]
     copies: Dict[tuple, Dict[str, List[int]]] = {}
     meta: Dict[tuple, Tuple[tuple, bool, str]] = {}
+    helper = _quiet_resolver(ctx, helper)
     for k in ctx.files:
         for lineno, row in _read_qt_rows(Path(k)):
             kind = _qt_reversal_kind(row, helper)
@@ -850,6 +918,98 @@ def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
                 if oi < len(lines):
                     bucket.setdefault(f, set()).add(lines[oi])
 
+
+
+def _qt_position_event(row, h) -> Optional[Tuple[str, str, str, float]]:
+    """(broker account, listing, date, signed change in shares) of a row
+    that moves a listed position, else None: a Buy or Sell, a transfer,
+    and a split, stock dividend or reinvestment (whose signed Quantity
+    is the change, on a long or a short position) on the listing
+    parse_file books it on. Unparseable cells: None (parse_file names
+    the row)."""
+    act = (row.get('Activity Type') or '').strip()
+    action = _canon_action(row.get('Action'))
+    desc = row.get('Description') or ''
+    try:
+        q = parse_strict_number(row.get('Quantity'), field='Quantity',
+                                allow_blank=True, blank=0.0)
+    except BrokerageParseError:
+        return None
+    dt = h.parse_date((row.get('Transaction Date') or '').strip(),
+                      *_DATE_FMTS)
+    if dt is None or abs(q) < 1e-12:
+        return None
+    sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
+    cur = (row.get('Currency') or '').strip().upper()
+    listing = None
+    if act in ('Trades', 'Transfers'):
+        try:
+            if h.parse_option_from_description(desc):
+                return None         # a contract, not a listing
+        except BrokerageParseError:
+            return None
+    if act in ('Trades', 'Transfers') and sym and cur \
+            and not _INTERNAL_CODE_RE.match(sym):
+        # As the timelines read them (build_qt_account_context).
+        if act == 'Trades':
+            if action not in ('Buy', 'Sell'):
+                return None
+            q = -abs(q) if action == 'Sell' else abs(q)
+        if cur == 'CAD' and _FX_SETTLED_RE.search(desc):
+            cur = 'USD'
+        listing = h.apply_currency_suffix(sym, cur)
+    elif act == 'Transfers':
+        listing = _qt_booked_listing(row, h)    # an internal code
+    elif h._is_stock_split(action, act, desc) and not h._is_cash_only(row):
+        listing = _qt_booked_listing(row, h)
+    elif action == 'DIS' and _STK_DIV_RE.search(desc):
+        listing = _qt_booked_listing(row, h)
+    elif action == 'REI' or act == 'Dividend reinvestment':
+        listing = _qt_booked_listing(row, h, rei=True)
+    if not listing:
+        return None
+    return ((row.get('Account #') or '').strip(), listing,
+            dt.strftime('%Y-%m-%d'), q)
+
+
+def _plan_qt_positions(ctx: QtAccountContext, helper) -> None:
+    """Each broker account's signed position per listing, over ALL of
+    the account's exports, for _parse_split (a split on a short
+    position debits shares; on a long one that is a reverse split). A
+    row in two overlapping downloads is ONE broker row (its copies are
+    counted per file, as _plan_qt_reversals does): a sale counted twice
+    made a long holding read short and a 6-for-5 split 0.8 (backlog
+    TJ-0664). An earlier split, stock dividend or reinvestment moves the
+    position too: a 2-for-1 on a short of 100 left it -200, not -100
+    (TJ-0665). Each broker account is its own position: with
+    combined_broker_accounts one account's long made another's short
+    split read as a reverse split (TJ-0672)."""
+    h = _quiet_resolver(ctx, helper)
+    copies: Dict[tuple, Dict[str, int]] = {}
+    for k in ctx.files:
+        for _lineno, row in _read_qt_rows(Path(k)):
+            if _is_qt_header(row):
+                continue
+            ev = _qt_position_event(row, h)
+            if ev is None:
+                continue
+            try:
+                ck = (ev, _canon_action(row.get('Action')),
+                      (row.get('Symbol') or '').strip().upper(),
+                      ' '.join((row.get('Description') or '').split())
+                      .upper(),
+                      _qt_cell_value(row, 'Net Amount'),
+                      (row.get('Currency') or '').strip().upper())
+            except BrokerageParseError:
+                continue
+            per = copies.setdefault(ck, {})
+            per[k] = per.get(k, 0) + 1
+    for ck, per in copies.items():
+        acct, listing, date, q = ck[0]
+        ctx.positions.setdefault((acct, listing), []).extend(
+            [(date, q)] * max(per.values()))
+    for tl in ctx.positions.values():
+        tl.sort(key=lambda e: (e[0], -e[1]))
 
 def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
     """A ticker change with no corporate-action row (audit S062-06 /
@@ -1288,7 +1448,8 @@ class QuestradeBrokerage(BaseBrokerage):
         return s, c
 
     def _resolve_symbol(self, row: Dict[str, Any], currency: str,
-                        lineno: Optional[int] = None, rei: bool = False):
+                        lineno: Optional[int] = None, rei: bool = False,
+                        quiet: bool = False):
         """(symbol, suffix currency) for a non-trade row. Questrade
         writes some rows under an internal code (S098765, a TF6's
         R123456) or a dotted dividend code (.SAMPLP for an issuer held as
@@ -1298,7 +1459,9 @@ class QuestradeBrokerage(BaseBrokerage):
         used to rebind, e.g., an FTN.PR dividend onto FTN.PRA because
         both share a description. A description that maps to several
         symbols is never guessed, and an internal code nothing resolves
-        is said out loud (a ticker.map GLOBAL line fixes it)."""
+        is said out loud (a ticker.map GLOBAL line fixes it). `quiet`
+        (the account context's plans, which read every row before the
+        parse does): the same answer, with no warning and no state."""
         raw = (row.get('Symbol') or '').strip().upper()
         sym = raw.lstrip('.')
         code_like = (not sym or bool(_INTERNAL_CODE_RE.match(sym))
@@ -1318,7 +1481,7 @@ class QuestradeBrokerage(BaseBrokerage):
             own = self.apply_currency_suffix(sym, cur)
             others = sorted({self.apply_currency_suffix(s, c)
                              for s, c in cands} - {own})
-            if all(ticker_map_joins(own, o) for o in others):
+            if quiet or all(ticker_map_joins(own, o) for o in others):
                 others = []     # ticker.map already folds them (A2-1056)
             if others:
                 key = (own, tuple(others))
@@ -1347,6 +1510,8 @@ class QuestradeBrokerage(BaseBrokerage):
             return inferred
         if len(cands) == 1:
             return next(iter(cands))
+        if quiet:
+            return sym, currency
         if len(cands) > 1:
             key = (sym, tuple(sorted(cands)))
             if ticker_map_renames(self.apply_currency_suffix(sym, currency)):
@@ -1415,6 +1580,7 @@ class QuestradeBrokerage(BaseBrokerage):
             ctx.add_codes_note()
             ctx.emit()
         self._ctx = ctx
+        ctx.plan_rows(self)
         self._desc_to_ticker = ctx.desc_to_ticker
         rows = self._in_real_order(path, _read_qt_rows(path, warn=True))
 
@@ -2506,8 +2672,13 @@ class QuestradeBrokerage(BaseBrokerage):
         # own trades say which side the pool is on; a long (or unknown)
         # pool keeps the signed rule (a negative quantity is then a
         # reverse split).
-        pos = self._ctx.position_on(symbol, dt.strftime("%Y-%m-%d"),
-                                    before=True) if self._ctx else 0.0
+        # The broker account's own position (backlog TJ-0672), with
+        # earlier splits replayed and overlapping copies counted once
+        # (_plan_qt_positions).
+        pos = self._ctx.position_on(
+            symbol, dt.strftime("%Y-%m-%d"), before=True,
+            account=(row.get('Account #') or '').strip()) \
+            if self._ctx else 0.0
         if pos < -1e-9:
             ratio = (held - received) / held
         else:

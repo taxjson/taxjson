@@ -48,6 +48,7 @@ not an OCC option symbol.
 from __future__ import annotations
 
 import copy
+import re
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
@@ -95,9 +96,37 @@ def is_plain_future(symbol: str) -> bool:
 # US-OPT-04).
 
 
+_FUTURE_ROOT_RE = re.compile(
+    r'^(?:F:|[\\/])([A-Z0-9]+?)(?:[FGHJKMNQUVXZ]\d{1,2})?(?:\..*)?$')
+
+
+def futures_root(symbol: str) -> str:
+    """A plain future's contract family: 'ZZQ' for 'F:ZZQZ6.US' or
+    '/ZZQZ26' (the book prefix, the month code and year, and a listing
+    suffix dropped); '' for anything else."""
+    s = str(symbol or "").strip().upper()
+    if not is_plain_future(s):
+        return ""
+    m = _FUTURE_ROOT_RE.match(s)
+    return m.group(1) if m else ""
+
+
+def is_security_future(symbol: str) -> bool:
+    """A plain future the project's ticker.map declares a security
+    future (`SECFUT ROOT`, lib/markets): a single-stock or narrow-based
+    index future (backlog TJ-0730)."""
+    root = futures_root(symbol)
+    if not root:
+        return False
+    from taxjson.lib.markets import is_security_future_root
+    return is_security_future_root(root)
+
+
 def section_1256_kind(symbol: str) -> str:
     """Which US §1256 contract `symbol` is, '' for none: "future" (a
-    plain futures contract), "futures option" (an option on one — the
+    plain futures contract, unless the ticker.map declares its root a
+    security future — IRC §1256(b)(2)(A) excludes one held by anyone
+    but a dealer, backlog TJ-0730), "futures option" (an option on one — the
     `F:`, `/` or `\\` prefix) or "index option" (a broad-based index
     option, lib/markets.is_index_option_root). tax-logic US-FUT-02 /
     US-OPT-04:
@@ -107,7 +136,7 @@ def section_1256_kind(symbol: str) -> str:
     from taxjson.lib.core import parse_option_underlying
     s = str(symbol or "")
     if is_plain_future(s):
-        return "future"
+        return "" if is_security_future(s) else "future"
     if not is_option_symbol(s):
         return ""
     if s.startswith(_FUTURES_PREFIXES):
@@ -156,6 +185,74 @@ def _own_fee(tx: TaxTransaction) -> Decimal:
     """A fill's commissions (commission + fee, + charged), inside its
     net_amount."""
     return _D(tx.commission) + _D(tx.fee)
+
+
+def _broker_books(transactions, idx) -> Dict[int, str]:
+    """{index: broker book} for the plain-futures rows `idx`: the row's
+    broker account (its hashed `source_account`) when the contract's
+    rows come from two or more broker accounts and every one of them
+    names its own; '' (one book) otherwise. Two broker accounts' exports
+    in one project folder are two positions: a short opened in one
+    never closes a long held in the other (TJ-0949). A row naming no
+    broker account (a .tt line) keeps the contract one book, as
+    before."""
+    srcs: Dict[Tuple[str, str], set] = {}
+    for i in idx:
+        tx = transactions[i]
+        srcs.setdefault((tx.symbol, (tx.currency or "").upper()),
+                        set()).add(str(getattr(tx, "source_account", "")
+                                       or ""))
+    out: Dict[int, str] = {}
+    for i in idx:
+        tx = transactions[i]
+        s = srcs[(tx.symbol, (tx.currency or "").upper())]
+        out[i] = (str(tx.source_account) if len(s) > 1 and "" not in s
+                  else "")
+    return out
+
+
+def _take_moved_position(pos: Dict[Tuple[str, str, str], list],
+                         key: Tuple[str, str, str], tx: TaxTransaction,
+                         q: Decimal) -> None:
+    """A fill the broker codes CLOSING alone (IB code C) for more than
+    its own broker account holds: the rest was moved to it from another
+    broker account of the folder (TJ-1162). A futures row cannot carry a
+    transfer, so the fill itself is the only sign: the units it lacks
+    come from the other books holding that side, their money with them.
+    All of them are closed by this fill, so their place in the lots
+    does not matter."""
+    from taxjson.lib.missing_history import open_close_codes
+    if open_close_codes(tx) != ("C",):
+        return
+    p = pos[key]
+    if abs(p[0]) > _EPS and (p[0] > 0) == (q > 0):
+        return                  # adds to its own position: no close
+    need = abs(q) - abs(p[0])
+    for k, other in sorted(pos.items()):
+        if need <= _EPS:
+            break
+        if (k == key or k[:2] != key[:2] or abs(other[0]) <= _EPS
+                or (other[0] > 0) == (q > 0)):
+            continue
+        sign = Decimal(1) if other[0] > 0 else Decimal(-1)
+        mv = min(need, abs(other[0]))
+        left = mv
+        while left > _EPS and other[1]:
+            lot = other[1][0]
+            take = min(left, lot[0])
+            part = [take, lot[1] * take / lot[0], lot[2] * take / lot[0]]
+            lot[0] -= take
+            lot[1] -= part[1]
+            lot[2] -= part[2]
+            left -= take
+            if lot[0] <= _EPS:
+                other[1].pop(0)
+            p[1].append(part)
+        other[0] -= sign * mv
+        if abs(other[0]) <= _EPS:
+            other[0], other[1] = Decimal(0), []
+        p[0] += sign * mv
+        need -= mv
 
 
 def _settle(transactions: List[TaxTransaction], method: str,
@@ -227,10 +324,11 @@ def _settle(transactions: List[TaxTransaction], method: str,
         order = sorted(fut_idx, key=lambda i: (
             transactions[i].date_settle or transactions[i].date,
             transactions[i].date, transactions[i].time or "", i))
-    # (sym, cur) -> [signed qty, [[open units, their native money,
-    # their commissions], ...]]: "average" keeps a single pooled lot;
-    # "fifo" one lot per opening.
-    pos: Dict[Tuple[str, str], list] = {}
+    # (sym, cur, broker book) -> [signed qty, [[open units, their native
+    # money, their commissions], ...]]: "average" keeps a single pooled
+    # lot; "fifo" one lot per opening.
+    books = _broker_books(transactions, fut_idx)
+    pos: Dict[Tuple[str, str, str], list] = {}
     out_parts: Dict[int, List[TaxTransaction]] = {}
     for i in order:
         tx = transactions[i]
@@ -239,8 +337,10 @@ def _settle(transactions: List[TaxTransaction], method: str,
             out_parts[i] = [_part(tx, q, Decimal(1), Decimal(0), True)]
             continue
         fee = _own_fee(tx)
-        key = (tx.symbol, (tx.currency or "").upper())
+        key = (tx.symbol, (tx.currency or "").upper(), books[i])
         p = pos.setdefault(key, [Decimal(0), []])
+        if books[i]:
+            _take_moved_position(pos, key, tx, q)
         money = _money(tx)
         stats["rows"] += 1
         if abs(p[0]) <= _EPS or (p[0] > 0) == (q > 0):
@@ -399,10 +499,19 @@ def parse_settle_native(value) -> "Tuple[str, Decimal, Decimal, str, Decimal] | 
 
 def stamp_rate(tx: TaxTransaction, rate) -> None:
     """Record on a converted settlement part the rate its conversion
-    applied (1 when the contract is in the target currency)."""
+    applied (1 when the contract is in the target currency). A part
+    converted again (USD to EUR, then EUR to CAD) composes the rates,
+    so the recorded rate always takes its native P/L to the currency
+    it is in now; the first rate alone priced the Canadian re-averaged
+    close in the intermediate currency (backlog TJ-0745)."""
     v = str(getattr(tx, "settle_native", "") or "")
-    if len(v.split()) == 4:
+    parts = v.split()
+    if len(parts) == 4:
         tx.settle_native = f"{v} {rate}"
+    elif len(parts) == 5 and parse_settle_native(v) is not None:
+        prior = Decimal(parts[4])
+        composed = prior * Decimal(str(rate))
+        tx.settle_native = " ".join(parts[:4] + [str(composed)])
 
 
 def engine_pool_key(tx) -> str:
@@ -441,7 +550,10 @@ def pool_across_accounts(transactions: List[TaxTransaction]
     notes: List[str] = []
     out = list(transactions)
     for sym, idx in sorted(by_sym.items()):
-        if len({transactions[i].account for i in idx}) < 2:
+        # Books settled apart: the project's accounts, and the broker
+        # accounts of one folder (_broker_books, TJ-0949).
+        _bk = _broker_books(transactions, idx)
+        if len({(transactions[i].account, _bk[i]) for i in idx}) < 2:
             continue
         legs = {}
         for i in idx:

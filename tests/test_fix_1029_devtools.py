@@ -162,8 +162,10 @@ class TestAutoMergeOnlyWhenMainMustBeUpToDate(unittest.TestCase):
         self.assertIn("GitHub merges it (rebase) once its required checks pass",
                       r.stdout)
         self.assertIn("main moved on while the checks ran", r.stderr)
-        self.assertTrue([c for c in self.calls()
-                         if c[:2] == ["pr", "merge"] and "--disable-auto" in c])
+        # Main moved before every check passed: auto-merge was never
+        # turned on (backlog TJ-0942), so nothing could merge later.
+        self.assertFalse([c for c in self.calls()
+                          if c[:2] == ["pr", "merge"] and "--auto" in c])
         self.assertEqual(self.origin_log(), ["another pull request", "start"])
 
     def test_an_unmoved_main_lands_either_way(self):

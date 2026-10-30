@@ -406,7 +406,7 @@ class TestNewYear(unittest.TestCase):
         with mock.patch.object(os, "rename", _rename):
             with self.assertRaises(OSError):
                 R._new_year_publish(top, top / "2025", "x = 1\n",
-                                    {"ticker.map": b""}, True)
+                                    {"ticker.map": b""}, "holdings")
         self.assertEqual(list((top / "2025").iterdir()), [])
         self.assertEqual(sorted(p.name for p in top.iterdir()),
                          ["2024", "2025", "inputs"])

@@ -303,7 +303,9 @@ class TestParser(unittest.TestCase):
             try:
                 txs, err = qt_parse([TFI_M], self.STATE)
             finally:
-                base._TICKER_JOINS = None
+                # (All of it: a path left behind is the map every later
+                # IB parse in the process reads, backlog TJ-1131.)
+                base.set_ticker_map(None)
         self.assertEqual({t['symbol'] for t in txs}, {'X000001.TO'})
         self.assertNotIn(SC.NOTE_HEAD, err)
 

@@ -81,6 +81,9 @@ except ImportError:                     # pragma: no cover
 
 PROG = "taxjson-to-base-curr"
 CACHE_FILE = os.path.expanduser("~/.currency_price_cache.json")
+# The Yahoo pairs _drop_stale_yahoo_fills has checked, in the cache.
+_FILLS_CHECKED = "_yahoo_fills_checked"
+_FILL_CHAIN_MAX_DAYS = 29
 
 BOC_START = "2017-01-03"            # first observation of the Valet FX series
 # Folio S5-F4-C1 para 1.4: a date before March 1, 2017 uses the Bank of
@@ -841,11 +844,17 @@ def refresh_yahoo(cache: dict, pair: str, ranges: List[Tuple[str, str]],
             errors.append(f"Yahoo Finance {ticker} {a}..{b}: no data "
                           f"returned (download failed?)")
             continue
-        # Seed the forward-fill from the last cached value before `a`.
+        # Seed the forward-fill from the last cached value before `a`,
+        # dated by the observation it may carry (_yahoo_run_start): a
+        # cached day is often itself a fill, and filling on from it as
+        # if it were an observation let a rate reach 14 days (backlog
+        # TJ-0843).
         prev = _prior(sorted(existing), _shift(a, -1))
-        cur = existing[prev] if prev and _days(prev, a) <= MAX_FILL_DAYS \
-            else None
-        last_obs = prev if cur is not None else None
+        last_obs = _yahoo_run_start(existing, prev) if prev else None
+        cur = existing[prev] if last_obs \
+            and _days(last_obs, a) <= MAX_FILL_DAYS else None
+        if cur is None:
+            last_obs = None
         d = a
         hi = min(b, yesterday)
         while d <= hi:
@@ -895,9 +904,76 @@ def _yahoo_history_starts_later(fetch, ticker: str, b: str,
 
 # ------------------------------------------------------------ emission
 
+def _drop_stale_yahoo_fills(cache: dict, pair: str, offline: bool
+                            ) -> List[str]:
+    """Remove the fills of `pair` a release before the fill limit left in
+    the cache, once (backlog TJ-1090): refresh_yahoo filled on from a
+    cached fill, so a range fetched in two parts stored one rate for up to
+    14 days. Their coverage is recorded, so they were never asked for
+    again, and resolve_rows takes a cached day as it is, so they reached
+    the rates file on every rebuild. The cache cannot tell a fill from a
+    rate that really repeated: of a run of one rate longer than a fill
+    can be (an observation and MAX_FILL_DAYS days), the days after that
+    are dropped with their coverage, and an online run asks the source
+    again: a real observation comes back. A run of over
+    _FILL_CHAIN_MAX_DAYS days is left alone: it would take a fetch a week
+    for a month to fill it, and a pegged rate's years are not asked for
+    again. A pair is marked done
+    (`_yahoo_fills_checked`) online only, as offline nothing can come
+    back. Returns the notes."""
+    done = cache.get(_FILLS_CHECKED)
+    if isinstance(done, dict) and pair in done:
+        return []
+    obs = _yahoo_obs(cache, pair)
+    dropped: List[str] = []
+    run: List[str] = []
+
+    def end_run() -> None:
+        # (longer than a chain of fills can be: a rate that repeats)
+        if MAX_FILL_DAYS + 1 < len(run) <= _FILL_CHAIN_MAX_DAYS:
+            dropped.extend(run[MAX_FILL_DAYS + 1:])
+    for d in sorted(obs):
+        if run and (d != _shift(run[-1], 1) or obs[d] != obs[run[-1]]):
+            end_run()
+            run = []
+        run.append(d)
+    end_run()
+    for d in dropped:
+        del cache[f"{pair}-{d}"]
+        _uncover(cache, f"yahoo:{pair}", d)
+    if not offline:
+        if not isinstance(done, dict):
+            done = cache[_FILLS_CHECKED] = {}
+        done[pair] = True
+    if not dropped:
+        return []
+    return [f"{len(dropped)} cached Yahoo Finance {pair} day(s) "
+            f"({dropped[0]}..{dropped[-1]}) carried one rate past the "
+            f"{MAX_FILL_DAYS}-day fill limit: dropped"
+            + (" for this run; an online run asks for them again" if offline
+               else " and asked for again")]
+
+
 def _prior(sorted_dates: List[str], d: str) -> Optional[str]:
     i = bisect.bisect_right(sorted_dates, d)
     return sorted_dates[i - 1] if i else None
+
+
+def _yahoo_run_start(obs: Dict[str, float], d: str) -> str:
+    """The earliest date the Yahoo rate cached for `d` may have been
+    observed. The cache stores refresh_yahoo's forward-fills as plain
+    calendar-date keys, so a fill cannot be told from an observation:
+    the start of the unbroken run of days carrying the same rate is the
+    oldest it can be (a rate that really repeated only shortens a fill).
+    Walks back no further than MAX_FILL_DAYS + 1 days (backlog TJ-0843)."""
+    v = obs[d]
+    first = d
+    for _ in range(MAX_FILL_DAYS + 1):
+        q = _shift(first, -1)
+        if obs.get(q) != v:
+            break
+        first = q
+    return first
 
 
 def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
@@ -965,8 +1041,16 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
         # stand-in for a Bank fetch that did not happen.
         if val is None and (not boc_era or boc_reach or withdrawn) \
                 and _reaches(y_cov, d, today):
-            p = _prior(y_dates, d)
-            if p and _days(p, d) <= MAX_FILL_DAYS:
+            # A cached day is used as it is (refresh_yahoo already
+            # filled it, within MAX_FILL_DAYS of its observation); a
+            # day with none is filled from the latest one before only
+            # within MAX_FILL_DAYS of the observation that one may
+            # carry, never of the fill itself — filling again from a
+            # fill let a rate reach 19 days into a converter that
+            # promises 12 (backlog TJ-0843).
+            p = d if d in y_obs else _prior(y_dates, d)
+            if p and (p == d or _days(_yahoo_run_start(y_obs, p), d)
+                      <= MAX_FILL_DAYS):
                 # %.6g keeps significant digits for small-magnitude
                 # rates (JPY→CAD ~0.00947 printed %.4f lost 0.5%).
                 val, src = f"{y_obs[p]:.6g}", "yahoo"
@@ -1189,6 +1273,7 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
     pair = f"{from_curr}{to_curr}"
     errors += _drop_bad_shapes(cache, offline)
     errors += _drop_bad_obs(cache, pair, offline)
+    notes += _drop_stale_yahoo_fills(cache, pair, offline)
     if offline:
         notes.append("TAXJSON_OFFLINE is set — using cached rates only "
                      "(no download); a transaction whose date has no "
@@ -1242,9 +1327,15 @@ def _spot_row(from_curr: str, to_curr: str) -> Optional[str]:
             recent = yf.Ticker(f"{from_curr}{to_curr}=X").history(
                 period="1d", interval="1m")
         if not recent.empty:
+            rate = float(recent['Close'].iloc[-1])
+            # A NaN, zero, negative or infinite quote is no rate (the
+            # daily fetch drops them too): written out, it made the
+            # whole rates file unreadable downstream (backlog TJ-0845).
+            if not _good_rate(rate):
+                return None
             now = datetime.now()
             return (f"{now:%Y-%m-%d} {now:%H:%M:%S} {from_curr} {to_curr} "
-                    f"{float(recent['Close'].iloc[-1]):.6g} yahoo")
+                    f"{rate:.6g} yahoo")
     except Exception:
         pass
     return None

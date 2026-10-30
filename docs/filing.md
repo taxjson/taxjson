@@ -196,8 +196,8 @@ Canada; a US return: [A US return](#a-us-return).
       was paid.
 - [ ] `taxjson amt` — the minimum tax line by line (form T691): whether
       it binds, the carryover it creates, and the carryover of the 7
-      preceding years recovered against regular tax above the minimum
-      (ITA s.120.2, line 40427). Enter last years' carryover by year of
+      preceding years recovered against basic federal tax above the
+      minimum amount (ITA s.120.2, line 40427). Enter last years' carryover by year of
       origin in `[estimate] amt_carryover = { YEAR = AMOUNT }` (from the
       notice of assessment) unless last year's close-year lock carries it.
 

@@ -91,6 +91,10 @@ def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                           "rebuy_at": r.get("rebuy_at"),
                           "deadline_passed": bool(
                               r.get("deadline_passed")),
+                          # A settled VIOLATION: what a loss sale today
+                          # of the shares still held meets (backlog
+                          # TJ-0775).
+                          "forward": r.get("forward"),
                           # CLEAR, held only in registered accounts /
                           # IRAs bought there in the window: sell-check's
                           # SIMILAR caveat ({account, date} or None).
@@ -108,6 +112,16 @@ def _sheltered_only(rec: Dict[str, Any]) -> bool:
         if taxable is None or sheltered is None:
             return False
         return abs(float(taxable)) <= 0.01 and abs(float(sheltered)) > 0.01
+    except (TypeError, ValueError):
+        return False
+
+
+def _short_taxable(rec: Dict[str, Any]) -> bool:
+    """A radar row whose taxable position is short (a written option,
+    shorted shares): its exit is a buy back (backlog TJ-0803). A row
+    without the field (an older radar) is not judged."""
+    try:
+        return float(rec.get("taxable_qty")) < -1e-6
     except (TypeError, ValueError):
         return False
 
@@ -159,6 +173,21 @@ def diff_radar(prev: Dict[str, Dict[str, Any]],
                         f"{t}: {pcat} -> CLEAR — held only in sheltered "
                         f"account(s): nothing to sell at a loss (a "
                         f"sheltered disposition has no tax effect)")
+                elif _short_taxable(c):
+                    # A short position (a written option, shorted
+                    # shares) is closed by buying back, and its
+                    # replacement is a new short sale or write: the
+                    # radar's own CLEAR advice says so; "sell ... don't
+                    # buy back" is the long wording (backlog TJ-0803).
+                    rec["scope"] = "short"
+                    adv = (c.get("advisory") or "").strip()
+                    if adv.startswith("CLEAR:"):
+                        adv = adv[len("CLEAR:"):].strip()
+                    rec["line"] = (
+                        f"{t}: {pcat} -> CLEAR — "
+                        + (adv or "safe to buy back (cover) at a loss; "
+                                  "do not short or write it again for "
+                                  "30 days"))
                 else:
                     rec["line"] = (
                         f"{t}: {pcat} -> CLEAR — safe to sell at a loss "
@@ -226,6 +255,56 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
                     f"{cur_now:,.2f} ({delta:+,.2f})"}
 
 
+def harvest_left_out(hdoc: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The positions a `taxjson harvest --json` document left out of its
+    totals ({key, shown}: key `account|symbol`, shown `SYMBOL (reason)`),
+    sorted by key. A total that leaves out a position the baseline
+    valued (a missing FX rate, no price) is not comparable with it:
+    the move is the coverage, not the market (backlog TJ-0912)."""
+    out: Dict[str, str] = {}
+    for o in hdoc.get("omitted") or []:
+        if not isinstance(o, dict):
+            continue
+        sym = str(o.get("symbol") or "")
+        if not sym:
+            continue
+        key = f"{o.get('account') or ''}|{sym}"
+        why = str(o.get("reason") or "").strip()
+        out.setdefault(key, f"{sym} ({why})" if why else sym)
+    return [{"key": k, "shown": out[k]} for k in sorted(out)]
+
+
+def harvest_valued(hdoc: Dict[str, Any]) -> List[str]:
+    """The `account|symbol` keys of the positions a `taxjson harvest
+    --json` document valued (its rows), sorted."""
+    return sorted({f"{r.get('account') or ''}|{r.get('symbol')}"
+                   for r in hdoc.get("rows") or []
+                   if isinstance(r, dict) and r.get("symbol")})
+
+
+def harvest_coverage(prev_left: Optional[List[str]],
+                     cur_left: List[str],
+                     prev_valued: Optional[List[str]] = None) -> str:
+    """How this run's harvest total compares with the baseline's, by
+    the positions each left out: "worse" (it leaves out a position the
+    baseline valued: no comparison, the baseline is kept), "better" (it
+    values a position the baseline left out: no comparison, it becomes
+    the baseline), else "same" (compare them). A position left out that
+    the baseline never valued (a new holding with an unknown cost) is
+    in neither total, so it stops nothing: it kept the baseline on every
+    run while it stayed left out (backlog TJ-1040). `prev_valued` None
+    (a baseline without the field): any newly left-out position counts
+    as one it valued. A baseline from before the left-out field
+    (`prev_left` None) counts as the same."""
+    if prev_left is None:
+        return "same"
+    prev, cur = set(prev_left), set(cur_left)
+    new = cur - prev
+    if new if prev_valued is None else new & set(prev_valued):
+        return "worse"
+    return "better" if prev - cur else "same"
+
+
 def _state_shape_problem(doc: Dict[str, Any]) -> Optional[str]:
     """Why the state's radar or harvest_now cannot be diffed, or None.
     The two fields are independent: a state with no radar (null or
@@ -247,6 +326,14 @@ def _state_shape_problem(doc: Dict[str, Any]) -> Optional[str]:
                           or not isinstance(h, (int, float))
                           or not math.isfinite(h)):
         return '"harvest_now" is not a number'
+    left = doc.get("harvest_omitted")
+    if left is not None and (not isinstance(left, list)
+                             or any(not isinstance(k, str) for k in left)):
+        return '"harvest_omitted" is not a list of text'
+    valued = doc.get("harvest_valued")
+    if valued is not None and (not isinstance(valued, list)
+                               or any(not isinstance(k, str) for k in valued)):
+        return '"harvest_valued" is not a list of text'
     return None
 
 
@@ -302,11 +389,20 @@ def baseline_date(path: Path) -> Optional[str]:
 
 def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
                harvest_now: Optional[float],
-               as_of: str) -> None:
+               as_of: str,
+               harvest_omitted: Optional[List[str]] = None,
+               harvest_valued: Optional[List[str]] = None) -> None:
+    """`harvest_omitted` / `harvest_valued`: the `account|symbol` keys of
+    the positions the saved harvest total leaves out (harvest_left_out)
+    and values (harvest_valued), kept with it."""
     doc: Dict[str, Any] = {"schema_version": STATE_VERSION,
                            "as_of": as_of, "radar": radar}
     if harvest_now is not None:
         doc["harvest_now"] = round(harvest_now, 2)
+        if harvest_omitted is not None:
+            doc["harvest_omitted"] = sorted(harvest_omitted)
+        if harvest_valued is not None:
+            doc["harvest_valued"] = sorted(harvest_valued)
     # No stray .part beside a state that could not be written (the
     # caller names the path, S046-12); never through a symlink (M1).
     from taxjson.lib.safe_write import write_atomic

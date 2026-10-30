@@ -162,7 +162,10 @@ echo "   $("$PY" --version 2>&1) at $PY"
 
 say "2/4 Source → $DIR"
 DRY_RUN="${TAXJSON_DRY_RUN:-0}"
-if [ -d "$DIR/.git" ]; then
+# An existing checkout: a clone (.git a folder) or a linked git worktree
+# (.git a file), as lib/channels.py is_checkout reads it — a worktree was
+# taken for a missing install and cloned into (backlog TJ-0810).
+if [ -e "$DIR/.git" ]; then
   git -C "$DIR" fetch --tags --quiet origin
 elif [ "$DRY_RUN" = 1 ]; then
   # A dry run changes nothing: resolving the channel needs the tags and
@@ -183,9 +186,33 @@ DIR="$(cd "$DIR" && pwd -P)"          # canonical: the symlink target must be ab
 # and pipefail then fails the script.
 newest() { git -C "$DIR" tag -l 'v[0-9]*' --sort=-v:refname | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sed -n 1p; }
 # What channels.json on main names for a channel (a promote is a one-line
-# commit there, never a new tag).
-named() { { git -C "$DIR" show origin/main:channels.json 2>/dev/null || true; } \
-            | sed -nE "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"(v[^\"]+)\".*/\\1/p" | sed -n 1p; }
+# commit there, never a new tag): empty when main has no channels.json or
+# it names no such channel. The file must be what channels.parse_channels
+# accepts — a JSON object of "stable" / "beta", each a vX.Y.Z release —
+# or it is refused (status 1, why on stderr): a release-looking string in
+# a malformed file, or a value such as v0.4.0-rc1, was taken as the
+# release (backlog TJ-0704). Read in the shell, not Python: the release
+# values hold no space, quote or escape, so a strict match is the parse.
+named() {
+  local text ws rel member re
+  text="$(git -C "$DIR" show origin/main:channels.json 2>/dev/null)" || return 0
+  ws=$'[ \t\r\n]*'
+  rel='"v[0-9]+[.][0-9]+[.][0-9]+"'
+  member="\"(stable|beta)\"${ws}:${ws}${rel}"
+  re="^${ws}[{]${ws}(${member}(${ws},${ws}${member})*)?${ws}[}]${ws}\$"
+  if ! [[ "$text" =~ $re ]]; then
+    printf '%s\n' "channels.json on main is not a JSON object naming a vX.Y.Z release for stable and beta, like {\"stable\": \"v1.2.3\", \"beta\": \"v1.2.3\"} — refusing to pick a release from it." >&2
+    return 1
+  fi
+  # The last one, as a JSON reader takes a repeated key.
+  printf '%s' "$text" | tr -d ' \t\r\n' | { grep -oE "\"$1\":\"v[0-9]+[.][0-9]+[.][0-9]+\"" || true; } \
+    | sed -n '$s/.*:"\(v[^"]*\)"/\1/p'
+}
+# A release scripts/release.sh made: an annotated tag on main's history.
+is_release() {
+  [ "$(git -C "$DIR" cat-file -t "refs/tags/$1" 2>/dev/null)" = tag ] \
+    && git -C "$DIR" merge-base --is-ancestor "refs/tags/$1^{commit}" origin/main 2>/dev/null
+}
 # The newer of two vX.Y.Z.
 vernewer() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
 CUR="$(git -C "$DIR" describe --tags --exact-match 2>/dev/null || true)"
@@ -193,7 +220,7 @@ case "$CHANNEL" in
   dev) TARGET=main ;;
   latest) TARGET="$(newest)" ;;
   stable|beta)
-    TARGET="$(named "$CHANNEL")"
+    TARGET="$(named "$CHANNEL")" || die "No $CHANNEL release installed: fix channels.json on main (or name a release: --channel vX.Y.Z)."
     if [ -z "$TARGET" ]; then
       echo "   (channels.json names no $CHANNEL release yet — using the newest)"
       TARGET="$(newest)"
@@ -213,12 +240,19 @@ if [ "$TARGET" != main ]; then
   git -C "$DIR" merge-base --is-ancestor "refs/tags/$TARGET^{commit}" origin/main 2>/dev/null \
     || die "$TARGET is not on the main branch's history — refusing to install it."
   # A channel never takes an install backwards (this one may run ahead of
-  # it after `taxjson deploy` or a pin); naming a version goes back.
+  # it after `taxjson deploy` or a pin); naming a version goes back. Only
+  # a release counts: a newer tag here that is lightweight, or on a commit
+  # main never had (a local tag), passed without the checks above, so the
+  # install stayed on it (backlog TJ-0703); it moves to the channel's.
   case "$CHANNEL" in v*) ;; *)
     if [[ "$CUR" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$CUR" != "$TARGET" ] \
         && [ "$(vernewer "$CUR" "$TARGET")" = "$CUR" ]; then
-      echo "   on $CUR, newer than $CHANNEL ($TARGET) — staying (to go back: --channel $TARGET)"
-      TARGET="$CUR"
+      if is_release "$CUR"; then
+        echo "   on $CUR, newer than $CHANNEL ($TARGET) — staying (to go back: --channel $TARGET)"
+        TARGET="$CUR"
+      else
+        echo "   on $CUR, which is not a release (not an annotated tag on main's history) — moving to $CHANNEL ($TARGET)"
+      fi
     fi ;;
   esac
 fi

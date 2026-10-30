@@ -327,7 +327,7 @@ def _listed_pairs(mh_path):
     return load_missing_history(Path(mh_path))
 
 
-def _opening_sizes(txs, mh_path, year):
+def _opening_sizes(txs, mh_path, year, types=None):
     """What `taxjson run` opens for each .tt OPENING cost=unknown line —
     the same synthesize_openings call, sized from the rows through
     `year`'s end (or the project's): (symbol, account) -> its applied-
@@ -338,7 +338,8 @@ def _opening_sizes(txs, mh_path, year):
     try:
         pairs = load_missing_history(Path(mh_path))
         _o, log = synthesize_openings(txs, pairs, flag_stale=False,
-                                      until=sizing_until(year))
+                                      until=sizing_until(year),
+                                      registered_accounts=types or None)
     except (OSError, ValueError):
         return {}
     return {(e['symbol'], e['account']): e for e in log}
@@ -951,7 +952,8 @@ def main(argv=None):
     short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year,
                                                        date_basis=basis,
                                                        journal_symbols=journal,
-                                                       pool=_pool)
+                                                       pool=_pool,
+                                                       registered_accounts=types or None)
                   if (r.candidate.symbol, r.candidate.account) not in linked_old]
 
     # --- 1b. Broker-marked covers no short in the data backs (RBC
@@ -960,7 +962,8 @@ def main(argv=None):
     #         A2-0306, IB twin A2-0175). ---
     covers = [c for c in detect_unbacked_covers(
                   txs, include_options=args.include_options,
-                  date_basis=basis, journal_symbols=journal)
+                  date_basis=basis, journal_symbols=journal,
+                  registered_accounts=types or None)
               if not args.account or c.account == args.account]
 
     # --- 1c. missing-history entries today's detection would NOT propose
@@ -1172,9 +1175,46 @@ def main(argv=None):
             _diag(f"taxjson-missing-history: warning: could not read "
                   f"{args.missing_history}: {e}", file=sys.stderr)
 
+    # The openings the run booked, walked with the books as the closing
+    # summary walks them (first_run.uncovered_short_sales): a used-up
+    # opening leaves its later sale unresolved (backlog TJ-0958, TJ-1170),
+    # and the lines on the old symbols of a rename cover the new one
+    # (TJ-0959, TJ-1199). None: no booked opening to read, a pair is
+    # covered by its name alone.
+    _walked = None
+    _logged = {}
+    if yr and _ph and short_rows:
+        from taxjson.lib.first_run import logged_openings
+        _logged = {k: v for k, v in logged_openings(
+                       Path(args.files[0]).resolve().parent).items()
+                   if k in _ph}
+        if _logged:
+            _with = txs + [t for rows_ in _logged.values() for t in rows_]
+            _after = [c for c in detect_missing_history(
+                          _with, include_options=args.include_options,
+                          include_broker_shorts=True,
+                          registered_accounts=types or None,
+                          journal_symbols=journal)
+                      if not c.broker_marked_short]
+            _walked = {
+                (str(r.candidate.symbol).upper(),
+                 str(r.candidate.account).lower())
+                for r in assess_tax_year_relevance(
+                    _with, _after, yr, date_basis=basis,
+                    journal_symbols=journal,
+                    pool=year_pool(_with, _after, yr, country=country,
+                                   registered=types, date_basis=basis),
+                    registered_accounts=types or None)
+                if r.affects_year or r.pooled_with}
+
     def _covered(r) -> bool:
         c = r.candidate
-        return (str(c.symbol).upper(), str(c.account).lower()) in _ph
+        key = (str(c.symbol).upper(), str(c.account).lower())
+        if key in _ph and key not in _logged:
+            return True
+        if _walked is not None and (r.affects_year or r.pooled_with):
+            return key not in _walked
+        return key in _ph
 
     # === Section 0: reconstructed mergers ===
     if links:
@@ -1200,9 +1240,10 @@ def main(argv=None):
     # === Section 1: truncated history ===
     # The opening the run applies for each pair the file lists, said
     # under its row in whichever section it is (CA-ACB-11 / US-BASIS-04).
-    _sizes = (_opening_sizes(txs, args.missing_history, yr)
+    _sizes = (_opening_sizes(txs, args.missing_history, yr, types)
               if args.missing_history and short_rows
-              and any(_covered(r) for r in short_rows) else {})
+              and (_walked is not None
+                   or any(_covered(r) for r in short_rows)) else {})
     if short_rows:
         _P.heading(f"TRUNCATED HISTORY — positions go short (missing a "
                    f"buy): {len(short_rows)} pair(s)")

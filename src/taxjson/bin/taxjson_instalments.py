@@ -70,6 +70,16 @@ def balance_due_date(year: int) -> date:
     return date(int(year) + 1, *BALANCE_DUE_MONTH_DAY)
 
 
+def balance_payment_deadline(year: int) -> date:
+    """The last day a payment of `year`'s balance is on time: the
+    balance-due date, or the next business day when it falls on a
+    weekend (CRA accepts a payment on that day as on time; statutory
+    holidays are not modelled, as for the quarterly dates). A payment
+    dated up to it belongs to the year (backlog TJ-0915); interest still
+    runs to balance_due_date, so it earns no credit."""
+    return _next_business_day(balance_due_date(year))
+
+
 def balance_due_label() -> str:
     """'April 30' (from the constant)."""
     import calendar

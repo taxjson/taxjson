@@ -20,6 +20,11 @@ row dated on or before it (`pools_on`). Rows that share a `seq` came
 from one row of the books (a rename empties one pool and fills
 another). A pool's `total_cost` follows the inventory's convention: a
 short's is negative (the opening proceeds credited).
+
+A short pool beside a long (Canada: a future, or a share short the broker
+marks) is no property held, so it has no row here while the long is held.
+Its part `shorts`, a timeline of the same shape, has each account's part
+of it, per (account, symbol): `short_rows_on`.
 """
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -62,6 +67,12 @@ class Recorder:
         self._last: Dict[Label, State] = {}
         self._held: Dict[Label, None] = {}      # ordered set
         self._rows: List[Tuple[int, Label, State, str]] = []
+        # The id of the book row each `seq` is (the engine appends one
+        # per row it walks; the Canadian engine does): the document's
+        # `row_ids`, so a reader can place a row of the books between
+        # two steps of one day (T1135: a custody account's units at
+        # each step, backlog TJ-0646).
+        self.row_ids: List[str] = []
 
     def touch(self, seq: int, labels: Iterable[Label],
               renamed: Optional[Dict[Label, str]] = None) -> None:
@@ -128,8 +139,11 @@ class Recorder:
             rows.append([seq, d, lab[0], lab[1], float(qty),
                          round_half_up(cost, 4), round_half_up(dw, 4),
                          *rest, renamed])
-        return {"version": VERSION, "basis": basis,
-                "fields": list(FIELDS), "rows": rows}
+        doc = {"version": VERSION, "basis": basis,
+               "fields": list(FIELDS), "rows": rows}
+        if self.row_ids and len(self.row_ids) == n:
+            doc["row_ids"] = list(self.row_ids)
+        return doc
 
 
 # ------------------------------------------------------------ readers
@@ -144,13 +158,87 @@ def rows(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _is_num(v: Any) -> bool:
+    import math
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v))
+
+
+def _is_str(v: Any) -> bool:
+    return isinstance(v, str)
+
+
+def _is_opt_str(v: Any) -> bool:
+    return v is None or isinstance(v, str)
+
+
+# Each field's test: a row the engine wrote (Recorder.finish) passes
+# every one.
+_FIELD_OK: Dict[str, Callable[[Any], bool]] = {
+    "seq": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "date": _is_str,
+    "account": _is_str,
+    "symbol": lambda v: isinstance(v, str) and bool(v),
+    "qty": _is_num,
+    "total_cost": _is_num,
+    "deferred_wash": _is_num,
+    "unknown_cost": lambda v: isinstance(v, bool),
+    "currency": _is_str,
+    "position_start_date": _is_opt_str,
+    "last_acq_date": _is_opt_str,
+    "renamed_to": _is_str,
+}
+
+def row_seqs(doc: Dict[str, Any]) -> Dict[str, int]:
+    """{book row id: the seq the engine walked it as} ({} when the
+    timeline does not record its rows' ids). An id walked twice is left
+    out: such a row cannot be placed."""
+    out: Dict[str, int] = {}
+    twice = set()
+    for i, rid in enumerate(doc.get("row_ids") or []):
+        rid = str(rid or "")
+        if not rid:
+            continue
+        if rid in out:
+            twice.add(rid)
+        out[rid] = i
+    for rid in twice:
+        del out[rid]
+    return out
+
+
 def check(doc: Any) -> Optional[str]:
-    """None for a timeline this version reads, else what is wrong."""
+    """None for a timeline this version reads, else what is wrong: its
+    version, its field names (every one of FIELDS), and each row (one
+    value per field, each of its field's type, the numbers finite). A
+    damaged sidecar read anyway turned a short row's cost into 0 and a
+    row without its quantity into no holding (backlog TJ-0684)."""
     if not isinstance(doc, dict) or not isinstance(doc.get("rows"), list):
         return "not a cost timeline"
     if doc.get("version") != VERSION:
         return (f"cost timeline version {doc.get('version')!r}, this "
                 f"taxjson reads {VERSION}")
+    fields = doc.get("fields")
+    if (not isinstance(fields, list)
+            or not all(isinstance(f, str) for f in fields)):
+        return "not a cost timeline (its field names are missing)"
+    missing = [f for f in FIELDS if f not in fields]
+    if missing:
+        return ("not a cost timeline (no field "
+                + ", ".join(repr(f) for f in missing) + ")")
+    for i, r in enumerate(doc["rows"]):
+        if not isinstance(r, list) or len(r) != len(fields):
+            n = len(r) if isinstance(r, list) else "no"
+            return (f"row {i} has {n} values, the timeline names "
+                    f"{len(fields)} fields")
+        for f, v in zip(fields, r):
+            ok = _FIELD_OK.get(f)
+            if ok is not None and not ok(v):
+                return f"row {i}: {f} is {v!r}"
+    if "shorts" in doc:
+        problem = check(doc["shorts"])
+        if problem:
+            return f"its shorts: {problem}"
     return None
 
 
@@ -182,12 +270,16 @@ def inventory_on(doc: Dict[str, Any], date: str,
     per-account pool), the engine's flat tolerance applied: `eps(symbol)`,
     the Canadian engine's (core.pool_qty_eps) when not given — the US
     engine's is US_QTY_EPS."""
-    from taxjson.lib.core import pool_qty_eps
+    from taxjson.lib.core import MATERIAL_COST, pool_qty_eps
     eps = eps or pool_qty_eps
     out: List[Dict[str, Any]] = []
     for (acct, sym), r in pools_on(doc, date, account).items():
         q = float(r.get("qty") or 0.0)
-        if abs(q) <= eps(sym):
+        # A sub-micro position that carries a real cost is held
+        # (CA-ACB-01; backlog TJ-0649).
+        if not q or (abs(q) <= eps(sym)
+                     and abs(float(r.get("total_cost") or 0.0))
+                     < MATERIAL_COST):
             continue
         out.append({"symbol": sym, "qty": q,
                     **({"account": acct} if acct else {}),
@@ -198,4 +290,23 @@ def inventory_on(doc: Dict[str, Any], date: str,
                     "deferred_wash": round(float(
                         r.get("deferred_wash") or 0.0), 4),
                     "unknown_cost": bool(r.get("unknown_cost"))})
+    return out
+
+
+def short_rows_on(doc: Dict[str, Any], date: str,
+                  eps: Optional[Callable[[str], float]] = None
+                  ) -> List[Dict[str, Any]]:
+    """The account-held shorts beside a long at the end of `date`, as
+    `inventory_on` rows with their `account` and `short_pool`. A short
+    with no long beside it is left out: it is the pool's own row in the
+    timeline (core._ca_pool_state)."""
+    shorts = doc.get("shorts")
+    if not isinstance(shorts, dict):
+        return []
+    pools = pools_on(doc, date)
+    out = []
+    for r in inventory_on(shorts, date, eps=eps):
+        pooled = pools.get(("", r["symbol"]))
+        if pooled is not None and float(pooled.get("qty") or 0.0) > 0:
+            out.append(dict(r, short_pool=True))
     return out

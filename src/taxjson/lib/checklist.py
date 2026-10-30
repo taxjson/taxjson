@@ -1434,18 +1434,52 @@ def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
     return out
 
 
+# The inputs a run may write itself — the elections it asks for
+# (manifest.json), the crypto send decisions (sends.json) and the
+# crypto_sends.tt they regenerate in a frozen year: recorded as the run
+# leaves them, never as an edit made while it ran.
+_RUN_WRITTEN_NAMES = _ACCOUNT_SIDECARS + ("crypto_sends.tt",)
+
+
+def _edited_during_run(started: Dict[str, str], now: Dict[str, str]
+                       ) -> List[str]:
+    """The fingerprint keys of the inputs that changed between a run's
+    start (`started`) and its end (`now`), the run's own files
+    (_RUN_WRITTEN_NAMES) aside: changed, removed or added meanwhile."""
+    keys = sorted(set(started) | set(now))
+    return [k for k in keys
+            if started.get(k) != now.get(k)
+            and _fingerprint_name(k) not in _RUN_WRITTEN_NAMES]
+
+
 def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
-                             booked_twice: Sequence[str] = ()) -> None:
+                             booked_twice: Sequence[str] = (),
+                             started: Optional[Dict[str, str]] = None
+                             ) -> List[str]:
     """Called by a successful FULL `taxjson run`: what the reports were
     built from, for run-clean's staleness check. `booked_twice`: what
     the run found booked in two accounts (one export file in two
     folders, one broker account in two taxjson accounts), each in one
     line; run-clean and the run's closing list read it back
-    (recorded_booked_twice, backlog TJ-0478)."""
+    (recorded_booked_twice, backlog TJ-0478). `started`: the inputs'
+    fingerprint taken when the run started, before any stage read
+    them. An input edited (added, removed) while the run read them is
+    recorded as it was at the start, so the books read as stale until
+    the next run: the version read afterwards was never the one
+    calculated (backlog TJ-0929). Returns those inputs' keys."""
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
+    files = input_fingerprint(root, cfg)
+    edited: List[str] = []
+    if started is not None:
+        edited = _edited_during_run(started, files)
+        for k in edited:
+            if k in started:
+                files[k] = started[k]
+            else:
+                files.pop(k, None)
     doc: Dict[str, Any] = {"version": FINGERPRINT_VERSION,
-                           "files": input_fingerprint(root, cfg)}
+                           "files": files}
     if booked_twice:
         doc["booked_twice"] = [str(x) for x in booked_twice]
     # The country the books were built under: a report command on books
@@ -1458,6 +1492,7 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any], *,
     from taxjson.lib.safe_write import write_atomic
     write_atomic(work / FINGERPRINT_FILE,
                  json.dumps(doc, indent=1, sort_keys=True) + "\n")
+    return edited
 
 
 def recorded_booked_twice(root: Path) -> List[str]:
@@ -2589,10 +2624,14 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
                  f"{c.get('missing_from_slip', 0)} missing from slip"]
         if c.get("ambiguous_listing"):
             parts.append(f"{c['ambiguous_listing']} ambiguous listing")
+        if c.get("unknown_proceeds"):
+            parts.append(f"{c['unknown_proceeds']} with unknown short-sale "
+                         f"proceeds")
         if rep.get("unreadable_rows"):
             parts.append(f"{rep['unreadable_rows']} unreadable slip row(s)")
         # Real mismatches first as the examples (R1-1).
         _rank = {"MISMATCH": 0, "AMBIGUOUS_LISTING": 1,
+                 "UNKNOWN_PROCEEDS": 1,
                  "MISSING_FROM_COMPUTED": 2, "MISSING_FROM_SLIP": 3}
         bad = [f"{r.get('symbol')} {r.get('status')}"
                for r in sorted((r for r in (rep.get("rows") or [])
@@ -2791,6 +2830,37 @@ def d_form_export(ctx: Ctx) -> Result:
             f"{float(rep.get('manual_proceeds') or 0.0):,.2f}) are not in "
             f"the {label} rows — report them by hand (form-export's "
             f"MANUAL REPORTING section)")
+    # An assignment's premium the engine says is in no gain: the two
+    # totals above tie, equally short of it (backlog TJ-0824).
+    unc = [i for i in ((rep.get("readiness") or {}).get("issues") or [])
+           if isinstance(i, dict) and i.get("kind") == "unconsumed-premium"]
+    if unc:
+        problems.append(
+            "an option assignment's premium is in no gain (its stock leg "
+            "is not in the books) — add the delivery rows, then `tjs run` "
+            "(`tjs audit` names it)")
+    # Compensation paid on a short still inside its 45 days: the year's
+    # income moves if it is covered in time (§263(h); backlog TJ-1065).
+    _open_comp = [i for i in ((rep.get("readiness") or {}).get("issues") or [])
+                  if isinstance(i, dict)
+                  and i.get("kind") == "compensation-not-settled"]
+    if _open_comp:
+        problems.append(
+            f"{len(_open_comp)} dividend compensation payment(s) on a short "
+            f"still inside its 45 days: not settled, the year's income "
+            f"moves if it is covered in time — add the later rows, then "
+            f"`tjs run` ({_open_comp[0].get('detail')})")
+    # A cost or a quantity the engine's conservation check says the books
+    # lost track of: the totals above tie, equally short (backlog TJ-1115).
+    cons = [str(i.get("detail") or "") for i in (
+                (rep.get("readiness") or {}).get("issues") or [])
+            if isinstance(i, dict) and i.get("kind") == "conservation"]
+    if cons:
+        problems.append(
+            f"the books lost track of a cost or a quantity "
+            f"({cons[0].split(' — ')[0]}"
+            f"{f', and {len(cons) - 1} more' if len(cons) > 1 else ''}) — "
+            f"`tjs audit`; check the account's rows for the symbol")
     if problems:
         return Result("form-export", "attention", "; ".join(problems))
     return Result("form-export", "done",
@@ -2836,7 +2906,10 @@ def d_t1135(ctx: Ctx) -> Result:
                       actionable=False)
     # An account's Canadian dollars the books give no balance of (CA-RPT-
     # 20): yours to add before the verdict stands.
-    nc = [str(n.get("account")) for n in rep.get("cash_not_counted") or []]
+    # (Cash in transit inside the year has a balance and a cost: named by
+    # `tjs t1135`, not one to add; backlog TJ-1228.)
+    nc = [str(n.get("account")) for n in rep.get("cash_not_counted") or []
+          if not n.get("transit")]
     if nc:
         return Result("t1135", "manual",
                       f"below the CAD 100,000 threshold on these books, but "
@@ -3267,18 +3340,21 @@ def save_state(root: Path, state: Dict[str, Any], year: int) -> None:
 def reset_state(root: Path) -> bool:
     """`checklist --reset`: remove checklist.json. True when there was
     one. A directory, or a project where the file cannot be removed, is
-    a StateFileError line rather than a traceback (A2-1414)."""
+    a StateFileError line rather than a traceback (A2-1414). Under the
+    state lock set_override takes: a reset between a mark's read and its
+    save let the mark write the old marks back (backlog TJ-0854)."""
     path = root / STATE_FILE
-    if not path.exists() and not path.is_symlink():
-        return False
-    if path.is_dir():
-        raise StateFileError(f"cannot remove {STATE_FILE}: is a directory "
-                             f"— remove it by hand")
-    try:
-        path.unlink()
-    except OSError as e:
-        raise _state_write_error("remove", path, e) from None
-    return True
+    with _StateLock(root):
+        if not path.exists() and not path.is_symlink():
+            return False
+        if path.is_dir():
+            raise StateFileError(f"cannot remove {STATE_FILE}: is a "
+                                 f"directory — remove it by hand")
+        try:
+            path.unlink()
+        except OSError as e:
+            raise _state_write_error("remove", path, e) from None
+        return True
 
 
 class _StateLock:
@@ -4251,7 +4327,8 @@ def s_tobase_map(ctx: Ctx, f: _Facts) -> Result:
                          else "") + " — `tjs "
                       "update-tobase-map` shows the interlisted pairs "
                       "that would change these books")
-    if (tob.stamp or "") < master.generated:
+    if TB.generation_key(tob.stamp or "") < TB.generation_key(
+            master.generated):
         return Result("tobase-map", "attention",
                       f"{name} is from the master of "
                       f"{tob.stamp or 'an unknown date'}; this taxjson has "
@@ -4678,13 +4755,50 @@ def _check_key(root: Path, p: Path) -> str:
     return p.as_posix()
 
 
+# The checklist fingerprint's entry for the taxjson.toml content no run
+# reads (_PLANNING_TABLES, _PLANNING_SETTINGS, _PLANNING_ACCOUNT_KEYS)
+# but the checks do: the estimate and AMT steps read [estimate].
+PLANNING_CONFIG_KEY = "taxjson.toml (planning settings)"
+
+
+def _planning_config_digest(path: Path) -> Optional[str]:
+    """sha256 of the part of taxjson.toml a run does not read (the
+    planning tables and keys _run_config_part leaves out), canonically
+    serialised; None when the file cannot be read or parsed (the run's
+    own digest already names it changed)."""
+    import hashlib
+    try:
+        from taxjson.lib.tomlcompat import tomllib
+        doc = tomllib.loads(Path(path).read_bytes().decode("utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return None
+    part: Dict[str, Any] = {k: v for k, v in doc.items()
+                            if k in _PLANNING_TABLES}
+    st = doc.get("settings")
+    if isinstance(st, dict):
+        part["settings"] = {k: v for k, v in st.items()
+                            if k in _PLANNING_SETTINGS}
+    accts = doc.get("accounts")
+    if isinstance(accts, dict):
+        part["accounts"] = {
+            n: {k: v for k, v in a.items() if k in _PLANNING_ACCOUNT_KEYS}
+            for n, a in accts.items() if isinstance(a, dict)}
+    blob = json.dumps(part, sort_keys=True, default=str).encode("utf-8")
+    return "planning-settings:" + hashlib.sha256(blob).hexdigest()
+
+
 def checklist_fingerprint(ctx: Ctx) -> Dict[str, str]:
     """What the kept verdicts were made from, {key: sha256}: every run
-    input (input_fingerprint) and the files only the checks read
+    input (input_fingerprint), the files only the checks read
     (_check_only_files) — a changed holdings snapshot made no verdict
-    stale before (audit 2026-10-24 A14)."""
+    stale before (audit 2026-10-24 A14) — and the taxjson.toml settings
+    only the checks read (PLANNING_CONFIG_KEY: an edited [estimate]
+    other_income left the kept AMT verdict fresh; backlog TJ-0923)."""
     import hashlib
     out = input_fingerprint(ctx.root, ctx.cfg)
+    _plan = _planning_config_digest(Path(ctx.root) / "taxjson.toml")
+    if _plan is not None:
+        out[PLANNING_CONFIG_KEY] = _plan
     for p in _check_only_files(ctx):
         try:
             out.setdefault(_check_key(ctx.root, p),

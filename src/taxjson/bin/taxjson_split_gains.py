@@ -78,11 +78,18 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
     start: Dict[str, str] = {}
     # One corporate event per account however many copies (CA-CORP-12).
     dup = split_copies(order, per_account=True)
+    # A trade executed before a split and settling after it is in
+    # post-split shares under settle ordering, as the engine and
+    # balance_on re-denominate it: a June 3 sale of 100 settling June 6
+    # over a June 4 2-for-1 left 100 phantom shares here, and a June 9
+    # buy's position kept January's start (backlog TJ-1013).
+    from taxjson.bin.taxjson_apply_distributions import _settle_lag_factors
+    factor = _settle_lag_factors(order) if basis == "settle" else {}
     for t in order:
         sym = str(t.get("symbol") or "")
         act = t.get("action")
         if act in ("BUYSELL", "ASSIGN", "OPENING_BALANCE", "TRANSFER"):
-            q = float(t.get("quantity") or 0.0)
+            q = float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0)
             before = bal.get(sym, 0.0)
             after = before + q
             bal[sym] = after
@@ -107,16 +114,69 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
     return start
 
 
+def _own_premium_cost(lots: Any, account: str, qty: float, share: float,
+                      total_cost: Any) -> Optional[float]:
+    """A written option's cost in `account` from the engine's table of
+    each account's open contracts (core's `account_premiums`), or None
+    when its units are not its own lots or the table cannot be read."""
+    try:
+        own = lots[account]
+        if abs(abs(qty) - float(own["units"])) >= 1e-6:
+            return None
+        rest = float(total_cost or 0.0) + sum(float(e["premium"])
+                                              for e in lots.values())
+        return round(-float(own["premium"]) + rest * share, 6)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _lots_are_every_position(lots: Any, symbol: str,
+                             pool_rows: Optional[List[dict]], until: str,
+                             date_basis: str) -> bool:
+    """Does every account of the blended pass (`pool_rows`) hold exactly
+    its own lots of the table `lots`? If one does not (a contract closed
+    or moved across accounts, a long beside the writes), an account's own
+    premium and another's share of the whole pool would not add up to
+    the pool, so all go by share (backlog TJ-1303). No rows to ask: the
+    account's own units decide alone."""
+    if not pool_rows:
+        return True
+    from taxjson.lib.positions_check import pool_splits
+    try:
+        accounts = {str(r.get("account") or "") for r in pool_rows
+                    if isinstance(r, dict)} | set(lots)
+        for a in accounts:
+            own = [r for r in pool_rows if isinstance(r, dict)
+                   and str(r.get("account") or "") == a]
+            bal = balance_on(own + pool_splits(pool_rows, a), symbol, until,
+                             date_basis=date_basis)
+            if abs(bal + (float(lots[a]["units"]) if a in lots else 0.0)
+                   ) >= 1e-6:
+                return False
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _split_inventory(rows: List[Dict[str, Any]], account: str,
                      book: Optional[List[dict]], starts: Dict[str, str],
-                     until: str, date_basis: str = "settle"
+                     until: str, date_basis: str = "settle",
+                     pool_rows: Optional[List[dict]] = None
                      ) -> List[Dict[str, Any]]:
     """The account's inventory rows: its own (US per-account lots), and
     its share of each blended pool by its balance at the end of `until`
     (on `date_basis`: the pools' own, a trade-date project's year end on
     trade dates, backlog TJ-0343; `taxjson list --date` gives the
-    project's)."""
+    project's). A short pool's row beside a long (`short_pool`) is its
+    account's own, so the account's balance takes it back before its
+    share of the long is read: the two never net (backlog TJ-1028)."""
     inventory: List[Dict[str, Any]] = []
+    own_short: Dict[str, float] = {}
+    for row in rows:
+        if row.get("short_pool") and row.get("account") == account:
+            sym = row.get("symbol", "")
+            own_short[sym] = own_short.get(sym, 0.0) - float(row.get("qty")
+                                                             or 0.0)
     for row in rows:
         row_acct = row.get("account")
         if row_acct:
@@ -127,8 +187,9 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
         # own share count at the blended ACB per share.
         if book is None:
             continue
-        qty = balance_on(book, row.get("symbol", ""), until,
-                         date_basis=date_basis)
+        qty = (balance_on(book, row.get("symbol", ""), until,
+                          date_basis=date_basis)
+               + own_short.get(row.get("symbol", ""), 0.0))
         total_qty = float(row.get("qty") or 0.0)
         if abs(qty) < 1e-9 or abs(total_qty) < 1e-9:
             continue
@@ -145,10 +206,27 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
             r["position_start_date"] = _st
         # Every ADDITIVE field scales with the account's share — the
         # deferred superficial loss too (audit R1-160: copied whole into
-        # every account, it was counted once per account).
-        for _f in ("total_cost", "deferred_wash", "base_total_cost"):
+        # every account, it was counted once per account), and a written
+        # option's premium recognised at the write (grant timing: copied
+        # whole, harvest charged each account the pool's premium as a
+        # buy-back loss, backlog TJ-1010).
+        for _f in ("total_cost", "deferred_wash", "base_total_cost",
+                   "recognised_premium"):
             if _f in row:
                 r[_f] = round(float(row.get(_f) or 0.0) * share, 6)
+        # A written option open in several accounts: its own contracts'
+        # premium, which a close takes, with its share of what the lots
+        # do not hold (backlog TJ-1251). Units that are not its own lots
+        # (a contract moved in), in any account, go by share (TJ-1303).
+        _lots = r.pop("account_premiums", None)
+        _cost = (_own_premium_cost(_lots, account, qty, share,
+                                   row.get("total_cost"))
+                 if _lots is not None and _lots_are_every_position(
+                     _lots, row.get("symbol", ""), pool_rows, until,
+                     date_basis)
+                 else None)
+        if _cost is not None:
+            r["total_cost"] = _cost
         r["account"] = account
         r["blended_pool"] = True    # ACB/share is the s.47 blended figure
         inventory.append(r)
@@ -156,7 +234,14 @@ def _split_inventory(rows: List[Dict[str, Any]], account: str,
 
 
 def split_for_account(combined: Dict[str, Any], account: str,
-                      base_txs: Optional[List[dict]]) -> Dict[str, Any]:
+                      base_txs: Optional[List[dict]],
+                      pool_rows: Optional[List[dict]] = None
+                      ) -> Dict[str, Any]:
+    # What the pass across accounts cut at this account's snapshot is
+    # not in its walk either (backlog TJ-1168).
+    from taxjson.lib.positions_check import without_pool_cut
+    if base_txs is not None:
+        base_txs = without_pool_cut(base_txs, pool_rows, account)
     txs = [e for e in combined.get("transactions", [])
            if e.get("account") == account]
     manual = [e for e in combined.get("manual_reporting_required", [])
@@ -179,11 +264,18 @@ def split_for_account(combined: Dict[str, Any], account: str,
     openings = _missing_history_openings(combined, account)
     _basis = (combined.get("summary") or {}).get("tax_date_basis") \
         or "settle"
-    starts = (_position_starts(list(base_txs) + openings, _basis)
+    # The splits another account of the pool reports (`pool_rows`: the
+    # blended pass's merged books): the engine split this account's
+    # shares too, so its count is walked with them (backlog TJ-0696).
+    from taxjson.lib.positions_check import pool_splits
+    _pool = pool_splits(pool_rows or [], account)
+    starts = (_position_starts(list(base_txs) + openings + _pool, _basis)
               if base_txs is not None else {})
-    book = (list(base_txs) + openings) if base_txs is not None else None
+    book = ((list(base_txs) + openings + _pool) if base_txs is not None
+            else None)
     inventory = _split_inventory(combined.get("inventory", []), account,
-                                 book, starts, "9999-12-31")
+                                 book, starts, "9999-12-31",
+                                 pool_rows=pool_rows)
     # The pools or lots at the year end (the engine's
     # inventory_year_end): the US engine's per-account lots are the
     # account's own, Canada's pools go by the account's balance at that
@@ -289,7 +381,17 @@ def split_for_account(combined: Dict[str, Any], account: str,
           if isinstance(it, dict) and it.get("account") == account]
     if lo:
         out["loss_overrides"] = lo
-    plog = [e for e in _mh_log(combined)
+    # Grant-timed closes that leave no record (backlog TJ-1091).
+    nil = [c for c in combined.get("grant_nil_closes") or []
+           if c.get("account") == account]
+    if nil:
+        out["grant_nil_closes"] = nil
+    # A cover of the year whose loss is the next year's (backlog TJ-1189).
+    later = [c for c in combined.get("covers_realized_next_year") or []
+             if c.get("account") == account]
+    if later:
+        out["covers_realized_next_year"] = later
+    plog =[e for e in _mh_log(combined)
             if e.get("account") == account]
     if plog:
         out["missing_history_log"] = plog
@@ -304,6 +406,10 @@ def main(argv=None) -> int:
     ap.add_argument("--base", type=Path, default=None,
                     help="The account's base book (for apportioning "
                          "blended account-less inventory rows)")
+    ap.add_argument("--pool-base", type=Path, default=None,
+                    help="The blended pass's merged books (every account "
+                         "of the pool): the splits another account "
+                         "reports apply to this account's shares too")
     args = ap.parse_args(argv)
 
     # read_work_doc: rows of objects with numeric money fields — a text
@@ -331,7 +437,15 @@ def main(argv=None) -> int:
             cli_diag.error(PROG, f"could not read --base {e}")
             return 2
 
-    out = split_for_account(combined, args.account, base_txs)
+    pool_rows = None
+    if args.pool_base:
+        try:
+            pool_rows = list(read_work_doc(args.pool_base)
+                             .get("transactions") or [])
+        except (InputFileError, AttributeError) as e:
+            cli_diag.error(PROG, f"could not read --pool-base {e}")
+            return 2
+    out = split_for_account(combined, args.account, base_txs, pool_rows)
     from taxjson.lib.json_input import dump_filing_json
     dump_filing_json(out, sys.stdout)
     print()

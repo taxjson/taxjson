@@ -47,6 +47,7 @@ securities it bought or sold have.
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 LABEL = "v2 (opt-in, under audit)"
@@ -55,6 +56,10 @@ _COMPLETE = "complete"          # lib/cash_events.COMPLETE
 # by (IB rounds each line to the cent; a few hundred rows of rounding).
 TOL = 1.00
 _EPS = 1e-6
+# Rows a statement dates but does not time (their `time` is a parser's
+# placeholder): no moment to set against a conversion's clock (_moment).
+_NO_CLOCK_ACTIONS = frozenset({"DIVIDEND", "DIVIDEND_IN_LIEU", "TAX",
+                               "INTEREST", "FEE"})
 # An own arrival that settles before its departure (the receiving
 # broker credits the move first) is walked on that departure when it
 # settles within this many days and its account holds the units until
@@ -100,6 +105,29 @@ def close_problem(close: Any, year: Any) -> Optional[str]:
                     or not _finite(v.get("cost")):
                 return (f"fx_cash_v2.books.{book}.{cur} has no finite "
                         f"units and cost")
+    # Own moves in transit at the close (backlog TJ-0656).
+    tr = close.get("transit")
+    if tr is not None:
+        if not isinstance(tr, dict):
+            return "fx_cash_v2.transit is not a table of currencies"
+        for cur, v in tr.items():
+            if not isinstance(v, dict) or not _finite(v.get("units")) \
+                    or not _finite(v.get("cost")):
+                return (f"fx_cash_v2.transit.{cur} has no finite units "
+                        f"and cost")
+    # Own moves whose arrival came first (backlog TJ-1076).
+    eo = close.get("early_out")
+    if eo is not None:
+        if not isinstance(eo, dict):
+            return "fx_cash_v2.early_out is not a table of books"
+        for book, curs in eo.items():
+            if not isinstance(curs, dict):
+                return (f"fx_cash_v2.early_out.{book} is not a table of "
+                        f"currencies")
+            for cur, v in curs.items():
+                if not isinstance(v, dict) or not _finite(v.get("units")):
+                    return (f"fx_cash_v2.early_out.{book}.{cur} has no "
+                            f"finite units")
     return None
 
 
@@ -129,8 +157,8 @@ def _book_account(books: Any, book: str) -> Optional[str]:
     return accts[0] if len(accts) == 1 else None
 
 
-def _carried_book(book: str, books: Any, acct: Optional[str]
-                  ) -> Tuple[Optional[str], str]:
+def _carried_book(book: str, books: Any, acct: Optional[str],
+                  carried: Any = ()) -> Tuple[Optional[str], str]:
     """This year's name of a book carried from the prior year's close,
     and why it differs ("" when it does not); (None, why) when it
     cannot be told. lib/cash_events.Books names a broker's book by its
@@ -158,8 +186,15 @@ def _carried_book(book: str, books: Any, acct: Optional[str]
                           f"now ({', '.join(names)})" if len(accts) > 1
                           else f"the only {short} account of {label} now")
         # Its account has no file this year while another of the broker
-        # has: kept apart under its own name, never mixed into theirs.
-        return f"{label}/{short}:{acct[:4]}", (
+        # has: kept apart under its own name, never mixed into theirs —
+        # as long as tells it from this year's accounts and the other
+        # carried ones (`carried`, lib/cash_events.Books' rule): four
+        # characters named it as an account whose hash shares them,
+        # and its balance was dropped as replaced (backlog TJ-0834).
+        from taxjson.lib.cash_events import _short_width
+        width = _short_width(set(accts) | {acct} | {
+            a for a in carried if a})
+        return f"{label}/{short}:{acct[:width]}", (
             f"its account has no file in {label} this year; "
             f"{', '.join(names)} is another {short} account")
     if book in names:
@@ -181,7 +216,10 @@ def _carried_book(book: str, books: Any, acct: Optional[str]
 def _carry_openings(carry: Dict[str, Any],
                     opening: Dict[Tuple[str, str], Dict[str, Any]],
                     books: Any, base: str, year: int,
-                    problems: List[Dict[str, Any]]) -> Tuple[int, List[str]]:
+                    problems: List[Dict[str, Any]],
+                    transit_in: Optional[Dict[str, Dict[str, float]]] = None,
+                    early_in: Optional[Dict[Tuple[str, str], float]] = None
+                    ) -> Tuple[int, List[str]]:
     """The prior year's close into `opening` (a CASHOPEN for the same
     book and currency replaces its entry). Returns (books carried,
     notes). Refused, never guessed (2026-10 audit C02-C05): a record
@@ -191,7 +229,10 @@ def _carry_openings(carry: Dict[str, Any],
     line could not give (lib/cash_events.opening_problem: a cost below
     zero, a cost on no units), and a carried book this year's books
     cannot place (_carried_book) unless a CASHOPEN for one of the
-    broker's books takes its place."""
+    broker's books takes its place. `early_in` {(book, currency): units}:
+    the units of an own move whose arrival the close walked and whose
+    departure settles this year (the close's `early_out`; backlog
+    TJ-1076)."""
     from taxjson.lib.cash_events import opening_problem
     notes: List[str] = []
     y0 = f"{year}-01-01"
@@ -233,6 +274,29 @@ def _carry_openings(carry: Dict[str, Any],
         problems.append(_p("carry", f"{src}: its books are not a table — "
                            f"{repair}", y0))
         return 0, notes
+    # Own moves in transit at the close (TJ-0656): into the pool, to be
+    # matched by their arrival this year.
+    tr = carry.get("transit")
+    if tr is not None and not isinstance(tr, dict):
+        problems.append(_p("carry", f"{src}: its transit is not a table "
+                           f"of currencies — {repair}", y0))
+    for cur, v in (tr.items() if isinstance(tr, dict) else ()):
+        cur = str(cur).upper()
+        if not isinstance(v, dict) or not _finite(v.get("units")) \
+                or not _finite(v.get("cost")) or float(v["units"]) < 0 \
+                or float(v["cost"]) < 0:
+            problems.append(_p(
+                "carry", f"{src}: {cur} in transit carries {v!r} — units "
+                f"and cost must be finite numbers, not below zero; "
+                f"{repair}", y0, "", cur))
+            continue
+        if transit_in is not None and float(v["units"]) > _EPS:
+            transit_in[cur] = {"units": float(v["units"]),
+                               "cost": float(v["cost"])}
+            notes.append(f"{src}: {float(v['units']):,.2f} {cur} were "
+                         f"in transit between your own accounts (cost "
+                         f"{float(v['cost']):,.2f} {base}) — carried, to "
+                         f"arrive this year")
     carried = 0
     for book, curs in cbooks.items():
         book = str(book)
@@ -240,7 +304,11 @@ def _carry_openings(carry: Dict[str, Any],
             problems.append(_p("carry", f"{src}: {book} is not a table of "
                                f"currencies — {repair}", y0, book))
             continue
-        target, why = _carried_book(book, books, accounts.get(book))
+        lb = _book_parts(book)[:2]
+        target, why = _carried_book(
+            book, books, accounts.get(book),
+            [str(a) for b, a in accounts.items()
+             if _book_parts(str(b))[:2] == lb])
         if target is not None and target != book:
             notes.append(f"{src}: {book} is {target} this year ({why}) — "
                          f"carried under that name")
@@ -291,13 +359,74 @@ def _carry_openings(carry: Dict[str, Any],
                     f"balance)", y0, book, cur, units))
                 continue
             k = (target, cur)
+            if k in opening and opening[k].get("carried_from"):
+                # Two carried books placed in one (never a CASHOPEN
+                # line's replacement, backlog TJ-0834): refused.
+                problems.append(_p(
+                    "carry", f"{src} carries {cur} for both "
+                    f"{opening[k]['carried_from']} and {book}, and both "
+                    f"are {target} this year — add a `CASHOPEN {y0} "
+                    f"{cur} <units> <cost>` line for each book this year "
+                    f"to a .tt of {target.split('/', 1)[0]}", y0, target,
+                    cur, units))
+                continue
             if k in opening:
                 notes.append(f"{opening[k]['source']}: CASHOPEN for "
                              f"{target} {cur} replaces the prior year's "
                              f"carried balance")
                 continue
-            opening[k] = {"units": units, "cost": cost, "source": src}
+            opening[k] = {"units": units, "cost": cost, "source": src,
+                          "carried_from": book}
+            if accounts.get(book):
+                opening[k]["account"] = str(accounts[book])
             carried += 1
+    # Own moves whose arrival the close walked and whose departure
+    # settles this year (TJ-1076): the units are the receiving account's,
+    # and the sender's statement still shows them until the departure.
+    eo = carry.get("early_out")
+    if eo is not None and not isinstance(eo, dict):
+        problems.append(_p("carry", f"{src}: its early_out is not a table "
+                           f"of books — {repair}", y0))
+    for book, curs in (eo.items() if isinstance(eo, dict) else ()):
+        book = str(book)
+        if not isinstance(curs, dict):
+            problems.append(_p("carry", f"{src}: early_out {book} is not a "
+                               f"table of currencies — {repair}", y0, book))
+            continue
+        lb = _book_parts(book)[:2]
+        target, why = _carried_book(
+            book, books, accounts.get(book),
+            [str(a) for b, a in accounts.items()
+             if _book_parts(str(b))[:2] == lb])
+        for cur, v in curs.items():
+            cur = str(cur).upper()
+            if not isinstance(v, dict) or not _finite(v.get("units")) \
+                    or float(v["units"]) < 0:
+                problems.append(_p(
+                    "carry", f"{src}: early_out {book} {cur} carries {v!r} "
+                    f"— units must be a finite number, not below zero; "
+                    f"{repair}", y0, book, cur))
+                continue
+            units = float(v["units"])
+            if target is None:
+                problems.append(_p(
+                    "carry", f"{src}: {units:,.2f} {cur} of {book} had "
+                    f"already reached another of your accounts, and {why} "
+                    f"— which of them sends them the record does not say; "
+                    f"re-close {cy} with one book for it", y0, book, cur,
+                    units))
+                continue
+            k = (target, cur)
+            if k in opening and not opening[k].get("carried_from"):
+                # The line gives the account's own units: the arrival's
+                # are not in them or the departure is refused, as said.
+                notes.append(f"{opening[k]['source']}: CASHOPEN for {target} "
+                             f"{cur} replaces the prior year's carried "
+                             f"balance, and with it the {units:,.2f} {cur} "
+                             f"of its move out that had already arrived")
+                continue
+            if early_in is not None and units > _EPS:
+                early_in[k] = units
     return carried, notes
 
 
@@ -406,6 +535,65 @@ def _on_trade_dates(points: List[List[Any]], net: List[List[Any]],
         pt = [d, round(held, 6), round(max(c, 0.0), 2) if held else 0.0]
         if not out or out[-1][1:] != pt[1:]:
             out.append(pt)
+    return out
+
+
+def _trade_pool_cost(series: Dict[Tuple[str, str], List[List[Any]]],
+                     fser: Dict[Tuple[str, str], List[List[Any]]],
+                     favg: Dict[str, List[List[Any]]], prev_end: str
+                     ) -> Dict[Tuple[str, str], List[List[Any]]]:
+    """_on_trade_dates' [[date, units, cost]] of every book, their cost
+    the trade-date POOL's average (one pool per currency across the
+    accounts, s.47): on a day a leg traded and not yet settled moved
+    units or cost in any book, the pool is the settled one (`favg`:
+    [date, avg, units, cost]) plus what each book's trade-date point
+    differs from its settled one (`fser`), and every book holds its
+    units at that pool's average. Patched book by book, a sale's
+    pending proceeds came in at their own cost in its account while the
+    other accounts kept the settled average (backlog TJ-0720). Days with
+    nothing in lag keep their points."""
+    def at(pts: List[List[Any]], d: str) -> Optional[List[Any]]:
+        v = None
+        for p in pts:
+            if p[0] > d:
+                break
+            v = p
+        return v
+
+    out = dict(series)
+    for cur in sorted({k[1] for k in series}):
+        ks = sorted(k for k in series if k[1] == cur)
+        dates = sorted({p[0] for k in ks for p in series[k]
+                        if p[0] >= prev_end})
+        new: Dict[Tuple[str, str], List[List[Any]]] = {k: [] for k in ks}
+        changed = False
+        for d in dates:
+            du = dc = 0.0
+            rows = {}
+            for k in ks:
+                t = at(series[k], d)
+                s = at(fser.get(k, []), d)
+                ut, ct = (float(t[1]), float(t[2])) if t else (0.0, 0.0)
+                us, cs = (float(s[1]), float(s[2])) if s else (0.0, 0.0)
+                du += ut - us
+                dc += ct - cs
+                rows[k] = (ut, ct)
+            if abs(du) > _EPS or abs(dc) > 0.005:
+                pool = at(favg.get(cur, []), d)
+                pu = float(pool[2]) if pool and len(pool) > 3 else 0.0
+                pc = float(pool[3]) if pool and len(pool) > 3 else 0.0
+                tu, tc = pu + du, pc + dc
+                avg = tc / tu if tu > _EPS else 0.0
+                rows = {k: (u, round(u * avg, 2) if u > _EPS else 0.0)
+                        for k, (u, _c) in rows.items()}
+                changed = True
+            for k, (u, c) in rows.items():
+                pt = [d, round(u, 6), c]
+                if not new[k] or new[k][-1][1:] != pt[1:]:
+                    new[k].append(pt)
+        if changed:
+            for k in ks:
+                out[k] = new[k]
     return out
 
 
@@ -566,6 +754,37 @@ def _base_on_trade_dates(pts: List[List[Any]], mine: List[Dict[str, Any]],
     return out
 
 
+def _refund_legs(row: Dict[str, Any], legs: List[Tuple]) -> List[Tuple]:
+    """`legs` ([(currency, amount, cost, (sd, td, time))]) of a trade
+    with commission refunds folded into its cost (`commission_refunds`,
+    "<date> <cash>; ..." in the trade's currency: IB's Commission
+    Adjustments): the trade's own leg less the refunds (the commission
+    it paid in full, on its date) and a leg per refund on its own date.
+    Read at the folded net, the cash of a refund was walked months
+    early, at the trade date's rate (backlog TJ-0748). Unchanged for a
+    row without refunds, or no leg in its currency."""
+    raw = str(row.get("commission_refunds") or "").strip()
+    cur = str(row.get("currency") or "").upper()
+    if not raw or not any(str(c or "").upper() == cur for c, *_ in legs):
+        return legs
+    refunds: List[Tuple[str, float]] = []
+    for part in raw.split(";"):
+        bits = part.split()
+        if len(bits) != 2:
+            continue
+        try:
+            datetime.strptime(bits[0], "%Y-%m-%d")
+            refunds.append((bits[0], float(bits[1])))
+        except ValueError:
+            continue
+    if not refunds:
+        return legs
+    total = sum(a for _d, a in refunds)
+    out = [(c, a - total if str(c or "").upper() == cur else a, k, w)
+           for c, a, k, w in legs]
+    return out + [(cur, a, None, (d, d, "")) for d, a in refunds]
+
+
 def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
           year: int, rate_of: RateOf, *, country: str,
           carry: Optional[Dict[str, Any]] = None,
@@ -589,7 +808,12 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     their cost the units times the pool's average cost per unit (one
     pool per currency, s.47), the first point the year's opening dated
     the day before it; "base": _base_holdings' balances of the base
-    currency; "interest": the year's INTEREST rows naming no symbol,
+    currency; "transit": the own moves in transit at the close, which
+    no book's units hold (_transit_where; backlog TJ-0946);
+    "transit_spans": those that arrived in the year (_transit_spans;
+    backlog TJ-1129); "currencies":
+    each [book, currency] with an opening or an event of the year;
+    "interest": the year's INTEREST rows naming no symbol,
     [{"id", "date", "account", "currency"}] — the currency it was paid
     in (a USD stablecoin's as USD where they are cash), which the base
     books do not keep: the income of that cash row (backlog TJ-0628)}.
@@ -598,7 +822,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     has moved: _on_trade_dates; backlog TJ-0627) — the dates `taxjson
     t1135` walks the securities on, so the cash that paid for shares is
     never counted with them, nor a sale's proceeds left out."""
-    from taxjson.bin.taxjson_fx_cash import _cash_legs
+    from taxjson.bin.taxjson_fx_cash import _cash_leg_dates
     if holdings_basis not in ("settle", "trade"):
         raise ValueError(f"holdings_basis {holdings_basis!r}: settle or "
                          f"trade")
@@ -679,7 +903,11 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if ps and td < ps:
             td, sd = ps, max(sd, ps)
             redated += 1
-        legs = [(c, a, None) for c, a in _cash_legs(row, stable_cash)]
+        when = (sd, td, str(row.get("time") or ""))
+        # A corporate action's cash paid after its row's date: on the
+        # day it came (backlog TJ-1063, TJ-1106).
+        legs = [(c, a, None, (paid, paid, when[2]) if paid > sd else when)
+                for c, a, paid in _cash_leg_dates(row, stable_cash)]
         rw = _reward_cash(row, stable_cash)
         if rw is not None:
             # The reward's own currency comes in, at the value the
@@ -689,8 +917,10 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                       or 0.0)
             legs = [(rw[0], rw[1], abs(v) if str(row.get("currency")
                                                  or "").upper() == base
-                     else None)]
-        for cur, amt, cost in legs:
+                     else None, when)]
+        else:
+            legs = _refund_legs(row, legs)
+        for cur, amt, cost, (sd, td, tm) in legs:
             cur = (cur or "").upper()
             if not cur or abs(amt) < _EPS:
                 continue
@@ -703,8 +933,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                         base_lost.add(str(row.get("account") or ""))
                     continue
                 base_ops.append({"sd": sd, "td": td, "book": book,
-                                 "time": str(row.get("time") or ""),
-                                 "amount": float(amt)})
+                                 "time": tm, "amount": float(amt)})
                 continue
             if book is None:
                 if in_year(sd) or (td < y0 <= sd):
@@ -713,7 +942,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                         unattributed.get(f"{row.get('account')}/{src}",
                                          0) + 1
                 continue
-            op(kind="flow", sd=sd, td=td, time=str(row.get("time") or ""),
+            op(kind="flow", sd=sd, td=td, time=tm,
+               clockless=str(row.get("action") or "").upper()
+               in _NO_CLOCK_ACTIONS,
                book=book, currency=cur, amount=float(amt), cost=cost,
                desc=f"{row.get('action')} {row.get('symbol') or ''}"
                     .strip(), where=str(row.get("source") or ""))
@@ -789,9 +1020,14 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                     kind == "CASHBAL" or in_year(ev["date"])) and not (
                     kind == "CASHOPEN"
                     and str(ev.get("currency", "")).upper() == base):
-                problems.append(_p("book", f"{ev.get('where')}: "
-                                   f"{ev.get('book_problem') or 'no book'}",
-                                   ev["date"], "", ev.get("currency", "")))
+                problems.append({**_p(
+                    "book", f"{ev.get('where')}: "
+                    f"{ev.get('book_problem') or 'no book'}",
+                    ev["date"], "", ev.get("currency", "")),
+                    # The account whose file holds it: its cash, not its
+                    # book, is what cannot be walked (t1135_cash.cash_doc;
+                    # backlog TJ-1174).
+                    "account": str(ev.get("label") or "")})
             if holdings and kind != "CASHOPEN" and base in (
                     str(ev.get(k) or "").upper()
                     for k in ("currency", "from_ccy", "to_ccy")) \
@@ -804,7 +1040,11 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             fee = conv_fee.pop(ck, 0.0) if broker else 0.0
             sides = side_fee.pop(ck, {}) if broker else {}
             fc_, tc_ = ev["from_ccy"].upper(), ev["to_ccy"].upper()
+            # The broker's clock when it gives one (IB's Forex rows): one
+            # day's conversions walked in the order they were executed,
+            # not the order of the rows (backlog TJ-0859).
             op(kind="conv", sd=ev["settle"], td=ev["date"], book=book,
+               time=str(ev.get("time") or ""),
                from_ccy=fc_,
                from_amt=float(ev["from_amt"]) + sides.get(fc_, 0.0),
                to_ccy=tc_,
@@ -815,16 +1055,19 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             if holdings and base in (fc_, tc_):
                 base_ops.append({
                     "sd": ev["settle"], "td": ev["date"], "book": book,
+                    "time": str(ev.get("time") or ""),
                     "amount": (float(ev["to_amt"]) if tc_ == base
                                else -float(ev["from_amt"]))})
         elif kind == "FLOW":
             if ev["currency"].upper() != base:
                 op(kind="flow", sd=ev["settle"], td=ev["date"], book=book,
+                   time=str(ev.get("time") or ""),
                    currency=ev["currency"].upper(), amount=ev["amount"],
                    desc=ev.get("desc", ""), where=ev.get("where", ""))
             elif holdings:
                 base_ops.append({"sd": ev["settle"], "td": ev["date"],
                                  "book": book,
+                                 "time": str(ev.get("time") or ""),
                                  "amount": float(ev["amount"])})
         elif kind == "CASHMOVE":
             if ev["currency"].upper() != base:
@@ -847,13 +1090,28 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
 
     # ------------------------------------------------ openings
     opening: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    base_seen: Dict[str, Dict[str, Any]] = {}
+    base_bad: Dict[str, str] = {}
     for ln in [x for x in lines if x["kind"] == "CASHOPEN"]:
         cur = ln["currency"].upper()
         if cur == base:
             # The base currency's balance at the start of the year
-            # (_base_holdings): no cost of its own to carry.
-            if holdings and ln["date"] == y0 and ln.get("book") \
-                    and ln["book"] not in base_open:
+            # (_base_holdings): no cost of its own to carry. A second
+            # line for the book is refused as a foreign currency's is:
+            # the first was taken, so the order of the lines chose the
+            # T1135 cash cost (backlog TJ-0840).
+            if ln["date"] != y0 or not ln.get("book"):
+                continue
+            first = base_seen.get(ln["book"])
+            if first is not None:
+                text = (f"{ln.get('where')}: a second CASHOPEN for "
+                        f"{ln['book']} {cur} (the first: "
+                        f"{first.get('where')}) — keep one")
+                problems.append(_p("opening", text, y0, ln["book"], cur))
+                base_bad.setdefault(ln["book"], text)
+                continue
+            base_seen[ln["book"]] = ln
+            if holdings:
                 base_open[ln["book"]] = ln
             continue
         if ln["date"] != y0:
@@ -874,9 +1132,16 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         opening[k] = {"units": ln["units"], "cost": ln["cost"],
                       "source": ln.get("where") or "CASHOPEN"}
     carried = 0
+    # Own moves the prior year's close left in transit (TJ-0656):
+    # {currency: {"units", "cost"}}, into the pool and `transit`.
+    transit_in: Dict[str, Dict[str, float]] = {}
+    # An own move's arrival the prior year walked, its departure settling
+    # this year (TJ-1076): {(book, currency): units}.
+    early_in: Dict[Tuple[str, str], float] = {}
     if carry:
         carried, _cn = _carry_openings(carry, opening, cash.get("books"),
-                                       base, year, problems)
+                                       base, year, problems, transit_in,
+                                       early_in)
         notes.extend(_cn)
 
     # Trade-date vs settle-date: what a statement shows at the end of D
@@ -985,6 +1250,17 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     # already took (_promise): the departure puts only the rest in
     # transit.
     promised: Dict[int, float] = {}
+    # An own arrival walked before another account's departure (the
+    # receiving broker credited the move first, _promise): the units
+    # leave the sending account then, so they are owned once — held in
+    # both until the departure, they were counted twice in T1135's
+    # holdings, and a debt the arrival repaid emptied the pool while
+    # the sender still held them, so the departure put them back at no
+    # cost (backlog TJ-0717). `early` {departure seq: units taken
+    # early}; `early_out` {(book, cur): units}: what the account's
+    # statement still shows until the departure (its reconciliation).
+    early: Dict[int, float] = {}
+    early_out: Dict[Tuple[str, str], float] = {}
     for (book, cur), o in opening.items():
         u, c = float(o["units"]), float(o["cost"])
         if u > _EPS:
@@ -994,6 +1270,12 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             p[1] += c
         elif u < -_EPS:
             owed[(book, cur)] = [-u, c]
+    for cur, v in sorted(transit_in.items()):
+        p = pool.setdefault(cur, [0.0, 0.0])
+        p[0] += v["units"]
+        p[1] += v["cost"]
+        transit[cur] = transit.get(cur, 0.0) + v["units"]
+    early_out.update(early_in)
     per: Dict[str, Dict[str, float]] = {}
     gain_events: List[Dict[str, Any]] = []
     borrowed: List[Dict[str, Any]] = []
@@ -1026,8 +1308,10 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                         | {k for k in fser if k[1] == cur}):
             u = max(held.get(k, 0.0), 0.0)
             _put(fser.setdefault(k, []), [d, round(u, 6), round(u * avg, 2)])
+        # (and the pool itself, units and cost: _trade_pool_cost; its
+        # average also costs the units in transit: _transit_spans)
+        _put(favg.setdefault(cur, []), [d, avg, p[0], p[1]])
         if trade_basis:
-            _put(favg.setdefault(cur, []), [d, avg])
             for k in sorted({k for k in held if k[1] == cur}
                             | {k for k in owed if k[1] == cur}
                             | {k for k in fnet if k[1] == cur}):
@@ -1039,7 +1323,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             for cur in sorted({c for c, _a in _legs(o) if c != base}):
                 record(cur, o["sd"])
     if holdings:
-        for cur in sorted({c for (_b, c) in held}
+        for cur in sorted({c for (_b, c) in held} | set(transit_in)
                           | ({c for (_b, c) in owed} if trade_basis
                              else set())):
             record(cur, prev_end)
@@ -1057,6 +1341,16 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     def outflow(o, cur: str, x: float, r: Optional[float], mode: str,
                 proceeds: Optional[float] = None) -> None:
         k = (o["book"], cur)
+        if mode == "own" and o.get("seq") in early:
+            # Its units an arrival walked before it already took
+            # (TJ-0717): only the rest leaves now.
+            pre = early.pop(o["seq"])
+            early_out[k] = early_out.get(k, 0.0) - pre
+            if abs(early_out[k]) <= _EPS:
+                early_out.pop(k, None)
+            x -= pre
+            if x <= _EPS:
+                return
         h = held.get(k, 0.0)
         cov = min(x, h)
         exc = x - cov
@@ -1110,6 +1404,8 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                              "where": o.get("decl_where") or ""})
 
     def inflow(o, cur: str, x: float, cost: float) -> None:
+        if x <= _EPS:
+            return              # no units: nothing acquired (TJ-0722)
         k = (o["book"], cur)
         if trade_basis and x > _EPS:
             in_cost[(o.get("seq"), cur)] = cost / x
@@ -1140,7 +1436,11 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     def arrive(o, cur: str, x: float) -> None:
         """Own-transfer units arriving: already in the pool (units and
         cost) — they only change place. A debt in the receiving account
-        is repaid with them at the pool's average cost."""
+        is repaid with them: the units are disposed of at the day's
+        value (a currency gain, s.39(1.1)) and the debt settled at it
+        (a gain on the debt, s.39(2)) — each its own, as the $200
+        exemption is the currency's alone (backlog TJ-0724; one gain at
+        the pool's average cost put both under the exemption)."""
         k = (o["book"], cur)
         p = pool.setdefault(cur, [0.0, 0.0])
         rest = x
@@ -1149,7 +1449,11 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             rep = min(x, d[0])
             avg = p[1] / p[0] if p[0] > _EPS else 0.0
             avg_b = d[1] / d[0]
-            g = rep * (avg_b - avg)
+            r = rate(cur, o["sd"])
+            # No rate: a problem (unrated); walked on at the pool's cost.
+            pay = r if r is not None else avg
+            g = rep * (avg_b - pay)
+            cg = rep * (pay - avg)
             d[0] -= rep
             d[1] -= rep * avg_b
             if d[0] < _EPS:
@@ -1158,7 +1462,15 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             p[1] -= rep * avg
             if p[0] < _EPS:
                 p[0] = p[1] = 0.0
-            stat(cur)["debt_gain"] += g
+            s = stat(cur)
+            s["debt_gain"] += g
+            s["disposed"] += rep
+            s["gain"] += cg
+            gain_events.append({"date": o["sd"], "book": o["book"],
+                                "currency": cur, "units": round(rep, 2),
+                                "rate": r, "gain": round(cg, 2),
+                                "what": "repays a debt: "
+                                        + (o.get("desc") or "own move")})
             repaid.append({"date": o["sd"], "book": o["book"],
                            "currency": cur, "units": round(rep, 2),
                            "gain": round(g, 2)})
@@ -1166,9 +1478,14 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         if rest > _EPS:
             held[k] = held.get(k, 0.0) + rest
 
+    def shown(book: str, cur: str) -> float:
+        """The units `book` holds as its statement shows them: an own
+        departure an earlier arrival took the units of (`early_out`)
+        has not left it yet."""
+        return held.get((book, cur), 0.0) + early_out.get((book, cur), 0.0)
+
     def bal(book: str, cur: str) -> float:
-        return held.get((book, cur), 0.0) - (owed.get((book, cur))
-                                             or [0.0])[0]
+        return shown(book, cur) - (owed.get((book, cur)) or [0.0])[0]
 
     def _stable_bal_note(c: Dict[str, Any]) -> str:
         """A CASHBAL line of US dollars in a crypto exchange's book, with
@@ -1196,13 +1513,48 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         return o["kind"] == "move" and (o.get("decl") or {}).get(
             "how") == "own"
 
+    # The days a conversion states its clock (IB's Forex rows): an event
+    # of that day with no clock of its own (a Deposits & Withdrawals
+    # row, a date-only row's placeholder time) did not happen at 00:00:
+    # what it brings in comes before the day's clocks, what it takes out
+    # after them. Read as 00:00, a withdrawal came before the conversion
+    # that funded it: a borrowing at the day's rate and a gain on
+    # repaying it (backlog TJ-1041). On a day with no conversion's clock
+    # the order is the rows' times, then their order.
+    _conv_clock = {(o["sd"], o["td"], o["book"]) for o in walk
+                   if o["kind"] == "conv" and o.get("time")}
+
+    def _moment(o: Dict[str, Any]) -> str:
+        tm = o.get("time") or ""
+        if o["kind"] in ("flow", "move") and (not tm or o.get("clockless")) \
+                and (o["sd"], o["td"], o["book"]) in _conv_clock:
+            return "~" if float(o["amount"]) < 0 else ""
+        return tm
+
     # One settle day: by trade date and time, an own arrival after the
     # other events of its moment; checks last.
     def _order(o: Dict[str, Any]) -> Tuple:
         return (o["sd"], 9 if o["kind"] == "check" else 0, o["td"],
-                o.get("time") or "",
+                _moment(o),
                 1 if _own(o) and o["amount"] > 0 else 0, o["seq"])
     walk.sort(key=_order)
+    # The carried arrivals' departures (TJ-1076), first come first taken;
+    # one the books do not have is refused below.
+    early_missing: Dict[Tuple[str, str], float] = {}
+    for (book, cur), units in sorted(early_in.items()):
+        for o in walk:
+            if units > _EPS and _own(o) and o["amount"] < 0 \
+                    and o["book"] == book and o["currency"] == cur:
+                take = min(-o["amount"], units)
+                early[o["seq"]] = take
+                units -= take
+        if units > TOL:
+            early_missing[(book, cur)] = units
+    # What settles in the days after the year: a departure an arrival of
+    # the year may wait for (_promise; backlog TJ-1076).
+    _last = f"{year + 1}-01-{OWN_EARLY_DAYS:02d}"
+    after_year = sorted((o for o in ops if y1 < o["sd"] <= _last),
+                        key=_order)
 
     def _waits(i: int) -> bool:
         """walk[i] an own arrival that the units in transit do not cover
@@ -1245,7 +1597,7 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             # Its account's balance before each event from the arrival
             # to the departure's own place; the earliest point from
             # which it stays at or above the units that leave.
-            bal_at = [held.get((d["book"], cur), 0.0)]
+            bal_at = [shown(d["book"], cur)]
             for x in walk[i:j]:
                 bal_at.append(bal_at[-1] + (
                     sum(a for c, a in _legs(x) if c == cur)
@@ -1282,8 +1634,10 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         account's that settles within OWN_EARLY_DAYS days after it
         while that account holds the units until they leave (the
         receiving broker credited the move first: the units are in the
-        pool the whole time, so no figure moves; backlog TJ-0067). ""
-        when promised, else why not (for the refusal)."""
+        pool the whole time, so no figure moves; backlog TJ-0067; one
+        that settles in the days after the year is carried in the close,
+        `early_out`: TJ-1076). "" when promised, else why not (for the
+        refusal)."""
         from datetime import date, timedelta
         o = walk[k]
         cur, sd = o["currency"], o["sd"]
@@ -1293,11 +1647,13 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         except ValueError:
             last = sd
         why = ""
-        for j in range(k + 1, len(walk)):
-            d = walk[j]
+        ahead = walk + after_year
+        for j in range(k + 1, len(ahead)):
+            d = ahead[j]
             if not (_own(d) and d["amount"] < 0 and d["currency"] == cur):
                 continue
-            room = -d["amount"] - promised.get(d["seq"], 0.0)
+            room = (-d["amount"] - promised.get(d["seq"], 0.0)
+                    - early.get(d["seq"], 0.0))
             if room + TOL < short:
                 continue
             if d["sd"] == sd and d["book"] == o["book"]:
@@ -1314,8 +1670,9 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 # The departure's account holds the units from now
                 # until it leaves (its balance before the departure is
                 # what that row adds back).
-                low = min([held.get((d["book"], cur), 0.0)]
-                          + [v for v in _running(k, j, d["book"], cur)])
+                low = min([shown(d["book"], cur)]
+                          + [v for v in _running(ahead, k, j, d["book"],
+                                                 cur)])
                 if low + _EPS < -d["amount"]:
                     why = why or (f"{d['book']}'s move out of "
                                   f"{-d['amount']:,.2f} {cur} settles "
@@ -1323,17 +1680,33 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                                   f"does not hold them until then")
                     continue
             take = min(short, room)
-            promised[d["seq"]] = promised.get(d["seq"], 0.0) + take
+            if d["book"] != o["book"] and \
+                    held.get((d["book"], cur), 0.0) + _EPS < take:
+                # Another arrival already took its units early.
+                why = why or (f"{d['book']} does not hold the "
+                              f"{take:,.2f} {cur} until its move out on "
+                              f"{d['sd']}")
+                continue
+            if d["book"] == o["book"]:
+                promised[d["seq"]] = promised.get(d["seq"], 0.0) + take
+            else:
+                # Another account's departure: its units leave it now
+                # (`early`, TJ-0717), never held by both accounts.
+                early[d["seq"]] = early.get(d["seq"], 0.0) + take
+                dk = (d["book"], cur)
+                held[dk] = held.get(dk, 0.0) - take
+                early_out[dk] = early_out.get(dk, 0.0) + take
             transit[cur] = transit.get(cur, 0.0) + take
             return ""
         return why or (f"no move out of another of your accounts settles "
                        f"on its day or in the {OWN_EARLY_DAYS} days after")
 
-    def _running(k: int, j: int, book: str, cur: str) -> List[float]:
-        """`book`'s balance of `cur` after each event from walk[k+1] to
-        the one before walk[j]."""
-        v, out_ = held.get((book, cur), 0.0), []
-        for x in walk[k + 1:j]:
+    def _running(ahead: List[Dict[str, Any]], k: int, j: int, book: str,
+                 cur: str) -> List[float]:
+        """`book`'s balance of `cur` after each event from ahead[k+1] to
+        the one before ahead[j]."""
+        v, out_ = shown(book, cur), []
+        for x in ahead[k + 1:j]:
             if x["kind"] != "check" and x["book"] == book:
                 v += sum(a for c, a in _legs(x) if c == cur)
                 out_.append(v)
@@ -1389,6 +1762,38 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
             # what the currency bought cost, taken from what the
             # currency sold fetched.
             fee = float(o.get("fee") or 0.0)
+            if tc != base and o["to_amt"] <= _EPS:
+                # Its commission in the currency bought took all the
+                # units bought, or more (a minimum commission on a small
+                # order; side_fee): nothing is acquired, and the units
+                # the commission took beyond them leave the account as
+                # a fee in that currency would, spent at the day's rate
+                # (backlog TJ-0722: walked as a purchase of no units or
+                # fewer than none, it divided by zero or held the units
+                # the fee took).
+                if fc != base:
+                    # (as below: a value= prices it, no rate needed)
+                    v = o.get("value")
+                    rf = rate_of(fc, o["sd"]) if v else rate(fc, o["sd"])
+                    if not v and rf is None:
+                        continue
+                    outflow(o, fc, o["from_amt"], rf, "spend",
+                            proceeds=v or o["from_amt"] * rf)
+                over = -o["to_amt"]
+                if over > _EPS:
+                    r = rate(tc, o["sd"])
+                    if r is None:
+                        continue
+                    outflow(o, tc, over, r, "spend")
+                notes.append(
+                    f"{o['book']}: the commission of the conversion of "
+                    f"{o['sd']} ({o.get('where') or o.get('desc')}) took "
+                    f"all the {tc} it bought"
+                    + (f" and {over:,.2f} {tc} more" if over > _EPS
+                       else "")
+                    + f": nothing acquired; what it paid in {fc} is the "
+                    f"commission's cost, not a cost of the {tc}")
+                continue
             if fc == base:
                 inflow(o, tc, o["to_amt"], o["from_amt"] + fee)
             elif tc == base:
@@ -1486,11 +1891,59 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     if walked is not None:
         record_op(walked)
 
+    for (book, cur), units in sorted(early_missing.items()):
+        problems.append(_p(
+            "own", f"{book}: {units:,.2f} {cur} reached another of your "
+            f"accounts before {y0} (the close of {year - 1}), and its move "
+            f"out of {book} is not in the books by {y1} — add its CASHMOVE "
+            f"line, or re-close {year - 1}", y1, book, cur, units))
+    # Departures that settle after the year whose arrival it walked
+    # (TJ-1076): the units are the receiving account's at the close, and
+    # the sender's statement still shows them.
+    close_early: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for o in after_year:
+        pre = early.get(o["seq"], 0.0)
+        if pre > _EPS:
+            row_ = close_early.setdefault(o["book"], {}).setdefault(
+                o["currency"], {"units": 0.0})
+            row_["units"] = round(row_["units"] + pre, 6)
+            notes.append(f"{pre:,.2f} {o['currency']} arrived in another of "
+                         f"your accounts in {year} before leaving "
+                         f"{o['book']} on {o['sd']}: owned once, by the "
+                         f"account they reached, and matched next year")
     for cur, d in sorted({(c, d) for c, d in unrated}):
         problems.append(_p("rate", f"no {cur} rate on file for {d} (or "
                            f"the 5 days before) — run `taxjson run` to "
                            f"refresh the rates", d, "", cur))
+    # An own move that leaves in the year and arrives after it (both
+    # legs in the books: the arrival settles after December 31) is
+    # still yours, in transit: carried in the close at the pool's
+    # average cost and matched by the arrival next year (backlog
+    # TJ-0656: refused, the year could not close). One whose arrival
+    # the books do not have is refused as before.
+    pending_in: Dict[str, Tuple[float, str]] = {}
+    for o in ops:
+        if _own(o) and o["amount"] > 0 and o["sd"] > y1:
+            u, first = pending_in.get(o["currency"], (0.0, o["sd"]))
+            pending_in[o["currency"]] = (u + float(o["amount"]),
+                                         min(first, o["sd"]))
+    close_transit: Dict[str, Dict[str, float]] = {}
+    # Where the units in transit at the close left and go
+    # (`holdings` "transit", taxjson t1135; backlog TJ-0946).
+    transit_where: List[Dict[str, Any]] = []
     for cur, t in sorted(transit.items()):
+        later, when = pending_in.get(cur, (0.0, ""))
+        if t > TOL and later + TOL >= t:
+            p = pool.get(cur) or [0.0, 0.0]
+            avg = p[1] / p[0] if p[0] > _EPS else 0.0
+            close_transit[cur] = {"units": round(t, 6),
+                                  "cost": round(t * avg, 6)}
+            notes.append(f"{t:,.2f} {cur} left an account as a move "
+                         f"between your own accounts and arrive in "
+                         f"another after {y1} ({when}): still yours, "
+                         f"carried in transit at a cost of "
+                         f"{t * avg:,.2f} {base}")
+            continue
         if t > TOL:
             problems.append(_p(
                 "own", f"{t:,.2f} {cur} left an account as a move "
@@ -1507,6 +1960,22 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                 p[1] = max(p[1] - t * avg, 0.0)
                 if p[0] < _EPS:
                     p[0] = p[1] = 0.0
+    # On trade dates a move that trades in the year and settles after it
+    # has already left or reached its book (_on_trade_dates), which the
+    # settled `transit` above does not see (backlog TJ-1157, TJ-1185).
+    transit_ends: List[Dict[str, Any]] = []
+    if holdings:
+        own_moves = [o for o in ops if _own(o)]
+        for cur in sorted({o["currency"] for o in own_moves}):
+            t = float((close_transit.get(cur) or {}).get("units") or 0.0)
+            if transit.get(cur, 0.0) > TOL and not t:
+                continue        # refused above: its rows are unknown
+            p = pool.get(cur) or [0.0, 0.0]
+            at_end, ended = _transit_where(
+                own_moves, cur, t, p[1] / p[0] if p[0] > _EPS else 0.0,
+                prev_end, y0, y1, trade_basis, early)
+            transit_where += at_end
+            transit_ends += ended
     # Every account with in-year activity needs a statement balance on
     # or after its last event to reconcile against.
     checked: Dict[Tuple[str, str], str] = {}
@@ -1557,8 +2026,12 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
     # (hashed, as the books do): next year checks the first and places
     # each book by the second (_carry_openings).
     close_accounts: Dict[str, str] = {}
+    # A carried book whose account has no file this year keeps the
+    # account the prior close recorded (TJ-0834).
+    carried_acct = {b: o["account"] for (b, _c), o in opening.items()
+                    if o.get("account")}
     for book in sorted(close_books):
-        a = _book_account(cash.get("books"), book)
+        a = _book_account(cash.get("books"), book) or carried_acct.get(book)
         if a:
             close_accounts[book] = a
     net = sum(s["gain"] + s["debt_gain"] for s in per.values())
@@ -1585,15 +2058,37 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
                                       prev_end, y1)
                 if pts or k in fser:
                     series[k] = pts
+            series = _trade_pool_cost(series, fser, favg, prev_end)
+        base_rows = _base_holdings(base_ops, base_checks, base_open,
+                                   base_lost, year, holdings_basis)
+        for row in base_rows:
+            if row["book"] in base_bad:
+                row.update(ok=False, why=base_bad[row["book"]])
         extra["holdings"] = {
             "basis": holdings_basis,
             "foreign": [{"book": b, "currency": c, "points": pts}
                         for (b, c), pts in sorted(series.items())],
-            "base": _base_holdings(base_ops, base_checks, base_open,
-                                   base_lost, year, holdings_basis),
+            "base": base_rows,
+            # Own moves in transit at the year end: still yours, in no
+            # book's units (TJ-0946), one entry per departure and arrival
+            # book (TJ-1186, TJ-1187).
+            "transit": transit_where,
+            # Own moves in transit between days of the year (TJ-1129; on
+            # trade dates, also those traded by its end: TJ-1157).
+            "transit_spans": _transit_spans(
+                [o for o in ops if _own(o)], transit_in, early_in, favg,
+                y0, y1, prev_end, trade_basis) + transit_ends,
+            # Every [book, currency] with an opening or an event of the
+            # year, walked or not: a book-less problem of a currency
+            # reaches only these (t1135_cash.cash_doc; backlog TJ-1098).
+            "currencies": sorted(
+                set(opening)
+                | {(o["book"], c) for o in ops
+                   if in_year(o["sd"]) or in_year(o["td"])
+                   for c, _a in _legs(o) if c != base}),
             "interest": sorted(interest, key=lambda r: (r["date"],
                                                         r["id"]))}
-    return {
+    doc: Dict[str, Any] = {
         **extra,
         "ledger": "v2", "label": LABEL, "status": status,
         "reliable": status == "computed", "under_audit": True,
@@ -1625,6 +2120,185 @@ def build(native: List[Dict[str, Any]], cash: Dict[str, Any], base: str,
         "unread_books": unread,
         "stablecoins_as_cash": bool(cash.get("stablecoins_as_cash")),
     }
+    if close_transit:
+        # Own moves in transit at the year end (TJ-0656).
+        doc["close"]["transit"] = close_transit
+    if close_early:
+        # Own moves whose arrival came first, across the close (TJ-1076).
+        doc["close"]["early_out"] = close_early
+    return doc
+
+
+def _transit_where(moves: List[Dict[str, Any]], cur: str, units: float,
+                   avg: float, prev_end: str, y0: str, y1: str,
+                   trade_basis: bool, early: Dict[int, float]
+                   ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """One currency's own moves in transit at the close, for `holdings`
+    (`moves`: the walk's moves between your own accounts; `units`: what
+    the settled walk carries in transit; `avg`: the pool's average cost
+    per unit). Returns (the entries at the year end, the spans that end
+    in the year). No book holds their units: they left the one and have
+    not reached the other (backlog TJ-0946).
+
+    An entry per departure and arrival book, each with its own dates, so
+    that a sender's units join its row from its own departure and only the
+    arrivals that cover them say where they go (backlog TJ-1186, TJ-1187):
+    {"currency", "units", "cost", "from" ([the book it left]; empty for
+    units with no departure of the year), "to" ([the book it arrives in];
+    empty when the books have no arrival for it), "since" (the departure's
+    date, on the holdings' basis), "arrives" (the arrival's settlement
+    date)}. The departures are the latest of the year that cover `units`
+    and, on trade dates, those traded in the year that settle after it;
+    the arrivals, those that settle after the year, take what left first,
+    the walk's order. On trade dates an arrival traded in the year is
+    already in its book: what it covers is no longer in transit at the
+    year end, only until then, a `transit_spans` entry (backlog TJ-1157,
+    TJ-1185). What an arrival the walk already took from a departure
+    (`early` {departure seq: units}, TJ-1076) is in that arrival's book,
+    not in transit (backlog TJ-1285)."""
+    when = "td" if trade_basis else "sd"
+    order = (lambda o: (o[when], o["sd"], o["td"], o.get("seq") or 0))
+    mine = [o for o in moves if o.get("currency") == cur and o["book"]]
+    queue: List[List[Any]] = []
+    left = units
+    for o in sorted((o for o in mine if float(o["amount"]) < 0
+                     and y0 <= o["sd"] <= y1), key=order, reverse=True):
+        if left <= TOL:
+            break
+        take = min(-float(o["amount"]), left)
+        queue.insert(0, [take, o[when], o["book"]])
+        left -= take
+    if left > TOL:
+        queue.insert(0, [left, "", ""])
+    if trade_basis:
+        queue += [[u, o["td"], o["book"]]
+                  for o in sorted((o for o in mine if float(o["amount"]) < 0
+                                   and y0 <= o["td"] <= y1 < o["sd"]),
+                                  key=order)
+                  for u in [-float(o["amount"]) - early.get(o.get("seq"), 0.0)]
+                  if u > _EPS]
+        queue.sort(key=lambda q: q[1])
+    legs: Dict[Tuple[str, str, str], List[Any]] = {}
+    spans: List[Dict[str, Any]] = []
+
+    def to_leg(take: float, q: List[Any], to: str, arrives: str) -> None:
+        leg = legs.setdefault((q[2], q[1], to), [0.0, arrives])
+        leg[0] += take
+
+    for o in sorted((o for o in mine if float(o["amount"]) > 0
+                     and o["sd"] > y1), key=order):
+        need = float(o["amount"])
+        while need > _EPS and queue:
+            q = queue[0]
+            take = min(q[0], need)
+            q[0] -= take
+            need -= take
+            if q[0] <= _EPS:
+                queue.pop(0)
+            if not trade_basis or o["td"] > y1:
+                to_leg(take, q, o["book"], o["sd"])
+                continue
+            start = max(q[1], prev_end)
+            if q[2] and take > TOL and start < o["td"]:
+                spans.append({"currency": cur, "units": round(take, 6),
+                              "from": q[2], "to": o["book"], "since": start,
+                              "until": o["td"],
+                              "points": [[start, round(take, 6),
+                                          round(take * avg, 2)],
+                                         [o["td"], 0.0, 0.0]]})
+    # What no arrival covers: a tolerance's rounding stays with the last
+    # leg of its departure; more has no arrival in the books.
+    for q in queue:
+        same = [k for k in legs if k[:2] == (q[2], q[1])]
+        if q[0] <= TOL and same:
+            legs[same[-1]][0] += q[0]
+        elif q[0] > TOL:
+            to_leg(q[0], q, "", "")
+    return ([{"currency": cur, "units": round(u, 6),
+              "cost": round(u * avg, 6), "from": [frm] if frm else [],
+              "to": [to] if to else [], "since": since, "arrives": arrives}
+             for (frm, since, to), (u, arrives) in sorted(legs.items())],
+            spans)
+
+
+def _transit_spans(moves: List[Dict[str, Any]],
+                   transit_in: Dict[str, Dict[str, float]],
+                   early_in: Dict[Tuple[str, str], float],
+                   favg: Dict[str, List[List[Any]]], y0: str, y1: str,
+                   prev_end: str, trade_basis: bool) -> List[Dict[str, Any]]:
+    """The own moves that spend days of the year in transit and arrive
+    in it, for `holdings` (`moves`: the walk's moves between your own
+    accounts): no book's units hold them from the end of the day they
+    leave to the day before they arrive (backlog TJ-1129). Arrivals take
+    what left first, the walk's order; what is left at the close is
+    _transit_where's. An arrival that comes first has no days in transit.
+    [{"currency", "units", "from" (the book it left; "" for units the
+    prior year's close carried, when the books lack their departure),
+    "to", "since", "until", "points": [[date, units, cost], ...] (the
+    pool's average cost per unit, `favg`, on the holdings' basis; the last
+    point, at the arrival, none)}]."""
+    when = "td" if trade_basis else "sd"
+    out: List[Dict[str, Any]] = []
+    order = (lambda o: (o["sd"], o["td"], o.get("seq") or 0))
+
+    def points(cur: str, start: str, end: str, units: float) -> List[List[Any]]:
+        series = favg.get(cur) or []
+
+        def avg(d: str) -> float:
+            v = series[0][1] if series else 0.0
+            for p in series:
+                if p[0] > d:
+                    break
+                v = p[1]
+            return float(v)
+        days = [start] + [p[0] for p in series if start < p[0] < end]
+        return [[d, round(units, 6), round(units * avg(d), 2)] for d in days
+                ] + [[end, 0.0, 0.0]]
+
+    for cur in sorted({o["currency"] for o in moves} | set(transit_in)):
+        mine = sorted((o for o in moves if o["currency"] == cur), key=order)
+        # What the prior year's close left in transit: the latest
+        # departures before the year that cover it.
+        left = float((transit_in.get(cur) or {}).get("units") or 0.0)
+        queue: List[List[Any]] = []
+        for o in reversed([m for m in mine
+                           if m["amount"] < 0 and m["sd"] < y0]):
+            if left <= TOL:
+                break
+            take = min(-float(o["amount"]), left)
+            queue.insert(0, [take, prev_end, o["book"]])
+            left -= take
+        if left > TOL:
+            queue.insert(0, [left, prev_end, ""])
+        # A departure whose arrival the prior year walked has no days.
+        taken = {b: u for (b, c), u in early_in.items() if c == cur}
+        for o in mine:
+            if o["amount"] < 0 and y0 <= o["sd"] <= y1:
+                u = -float(o["amount"])
+                pre = min(u, taken.get(o["book"], 0.0))
+                if pre > _EPS:
+                    taken[o["book"]] -= pre
+                    u -= pre
+                if u > _EPS:
+                    queue.append([u, o[when], o["book"]])
+        for o in mine:
+            if o["amount"] <= 0 or not y0 <= o["sd"] <= y1:
+                continue
+            need = float(o["amount"])
+            while need > _EPS and queue:
+                q = queue[0]
+                take = min(q[0], need)
+                q[0] -= take
+                need -= take
+                if q[0] <= _EPS:
+                    queue.pop(0)
+                start, end = max(q[1], prev_end), o[when]
+                if take > TOL and start < end and end >= y0:
+                    out.append({"currency": cur, "units": round(take, 6),
+                                "from": q[2], "to": o["book"], "since": start,
+                                "until": end,
+                                "points": points(cur, start, end, take)})
+    return out
 
 
 def headline(doc: Dict[str, Any], verdict: Optional[Dict[str, Any]]

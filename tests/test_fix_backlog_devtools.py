@@ -475,11 +475,13 @@ class TestPrepareLeavesTheKitChecksToItsPullRequest(unittest.TestCase):
 
     def test_land_sh_waits_for_the_kit_checks_job(self):
         # land.sh's own `expected` list: every workflow each pull request
-        # triggers. kit-checks must be in it (no paths filter).
+        # triggers. kit-checks must be in it (no paths filter). It reads
+        # the workflows of the commit it lands (HEAD_SHA; TJ-0702).
         land = (REPO / "scripts" / "land.sh").read_text()
         body = land[land.index("expected() {"):]
         body = body[:body.index("\n}\n") + 3]
-        r = _run("bash", "-c", body + "\nexpected", cwd=REPO)
+        r = _run("bash", "-c", body + '\nHEAD_SHA="$(git rev-parse HEAD)"'
+                 "\nexpected", cwd=REPO)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("kit-checks", r.stdout.splitlines())
 

@@ -134,7 +134,7 @@ DEFERRED:  64.71 CAD in open positions' cost — tjs list</pre>
   <h2>Checked against the one thing that cannot lie</h2>
   <p class="lead">Internal reports can all agree and still be wrong. <code>taxjson sanity</code> compares the positions the books say you hold with the positions your broker's own export says you hold, account by account — every run ends with it once the snapshots are in <code>holdings/</code>, matched to their accounts without a setting. Any difference is a trade that has not reached the CSV yet, or a booking problem — there is no third kind.</p>
   <div class="row">
-    <div class="card"><h3>10,500+ tests</h3><p>Every fix lands with a regression test that failed before it, tagged with the tax-logic rule it pins; the gate fails on a rule with no test.</p></div>
+    <div class="card"><h3>12,500+ tests</h3><p>Every fix lands with a regression test that failed before it, tagged with the tax-logic rule it pins; the gate fails on a rule with no test.</p></div>
     <div class="card"><h3>Fuzzers and mutants</h3><p>Three property fuzzers run thousands of random ledgers per run; mutation testing of both engines finds the boundaries no test pins.</p></div>
     <div class="card"><h3>Two full audits</h3><p>Eight review rounds, a security review and two full-coverage audits of the whole codebase. Every confirmed finding reproduced, fixed, pinned.</p></div>
     <div class="card"><h3>Published limits</h3><p>docs/limits.md lists what is out of scope and what to do by hand, with the citation.</p></div>

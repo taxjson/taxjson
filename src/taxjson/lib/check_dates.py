@@ -15,7 +15,8 @@ for IB and the crypto exchanges once converted):
 
 Settlement (stocks and options): never before the trade, never on a day
 the market cannot settle, and normally the standard cycle (T+1 from
-May 2024, T+2 from Sept 2017, T+3 before; options T+1) counted in
+May 2024, T+2 from Sept 2017, T+3 before, T+5 in North America
+before June 7 1995; options T+1) counted in
 settlement days. A broker that prints its own settlement date may
 differ from the standard cycle; that is reported as a note, not an
 error. A .tt line carries one date, used as both trade and settlement
@@ -38,6 +39,11 @@ from taxjson.lib import market_calendar as mc
 from taxjson.lib.dates import settlement_calendar, settlement_date
 
 TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
+# The earliest trade year a date may carry: the floor of the project
+# years taxjson accepts (config_check, cli_diag: 1900). A long-held
+# purchase from before 1990 is real history that establishes today's
+# cost, not an impossible date (backlog TJ-0820).
+EARLIEST_YEAR = 1900
 
 from taxjson.lib.core import is_opening_row  # noqa: E402
 INCOME_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST", "TAX",
@@ -192,6 +198,22 @@ def _calendar(cls: str, symbol: str, currency: str) -> Optional[str]:
     (lib/dates.settlement_calendar, the parsers' rule; TJ-0705)."""
     mkt = _market(cls, symbol, currency)
     return settlement_calendar(symbol, currency, market=mkt) if mkt else mkt
+
+
+def _is_event_row(r: Dict[str, Any], td: date,
+                  sd: Optional[date]) -> bool:
+    """A corporate event booked as a trade row: a typed stock dividend,
+    or a $0 row dated (and settled) its event day whose description
+    names the event (_EVENT_RE)."""
+    from taxjson.lib.core import STOCK_DIVIDEND
+    if str(r.get("type") or "") == STOCK_DIVIDEND:
+        return True
+    try:
+        price = abs(float(r.get("price") or 0))
+    except (TypeError, ValueError):
+        return False
+    return (sd in (None, td) and price < 1e-9
+            and bool(_EVENT_RE.search(str(r.get("description") or ""))))
 
 
 def check_trade_time(cls: str, d: date, t: Optional[dtime], symbol: str,
@@ -359,7 +381,8 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                     continue
                 if shared and td.year > year + 1:
                     later += 1
-                if td.year < 1990 or (td.year > year + 1 and not shared):
+                if td.year < EARLIEST_YEAR or (td.year > year + 1
+                                               and not shared):
                     # One error per bad date: a far-future row was also
                     # counted as dated after today (A2-1192).
                     add("ERROR", "out-of-range",
@@ -395,9 +418,15 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                 sym = r.get("symbol") or ""
                 cls = asset_class(sym, crypto)
                 cur = (r.get("currency") or "").upper()
+                # A corporate event a parser books as a trade (a stock
+                # dividend; a $0 spin-off or reorganisation leg) is
+                # dated the day the broker posts it, which may be a
+                # weekend or a holiday: no exchange executes it and no
+                # settlement cycle applies (backlog TJ-0695).
+                event = _is_event_row(r, td, sd)
                 # A .tt line has no trade time, and a corporate action is
                 # an event the broker stamps, not an execution.
-                if kind not in ("tt", "corp"):
+                if kind not in ("tt", "corp") and not event:
                     hit = check_trade_time(cls, td, _t(r.get("time")), sym,
                                            cur)
                     if hit:
@@ -416,6 +445,8 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                 if sd < td:
                     add("ERROR", "settle-before-trade",
                         "settles before it trades", acct, label, r)
+                    continue
+                if event:
                     continue
                 if cls == "futures":
                     if futures_settle == "trade" and sd != td \

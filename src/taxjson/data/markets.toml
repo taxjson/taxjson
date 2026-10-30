@@ -127,6 +127,43 @@ LTSE = "US"
 MEMX = "US"
 PEARL = "US"
 
+# Futures venues (IB "Listing Exch" of a futures or futures-option
+# contract) whose sessions date a fill other than the Eastern clock
+# date (tax-logic CA-DATE-SESSION / US-DATE-SESSION). A US-dollar
+# contract on a venue missing here follows CME Globex: from 18:00 ET,
+# Sunday to Thursday, and on a weekday the exchange is closed, the next
+# trading day. Keys:
+#   evening_open     the Eastern time the next trade date's session opens
+#   calendar         the market whose trading days count ("USD": NYSE,
+#                    "CAD": TSX)
+#   every_evening    true: a fill from evening_open on any day (Friday
+#                    too) belongs to the next trading day
+#   continuous_from  "YYYY-MM-DD HH:MM:SS" ET: from then, the venue's
+#                    24/7 contracts trade through the weekend; a fill
+#                    after continuous_close (Friday too), on a Saturday
+#                    or Sunday, or on a closed weekday takes the next
+#                    trading day. No other contract of the venue trades
+#                    in those hours, so the venue decides, not a symbol.
+#
+# Montreal Exchange (CDE): index futures and the CGZ / CGF / CGB bond
+# futures open at 8:00 p.m. ET for the next trading day
+# (https://www.m-x.ca/en/trading/data/trading-hours-and-holidays).
+[ib_futures_sessions.CDE]
+evening_open = "20:00:00"
+calendar = "CAD"
+every_evening = true
+
+# CME: cryptocurrency futures and options trade 24/7 from 4 p.m. CT
+# (17:00 ET) on Friday May 29, 2026; weekend and holiday trading from
+# Friday evening through Sunday evening carries the next business day's
+# trade date (CME Group, "Cryptocurrency Futures and Options Migration
+# to 24-7 Trading", and its 2026 launch notice).
+[ib_futures_sessions.CME]
+evening_open = "18:00:00"
+calendar = "USD"
+continuous_from = "2026-05-29 17:00:00"
+continuous_close = "17:00:00"
+
 # A crypto exchange → the venue suffix its coins carry in a crypto
 # account's holdings handoff (reports/<account>_holdings.toml): the form
 # the exchange's own holdings snapshot uses (BTC.KR for Kraken), so a

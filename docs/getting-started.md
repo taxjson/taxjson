@@ -1147,7 +1147,8 @@ and a complete project per tax year beside them.
   `[estimate]` and `[instalments]` commented out for reference, and each
   account's `holdings` list commented out: those are 2025's snapshots),
   `ticker.map` copied (it keeps reading the shared `tobase.map`), and
-  an empty `holdings/`. The
+  an empty `holdings/` (the folder `holdings_dir` names inside the
+  year, when it names one). The
   missing-history lines are in the shared inputs: the same in every
   year, their quantities fixed.
 - **Keeping the years aligned:** a map line or setting added in one year

@@ -117,7 +117,8 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
             ("JOURNAL FROM TO", "read as TOBASE FROM TO"),
         ))),
     (LOOKUPS, ("QUOTE", "EXTRACT", "CRYPTO", "T1135", "SIMILAR", "STABLE",
-               "SPLITSHARE", "INDEXOPT", "EVENING", "MULT", "VENUE"),
+               "SPLITSHARE", "INDEXOPT", "SECFUT", "EVENING", "MULT",
+               "VENUE"),
      ("They change no symbol in the books.", (
          ("QUOTE SYMBOL YAHOO_SYMBOL [RATIO]",
           "the Yahoo spelling a price lookup uses"),
@@ -132,6 +133,8 @@ GROUPS: Tuple[Tuple[str, Tuple[str, ...], Doc], ...] = (
          ("STABLE SYMBOL USD|NO", "a US-dollar stablecoin, or not one"),
          ("SPLITSHARE ROOT [NO]", "a Canadian split-share corporation"),
          ("INDEXOPT ROOT [NO]", "a broad-based index option root (US)"),
+         ("SECFUT ROOT [NO]", "a security future's root: not a §1256 "
+          "contract (US)"),
          ("EVENING ROOT [NO]", "an option root with a Cboe evening session"),
          ("MULT SYMBOL N", "an option's contract size"),
          ("VENUE IBCODE SUFFIX|NO", "an IB listing exchange and its suffix"),
@@ -645,7 +648,8 @@ def meaning(text: str) -> tuple:
             side.quote, side.crypto, tuple(side.extract), side.t1135,
             side.t1135_category,
             tuple(s for s, _w, _l in side.similar),
-            side.stable, side.splitshare, side.indexopt, side.evening,
+            side.stable, side.splitshare, side.indexopt, side.secfut,
+            side.evening,
             side.mult, side.venue, len(problems), len(notes),
             len(side.problems), len(side.retired))
 

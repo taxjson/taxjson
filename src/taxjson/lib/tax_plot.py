@@ -56,11 +56,16 @@ def build(points: Iterable[Dict[str, Any]], *, year: int, base: str,
           year_estimate: float, year_income: float,
           label: str, accounts: Iterable[str],
           with_amt: Optional[float] = None,
-          other_income: float = 0.0) -> Dict[str, Any]:
+          other_income: float = 0.0,
+          unknown_cost_routed: int = 0,
+          unknown_cost_included: int = 0) -> Dict[str, Any]:
     """The document. `points`: one per month in order, {month,
     cum_tax, cum_income} — the estimator run on the rows dated up to
     the month's end. `year_estimate` / `year_income`: `taxjson
-    estimate`'s own figures for the year."""
+    estimate`'s own figures for the year. `unknown_cost_routed`: the
+    sales with an unknown cost routed to manual reporting, NOT in the
+    figures; `unknown_cost_included`: those in them (raw engine
+    output), as `taxjson estimate` counts them (backlog TJ-0783)."""
     rows: List[Dict[str, Any]] = []
     prev_t = prev_i = 0.0
     for p in points:
@@ -83,6 +88,12 @@ def build(points: Iterable[Dict[str, Any]], *, year: int, base: str,
                                    else round(float(with_amt), 2)),
         # What is dated to the year rather than to a month.
         "year_adjustment": gap if abs(gap) > 0.005 else 0.0,
+        # The sales with an unknown cost: left out of every figure
+        # (routed to manual reporting) or counted in them; with one
+        # left out the figures are incomplete (backlog TJ-0783).
+        "unknown_cost_routed": int(unknown_cost_routed or 0),
+        "unknown_cost_included": int(unknown_cost_included or 0),
+        "complete": not unknown_cost_routed,
     }
 
 
@@ -235,6 +246,19 @@ def render(doc: Dict[str, Any], width: int = 120, cmd: str = "tjs plot-tax"):
     except ValueError:
         us, instalments = None, False
     acts = []
+    # The sales with an unknown cost, as `tjs estimate` names them
+    # (backlog TJ-0783): the chart said nothing of them.
+    n_out = int(doc.get("unknown_cost_routed") or 0)
+    n_in = int(doc.get("unknown_cost_included") or 0)
+    if n_out:
+        acts.append(out.act(
+            f"{n_out} sale(s) with an unknown cost NOT in these figures "
+            f"(routed to manual reporting): the months and the year are "
+            f"incomplete; report them by hand", "tjs form-export"))
+    if n_in:
+        acts.append(out.act(
+            f"these figures include {n_in} sale(s) with an unknown cost; "
+            f"the filing totals leave them out", "tjs form-export"))
     if doc.get("year_adjustment"):
         what = {True: "a §1256 reclassification",
                 False: "a T5 box 18 capital gains dividend"}.get(

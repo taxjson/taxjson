@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import contextlib
 import io
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 ERROR = "error"
 WARNING = "warning"
@@ -107,13 +108,93 @@ def _captured_warnings(buf: io.StringIO, where: str) -> List[str]:
     return out
 
 
+def _refuse_inkind_total(ln: Dict[str, Any],
+                         row_sizes: Optional[Dict[str, List[float]]],
+                         unread: Optional[Callable[[], bool]] = None) -> None:
+    """The run's stop on an option's INKIND line whose price and total
+    disagree (backlog TJ-1163): at the contract's size (a MULT line, else
+    100), or at a size the project's transfer rows state, which the run
+    values the line at. (Its "assumed 100" note is not this line's.)
+    `unread` (_sizes_unread) true: a row the run has yet to read may state
+    the size, so the line is a warning for now (backlog TJ-1288)."""
+    from taxjson.lib import in_kind as IK
+    with contextlib.redirect_stderr(io.StringIO()):
+        bad = IK.line_total_problem(ln)
+    if bad and not any(
+            not IK.line_total_problem(ln, size)
+            for size in (row_sizes or {}).get(str(ln.get("symbol")), [])):
+        text = bad.replace(
+            f"the INKIND line {ln.get('source') or ''}: ", "INKIND ", 1)
+        if unread is not None and unread():
+            print(f"warning: {text}; the broker's transfer row may state "
+                  f"another contract size: `tjs run` reads it and checks the "
+                  f"line at that size", file=sys.stderr)
+            return
+        raise ValueError(text)
+
+
+def _row_sizes(root: Path, names: Iterable[str]) -> Dict[str, List[float]]:
+    """symbol -> the contract sizes the accounts' transfer rows in work/
+    state (IB's), when a run has parsed them."""
+    from taxjson.lib.transfer_in import sidecar_rows
+    out: Dict[str, List[float]] = {}
+    for _a, _b, t in sidecar_rows(Path(root) / "work", list(names)):
+        try:
+            size = float(t.get("multiplier") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if size > 0 and t.get("contract_size_basis") != "assumed":
+            out.setdefault(str(t.get("symbol") or "").upper(), []).append(size)
+    return out
+
+
+def _sizes_unread(root: Path, names: Iterable[str]) -> bool:
+    """An export of the accounts whose transfer rows can state a contract
+    size (IB's, a generic mapping's) has no parsed file in work/ yet: no
+    run has read it, so _row_sizes cannot know the size."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.brokerages.detect import detect_broker
+    work = Path(root) / "work"
+    for acct in names:
+        folder = _PL.inputs_dir(root) / acct
+        if not folder.is_dir():
+            continue
+        for p in sorted(folder.iterdir()):
+            if (not p.is_file() or p.suffix.lower() != ".csv"
+                    or p.name.startswith((".", "~$"))):
+                continue
+            try:
+                b = detect_broker(p)
+            except (OSError, ValueError):   # the run names a bad export
+                continue
+            if b in ("ib", "generic") and not any(
+                    work.glob(f"{acct}_{b}*.json")):
+                return True
+    return False
+
+
+def _reads_inkind(acfg: Dict[str, Any]) -> bool:
+    """`taxjson run` reads this account's INKIND lines: a taxable equity
+    account that keeps its transfer rows out of the books
+    (taxjson_run._in_kind_plans, in_kind_state)."""
+    return (acfg.get("type") == "taxable" and not acfg.get("transfers")
+            and not acfg.get("crypto"))
+
+
 def parse_line(line: str, where: str, *, account: str, crypto: bool,
-               equity: bool, rows: Optional[List[Dict[str, Any]]] = None
+               equity: bool, rows: Optional[List[Dict[str, Any]]] = None,
+               row_sizes: Optional[Dict[str, List[float]]] = None,
+               sizes_unread: Optional[Callable[[], bool]] = None,
+               inkind_read: bool = True
                ) -> Tuple[str, List[str]]:
     """One line through the readers `taxjson run` applies, in the run's
     order. Returns (kind, warnings); raises ValueError for a line the
     run would refuse, its message as the run prints it. `rows`, when
-    given, receives the rows of the books the line reads as."""
+    given, receives the rows of the books the line reads as. `row_sizes`:
+    the contract sizes the project's transfer rows state (_row_sizes);
+    `sizes_unread`: _sizes_unread. `inkind_read` false: the run does not
+    read this account's INKIND lines (_reads_inkind), so it refuses no
+    total of theirs."""
     from taxjson.bin import taxjson_convert_tt as CT
     from taxjson.lib.cash_events import CashLineError
     from taxjson.lib.cash_events import parse_line as _cashline
@@ -123,7 +204,10 @@ def parse_line(line: str, where: str, *, account: str, crypto: bool,
         return KIND_BLANK, []
     buf = io.StringIO()
     with contextlib.redirect_stderr(buf):
-        if CT.parse_inkind_line(line, where) is not None:
+        inkind = CT.parse_inkind_line(line, where)
+        if inkind is not None:
+            if inkind_read:
+                _refuse_inkind_total(inkind, row_sizes, sizes_unread)
             return KIND_EVENT, _captured_warnings(buf, where)
         j = CT.parse_journal_line(line, where)
         if j is not None:
@@ -175,8 +259,13 @@ def parse_line(line: str, where: str, *, account: str, crypto: bool,
 
 
 def check_file(path: Path, *, file: str, account: str, crypto: bool,
-               equity: bool) -> FileReport:
-    """Every line of one file."""
+               equity: bool,
+               row_sizes: Optional[Dict[str, List[float]]] = None,
+               sizes_unread: Optional[Callable[[], bool]] = None,
+               inkind_read: bool = True
+               ) -> FileReport:
+    """Every line of one file. `row_sizes`, `sizes_unread`, `inkind_read`:
+    parse_line."""
     from taxjson.lib.cli_diag import read_text_utf8
     rep = FileReport(file=file, path=Path(path), account=account)
     try:
@@ -198,7 +287,9 @@ def check_file(path: Path, *, file: str, account: str, crypto: bool,
         try:
             kind, warns = parse_line(raw, where, account=account,
                                      crypto=crypto, equity=equity,
-                                     rows=txs)
+                                     rows=txs, row_sizes=row_sizes,
+                                     sizes_unread=sizes_unread,
+                                     inkind_read=inkind_read)
         except ValueError as e:
             rep.problems.append(Problem(ERROR, where, file, n,
                                         _strip_where(e, where), shown))
@@ -347,6 +438,58 @@ def _opening_snapshots(reports: List[FileReport], account: str) -> None:
                     f"{e} The other line: {r0.file}:{n0}.", shown))
 
 
+def _project_openings_rule(root: Path) -> Tuple[Optional[str], Optional[str]]:
+    """(country, base currency) of the project at `root` as the run
+    passes them to the OPENING cut-off (lib/opening
+    .apply_opening_cutoff); (None, None) when taxjson.toml cannot say."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.country import (CountryError, home_currency,
+                                     settings_country)
+    cfg = _PL.read_config_soft(root)
+    settings = cfg.get("settings") if isinstance(cfg, dict) else None
+    if not isinstance(settings, dict):
+        return None, None
+    try:
+        country = settings_country(settings)
+    except CountryError:
+        return None, None
+    base = settings.get("base_currency")
+    if not isinstance(base, str) or not base.strip():
+        base = home_currency(country)
+    return country, base.strip().upper()
+
+
+def _country_openings(reports: List[FileReport], account: str,
+                      country: Optional[str],
+                      base_currency: Optional[str]) -> None:
+    """The run's per-country refusal of a known-cost OPENING line
+    (lib/opening.apply_opening_cutoff with the project's country: a US
+    lot without its acquisition date, US-OPEN-01, or in another currency
+    than the base, US-OPEN-02), each an ERROR of its line. check-tt said
+    "Every line parses." and the run stopped at merging (backlog
+    TJ-0831)."""
+    if not country:
+        return
+    from taxjson.lib.core import is_opening_row
+    from taxjson.lib.opening import OpeningError, apply_opening_cutoff
+    for r in reports:
+        for n, shown, tx in r.txs:
+            if not is_opening_row(tx):
+                continue
+            where = f"{r.file}:{n}"
+            if any(p.where == where and p.severity == ERROR
+                   for p in r.problems):
+                continue
+            try:
+                apply_opening_cutoff([dict(tx, account=account)],
+                                     country=country,
+                                     base_currency=base_currency,
+                                     report=io.StringIO())
+            except OpeningError as e:
+                r.problems.append(Problem(ERROR, where, r.file, n,
+                                          str(e), shown))
+
+
 def _not_own_accounts(reports: List[FileReport], root: Path, acct: str,
                       acfg: Any, accounts: Dict[str, Any]) -> None:
     """A NOTOWN line the run reads and says undoes no pairing, known by
@@ -401,6 +544,11 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
     names = sorted(only) if only is not None else sorted(accounts or {})
     reports: List[FileReport] = []
     extra: List[Problem] = []
+    country, base_currency = _project_openings_rule(root)
+    row_sizes = _row_sizes(root, sorted(accounts or {}))
+
+    def unread() -> bool:
+        return _sizes_unread(root, sorted(accounts or {}))
     for acct in names:
         acfg = (accounts or {}).get(acct) or {}
         crypto = _is_crypto(acfg)
@@ -409,7 +557,9 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
         for tt in tt_files(_PL.inputs_dir(root) / acct):
             file = f"inputs/{acct}/{shown_name(tt)}"
             rep = check_file(tt, file=file, account=acct, crypto=crypto,
-                             equity=not crypto)
+                             equity=not crypto, row_sizes=row_sizes,
+                             sizes_unread=unread,
+                             inkind_read=_reads_inkind(acfg))
             reports.append(rep)
             mine.append(rep)
             # The names the run refuses (taxjson_run.stage_account):
@@ -437,6 +587,7 @@ def _project_reports(root: Path, accounts: Dict[str, Any],
         _taxable_transfers(mine, acct, acfg)
         if not crypto:
             _opening_snapshots(mine, acct)
+            _country_openings(mine, acct, country, base_currency)
         _not_own_accounts(mine, root, acct, acfg, accounts or {})
     # Across lines and files: the run's own up-front readers. A line
     # already refused above is not named twice.

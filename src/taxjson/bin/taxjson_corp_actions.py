@@ -109,6 +109,43 @@ def extract_events(extractor, csv_paths: List[Path],
     return events
 
 
+def map_renames(path: Path) -> dict:
+    """The renames of a ticker.map as the extractors read them (a
+    spin-off's parent named by a broker code: `GLOBAL X123456
+    PARENT.TO`). OSError / ValueError when the map cannot be read."""
+    from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                merge_renames)
+    return merge_renames(_parse_map_file(Path(path))[0], to_base=True)
+
+
+def project_corp_map(root: Path) -> Optional[Path]:
+    """The map `taxjson run`'s corporate-action stage read for the
+    project at `root`: the run's effective map (work/ticker.map.effective:
+    ticker.map plus the listings it joined and the .tt renames) when the
+    last run wrote one, else ticker.map; None without either. `taxjson
+    elect` extracts with it, so its event ids are the run's (backlog
+    TJ-0849)."""
+    from taxjson.lib import project_layout as _PL
+    from taxjson.lib.cross_listings import EFFECTIVE_MAP
+    for p in (Path(root) / "work" / EFFECTIVE_MAP,
+              _PL.ticker_map_path(root)):
+        if p.is_file():
+            return p
+    return None
+
+
+def project_corp_renames(root: Path) -> Optional[dict]:
+    """map_renames of project_corp_map (None when there is no map or it
+    cannot be read: `taxjson run` refuses a bad map up front)."""
+    p = project_corp_map(root)
+    if p is None:
+        return None
+    try:
+        return map_renames(p) or None
+    except (OSError, ValueError):
+        return None
+
+
 def _default_manifest_path(csv_path: Path) -> Path:
     """`<dir>/.<csv-filename>.elections` — sits next to the CSV, hidden
     by default so it doesn't clutter directory listings but is easy to
@@ -274,6 +311,17 @@ def _update_or_die(path: Path, change):
     except (ValueError, LockLinkError) as e:
         emit_line(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
         raise SystemExit(2)
+
+
+def _log_saved(log: Optional[str], records) -> None:
+    """Append each saved ElectionRecord of `records` to the --saved-log
+    file (one JSON line each; nothing without one)."""
+    if not log:
+        return
+    from dataclasses import asdict
+    with open(log, 'a', encoding='utf-8') as f:
+        for rec in records:
+            f.write(json.dumps(asdict(rec), sort_keys=True) + '\n')
 
 
 def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
@@ -504,6 +552,21 @@ def main():
              "lieu booked, not an UNBOOKED warning.",
     )
     parser.add_argument(
+        '--ask-event', metavar='ID', default=None,
+        help="Ask only about this event (`taxjson elect --redo --event "
+             "ID`): no other event is asked about or elected, and the "
+             "rows of an event that has no election are left out of the "
+             "output (`taxjson run` asks about it).",
+    )
+    parser.add_argument(
+        '--saved-log', metavar='FILE', default=None,
+        help="Append each election this run saves (one JSON line: the "
+             "record) to FILE: `taxjson elect --redo` reads it to tell "
+             "its own answers from an election another command saved "
+             "meanwhile when it puts the cleared ones back (backlog "
+             "TJ-0955).",
+    )
+    parser.add_argument(
         '--list', dest='list_only', action='store_true',
         help="Just print extracted events; don't prompt, don't write, don't emit JSON.",
     )
@@ -568,11 +631,8 @@ def main():
     from taxjson.lib.brokerages.base import BrokerageParseError
     renames = None
     if args.ticker_map and Path(args.ticker_map).exists():
-        from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
-                                                    merge_renames)
         try:
-            renames = merge_renames(_parse_map_file(
-                Path(args.ticker_map))[0], to_base=True)
+            renames = map_renames(Path(args.ticker_map))
         except (OSError, ValueError) as e:
             emit_line(f"taxjson-corp-actions: error: {args.ticker_map}: {e}",
                       file=sys.stderr)
@@ -625,11 +685,18 @@ def main():
     # (name changes) are elected without prompting — the manifest record
     # is still written, so the audit trail is intact and `taxjson elect
     # --redo` can override like any hand-made election.
-    auto_applied = apply_auto_defaults(events, manifest, args.country)
+    # --ask-event: that event only — another event's election is never
+    # saved by a redo of one (backlog TJ-0847).
+    in_scope = (events if args.ask_event is None
+                else [ev for ev in events if ev.event_id == args.ask_event])
+    auto_applied = apply_auto_defaults(in_scope, manifest, args.country)
     if auto_applied and not args.decisions_only:
         manifest, auto_applied = _update_or_die(
             manifest_path,
-            lambda m: apply_auto_defaults(events, m, args.country))
+            lambda m: apply_auto_defaults(in_scope, m, args.country))
+        _log_saved(args.saved_log,
+                   [manifest.records[ev.event_id] for ev in auto_applied
+                    if ev.event_id in manifest.records])
         for ev in auto_applied:
             emit_line(f"note: auto-elected {ev.event_id} ({ev.summary()}) — "
                       f"no decision required; `taxjson elect --redo` to "
@@ -646,6 +713,12 @@ def main():
             ev.event_id for ev in missing if sheltered_default_applies(ev))
         missing = [ev for ev in missing
                    if ev.event_id not in sheltered_default]
+    # --ask-event: the other events without an election are neither asked
+    # about nor booked here (backlog TJ-0847).
+    not_asked = ({ev.event_id for ev in missing
+                  if ev.event_id != args.ask_event}
+                 if args.ask_event is not None else set())
+    missing = [ev for ev in missing if ev.event_id not in not_asked]
 
     if missing:
         if args.no_input or not sys.stdin.isatty():
@@ -698,6 +771,13 @@ def main():
             # Saved at once (never lose answers), under the lock.
             manifest, _ = _update_or_die(
                 manifest_path, lambda m, rec=rec: m.set(rec) or True)
+            _log_saved(args.saved_log, [rec])
+            if args.decisions_only:
+                # The save re-read the file: a run of shared exports
+                # keeps its legacy-id rekeys and auto-defaults in memory
+                # only (backlog TJ-1118).
+                manifest.migrate_legacy(events)
+                apply_auto_defaults(in_scope, manifest, args.country)
         print(f"\nManifest saved to {shown}\n", file=sys.stderr)
 
     fx = None
@@ -709,6 +789,11 @@ def main():
                       f"{args.rates} unusable ({e}); cross-currency "
                       f"exchanges are booked in the consideration's "
                       f"currency.", file=sys.stderr)
+    if not_asked:
+        emit_line(f"note: {len(not_asked)} other event(s) without an "
+                  f"election not asked (only {args.ask_event} was): "
+                  f"`taxjson run` asks about them.", file=sys.stderr)
+        events = [ev for ev in events if ev.event_id not in not_asked]
     try:
         out = _emit_resolved(events, manifest, args.country, fx=fx,
                              sheltered_default=sheltered_default,

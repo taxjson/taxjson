@@ -515,7 +515,7 @@ def _lookup_named(side) -> frozenset:
     """The symbols the lookup lines of a map name (SideRules): the
     symbol of a QUOTE, CRYPTO, T1135, STABLE or MULT line, every symbol
     of a SIMILAR line and an EXTRACT line's target. A root-wide market
-    line (SPLITSHARE, INDEXOPT, EVENING) and a VENUE code name no
+    line (SPLITSHARE, INDEXOPT, SECFUT, EVENING) and a VENUE code name no
     symbol."""
     out = set()
     for table in (side.quote, side.crypto, side.t1135, side.stable,
@@ -789,6 +789,14 @@ def apply_mapping(tx: TaxTransaction, mapping: Dict[str, str]) -> TaxTransaction
         mapped_new = map_symbol(new_sym, mapping)
         if mapped_new != new_sym:
             tx.symbol_new = mapped_new
+    # A warrant exercise's share target (exercise_of) names the shares
+    # the rows map: left unmapped, the engine found no such shares and
+    # booked the exercise as cash-settled (backlog TJ-0978).
+    ex_of = getattr(tx, 'exercise_of', '') or ''
+    if ex_of:
+        mapped_ex = map_symbol(ex_of, mapping)
+        if mapped_ex != ex_of:
+            tx.exercise_of = mapped_ex
     return tx
 
 @guard_main("taxjson-ticker-map")

@@ -39,7 +39,7 @@ from taxjson.lib.core import (
     coerce_transaction_row, strip_json_comments,
 )
 from taxjson.bin.taxjson_sort import (deduplicate, sort_transactions,
-                                      source_accounts_of)
+                                      source_accounts_of, source_brokers_of)
 from taxjson.bin.taxjson_ticker_map import (
     load_map_file, apply_mapping, apply_drops, merge_renames,
     bare_target_warnings,
@@ -55,7 +55,8 @@ from taxjson.bin.taxjson_convert_currency import (
 )
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
 from taxjson.lib.corporate_timeline import normalize_symbol_new
-from taxjson.lib.trade_cancel import pair_cancellations, trade_cancel_what
+from taxjson.lib.trade_cancel import (pair_cancellations, retained_fee,
+                                      trade_cancel_what)
 from taxjson.lib.corp_actions import drop_broker_cil_pairs
 
 
@@ -220,6 +221,30 @@ def _set_fld(t, k, v) -> None:
         setattr(t, k, v)
 
 
+def _split_by_account(dlist, tlist):
+    """[(dividends, taxes)] of one (symbol, date, description) group,
+    one pair per account when every row names it: the project account
+    (`account`), then the broker account (`source_account`, else
+    `broker_account`). One account's withholding used to be shared
+    with another account's same-day dividend (backlog TJ-0736). A row
+    whose account is unknown keeps the pooled pairing of its level."""
+    pairs = [(dlist, tlist)]
+    for ident in (lambda t: _fld(t, 'account', '') or '',
+                  lambda t: (_fld(t, 'source_account', '')
+                             or _fld(t, 'broker_account', '') or '')):
+        out = []
+        for ds, ts in pairs:
+            if not all(ident(t) for t in ds + ts):
+                out.append((ds, ts))
+                continue
+            for name in dict.fromkeys(ident(t) for t in ts):
+                sub_d = [d for d in ds if ident(d) == name]
+                if sub_d:
+                    out.append((sub_d, [t for t in ts if ident(t) == name]))
+        pairs = out
+    return pairs
+
+
 def reconcile_dividend_tax(txs, rate=None):
     """Pair each DIVIDEND with its withholding TAX so both records are
     self-describing. Runs post-dedup, so every dividend and every
@@ -232,7 +257,10 @@ def reconcile_dividend_tax(txs, rate=None):
         per-share withholding rate in `price` (in its own currency).
 
     Matching is on (symbol, date, description-core), so a regular
-    dividend and a same-day Payment-in-Lieu reconcile independently.
+    dividend and a same-day Payment-in-Lieu reconcile independently,
+    and within that on the account when the rows name it
+    (_split_by_account: two accounts' same-day dividends each keep
+    their own withholding).
     Totals are unaffected: downstream tools read gross_amount for
     dividends and the TAX rows' net_amount — never DIVIDEND.net_amount.
 
@@ -260,10 +288,12 @@ def reconcile_dividend_tax(txs, rate=None):
 
     converted = 0
     unconverted = []
+    groups = []
     for key, dlist in divs.items():
         tlist = taxes.get(key)
-        if not tlist:
-            continue
+        if tlist:
+            groups.extend(_split_by_account(dlist, tlist))
+    for dlist, tlist in groups:
         total_gross = sum(_fld(d, 'gross_amount', 0.0) or 0.0
                           for d in dlist)
         if total_gross <= 0:
@@ -332,9 +362,12 @@ def cancel_trade_pairs(txs):
         if id(_ca) in whole:
             continue
         what = trade_cancel_what(orig.quantity, _ca.quantity)
+        kf = retained_fee(orig, _ca)
         emit_line(f"note: dropped {what} {orig.symbol} trade of "
               f"{orig.quantity:g} @ {orig.price:g} on {orig.date} and "
-              f"its broker cancellation (Ca) from another statement.")
+              f"its broker cancellation (Ca) from another statement"
+              + (f"; the commission the broker kept ({kf.net_amount:g} "
+                 f"{kf.currency}) stays, a FEE row." if kf else "."))
     for ca in unmatched:
         emit_line(f"warning: {ca.symbol}: the broker cancelled (Ca) a trade "
               f"of {-ca.quantity:g} @ {ca.price:g} on {ca.date}, but the "
@@ -506,6 +539,13 @@ def main():
              "refused instead of dropping its gain.",
     )
     parser.add_argument(
+        '--tax-date', choices=('settle', 'trade'), default=None,
+        help="The project's date basis for --year's refusal (a sale "
+             "traded Dec 31 that settles in January is the earlier "
+             "year's on trade dates); default: the --country's own "
+             "(Canada settle, US trade).",
+    )
+    parser.add_argument(
         '--require-inputs', action='store_true',
         help="Fail if any input file is missing or unreadable, instead of "
              "warn-and-skip. Use in orchestrated pipelines where every input "
@@ -529,6 +569,8 @@ def main():
         txs, dropped = deduplicate(
             txs, return_dropped=True, report=sys.stderr,
             source_accounts=source_accounts_of(
+                s.get('original_metadata') for s in sources),
+            source_brokers=source_brokers_of(
                 s.get('original_metadata') for s in sources))
         if dropped:
             emit_line(f"note: --dedup removed {len(dropped)} duplicate row(s):")
@@ -610,10 +652,14 @@ def main():
     # symbols, so a renamed listing is the snapshot's own. Always on: a
     # no-op without OPENING rows.
     from taxjson.lib.opening import OpeningError, apply_opening_cutoff
+    # The rows it leaves out, kept in the output's metadata: the cut-off
+    # across accounts walks the whole history back (backlog TJ-1201).
+    opening_cut = []
     try:
         txs = apply_opening_cutoff(
             txs, year=args.year, country=args.country,
-            base_currency=(args.target_currency or None))
+            base_currency=(args.target_currency or None),
+            tax_date=args.tax_date, cut=opening_cut)
     except OpeningError as e:
         emit_line(f"error: {e}")
         return 1
@@ -757,6 +803,8 @@ def main():
                 ] if flag
             ],
             **({'target_currency': target_currency} if target_currency else {}),
+            **({'opening_cut': [t.to_dict() for t in opening_cut]}
+               if opening_cut else {}),
         },
     }
     json.dump(output, sys.stdout, indent=2, sort_keys=True)

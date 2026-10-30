@@ -739,10 +739,30 @@ def parse_strict_number(raw, *, field: str = 'value', where: str = '',
 # class letter outside CAD): the market data's venue table.
 from taxjson.lib.markets import (canadian_suffixes as _ca_sfx,  # noqa: E402
                                  currency_suffixes as _cur_sfx,
+                                 known_suffixes as _known_sfx,
                                  listing_suffix_re as _sfx_re)
 _CA_VENUE_SUFFIX_RE = _sfx_re(_ca_sfx() - {'TO', 'V'})
 _CA_PREF_UNDOTTED_RE = re.compile(r'^([A-Z0-9]+)\.(PR|PF)([A-Z]{1,2})$',
                                   re.IGNORECASE)
+# A fully dotted preferred series with no venue (FTN.PR.L, FTN.PR.V): its
+# last letters are the SERIES, not a London (.L) or Venture (.V) suffix,
+# unless they spell a listing suffix of more than one letter (FTN.PR.CN
+# is the CSE listing of FTN.PR, FTN.PR.US its US one). Stripped as a
+# venue, two series became one pool (backlog TJ-0970); kept as a series,
+# an explicit listing got a second suffix (backlog TJ-1202).
+_CA_PREF_DOTTED_RE = re.compile(r'^[A-Z0-9]+\.(?:PR|PF)\.([A-Z]{1,2})$',
+                                re.IGNORECASE)
+
+
+def is_ca_pref_series(symbol: str) -> bool:
+    """True when `symbol` is a dotted preferred series with no venue
+    suffix (FTN.PR.L, FTN.PR.V): its final letters must not be read as
+    a listing suffix."""
+    m = _CA_PREF_DOTTED_RE.match((symbol or '').strip())
+    if not m:
+        return False
+    return not any(len(s) > 1 and s.upper() == m.group(1).upper()
+                   for s in _known_sfx())
 
 
 def canonical_ca_root(root: str) -> str:
@@ -764,6 +784,8 @@ def canonical_ca_listing(symbol: str, currency: str = 'CAD') -> Optional[str]:
     letter."""
     sym = (symbol or '').strip()
     up = sym.upper()
+    if is_ca_pref_series(sym):
+        return None
     if up.endswith('.TO') and len(up) > 3:
         return f"{canonical_ca_root(sym[:-3])}.TO"
     if (up.endswith('.V') and len(up) > 2
@@ -1057,11 +1079,15 @@ class BaseBrokerage:
             ca = canonical_ca_listing(sym, currency)
             if ca is not None:
                 return ca
-        sym = self._CURRENCY_SUFFIX_RE.sub('', sym)
         # A currency code is case-blind: 'usd' made the suffix '.usd'
         # and split the pool from SAMPLE.US (audit S055-17).
         currency = (currency or '').strip().upper()
         ext = self.CURRENCY_EXT_MAP.get(currency, self.CURRENCY_EXT_FALLBACK or currency)
+        # (A series letter that IS the row currency's suffix, SYN.PF.L in
+        # GBP, is that listing: backlog TJ-1202.)
+        if (not is_ca_pref_series(sym)
+                or sym.upper().endswith(f'.{ext}'.upper())):
+            sym = self._CURRENCY_SUFFIX_RE.sub('', sym)
         if ext == 'TO':
             # FTN.PRA -> FTN.PR.A (audit S014-07).
             sym = canonical_ca_root(sym)
@@ -1069,7 +1095,8 @@ class BaseBrokerage:
 
     def tx_roc_adjust(self, *, symbol: str, currency: str, date: str,
                       desc: str, amount: float,
-                      account: Optional[str] = None) -> Dict[str, Any]:
+                      account: Optional[str] = None,
+                      no_cash: str = '') -> Dict[str, Any]:
         """One shared shape for a return-of-capital row: an ADJUST that
         REDUCES ACB by the cash received (net_amount = -amount), tagged
         type='roc' so `taxjson roc`/`roc-sum` can report it. `amount` is
@@ -1082,7 +1109,11 @@ class BaseBrokerage:
         The row is dated by its posting (pay) date; a record date the
         description prints ("REC 12/30/24") rides along as the neutral
         `record_date` fact — lib/income_dating decides, per country,
-        which date lowers the cost."""
+        which date lowers the cost.
+
+        `no_cash`: why the row lowers the cost without any cash arriving
+        with it (RBC's year-end book-cost row); the FX-on-cash ledgers
+        then book no receipt (backlog TJ-1033)."""
         tx = {
             'action': 'ADJUST',
             'date': date, 'time': '09:30:00', 'date_settle': date,
@@ -1094,6 +1125,8 @@ class BaseBrokerage:
         rec = income_facts_from_description(desc).get('record_date')
         if rec:
             tx['record_date'] = rec
+        if no_cash:
+            tx['no_cash'] = no_cash
         return tx
 
     # ----------------------------------------------------------- sign / coerce
@@ -1489,7 +1522,9 @@ class BaseBrokerage:
         whose CSV date column IS the settlement date (Webull, per user
         verification against real statements). Options T+1 in all eras;
         equities T+2 before the T+1 cutover (US 2024-05-28 / CA 2024-05-27),
-        T+1 after (T+3 before 2017-09-05). Walks back through weekends and
+        T+1 after (T+3 before 2017-09-05, T+5 before 1995-06-07 in USD and
+        CAD: lib/dates.settlement_lag_days, tax-logic CA-DATE-04 /
+        US-DATE-04). Walks back through weekends and
         the market's settlement holidays to the latest trading day that
         settles on that date (lib/market_calendar); the era is the trade
         date's, so the cutover days round-trip."""
@@ -1514,7 +1549,9 @@ class BaseBrokerage:
                                *formats: str) -> str:
         """Era-aware EQUITY settlement for brokerages whose CSV carries no
         settlement column: T+2 before the T+1 cutover, T+1 after (T+3
-        before 2017-09-05), counted in the market's settlement days
+        before 2017-09-05, T+5 before 1995-06-07 in USD and CAD:
+        lib/dates.settlement_lag_days, tax-logic CA-DATE-04 / US-DATE-04),
+        counted in the market's settlement days
         (weekends and USD/CAD settlement holidays skipped).
         The cutover is market-specific: US 2024-05-28; Canada 2024-05-27 (a
         TSX trading day — the US was closed for Memorial Day)."""

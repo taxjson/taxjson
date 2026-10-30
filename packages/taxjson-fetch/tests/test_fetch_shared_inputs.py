@@ -102,8 +102,11 @@ class TestSharedInputs(unittest.TestCase):
                 C.run(req)
             self.assertIn("2024-06-03", str(cm.exception))
             self.assertEqual(out.read_text(), dated)
-        # A single-folder project keeps the per-year test (unchanged).
-        self.assertEqual(C._flex_lost_dates(dated, _FLEX_2025, 2025), [])
+        # A single-folder project's 2025 figures read the history
+        # before 2025 too (its cost; backlog TJ-0869), but no later year.
+        self.assertEqual(C._flex_lost_dates(dated, _FLEX_2025, 2025),
+                         ["2024-06-03"])
+        self.assertEqual(C._flex_lost_dates(dated, _FLEX_2025, 2023), [])
         self.assertEqual(C._flex_lost_dates(dated, _FLEX_2025, 2025,
                                             every_year=True),
                          ["2024-06-03"])

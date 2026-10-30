@@ -618,7 +618,27 @@ def apply_dated_renames(txs: List[Any], dated: Iterable[DatedRename],
                       f"{acct}'s own (`RENAME {dr.date} {dr.old} {dr.new} "
                       f"late=fold` or `late=separate`) settles them.",
                       file=stream)
+        _follow_exercise_targets(out, dr, olds)
     return out
+
+
+def _follow_exercise_targets(rows: List[Any], dr: DatedRename,
+                             olds: set) -> None:
+    """A warrant exercise on or after a rename delivers the new symbol's
+    shares: its `exercise_of` follows, as a GLOBAL line maps it (TJ-0978).
+    Left on OLD in an account with no OLD rows (so no rename row to carry
+    it), the engine found no such shares and read the exercise as settled
+    in cash: a loss of the warrants' cost (TJ-1132). An account with rows
+    still on OLD after the date (`late=separate`, or a broker's rename row
+    dated later) keeps its target: the rows name those shares."""
+    still_old = {t.account for t in rows
+                 if t.symbol in olds and (t.date or "") >= dr.date
+                 and t.action in _POSITION_ACTIONS}
+    for t in rows:
+        if (getattr(t, "exercise_of", "") in olds
+                and (t.date or "") >= dr.date
+                and t.account not in still_old):
+            t.exercise_of = dr.new
 
 
 # ------------------------------------------------- reading a project
@@ -702,7 +722,110 @@ def _walk_key(r: Dict[str, Any]) -> Tuple[str, int, str]:
             str(r.get("time") or ""))
 
 
-def _walk_states(rows: List[Dict[str, Any]], country: str = ""):
+def _assign_costs(rows: List[Dict[str, Any]], country: str = ""
+                  ) -> Dict[int, float]:
+    """{id(share row): cost to add to it} — each assigned or exercised
+    option's premium where the books put it (CA-OPT-08 / US-OPT-05): a
+    written put's premium comes out of the cost of the shares it
+    delivered, a bought call's cost goes into them. Each option is
+    paired with its own share legs as the engines pair them
+    (lib/core _pair_assign_legs) and its premium is the closed
+    contracts' own, oldest first (written, US bought), or its part of
+    the average cost (Canada bought); the legs share it by their units. Sales (a call assigned, a put exercised)
+    change the cost of no shares held: not here. The rename's book cost
+    added the delivery at the strike only, 1000 where the books carry
+    900 (backlog TJ-0852)."""
+    import contextlib
+    import io
+    from taxjson.lib.core import (TaxTransaction, _assign_direction,
+                                  _make_assign_underlying_resolver,
+                                  _pair_assign_legs, is_option_symbol)
+    from taxjson.lib.corporate_timeline import event_sort_key
+    fields = TaxTransaction.__dataclass_fields__
+    txs: List[Any] = []
+    row_of: Dict[str, Dict[str, Any]] = {}
+    for n, r in enumerate(rows):
+        if r.get("action") not in ("BUYSELL", "ASSIGN"):
+            continue
+        try:
+            t = TaxTransaction(**{k: v for k, v in r.items()
+                                  if k in fields})
+        except (TypeError, ValueError):
+            continue
+        t.id = f"rename-{n}"            # a base book's ids can repeat
+        t.account = str(r.get("_acct") or r.get("account") or "")
+        row_of[t.id] = r
+        txs.append(t)
+    if not any(t.action == "ASSIGN" and is_option_symbol(t.symbol or "")
+               for t in txs):
+        return {}
+    from taxjson.lib.country import lot_rule
+    us = bool(country) and lot_rule(country) == "fifo"
+    txs.sort(key=lambda x: event_sort_key(
+        x, profile="us_main" if us else "ca_main",
+        date_of=(lambda t: t.date) if us
+        else (lambda t: t.date_settle or t.date)))
+    with contextlib.redirect_stderr(io.StringIO()):
+        resolve = _make_assign_underlying_resolver(
+            txs, lambda t: t.date, quiet=True)
+        pairs = _pair_assign_legs(txs, lambda _t: True, resolve)
+    by_id = {t.id: t for t in txs}
+    # The open contracts per (account, option), oldest first: [contracts
+    # (signed), money]. A close takes the premium of the contracts it
+    # closes, oldest first, as the books do (written options in both
+    # countries, US bought ones); Canada's bought options are identical
+    # properties at their average cost (s.47): one lot (backlog TJ-1069).
+    open_lots: Dict[Tuple[str, str], List[List[float]]] = {}
+    out: Dict[int, float] = {}
+    for t in txs:
+        if not is_option_symbol(t.symbol or ""):
+            continue
+        lots = open_lots.setdefault((t.account, t.symbol), [])
+        q = float(t.quantity or 0.0)
+        net = abs(float(t.net_amount or 0.0))
+        if abs(q) < 1e-12:
+            continue
+        if not lots or lots[0][0] * q > 0:
+            if lots and q > 0 and not us:
+                lots[0][0] += q
+                lots[0][1] += net
+            else:
+                lots.append([q, net])
+        else:
+            # A close (a buy-back, an expiry, an assignment): its part
+            # of the premium received or the cost paid.
+            part, want = 0.0, abs(q)
+            while lots and want > 1e-12:
+                lot = lots[0]
+                n = min(want, abs(lot[0]))
+                piece = lot[1] * n / abs(lot[0])
+                part += piece
+                lot[1] -= piece
+                lot[0] += n if lot[0] < 0 else -n
+                want -= n
+                if abs(lot[0]) < 1e-9:
+                    lots.pop(0)
+            if want > 1e-12:    # past flat: the rest opens the other way
+                lots.append([want if q > 0 else -want, net * want / abs(q)])
+            if t.action != "ASSIGN" or _assign_direction(t) != 1:
+                continue
+            legs = [by_id[i] for i in pairs.get(t.id, ()) if i in by_id]
+            units = sum(abs(float(x.quantity or 0.0)) for x in legs)
+            if units < 1e-12:
+                continue
+            # A written put (short, closed by +q): its premium off the
+            # shares' cost; a bought call (long, closed by -q): its cost
+            # on them.
+            sign = -1.0 if q > 0 else 1.0
+            for x in legs:
+                key = id(row_of[x.id])
+                out[key] = out.get(key, 0.0) + sign * part * abs(
+                    float(x.quantity or 0.0)) / units
+    return out
+
+
+def _walk_states(rows: List[Dict[str, Any]], country: str = "",
+                 extra: Optional[Dict[int, float]] = None):
     """Replay one account's rows: {event row id: (qty, cost)} of the
     renamed symbol just before each rename row (book cost: buys at their
     cost, ADJUST rows added; no superficial-loss or wash-sale
@@ -710,11 +833,13 @@ def _walk_states(rows: List[Dict[str, Any]], country: str = ""):
     (country.lot_rule): Canada's average cost (CA-ACB-01; also when the
     country is unknown), the US's oldest lots first (US-BASIS-01,
     _walk_fifo: backlog TJ-0309 — the average cost carried 150 where the
-    books carry the remaining lot's 200)."""
+    books carry the remaining lot's 200). `extra`: {id(row): cost to add}
+    of the share rows an option's premium goes into (_assign_costs)."""
+    extra = extra or {}
     if country:
         from taxjson.lib.country import lot_rule
         if lot_rule(country) == "fifo":
-            return _walk_fifo(rows)
+            return _walk_fifo(rows, extra)
     state: Dict[str, List[float]] = {}
     snap: Dict[int, Tuple[float, float]] = {}
     from taxjson.lib.corporate_timeline import split_copies
@@ -741,7 +866,7 @@ def _walk_states(rows: List[Dict[str, Any]], country: str = ""):
         elif a in _POSITION_ACTIONS:
             net = abs(float(r.get("net_amount") or 0.0))
             if q > 0:
-                st[1] += net
+                st[1] += max(0.0, net + extra.get(id(r), 0.0))
             elif q < 0 and st[0] > 1e-9:
                 st[1] -= st[1] * min(1.0, -q / st[0])
             st[0] += q
@@ -752,14 +877,17 @@ def _walk_states(rows: List[Dict[str, Any]], country: str = ""):
     return snap
 
 
-def _walk_fifo(rows: List[Dict[str, Any]]):
+def _walk_fifo(rows: List[Dict[str, Any]],
+               extra: Optional[Dict[int, float]] = None):
     """_walk_states for a US book (US-BASIS-01): each symbol's lots
     [qty, cost, date, time], oldest first. A sale takes the oldest lots'
     units and cost (more than held: a short lot of no cost), a purchase
     covers a short position first, a split scales each lot, a rename
     moves the lots to the new symbol in acquisition order (date, then
     time, as the engine merges them), an ADJUST is spread over the long
-    lots by units (a lot's cost never below 0: §301(c)(3))."""
+    lots by units (a lot's cost never below 0: §301(c)(3)). `extra`:
+    as _walk_states'."""
+    extra = extra or {}
     eps = 1e-9
     lots: Dict[str, List[List[Any]]] = {}
     snap: Dict[int, Tuple[float, float]] = {}
@@ -789,6 +917,7 @@ def _walk_fifo(rows: List[Dict[str, Any]]):
         elif a in _POSITION_ACTIONS:
             net = abs(float(r.get("net_amount") or 0.0))
             if q > 0:
+                net = max(0.0, net + extra.get(id(r), 0.0))
                 left = q
                 for lot in held:
                     if left <= eps:
@@ -1002,7 +1131,8 @@ def report(root: Path, cfg: Dict[str, Any],
     snaps: Dict[int, Tuple[float, float]] = {}
     _country = _project_country(cfg)
     for acct, rs in by_acct.items():
-        snaps.update(_walk_states(rs, _country))
+        snaps.update(_walk_states(rs, _country,
+                                  _assign_costs(rs, _country)))
     accounts = cfg.get("accounts") or {}
     # The view's note only: the late-trade checks (hints=False: the
     # run's, edge-cases') read the gains files mid-run, before the
@@ -1016,6 +1146,10 @@ def report(root: Path, cfg: Dict[str, Any],
         for r in e["rows"]:
             q, c = snaps.get(id(r), (0.0, 0.0))
             acct = r["_acct"]
+            if account and acct != account:
+                # The account asked for only: another account's holding
+                # and cost were in its report (backlog TJ-0851).
+                continue
             carried.append({
                 "account": acct,
                 "sheltered": (accounts.get(acct) or {}).get("type")
@@ -1032,7 +1166,8 @@ def report(root: Path, cfg: Dict[str, Any],
             "source": next((x for x in (SOURCE_TT, SOURCE_MAP,
                                         SOURCE_IB_CONID, "broker")
                             if x in ids), "broker"),
-            "ticker_map_lines": lines, "accounts": e["accounts"],
+            "ticker_map_lines": lines,
+            "accounts": [account] if account else e["accounts"],
             "carried": carried, "currency": base_cur,
             # Denied losses on the old symbol by the rename date that
             # the books add to a replacement's cost: not in book_cost.
@@ -1091,6 +1226,23 @@ def report(root: Path, cfg: Dict[str, Any],
             "pending": unresolved + len(suggested) + len(unused)}
 
 
+def late_of(x: Dict[str, Any], e: Dict[str, Any]) -> bool:
+    """Late trade `x` of report()'s `late` is one of event `e`'s: the
+    rename's date and new symbol, and its symbol the event's old one (or
+    an option on it). The date and new symbol alone joined an unrelated
+    rename to the same symbol that day (backlog TJ-0687)."""
+    return (x.get("rename_date") == e["date"]
+            and x.get("renamed_to") == e["new"]
+            and names_symbol(str(x.get("symbol") or ""), e["old"]))
+
+
+def pending_renames(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """report()'s rename events with an unresolved late trade (`taxjson
+    renames --pending`)."""
+    bad = [x for x in doc["late"] if x["resolution"] == "unresolved"]
+    return [e for e in doc["renames"] if any(late_of(x, e) for x in bad)]
+
+
 def unused_declarations(dated: Iterable[DatedRename],
                         events: List[Dict[str, Any]],
                         mapping: Optional[Dict[str, str]] = None
@@ -1134,9 +1286,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
     hints = doc.get("suggested") or []
     unused = doc.get("unused") or []
     if pending:
-        bad = {(x["rename_date"], x["renamed_to"]) for x in late
-               if x["resolution"] == "unresolved"}
-        evs = [e for e in evs if (e["date"], e["new"]) in bad]
+        evs = pending_renames(doc)
         undated = []
     d = Doc(f"RENAMES ({len(evs)})" if not pending else
             f"RENAMES — pending: {len(evs)} with an undeclared late trade, "
@@ -1180,8 +1330,7 @@ def render(doc: Dict[str, Any], width_: Optional[int] = None,
                      f"losses on {e['old']} by {e['date']} is in the "
                      f"replacement shares' cost in the books, not here "
                      f"(`tjs list` shows the adjusted cost).", "  ", "  ")
-        mine = [x for x in late if x["symbol"] and x["rename_date"]
-                == e["date"] and x["renamed_to"] == e["new"]]
+        mine = [x for x in late if x["symbol"] and late_of(x, e)]
         if mine:
             # (late= is per account: each row says its own when the
             # accounts chose differently)

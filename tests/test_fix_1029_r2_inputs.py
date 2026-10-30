@@ -203,7 +203,9 @@ class TestHoldingsCheckNamesWhyItCouldNotRun(unittest.TestCase):
     run's default view with a bare "Warning: holdings check could not
     run" — no file, no reason, no command; only --details added the
     Error. The one line now names the reason and `taxjson sanity`, and
-    the detailed form says what to do."""
+    the detailed form says what to do. Since TJ-0643 such a file is an
+    input sanity cannot read (exit 2): its Error, naming the file from
+    the project, comes first, then the run's warning and the command."""
 
     def test_reason_and_command_on_the_one_line(self):
         with tempfile.TemporaryDirectory() as td:
@@ -215,15 +217,18 @@ class TestHoldingsCheckNamesWhyItCouldNotRun(unittest.TestCase):
             r = _tjs(p, "run", "--no-input", width="120")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             out = r.stdout + r.stderr
-            self.assertIn("Warning: holdings check could not run: "
-                          "margin_holdings.toml has no [[holding]] array "
-                          "— `taxjson sanity`", out)
-            r = _tjs(p, "run", "--no-input")
-            self.assertIn("warning: holdings check could not run\n"
-                          "    taxjson run: error: margin_holdings.toml has "
-                          "no [[holding]] array (a holdings file has "
+            self.assertIn("Error: holdings/margin_holdings.toml has no "
+                          "[[holding]] array (a holdings file has "
                           "[[holding]] tables)\n"
-                          "    Fix what it names; then `taxjson sanity`.",
+                          "Warning: holdings check could not run — "
+                          "`taxjson sanity`", out)
+            r = _tjs(p, "run", "--no-input")
+            self.assertIn("taxjson run: error: holdings/margin_holdings.toml "
+                          "has no [[holding]] array (a holdings file has "
+                          "[[holding]] tables)\n"
+                          "  warning: holdings check could not run\n"
+                          "    The Error above names the file to fix; then "
+                          "`taxjson sanity`.",
                           r.stdout + r.stderr)
 
 

@@ -39,6 +39,7 @@ discloses the pick (with an explicit note when it is not the requested
 year) — add a new vintage annually.
 """
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 RATE_VINTAGE = "2025"
@@ -794,6 +795,13 @@ def _amt_canada(*, realized: float, eligible_div: float,
         "carryforward": round(s120_2, 2),
         "binding": binding,
         "headroom": round(max(0.0, regular_fed - fed_min), 2),
+        # What a minimum tax carryover can take this year (s.120.2(1)(b)):
+        # the federal tax before the deductions of s.120.2, s.126 and
+        # s.127 (basic federal tax, before the foreign tax credit) less
+        # the minimum amount of s.127.51 (before the special credit).
+        # The headroom above, after both foreign tax credits, let a
+        # carryover lapse that the law allows (backlog TJ-0719).
+        "recovery_limit": round(max(0.0, basic_fed - minimum_amount), 2),
     }
 
 
@@ -806,16 +814,22 @@ CA_AMT_CARRY_YEARS = 7
 
 
 def ca_amt_carryover(year, available: Optional[Dict[Any, float]],
-                     headroom: float) -> Dict[str, Any]:
+                     headroom: float,
+                     claim: Optional[float] = None) -> Dict[str, Any]:
     """Apply a minimum tax carryover to tax year `year`. `available`:
     {year of origin: unapplied amount} as on the notice / T691;
-    `headroom`: regular federal tax minus federal minimum tax for
-    `year` (0 when AMT binds). Origins older than `year` - 7 have
-    expired (dropped, listed); an origin of `year` or later is refused
+    `headroom`: the limit of s.120.2(1)(b) for `year`, `_amt_canada`'s
+    `recovery_limit`: basic federal tax (before the foreign tax credit)
+    minus the minimum amount of s.127.51 (0 when AMT binds). Origins
+    older than `year` - 7 have expired (dropped, listed); an origin of `year` or later is refused
     (ValueError) — a carryover comes from an EARLIER year. Recovery
-    takes the oldest origins first (tax-logic CA-AMT-03/04). Amounts
-    in, cents out; `remaining_by_year` keeps the origins still open
-    after this year (an origin of `year` - 7 is used up or gone)."""
+    takes the oldest origins first (tax-logic CA-AMT-03/04). `claim`:
+    the amount worth claiming, when less than the limit (s.120.2(1)
+    allows what is claimed, up to the limit; `_useful_claim`): an origin
+    in its last usable year is still claimed up to the limit, since it
+    lapses otherwise. Amounts in, cents out; `remaining_by_year` keeps
+    the origins still open after this year (an origin of `year` - 7 is
+    used up or gone)."""
     y = int(year)
     usable: Dict[int, float] = {}
     expired: Dict[int, float] = {}
@@ -834,6 +848,10 @@ def ca_amt_carryover(year, available: Optional[Dict[Any, float]],
         else:
             usable[o] = usable.get(o, 0.0) + a
     room = max(0.0, float(headroom))
+    if claim is not None:
+        last = sum(a for o, a in usable.items()
+                   if o <= y - CA_AMT_CARRY_YEARS)
+        room = min(room, max(0.0, float(claim), last))
     recovered: Dict[int, float] = {}
     for o in sorted(usable):
         take = min(usable[o], room)
@@ -863,6 +881,28 @@ def ca_amt_carryover(year, available: Optional[Dict[Any, float]],
     }
 
 
+def _useful_claim(tax_after, most: float) -> float:
+    """The smallest claim (to the cent, up) of at most `most` that
+    gives the tax `most` gives. `tax_after(claim)` is the total tax:
+    once the foreign tax credit takes all of the federal tax, a further
+    dollar of carryover only replaces a dollar of that credit, so it
+    gives up carryover for no saving (backlog TJ-1030)."""
+    if most <= 0.005:
+        return most
+    tol = 1e-6
+    floor = tax_after(most)
+    if tax_after(0.0) <= floor + tol:
+        return 0.0
+    lo, hi = 0.0, most
+    while hi - lo > 0.001:
+        mid = (lo + hi) / 2.0
+        if tax_after(mid) <= floor + tol:
+            hi = mid
+        else:
+            lo = mid
+    return min(most, math.ceil(round(hi * 100.0, 6)) / 100.0)
+
+
 def ca_withholding_limit(entries) -> Dict[str, Any]:
     """The foreign tax form T2209 counts when the books pair each
     withholding with the property it was withheld on: ITA s.126(7)'s
@@ -878,7 +918,8 @@ def ca_withholding_limit(entries) -> Dict[str, Any]:
     or, with "security" empty and its "account", the TAX rows of an
     account the books cannot pair with a security (no symbol, or one
     with no foreign dividend in the year), whose "dividends" are the
-    account's foreign cash dividends no TAX row names. Returns the
+    account's foreign cash dividends none of its TAX rows names (within
+    each security's room the paired withholding leaves). Returns the
     foreign tax counted (`creditable`), its assumed part, the
     withholding above the limit (`over_cap`, by security in
     `over_by_security`) and the unpaired TAX rows: withheld, counted,
@@ -966,6 +1007,20 @@ def ca_foreign_deduction_text(not_credited: float, over_cap: float,
             f"deduction you claim goes in [estimate] deductions.")
 
 
+def _claim_kept_note(carry: Dict[str, Any]) -> str:
+    """The sentence on a carryover the limit had room for and the claim
+    leaves open (tax-logic CA-AMT-04); "" with none."""
+    from taxjson.lib.report_model import fmt_money as m
+    kept = float(carry.get("claim_kept") or 0.0)
+    if kept <= 0.005:
+        return ""
+    return (f"Minimum tax carryover: {m(kept)} more fits the limit, but "
+            f"claiming it lowers no tax: it would only take the place of "
+            f"the foreign tax credit, or of a tax already nil. It stays "
+            f"open for a later year (ITA s.120.2(1): the amount claimed, "
+            f"up to the limit).")
+
+
 def _canada_notes(prov_key: str, prov: Dict[str, Any],
                   with_inv: Dict[str, Any], base: Dict[str, Any],
                   amt: Dict[str, Any], staking: float,
@@ -1051,7 +1106,9 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
             f"foreign dividend{yr}, so the estimate cannot pair them "
             f"with their dividends; they count up to "
             f"{fmt_pct(CA_FOREIGN_WITHHOLDING)} of their account's "
-            f"foreign cash dividends that no TAX row names: {m(counted)} "
+            f"foreign cash dividends that none of its TAX rows names "
+            f"(within each security's {fmt_pct(CA_FOREIGN_WITHHOLDING)} "
+            f"that its paired withholding leaves): {m(counted)} "
             f"counted"
             + (f", {m(unpaired - counted)} not." if unpaired - counted
                > 0.005 else "."))
@@ -1106,10 +1163,11 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
     carry = amt.get("carryover") or {}
     if carry.get("entered"):
         src = carry.get("source") or "the input"
-        if carry.get("recovered", 0.0) > 0.005:
+        if carry.get("recovered_federal", 0.0) > 0.005:
             _sur = float(carry.get("recovered_provincial_surtax") or 0.0)
             _share = carry.get("recovered_provincial_credit",
                                carry["recovered_provincial"])
+            _red = float(carry.get("recovered_credits_reduced") or 0.0)
             notes.append(
                 f"Minimum tax carryover applied (ITA s.120.2; T691 Part "
                 f"8, line 40427): {m(carry['recovered_federal'])} federal"
@@ -1118,17 +1176,26 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
                    if abs(_sur) > 0.005 else "")
                 + f", oldest "
                 f"year first, limited to the {m(carry['limit'])} by which "
-                f"regular federal tax exceeds the minimum — from {src}.")
+                f"basic federal tax (before the foreign tax credit) "
+                f"exceeds the minimum amount (s.120.2(1)(b)) — from "
+                f"{src}."
+                + (f" The lower tax limits the foreign tax credit (and "
+                   f"any dividend tax credit) by {m(_red)}, so tax falls "
+                   f"by {m(carry.get('recovered', 0.0))}."
+                   if abs(_red) > 0.005 else ""))
         elif amt["binding"]:
             notes.append(f"Minimum tax carryover available "
                          f"({m(carry['available'])}, from {src}) is not "
                          f"recovered this year: AMT binds, so regular tax "
                          f"does not exceed the minimum (ITA s.120.2).")
+        if _claim_kept_note(carry):
+            notes.append(_claim_kept_note(carry))
         for o, a in (carry.get("expired_by_year") or {}).items():
             notes.append(f"The {o} minimum tax carryover ({m(a)}, from "
                          f"{src}) expired after {int(o) + 7}: it carries "
                          f"forward 7 years only (ITA s.120.2) — dropped.")
-    elif not amt["binding"] and amt["headroom"] > 0.005:
+    elif not amt["binding"] and amt.get("recovery_limit",
+                                        amt["headroom"]) > 0.005:
         # ITA s.120.2: minimum tax paid in the 7 preceding years is
         # creditable against regular tax above the minimum
         # (T691 Part 8, T1 line 40427, provincial piggyback e.g. ON428
@@ -1136,8 +1203,10 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
         notes.append(f"If you paid minimum tax (AMT) in any of the 7 "
                      f"preceding years, its carryover (T691 Part 8, "
                      f"line 40427; ITA s.120.2) can reduce federal tax "
-                     f"by up to the "
-                     f"{m(amt['headroom'])} headroom, plus the "
+                     f"by up to "
+                     f"{m(amt.get('recovery_limit', amt['headroom']))} "
+                     f"(basic federal tax less the minimum amount, "
+                     f"s.120.2(1)(b)), plus the "
                      f"{prov_key} share — none is entered: put it in "
                      f"taxjson.toml's [estimate] amt_carryover = {{ YEAR "
                      f"= AMOUNT }} (by year of origin, from your notice "
@@ -1166,7 +1235,9 @@ CA_ASSUMPTIONS = (
     "symbol, across the taxable accounts; a TAX row that names no "
     "security, or one with no foreign dividend in the year, up to "
     + fmt_pct(CA_FOREIGN_WITHHOLDING) + " of its account's foreign "
-    "cash dividends that no TAX row names) "
+    "cash dividends that none of its TAX rows names, within each "
+    "security's " + fmt_pct(CA_FOREIGN_WITHHOLDING) + " that its "
+    "paired withholding leaves) "
     "and up to the Canadian tax on their share of net income (forms "
     "T2209 and T2036, all foreign dividends as one country's and all "
     "foreign tax as non-business income tax); foreign tax that neither "
@@ -1244,6 +1315,15 @@ def estimate_canada(*, realized: float, eligible_div: float,
     import math
     cg_div = float(capital_gains_dividends or 0.0)
     realized = float(realized) + cg_div
+    # Eligible dividend compensation paid on a short (a Canadian
+    # dealer's negative payment in lieu, s.260) nets against the
+    # eligible dividends received only down to zero (s.82(1)(a.1)): the
+    # excess is not negative dividend income, so it neither lowers the
+    # gross-up and credit below zero nor the tax on other income
+    # (backlog TJ-0727; tax-logic CA-RPT-04).
+    eligible_net = float(eligible_div)
+    eligible_div = max(0.0, eligible_net)
+    eligible_excess = max(0.0, -eligible_net)
     for _n, _v in (("deductions", deductions),
                    ("carrying_charges", carrying_charges)):
         if not math.isfinite(float(_v)) or float(_v) < 0:
@@ -1402,13 +1482,24 @@ def estimate_canada(*, realized: float, eligible_div: float,
         _cy = None
     if _cy is not None:
         factor = float(prov.get("amt_factor") or 0.0)
-        c = ca_amt_carryover(_cy, amt_carryover or {}, amt["headroom"])
+
+        def _after(claim: float) -> Dict[str, Any]:
+            return _canada_tax(other_income + pil + staking - ded_total,
+                               taxable_gain, eligible_div, foreign_div,
+                               prov, ftc=ftc, net_income=net_income,
+                               fed_mtc=claim, prov_mtc=claim * factor,
+                               prov_key=prov_key)
+        c = ca_amt_carryover(_cy, amt_carryover or {},
+                             amt["recovery_limit"])
+        # The limit is a ceiling: claim what still lowers tax, and keep
+        # the rest open (s.120.2(1), tax-logic CA-AMT-04, TJ-1030).
+        _most = c["recovered_federal"]
+        _useful = _useful_claim(lambda x: _after(x)["total"], _most)
+        if _useful < _most - 0.005:
+            c = ca_amt_carryover(_cy, amt_carryover or {},
+                                 amt["recovery_limit"], claim=_useful)
         fed_rec = c["recovered_federal"]
-        after = _canada_tax(other_income + pil + staking - ded_total,
-                            taxable_gain, eligible_div, foreign_div, prov,
-                            ftc=ftc, net_income=net_income,
-                            fed_mtc=fed_rec, prov_mtc=fed_rec * factor,
-                            prov_key=prov_key)
+        after = _after(fed_rec)
         prov_rec = with_inv["provincial"] - after["provincial"]
         # Of the provincial drop, the share deducted from basic
         # provincial tax (what the provincial form's carryover line
@@ -1417,9 +1508,15 @@ def estimate_canada(*, realized: float, eligible_div: float,
         # share (backlog TJ-0016).
         prov_credit = (with_inv["detail"]["prov_basic"]
                        - after["detail"]["prov_basic"])
+        # The surtax the lower basic tax saves, from the surtax itself:
+        # the rest of the provincial drop is the foreign tax credit the
+        # lower tax limits (form T2036), which the drop reported as an
+        # Alberta surtax that does not exist (backlog TJ-0653).
+        prov_sur = (with_inv["detail"]["prov_surtax"]
+                    - after["detail"]["prov_surtax"])
         fed_rec_t = with_inv["federal"] - after["federal"]
         bc = ca_amt_carryover(_cy, amt_carryover or {},
-                              base_amt["headroom"])
+                              base_amt["recovery_limit"])
         b_after = _canada_tax(other_income - ded_total, 0.0, 0.0, 0.0,
                               prov, fed_mtc=bc["recovered_federal"],
                               prov_mtc=bc["recovered_federal"] * factor,
@@ -1435,15 +1532,31 @@ def estimate_canada(*, realized: float, eligible_div: float,
         closing = dict(c["remaining_by_year"])
         if created > 0.005:
             closing[str(_cy)] = created
+        # Line 40427 is the nominal amount recovered (what the origins
+        # give up, `recovered_federal` from ca_amt_carryover); federal
+        # tax falls by less when the foreign tax credit, limited by the
+        # lower tax, falls too. The tax drop was reported as the credit
+        # (backlog TJ-0653).
+        fed_nominal = c["recovered_federal"]
+        _reduced = fed_nominal + prov_credit + prov_sur - recovered
+        # With no credit limited, the share and the surtax foot to the
+        # rounded provincial drop, as they did.
+        _sur_out = (round(round(prov_rec, 2) - round(prov_credit, 2), 2)
+                    if abs(prov_rec - prov_credit - prov_sur) < 0.005
+                    else round(prov_sur, 2))
         c.update({
             "entered": amt_carryover is not None,
             "source": amt_carryover_source,
-            "recovered_federal": round(fed_rec_t, 2),
+            "recovered_federal": round(fed_nominal, 2),
+            # What federal and provincial tax actually fall by.
+            "recovered_federal_tax": round(fed_rec_t, 2),
             "recovered_provincial": round(prov_rec, 2),
             "recovered_provincial_credit": round(prov_credit, 2),
-            # The two parts add up to the rounded drop.
-            "recovered_provincial_surtax": round(
-                round(prov_rec, 2) - round(prov_credit, 2), 2),
+            "recovered_provincial_surtax": _sur_out + 0.0,
+            # The foreign tax credits (and any dividend tax credit
+            # floored at the tax) the lower tax takes back: the parts
+            # less it foot to the drop, `recovered` (to the cent).
+            "recovered_credits_reduced": round(_reduced, 2) + 0.0,
             "recovered": round(recovered, 2),
             "base_recovered": round(base_rec, 2),
             "attributed": round(recovered_attr, 2),
@@ -1451,12 +1564,26 @@ def estimate_canada(*, realized: float, eligible_div: float,
             "closing_by_year": dict(sorted(closing.items())),
             "closing": round(float(sum(closing.values())), 2),
         })
+        # What the claim leaves open though the limit had room for it.
+        _kept = round(_most - fed_rec, 2)
+        if _kept > 0.005:
+            c["claim_kept"] = _kept
         amt["carryover"] = c
     notes = vintage_notes(year, pick)
+    if eligible_excess > 0.005:
+        notes.append(
+            f"Eligible dividend compensation paid (on a short, s.260) "
+            f"exceeds the eligible dividends received by "
+            f"{eligible_excess:,.2f}: it offsets them only down to zero "
+            f"(ITA s.82(1)(a.1)), so the excess is not deducted from "
+            f"other income here.")
     if prov_key is None:
         notes.append("Federal only: no supported [settings] province, so "
                      "no provincial tax, credit or minimum tax is "
                      "included.")
+        _kept_note = _claim_kept_note((amt.get("carryover") or {}))
+        if _kept_note:
+            notes.append(_kept_note)
     else:
         notes += _canada_notes(prov_key, prov, with_inv, base, amt,
                                staking, over_cap=over_cap, limit=limit,
@@ -1481,6 +1608,11 @@ def estimate_canada(*, realized: float, eligible_div: float,
         "losses_applied": round(losses_applied, 2),
         "losses_unused": round(losses_unused, 2),
         "grossed_eligible": round(grossed, 2),
+        # The eligible dividends taxed (net of compensation paid, at
+        # least 0) and the compensation paid above the dividends
+        # received, which is not deducted (backlog TJ-0727).
+        "eligible_dividends": round(eligible_div, 2),
+        "eligible_compensation_excess": round(eligible_excess, 2) + 0.0,
         "staking": round(staking, 2),
         "deductions": round(deductions, 2),
         "carrying_charges": round(carrying_charges, 2),

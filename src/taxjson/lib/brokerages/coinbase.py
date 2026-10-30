@@ -2,6 +2,7 @@ from taxjson.lib.stage_msg import emit_line
 import csv
 import io
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -10,6 +11,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, read_broker_text,
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
                                                    USD_STABLECOINS, RowIds,
                                                    same_coin_hint,
+                                                   order_within_seconds,
                                                    strict_money, utc_to_local,
                                                    warn_depeg)
 
@@ -217,6 +219,10 @@ class CoinbaseBrokerage(BaseBrokerage):
         # One ID on two different rows: refused, never one dropped by
         # the dedup (2026-10-25 audit robustness#4).
         ids = RowIds(f"Coinbase CSV {shown_name(path)}", "ID")
+        # Export line -> its UTC instant (_ts): the order of two rows
+        # the repeated hour compresses into one second (backlog TJ-1056).
+        self._instant_of_line: Dict[int, datetime] = {}
+        self._row_start = None
         # utf-8-sig swallows a BOM if present, plain utf-8 reads it as a
         # data byte and silently breaks the first column match.
         with io.StringIO(read_broker_text(path)) as f:
@@ -227,6 +233,7 @@ class CoinbaseBrokerage(BaseBrokerage):
             # transaction remembers it (backlog TJ-0124).
             for row_start, row in self.rows_noting_lines(
                     transactions, _record_starts(reader), lambda x: x[0]):
+                self._row_start = row_start
                 if not header:
                     # Stripped like resolve_header: a header written
                     # `ID, Timestamp, ...` used to be missed and the
@@ -695,7 +702,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # Coinbase builds it, or refuse.
                     total = self._derive_blank_total(
                         row, header_map, type_raw, is_sell, qty, price,
-                        fee)
+                        fee, where)
                     self._blank_totals = (self._blank_totals or 0) + 1
                 else:
                     # A given Total must fit the row (A2-0080), and a
@@ -705,6 +712,19 @@ class CoinbaseBrokerage(BaseBrokerage):
                         where, row, header_map, is_sell, qty, price, fee,
                         total)
 
+                gross = price * abs(qty)
+                if not price and qty and 'subtotal' in header_map \
+                        and self._col(row, header_map, 'subtotal').strip():
+                    # A blank Price cell: the Subtotal states the value
+                    # (quantity x price). The price and the gross come
+                    # from it; with price 0 and a net of 0 (a fee that
+                    # took the whole sale) fill-crypto read the row as
+                    # unvalued and booked market proceeds over the
+                    # stated 0 (backlog TJ-0988).
+                    _sub = abs(self._num(row, header_map, 'subtotal'))
+                    if _sub:
+                        gross = _sub
+                        price = round(_sub / abs(qty), 8)
                 # Coinbase Advanced Trade Sell rows store both qty and total
                 # as negative ("money out, position out"); store the magnitude
                 # so the gain engine sees positive proceeds. Matches the old
@@ -721,7 +741,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     'currency': currency,
                     'price': price,
                     'net_amount': total,
-                    'gross_amount': price * abs(qty),
+                    'gross_amount': gross,
                     'fee': abs(fee),
                     'account': self.DEFAULT_ACCOUNT,
                 }
@@ -780,6 +800,8 @@ class CoinbaseBrokerage(BaseBrokerage):
                    f"via a .tt file.")
             emit_line(f"warning: UNBOOKED: {msg}")
             self.lint_findings.append(msg)
+        order_within_seconds(transactions, self.row_line,
+                             self._instant_of_line)
         self.emit_skip_summary(shown_name(path))
         return transactions
 
@@ -1064,15 +1086,23 @@ class CoinbaseBrokerage(BaseBrokerage):
         return [sell, buy]
 
     def _derive_blank_total(self, row, header_map, type_raw, is_sell, qty,
-                            price, fee) -> float:
+                            price, fee, where='') -> float:
         """Total for a Buy/Sell row whose Total cell is blank. Coinbase
         builds Total = Subtotal + fee on a buy and Subtotal - fee on a
         sell; without a Subtotal, quantity x price stands in for it.
         With neither, the row's value is unknown — refuse rather than
-        book $0 cost or $0 proceeds."""
+        book $0 cost or $0 proceeds. A Subtotal must fit |qty| x price,
+        as it must when the Total is given (_checked_total), a stated 0
+        too: the blank redundant cell weakened the check (backlog
+        TJ-0992, TJ-1188)."""
         fee = abs(fee)
-        sub = (abs(self._num(row, header_map, 'subtotal'))
-               if self._col(row, header_map, 'subtotal').strip() else 0.0)
+        has_sub = self._col(row, header_map, 'subtotal').strip()
+        sub = abs(self._num(row, header_map, 'subtotal')) if has_sub else 0.0
+        if has_sub:
+            self._check_qp(where or f"Coinbase row "
+                           f"{self._col(row, header_map, 'timestamp')!r} "
+                           f"{type_raw.strip()!r}", 'Subtotal', sub, qty,
+                           price)
         if not sub and price and qty:
             sub = abs(price * qty)
         if not sub:
@@ -1157,10 +1187,20 @@ class CoinbaseBrokerage(BaseBrokerage):
             quote_leg['id'] = f'{cb_id}-quote'
         if tx['currency'] not in _FIAT:
             # Priced in the quote coin (or another crypto): the row has
-            # no fiat value. Both legs go to taxjson-fill-crypto.
+            # no fiat value. Both legs go to taxjson-fill-crypto. A buy's
+            # fee is in the quote coin and inside the Notes amount spent;
+            # a fiat-priced buy's Total counts it in the one value, so
+            # the fee rides along for the filler to add (`swap_fee`,
+            # backlog TJ-0981). A sell's Notes amount is net of the fee,
+            # as its fiat Total is: nothing to add.
+            fee_units = abs(tx.get('fee') or 0.0)
+            in_quote = tx['currency'] == quote
             for leg in (tx, quote_leg):
                 leg.update(currency='USD', price=0.0, net_amount=0.0,
                            gross_amount=0.0, fee=0.0)
+                if fee_units and not is_sell and in_quote \
+                        and fee_units < q_qty:
+                    leg['swap_fee'] = f"{fee_units!r} spent"
             return [tx, quote_leg]
         value = abs(tx['net_amount'])
         if not value:
@@ -1221,6 +1261,8 @@ class CoinbaseBrokerage(BaseBrokerage):
                 f"{self._col(row, header_map, 'asset')!r}). Add the "
                 f"format to parse_date if this is a new Coinbase export "
                 f"variant.")
+        if self.__dict__.get('_row_start') is not None:
+            self._instant_of_line[self._row_start] = dt
         return utc_to_local(dt)
 
     @staticmethod
@@ -1258,8 +1300,15 @@ def coinbase_cash_events(path, stable_cash: bool = True
     Deposit / Withdrawal of a currency, and (cash-mode book: a USD
     stablecoin is US-dollar cash, CA-CRYPTO-02) per Send / Receive of a
     stablecoin; an FXCONV per Buy / Sell of a stablecoin for another
-    currency ("Bought 3495.67 USDC for 5000 CAD"). The export has no
-    balance: a CASHBAL .tt line gives the ledger one."""
+    currency ("Bought 3495.67 USDC for 5000 CAD"); a FLOW per
+    Subscription paid in a currency (or a stablecoin), and per
+    stablecoin leg of a Convert with a coin ("Converted 100 USDC to 1
+    ETH": the parser books the coin alone, as bought or sold for US
+    dollars). Each event carries the row's ID (`_broker_id`, left out
+    of every output): two exports' rows alike in every other way are
+    two events when their IDs differ (cash_events.dedup_across_files).
+    The export has no balance: a CASHBAL .tt line gives the ledger
+    one."""
     from taxjson.lib import cash_events as CE
     from taxjson.lib.brokerages.base import shown_name
     name = shown_name(path)
@@ -1284,10 +1333,6 @@ def coinbase_cash_events(path, stable_cash: bool = True
         asset = _cb_symbol(cb._col(row, header_map, 'asset'))
         if not typ or not asset:
             continue
-        is_fiat = asset in _FIAT
-        is_cash_coin = asset in cash_coins
-        if not (is_fiat or is_cash_coin):
-            continue
         # The row's kind as the position parser reads it (_BUY_RE /
         # _SELL_RE / _STAKING_RE): "Advanced Trade Buy" is a buy. The
         # exact labels 'buy' / 'sell' alone left an Advanced Trade of
@@ -1295,18 +1340,47 @@ def coinbase_cash_events(path, stable_cash: bool = True
         is_buy = bool(_BUY_RE.search(type_raw))
         is_sell = bool(_SELL_RE.search(type_raw))
         is_staking = bool(_STAKING_RE.search(type_raw))
-        cur = 'USD' if is_cash_coin else asset
         where = f"{name}:{i}"
+        # The row's own ID: what tells two exports' identical-looking
+        # rows apart (backlog TJ-0865).
+        cb_id = cb._col(row, header_map, 'id').strip()
+        if 'convert' in typ and not (is_buy or is_sell or is_staking):
+            # The Convert's stablecoin leg (backlog TJ-0916): the
+            # parser books "Converted 100 USDC to 1 ETH" as ETH bought
+            # (and the reverse as ETH sold), a row the ledger reads as
+            # crypto-for-crypto (taxjson_fx_cash._non_cash) — the US
+            # dollars it spent or received were in no ledger. Read from
+            # the Notes, as the parser and the crypto-sends pool read
+            # them; whichever leg the Asset column names.
+            ev = _convert_cash_leg(cb, row, header_map, cash_coins, where)
+            if ev is not None:
+                ev['_broker_id'] = cb_id
+                out.append(ev)
+            continue
+        is_fiat = asset in _FIAT
+        is_cash_coin = asset in cash_coins
+        if not (is_fiat or is_cash_coin):
+            continue
+        cur = 'USD' if is_cash_coin else asset
         qty = abs(cb._num(row, header_map, 'quantity transacted'))
         if qty < 1e-9:
             continue
         day = cb._ts(row, header_map, typ).date().isoformat()
+        n_before = len(out)
         if typ in ('deposit', 'receive', 'withdrawal', 'send'):
             sign = 1.0 if typ in ('deposit', 'receive') else -1.0
             ev = CE.move(day, cur, sign * qty, where=name,
                          desc=f"Coinbase {typ} {asset}")
             ev['line_where'] = where
             out.append(ev)
+        elif typ == 'subscription':
+            # A Coinbase One subscription paid from the account's cash
+            # (backlog TJ-0870): the currency spent, at the day's rate.
+            # The parser counts the row a non-event (no security moves);
+            # the cash it took was in no ledger, so the year's closing
+            # balance never reconciled.
+            out.append(CE.flow(day, cur, -qty, where=where,
+                               desc=f"Coinbase subscription {asset}"))
         elif is_cash_coin and (is_buy or is_sell) and not is_staking:
             sell = is_sell and not is_buy
             verb = 'sell' if sell else 'buy'
@@ -1330,11 +1404,44 @@ def coinbase_cash_events(path, stable_cash: bool = True
                                  desc=f"Coinbase {verb} {asset} "
                                       f"{'fee' if spent > 0 else 'spread'}")
                     out.append(ev)
-                continue
-            if not sell:
+            elif not sell:
                 out.append(CE.conv(day, pc, total, cur, qty, where=where,
                                    desc=f"Coinbase {verb} {asset}"))
             else:
                 out.append(CE.conv(day, cur, qty, pc, total, where=where,
                                    desc=f"Coinbase {verb} {asset}"))
+        for ev in out[n_before:]:
+            ev['_broker_id'] = cb_id
     return out
+
+
+def _convert_cash_leg(cb: "CoinbaseBrokerage", row, header_map,
+                      cash_coins, where: str):
+    """The US-dollar FLOW of a Convert between a stablecoin (cash,
+    CA-CRYPTO-02) and a coin: - the stablecoin units spent, + those
+    received, at the day's rate (lib/fx_cash_v2). None for a Convert
+    with no such leg (coin for coin, stablecoin for stablecoin, a
+    property-mode book) or whose Notes the parser refuses."""
+    if not cash_coins:
+        return None
+    notes = cb._col(row, header_map, 'notes') or ''
+    m = _CONVERT_NOTES_RE.search(notes)
+    if not m:
+        return None             # the parser refuses the row
+    fa, ta = _cb_symbol(m.group(2)), _cb_symbol(m.group(4))
+    cash_or_fiat = set(cash_coins) | set(_FIAT)
+    ctx = f"Coinbase {where} Notes {notes!r}"
+    if fa in cash_coins and ta not in cash_or_fiat:
+        amt = -strict_money(m.group(1), 'Convert quantity', ctx)
+    elif ta in cash_coins and fa not in cash_or_fiat:
+        amt = strict_money(m.group(3), 'Convert quantity', ctx)
+    else:
+        return None
+    if abs(amt) < 1e-9:
+        return None
+    from taxjson.lib import cash_events as CE
+    day = cb._ts(row, header_map, 'Convert').date().isoformat()
+    ev = CE.flow(day, 'USD', amt, where=where,
+                 desc=f"Coinbase convert {fa} to {ta}")
+    ev['leg'] = 'trade'
+    return ev

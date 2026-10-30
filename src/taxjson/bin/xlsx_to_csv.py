@@ -150,6 +150,68 @@ def pick_sheet(wb, sheet_name=0):
         f"index from 0 to {len(names) - 1}")
 
 
+_NS_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_NS_REL = ("{http://schemas.openxmlformats.org/officeDocument/2006/"
+           "relationships}")
+_NS_PKG = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+
+
+def _uncached_formulas(input_file, title):
+    """[(cell, formula)] of worksheet `title`'s formula cells that hold
+    no saved result: a workbook a script wrote and no spreadsheet
+    program calculated. openpyxl reads such a cell as empty, the same
+    as a genuinely empty one, so a formula fee was lost from a cost
+    (backlog TJ-0737). A cached empty text result (t="str") is a
+    value. Read from the file's XML, which keeps that difference;
+    an unreadable layout gives [] (openpyxl reports it)."""
+    import posixpath
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    def rels(z, part):
+        d, b = posixpath.split(part)
+        rp = posixpath.join(d, "_rels", b + ".rels")
+        if rp not in z.namelist():
+            return {}
+        out = {}
+        for r in ET.fromstring(z.read(rp)).iter(f"{_NS_PKG}Relationship"):
+            tgt = r.get("Target") or ""
+            tgt = (tgt.lstrip("/") if tgt.startswith("/")
+                   else posixpath.normpath(posixpath.join(d, tgt)))
+            out[r.get("Id")] = (tgt, r.get("Type") or "")
+        return out
+
+    try:
+        with zipfile.ZipFile(input_file) as z:
+            wb_part = next((t for t, ty in rels(z, "").values()
+                            if ty.endswith("/officeDocument")),
+                           "xl/workbook.xml")
+            rid = None
+            for s in ET.fromstring(z.read(wb_part)).iter(f"{_NS_MAIN}sheet"):
+                if s.get("name") == title:
+                    rid = s.get(f"{_NS_REL}id")
+                    break
+            part = rels(z, wb_part).get(rid, ("", ""))[0]
+            if not part:
+                return []
+            found = []
+            with z.open(part) as fh:
+                for _ev, c in ET.iterparse(fh):
+                    if c.tag != f"{_NS_MAIN}c":
+                        continue
+                    f = c.find(f"{_NS_MAIN}f")
+                    if f is not None and c.get("t") not in ("str",
+                                                            "inlineStr"):
+                        v = c.find(f"{_NS_MAIN}v")
+                        if v is None or not (v.text or ""):
+                            found.append((c.get("r") or "?", f.text or ""))
+                    c.clear()
+            return found
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile,
+            ET.ParseError):
+        return []
+
+
 def read_sheet(input_file, sheet_name=0):
     """Read one sheet with EVERY cell as the text it shows (_cell_text):
 
@@ -166,11 +228,26 @@ def read_sheet(input_file, sheet_name=0):
         empty.
 
     Trailing empty cells and rows are dropped and every row padded to
-    the widest, as pandas wrote them."""
+    the widest, as pandas wrote them. A formula cell with no saved
+    result is refused, naming the sheet and cell (_uncached_formulas):
+    its value is unknown, not empty."""
     import openpyxl
     wb = openpyxl.load_workbook(input_file, data_only=True)
     try:
         ws = pick_sheet(wb, sheet_name)
+        missing = _uncached_formulas(input_file, ws.title)
+        if missing:
+            shown = ", ".join(f"{cell} (={formula})"
+                              for cell, formula in missing[:5])
+            more = (f" and {len(missing) - 5} more"
+                    if len(missing) > 5 else "")
+            raise ValueError(
+                f"worksheet {ws.title!r}: {len(missing)} formula cell(s) "
+                f"hold no saved result: {shown}{more} — the workbook was "
+                f"saved without calculating them, so their values are "
+                f"unknown and would convert as empty cells. Open it in a "
+                f"spreadsheet program, let it recalculate, save it, and "
+                f"convert again.")
         rows = []
         for row in ws.iter_rows():
             cells = [_cell_text(c) for c in row]

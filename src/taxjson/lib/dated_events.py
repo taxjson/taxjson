@@ -341,6 +341,15 @@ def resolve_renames(tt: Sequence[Any], mapped: Sequence[Any]
                             f"one line: {dr.line!r}")
                     home = False
                     break
+                # The window spans the whole event, not a chain of its
+                # lines: a line within it of one of them but not of
+                # another starts an event of its own, which the check
+                # below names (backlog TJ-0941: a middle line joined
+                # June 2 and June 14 into one event).
+                if any((_days(x.date, dr.date) is None
+                        or _days(x.date, dr.date) > WINDOW_DAYS)
+                       for x in c):
+                    break
                 home = c
                 break
             if home is not None:
@@ -897,6 +906,33 @@ def _book_symbols(root: Path, acct: str) -> Optional[set]:
     return out
 
 
+def _has_inputs(root: Path, acct: str) -> bool:
+    """The account's inputs folder holds a file a run builds books from:
+    a .tt or an activity .csv (not a hidden file or an Office lock file,
+    a redacted copy or a positions report, as the run skips them; a
+    README or a sidecar builds none, so no run would ever cure a refusal
+    keyed on it: backlog TJ-1182). A .csv that cannot be read as an
+    export counts: the run stops on it and says why."""
+    from taxjson.lib.brokerages.detect import detect
+    folder = _PL.inputs_dir(Path(root)) / acct
+    try:
+        files = [p for p in folder.iterdir()
+                 if p.is_file() and not p.name.startswith((".", "~$"))
+                 and p.suffix.lower() in (".csv", ".tt")
+                 and not _PL.redacted_copy_beside_exports(p)]
+    except OSError:
+        return False
+    for p in files:
+        if p.suffix.lower() == ".tt":
+            return True
+        try:
+            if not detect(p).positions:
+                return True
+        except Exception:                           # noqa: BLE001
+            return True
+    return False
+
+
 def _carries(root: Path, acct: str, old: str, new: str, date: str) -> bool:
     """The account's books carry the change: a SPLIT row renaming OLD (or
     to NEW) within renames.WINDOW_DAYS of the date."""
@@ -1168,9 +1204,23 @@ def plan_migration(root: Path, accounts: Dict[str, Any], map_text: str,
     for acct, o, nw, d, late in sorted(old_v - new_v):
         alt = sorted(x for x in new_v if x[:3] == (acct, o, nw))
         if not alt and syms.get(acct) is None:
-            # An account without books, of a kind the moved line no
-            # longer reaches (a legacy map line applied to both kinds):
-            # nothing booked changes (second pre-release review, 9).
+            if _has_inputs(root, acct):
+                # Its exports are there, unread: whether they name the
+                # symbols is not known until a run builds its books, and
+                # the moved line would no longer reach it (backlog
+                # TJ-0940: a crypto rename moved to the securities
+                # account before the first run).
+                plan.refused.append(
+                    f"account {acct} has no books yet (no work/{acct}_"
+                    f"base.json), so whether its trades name {o} or {nw} "
+                    f"is not known, and the moved line would no longer "
+                    f"reach it — run `taxjson run`, then format the map "
+                    f"again")
+                continue
+            # An account without books or inputs, of a kind the moved
+            # line no longer reaches (a legacy map line applied to both
+            # kinds): nothing booked changes (second pre-release
+            # review, 9).
             continue
         now = (f"{d}" + (f" late={late}" if late else ""))
         then = ", ".join(f"{x[3]}" + (f" late={x[4]}" if x[4] else "")

@@ -7,8 +7,9 @@ whole shares at its share of the allocated cost and sold for the cash:
 the full quantity takes the full allocation, the parent gives up all of
 it, and the fraction's gain is the cash less its share. RBC's cash-in-lieu
 row was "NOT booked"; Questrade's own $0 pair for it is replaced (sold
-once). Taxable spin-offs, stock dividends, IB and the US §355 path keep
-their booking.
+once). Stock dividends, IB and the US §355 path keep their booking. A
+taxable spin-off's fraction is part of the dividend at the same value,
+received with the whole shares and sold for the cash (TJ-0948).
 
 Every fixture is SYNTHETIC: account 99900001, tickers ZZP / ZZS.
 """
@@ -314,7 +315,10 @@ class TestRbcSpinoffCashInLieu(_E2E):
         self.assertIn('NOT booked', err)
 
     @rule("CA-CORP-07")
-    def test_taxable_spinoff_rows_unchanged_and_cash_said(self):
+    def test_taxable_spinoff_books_and_sells_the_fraction(self):
+        """TJ-0948: the fraction paid in cash is part of the dividend
+        (10.5 x 20 = 210), received with the whole shares at that value
+        and sold for the cash: no UNBOOKED warning."""
         from taxjson.lib.corp_actions import resolve_event
         (evs, _err) = rbc_events(R_BUY + r_dis() + r_cil())
         (plain, _err) = rbc_events(R_BUY + r_dis())
@@ -323,10 +327,32 @@ class TestRbcSpinoffCashInLieu(_E2E):
                            'canada', hints)
         before, err0 = _quiet(resolve_event, plain[0],
                               'taxable_deemed_dividend', 'canada', hints)
-        self.assertEqual(rows, before)
         self.assertNotIn('UNBOOKED', err0)
-        self.assertIn('warning: UNBOOKED:', err)
-        self.assertIn('taxable_deemed_dividend election books no sale', err)
+        self.assertNotIn('UNBOOKED', err)
+        div, = _rows(rows, 'DIVIDEND')
+        buy, = _rows(rows, 'BUYSELL', +1)
+        sale, = _rows(rows, 'BUYSELL', -1)
+        self.assertAlmostEqual(div['net_amount'], 210.0)
+        self.assertAlmostEqual(buy['quantity'], 10.5)
+        self.assertAlmostEqual(buy['net_amount'], 210.0)
+        self.assertAlmostEqual(sale['quantity'], -0.5)
+        self.assertAlmostEqual(sale['net_amount'], 12.0)
+        self.assertEqual(sale['date'], CIL_DAY)
+        self.assertEqual(sale['corp_cash'], '12 CAD')
+        self.assertNotIn('type', sale)          # RBC's parser booked nothing
+        # With no fraction paid in cash, the booking is as it was.
+        self.assertEqual([(x['action'], x.get('quantity'), x['net_amount'])
+                          for x in before],
+                         [('DIVIDEND', 0.0, 200.0), ('BUYSELL', 10.0, 200.0)])
+        # A fraction sold by hand in a .tt file (the old warning's fix)
+        # is left to that sale: never sold twice.
+        hand = [{'date': CIL_DAY, 'symbol': 'ZZS.TO', 'quantity': -0.5,
+                 'source': 'cil.tt:1'}]
+        rows2, err2 = _quiet(resolve_event, evs[0],
+                             'taxable_deemed_dividend', 'canada', hints,
+                             tt_sales=hand)
+        self.assertEqual(_rows(rows2, 'BUYSELL', -1), [])
+        self.assertIn('booked by hand (cil.tt:1', err2)
 
     def test_other_reorganization_cil_still_unmatched(self):
         # A CIL of a security with no event stays the parser's warning.
@@ -351,6 +377,8 @@ class TestQuestradeSpinoffCashInLieu(_E2E):
         self.assertAlmostEqual(ev.fraction_in_lieu, 0.5)
         self.assertEqual(ev.cash_in_lieu_date, CIL_DAY)
         self.assertTrue(ev.cil_broker_booked)
+        # The record date it prints (who is entitled: TJ-0951).
+        self.assertEqual(ev.record_date, '2026-06-01')
 
     def test_a_reversed_cil_carries_no_cash(self):
         (evs, _err) = qt_events(Q_BUY + q_dis() + q_cil()
@@ -409,22 +437,53 @@ class TestQuestradeSpinoffCashInLieu(_E2E):
         self.assertEqual(evs, [])
 
     @rule("CA-CORP-07")
-    def test_taxable_spinoff_keeps_the_parsers_pair(self):
+    def test_taxable_spinoff_replaces_the_parsers_pair(self):
+        """TJ-0948: the taxable spin-off sells the fraction at its value
+        as income; the parser's $0 pair for the cash is dropped (sold
+        once, never at a $0 cost diluting the whole shares')."""
         from taxjson.lib.corp_actions import (drop_broker_cil_pairs,
                                               resolve_event)
         body = Q_BUY + q_dis() + q_cil()
         (evs, _) = qt_events(body)
         rows, _ = _quiet(resolve_event, evs[0], 'taxable_deemed_dividend',
                          'canada', {'fmv_per_share': 20.0})
-        # As before the change: the dividend and the whole shares, no cash
-        # of the parser's pair on them (fx-cash counts the parser's sale).
-        self.assertEqual([x['action'] for x in rows], ['DIVIDEND', 'BUYSELL'])
-        self.assertFalse(any('corp_cash' in x for x in rows))
+        self.assertEqual([x['action'] for x in rows],
+                         ['DIVIDEND', 'BUYSELL', 'BUYSELL'])
+        self.assertAlmostEqual(rows[0]['net_amount'], 210.0)
+        self.assertNotIn('corp_cash', rows[0])
+        sale, = _rows(rows, 'BUYSELL', -1)
+        self.assertEqual(sale['type'], 'cil_takeover')
         txs, _ = qt_parse(body)
-        kept = drop_broker_cil_pairs(txs + rows)
-        pair = [t for t in kept if t.get('symbol') == 'ZZS.TO'
-                and 'CASH IN LIEU' in t.get('description', '')]
-        self.assertEqual(sorted(t['quantity'] for t in pair), [-0.5, 0.5])
+        for t in txs + rows:
+            t['account'] = 'margin'     # the stage's account label
+        kept, err = _quiet(drop_broker_cil_pairs, txs + rows)
+        zzs = [t for t in kept if t.get('symbol') == 'ZZS.TO']
+        self.assertEqual(sorted(t['quantity'] for t in zzs), [-0.5, 10.5])
+        self.assertIn('replaces the broker', err)
+
+    @rule("CA-CORP-07")
+    def test_end_to_end_taxable_fraction(self):
+        """TJ-0948, a real run: the dividend is 10.5 x 20 = 210, the
+        fraction is sold for 12 on its 10 cost, and the 10 whole shares
+        keep 200 (not 200 spread over 10.5 by the parser's $0 buy)."""
+        with tempfile.TemporaryDirectory() as td:
+            _res, gains, base = _project_run(
+                td, 'qt_2026.csv', QH + Q_BUY + q_dis() + q_cil(),
+                election='taxable_deemed_dividend', hint='fmv_per_share=20')
+            divs = [t for t in base if t['action'] == 'DIVIDEND'
+                    and t.get('symbol') == 'ZZP.TO']
+            self.assertEqual([round(float(t['net_amount']), 4)
+                              for t in divs], [210.0])
+            sales = [t for t in gains['transactions']
+                     if t.get('symbol') == 'ZZS.TO' and t.get('qty')]
+            self.assertEqual(len(sales), 1, sales)
+            self.assertAlmostEqual(sales[0]['qty'], 0.5, places=9)
+            self.assertAlmostEqual(sales[0]['cost'], 10.0, places=4)
+            self.assertAlmostEqual(sales[0]['proceeds'], 12.0, places=4)
+            inv = {h['symbol']: h for h in gains['inventory']}
+            self.assertAlmostEqual(inv['ZZS.TO']['qty'], 10.0, places=9)
+            self.assertAlmostEqual(inv['ZZS.TO']['total_cost'], 200.0,
+                                   places=4)
 
     def test_stock_dividend_cil_keeps_the_parsers_pair(self):
         from taxjson.lib.corp_actions import drop_broker_cil_pairs

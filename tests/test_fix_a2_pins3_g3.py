@@ -118,8 +118,8 @@ def _dr(d, settle, sym="ABC.US"):
 
 
 class TestCheckDatesLagAndFloor(unittest.TestCase):
-    """A2-1566: the settle-late lag (`lag_days > 7`) and the 1990 floor
-    (`td.year < 1990`)."""
+    """A2-1566: the settle-late lag (`lag_days > 7`) and the year floor
+    (`td.year < EARLIEST_YEAR`, 1900 since backlog TJ-0820)."""
 
     def _codes(self, rows):
         td, root, cfg = _dates_project(rows)
@@ -136,11 +136,11 @@ class TestCheckDatesLagAndFloor(unittest.TestCase):
         self.assertIn(("2025-06-03", "settle-cycle"), codes)
         self.assertNotIn(("2025-06-03", "settle-late"), codes)
 
-    def test_dates_before_1990_are_out_of_range(self):
-        codes = self._codes([_dr("1989-06-12", "1989-06-15"),
-                             _dr("1990-06-12", "1990-06-15")])
-        self.assertIn(("1989-06-12", "out-of-range"), codes)
-        self.assertNotIn(("1990-06-12", "out-of-range"), codes)
+    def test_dates_before_1900_are_out_of_range(self):
+        codes = self._codes([_dr("1899-06-12", "1899-06-15"),
+                             _dr("1900-06-12", "1900-06-15")])
+        self.assertIn(("1899-06-12", "out-of-range"), codes)
+        self.assertNotIn(("1900-06-12", "out-of-range"), codes)
 
 
 # ========================================================= edge-cases

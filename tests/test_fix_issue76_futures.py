@@ -186,9 +186,12 @@ class TestRecordedFacts(unittest.TestCase):
                 + _convert([_fut("acct_b", "2025-02-03", -1, 20000)]))
         res = get_tax_rules("canada").compute_gains(rows)
         self.assertEqual(res["summary"]["total_gain"], 0)
-        # The reports show the contract's net position across accounts.
-        self.assertEqual([i for i in res["inventory"]
-                          if i["symbol"] == "F:SYNZ6.US"], [])
+        # The long and the other account's short are two positions, never
+        # their net (backlog TJ-1103).
+        self.assertEqual(sorted((i.get("account", ""), i["qty"])
+                                for i in res["inventory"]
+                                if i["symbol"] == "F:SYNZ6.US"),
+                         [("", 1.0), ("acct_b", -1.0)])
 
 
 class TestUsaKeepsPerAccountFifo(unittest.TestCase):

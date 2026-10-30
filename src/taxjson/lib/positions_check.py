@@ -103,6 +103,103 @@ def load_base_rows(cache: Path, account: str, *,
     return [r for r in rows if isinstance(r, dict)]
 
 
+def pool_splits(pool_rows: Iterable[Dict[str, Any]],
+                account: str) -> List[Dict[str, Any]]:
+    """The splits (and renames) of a blended pass's merged books
+    (`pool_rows`) that only other accounts' books carry, as copies
+    booked in `account`. The engines apply a split to the whole
+    security, every account's shares (Canada's s.47 pool, the US lots
+    alike), but each account's books hold only the splits its own
+    exports report: a walk of one account's books left its shares
+    unsplit, so its share of a pool was apportioned on the old count and
+    `sanity` compared the old count (backlog TJ-0696). An event the
+    account reports itself (the same symbol and new symbol within
+    SPLIT_DATE_WINDOW_DAYS: its own ratio, a merger's per-account one)
+    is not added, and an event several other accounts report is added
+    once, its earliest copy — as the T1135 custody walk reads them
+    (taxjson_t1135 Custody.book)."""
+    from datetime import date as _d
+    from taxjson.lib.corporate_timeline import (SPLIT_DATE_WINDOW_DAYS,
+                                                normalize_symbol_new)
+
+    def _event(t: Dict[str, Any]) -> Tuple[str, str]:
+        sym = str(t.get("symbol") or "")
+        return sym, normalize_symbol_new(sym, t.get("symbol_new"))
+
+    def _day(t: Dict[str, Any]) -> Optional[Any]:
+        try:
+            return _d.fromisoformat(str(t.get("date") or "")[:10])
+        except ValueError:
+            return None
+    splits = [r for r in pool_rows if isinstance(r, dict)
+              and str(r.get("action") or "").upper() == "SPLIT"]
+    seen: Dict[Tuple[str, str], List[Any]] = {}
+    for r in splits:
+        if str(r.get("account") or "") == account:
+            seen.setdefault(_event(r), []).append(_day(r))
+    out = []
+    for r in sorted((r for r in splits
+                     if str(r.get("account") or "") != account),
+                    key=lambda r: str(r.get("date") or "")):
+        d = _day(r)
+        if any(o is None or d is None
+               or abs((o - d).days) <= SPLIT_DATE_WINDOW_DAYS
+               for o in seen.get(_event(r), ())):
+            continue            # the account's own copy, or one added
+        seen.setdefault(_event(r), []).append(d)
+        out.append(dict(r, account=account,
+                        pool_split_of=str(r.get("account") or "")))
+    return out
+
+
+def without_pool_cut(rows: List[Dict[str, Any]],
+                     pool_rows: Optional[List[Dict[str, Any]]],
+                     account: str) -> List[Dict[str, Any]]:
+    """`account`'s `rows` less those the pass across accounts cut at its
+    snapshot (taxjson-merge --opening-cutoff, a rename only another
+    account reports): they are not in `pool_rows`, the merged books. A
+    view that walks such a row with pool_splits would carry the old
+    purchase through that rename beside the snapshot's shares (backlog
+    TJ-1168). `rows` as they are without pool rows of the account."""
+    kept = {r.get("id") for r in pool_rows or []
+            if isinstance(r, dict) and r.get("account") == account}
+    if not kept:
+        return rows
+    return [r for r in rows if r.get("id") in kept or not r.get("id")
+            or r.get("account") != account]
+
+
+# The merged books of the blended passes (taxjson_run
+# stage_blended_wash_pass): the taxable accounts', the crypto accounts'.
+BLEND_BASES = (".blend_base.json", ".cryptoblend_base.json")
+
+
+def blended_pool_rows(cache: Path, account: str) -> List[Dict[str, Any]]:
+    """The rows of the blended pass's merged books `account` is in, when
+    its filing books (work/<account>_gains_wash.json) are split from
+    that pass; [] otherwise (its own pass: its pools are its own)."""
+    try:
+        doc = json.loads((Path(cache) / f"{account}_gains_wash.json")
+                         .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    meta = doc.get("metadata") if isinstance(doc, dict) else None
+    if not (isinstance(meta, dict) and meta.get("split_from")):
+        return []
+    for name in BLEND_BASES:
+        try:
+            pool = json.loads((Path(cache) / name).read_text(
+                encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows = pool.get("transactions") if isinstance(pool, dict) else None
+        if isinstance(rows, list) and any(
+                isinstance(r, dict) and r.get("account") == account
+                for r in rows):
+            return rows
+    return []
+
+
 def book_rows(cache: Path, account: str, *,
               strict: bool = False) -> List[Dict[str, Any]]:
     """The rows the account's books hold positions from: its merged rows
@@ -111,9 +208,14 @@ def book_rows(cache: Path, account: str, *,
     lines: units bought before the data, which no row of the merged
     books carries — lib/missing_history.openings_from_log). Every view
     of the books' positions on a date reads these, so it holds the
-    same units the books do."""
+    same units the books do — and the splits another account of its
+    blended pool reports (pool_splits: the engines split every
+    account's shares; backlog TJ-0696)."""
     from taxjson.lib.missing_history import openings_from_log
-    rows = load_base_rows(cache, account, strict=strict)
+    _pool = blended_pool_rows(cache, account)
+    rows = without_pool_cut(load_base_rows(cache, account, strict=strict),
+                            _pool, account)
+    rows = rows + pool_splits(_pool, account)
     for name in (f"{account}_gains.json", f"{account}_gains_wash.json"):
         p = Path(cache) / name
         try:
@@ -126,7 +228,10 @@ def book_rows(cache: Path, account: str, *,
 
 
 def load_inventory(path: Path) -> Dict[str, Dict[str, Any]]:
-    """{symbol: inventory entry} of a gains file (summed per symbol)."""
+    """{symbol: inventory entry} of a gains file (summed per symbol).
+    `unknown_cost`: a row of the symbol has no known cost (an OPENING
+    cost=unknown line's units): its total_cost is a placeholder, never
+    a cost to compare (backlog TJ-0818)."""
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -138,7 +243,9 @@ def load_inventory(path: Path) -> Dict[str, Dict[str, Any]]:
             continue
         e = out.setdefault(sym, {"qty": 0.0, "total_cost": 0.0,
                                  "deferred_wash": 0.0,
-                                 "currency": h.get("currency") or ""})
+                                 "currency": h.get("currency") or "",
+                                 "unknown_cost": False})
+        e["unknown_cost"] = e["unknown_cost"] or bool(h.get("unknown_cost"))
         e["qty"] += float(h.get("qty") or 0.0)
         e["total_cost"] += float(h.get("total_cost") or 0.0)
         e["deferred_wash"] += float(h.get("deferred_wash") or 0.0)
@@ -150,26 +257,45 @@ def last_day(rows: Iterable[Dict[str, Any]]) -> str:
                 if r.get("action") in _COST_ACTIONS), default="")
 
 
-def _ordered(rows):
-    return sorted(rows, key=lambda r: (str(r.get("date") or ""),
+def _ordered(rows, *, clock: bool = False):
+    """The rows in the books' order, by trade date. At one date an
+    opening balance first, then a split — effective at the market's
+    open, whatever clock time its row carries — then the day's trades
+    by clock time, as the Canada engine and the record-date balance walk
+    take them (corporate_timeline 'ca_balance', apply_distributions
+    .balance_on): a noon-stamped split no longer scaled a 09:30
+    purchase of the same day (backlog TJ-0812). `clock`: the US
+    engine's order instead (corporate_timeline 'us_main': clock time
+    first, then the rung), which takes a split stamped after a trade
+    after it. Rows tied on the key keep their order (stable sort)."""
+    def _rung(r):
+        a = r.get("action")
+        return 0 if a == "OPENING_BALANCE" else 1 if a == "SPLIT" else 2
+    if clock:
+        return sorted(rows, key=lambda r: (str(r.get("date") or ""),
+                                           str(r.get("time") or ""),
+                                           _rung(r)))
+    return sorted(rows, key=lambda r: (str(r.get("date") or ""), _rung(r),
                                        str(r.get("time") or "")))
 
 
 def positions_on(rows: Iterable[Dict[str, Any]], day: str, *,
                  settled: bool = False,
-                 before: bool = False) -> Dict[str, float]:
+                 before: bool = False,
+                 clock: bool = False) -> Dict[str, float]:
     """{symbol: quantity} after every row traded on or before `day`
     (`before`: strictly before it; `settled`: by settlement date — the
     holder of record). Splits scale the symbol's shares; a rename moves
     them to the new symbol. One split reported twice (two accounts'
     or two sources' copies, nearby dates) applies once: the position
     is keyed by symbol, so the event is too (split_copies,
-    CA-CORP-12)."""
+    CA-CORP-12). Rows are taken in the books' order (_ordered; `clock`:
+    the US engine's)."""
     from taxjson.lib.corporate_timeline import split_copies
     rows = list(rows)
     dup = split_copies(rows)
     pos: Dict[str, float] = {}
-    for r in _ordered(rows):
+    for r in _ordered(rows, clock=clock):
         d = str((r.get("date_settle") if settled else None)
                 or r.get("date") or "")
         if (d >= day) if before else (d > day):
@@ -256,26 +382,38 @@ def fractions_awaiting_cash(rows: Iterable[Dict[str, Any]], day: str
     sold for their cash in lieu on a later day (lib/corp_actions
     ._allocated_spinoff_selling_fraction, CA-CORP-05). A broker's
     snapshot between the two shows the whole shares only, which is no
-    difference to report (backlog TJ-0149)."""
+    difference to report (backlog TJ-0149). A share-for-share merger's
+    fraction likewise: the exchange (a SPLIT row) gives it, and its sale
+    for the cash in lieu is dated when the cash is paid (backlog
+    TJ-0866); its entries carry "event": "merger"."""
     rows = list(rows)
     got: Dict[str, str] = {}
+    merged: Dict[str, str] = {}
     for r in rows:
-        if (r.get("action") == "BUYSELL" and r.get("corp_event_id")
-                and float(r.get("quantity") or 0.0) > 0):
-            eid = str(r["corp_event_id"])
-            d = str(r.get("date") or "")[:10]
+        eid = str(r.get("corp_event_id") or "")
+        if not eid or float(r.get("quantity") or 0.0) <= 0:
+            continue
+        d = str(r.get("date") or "")[:10]
+        if r.get("action") == "BUYSELL":
             got[eid] = min(got.get(eid, d), d)
+        elif r.get("action") == "SPLIT":
+            merged[eid] = min(merged.get(eid, d), d)
     out: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         q = float(r.get("quantity") or 0.0)
         eid = str(r.get("corp_event_id") or "")
-        if (r.get("action") != "BUYSELL" or not -1.0 < q < 0.0 or not eid
-                or r.get("corp_election") != "rollover_s_86_1"):
+        if r.get("action") != "BUYSELL" or not -1.0 < q < 0.0 or not eid:
             continue
-        rec, paid = got.get(eid, ""), str(r.get("date") or "")[:10]
+        paid = str(r.get("date") or "")[:10]
+        if r.get("corp_election") == "rollover_s_86_1":
+            rec, extra = got.get(eid, ""), {}
+        elif eid in merged and r.get("corp_cash"):
+            rec, extra = merged[eid], {"event": "merger"}
+        else:
+            continue
         if rec and rec <= day < paid:
             out.setdefault(str(r.get("symbol") or ""), []).append(
-                {"quantity": -q, "received": rec, "paid": paid})
+                {"quantity": -q, "received": rec, "paid": paid, **extra})
     return out
 
 
@@ -303,7 +441,8 @@ def _record_date_of(r: Dict[str, Any]) -> str:
 
 
 def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
-            settled: bool = False, before: bool = False) -> float:
+            settled: bool = False, before: bool = False,
+            clock: bool = False) -> float:
     """The units the books held on `day` of the security `sym` names
     now: its own position plus the units a later ticker change (a
     rename SPLIT row into `sym` — a broker's corporate action, a dated
@@ -319,14 +458,16 @@ def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
     `sym`. A rename of a ticker that had already been renamed away
     (a reused ticker: OLD -> NEW, then a new OLD -> OTHER) carries only
     the shares bought under the reused ticker, never the ones that left
-    with the earlier rename (audit finding 61)."""
+    with the earlier rename (audit finding 61). `clock`: the US
+    engine's order of a day's rows (_ordered; backlog TJ-1094)."""
     rows = list(rows)
-    pos = positions_on(rows, day, settled=settled, before=before)
+    pos = positions_on(rows, day, settled=settled, before=before,
+                       clock=clock)
     # Each held symbol's shares on `day`: where they are now, and the
     # ratio applied on the way.
     lots = {s: (s, 1.0) for s in pos if s != sym}
     total = pos.get(sym, 0.0)
-    for r in _ordered(rows):
+    for r in _ordered(rows, clock=clock):
         if not lots:
             break
         if r.get("action") != "SPLIT":
@@ -355,26 +496,29 @@ def held_as(rows: Iterable[Dict[str, Any]], sym: str, day: str, *,
     return total
 
 
-# North American markets moved from T+2 to T+1 settlement in May 2024
-# (Canada on the 27th, the US on the 28th): the last trade entitled to a
-# dividend settles by its record date.
-_T1_SINCE = {"US": "2024-05-28", "CA": "2024-05-27"}
-
-
 def last_entitled_trade_day(record: str, currency: str) -> Optional[str]:
     """The last trading day whose trade settles by `record` on the
     market's own calendar (the currency's: USD the US, CAD Canada) —
-    the eve of the ex-date. None for a bad date."""
-    from taxjson.lib.market_calendar import market_for, sub_settlement_days
-    mkt = market_for(currency) or "US"
-    n = 1 if record >= _T1_SINCE.get(mkt, "2024-05-28") else 2
+    the eve of the ex-date. The settlement cycle is the one of the
+    trade's day, by the canonical calendar (lib/dates
+    .last_trade_date_settling_by: T+3 before September 5 2017 in Canada
+    and the US, T+2 after, T+1 from May 2024): a hardcoded T+2 before
+    the T+1 move entitled a T+3-era purchase a day late (backlog
+    TJ-0815, TJ-0826). None for a bad date."""
+    from datetime import datetime
+    from taxjson.lib.dates import last_trade_date_settling_by
     try:
-        return sub_settlement_days(record, n, currency or "USD").isoformat()
+        datetime.strptime(str(record or ""), "%Y-%m-%d")
+    except ValueError:
+        return None
+    try:
+        return last_trade_date_settling_by(record, currency or "USD")
     except ValueError:
         return None
 
 
-def _max_held(rows, sym: str, pay: str, days: int) -> Optional[float]:
+def _max_held(rows, sym: str, pay: str, days: int, *,
+              clock: bool = False) -> Optional[float]:
     """The most shares of `sym` the rows held at the end of any day of
     the `days` before `pay` (pay day included); None for a bad date."""
     from datetime import datetime, timedelta
@@ -385,19 +529,20 @@ def _max_held(rows, sym: str, pay: str, days: int) -> Optional[float]:
     best = 0.0
     for k in range(days + 1):
         day = (d0 - timedelta(days=k)).strftime("%Y-%m-%d")
-        best = max(best, held_as(rows, sym, day))
+        best = max(best, held_as(rows, sym, day, clock=clock))
     return best
 
 
 def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
-                            tol: float = 1e-4) -> List[Dict[str, Any]]:
+                            tol: float = 1e-4, *,
+                            clock: bool = False) -> List[Dict[str, Any]]:
     """Dividend rows whose description STATES the share count ("ON 500
     SHS") for more shares than the books held when the payment was
     earned. Entitlement is fixed at the record date, not the pay date:
     a sale after it (the dividend paid days or weeks later, the position
     0 by then) is no finding. With the record date (the row's, a .tt
     record=, or the "REC mm/dd/yy" its description prints) the books'
-    SETTLED position that day is compared (T+1 / T+2 settlement: the
+    SETTLED position that day is compared (T+3, T+2 or T+1 settlement: the
     holder of record), or the shares traded by the eve of the ex-date
     on the market's calendar (last_entitled_trade_day), whichever is
     more; with only the ex-date, the position at the end of
@@ -444,14 +589,14 @@ def income_share_mismatches(rows: List[Dict[str, Any]], account: str,
                 # traded by the eve of the ex-date on the market's own
                 # calendar (a broker's settle date can follow another
                 # market's holiday), whichever is more.
-                h = held_as(book, sym, rec, settled=True)
+                h = held_as(book, sym, rec, settled=True, clock=clock)
                 eve = last_entitled_trade_day(rec, cur)
                 if eve:
-                    h = max(h, held_as(book, sym, eve))
+                    h = max(h, held_as(book, sym, eve, clock=clock))
                 return h
             if exd:
-                return held_as(book, sym, exd, before=True)
-            return _max_held(book, sym, pay, INCOME_WINDOW_DAYS)
+                return held_as(book, sym, exd, before=True, clock=clock)
+            return _max_held(book, sym, pay, INCOME_WINDOW_DAYS, clock=clock)
         held = _held(mine)
         if held is None:
             continue
@@ -509,6 +654,13 @@ def compare_cost(*, symbol: str, broker_cost: float, cost_currency: str,
         if filing is None:
             row.update(status="n/a", note="no books cost for it")
             return row
+        if filing.get("unknown_cost"):
+            # Units whose cost the books do not know (an OPENING
+            # cost=unknown line): their 0 is no cost, so a broker's 0
+            # is not a match (backlog TJ-0818).
+            row.update(status="n/a", note="the books' cost is unknown "
+                                          "(an opening line's cost=unknown)")
+            return row
         books = float(filing["total_cost"])
         row.update(books_cost=books, basis="filing books "
                    + ("(FIFO lots, wash-adjusted)" if usa else
@@ -518,6 +670,10 @@ def compare_cost(*, symbol: str, broker_cost: float, cost_currency: str,
             row.update(status="n/a",
                        note=f"no {cur} books for it (the books are in "
                             f"{base})")
+            return row
+        if native.get("unknown_cost"):
+            row.update(status="n/a", note="the books' cost is unknown "
+                                          "(an opening line's cost=unknown)")
             return row
         books = float(native["total_cost"])
         row.update(books_cost=books,

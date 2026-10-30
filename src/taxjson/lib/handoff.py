@@ -847,23 +847,34 @@ def _same_lots(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> bool:
     if len(sa) != len(sb):
         return False
     if set(sa) == set(sb):
-        pairs = [(sa[k], sb[k]) for k in sa]
-    else:
-        def key(seq):
-            return [(x.get("date") or "", float(x["qty"])) for x in seq]
-        pairs = list(zip(sorted(sa.values(), key=key),
-                         sorted(sb.values(), key=key)))
-    for xa, xb in pairs:
-        if len(xa) != len(xb):
+        return all(_same_seq(sa[k], sb[k]) for k in sa)
+    # Renamed accounts: each of the record's sequences takes an equal one
+    # of the opening's (the same-named account first). Pairing them by a
+    # sort on dates and units alone left two accounts tied on those in
+    # name order, so a rename that swapped the order paired each with the
+    # other's basis (backlog TJ-0919).
+    left = dict(sb)
+    for k, xa in sa.items():
+        cand = ([k] if k in left else []) + [j for j in left if j != k]
+        hit = next((j for j in cand if _same_seq(xa, left[j])), None)
+        if hit is None:
             return False
-        for x, y in zip(xa, xb):
-            if (x.get("date") != y.get("date")
-                    or (x.get("holding_start") or x.get("date"))
-                    != (y.get("holding_start") or y.get("date"))
-                    or not _qty_eq(float(x["qty"]), float(y["qty"]))
-                    or not _acb_close(float(x["basis"]),
-                                      float(y["basis"]))):
-                return False
+        del left[hit]
+    return True
+
+
+def _same_seq(xa: List[Dict[str, Any]], xb: List[Dict[str, Any]]) -> bool:
+    """Two accounts' lots of a security the same, lot by lot in FIFO
+    order: dates, holding-period start, units and basis."""
+    if len(xa) != len(xb):
+        return False
+    for x, y in zip(xa, xb):
+        if (x.get("date") != y.get("date")
+                or (x.get("holding_start") or x.get("date"))
+                != (y.get("holding_start") or y.get("date"))
+                or not _qty_eq(float(x["qty"]), float(y["qty"]))
+                or not _acb_close(float(x["basis"]), float(y["basis"]))):
+            return False
     return True
 
 
@@ -1298,6 +1309,30 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
         now = opening.get(g, {})
         renamed = _redescribed_options(prev, now)
         for old, new in renamed:
+            # The contract under its two roots is one position only if
+            # its lots are the same too: the pair used to skip the US
+            # lot check, so a changed acquisition date (a short-term sale
+            # filed long-term, or the reverse) passed (backlog TJ-0920).
+            if lot_check:
+                pl = (rec_lots.get(g) or {}).get(old) or []
+                nl = (opening_lots.get(g) or {}).get(new) or []
+                if pl and nl and not _same_lots(pl, nl):
+                    p, n = prev[old], now[new]
+                    issues["positions"].append({
+                        "group": g, "symbol": new,
+                        "closed_symbol": old,
+                        "closed_qty": p["qty"], "closed_acb": p["acb"],
+                        "closed_deferred": p.get("deferred", 0.0),
+                        "opening_qty": n["qty"], "opening_acb": n["acb"],
+                        "qty_diff": round(n["qty"] - p["qty"], 8),
+                        "acb_diff": round(n["acb"] - p["acb"], 2),
+                        "filed_gain_diff": None,
+                        "lots": {"closed": pl, "opening": nl},
+                        "why": (f"{old} in the {ry} books opens here as "
+                                f"{new} (the broker re-described the "
+                                f"contract), with "
+                                + _lots_why(ry, pl, nl))})
+                    continue
             issues["notes"].append(
                 f"{old} in the {ry} books opens here as {new}: the same "
                 f"expiry, right, strike, quantity and cost under another "
@@ -1421,6 +1456,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     here.append(dict(r, _acct=n))
 
     used_here: set = set()
+    here_accts = {n for ns in groups(cfg).values() for n in ns}
 
     def _found(s: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """This project's row for the record's straddling trade `s`: the
@@ -1428,10 +1464,19 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
         3 days (an opening .tt dates a row on its settlement day), the
         same net amount. Symbol + quantity + 3 days let a DISTINCT
         same-size January sale clear a sale missing from both years, or
-        raise a false "double" (A2-0354). A row answers one item."""
+        raise a false "double" (A2-0354). A row answers one item.
+        The straddler's account, when this project has it, must match:
+        another account's same-size sale is a distinct disposition and
+        cleared the one this project lost (TJ-0807). An account this
+        project does not name (renamed since) matches any."""
         sd = _d(s.get("date"))
+        sa = str(s.get("account") or "")
+        if sa not in here_accts:
+            sa = ""
         for idx, r in enumerate(here):
             if idx in used_here or r.get("symbol") != s["symbol"]:
+                continue
+            if sa and r.get("_acct") != sa:
                 continue
             if not _qty_eq(float(r.get("quantity") or 0), s["qty"]):
                 continue
@@ -1487,15 +1532,49 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     # distinct sale, not the closed one again (A2-0122).
     # Only a sale out of a LONG position is a disposition: the row that
     # opens a short is not the closed year's sale (its cover is, A2-0674).
+    # The replay is per account and applies each account's splits (a
+    # rename moves the units), transfers and opening balances: a sale
+    # out of split-created units read as a sale out of a smaller long,
+    # so the closed year's sale was not seen as this project's own row
+    # and a same-size January sale became a false "double" (TJ-0808).
+    # A split is the security's: the run applies one account's SPLIT row
+    # to every account of the pool, so each account takes the ones other
+    # accounts report as well (positions_check.pool_splits; TJ-1037).
+    from taxjson.lib.corporate_timeline import split_copies
+    from taxjson.lib.positions_check import blended_pool_rows, pool_splits
+    replay = list(here)
+    for names in groups(cfg).values():
+        for n in names:
+            for r in _rows(cache / f"{n}_base.json"):
+                if r.get("action") in ("SPLIT", "TRANSFER",
+                                       "OPENING_BALANCE"):
+                    replay.append(dict(r, _acct=n))
+            replay += [dict(r, _acct=n) for r in pool_splits(
+                blended_pool_rows(cache, n), n)]
+    split_dup = split_copies(replay, per_account=True,
+                             account_of=lambda x: x.get("_acct") or "")
     own_closed: List[Tuple[str, float, Optional[date], Optional[date],
                            float]] = []
-    _pos: Dict[str, float] = {}
-    for r in sorted(here, key=lambda x: (_bdate(x, basis) or date.max,
-                                         str(x.get("time") or ""))):
-        sym = r.get("symbol") or ""
+    _pos: Dict[Tuple[str, str], float] = {}
+    for r in sorted(replay, key=lambda x: (_bdate(x, basis) or date.max,
+                                           str(x.get("time") or ""))):
+        acct, sym = str(r.get("_acct") or ""), r.get("symbol") or ""
+        if r.get("action") == "SPLIT":
+            if id(r) in split_dup:
+                continue
+            try:
+                ratio = float(r.get("quantity") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            new = str(r.get("symbol_new") or "").strip() or sym
+            moved = _pos.pop((acct, sym), 0.0) * ratio
+            _pos[(acct, new)] = _pos.get((acct, new), 0.0) + moved
+            continue
         q = float(r.get("quantity") or 0.0)
-        before = _pos.get(sym, 0.0)
-        _pos[sym] = before + q
+        before = _pos.get((acct, sym), 0.0)
+        _pos[(acct, sym)] = before + q
+        if r.get("action") not in ("BUYSELL", "ASSIGN"):
+            continue
         if q >= 0 or before <= QTY_TOL:
             continue
         if (_bdate(r, basis) or date.max) > date(ry, 12, 31):

@@ -155,21 +155,43 @@ def _cash_legs(tx: Dict[str, Any], stable_cash: bool = True
         return legs
     cc = str(tx.get("corp_cash") or "").strip()
     if tx.get("corp_event_id") and cc:
-        out = []
-        for part in cc.split(";"):
-            bits = part.split()
-            if len(bits) != 2:
-                continue
-            try:
-                amt = float(bits[0])
-            except ValueError:
-                continue
-            out.append((bits[1].upper(), amt))
-        return out
+        return [(c, a) for c, a, _paid in _corp_cash_parts(cc)]
     flow = _flows(tx, stable_cash)
     if flow is None:
         return []
     return [(str(tx.get("currency") or "").upper(), flow)]
+
+
+def _corp_cash_parts(corp_cash: str) -> List[tuple]:
+    """[(currency, amount, paid)] of a `corp_cash` value ("<amount> <CUR>
+    [ @<date>]; ..."; lib/corp_actions._corp_cash); `paid` is '' for cash
+    paid on the row's own date."""
+    out = []
+    for part in corp_cash.split(";"):
+        bits = part.split()
+        paid = ""
+        if len(bits) == 3 and bits[2].startswith("@"):
+            paid = bits.pop()[1:]
+        if len(bits) != 2:
+            continue
+        try:
+            amt = float(bits[0])
+        except ValueError:
+            continue
+        out.append((bits[1].upper(), amt, paid))
+    return out
+
+
+def _cash_leg_dates(tx: Dict[str, Any], stable_cash: bool = True
+                    ) -> List[tuple]:
+    """_cash_legs with each leg's own date: [(currency, flow, paid)],
+    `paid` '' for the row's date. A corporate action's cash in lieu paid
+    days after the exchange is folded into a row dated on the exchange;
+    the ledger counts it when it came (backlog TJ-1063, TJ-1106)."""
+    cc = str(tx.get("corp_cash") or "").strip()
+    if tx.get("corp_event_id") and cc:
+        return _corp_cash_parts(cc)
+    return [(c, a, "") for c, a in _cash_legs(tx, stable_cash)]
 
 
 def _flows(tx: Dict[str, Any], stable_cash: bool = True
@@ -215,7 +237,29 @@ def _flows(tx: Dict[str, Any], stable_cash: bool = True
         # Repo convention: TAX positive = withheld (cash out); FEE
         # positive = charged.
         return -net
+    if action == "ADJUST" and _broker_roc(tx):
+        # A return of capital a broker's export paid in cash (its
+        # parser's tx_roc_adjust: net_amount = -cash received): the
+        # cash came in, whatever it does to the security's cost. Every
+        # ADJUST was skipped, and the IB cash events read no Dividends
+        # row, so the receipt was in neither (backlog TJ-0846). A .tt
+        # ADJUST (a T3's box 42 entered by hand: its cash came with
+        # the distribution's dividend row), a row its parser marked
+        # `no_cash` (RBC's year-end book-cost row, Value 0: backlog
+        # TJ-1033) and the other adjustments move no cash.
+        return -net
     return None
+
+
+def _broker_roc(tx: Dict[str, Any]) -> bool:
+    """A return-of-capital ADJUST a broker's export carries (type
+    `roc`, from a file that is not a .tt) and paid in cash (not marked
+    `no_cash`)."""
+    import re
+    if str(tx.get("type") or "").lower() != "roc" or tx.get("no_cash"):
+        return False
+    src = re.sub(r"#\d+$", "", str(tx.get("source") or "")).lower()
+    return bool(src) and not src.endswith(".tt")
 
 
 FX_MAX_RATE_AGE_DAYS = 5      # the converter's lookback (CA-FX-02 / US-FX-02)
@@ -270,7 +314,22 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
     # Friday sale and a Monday buy settle the same day, and clock time
     # alone walked the buy first — a phantom overdraft (A2-0244; the
     # futures and distribution walks already sort this way).
-    rows = sorted(transactions,
+    walked: List[Dict[str, Any]] = []
+    for t in transactions:
+        # Cash paid after its row's date is walked on the day it came.
+        cc = str(t.get("corp_cash") or "")
+        if "@" not in cc or not t.get("corp_event_id"):
+            walked.append(t)
+            continue
+        by_day: Dict[str, List[str]] = {}
+        for c, a, paid in _corp_cash_parts(cc):
+            by_day.setdefault(paid, []).append(f"{a:.10g} {c}")
+        for paid, parts in by_day.items():
+            part = dict(t, corp_cash="; ".join(parts))
+            if paid:
+                part.update(date=paid, date_settle=paid)
+            walked.append(part)
+    rows = sorted(walked,
                   key=lambda t: (str(t.get("date_settle")
                                      or t.get("date") or ""),
                                  str(t.get("date") or ""),
@@ -368,10 +427,15 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
             else _snap()}
 
 
-def apply_jurisdiction(net_gain: float, country: str) -> Dict[str, Any]:
+def apply_jurisdiction(net_gain: float, country: str,
+                       debt_gain: float = 0.0) -> Dict[str, Any]:
     """The reportable figure. Canada (s.39(1.1)): only the net beyond
-    $200 counts, symmetric for losses. US (§988): ordinary income, no
-    de-minimis modeled. An unknown country raises (lib/country)."""
+    $200 counts, symmetric for losses — of the gain on disposing of
+    currency; `debt_gain`, the part of `net_gain` realised on repaying
+    a debt in a foreign currency (s.39(2), ledger v2's `debt_gain`),
+    counts in full (backlog TJ-0724: the $200 erased it too). US
+    (§988): ordinary income, no de-minimis modeled. An unknown country
+    raises (lib/country)."""
     from taxjson.lib.country import is_usa
     if is_usa(country):
         return {"rule": "§988 (ordinary income)",
@@ -380,18 +444,36 @@ def apply_jurisdiction(net_gain: float, country: str) -> Dict[str, Any]:
                         "ORDINARY income, not capital — report the "
                         "full net; the §988(e) $200-per-transaction "
                         "personal-use exemption is not modeled."}
-    if net_gain > CA_EXEMPTION:
-        reportable = net_gain - CA_EXEMPTION
-    elif net_gain < -CA_EXEMPTION:
-        reportable = net_gain + CA_EXEMPTION
+    currency = net_gain - debt_gain
+    if currency > CA_EXEMPTION:
+        reportable = currency - CA_EXEMPTION
+    elif currency < -CA_EXEMPTION:
+        reportable = currency + CA_EXEMPTION
     else:
         reportable = 0.0
+    reportable += debt_gain
+    note = ("Only the net gain (or loss) on foreign-currency "
+            "dispositions beyond $200/year is a capital "
+            "gain (loss) — Schedule 3, 'Bonds, debentures, "
+            "promissory notes, and other similar properties'.")
+    if abs(debt_gain) >= 0.005:
+        note += (f" The {debt_gain:,.2f} on repaying debts in a foreign "
+                 f"currency (s.39(2)) counts in full, outside the $200.")
     return {"rule": "ITA s.39(1.1) (capital, $200 de minimis)",
             "reportable": round(reportable, 2),
-            "note": "Only the net gain (or loss) on foreign-currency "
-                    "dispositions beyond $200/year is a capital "
-                    "gain (loss) — Schedule 3, 'Bonds, debentures, "
-                    "promissory notes, and other similar properties'."}
+            "note": note}
+
+
+def v2_verdict(doc: Dict[str, Any], country: str
+               ) -> Optional[Dict[str, Any]]:
+    """apply_jurisdiction of a ledger v2 doc (lib/fx_cash_v2.build):
+    None unless it computed; its gains on repaying debts (`debt_gain`)
+    counted outside the $200 (s.39(2); backlog TJ-0724)."""
+    if doc.get("status") != "computed":
+        return None
+    debt = sum(float(s.get("debt_gain") or 0.0)
+               for s in (doc.get("per_currency") or {}).values())
+    return apply_jurisdiction(doc["net_gain"], country, debt_gain=debt)
 
 
 NOT_READ = ("conversions, deposits/withdrawals and margin balances are "

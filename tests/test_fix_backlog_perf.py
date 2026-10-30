@@ -179,13 +179,17 @@ def _digest(res):
 # replacements in all four accounts. Re-captured when the window
 # listing moved to settlement dates (backlog TJ-0258): only the window
 # rows' (tx id, role) lists changed, every figure, denial and pool the
-# same.
+# same. Re-captured for backlog TJ-0725: the 2024-10-15 ZZA.TO loss's
+# window ends 2024-11-15, the day its replacement call ZZA241115C
+# expires, so the call is no longer held at day 30 and the denial goes
+# to the share replacements instead; the later ZZA.TO figures follow
+# from their changed ACB.
 _PINNED = {
-    'digest': '80db3828f03fc9228ac50e4921c8028a8cf3d6fc'
-              'd13ad0a847bba8e1ebf4405b',
+    'digest': '80a4cf6af8e62a31d57e7549861e41e9'
+              '5e5cca8e613daedd5f7c86fc5ce2db21',
     'denied_sales': 91,
-    'total_disallowed': 28546.909964,
-    'total_permanent': 14631.49363,
+    'total_disallowed': 28828.677018,
+    'total_permanent': 15393.990232,
 }
 
 

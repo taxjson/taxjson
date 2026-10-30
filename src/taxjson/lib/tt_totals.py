@@ -79,6 +79,15 @@ class Mismatch:
         f = self.formula.replace("*", " x ")
         return f.replace("+", " + ").replace("-", " - ")
 
+    def size(self) -> float:
+        """The contract size the formula multiplies by (`qty*price*100`:
+        100; a share line's `qty*price`: 1)."""
+        m = re.search(r"price\*([\d.]+)", self.formula)
+        try:
+            return float(m.group(1)) if m else 1.0
+        except ValueError:
+            return 1.0
+
     def message(self, where: str = "", source: str = ""
                 ) -> Tuple[str, List[str]]:
         """(headline, details) of the console Warning; `where` names
@@ -88,10 +97,12 @@ class Mismatch:
         written and has no fee column to advise (third pre-release
         review, finding 9)."""
         where = where or self.where
-        acq = _acquired(source)
+        acq = _acquired(source, self.size())
         if acq is not None and not self.sell_zero:
             return (f"{where}: a .tt ACQUIRED line's total {self.total} "
-                    f"is not qty x price = {self.expected}",
+                    f"is not qty x price"
+                    f"{f' x {self.size():g}' if self.size() != 1 else ''}"
+                    f" = {self.expected}",
                     ["The total is what is booked as the lot's cost, so "
                      "check it for a typo:", " ".join(source.split()),
                      f"ACQUIRED has no fee column: if the total is right "
@@ -116,9 +127,11 @@ class Mismatch:
                  "stops on it."])
 
 
-def _acquired(source: str):
+def _acquired(source: str, size: float = 1.0):
     """The price that agrees with an ACQUIRED line's total (total ÷
-    quantity, as text), or None when `source` is not an ACQUIRED line."""
+    (quantity x the contract size `size`), as text: an option's price is
+    per share — total ÷ quantity alone was 100 times it, backlog
+    TJ-0934), or None when `source` is not an ACQUIRED line."""
     parts = str(source or "").split("#", 1)[0].split()
     if len(parts) < 8 or parts[0].upper() != "ACQUIRED":
         return None
@@ -127,9 +140,9 @@ def _acquired(source: str):
         total = float(parts[7].replace(",", ""))
     except ValueError:
         return None
-    if abs(qty) < 1e-12:
+    if abs(qty) < 1e-12 or not size or size <= 0:
         return None
-    px = f"{abs(total / qty):.6f}".rstrip("0")
+    px = f"{abs(total / (qty * size)):.6f}".rstrip("0")
     whole, _dot, frac = px.partition(".")
     return f"{whole}.{frac.ljust(2, '0')}"
 

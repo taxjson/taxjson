@@ -98,6 +98,103 @@ def merge(series: Iterable[List[List[Any]]]) -> List[List[Any]]:
     return out
 
 
+def _transit(transit: Iterable[Dict[str, Any]], accounts: Dict[str, str],
+             base: str, groups: Dict[Tuple[str, str], List[List[List[Any]]]]
+             ) -> List[Dict[str, Any]]:
+    """The cash in transit between your own accounts at the year end
+    (the ledger's holdings `transit`: it left one account in the year
+    and arrives in another after it). It is still yours, and no
+    account's units hold it (backlog TJ-0946). When every account it
+    left and goes to is counted, under one country, it is that
+    country's cash held outside Canada: its units and cost join the
+    sending account's row from the day it left (`groups`). When only
+    some of them are counted (a move between a Canadian and a foreign
+    custodian, or two countries), the books do not tell where it was
+    held on December 31, as when the books have no arrival for it: it
+    is named, of unknown standing, and the total is not settled. A move
+    between accounts none of which is counted is no foreign property.
+    Returns the not_counted entries."""
+    named: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for tr in transit:
+        cur = str(tr.get("currency") or "").upper()
+        if not cur or cur == base:
+            continue
+        frm = [_label(b) for b in tr.get("from") or []]
+        to = [_label(b) for b in tr.get("to") or []]
+        ends = set(frm) | set(to)
+        if not ends & set(accounts):
+            continue
+        units = float(tr.get("units") or 0.0)
+        cost = float(tr.get("cost") or 0.0)
+        countries = {accounts.get(a) for a in ends}
+        if frm and to and tr.get("since") and None not in countries \
+                and len(countries) == 1:
+            groups.setdefault((frm[0], cur), []).append(
+                [[str(tr["since"]), round(units, 6), round(cost, 2)]])
+            continue
+        n = named.setdefault(
+            (", ".join(sorted(set(frm))), ", ".join(sorted(set(to))), cur),
+            {"units": 0.0, "cost": 0.0, "arrives": tr.get("arrives") or "",
+             "account": (frm or to)[0]})
+        n["units"] += units
+        n["cost"] += cost
+    out: List[Dict[str, Any]] = []
+    for (frm_s, to_s, cur), n in sorted(named.items()):
+        out.append({
+            "account": n["account"], "currency": cur, "unknown": True,
+            "why": (f"{n['units']:,.2f} {cur} in transit between your own "
+                    f"accounts at the year end (from {frm_s or '?'} to "
+                    f"{to_s or '?'}, arriving {n['arrives'] or '?'}; cost "
+                    f"{n['cost']:,.2f} {base}): the books do not tell whether "
+                    f"it was held outside Canada")})
+    return out
+
+
+def _spans(spans: Iterable[Dict[str, Any]], accounts: Dict[str, str],
+           base: str, groups: Dict[Tuple[str, str], List[List[List[Any]]]]
+           ) -> List[Dict[str, Any]]:
+    """The own moves in transit on days of the year (the ledger's
+    holdings `transit_spans`): still yours, in no account's units, so
+    they fell out of the at-any-time maximum (backlog TJ-1129). As
+    _transit does at the year end: when every account it left and goes
+    to is counted, under one country, its units and cost join the sending
+    account's row for those days (`groups`); a move between accounts none
+    of which is counted is no foreign property. Otherwise the books do
+    not tell where it was held on those days: it is named, one entry per
+    from, to and currency with its largest cost. The year-end cost is not
+    in question, so it leaves the total settled. Returns the not_counted
+    entries."""
+    named: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for sp in spans:
+        cur = str(sp.get("currency") or "").upper()
+        if not cur or cur == base:
+            continue
+        frm = _label(sp["from"]) if sp.get("from") else ""
+        to = _label(sp["to"]) if sp.get("to") else ""
+        ends = {a for a in (frm, to) if a}
+        if not ends & set(accounts):
+            continue
+        countries = {accounts.get(a) for a in ends}
+        if frm and None not in countries and len(countries) == 1:
+            groups.setdefault((frm, cur), []).append(sp["points"])
+            continue
+        n = named.setdefault((frm, to, cur), {
+            "units": 0.0, "cost": 0.0, "since": sp.get("since") or ""})
+        n["units"] = max(n["units"], float(sp.get("units") or 0.0))
+        n["cost"] = max([n["cost"]] + [float(p[2]) for p in sp["points"]])
+    out: List[Dict[str, Any]] = []
+    for (frm, to, cur), n in sorted(named.items()):
+        out.append({
+            "account": frm if frm in accounts else to, "currency": cur,
+            "unknown": False, "transit": True,
+            "why": (f"up to {n['units']:,.2f} {cur} (cost {n['cost']:,.2f} "
+                    f"{base}) in transit between your own accounts during "
+                    f"the year (from {frm or '?'} to {to or '?'}, first on "
+                    f"{n['since']}): the books do not tell whether it was "
+                    f"held outside Canada, and it is not in the maximum")})
+    return out
+
+
 def cash_doc(ledger: Optional[Dict[str, Any]], accounts: Dict[str, str],
              year: int, base: str, refusal: str = "",
              stablecoins: Iterable[str] = (),
@@ -123,8 +220,14 @@ def cash_doc(ledger: Optional[Dict[str, Any]], accounts: Dict[str, str],
     ledger is not computed and a problem names its currency or none
     (its pool's average cost is the taxpayer's, over every account); a
     currency of a counted account a problem names is a row even with no
-    units walked. The base currency of an account is a row when every
-    book of the account gives its balance, else it is not counted."""
+    units walked. A problem that reaches no row (it names no book or
+    no currency, and the account has no row of unknown cost) leaves the
+    account's foreign cash not counted and unknown, so the total is not
+    settled (backlog TJ-0657); one of a currency, naming no book, only
+    where the account had that currency in the year (TJ-1098), or whose
+    file holds the line it could not place (TJ-1174). The base currency of an account is a row
+    when every book of the account gives its balance, else it is not
+    counted."""
     base = str(base).upper()
     hb = ((ledger or {}).get("holdings") or {}).get("basis")
     if hb is not None and hb != basis:
@@ -169,6 +272,10 @@ def cash_doc(ledger: Optional[Dict[str, Any]], accounts: Dict[str, str],
         acct = _label(p.get("book") or "")
         if p.get("book") and cur and cur != base and acct in accounts:
             groups.setdefault((acct, cur), [])
+    transit_open = _transit(hold.get("transit") or [], accounts, base,
+                            groups)
+    transit_open += _spans(hold.get("transit_spans") or [], accounts, base,
+                           groups)
     for (acct, cur), lists in sorted(groups.items()):
         why = why_unknown(cur) if not computed else None
         doc["series"].append({"account": acct, "currency": cur,
@@ -193,6 +300,43 @@ def cash_doc(ledger: Optional[Dict[str, Any]], accounts: Dict[str, str],
         doc["series"].append({"account": acct, "currency": base,
                               "country": accounts[acct], "points": pts,
                               "unknown": False, "why": ""})
+    doc["not_counted"] += transit_open
+    # A refusal that reached no row: the ledger stopped before it walked
+    # a counted account's foreign cash (a file of several broker
+    # accounts' rows with no CASHBOOK line: a problem naming no book or
+    # no currency), so the account has no row to carry it. Its foreign
+    # cash is unknown, not none: named, and the total is not settled
+    # (backlog TJ-0657). A problem of one currency that names no book (a
+    # missing rate, an own move that never arrived) reaches only the
+    # accounts with that currency in the year: another account's cash of
+    # it is none, not unknown (backlog TJ-1098). A .tt line the ledger
+    # could not place never became an event, so `currencies` cannot list
+    # it: it reaches the account whose file holds it (backlog TJ-1174). A
+    # carried record that does not read says nothing of who held it:
+    # every account.
+    unknown = {(s["account"], s["currency"]) for s in doc["series"]
+               if s["unknown"]}
+    had = hold.get("currencies")
+    had = None if had is None else {(_label(b), str(c).upper())
+                                    for b, c in had}
+    for p in problems:
+        cur = str(p.get("currency") or "").upper()
+        if cur == base:
+            continue
+        book = str(p.get("book") or "")
+        for acct in ([_label(book)] if book else [str(p["account"])]
+                     if p.get("account") else sorted(accounts)):
+            if acct not in accounts or (acct, cur) in unknown or (
+                    not cur and any(a == acct for a, _c in unknown)):
+                continue
+            if cur and not book and had is not None \
+                    and p.get("kind") not in ("carry", "book") \
+                    and (acct, cur) not in had:
+                continue
+            unknown.add((acct, cur))
+            doc["not_counted"].append({
+                "account": acct, "currency": cur, "unknown": True,
+                "why": str(p.get("text") or p.get("kind") or "")})
     return doc
 
 

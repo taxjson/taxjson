@@ -1,7 +1,8 @@
 """Settlement calendars for the US and Canadian securities markets.
 
 A trade settles a fixed number of SETTLEMENT days after it is made
-(T+1 since 2024-05-27/28, T+2 from 2017-09-05, T+3 before). A settlement
+(T+1 since 2024-05-27/28, T+2 from 2017-09-05, T+3 before, T+5 before
+1995-06-07). A settlement
 day is a weekday on which the clearing house settles: exchange holidays
 and, in the US, bank (Federal Reserve) holidays are not settlement days.
 The calendars are rule-based, so every year is covered without a table.
@@ -98,7 +99,11 @@ def nyse_holidays(year: int) -> FrozenSet[date]:
         out.add(nyd + timedelta(days=1))
     elif nyd.weekday() != 5:          # a Saturday New Year is not moved
         out.add(nyd)
-    out.add(_nth_weekday(year, 1, 0, 3))            # Martin Luther King Jr.
+    if year >= 1998:
+        # Martin Luther King Jr. Day: the NYSE first closed for it in
+        # 1998 (NASD Notice 97-93); January 20, 1997 was a trading and
+        # settlement day (Notice 96-90; backlog TJ-0809).
+        out.add(_nth_weekday(year, 1, 0, 3))
     out.add(_nth_weekday(year, 2, 0, 3))            # Washington's Birthday
     out.add(_easter(year) - timedelta(days=2))      # Good Friday
     out.add(_nth_weekday(year, 5, 0, -1))           # Memorial Day
@@ -115,7 +120,8 @@ def nyse_holidays(year: int) -> FrozenSet[date]:
 def fed_holidays(year: int) -> FrozenSet[date]:
     """Federal Reserve (US bank) holidays, as observed."""
     days = [date(year, 1, 1),
-            _nth_weekday(year, 1, 0, 3),
+            # Martin Luther King Jr. Day: a federal holiday from 1986.
+            _nth_weekday(year, 1, 0, 3) if year >= 1986 else None,
             _nth_weekday(year, 2, 0, 3),
             _nth_weekday(year, 5, 0, -1),
             date(year, 6, 19) if year >= 2021 else None,

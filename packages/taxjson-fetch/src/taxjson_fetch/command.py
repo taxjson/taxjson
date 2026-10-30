@@ -54,6 +54,37 @@ def _questrade_token_write(tok_cache: Path, token: str) -> None:
     write_atomic(tok_cache, token + "\n")
 
 
+def _questrade_token_target(tok_cache: Path) -> Path:
+    """The file the token path names: when the path is a symlink (to a
+    token another tool or project shares), its target, so the read, the
+    lock and the rotated token's atomic write all address that one
+    file. The write replaced the LINK with a regular file of its own,
+    and the shared file kept the token the refresh had just killed
+    (backlog TJ-0885). A link whose target is missing or is no file, or
+    whose folder cannot take the rotated token, is refused (a SystemExit)
+    before any token is spent."""
+    import os as _os
+    if not tok_cache.is_symlink():
+        return tok_cache
+    try:
+        shown = _os.readlink(str(tok_cache))
+    except OSError:
+        shown = "?"
+    try:
+        real = tok_cache.resolve(strict=True)
+    except (OSError, RuntimeError):
+        real = None
+    if real is None or not real.is_file():
+        _die(f"the Questrade token file {tok_cache} is a link to {shown}, "
+             f"which is not a file — point the link at the shared token "
+             f"file (or remove it), then fetch again. No token was used.")
+    if not _os.access(str(real.parent), _os.W_OK):
+        _die(f"the Questrade token file {tok_cache} is a link to {real}, "
+             f"whose folder cannot be written — the rotated token could "
+             f"not be saved there. No token was used.")
+    return real
+
+
 class QtAuthError(RuntimeError):
     """A Questrade refresh failed; `token` is the one that was tried
     (for _qt_auth_hint — never printed)."""
@@ -77,6 +108,7 @@ def _qt_open_session(tok_cache: Path, http, *, explicit: str = "",
     QtAuthError."""
     import os as _os
     from taxjson.lib.safe_write import file_lock
+    tok_cache = _questrade_token_target(tok_cache)    # backlog TJ-0885
     tok_cache.parent.mkdir(parents=True, exist_ok=True)
     lock = tok_cache.with_name(tok_cache.name + ".lock")
     with file_lock(lock, on_wait=on_wait):
@@ -180,6 +212,12 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
         # leave the cost unknown (None).
         _book_syms = set()
         _sizes: Dict[str, set] = {}
+        # What the rows leave of each symbol: zero is a contract the books
+        # hold only closed, which says nothing about the listing open now
+        # (backlog TJ-1235). A row the sum cannot read, or a split, is no
+        # such book.
+        _nets: Dict[str, float] = {}
+        _unread = set()
         try:
             import json as _json
             _bp = cache / f"{a}_base.json"
@@ -192,8 +230,20 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                         _m = F._finite(_r.get("multiplier"))
                         if _m is not None and _m > 0:
                             _sizes.setdefault(_sym, set()).add(_m)
+                        _act = _r.get("action")
+                        if _act in ("BUYSELL", "ASSIGN", "TRANSFER",
+                                    "OPENING_BALANCE"):
+                            _q = F._finite(_r.get("quantity"))
+                            if _q is None:
+                                _unread.add(_sym)
+                            else:
+                                _nets[_sym] = _nets.get(_sym, 0.0) + _q
+                        elif _act == "SPLIT":
+                            _unread.add(_sym)
         except Exception:
             pass
+        _closed_syms = {s for s, v in _nets.items()
+                        if abs(v) < 1e-9 and s not in _unread}
         _book_mult = {s: (next(iter(v)) if len(v) == 1 else None)
                       for s, v in _sizes.items()}
         # An option the books do not hold yet: the contract size
@@ -202,20 +252,40 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
         # lookup that fails leaves the standard size assumed, and said.
         _live_sizes: Dict[int, Optional[float]] = {}
         _lookup_err = ""
-        _opt_ids = F.qt_unbooked_option_ids(positions, _book_syms)
+        _opt_ids = F.qt_unbooked_option_ids(positions, _book_syms,
+                                            _closed_syms)
         if _opt_ids:
             try:
                 _live_sizes = F.qt_contract_sizes(qt_session, _opt_ids,
                                                   http)
             except RuntimeError as e:
                 _lookup_err = str(e)
+        # A contract the books hold under both listings (one closed), or
+        # under neither on a root a .TO listing teaches as Montreal, or
+        # on one listing only closed: the listing open now, from
+        # Questrade's symbol lookup (backlog TJ-0880, TJ-1074, TJ-1235).
+        _venues: Dict[int, str] = {}
+        _venue_err = ""
+        _amb_ids = F.qt_ambiguous_option_ids(positions, _book_syms,
+                                             _closed_syms)
+        if _amb_ids:
+            try:
+                _venues = F.qt_option_currencies(qt_session, _amb_ids, http)
+            except RuntimeError as e:
+                _venue_err = str(e)
         _assumed: List[str] = []
+        _ambiguous: List[str] = []
+        _amb_unbooked: List[str] = []
+        _amb_closed: List[str] = []
         try:
             text = F.positions_to_holdings_toml(
                 positions, a, number,
                 _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                 book_symbols=_book_syms, book_multipliers=_book_mult,
-                live_sizes=_live_sizes, assumed=_assumed)
+                live_sizes=_live_sizes, assumed=_assumed,
+                live_currencies=_venues, ambiguous=_ambiguous,
+                ambiguous_unbooked=_amb_unbooked,
+                closed_symbols=_closed_syms, ambiguous_closed=_amb_closed)
         except RuntimeError as e:
             _die(f"{a}: {e}")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -237,6 +307,39 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                   "until then. Once `taxjson run` has its trade in the "
                   "books, `taxjson fetch --positions` takes the books' "
                   "size.")
+        if _ambiguous:
+            say(f"  note: {a}: the books hold {len(_ambiguous)} option "
+                f"contract(s) both Montreal-listed (.TO) and US-listed "
+                f"(.US) ({', '.join(_ambiguous[:4])}"
+                f"{', ...' if len(_ambiguous) > 4 else ''}), and "
+                f"Questrade's symbol lookup "
+                + (f"failed ({_venue_err})" if _venue_err else
+                   "did not say which is open")
+                + ": no currency is written for its cost, and `taxjson "
+                  "sanity` may name the other listing. Run `taxjson fetch "
+                  "--positions` again later.")
+        if _amb_unbooked:
+            # backlog TJ-1074: the books' other series say nothing about
+            # this contract.
+            say(f"  note: {a}: {len(_amb_unbooked)} option(s) not in the "
+                f"books yet ({', '.join(_amb_unbooked[:4])}"
+                f"{', ...' if len(_amb_unbooked) > 4 else ''}) on a root "
+                f"the books hold Montreal-listed, and Questrade's symbol "
+                f"lookup "
+                + (f"failed ({_venue_err})" if _venue_err else
+                   "did not say which listing it is")
+                + ": no currency is written for its cost. Run `taxjson "
+                  "fetch --positions` again later.")
+        if _amb_closed:
+            # backlog TJ-1235: the closed rows say nothing of what is open.
+            say(f"  note: {a}: {len(_amb_closed)} open option(s) the books "
+                f"hold only closed ({', '.join(_amb_closed[:4])}"
+                f"{', ...' if len(_amb_closed) > 4 else ''}), and Questrade's "
+                f"symbol lookup "
+                + (f"failed ({_venue_err})" if _venue_err else
+                   "did not say which listing is open")
+                + ": no currency is written for its cost. Run `taxjson "
+                  "fetch --positions` again later.")
         out[a] = toml_path
     _year = (cfg.get("settings") or {}).get("year")
     if out and isinstance(_year, int) and _year < _dt.now().year:
@@ -257,6 +360,39 @@ def _shown(path: Path, root: Path) -> str:
         return _os.path.relpath(str(path), str(root))
     except ValueError:
         return str(path)
+
+
+# Questrade's numeric columns: compared by value, not spelling.
+_QT_NUMERIC_COLUMNS = ("quantity", "price", "gross amount", "commission",
+                       "net amount")
+
+
+def _qt_numeric_cols(header) -> frozenset:
+    """Indexes of `header`'s Questrade numeric columns."""
+    return frozenset(i for i, h in enumerate(header)
+                     if str(h).strip().lstrip("﻿").lower()
+                     in _QT_NUMERIC_COLUMNS)
+
+
+def _qt_row_key(row, cols) -> tuple:
+    """A CSV row's identity: its cells, those of the numeric columns
+    `cols` by value (Decimal: '10' and '10.0' are one quantity). A
+    re-fetch that spelled a number differently was a NEW row and the
+    merge counted the trade twice (backlog TJ-0735). A cell that is no
+    plain number (blank, '1,000.00') is compared as written."""
+    from decimal import Decimal, InvalidOperation
+    if not cols:
+        return tuple(row)
+    out = list(row)
+    for i in cols:
+        if i < len(out):
+            try:
+                d = Decimal(out[i].strip())
+            except (InvalidOperation, ValueError):
+                continue
+            if d.is_finite():
+                out[i] = d
+    return tuple(out)
 
 
 def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
@@ -287,7 +423,12 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     if ex_rows[0] != new_rows[0]:
         raise ValueError("header mismatch between the existing fetch "
                          "file and the new download")
-    ex_c, new_c = Counter(ex_rows[1:]), Counter(new_rows[1:])
+    cols = _qt_numeric_cols(ex_rows[0])
+
+    def key(r):
+        return _qt_row_key(r, cols)
+    ex_c = Counter(key(r) for r in ex_rows[1:])
+    new_c = Counter(key(r) for r in new_rows[1:])
     added = sum((new_c - ex_c).values())
     # ORDER (audit A2-0598): rows of one moment keep the export's order
     # (CA-DATE-14 / US-DATE-13) and Questrade stamps every row at
@@ -299,22 +440,25 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
     # reads a newest-first file bottom-up). Sorting the row tuples put
     # every same-day Buy ahead of its Sell.
     merged = list(new_rows[1:])
+    mkeys = [key(r) for r in merged]
     matched = [False] * len(merged)
     anchor = -1
     for row in ex_rows[1:]:
+        k = key(row)
         hit = next((i for i in range(anchor + 1, len(merged))
-                    if not matched[i] and merged[i] == row), None)
+                    if not matched[i] and mkeys[i] == k), None)
         if hit is not None:
             matched[hit] = True
             anchor = hit
             continue
         earlier = next((i for i in range(0, anchor + 1)
-                        if not matched[i] and merged[i] == row), None)
+                        if not matched[i] and mkeys[i] == k), None)
         if earlier is not None:          # same row, other place: a dup
             matched[earlier] = True
             continue
         anchor += 1                      # existing-only: keep it
         merged.insert(anchor, row)
+        mkeys.insert(anchor, k)
         matched.insert(anchor, True)
     col = _qt_date_col(list(ex_rows[0]))
 
@@ -386,16 +530,19 @@ def _qt_restatement_suspects(existing_csv: str,
                 _col("Symbol", 3).strip().upper(),
                 _col("Activity Type", 12).strip())
 
+    # Rows compared by value (_qt_row_key): '10' and '10.0' are no
+    # restatement (backlog TJ-0735).
+    ex_cols, new_cols = _qt_numeric_cols(hdr), _qt_numeric_cols(_hdr2)
     new_by_key: Dict[tuple, set] = {}
     for r in new_rows:
-        new_by_key.setdefault(_key(r), set()).add(tuple(r))
+        new_by_key.setdefault(_key(r), set()).add(_qt_row_key(r, new_cols))
     out: List[str] = []
     for r in ex_rows:
         k = _key(r)
         if not k[1]:
             continue
         peers = new_by_key.get(k)
-        if peers and tuple(r) not in peers:
+        if peers and _qt_row_key(r, ex_cols) not in peers:
             out.append(f"{k[0]} {k[1]} ({k[2] or 'row'})")
     # De-dup while keeping order.
     seen: set = set()
@@ -610,7 +757,10 @@ def _flex_rows(text: str):
     """(section, date-cells) for each Data row of an IB section,Header/
     Data CSV. With a section Header, only its date columns (a header
     holding 'Date' — 'Date/Time', 'Date', 'Settle Date', ...) count;
-    without one, every cell that is a whole date counts."""
+    without one, every cell that is a whole date counts. A ClosedLot
+    row is left out: its date is the open date of a lot a sale closed
+    (evidence, never booked), no activity of that day (backlog
+    TJ-1032)."""
     import csv as _csv
     import io as _io
     headers: Dict[str, List[str]] = {}
@@ -625,6 +775,10 @@ def _flex_rows(text: str):
             continue
         cells = row[2:]
         hdr = headers.get(sec)
+        if cells[0].strip() == "ClosedLot" or (hdr and any(
+                h == "DataDiscriminator" and c.strip() == "ClosedLot"
+                for h, c in zip(hdr, cells))):
+            continue
         if hdr:
             cells = [c for h, c in zip(hdr, cells)
                      if "date" in h.lower() and "ex date" not in h.lower()
@@ -666,22 +820,50 @@ def _flex_span(text: str) -> Optional[Tuple[str, str]]:
     return (days[0], days[-1]) if days else None
 
 
+# Days after Dec 31 whose activity a tax year's figures still read: a
+# repurchase within 30 days after a year-end sale's settlement (T+1 or
+# T+2, over the New Year holiday) denies its loss (backlog TJ-0869).
+_FLEX_YEAR_TAIL_DAYS = 37
+
+
+def _flex_year_last_day(year: Any) -> Optional[str]:
+    """The last ISO day whose activity `year`'s figures read: Dec 31
+    plus _FLEX_YEAR_TAIL_DAYS. None for a year that is not one."""
+    from datetime import timedelta
+    try:
+        end = date_cls(int(year), 12, 31)
+    except (TypeError, ValueError):
+        return None
+    return (end + timedelta(days=_FLEX_YEAR_TAIL_DAYS)).isoformat()
+
+
 def _flex_lost_dates(existing: str, new: str, year: Any,
                      every_year: bool = False) -> List[str]:
-    """Dates of `year` the existing ib_flex.csv covers but the new
-    download's span (_flex_span) does not: overwriting would delete
-    those rows. A Flex query set to 'Year to date' re-fetched in January
-    replaced a whole year of activity at exit 0 (S007-00). `every_year`
-    (exports shared by every year's project): the dates of ANY year —
-    another year's project reads the same file."""
+    """Dates the existing ib_flex.csv covers that `year`'s figures read
+    but the new download's span (_flex_span) does not: overwriting
+    would delete those rows. A Flex query set to 'Year to date'
+    re-fetched in January replaced a whole year of activity at exit 0
+    (S007-00). The year's figures read more than its own days: the
+    history before it (the cost of what it sells) and the days after it
+    in which a repurchase denies a December loss (_flex_year_last_day);
+    a full calendar-year refresh deleted the next January's repurchase
+    with no word (backlog TJ-0869). A date outside the span that the
+    download's same section still holds is not lost: a late withholding
+    adjustment dated before the period stays in a refresh of the same
+    statement (backlog TJ-1032). `every_year` (exports shared by every
+    year's project): the dates of ANY year — another year's project
+    reads the same file."""
     if (not year and not every_year) or not existing:
         return []
-    old = [d for d in _flex_dates(existing)
-           if every_year or d[:4] == str(year)]
+    last = None if every_year else _flex_year_last_day(year)
+    if not every_year and last is None:
+        return []
     got = _flex_span(new)
-    if not got:
-        return old
-    return [d for d in old if not got[0] <= d <= got[1]]
+    held = {(s, d) for s, ds in _flex_rows(new) for d in ds}
+    return sorted({d for s, ds in _flex_rows(existing) for d in ds
+                   if (every_year or d <= last)
+                   and (s, d) not in held
+                   and not (got and got[0] <= d <= got[1])})
 
 
 def run(request) -> Dict[str, Any]:
@@ -889,7 +1071,32 @@ def _run_locked(request) -> Dict[str, Any]:
             overlap = _qt_window_overlap(acct_dir, out,
                                          start.isoformat(),
                                          end.isoformat(), number)
-            if overlap and getattr(args, "trim_overlap", False):
+            # A fetched row the strict parser refuses replaces nothing:
+            # trimmed against it, a manual export lost its usable rows
+            # (backlog TJ-0868).
+            _unusable = (F.qt_unusable_activities(acts)
+                         if overlap and getattr(args, "trim_overlap", False)
+                         else [])
+            if _unusable:
+                results[a]["trimmed"] = []
+                _why = (f"{len(_unusable)} downloaded activit"
+                        f"{'y' if len(_unusable) == 1 else 'ies'} cannot "
+                        f"be read: " + "; ".join(_unusable[:3])
+                        + ("; ..." if len(_unusable) > 3 else ""))
+                for sib, n in overlap:
+                    results[a]["trimmed"].append(
+                        {"file": sib.name, "rows": 0,
+                         "refused": f"{sib.name}: not trimmed — {_why}"})
+                print(f"taxjson fetch: WARNING: {a}: "
+                      f"{', '.join(s.name for s, _n in overlap)} not "
+                      f"trimmed — {_why}. {out.name} holds them with "
+                      f"blank or unreadable cells, which `taxjson run` "
+                      f"refuses; the "
+                      f"manual rows are kept. Delete those rows from "
+                      f"{out.name} (a later fetch adds them back once "
+                      f"Questrade sends them whole), then fetch again "
+                      f"with --trim-overlap.", file=sys.stderr)
+            elif overlap and getattr(args, "trim_overlap", False):
                 results[a]["trimmed"] = []
                 for sib, n in overlap:
                     _baks: List[Path] = []
@@ -953,6 +1160,19 @@ def _run_locked(request) -> Dict[str, Any]:
                          f"must stay separate. Scope the Flex query "
                          f"to ONE account (one query per taxjson "
                          f"account; the token is shared).")
+            # A combined statement: ONE Statement section, rows of two
+            # accounts (backlog TJ-0867).
+            _ids = F.flex_account_ids(text)
+            if len(_ids) > 1:
+                sys.exit(f"taxjson fetch: {a}: the Flex download holds "
+                         f"the rows of {len(_ids)} broker accounts ("
+                         + ", ".join(F.mask_account_number(i)
+                                     for i in _ids)
+                         + ") — a combined statement would blend books "
+                           "that must stay separate; nothing was "
+                           "written. Scope the Flex query to ONE account "
+                           "(one query per taxjson account; the token "
+                           "is shared).")
             if not F.looks_like_ib_statement(text):
                 bad = out.with_suffix(".csv.unrecognized")
                 saved = ""
@@ -978,17 +1198,22 @@ def _run_locked(request) -> Dict[str, Any]:
                 _new = out.with_name(out.name + ".new")
                 if not getattr(args, "dry_run", False):
                     F.write_private(_new, text)
+                _whose = ("" if shared else
+                          f" {_pyear}'s figures read (the year, the "
+                          f"history before it and the "
+                          f"{_FLEX_YEAR_TAIL_DAYS} days after it, where "
+                          f"a repurchase denies a December loss)")
                 sys.exit(f"taxjson fetch: {a}: the Flex download covers "
                          f"{_span}, but {out.name} holds {len(_lost)} "
-                         f"{_pyear} activity date(s) outside it "
+                         f"activity date(s){_whose} outside it "
                          f"({_lost[0]}..{_lost[-1]}) — replacing it "
                          f"would delete that activity from the books. "
                          + ("" if getattr(args, "dry_run", False) else
                             f"The download was saved as {_new.name} "
                             f"(not read by `taxjson run`). ")
                          + f"Set the Flex query's period to cover "
-                         f"{_pyear}, or move {out.name} aside to accept "
-                         f"the new file.")
+                         f"{_lost[0]}..{_lost[-1]} too, or move "
+                         f"{out.name} aside to accept the new file.")
             if getattr(args, "dry_run", False):
                 say(f"  would write {out.name} "
                     f"({len(text.splitlines())} lines, {_span})")

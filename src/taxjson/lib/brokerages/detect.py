@@ -468,7 +468,10 @@ def same_broker_siblings(path: Path, broker: str,
     the same parser (a Kraken trades export's ledger, a Webull export's
     other years) — by the same detection, not by file name. `by_name`
     (lower-cased name -> bool) is the parser's old name test, used only
-    in a folder of more than SIBLING_SCAN_LIMIT CSVs."""
+    in a folder of more than SIBLING_SCAN_LIMIT CSVs. A redacted copy
+    beside the exports is never one: the run does not read it (backlog
+    TJ-0476, TJ-1080)."""
+    from taxjson.lib.project_layout import redacted_copy_beside_exports
     path = Path(path)
     try:
         me = path.resolve()
@@ -477,7 +480,8 @@ def same_broker_siblings(path: Path, broker: str,
                  and not p.name.startswith(('.', '~$'))]
     except OSError:
         return []
-    cands = sorted(p for p in cands if p.name != path.name)
+    cands = sorted(p for p in cands if p.name != path.name
+                   and not redacted_copy_beside_exports(p))
     scan = len(cands) <= SIBLING_SCAN_LIMIT
     out = []
     for p in cands:

@@ -23,7 +23,7 @@ import os
 import re
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Dict, List, Optional
 
 ENV_LOCAL_TZ = 'TAXJSON_LOCAL_TZ'
 
@@ -235,8 +235,46 @@ def _eastern_offset_hours(dt_utc: datetime) -> int:
     return -4 if start <= dt_utc < end else -5
 
 
+def _halved(w0: datetime, elapsed: timedelta) -> datetime:
+    """`w0` plus half of `elapsed`, in whole seconds."""
+    return w0 + timedelta(seconds=int(elapsed.total_seconds()) // 2)
+
+
+def _eastern_local(dt_utc: datetime) -> datetime:
+    """utc_to_local for North-American Eastern time without a tz
+    database (_eastern_offset_hours), the repeated hour ordered as
+    utc_to_local orders it."""
+    off = _eastern_offset_hours(dt_utc)
+    local = dt_utc + timedelta(hours=off)
+    if dt_utc.year >= 2007:
+        d = datetime(dt_utc.year, 11, 1)
+        d += timedelta(days=(6 - d.weekday()) % 7)
+        end = d + timedelta(hours=6)
+    else:
+        last_oct = datetime(dt_utc.year, 10, 31)
+        last_oct -= timedelta(days=(last_oct.weekday() + 1) % 7)
+        end = last_oct + timedelta(hours=6)
+    start = end - timedelta(hours=1)
+    if start <= dt_utc < end + timedelta(hours=1):
+        return _halved(start - timedelta(hours=4), dt_utc - start)
+    return local
+
+
 def utc_to_local(dt_utc: datetime, tz_name: Optional[str] = None) -> datetime:
-    """Naive UTC datetime -> naive local wall-clock datetime."""
+    """Naive UTC datetime -> naive local wall-clock datetime.
+
+    In the hour the clocks repeat when they fall back (01:00-01:59 twice
+    in Toronto), the wall clock runs backwards: a sale at 05:50 UTC
+    (01:50 EDT) and a rebuy at 06:10 UTC (01:10 EST) read in that order
+    by their local times put the rebuy first, and the canonical replay
+    (date, time) booked them so (backlog TJ-0747). Inside that hour the
+    two passes are compressed into it in order — the first pass into
+    its first half, the second into its second half, each instant at
+    half its distance from the hour's start — so local time order is
+    the instants' order, except that two instants one second apart may
+    share a whole second (the books store whole seconds: a parser keeps
+    those rows in order, order_within_seconds; backlog TJ-1056); the date
+    is the local date as before."""
     name = tz_name or local_tz_name()
     try:
         from zoneinfo import ZoneInfo
@@ -244,13 +282,85 @@ def utc_to_local(dt_utc: datetime, tz_name: Optional[str] = None) -> datetime:
     except Exception:
         if name in ('America/Toronto', 'America/Montreal',
                     'America/New_York', 'US/Eastern', 'Canada/Eastern'):
-            return dt_utc + timedelta(hours=_eastern_offset_hours(dt_utc))
+            return _eastern_local(dt_utc)
         raise ValueError(
             f"local time zone {name!r} (TAXJSON_LOCAL_TZ) is not available "
             f"— install the `tzdata` package or use an IANA zone name "
             f"such as America/Toronto.")
-    return (dt_utc.replace(tzinfo=timezone.utc).astimezone(tz)
-            .replace(tzinfo=None))
+    local = (dt_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+             .replace(tzinfo=None))
+    return _fold_ordered(dt_utc, local, tz)
+
+
+def order_within_seconds(transactions, row_line, key_of_line) -> None:
+    """Reorder, in place, the rows that share one (date, time) by the
+    instant their export line states (`key_of_line`: export line -> a
+    sort key; `row_line`: the row's line): the books keep rows of one
+    second in the order the parser gives them, so a descending export
+    booked a rebuy before the sale it followed. Rows of a stamp with one
+    instant, and rows of a stamp with a line of no known instant, keep
+    their order. (Kraken: the fraction of a second, backlog TJ-0746. Any
+    crypto parser: two UTC seconds utc_to_local compresses into one in
+    the hour the clocks repeat, backlog TJ-1056.)"""
+    groups: Dict[tuple, list] = {}
+    for i, t in enumerate(transactions):
+        groups.setdefault((t.get('date'), t.get('time')), []).append(i)
+    for idx in groups.values():
+        if len(idx) < 2:
+            continue
+        keys = {i: key_of_line.get(row_line(transactions[i])) for i in idx}
+        if any(k is None for k in keys.values()):
+            continue
+        moved = [transactions[i] for i in sorted(idx, key=keys.get)]
+        for pos, t in zip(idx, moved):
+            transactions[pos] = t
+
+
+def order_across_exports(rows, instants) -> List[int]:
+    """The order (indexes into `rows`, the parsed rows of several exports
+    in file order; each with date, time and source) that puts rows of one
+    (date, time) from more than one export by `instants` (parallel: each
+    row's instant, or None): order_within_seconds orders one file's, and
+    the books keep rows of one second in the order they are given, so two
+    UTC seconds utc_to_local compresses into one replayed in file order
+    (backlog TJ-1227). A stamp with a row of no known instant, or from one
+    export, keeps its order."""
+    order = list(range(len(rows)))
+    groups: Dict[tuple, list] = {}
+    for i, t in enumerate(rows):
+        groups.setdefault((t.date, t.time), []).append(i)
+    for idx in groups.values():
+        if len({rows[i].source for i in idx}) < 2 \
+                or any(instants[i] is None for i in idx):
+            continue
+        for pos, i in zip(idx, sorted(idx, key=lambda n: instants[n])):
+            order[pos] = i
+    return order
+
+
+def _ambiguous(w: datetime, tz) -> bool:
+    """Wall time `w` occurs twice in `tz` (the repeated hour)."""
+    a = w.replace(tzinfo=tz, fold=0).utcoffset()
+    b = w.replace(tzinfo=tz, fold=1).utcoffset()
+    return a is not None and b is not None and a > b
+
+
+def _fold_ordered(dt_utc: datetime, local: datetime, tz) -> datetime:
+    """`local` (the wall time of `dt_utc` in `tz`), or, inside a
+    repeated hour, its order-keeping stand-in (utc_to_local)."""
+    if not _ambiguous(local, tz):
+        return local
+    first = local.replace(tzinfo=tz, fold=0).utcoffset()
+    second = local.replace(tzinfo=tz, fold=1).utcoffset()
+    span = first - second               # how long the hour repeats
+    on_second = dt_utc + second == local
+    # The repeated span's first wall time: step back while ambiguous.
+    w0 = local
+    for step in (timedelta(minutes=1), timedelta(seconds=1)):
+        while _ambiguous(w0 - step, tz) and local - (w0 - step) < span:
+            w0 -= step
+    elapsed = (local - w0) + (span if on_second else timedelta(0))
+    return _halved(w0, elapsed)
 
 
 def same_coin_hint(a: str, b: str, qty_a: float, qty_b: float,

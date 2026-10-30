@@ -65,10 +65,11 @@ parser spells it; a bare symbol takes the suffix of the row's currency
 and refuse a decimal comma (1234,56). Trade rows settle on the mapped
 `settle` column when filled, else on the standard cycle from the
 holiday-aware lib.dates.settlement_date (T+1 since May 2024, T+2
-before, T+3 before 2017-09-05; options T+1) on the listing's market;
+before, T+3 before 2017-09-05, T+5 before 1995-06-07 in USD and CAD;
+options T+1) on the listing's market;
 income rows are dated `date`. Symbols are upper-cased (`sample` and `SAMPLE`
 are one security). Unmapped action values are counted and summarized,
-never silently dropped — one that carries a quantity or an amount is an
+never silently dropped — one that carries a quantity, an amount or a fee is an
 UNBOOKED warning (echoed by `taxjson run`, refused by `--strict`, a
 failure under `taxjson-brokerage --lint`); map it, or map it to `skip`.
 A `fee` row is booked positive = charged (the IB/Questrade/RBC
@@ -145,6 +146,7 @@ from taxjson.lib.tomlcompat import tomllib
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          canonical_ca_listing,
+                                         is_ca_pref_series,
                                          decode_broker_text,
                                          parse_strict_number,
                                          refuse_pasted_overlap,
@@ -156,6 +158,9 @@ from taxjson.lib.dates import settlement_date
 # converter uses for hand-entered totals.
 _REL_TOL = 0.01
 _ABS_TOL = 0.05
+# The most days after its expiry a $0 option close may post and still be
+# the expiry (dated and settled on the expiry day).
+_EXPIRY_POST_DAYS = 7
 # A fee above this share of the gross is almost always a column mix-up
 # (the amount or the gross in the fee column).
 _MAX_FEE_SHARE = 0.05
@@ -435,7 +440,8 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
                      allow_large_fees: bool, fee_mapped: bool = True,
                      is_future: bool = False,
                      amount_given: bool = False,
-                     fee_sign: Optional[str] = None) -> float:
+                     fee_sign: Optional[str] = None,
+                     price_given: bool = False) -> float:
     """Refuse a BUY/SELL row whose numbers don't hang together — the
     signature of a mis-mapped column. See the module docstring. Returns
     the fee to book, SIGNED (positive = charged, negative = a credited
@@ -467,6 +473,18 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
             fee = -fee
     hint = ("check the [columns] mapping — is the fee, gross or amount "
             "column mapped to the wrong field?")
+    if not fee_mapped and gross > 0 and (
+            amount or (amount_given and target == "sell")):
+        # A commission-inclusive Net column with no commission column:
+        # the gap between the net and qty x price IS the commission.
+        # A negative gap (a buy's amount below the gross) is left for
+        # the mismatch refusal below. A sale whose stated net is 0 had
+        # its whole gross taken by the commission: inferred before the
+        # zero-amount refusal below, which refused it (backlog TJ-0989).
+        inferred = (abs(amount) - gross if target == "buy"
+                    else gross - abs(amount))
+        if inferred > 0.005:
+            fee = round(inferred, 6)
     if amount_given and not amount and gross > 0:
         # An explicit 0 in the amount cell is not "no amount" (S057-05):
         # deriving qty x price over it booked a cost or proceeds the
@@ -478,32 +496,35 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
         if expected > max(_ABS_TOL, _REL_TOL * max(gross, 1.0)):
             raise ValueError(
                 f"generic importer: {where}: the amount cell is 0 but "
-                f"qty x price{' x 100' if mult > 1 else ''} "
+                f"qty x price{f' x {mult:g}' if mult > 1 else ''} "
                 f"{'+' if target == 'buy' else '-'} fee = {expected:.2f} "
                 f"— a row with no cash (free or journal shares) is not a "
                 f"{target}: map its action to skip and enter the real "
                 f"cost or proceeds in a .tt file; or is `amount` mapped "
                 f"to a column that is always 0? {hint}")
-    if not fee_mapped and amount and gross > 0:
-        # A commission-inclusive Net column with no commission column:
-        # the gap between the net and qty x price IS the commission.
-        # A negative gap (a buy's amount below the gross) is left for
-        # the mismatch refusal below.
-        inferred = (abs(amount) - gross if target == "buy"
-                    else gross - abs(amount))
-        if inferred > 0.005:
-            fee = round(inferred, 6)
     if gross <= 0 and amount:
         # No price (unmapped, blank or 0) or a future: the qty x price
         # cross-check cannot run, but a fee against the booked total
         # still can — a swapped fee/amount mapping books the commission
         # as the cost (S011-03).
-        if target == "buy" and fee > 0 and fee >= abs(amount) - 0.005:
+        # (A negative-price future: a charge larger than the amount
+        # makes the buy cost money although its notional is received —
+        # backlog TJ-0668; the fee-share check below still asks for the
+        # allow_large_fees opt-in.)
+        # (At a stated zero price an amount equal to the fee is no swap
+        # and no large fee: the fee is the row's whole cash, what a blank
+        # amount derives. A buy-to-close $0 expiry was refused, a sale
+        # asked for the opt-in: backlog TJ-1077, TJ-1121. A share bought
+        # at $0 stays refused, as with a blank amount: backlog TJ-1237.)
+        fee_only = _fee_only_cash(price_given, price, amount, fee, is_future)
+        if (target == "buy" and fee > 0 and fee >= abs(amount) - 0.005
+                and not (fee_only and mult > 1)
+                and not (is_future and price < 0)):
             raise ValueError(
                 f"generic importer: {where}: fee {fee:.2f} is not less "
                 f"than the buy's whole amount {abs(amount):.2f} — {hint}")
         if fee and abs(fee) > _MAX_FEE_SHARE * abs(amount) \
-                and not allow_large_fees:
+                and not allow_large_fees and not fee_only:
             raise ValueError(
                 f"generic importer: {where}: fee {abs(fee):.2f} is "
                 f"{abs(fee) / abs(amount):.2%} of the amount {abs(amount):.2f} "
@@ -518,7 +539,7 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
             f"{abs(fee) / gross:.2%} of the gross {gross:.2f} "
             f"(limit {_MAX_FEE_SHARE:.0%}) "
             f"(qty {abs(qty):g} x price {abs(price):g}"
-            f"{' x 100' if mult > 1 else ''}) — {hint} If the fee really "
+            f"{f' x {mult:g}' if mult > 1 else ''}) — {hint} If the fee really "
             f"is that large (tiny odd-lot trades), set "
             f"`[options] allow_large_fees = true` in the mapping.")
     if amount and gross > 0:
@@ -531,7 +552,7 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
                                         _REL_TOL * max(cmp, 1.0)):
             raise ValueError(
                 f"generic importer: {where}: amount {abs(amount):.2f} "
-                f"differs from qty x price{' x 100' if mult > 1 else ''} "
+                f"differs from qty x price{f' x {mult:g}' if mult > 1 else ''} "
                 f"{'+' if target == 'buy' else '-'} fee = {expected:.2f} "
                 f"(qty {abs(qty):g}, price {abs(price):g}, fee "
                 f"{fee:g}) by more than 1% — {hint}")
@@ -543,19 +564,56 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
     return fee
 
 
+def _commission_allowance(qty: float) -> float:
+    """The most a row's amount may carry as a commission of its own when
+    no fee column states one (back_compute_fee's allowance)."""
+    return 10.0 + 2.0 * abs(qty)
+
+
+def _fee_only_cash(price_given: bool, price: float, amount: float,
+                   fee: float, is_future: bool = False) -> bool:
+    """A row at a STATED zero price whose only cash is its commission
+    (a worthless-share cleanup, an expiry the broker charged for):
+    |amount| is the charged fee (backlog TJ-0731 / TJ-0732)."""
+    return (price_given and not price and not is_future and fee > 0
+            and abs(abs(amount) - fee) <= max(_ABS_TOL, _REL_TOL * fee))
+
+
+def _expiry_commission(target: str, qty: float, amount: float, date: str,
+                       expiry: Optional[str]) -> float:
+    """The commission of an option closed at a stated zero price on (or
+    posted up to 7 days after) its expiry, in a file with no fee column:
+    the row's amount, when it is a charge (a buy's, or a sale's cash
+    out) of a commission's size. Else 0: a sale's positive amount may be
+    cash received, a larger one more than a commission. The expiry was
+    read as a trade settling T+1 with the charge as proceeds (backlog
+    TJ-1035)."""
+    if (not expiry or not amount or expiry > date
+            or GenericBrokerage._days(expiry, date) > _EXPIRY_POST_DAYS
+            or (target == "sell" and amount > 0)
+            or abs(amount) > _commission_allowance(qty)):
+        return 0.0
+    return abs(amount)
+
+
 def _trade_net(fname: str, target: str, qty: float, price: float,
                amount: float, fee: float, mult: float = 1.0,
-               is_future: bool = False, amount_given: bool = False) -> float:
+               is_future: bool = False, amount_given: bool = False,
+               price_given: bool = False) -> float:
     """Fee-inclusive trade total: the amount column when present, else
     derived. A SELL whose commission exceeds its gross (a penny option
     close, a worthless-position cleanup) nets NEGATIVE: the engine
     deducts those negative proceeds (core._trade_money) and the schema
     accepts them (S017-00). It used to be clamped to 0 — the excess
     commission never reached the loss — or, with an amount column,
-    refused as a mis-mapping (S057-02)."""
+    refused as a mis-mapping (S057-02). So does a sale at a stated zero
+    price whose amount is its fee: the stated amount booked the charge
+    as proceeds received, the blank one as paid (backlog TJ-0731)."""
     gross = 0.0 if is_future else abs(qty) * abs(price) * mult
     if amount or amount_given:
-        if target == "sell" and gross > 0 and fee > gross:
+        if target == "sell" and fee > gross and (
+                gross > 0 or _fee_only_cash(price_given, price, amount,
+                                            fee, is_future)):
             return -abs(amount)
         if is_future and price < 0:
             # A futures price can be negative (WTI, April 2020): the
@@ -568,6 +626,35 @@ def _trade_net(fname: str, target: str, qty: float, price: float,
     # `fee` is signed: a rebate (negative) lowers a buy's cost and
     # raises a sale's proceeds (A2-0626).
     return gross + (fee if target == "buy" else -fee)
+
+
+def _future_notional(target: str, net: float, fee: float) -> float:
+    """|qty x price x size| of a futures fill from its signed net (a
+    buy's cost, a sale's proceeds) and signed fee (positive = charged):
+    a buy costs notional + fee, a sale brings notional - fee."""
+    return round(abs(net - fee if target == "buy" else net + fee), 6)
+
+
+def _future_net(target: str, price: float, amount: float,
+                fee: float) -> Tuple[float, bool]:
+    """(net, ambiguous) of a futures fill whose amount cell is read as a
+    magnitude. Its notional carries the price's sign (a negative-price
+    buy receives money), so the net is the reading of |amount| — cost
+    or credit — whose notional (net - fee for a buy, net + fee for a
+    sale) has that sign. When a commission or rebate larger than the
+    amount makes both readings possible, `ambiguous` is True and the
+    caller decides from the file's cash sign; the net returned is the
+    price-sign reading, the only one before backlog TJ-0668 (a rebate
+    crossing a near-zero notional was booked as a cost, and a charge
+    crossing a negative one refused)."""
+    a = abs(amount)
+    sign = -1.0 if price < 0 else 1.0
+    fits = [n for n in (a, -a)
+            if (n - fee if target == "buy" else n + fee) * sign > 0]
+    default = -a if price < 0 else a
+    if len(fits) == 1:
+        return fits[0], False
+    return default, len(fits) == 2 and bool(a) and bool(price)
 
 
 class GenericBrokerage(BaseBrokerage):
@@ -621,6 +708,10 @@ class GenericBrokerage(BaseBrokerage):
         # listing, audit S010-05): an explicit .V here must not split
         # the pool from the same shares bought at IB. The venue, not the
         # row currency, decides -- SAMPLF.U.TO bought in USD stays .TO.
+        # A dotted preferred series (FTN.PR.L, FTN.PR.V) names no venue:
+        # its letter is the series (backlog TJ-0970).
+        if is_ca_pref_series(sym):
+            return self.apply_currency_suffix(sym, currency)
         for suf in sorted(_ca_sfx()):
             if up.endswith("." + suf) and len(up) > len(suf) + 1:
                 return canonical_ca_listing(sym, "CAD")
@@ -658,6 +749,11 @@ class GenericBrokerage(BaseBrokerage):
                                                 False))
         formats = mapping.get("formats") or {}
         date_fmt = formats.get("date", "%Y-%m-%d")
+        # A date format with a clock: each trade keeps the execution
+        # time the row states (backlog TJ-0734: every row was stamped
+        # 09:30, and a newest-first export replayed a day's trades
+        # backwards).
+        has_clock = bool(re.search(r"%[HIMSXc]", date_fmt))
         settle_fmt = formats.get("settle", date_fmt)
         tax_sign = formats.get("tax_sign", "cash")
         fee_sign = formats.get("fee_sign", "cash")
@@ -706,6 +802,9 @@ class GenericBrokerage(BaseBrokerage):
         # (where, target, amount) per trade row: the file's amount-sign
         # convention check after the loop (A2-0106).
         trade_amounts: List[tuple] = []
+        # Futures rows whose commission crosses the notional: (tx index,
+        # where, target, amount cell, signed fee) — backlog TJ-0668.
+        fut_crossing: List[tuple] = []
         # Option rows closed at $0 and stock trades, for the exercise/
         # assignment check after the loop (A2-0629).
         zero_closes: List[Dict[str, Any]] = []
@@ -848,7 +947,11 @@ class GenericBrokerage(BaseBrokerage):
                     # the position short): surfaced as UNBOOKED, not
                     # just counted (R1-129).
                     _moves = False
-                    for _f in ("quantity", "amount"):
+                    # A mapped fee is cash too: a charge on a row with
+                    # no quantity or amount was dropped unflagged when
+                    # the mapping derives totals from qty x price
+                    # (backlog TJ-0972).
+                    for _f in ("quantity", "amount", "fee"):
                         try:
                             _v = num(row, _f, "")
                         except ValueError:
@@ -858,7 +961,7 @@ class GenericBrokerage(BaseBrokerage):
                     if _moves:
                         _w = (f"{shown_name(path)} line {reader.line_num}: "
                               f"action {raw_action or '?'!r} (not in "
-                              f"[actions]) carries a quantity/amount")
+                              f"[actions]) carries a quantity/amount/fee")
                         unbooked.append(_w)
                         self.lint_findings.append(
                             f"{_w} — not booked")
@@ -883,7 +986,10 @@ class GenericBrokerage(BaseBrokerage):
                         f"({mapping['_path']}) — fix the "
                         f"format in the mapping or the cell.")
                 date = dt.strftime("%Y-%m-%d")
-                row_dates.append(date)
+                clock = dt.strftime("%H:%M:%S") if has_clock else ""
+                # The order check sees the clock too: a newest-first
+                # export's rows of one day go down in time.
+                row_dates.append(f"{date} {clock}" if clock else date)
                 currency = (str(cell(row, "currency")).strip()
                             or str(defaults.get("currency", ""))
                             ).strip().upper()
@@ -915,37 +1021,68 @@ class GenericBrokerage(BaseBrokerage):
                 fee = fee_v or 0.0
 
                 if target in ("buy", "sell"):
-                    mult = (float(self.OPTION_MULTIPLIER)
-                            if is_option_symbol(symbol_raw)
-                            or is_option_symbol(symbol) else 1.0)
                     is_future = symbol.startswith(_FUTURES_PREFIXES)
+                    mult, size_basis = 1.0, ""
+                    if (is_option_symbol(symbol_raw)
+                            or is_option_symbol(symbol)):
+                        mult, size_basis = self._option_size(
+                            symbol, target, qty, price, amount_v, fee,
+                            fee_mapped, is_future)
+                    _exp = (parse_option_expiry(symbol)
+                            if mult > 1 and not is_future else None)
+                    # (A blank fee cell states nothing, like no fee
+                    # column: backlog TJ-1240.)
+                    expiry_fee = (
+                        _expiry_commission(target, qty, amount, date, _exp)
+                        if fee_v is None and price_v is not None
+                        and not price else 0.0)
+                    if expiry_fee:
+                        fee = expiry_fee
                     self._check_trade_shape(
                         where, target, raw_action, qty, price_v, amount_v,
                         abs(fee), mult, is_future)
                     trade_signs.append((where, target, qty))
-                    if not (is_future and price < 0):
-                        # A negative futures price turns the amount's
-                        # sign: no evidence of the file's cash sign.
-                        trade_amounts.append((where, target, amount_v))
                     fee = _check_trade_row(
                         where, target, qty, price, amount, fee, mult,
                         allow_large_fees, fee_mapped, is_future,
                         amount_given=amount_v is not None,
-                        fee_sign=trade_fee_sign)
+                        # (An inferred fee is a charge, not a signed cell.)
+                        fee_sign=None if expiry_fee else trade_fee_sign,
+                        price_given=price_v is not None)
+                    fut_net, fut_either = (
+                        _future_net(target, price, amount, fee)
+                        if is_future else (None, False))
+                    if fut_either:
+                        # Resolved after the loop by the file's cash sign
+                        # (backlog TJ-0668).
+                        fut_crossing.append((len(transactions), where,
+                                             target, amount, fee))
+                    elif not (is_future and price < 0) and not (
+                            mult > 1 and _fee_only_cash(
+                                price_v is not None, price, amount, fee,
+                                is_future)):
+                        # A negative futures price turns the amount's
+                        # sign, and an option's fee-only $0 close is its
+                        # charge either way: no evidence of the file's
+                        # cash sign (backlog TJ-1238).
+                        trade_amounts.append((where, target, amount_v))
                     # An option closed at $0 on (or posted just after)
                     # its expiry IS the expiry: dated and settled on the
                     # expiry day (CA-DATE-08 / US-DATE-08), not T+1 —
                     # a Dec-31 expiry's loss moved into the next year
                     # (audit A2-0628).
-                    _exp = (parse_option_expiry(symbol)
-                            if mult > 1 and not is_future else None)
-                    _zero = (not price and not amount)
+                    # A commission does not make it a trade: its cash
+                    # is the fee alone (backlog TJ-0732: it settled T+1,
+                    # a Dec-31 expiry's loss in the next year).
+                    _zero = (not price and (not amount or _fee_only_cash(
+                        True, price, amount, fee)))
                     if _exp and _zero and _exp < date and \
-                            self._days(_exp, date) <= 7:
+                            self._days(_exp, date) <= _EXPIRY_POST_DAYS:
                         expiry_clamped.append(
                             f"{where}: {symbol} $0 close dated {date} -> "
                             f"its expiry {_exp}")
                         date = _exp
+                        clock = ""      # another day's clock
                     if _exp and _zero and date == _exp:
                         date_settle = _exp
                     else:
@@ -963,7 +1100,7 @@ class GenericBrokerage(BaseBrokerage):
                                             "qty": qty, "target": target})
                     transactions.append({
                         "action": "BUYSELL",
-                        "date": date, "time": "09:30:00",
+                        "date": date, "time": clock or "09:30:00",
                         "date_settle": date_settle,
                         "symbol": symbol,
                         "quantity": self.signed_quantity(
@@ -977,22 +1114,36 @@ class GenericBrokerage(BaseBrokerage):
                         "price": price if is_future else abs(price),
                         # Amount column when present (fee-inclusive,
                         # magnitude); else derive from qty*price±fee.
-                        "net_amount": _trade_net(
+                        "net_amount": (fut_net if fut_net is not None
+                                       else _trade_net(
                             path.name, target, qty, price, amount, fee,
                             mult, is_future,
-                            amount_given=amount_v is not None),
+                            amount_given=amount_v is not None,
+                            price_given=price_v is not None)),
                         "gross_amount": (
-                            # Futures: the implied qty x price x size;
-                            # the fee is signed (a rebate is negative).
-                            abs(amount) + (fee if target == "sell"
-                                           else -fee)
-                            if is_future else self.theoretical_gross(
-                                qty, abs(price), is_option=(mult > 1))),
+                            # Futures: the implied qty x price x size,
+                            # from the signed net and fee (a rebate is
+                            # negative): its magnitude.
+                            _future_notional(target, fut_net, fee)
+                            if fut_net is not None
+                            else self.theoretical_gross(
+                                qty, abs(price), is_option=(mult > 1),
+                                multiplier=mult)),
                         "fee": fee,
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
                         **({"broker_account": row_account}
                            if row_account else {}),
+                        # A mini the row's own amount shows, or the
+                        # MULT size its cash is at (backlog TJ-0863,
+                        # TJ-1034): the size the row check compares its
+                        # money with. A MULT size its cash is not at
+                        # stays the engine's to read, as for every parser.
+                        **({"multiplier": mult,
+                            "contract_size_basis": size_basis}
+                           if size_basis in ("derived", "declared")
+                           and mult != float(self.OPTION_MULTIPLIER)
+                           else {}),
                     })
                     self.note_row_line(transactions[-1], reader.line_num)
                     continue
@@ -1058,6 +1209,27 @@ class GenericBrokerage(BaseBrokerage):
                     })
                     self.note_row_line(transactions[-1], reader.line_num)
         refuse_pasted_overlap(shown_name(path), pasted, "the header")
+        if fut_crossing:
+            # A futures fill whose commission or rebate is larger than
+            # its amount: paid or received both fit the price's sign.
+            # A file that signs its cash (a buy row paid is negative)
+            # says which; an unsigned one cannot (backlog TJ-0668).
+            cash_signed = any(t == "buy" and (a or 0) < 0
+                              for _, t, a in trade_amounts)
+            for i, w, t, a, f in fut_crossing:
+                if not cash_signed:
+                    raise ValueError(
+                        f"generic importer: {w}: a futures {t} whose "
+                        f"commission ({f:g}) is larger than its amount "
+                        f"({abs(a):g}): the cash could go either way "
+                        f"(paid or received {abs(a):g}), and the file's "
+                        f"amounts carry no sign to tell. Export the "
+                        f"amount signed (negative = paid; the file's buys "
+                        f"then show it), or enter the fill in a .tt "
+                        f"file.")
+                net = -a if t == "buy" else a
+                transactions[i]["net_amount"] = net
+                transactions[i]["gross_amount"] = _future_notional(t, net, f)
         # A file that signs its quantities (a sell row carried a
         # negative quantity) must not also carry a sell row with a
         # POSITIVE quantity: that row is a buy under the file's own
@@ -1123,7 +1295,8 @@ class GenericBrokerage(BaseBrokerage):
                   f"and are NOT in the books: {shown}{more}. Map the "
                   f"action in [actions] (or to \"skip\" if it really "
                   f"is not an event).")
-        # Every row is stamped 09:30:00, so a day's rows tie and keep
+        # A row with no clock is stamped 09:30:00 (a trade whose date
+        # format has one keeps its time), so a day's rows tie and keep
         # the order they are emitted in (CA-DATE-14 / US-DATE-13): a
         # newest-first export is read bottom-up. One row emits at most
         # one transaction, so reversing the list reverses the rows.
@@ -1142,6 +1315,73 @@ class GenericBrokerage(BaseBrokerage):
         transactions[:] = out
         self.emit_skip_summary(shown_name(path))
         return transactions
+
+    def _option_size(self, symbol: str, target: str, qty: float,
+                     price: float, amount_v: Optional[float], fee: float,
+                     fee_mapped: bool, is_future: bool) -> Tuple[float, str]:
+        """(premium multiplier, basis) of an option row; the export
+        never states a contract's size. The row's own money decides,
+        when it has a price and an amount: the standard 100, else a
+        ticker.map `MULT` size that fits ("declared"), else a mini's 10
+        (option_row_multiplier: "assumed" / "derived", as the Questrade,
+        RBC and Webull parsers do). With no amount to show it, 100,
+        unless MULT declares a mini's 10. `MULT` otherwise sizes the
+        deliverable: an adjusted series' 50 shares still cost its premium
+        x 100, and reading it as the premium multiplier refused the
+        row's real cash, or cut a price-only row's to N/100 (backlog
+        TJ-1034). A declared mini's own size is tried first, and a mini
+        with no MULT line (the cash used to be x 100 whatever the row
+        said) is found by its amount (backlog TJ-0863). A futures option
+        keeps the old 100 (its cash is the amount column; no qty x price
+        check runs)."""
+        std = float(self.OPTION_MULTIPLIER)
+        if is_future:
+            return std, "assumed"
+        from taxjson.lib.core import parse_option_underlying
+        from taxjson.lib.markets import option_contract_size
+        und = parse_option_underlying(symbol) or ""
+        declared = float(option_contract_size(symbol, und) or 0.0)
+        is_mini = declared == float(self.MINI_OPTION_MULTIPLIER)
+        if not price or not amount_v:
+            return (declared, "declared") if is_mini else (std, "assumed")
+        cash, f = abs(amount_v), abs(fee or 0.0)
+
+        def fits(m: float) -> bool:
+            gross = abs(qty) * abs(price) * m
+            tol = max(_ABS_TOL, _REL_TOL * max(gross, 1.0))
+            if fee_mapped:
+                # A charge or a rebate, and a sale whose commission
+                # exceeds its gross (it nets negative).
+                return any(abs(cash - c) <= tol
+                           for c in (gross + f, gross - f, abs(gross - f)))
+            # No fee column: the amount carries a commission of its own
+            # (back_compute_fee's allowance).
+            gap = cash - gross if target == "buy" else gross - cash
+            return -tol <= gap <= _commission_allowance(qty)
+
+        def fee_within_limit(m: float) -> bool:
+            # The commission a fit with no fee column infers, against the
+            # row check's limit.
+            gross = abs(qty) * abs(price) * m
+            gap = cash - gross if target == "buy" else gross - cash
+            return gap <= _MAX_FEE_SHARE * gross
+
+        if not declared:
+            return self.option_row_multiplier(symbol, fits)
+        # (When nothing fits, the money check names the first size.)
+        order = (declared, std) if is_mini else (std, declared)
+        # A low price fits 100 by reading the gap as a commission the row
+        # check then refuses; the declared size shows the amount without
+        # one (backlog TJ-1239).
+        if (not is_mini and not fee_mapped and not fee_within_limit(std)
+                and fits(declared) and fee_within_limit(declared)):
+            order = (declared, std)
+        for m in order:
+            if fits(m):
+                break
+        else:
+            m = declared if is_mini else std
+        return m, ("declared" if m == declared else "assumed")
 
     @staticmethod
     def _check_trade_shape(where: str, target: str, raw_action: str,
@@ -1187,8 +1427,12 @@ class GenericBrokerage(BaseBrokerage):
                 f"its own sign. Map sells to their own action value; "
                 f"booking it as a buy would drop the disposition.")
         _gross = abs(qty) * abs(price_v or 0.0) * mult
-        _neg_net = (fee > _gross > 0 and abs(abs(amount_v or 0.0)
-                                             - (fee - _gross))
+        # (A stated zero price counts: its fee is the whole cash —
+        # backlog TJ-0731.)
+        _neg_net = (fee > _gross
+                    and (_gross > 0 or (price_v is not None and not price_v
+                                        and not is_future))
+                    and abs(abs(amount_v or 0.0) - (fee - _gross))
                     <= max(_ABS_TOL, _REL_TOL * (fee - _gross)))
         if (target == "sell" and qty > 0 and (amount_v or 0.0) < 0
                 and not _neg_net
@@ -1270,7 +1514,8 @@ class GenericBrokerage(BaseBrokerage):
         """Settlement date of a trade row: the mapped `settle` column
         when the cell is filled, else the standard cycle from the
         shared holiday-aware helper (T+1 since the 2024 cutover, T+2
-        before, T+3 before 2017-09-05; options T+1), on the listing's
+        before, T+3 before 2017-09-05, T+5 before 1995-06-07 in USD and
+        CAD; options T+1), on the listing's
         market (lib/dates.settlement_calendar: a Canadian suffix settles
         on the Canadian calendar, in US dollars on the days both Canada
         and the US settle, .US on the US one, .L/.AX on the UK/ASX cycle,

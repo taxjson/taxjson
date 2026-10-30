@@ -133,6 +133,9 @@ class Payment:
     pil: bool
     shares: float = 0.0
     components: List[Component] = field(default_factory=list)
+    # The books' security root when the project's map renames IB's
+    # spelling (lib/slip_audit.map_report_roots); "" otherwise.
+    book_root: str = ""
 
     @property
     def gross(self) -> float:
@@ -168,6 +171,10 @@ class Report:
     payments: List[Payment] = field(default_factory=list)
     unknown: List[Tuple[str, float]] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
+    # The payments whose components do not add up to their Summary row:
+    # (payment, what differs) — the slip boxes read from them are in
+    # doubt (lib/slip_audit.audit: not compared, backlog TJ-0796).
+    mismatched: List[Tuple["Payment", str]] = field(default_factory=list)
 
     @property
     def years(self) -> List[str]:
@@ -354,10 +361,11 @@ def read_report(path: Path) -> Report:
                      " withheld (WithholdInBase)", 0.01 * n + 1e-9)):
                 got, want = getattr(p, attr), getattr(summ, attr)
                 if abs(want - got) > tol:
+                    detail = (f"the components add up to {got:.2f} "
+                              f"{cur}{what}, the payment to {want:.2f}")
                     rep.problems.append(
-                        f"{p.symbol} {p.pay_date}: the components add up "
-                        f"to {got:.2f} {cur}{what}, the payment to "
-                        f"{want:.2f}")
+                        f"{p.symbol} {p.pay_date}: {detail}")
+                    rep.mismatched.append((p, detail))
         rep.payments.append(p)
     rep.unknown = sorted(unknown.items())
     return rep

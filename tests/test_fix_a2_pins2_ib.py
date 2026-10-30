@@ -396,7 +396,9 @@ class TestPairCancellations(unittest.TestCase):
     def test_latest_original_before_the_ca_is_paired(self):
         a, b, c = _row(100, fee=1.0), _row(100, fee=2.0), _row(-100, ca=True)
         kept, pairs, unmatched = pair_cancellations([a, b, c])
-        self.assertEqual((kept, unmatched), ([a], []))
+        # (b's commission, not refunded, stays a FEE row: TJ-0742.)
+        self.assertEqual(([t for t in kept if t['action'] == 'BUYSELL'],
+                          unmatched), ([a], []))
         self.assertIs(pairs[0][0], b)
 
     def test_same_time_original_is_preferred(self):
@@ -404,7 +406,7 @@ class TestPairCancellations(unittest.TestCase):
         b = _row(100, time_='11:00:00', fee=2.0)
         c = _row(-100, time_='10:00:00', ca=True)
         kept, pairs, _ = pair_cancellations([a, b, c])
-        self.assertEqual(kept, [b])
+        self.assertEqual([t for t in kept if t['action'] == 'BUYSELL'], [b])
         self.assertIs(pairs[0][0], a)
 
     def test_original_in_another_account_is_not_paired(self):

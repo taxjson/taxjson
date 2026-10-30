@@ -375,7 +375,9 @@ class TestTaxRowsWithNoSecurity(unittest.TestCase):
                       "foreign dividend in 2025, so the estimate cannot "
                       "pair them with their dividends; they count up to "
                       "15% of their account's foreign cash dividends that "
-                      "no TAX row names: 40.00 counted.", r["notes"])
+                      "none of its TAX rows names (within each security's "
+                      "15% that its paired withholding leaves): 40.00 "
+                      "counted.", r["notes"])
 
     @rule("CA-EST-FTC")
     def test_above_the_room_left(self):
@@ -393,7 +395,8 @@ class TestTaxRowsWithNoSecurity(unittest.TestCase):
                          {"withheld": 200.0, "counted": 150.0,
                           "accounts": ["margin"]})
         notes = _flat(" ".join(r["notes"]))
-        self.assertIn("no TAX row names: 150.00 counted, 50.00 not.", notes)
+        self.assertIn("paired withholding leaves): 150.00 counted, 50.00 "
+                      "not.", notes)
         self.assertIn("The 200.00 withheld above 15% of each security's "
                       "foreign dividends (ZZQ.US 150.00, TAX rows with no "
                       "security 50.00; ITA s.20(11)) may be deductible on "

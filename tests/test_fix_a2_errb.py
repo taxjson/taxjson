@@ -274,7 +274,7 @@ class TestRunInputs(_Built):
         with open(root / "work" / ".run.lock", "a+") as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             r = self.cli(root, "run", "--no-input")
-        self.assertOneLine(r, 1, "another `taxjson run` is in progress")
+        self.assertOneLine(r, 1, "is in progress in this project")
         self.assertOneLine(self.cli(root, "run", "--no-input"), 0)
 
 

@@ -413,6 +413,12 @@ def lock_shape_problem(lock: Any, year) -> Optional[str]:
             if k in rr and not _finite_num(rr[k]):
                 return (f"records return_row.{k} as {rr[k]!r}, not a "
                         f"finite number — the lock is damaged")
+    # The year's slip capital gains close-year recorded (T5 box 18;
+    # backlog TJ-0898): the next year's carryover adds it to the filed
+    # figure.
+    if "slip_gains" in lock and not _finite_num(lock.get("slip_gains")):
+        return (f"records slip_gains as {lock.get('slip_gains')!r}, not a "
+                f"finite number — the lock is damaged")
     y = lock.get("year")
     if y is not None:
         try:
@@ -545,25 +551,42 @@ def filed_rows_problem(lock: Any, year: Any, label: str) -> Optional[str]:
 def missing_lock_problem(path: Path, label: Optional[str] = None
                          ) -> Optional[str]:
     """When `path` is a year project's filed/<year>.json that is gone
-    while that project's taxjson.toml still carries close-year's freeze
-    note (project_layout.lock_missing_frozen: the year was closed and
-    its lock deleted): a sentence naming it (`label`, default the path)
-    and the fix; else None — a year never closed has no lock to miss.
-    The next year read such a lock as no record at all: no carried loss,
-    no foreign-cash pool (backlog TJ-0272)."""
+    while that project shows the year was closed: its taxjson.toml still
+    carries close-year's freeze note (project_layout._freeze_noted),
+    or it still holds the reports close-year kept as filed
+    (filed/<year>/reports/: a year closed as a single folder, then moved
+    by `migrate --to-years`, has no freeze note) — a sentence naming it
+    (`label`, default the path) and the fix; else None: a year never
+    closed has no lock to miss. The next year read such a lock as no
+    record at all: no carried loss, no foreign-cash pool (backlog
+    TJ-0272)."""
     import os
     p = Path(path)
     y = file_year(p)
     if y is None or p.parent.name != "filed" or os.path.lexists(p):
         return None
     from taxjson.lib import project_layout as _PL
-    if not _PL.lock_missing_frozen(p.parent.parent, y):
+    if _PL._freeze_noted(p.parent.parent):
+        why = (f"the {y} project's taxjson.toml still carries close-year's "
+               f"freeze note")
+    elif _filed_reports_kept(p.parent / str(y) / "reports", y):
+        why = (f"the {y} project holds the reports close-year kept as "
+               f"filed (filed/{y}/reports/)")
+    else:
         return None
-    return (f"{label or p}: the {y} close-year lock is missing, while the "
-            f"{y} project's taxjson.toml still carries close-year's freeze "
-            f"note (the year was closed) — restore filed/{y}.json from git "
-            f"or a backup, or run `taxjson close-year` in the {y} project "
-            f"again; until then what {y} carried forward is unknown")
+    return (f"{label or p}: the {y} close-year lock is missing, while "
+            f"{why} (the year was closed) — restore filed/{y}.json from "
+            f"git or a backup, or run `taxjson close-year` in the {y} "
+            f"project again; until then what {y} carried forward is "
+            f"unknown")
+
+
+def _filed_reports_kept(d: Path, year: int) -> bool:
+    """`d` (a filed/<year>/reports/ folder) holds a report close-year
+    kept after the year ended: the year was closed
+    (project_layout.filed_reports_kept)."""
+    from taxjson.lib import project_layout as _PL
+    return _PL.filed_reports_kept(d, year)
 
 
 def missing_prior_lock(root: Path, settings: Dict[str, Any]

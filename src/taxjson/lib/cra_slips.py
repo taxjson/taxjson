@@ -23,7 +23,10 @@ one more line that reads as a name), the box rows (a known amount box
 of the slip's type and its amount; box 27's currency) and nothing else.
 The page also carries the recipient's name and other personal details:
 no line but those is kept, so they are never read into anything,
-stored or printed. The CRA copy shows no account number. A PDF of
+stored or printed. The CRA copy shows no account number; where a
+page does show the recipient's account (T5 box 29, T3 box 14), only a
+fingerprint of it is kept, in memory, to tell two slips of equal
+figures apart (drop_duplicates) — never the number. A PDF of
 several slips (pages saved together) is cut at each slip line: each
 slip is read from its own lines.
 
@@ -69,6 +72,9 @@ AMOUNT_BOXES = {
            "47", "48", "49", "50", "51"),
 }
 CURRENCY_BOX = "27"
+# The recipient's account number box: never kept, only a fingerprint
+# that tells two slips with equal figures apart (backlog TJ-0997).
+ACCOUNT_BOX = {"T5": "29", "T3": "14"}
 
 _FROM_RE = re.compile(r"^\s*(\d{4})\s+(T5|T3)\s+slip\s+\(([A-Za-z ]+)\)\s+"
                       r"from\s+(\S.*?)\s*$", re.I)
@@ -127,6 +133,9 @@ class CraSlip:
     issuer: str
     currency: str = "CAD"
     boxes: Dict[str, float] = field(default_factory=dict)
+    # A fingerprint of the recipient-account box (ACCOUNT_BOX), "" when
+    # the page shows none: never the number, never written or printed.
+    account_tag: str = field(default="", repr=False)
 
     def total(self, boxes) -> float:
         return sum(self.boxes.get(b, 0.0) for b in boxes)
@@ -217,6 +226,11 @@ def _one_slip(lines: List[str], where: str) -> CraSlip:
             continue
         box = r.group(1).lstrip("0") or "0"
         val = r.group(2)
+        if box == ACCOUNT_BOX.get(typ) and re.search(r"\d", val):
+            import hashlib
+            slip.account_tag = hashlib.sha256(
+                ("cra-slip-account:" + val).encode("utf-8")).hexdigest()[:16]
+            continue
         if (box in AMOUNT_BOXES[typ] and not _AMOUNT_RE.match(val)
                 and re.search(r"\d", val)):
             # A figure that is not d,ddd.dd: skipping it would import
@@ -719,7 +733,11 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
             pl.how = ("no fund in the books whose distributions match "
                       "its amounts or name")
             continue
-        if len(good) > 1 and good[1][0] <= 0.02 and good[0][0] <= 0.02 \
+        # Two candidates as good as each other — by amount, or both by
+        # name (the 25% band) the same distance off — are a tie: never
+        # placed by the order the books list them (backlog TJ-0999).
+        if len(good) > 1 \
+                and (good[0][0] <= 0.02) == (good[1][0] <= 0.02) \
                 and abs(good[0][0] - good[1][0]) < 0.002 \
                 and good[0][1] == good[1][1]:
             pl.how = (f"ambiguous: {good[0][3]} and {good[1][3]} "
@@ -754,6 +772,7 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
         # slips go by the payments otherwise, as before. Two with none:
         # nothing tells them apart — the slip is not placed by a guess.
         paid = [g for g in gs if g.rows]
+        several = len(gs) > 1          # the broker's, paid or not
         gs = paid or gs
         blind = len(gs) > 1 and not paid
         if not gs or blind:
@@ -791,10 +810,13 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                               "account)")
             continue
         books = []
+        other_books = []
         for g in gs:
             skip = t3_roots.get((g.account, g.hashes), set())
             rs = [r for r in g.rows if r.tax_date.startswith(ystr)
                   and r.root not in skip]
+            other_books.append(sum(r.cad for r in rs
+                                   if r.category == "other"))
             books.append((
                 sum(r.cad for r in rs if r.category in
                     ("ca_div", "foreign")),
@@ -834,6 +856,37 @@ def place(slips: List[CraSlip], groups: List[Group], year: int,
                 pl.how = (f"ambiguous: {len(alts)} {shown} broker accounts "
                           f"match it equally — type it into slips.toml "
                           f"with broker_account")
+                continue
+            # Box 14 is only a kind here: its share-out stays by the rest
+            # (backlog TJ-1211).
+            other = _cad(pl.slip.boxes.get("14", 0.0), pl.slip.currency,
+                         rate) or 0.0
+            if several and not (other >= 0.005
+                                and other_books[gi] >= 0.005) and not any(
+                    cad[k][j] >= 0.005 and books[gi][j] >= 0.005
+                    for j in range(3)):
+                # None of the broker's accounts has its kind of income
+                # (dividends, tax withheld, interest, other): the least
+                # different one is a guess (backlog TJ-0998).
+                kinds = ", ".join(w for j, w in enumerate(
+                    ("dividends", "foreign tax withheld", "interest"))
+                    if cad[k][j] >= 0.005)
+                if other >= 0.005:
+                    kinds = f"{kinds}, other income" if kinds \
+                        else "other income"
+                kinds = kinds or "no amounts"
+                if account:
+                    pl.account = account
+                    pl.how = (f"account {account}, as asked (no {shown} "
+                              f"broker account in the books has its "
+                              f"{kinds}: no broker account written)")
+                else:
+                    pl.how = (f"no {shown} broker account in the books has "
+                              f"its {kinds} in {year} — an export missing "
+                              f"from inputs/? Import it again naming its "
+                              f"account (`taxjson slip-audit ACCOUNT "
+                              f"--import-cra FILE`), or type it into "
+                              f"slips.toml with broker_account")
                 continue
             g = gs[gi]
             pl.group, pl.account = g, g.account
@@ -943,18 +996,32 @@ def drop_duplicates(slips: List[CraSlip]) -> Tuple[List[CraSlip],
                                                     List[str]]:
     """The slips with each one read twice kept once (a re-download `t3
     (1).pdf`, a file named with its folder): the same year, type,
-    issuer, status, currency and boxes. (kept, notes)."""
+    issuer, status, currency and boxes, and the same recipient account
+    where both pages show one — two slips of equal figures for two
+    broker accounts are two slips (backlog TJ-0997). A copy showing no
+    account gives way to a page that shows one, whatever the order: it
+    took every tagged slip after it for itself (backlog TJ-1212). (kept,
+    notes)."""
     kept: List[CraSlip] = []
     notes: List[str] = []
-    seen: Dict[Tuple, CraSlip] = {}
+    seen: Dict[Tuple, List[CraSlip]] = {}
     for s in slips:
         k = (s.year, s.type, _norm(s.issuer), s.status, s.currency,
              _boxes_key(s.boxes))
-        if k in seen:
-            notes.append(f"{s.shown}: the same slip as {seen[k].shown} — "
+        twin = next((t for t in seen.get(k, ())
+                     if not (s.account_tag and t.account_tag
+                             and s.account_tag != t.account_tag)), None)
+        if twin is not None and s.account_tag and not twin.account_tag:
+            notes.append(f"{twin.shown}: the same slip as {s.shown} — "
+                         f"read once")
+            seen[k] = [s if t is twin else t for t in seen[k]]
+            kept = [s if t is twin else t for t in kept]
+            continue
+        if twin is not None:
+            notes.append(f"{s.shown}: the same slip as {twin.shown} — "
                          f"read once")
             continue
-        seen[k] = s
+        seen.setdefault(k, []).append(s)
         kept.append(s)
     return kept, notes
 
@@ -974,6 +1041,7 @@ class Existing:
     boxes: Dict[str, float]
     keys: frozenset
     imported: bool                # source = "cra:..."
+    source: str = ""              # its `source`, as written
 
 
 @dataclass
@@ -995,7 +1063,9 @@ def plan_import(placed: List[Tuple[Placement, str]],
     same issuer, account, fund and broker account — in this import or
     already in slips.toml — or, with no original in slips.toml, the
     earlier amended slip there (the issuer's second amendment), and an
-    original whose amended slip is there is not added. Where it cannot
+    original whose amended slip is there is not added. A slip of no key
+    (its account named) meets a keyed table only if they share a box.
+    Where it cannot
     be told which slip an amended slip replaces (two it may amend, two
     amended slips of one fund in one import), none is imported
     (listed)."""
@@ -1007,15 +1077,23 @@ def plan_import(placed: List[Tuple[Placement, str]],
                 if pl.security else "", key)
 
     def same_slip(e: Existing, pl: Placement, key: str) -> bool:
+        # No key (its account named, its broker account not known): any
+        # table of the account may be it, keyed or not. Only a table of
+        # no key was: a slip imported under a key and again naming its
+        # account was added beside itself (backlog TJ-1208).
         return (e.type == pl.slip.type and e.account == pl.account
                 and e.security == (_root(pl.security) if pl.security
                                    else "")
-                and ((key in e.keys) if key else not e.keys))
+                and (not key or key in e.keys))
 
     def same_issuer(e: Existing, pl: Placement) -> bool:
         return not e.imported or _norm(e.issuer) == _norm(pl.slip.issuer)
 
-    live = [(pl, k) for pl, k in placed if pl.account]
+    def shares_box(e: Existing, pl: Placement) -> bool:
+        return any(abs(v) >= 0.005 and abs(e.boxes.get(b, 0.0)) >= 0.005
+                   for b, v in pl.slip.boxes.items())
+
+    live =[(pl, k) for pl, k in placed if pl.account]
     # In this import: an amended slip and the original it amends.
     drop = set()
     hold = set()
@@ -1060,6 +1138,10 @@ def plan_import(placed: List[Tuple[Placement, str]],
                 + ", ".join(live[j][0].slip.shown for j in orig)
                 + " — which cannot be told; none imported (import the "
                   "originals with --write, then the amended slip)")
+    # Each table already there stands for one slip of the import: two
+    # slips of equal figures (two broker accounts' — backlog TJ-0997)
+    # against one table add the second.
+    taken: set = set()
     for i, (pl, k) in enumerate(live):
         if i in drop or i in hold:
             continue
@@ -1075,14 +1157,36 @@ def plan_import(placed: List[Tuple[Placement, str]],
                and e.currency == pl.slip.currency
                and _boxes_key(e.boxes) == sb
                and not (pl.slip.status == "amended"
-                        and e.status != "amended")]
+                        and e.status != "amended")
+               and e.index not in taken]
         if dup:
-            plan.notes.append(
-                f"{pl.slip.shown}: already in slips.toml ([[slip]] "
-                f"#{dup[0].index}, the same boxes)")
+            dup.sort(key=lambda e: e.source != f"cra:{pl.slip.shown}")
+            taken.add(dup[0].index)
+            was = dup[0].source[len("cra:"):] \
+                if dup[0].source.startswith("cra:") else ""
+            if pl.slip.account_tag and was and was != pl.slip.shown:
+                # slips.toml cannot say whose account a table was: another
+                # file's page naming one may be a second broker account's
+                # slip of equal figures, never called the same one
+                # (backlog TJ-1212).
+                plan.notes.append(
+                    f"{pl.slip.shown}: the same figures as [[slip]] "
+                    f"#{dup[0].index} (from {was}); which recipient account "
+                    f"that table is for is not recorded — if this is "
+                    f"another account's slip, import both files together "
+                    f"(`--import-cra FOLDER`)")
+            else:
+                plan.notes.append(
+                    f"{pl.slip.shown}: already in slips.toml ([[slip]] "
+                    f"#{dup[0].index}, the same boxes)")
             continue
+        # A slip of no key is the slip of a keyed table only if they share
+        # a box: no broker account has the income of a slip of no key, so
+        # a table sharing none was placed by its own income, another
+        # broker account's slip (backlog TJ-1304).
         twins = [e for e in existing if same_slip(e, pl, k)
-                 and same_issuer(e, pl)]
+                 and same_issuer(e, pl)
+                 and (k or not e.keys or shares_box(e, pl))]
         if pl.slip.status == "amended":
             origs = [e for e in twins if e.status != "amended"]
             if not origs:
@@ -1091,7 +1195,11 @@ def plan_import(placed: List[Tuple[Placement, str]],
                 # would be counted).
                 origs = [e for e in twins if e.status == "amended"]
             if len(origs) == 1:
-                plan.replace.append((origs[0], pl, k))
+                # Its table's broker account stays when the import names
+                # only the account (TJ-1208).
+                kept = k or (next(iter(origs[0].keys))
+                             if len(origs[0].keys) == 1 else "")
+                plan.replace.append((origs[0], pl, kept))
                 continue
             if len(origs) > 1:
                 plan.notes.append(

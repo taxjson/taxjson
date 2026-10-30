@@ -37,6 +37,28 @@ from taxjson.lib.core import (
 # Days a row with no rate that day looks back for the latest earlier one.
 LOOKBACK_DAYS = 5
 
+# Actions dated the day they were PAID, settlement date or not: income,
+# withholding and fees (tax-logic CA-FX-01 / US-FX-02; the same set the
+# engines file by their pay date, pipeline in_year, and the .tt writer
+# dates by it, taxjson_convert_tt.PAID_DATE_ACTIONS).
+PAID_DATE_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST',
+                     'FEE')
+
+
+def rate_date(tx) -> str:
+    """The date whose rate converts a row (a dict or a TaxTransaction):
+    a trade's settlement date when it has one, else its date; income,
+    withholding and fees (PAID_DATE_ACTIONS) the day they were paid.
+    A dividend paid June 2 with a June 3 settlement date was converted
+    at June 3's rate (backlog TJ-0974)."""
+    def _g(key):
+        v = tx.get(key) if isinstance(tx, dict) else getattr(tx, key, '')
+        return str(v or '')
+    date, settle = _g('date'), _g('date_settle')
+    if _g('action').upper() in PAID_DATE_ACTIONS:
+        return date or settle
+    return settle or date
+
 
 class MissingRateError(InputContentError):
     """Rows whose date has no exchange rate (and no explicit
@@ -240,12 +262,26 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
         )
     return history
 
+def _usable_rate(tok: str) -> bool:
+    """True when load_exchange_rates keeps a row's RATE column: a plain
+    positive finite decimal."""
+    try:
+        rate = Decimal(tok)
+    except (InvalidOperation, ValueError):
+        return False
+    return (rate.is_finite() and rate > 0
+            and bool(_PLAIN_DECIMAL_RE.match(tok))
+            and math.isfinite(float(rate)) and float(rate) > 0)
+
+
 def load_rate_sources(rates_file: Path, target_curr: str = None) -> Dict[str, Dict[str, str]]:
     """{currency: {date: source}} from the optional SIXTH column of a
-    rates file (`boc` / `yahoo`, written by taxjson-to-base-curr). Same
-    first-row-wins keying as load_exchange_rates; rows without the
-    column (a hand-made or pre-0.17 file) are simply absent. Never
-    raises on a malformed line — load_exchange_rates owns that."""
+    rates file (`boc` / `yahoo`, written by taxjson-to-base-curr), for
+    the row load_exchange_rates selects: the first usable one per
+    currency and date. A selected row without the column (a hand-made or
+    pre-0.17 file) leaves its date absent — a later, ignored quote of
+    the same day lent the selected rate its source (backlog TJ-0986).
+    Never raises on a malformed line — load_exchange_rates owns that."""
     out: Dict[str, Dict[str, str]] = {}
     target_norm = norm_currency(target_curr)
     if not rates_file or not Path(rates_file).exists():
@@ -254,16 +290,19 @@ def load_rate_sources(rates_file: Path, target_curr: str = None) -> Dict[str, Di
         with Path(rates_file).open("r", encoding="utf-8-sig") as f:
             for line in f:
                 parts = line.split()
-                if len(parts) < 6 or parts[0].startswith("#") \
+                if len(parts) < 5 or parts[0].startswith("#") \
                         or not _RATE_DATE_RE.match(parts[0]):
                     continue
                 if target_norm and norm_currency(parts[3]) != target_norm:
                     continue
+                if not _usable_rate(parts[4]):
+                    continue
                 out.setdefault(norm_currency(parts[2]), {}).setdefault(
-                    parts[0], parts[5].lower())
+                    parts[0], parts[5].lower() if len(parts) > 5 else "")
     except (OSError, UnicodeDecodeError):
         return {}
-    return out
+    return {cur: {d: src for d, src in days.items() if src}
+            for cur, days in out.items()}
 
 
 # Module-level tally of default-rate fallbacks so we can emit a single
@@ -407,7 +446,7 @@ def convert_transaction(
         converted.currency = target_curr
     elif src_curr:
         # Resolve rate for this transaction's date
-        tx_date = tx.date_settle if tx.date_settle else tx.date
+        tx_date = rate_date(tx)
         before = dict(_DEFAULT_RATE_FALLBACKS)
         _fallback = default_rate_for(src_curr, target_curr, default_rate)
         rate_evidence = {}
@@ -472,6 +511,11 @@ def convert_transaction(
             for field, converted_value in staged.items():
                 setattr(converted, field, converted_value)
             converted.currency = target_curr
+            # The trade's own currency (its settlement calendar: a TSX
+            # US-dollar unit's is 'CAD+USD'), which the relabel drops
+            # (backlog TJ-0713); a re-conversion keeps the first.
+            if not (getattr(converted, 'trade_currency', '') or ''):
+                converted.trade_currency = src_curr
             # A futures settlement part keeps the rate its P/L was
             # converted at: the Canadian engine re-averages a close
             # across accounts in the native currency (issue #76).
@@ -705,12 +749,27 @@ def main():
     # `#` comments, qty→quantity alias, type guards. The bare
     # json.load + TaxTransaction(**item) here used to choke on a
     # commented file and silently DROP non-dict rows.
+    # The per-file broker accounts and generic brokers of the input are
+    # written out again: conversion dropped them, and a later dedup took
+    # two accounts' or brokers' identical fills for copies (backlog
+    # TJ-0976, TJ-1224).
+    from taxjson.bin.taxjson_sort import (_doc_metadata_blocks,
+                                          _doc_source_accounts,
+                                          source_brokers_of)
     try:
         if args.input:
             transactions = load_transactions(Path(args.input))
+            _text = Path(args.input).read_text(encoding="utf-8")
+            source_accounts = _doc_source_accounts(_text)
+            source_brokers = source_brokers_of(_doc_metadata_blocks(_text))
         else:
+            import io
+            from taxjson.lib.cli_diag import read_stdin_utf8
             from taxjson.lib.pipeline import load_stdin_transactions
-            transactions = load_stdin_transactions()
+            _stdin = read_stdin_utf8()      # UTF-8 whatever the locale
+            transactions = load_stdin_transactions(io.StringIO(_stdin))
+            source_accounts = _doc_source_accounts(_stdin)
+            source_brokers = source_brokers_of(_doc_metadata_blocks(_stdin))
     except ValueError as e:
         emit_line(f"error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -766,6 +825,10 @@ def main():
         "default_rate": (str(default_rate) if default_rate is not None
                          else "none"),
     }
+    if source_accounts:
+        metadata["source_accounts"] = source_accounts
+    if source_brokers:
+        metadata["source_brokers"] = source_brokers
     if args.default_rate is None and fallback_rows():
         # Default-rate rows are validation ERRORS unless the fallback
         # was accepted with an explicit --default-rate: the stderr

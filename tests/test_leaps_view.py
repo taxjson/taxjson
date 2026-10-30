@@ -9,7 +9,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from taxjson.lib.core import parse_option_expiry
@@ -154,9 +154,13 @@ class TestViews(unittest.TestCase):
         from taxjson.bin.taxjson_run import cmd_leaps
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)                        # no gains files
-            with self.assertRaises(SystemExit) as cm:
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, \
+                    redirect_stderr(err):
                 self._run(cmd_leaps, dir=str(root), period="all")
-        self.assertIn("taxjson run", str(cm.exception))
+        # A missing input: exit 2 (backlog TJ-0644).
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("taxjson run", err.getvalue())
 
     def test_no_leaps_message(self):
         from taxjson.bin.taxjson_run import cmd_leaps

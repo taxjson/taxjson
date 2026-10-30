@@ -740,7 +740,10 @@ class TestCanadaSpinoffRules(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         div, buy = rows
         self.assertEqual(div['action'], 'DIVIDEND')
-        self.assertEqual(div['symbol'], 'Q051234.US')
+        # The parent pays the dividend (TJ-0658); the new shares are
+        # bought.
+        self.assertEqual(div['symbol'], 'QDEF.US')
+        self.assertEqual(buy['symbol'], 'Q051234.US')
         self.assertAlmostEqual(div['net_amount'], 40.0)  # 80 × 0.5
         self.assertEqual(buy['action'], 'BUYSELL')
         self.assertAlmostEqual(buy['quantity'], 80.0)

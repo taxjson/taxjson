@@ -339,7 +339,9 @@ class TestAlignWriteJson(unittest.TestCase):
             self.assertEqual(doc["files"][0]["backup"], "ticker.map.bak")
             self.assertIn("accounts (order)",
                           [k["key"] for k in doc["keys_not_changed"]])
-            self.assertEqual(len(doc["warnings"]), 2, doc["warnings"])
+            # The accounts' order is a note, not a warning (backlog
+            # TJ-0922): it changes no figure.
+            self.assertEqual(len(doc["warnings"]), 1, doc["warnings"])
             # The file was written as said; the warnings are on stderr.
             self.assertIn("GLOBAL ZZOLD.US ZZQ.US",
                           (top / "2024" / "ticker.map").read_text())

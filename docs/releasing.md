@@ -146,7 +146,8 @@ that limit, or no `gh` refuses).
 `TAXJSON_PROMOTE_IGNORE_CI=1` promotes without that check and prints a
 warning. A forward move then runs `scripts/check-public.sh`: it reads
 what the public repo serves beside the code — every release's notes,
-every issue and pull request, and their comments (`gh api`, read-only) —
+every issue and pull request, their comments and each pull request's
+reviews (`gh api`, read-only) —
 and scans it
 with `scripts/check-pii.sh` (release notes as `--message`), naming the
 item of each hit, masked; a hit stops the promote. Without a working
@@ -469,19 +470,24 @@ rebase-merges it once all have passed — if `origin`'s `main` is still the
 commit it pushed on. (Were `main` given a ruleset that
 requires checks and a branch up to date with `main` ("require branches to
 be up to date before merging"), and auto-merge allowed, it would hand the
-merge to GitHub's auto-merge instead, which then refuses to merge onto a
-`main` that moved. A ruleset that requires checks but not an up-to-date
+merge to GitHub's auto-merge instead once every check has passed, which
+then refuses to merge onto a `main` that moved. Never earlier: GitHub's
+auto-merge waits only for the checks the ruleset requires, so a failed
+check it does not name would merge. A ruleset that requires checks but not an up-to-date
 branch is not enough: auto-merge would replay the commits onto whatever
 `main` is when the checks pass, so `land.sh` merges itself then. The
 private dev repo, on GitHub's free plan, has no ruleset. Should `main`
 move in the moment between its last look and its own merge, it warns
 that the landed commits do not sit on the gated base: run the gate on
 `main`.) It waits (`--timeout`, 60 minutes; `--no-wait` returns once
-the pull request is open) and brings local `main` to what landed
+the pull request is open, and nothing merges it by itself: merge it once
+its checks pass, as the message says) and brings local `main` to what landed
 (`git pull --rebase --autostash`: the rebase merge gave the commits new
 ids, and the local copies drop out). A failed check (exit 1) closes the
 pull request and deletes its branch, so nothing merges later behind your
-back; the commits stay on local `main` to fix and land again. So does a
+back; the commits stay on local `main` to fix and land again. When GitHub
+refuses that (an outage), the message says the pull request is still open
+(with auto-merge still on, it may merge by itself) and how to close it. So does a
 `main` that moved on while the checks ran (another pull request merged, a
 promote from another clone, a merge on the web; exit 1): `git pull
 --rebase`, run the gate again, and land again. Exit 3:
@@ -647,7 +653,8 @@ which renames the matrix checks: update the ruleset's required checks
   public repo, and by hand): `scripts/check-public.sh --days 2` on
   `taxjson/taxjson` with a read-only token and no
   secrets — the last two days of issues, pull request titles and bodies,
-  comments and the messages of `main`'s commits, and every release note,
+  comments, the reviews of the pull requests updated, and the messages of
+  `main`'s commits, and every release note,
   against the generic patterns. A hit fails the run and GitHub e-mails the
   owner; the log shows a masked hint and where. The full scan (private
   lists included) runs on the maintainer's machine before every forward

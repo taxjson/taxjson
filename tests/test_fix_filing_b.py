@@ -110,7 +110,9 @@ class TestReconcileGrantPair(unittest.TestCase):
     def test_grant_write_and_buyback_count_once(self):
         """R1-18: a WRITE record plus its buy-back is ONE slip row."""
         opt = "ZZA250718P00018500.US"
-        write = _sell(symbol=opt, qty=5, proceeds=0.0, cost=512.40,
+        # The engine's sign: a write's `cost` is its NEGATED premium
+        # (a positive cost is a net debit, backlog TJ-0780).
+        write = _sell(symbol=opt, qty=5, proceeds=0.0, cost=-512.40,
                       direction="SHORT", grant=True)
         close = _sell(symbol=opt, qty=5, proceeds=-133.15, cost=0.0,
                       direction="SHORT")

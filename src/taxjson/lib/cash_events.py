@@ -417,14 +417,33 @@ def apply_declarations(events: List[Dict[str, Any]],
 UNDECLARED = "?"        # a CASHMOVE line's how, when nothing declared it
 
 
-def tt_line(e: Dict[str, Any], base: Optional[str] = None
-            ) -> Optional[str]:
-    """A cash event as the .tt line that declares it (FORMS, without
-    `at=`; `taxjson cash` lists them): an FXCONV, a CASHMOVE (a broker's
+def at_token(e: Dict[str, Any], books: "Books") -> Optional[str]:
+    """The `at=` a copy of the event's .tt line needs to stay in its
+    book: None when a line without one, in a new .tt file of its
+    account folder (no CASHBOOK line), reads into that book anyway (the
+    folder's only book); else the book's name inside the folder (`alpha`
+    for margin/alpha, `ib:3135` for a broker's book). A copied line of a
+    book kept by hand, or of one of several broker books, lost its book
+    and read into the folder's default one (backlog TJ-0889)."""
+    b, label = e.get("book"), e.get("label")
+    if not b or not label or not str(b).startswith(f"{label}/"):
+        return None
+    if books.for_tt(label, "") == b:
+        return None
+    return str(b)[len(str(label)) + 1:] or None
+
+
+def tt_line(e: Dict[str, Any], base: Optional[str] = None,
+            at: Optional[str] = None) -> Optional[str]:
+    """A cash event as the .tt line that declares it (FORMS; `at`: the
+    book's `at=` token, at_token, when a copy needs one to keep its
+    book; `taxjson cash` lists them): an FXCONV, a CASHMOVE (a broker's
     move nothing declared shows UNDECLARED where own / kept / spot /
     cost= / proceeds= goes, so the line is not copied as it is), a
     CASHOPEN; a FLOW (the fee a cash event charged) as a `#FEE` comment
-    line, which a .tt file ignores. None for a CASHBAL (a statement
+    line, which a .tt file ignores (a trade's cash leg, `leg` "trade":
+    `#TRADE`; a FLOW received — a stock-lending receipt, a rebate — as a
+    `#CREDIT` one, never a fee: backlog TJ-0693). None for a CASHBAL (a statement
     fact, never written by hand), a PERIOD, a NOTE, a CASHBOOK.
 
     `base`: the project's base currency. A broker's move IN it is no
@@ -432,12 +451,13 @@ def tt_line(e: Dict[str, Any], base: Optional[str] = None
     `#CASHMOVE` comment line, never UNDECLARED — `?` on a Canadian-dollar
     deposit asked for a line ledger v2 ignores (backlog TJ-0461)."""
     k = e["kind"]
+    tail = f" at={at}" if at else ""
     if k == "FXCONV":
         s = (f"FXCONV {e['date']} {e['from_ccy']} {e['from_amt']:,.2f} "
              f"{e['to_ccy']} {e['to_amt']:,.2f}")
         if e.get("value") is not None:
             s += f" value={e['value']:,.2f}"
-        return s
+        return s + tail
     if k == "CASHMOVE":
         d = e.get("decl")
         if not d and base and str(e["currency"]).upper() == base.upper():
@@ -449,12 +469,20 @@ def tt_line(e: Dict[str, Any], base: Optional[str] = None
             how = f"{d['how']}={d['value']:,.2f}"
         else:
             how = str(d["how"])
-        return f"CASHMOVE {e['date']} {e['currency']} {e['amount']:+,.2f} {how}"
+        return (f"CASHMOVE {e['date']} {e['currency']} "
+                f"{e['amount']:+,.2f} {how}{tail}")
     if k == "CASHOPEN":
         return (f"CASHOPEN {e['date']} {e['currency']} {e['units']:,.2f} "
-                f"{e['cost']:,.2f}")
+                f"{e['cost']:,.2f}{tail}")
     if k == "FLOW":
-        return f"#FEE {e['date']} {e['currency']} {e['amount']:+,.2f}"
+        # A trade's cash leg (a Coinbase Convert's stablecoin side,
+        # backlog TJ-0916) is no fee; a FLOW received (a stock-lending
+        # receipt, a rebate) is a credit, never a fee (backlog TJ-0693).
+        if e.get("leg") == "trade":
+            kw = "#TRADE"
+        else:
+            kw = "#CREDIT" if float(e["amount"]) > 0 else "#FEE"
+        return f"{kw} {e['date']} {e['currency']} {e['amount']:+,.2f}"
     return None
 
 
@@ -531,16 +559,31 @@ def dedup_across_files(events: List[Dict[str, Any]],
     year-to-date one) carry the same cash event twice: an event repeated
     in ANOTHER file of the book is one event, the most any one file
     holds of it kept (two identical conversions in one file are two) —
-    the position books' cross-file rule. The settlement date is not part
+    the position books' cross-file rule. An event that carries its
+    broker's own ID (`_broker_id`: a Coinbase row's ID) is one event per
+    ID: two exports holding the same ID overlap, two holding different
+    IDs are two executions, and an ID-less copy (an older export with no
+    ID column) adds only what its file holds beyond the IDs (backlog
+    TJ-0865: two exports' distinct round trips alike in date and amount
+    were read as one). The settlement date is not part
     of an event's identity; when two files date one event's settlement
     differently, a line saying so (both files, both dates) is added to
     `warnings` (2026-10 audit #86)."""
     per: Dict[Tuple, Dict[str, int]] = {}
+    # The ID-less events per identity and file, and the IDs per identity.
+    bare: Dict[Tuple, Dict[str, int]] = {}
+    ids: Dict[Tuple, set] = {}
     settles: Dict[Tuple, Dict[str, str]] = {}
     for e in events:
         k = _identity(e)
         f = per.setdefault(k, {})
         f[e.get("file", "")] = f.get(e.get("file", ""), 0) + 1
+        bid = str(e.get("_broker_id") or "")
+        if bid:
+            ids.setdefault(k, set()).add(bid)
+        else:
+            b = bare.setdefault(k, {})
+            b[e.get("file", "")] = b.get(e.get("file", ""), 0) + 1
         if e["kind"] in ("FXCONV", "CASHMOVE", "FLOW"):
             settles.setdefault(k, {}).setdefault(
                 e.get("file", ""), str(e.get("settle") or e["date"]))
@@ -558,17 +601,53 @@ def dedup_across_files(events: List[Dict[str, Any]],
                 f"with different settlement dates ({said}) — kept once, "
                 f"dated {by_file[max(per[k], key=lambda f: (per[k][f], f))]}"
                 f"; check which file is right")
-    keep_n = {k: max(v.values()) for k, v in per.items()}
-    keep_file = {k: max(v, key=lambda f: (v[f], f)) for k, v in per.items()}
-    out: List[Dict[str, Any]] = []
+    # The ID-less copies kept: those of the file holding the most,
+    # beyond the events the IDs already account for.
+    keep_n = {k: max(0, max(v.values()) - len(ids.get(k, ())))
+              for k, v in bare.items()}
+    keep_file = {k: max(v, key=lambda f: (v[f], f))
+                 for k, v in bare.items()}
+    seen_ids: set = set()
+    # A conversion's commission (a FLOW with `_fee_of`, the broker's row
+    # of its conversion) is kept with its own conversion: deduplicated
+    # apart, the file tie-break kept one file's fee and the other
+    # file's conversion, and the fee then matched no kept conversion
+    # (backlog TJ-0860).
+    conv_of: Dict[Tuple, Dict[str, Any]] = {}
     for e in events:
+        if e["kind"] == "FXCONV" and e.get("where"):
+            conv_of.setdefault((e.get("label", ""), e.get("file", ""),
+                                e.get("book"), str(e["where"])), e)
+    out: List[Dict[str, Any]] = []
+    kept: set = set()
+    fees: List[Tuple[int, Dict[str, Any], Dict[str, Any]]] = []
+    for i, e in enumerate(events):
+        conv = (conv_of.get((e.get("label", ""), e.get("file", ""),
+                             e.get("book"), str(e["_fee_of"])))
+                if e["kind"] == "FLOW" and e.get("_fee_of") else None)
+        if conv is not None:
+            fees.append((i, e, conv))
+            continue
         k = _identity(e)
-        if e.get("file", "") != keep_file[k]:
-            continue
-        if keep_n[k] <= 0:
-            continue
-        keep_n[k] -= 1
+        bid = str(e.get("_broker_id") or "")
+        if bid:
+            if (k, bid) in seen_ids:
+                continue
+            seen_ids.add((k, bid))
+        else:
+            if e.get("file", "") != keep_file[k]:
+                continue
+            if keep_n[k] <= 0:
+                continue
+            keep_n[k] -= 1
         out.append(e)
+        kept.add(id(e))
+    if fees:
+        pos = {id(e): i for i, e in enumerate(events)}
+        for i, e, conv in fees:
+            if id(conv) in kept:
+                out.append(e)
+        out.sort(key=lambda e: pos[id(e)])
     return out
 
 

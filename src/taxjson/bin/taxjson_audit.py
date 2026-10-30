@@ -54,6 +54,7 @@ from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.bin.taxjson_convert_currency import (LOOKBACK_DAYS,
                                                   default_rate_for,
                                                   positive_rate)
+from taxjson.bin.taxjson_convert_currency import rate_date as row_rate_date
 from taxjson.lib.core import (get_tax_rules, is_option_symbol,
                               load_transactions)
 from taxjson.lib.country import (add_country_argument, canonical_country,
@@ -67,6 +68,7 @@ from taxjson.lib.trace_format import render_report_trace
 # books are kept to the cent, so half a cent of float drift is the
 # honest line between "ties" and "differs".
 TIE = 0.005 + 1e-9
+_ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +180,25 @@ def source_hits(rid: str, source_index: Dict[str, List[Dict[str, Any]]],
     return hits
 
 
+_SPLIT_MONEY_FIELDS = ("proceeds", "commission", "fee", "price",
+                       "net_amount", "gross_amount")
+
+
+def _moneyless_split(row: Dict[str, Any]) -> bool:
+    """A SPLIT row with no money in it: the converter's exemption
+    (taxjson_convert_currency.convert_transaction) — only its currency
+    label changes."""
+    if str(row.get("action") or "") != "SPLIT":
+        return False
+    for f in _SPLIT_MONEY_FIELDS:
+        try:
+            if float(row.get(f) or 0.0):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
 def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
                   *, base_currency: str,
                   fx_history: Dict[str, Dict[str, Decimal]],
@@ -212,10 +233,13 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
         abs(nominal - float(raw.get(field) or 0.0)) > TIE
         or cur != raw_cur)
     book = float(base_row.get(field) or 0.0)
-    native = not cur or cur == base_currency
-    # The converter prices on the settlement date when there is one.
-    rate_date = str(src.get("date_settle") or src.get("date")
-                    or raw.get("date_settle") or raw.get("date") or "")
+    # A split or ticker change that carries no money is relabelled by the
+    # converter, never converted (convert_transaction): it needs no rate,
+    # and a missing one failed correct books (backlog TJ-0765).
+    native = not cur or cur == base_currency or _moneyless_split(src)
+    # The converter's own date (a trade's settlement date when there is
+    # one; income on the day it was paid, backlog TJ-0974).
+    rate_date = row_rate_date(src) or row_rate_date(raw)
     fx: Dict[str, Any] = {"from": cur or base_currency, "to": base_currency}
     if native:
         rate: Optional[Decimal] = Decimal(1)
@@ -268,7 +292,9 @@ def money_lineage(rid: str, raw: Dict[str, Any], base_row: Dict[str, Any],
                 f"{'priced' if pre is not None else 'parsed'} row "
                 f"carries {_fmt(nominal)} {cur or base_currency} but the "
                 f"base book row carries {_fmt(book)} {base_currency} — "
-                f"no conversion applies to a {base_currency} row.")
+                + (f"no conversion applies to a {base_currency} row."
+                   if not cur or cur == base_currency else
+                   "a split carries no money to convert."))
         else:
             failures.append(
                 f"FX cross-check FAILED{_what}: {_fmt(nominal)} {cur} x "
@@ -309,8 +335,19 @@ def row_money_field(raw: Dict[str, Any]) -> str:
 
 
 def _row_day(row: Dict[str, Any]) -> str:
-    return min(str(row.get("date") or ""),
-               str(row.get("date_settle") or row.get("date") or ""))
+    """The earliest day a row can act on the pool: its trade or
+    settlement date, or the record date a return of capital paid later
+    lowers the cost on (Canada, s.53(2)(h): the engine dates it there,
+    lib/income_dating roc_date). A ROC paid more than the window after
+    the last audited sale, with a record date before it, was left out
+    of the pool check while it changed the audited gain (backlog
+    TJ-0766)."""
+    day = min(str(row.get("date") or ""),
+              str(row.get("date_settle") or row.get("date") or ""))
+    rec = str(row.get("record_date") or "")[:10]
+    if _ISO_DAY.match(rec) and rec < day:
+        day = rec
+    return day
 
 
 def pool_scope(events: List[Dict[str, Any]],
@@ -988,18 +1025,29 @@ def _row_line(row: Dict[str, Any]) -> str:
     return line
 
 
-def _map_note(raw_sym: str, base_sym: str, tmap) -> str:
-    """Name what renamed the symbol, when a ticker.map is on hand."""
+_MAP_RULES = (("glob", "GLOBAL"), ("tobase", "TOBASE"),
+              ("journal", "JOURNAL"))
+
+
+def _map_note(raw_sym: str, base_sym: str, tmap,
+              effective_map=None) -> str:
+    """Name what renamed the symbol, when a ticker.map is on hand: a
+    line of ticker.map, else one of the run's effective map (a listing
+    the run joined by its transfer journal, lib/cross_listings)."""
     if raw_sym == base_sym:
         return "unchanged"
-    if tmap is not None:
-        for attr, rule in (("glob", "GLOBAL"), ("tobase", "TOBASE"),
-                           ("journal", "JOURNAL")):
-            table = getattr(tmap, attr, {}) or {}
+    for m, where in ((tmap, "ticker.map {}"),
+                     (effective_map, "joined by the run: {} in "
+                      "work/ticker.map.effective")):
+        if m is None:
+            continue
+        for attr, rule in _MAP_RULES:
+            table = getattr(m, attr, {}) or {}
             for src, dst in table.items():
                 if src.upper() == raw_sym.upper() \
                         and dst.upper() == base_sym.upper():
-                    return f"{raw_sym} -> {base_sym}  (ticker.map {rule})"
+                    return (f"{raw_sym} -> {base_sym}  "
+                            f"({where.format(rule)})")
     return f"{raw_sym} -> {base_sym}"
 
 
@@ -1011,9 +1059,11 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 tmap, replacement_lookup: Dict[str, Dict[str, Any]],
                 checks_supplied: bool,
                 futures_native: Optional[Dict[str, float]] = None,
-                filled_index: Optional[Dict[str, Dict[str, Any]]] = None
-                ) -> Dict[str, Any]:
-    """Assemble the full provenance record for one engine disposition."""
+                filled_index: Optional[Dict[str, Dict[str, Any]]] = None,
+                effective_map=None) -> Dict[str, Any]:
+    """Assemble the full provenance record for one engine disposition.
+    `effective_map`: the run's effective map (--effective-map), naming
+    a listing the run joined (backlog TJ-0773)."""
     gid = g.get("id") or ""
     ev: Dict[str, Any] = {
         "id": gid, "symbol": g.get("symbol"), "date": g.get("date"),
@@ -1071,7 +1121,8 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
         ev["multiplier"] = _mult
     if raw is not None and base_row is not None:
         ev["mapping"] = _map_note(str(raw.get("symbol") or ""),
-                                  str(base_row.get("symbol") or ""), tmap)
+                                  str(base_row.get("symbol") or ""), tmap,
+                                  effective_map)
     elif base_row is None:
         ev["mapping"] = None
         ev["warnings"].append(
@@ -1774,6 +1825,11 @@ def parse_args(argv=None):
                         "its FX cross-check as a missing rate.")
     p.add_argument("--map", dest="ticker_map", help="ticker.map for "
                                                     "naming rename rules.")
+    p.add_argument("--effective-map", dest="effective_map",
+                   help="The run's effective map (work/ticker.map."
+                        "effective: ticker.map plus the listings the run "
+                        "joined by their transfer journal): a symbol "
+                        "filter takes a joined listing's ticker too.")
     p.add_argument("--source", action="append", default=[],
                    help="Parsed-source JSON (repeatable) — the nominal-"
                         "currency rows dispositions are joined back to.")
@@ -1892,6 +1948,19 @@ def main(argv=None) -> int:
             emit_line(f"taxjson-audit: warning: could not read ticker.map "
                       f"({e}) — rename rules will not be named.",
                       file=sys.stderr)
+    # The listings the run joined by their transfer journal live in its
+    # effective map only: `audit QZD.U.TO` matched nothing although the
+    # run booked that listing's sale as QZD.TO (backlog TJ-0773).
+    emap = None
+    if getattr(args, "effective_map", None):
+        try:
+            from taxjson.bin.taxjson_ticker_map import load_map_file
+            emap = load_map_file(Path(args.effective_map))
+        except Exception as e:
+            emit_line(f"taxjson-audit: warning: could not read the "
+                      f"effective map {args.effective_map} ({e}) — the "
+                      f"listings the run joined are not named.",
+                      file=sys.stderr)
 
     source_index = build_source_index([Path(s) for s in args.source])
     check_index, check_labels = build_check_index(
@@ -1960,9 +2029,11 @@ def main(argv=None) -> int:
     # `audit ABC.US` matched nothing because the books carry the
     # ticker.map target (ABC.TO) (S048-17).
     _want_syms = [str(w).upper() for w in (args.symbol or [])]
-    if _want_syms and tmap is not None:
+    for _m in (tmap, emap) if _want_syms else ():
+        if _m is None:
+            continue
         for _attr in ("glob", "tobase", "journal"):
-            for _src, _dst in (getattr(tmap, _attr, {}) or {}).items():
+            for _src, _dst in (getattr(_m, _attr, {}) or {}).items():
                 if _dst and any(str(_src).upper().startswith(w)
                                 for w in _want_syms):
                     _want_syms.append(str(_dst).upper())
@@ -2021,7 +2092,8 @@ def main(argv=None) -> int:
                           base_currency, tmap, replacement_lookup,
                           checks_supplied=bool(args.check),
                           futures_native=futures_native,
-                          filled_index=filled_index)
+                          filled_index=filled_index,
+                          effective_map=emap)
               for g in merged]
     # The sales' cost side traced like the sales: the audited
     # securities' buys and earlier trades against their parsed rows
